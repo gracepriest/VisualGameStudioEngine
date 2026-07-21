@@ -19,12 +19,22 @@ namespace VisualGameStudio.Shell.ViewModels.Dialogs;
 public enum ProjectLanguage { BasicLang, Cpp }
 
 /// <summary>A selectable backend. For BasicLang it maps to a real SolutionType;
-/// for C++ it is a display-only toolchain over the single "cpp" SolutionType.</summary>
-public sealed class BackendOption
+/// for C++ it is a toolchain choice over the single "cpp" SolutionType that is
+/// written to the created project (its <c>CppToolchain</c>) when the toolchain
+/// is installed on this machine.</summary>
+public sealed partial class BackendOption : ObservableObject
 {
     public string Name { get; init; } = "";
     public SolutionType SolutionType { get; init; } = SolutionTypes.DotNet;
     public string? ToolchainId { get; init; }   // null for BasicLang; "llvm"/"gcc"/"msvc" for C++
+
+    /// <summary>False when the availability probe found this toolchain missing.
+    /// The backend ComboBox greys the item via its container's IsEnabled.</summary>
+    [ObservableProperty] private bool _isEnabled = true;
+
+    /// <summary>"(not installed)" when the toolchain is unavailable; null otherwise.</summary>
+    [ObservableProperty] private string? _availabilityHint;
+
     public override string ToString() => Name;
 }
 
@@ -39,6 +49,14 @@ public sealed class LanguageOption
 public partial class NewProjectWizardViewModel : ObservableObject
 {
     private readonly IProjectTemplateService _templateService;
+    private readonly ICppToolchainProbe _toolchainProbe;
+
+    // Serializes probe-result application against backend-list rebuilds: in a
+    // headless host (unit tests) the probe continuation runs on a pool thread,
+    // where an unsynchronized Backends.Clear() during application could throw.
+    // In the app both sides run on the UI thread and the lock is uncontended.
+    private readonly object _toolchainSync = new();
+    private ToolchainAvailability? _toolchainAvailability;
 
     // UI-only platform classification (spec): Windows shows all; Cross-platform
     // excludes these; All applies no filter. Not persisted.
@@ -76,6 +94,16 @@ public partial class NewProjectWizardViewModel : ObservableObject
     [ObservableProperty] private string? _errorMessage;
     [ObservableProperty] private bool _hasError;
 
+    /// <summary>True when the language is C++ and the probe found no toolchain
+    /// installed at all. The options stay visible-but-disabled and creation is
+    /// still allowed — the project just won't build until a toolchain exists.</summary>
+    [ObservableProperty] private bool _noToolchainInstalled;
+
+    /// <summary>The in-flight toolchain probe kicked off at wizard open (a
+    /// completed task once its results are applied). Await it to observe
+    /// probe-driven state (greying, auto-select, warning) deterministically.</summary>
+    public Task ToolchainProbeTask { get; }
+
     public ObservableCollection<string> TargetFrameworks { get; } =
         new() { "net8.0", "net7.0", "net6.0", "net5.0", "netcoreapp3.1" };
     public ObservableCollection<string> CppStandards { get; } =
@@ -100,32 +128,125 @@ public partial class NewProjectWizardViewModel : ObservableObject
     public event EventHandler<ProjectCreationResult>? ProjectCreated;
     public event EventHandler? Cancelled;
 
-    public NewProjectWizardViewModel(IProjectTemplateService templateService)
+    public NewProjectWizardViewModel(IProjectTemplateService templateService, ICppToolchainProbe toolchainProbe)
     {
         _templateService = templateService;
+        _toolchainProbe = toolchainProbe;
         Location = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "BasicLangProjects");
         SelectedLanguageOption = Languages[0];
         LoadBackends();   // sets Backends + SelectedBackend -> cascades to categories + templates
+
+        // Probe at wizard open — the backend list lives on window 1, so waiting for
+        // the configure page would be too late. The probe spawns processes (~1s,
+        // worst-case seconds), so it must never run on the UI thread.
+        ToolchainProbeTask = ProbeToolchainsAsync();
+    }
+
+    private async Task ProbeToolchainsAsync()
+    {
+        ToolchainAvailability availability;
+        try
+        {
+            availability = await Task.Run(() => _toolchainProbe.Probe());
+        }
+        catch
+        {
+            // Probe failure: leave every option enabled rather than block the wizard.
+            return;
+        }
+        // No ConfigureAwait(false): in the app this resumes on the UI thread via the
+        // captured SynchronizationContext; headless tests resume on the pool, which
+        // is exactly what _toolchainSync guards against.
+        lock (_toolchainSync)
+        {
+            _toolchainAvailability = availability;
+            ApplyToolchainAvailability();
+        }
     }
 
     private void LoadBackends()
     {
-        Backends.Clear();
-        if (SelectedLanguage == ProjectLanguage.BasicLang)
+        lock (_toolchainSync)
         {
-            Backends.Add(new BackendOption { Name = "C# (.NET)",  SolutionType = SolutionTypes.DotNet });
-            Backends.Add(new BackendOption { Name = "MSIL",        SolutionType = SolutionTypes.Msil });
-            Backends.Add(new BackendOption { Name = "Native C++",  SolutionType = SolutionTypes.Native });
-            Backends.Add(new BackendOption { Name = "LLVM",        SolutionType = SolutionTypes.Llvm });
+            Backends.Clear();
+            if (SelectedLanguage == ProjectLanguage.BasicLang)
+            {
+                Backends.Add(new BackendOption { Name = "C# (.NET)",  SolutionType = SolutionTypes.DotNet });
+                Backends.Add(new BackendOption { Name = "MSIL",        SolutionType = SolutionTypes.Msil });
+                Backends.Add(new BackendOption { Name = "Native C++",  SolutionType = SolutionTypes.Native });
+                Backends.Add(new BackendOption { Name = "LLVM",        SolutionType = SolutionTypes.Llvm });
+            }
+            else
+            {
+                Backends.Add(new BackendOption { Name = "LLVM (clang++)", SolutionType = SolutionTypes.Cpp, ToolchainId = "llvm" });
+                Backends.Add(new BackendOption { Name = "GCC (g++)",      SolutionType = SolutionTypes.Cpp, ToolchainId = "gcc" });
+                Backends.Add(new BackendOption { Name = "MSVC",          SolutionType = SolutionTypes.Cpp, ToolchainId = "msvc" });
+            }
+            SelectedBackend = Backends[0];
+
+            // The probe may have completed before this rebuild (e.g. the user
+            // switched language after open) — re-apply the stored result.
+            ApplyToolchainAvailability();
         }
-        else
+    }
+
+    /// <summary>Greys out uninstalled toolchains, auto-selects the first available
+    /// one when the current selection is unavailable, and raises the none-installed
+    /// warning. No-op until the probe has produced a result. Callers hold _toolchainSync.</summary>
+    private void ApplyToolchainAvailability()
+    {
+        var availability = _toolchainAvailability;
+        if (availability == null) return;
+
+        bool anyToolchainOptions = false;
+        bool anyInstalled = false;
+        foreach (var backend in Backends)
         {
-            Backends.Add(new BackendOption { Name = "LLVM (clang++)", SolutionType = SolutionTypes.Cpp, ToolchainId = "llvm" });
-            Backends.Add(new BackendOption { Name = "GCC (g++)",      SolutionType = SolutionTypes.Cpp, ToolchainId = "gcc" });
-            Backends.Add(new BackendOption { Name = "MSVC",          SolutionType = SolutionTypes.Cpp, ToolchainId = "msvc" });
+            if (backend.ToolchainId == null) continue; // BasicLang backends are not probe-gated
+            anyToolchainOptions = true;
+            bool installed = backend.ToolchainId switch
+            {
+                "llvm" => availability.Llvm,
+                "gcc"  => availability.Gcc,
+                "msvc" => availability.Msvc,
+                _      => true,
+            };
+            backend.IsEnabled = installed;
+            backend.AvailabilityHint = installed ? null : "(not installed)";
+            if (installed) anyInstalled = true;
         }
-        SelectedBackend = Backends[0];
+
+        NoToolchainInstalled = anyToolchainOptions && !anyInstalled;
+
+        if (SelectedBackend is { IsEnabled: false } && anyInstalled)
+            SelectedBackend = Backends.First(b => b.IsEnabled);
+
+        // The selection can keep its identity while its availability changes
+        // (none-installed keeps the disabled selection), so recompute here too.
+        RecomputeCppStandards();
+    }
+
+    /// <summary>c++23 is offered only for an installed llvm/gcc selection (an
+    /// explicit whitelist: MSVC's cl maxes at c++20 here, and a disabled or
+    /// absent selection must not admit c++23 either). The collection instance
+    /// stays stable for the view; the selection snaps back to c++20 when the
+    /// current standard leaves the offer.</summary>
+    private void RecomputeCppStandards()
+    {
+        bool offerCpp23 = SelectedBackend is { IsEnabled: true, ToolchainId: "llvm" or "gcc" };
+        var desired = offerCpp23
+            ? new[] { "c++23", "c++20", "c++17", "c++14" }
+            : new[] { "c++20", "c++17", "c++14" };
+
+        if (!CppStandards.SequenceEqual(desired))
+        {
+            CppStandards.Clear();
+            foreach (var s in desired) CppStandards.Add(s);
+        }
+
+        if (!CppStandards.Contains(CppStandard))
+            CppStandard = "c++20";
     }
 
     partial void OnSelectedLanguageOptionChanged(LanguageOption? value)
@@ -144,6 +265,7 @@ public partial class NewProjectWizardViewModel : ObservableObject
     {
         RebuildCategories();
         RefreshTemplates();
+        RecomputeCppStandards();
         OnPropertyChanged(nameof(ShowFrameworkSelector));
         OnPropertyChanged(nameof(CanCreate));
     }
@@ -257,9 +379,14 @@ public partial class NewProjectWizardViewModel : ObservableObject
                 CreateSolutionFolder = CreateSolutionFolder,
                 CreateGitRepository = CreateGitRepository,
                 TargetFramework = TargetFramework,
-                Namespace = CustomNamespace
-                // NOTE (spec): CppStandard + toolchain are display-only this pass —
-                // there is no field on CreateProjectOptions to carry them.
+                Namespace = CustomNamespace,
+                // C++ projects carry the wizard's standard; the toolchain travels
+                // only when the selected one is actually installed — never persist
+                // an unavailable choice into the project.
+                CppStandard = SelectedLanguage == ProjectLanguage.Cpp ? CppStandard : null,
+                CppToolchain = SelectedLanguage == ProjectLanguage.Cpp && SelectedBackend is { IsEnabled: true }
+                    ? SelectedBackend.ToolchainId
+                    : null
             };
 
             var result = await _templateService.CreateProjectAsync(options);
@@ -288,9 +415,15 @@ public partial class NewProjectWizardViewModel : ObservableObject
 /// <summary>Design-time VM so the two wizard views preview in the AXAML designer.</summary>
 public class NewProjectWizardDesignViewModel : NewProjectWizardViewModel
 {
-    public NewProjectWizardDesignViewModel() : base(new DesignTemplateService())
+    public NewProjectWizardDesignViewModel() : base(new DesignTemplateService(), new DesignToolchainProbe())
     {
         ProjectName = "MyProject";
+    }
+
+    /// <summary>Everything "installed" so the designer never greys the options.</summary>
+    private sealed class DesignToolchainProbe : ICppToolchainProbe
+    {
+        public ToolchainAvailability Probe() => new(Llvm: true, Gcc: true, Msvc: true);
     }
 
     private sealed class DesignTemplateService : IProjectTemplateService

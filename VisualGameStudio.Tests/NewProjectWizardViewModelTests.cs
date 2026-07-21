@@ -31,10 +31,23 @@ public class NewProjectWizardViewModelTests
         public IReadOnlyList<ProjectTemplate> GetRecentTemplates() => new List<ProjectTemplate>();
     }
 
-    private static NewProjectWizardViewModel NewVm(out FakeTemplateService svc)
+    // Fixed-answer probe so tests control which toolchains "exist" on the machine.
+    private sealed class FakeToolchainProbe : ICppToolchainProbe
+    {
+        private readonly ToolchainAvailability _availability;
+        public FakeToolchainProbe(ToolchainAvailability availability) => _availability = availability;
+        public ToolchainAvailability Probe() => _availability;
+    }
+
+    // Default availability = everything installed, so pre-existing tests keep
+    // their "nothing greyed out" world. Tests that care pass an explicit value
+    // and MUST await vm.ToolchainProbeTask before asserting probe-driven state.
+    private static NewProjectWizardViewModel NewVm(out FakeTemplateService svc, ToolchainAvailability? toolchains = null)
     {
         svc = new FakeTemplateService();
-        return new NewProjectWizardViewModel(svc);
+        return new NewProjectWizardViewModel(
+            svc,
+            new FakeToolchainProbe(toolchains ?? new ToolchainAvailability(Llvm: true, Gcc: true, Msvc: true)));
     }
 
     [Test]
@@ -212,18 +225,160 @@ public class NewProjectWizardViewModelTests
     }
 
     [Test]
-    public async Task CreateProject_Cpp_UsesCppSolutionType_AndIgnoresToolchain()
+    public async Task CreateProject_Cpp_UsesCppSolutionType_AndCarriesToolchain()
     {
-        var vm = NewVm(out var svc);
+        var vm = NewVm(out var svc); // all toolchains installed
+        await vm.ToolchainProbeTask;
         vm.SelectedLanguage = ProjectLanguage.Cpp;
-        vm.SelectedBackend = vm.Backends.First(b => b.ToolchainId == "gcc"); // display-only
+        vm.SelectedBackend = vm.Backends.First(b => b.ToolchainId == "gcc");
         vm.ProjectName = "NativeDemo";
         vm.Location = "X:/here";
 
         await vm.CreateProjectCommand.ExecuteAsync(null);
 
         Assert.That(svc.LastOptions!.SolutionType.Id, Is.EqualTo("cpp"));
-        // CreateProjectOptions has no toolchain field — the gcc choice cannot leak.
+        // The toolchain choice is real now: it flows into the created project.
+        Assert.That(svc.LastOptions.CppToolchain, Is.EqualTo("gcc"));
+    }
+
+    [Test]
+    public async Task CreateProject_Cpp_FillsCppStandardAndAvailableToolchain()
+    {
+        var vm = NewVm(out var svc, new ToolchainAvailability(Llvm: false, Gcc: false, Msvc: true));
+        await vm.ToolchainProbeTask;
+        vm.SelectedLanguage = ProjectLanguage.Cpp; // auto-select lands on msvc (only one installed)
+        vm.CppStandard = "c++17";
+        vm.ProjectName = "NativeDemo";
+        vm.Location = "X:/here";
+
+        await vm.CreateProjectCommand.ExecuteAsync(null);
+
+        Assert.That(svc.LastOptions!.CppToolchain, Is.EqualTo("msvc"));
+        Assert.That(svc.LastOptions.CppStandard, Is.EqualTo("c++17"));
+    }
+
+    [Test]
+    public async Task CreateProject_Cpp_NoneInstalled_OmitsToolchain()
+    {
+        var vm = NewVm(out var svc, new ToolchainAvailability(Llvm: false, Gcc: false, Msvc: false));
+        await vm.ToolchainProbeTask;
+        vm.SelectedLanguage = ProjectLanguage.Cpp;
+        vm.ProjectName = "NativeDemo";
+        vm.Location = "X:/here";
+
+        await vm.CreateProjectCommand.ExecuteAsync(null);
+
+        Assert.That(svc.LastOptions!.CppToolchain, Is.Null);          // never persist an uninstalled toolchain
+        Assert.That(svc.LastOptions.CppStandard, Is.EqualTo("c++20")); // standard still travels
+    }
+
+    [Test]
+    public async Task CreateProject_BasicLang_LeavesBothNull()
+    {
+        var vm = NewVm(out var svc);
+        await vm.ToolchainProbeTask;
+        vm.SelectedBackend = vm.Backends.First(b => b.SolutionType.Id == "dotnet");
+        vm.ProjectName = "Demo";
+        vm.Location = "X:/here";
+
+        await vm.CreateProjectCommand.ExecuteAsync(null);
+
+        Assert.That(svc.LastOptions!.CppStandard, Is.Null);
+        Assert.That(svc.LastOptions.CppToolchain, Is.Null);
+    }
+
+    [Test]
+    public async Task Probe_MarksUnavailableBackendsDisabled()
+    {
+        var vm = NewVm(out _, new ToolchainAvailability(Llvm: false, Gcc: false, Msvc: true));
+        await vm.ToolchainProbeTask;
+        vm.SelectedLanguage = ProjectLanguage.Cpp;
+
+        var llvm = vm.Backends.First(b => b.ToolchainId == "llvm");
+        var gcc  = vm.Backends.First(b => b.ToolchainId == "gcc");
+        var msvc = vm.Backends.First(b => b.ToolchainId == "msvc");
+
+        Assert.That(llvm.IsEnabled, Is.False);
+        Assert.That(llvm.AvailabilityHint, Is.EqualTo("(not installed)"));
+        Assert.That(gcc.IsEnabled, Is.False);
+        Assert.That(gcc.AvailabilityHint, Is.EqualTo("(not installed)"));
+        Assert.That(msvc.IsEnabled, Is.True);
+        Assert.That(msvc.AvailabilityHint, Is.Null);
+    }
+
+    [Test]
+    public async Task Probe_SelectedUnavailable_AutoSelectsFirstAvailable()
+    {
+        var vm = NewVm(out _, new ToolchainAvailability(Llvm: false, Gcc: false, Msvc: true));
+        await vm.ToolchainProbeTask;
+        vm.SelectedLanguage = ProjectLanguage.Cpp; // Backends[0] = llvm, which is not installed
+
+        Assert.That(vm.SelectedBackend, Is.Not.Null);
+        Assert.That(vm.SelectedBackend!.ToolchainId, Is.EqualTo("msvc"));
+    }
+
+    [Test]
+    public async Task Probe_NoneInstalled_ShowsWarning_AllowsProceeding()
+    {
+        var vm = NewVm(out _, new ToolchainAvailability(Llvm: false, Gcc: false, Msvc: false));
+        await vm.ToolchainProbeTask;
+        vm.SelectedLanguage = ProjectLanguage.Cpp;
+
+        Assert.That(vm.NoToolchainInstalled, Is.True);
+        Assert.That(vm.Backends.All(b => !b.IsEnabled), Is.True); // visible but disabled
+        Assert.That(vm.SelectedBackend, Is.Not.Null);             // selection survives so Create stays possible
+
+        vm.ProjectName = "NativeDemo";
+        vm.Location = "X:/here";
+        Assert.That(vm.CanCreate, Is.True);
+
+        // Warning is a C++-only concern: switching back to BasicLang clears it.
+        vm.SelectedLanguage = ProjectLanguage.BasicLang;
+        Assert.That(vm.NoToolchainInstalled, Is.False);
+    }
+
+    [Test]
+    public async Task CppStandards_IncludesCpp23_ForLlvmAndGcc_NotMsvc()
+    {
+        var vm = NewVm(out _); // all installed
+        await vm.ToolchainProbeTask;
+        vm.SelectedLanguage = ProjectLanguage.Cpp;
+
+        vm.SelectedBackend = vm.Backends.First(b => b.ToolchainId == "llvm");
+        Assert.That(vm.CppStandards, Does.Contain("c++23"));
+
+        vm.SelectedBackend = vm.Backends.First(b => b.ToolchainId == "gcc");
+        Assert.That(vm.CppStandards, Does.Contain("c++23"));
+
+        vm.SelectedBackend = vm.Backends.First(b => b.ToolchainId == "msvc");
+        Assert.That(vm.CppStandards, Does.Not.Contain("c++23"));
+        Assert.That(vm.CppStandards, Is.EquivalentTo(new[] { "c++20", "c++17", "c++14" }));
+    }
+
+    [Test]
+    public async Task SelectingMsvc_WithCpp23Selected_SnapsBackToCpp20()
+    {
+        var vm = NewVm(out _); // all installed
+        await vm.ToolchainProbeTask;
+        vm.SelectedLanguage = ProjectLanguage.Cpp; // llvm selected -> c++23 on offer
+        vm.CppStandard = "c++23";
+
+        vm.SelectedBackend = vm.Backends.First(b => b.ToolchainId == "msvc");
+
+        Assert.That(vm.CppStandards, Does.Not.Contain("c++23"));
+        Assert.That(vm.CppStandard, Is.EqualTo("c++20"));
+    }
+
+    [Test]
+    public async Task CppStandards_NoneInstalled_DoesNotOfferCpp23()
+    {
+        // Defensive: the selection may still point at llvm, but with nothing
+        // installed the disabled selection must not admit c++23.
+        var vm = NewVm(out _, new ToolchainAvailability(Llvm: false, Gcc: false, Msvc: false));
+        await vm.ToolchainProbeTask;
+        vm.SelectedLanguage = ProjectLanguage.Cpp;
+
+        Assert.That(vm.CppStandards, Does.Not.Contain("c++23"));
     }
 
     [Test]

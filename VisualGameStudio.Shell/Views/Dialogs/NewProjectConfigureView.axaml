@@ -85,6 +85,11 @@
           <TextBlock Text="C++ standard" FontWeight="SemiBold" Margin="0,0,0,4"/>
           <ComboBox ItemsSource="{Binding CppStandards}" SelectedItem="{Binding CppStandard}"
                     HorizontalAlignment="Stretch"/>
+          <Border Background="#33806000" CornerRadius="4" Padding="8" Margin="0,4,0,0"
+                  IsVisible="{Binding NoToolchainInstalled}">
+            <TextBlock Text="No C++ toolchain detected — this project won't build until one is installed"
+                       Foreground="#E5C07B" FontSize="11" TextWrapping="Wrap"/>
+          </Border>
         </StackPanel>
 
         <!-- Options -->

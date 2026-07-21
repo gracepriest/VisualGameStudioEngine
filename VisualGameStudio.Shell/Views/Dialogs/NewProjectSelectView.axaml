@@ -39,7 +39,26 @@
             <TextBlock Text="Backend" FontWeight="SemiBold" Margin="0,0,0,4"/>
             <ComboBox ItemsSource="{Binding Backends}"
                       SelectedItem="{Binding SelectedBackend}"
-                      HorizontalAlignment="Stretch"/>
+                      HorizontalAlignment="Stretch">
+              <!-- Uninstalled toolchains stay visible but unselectable: the item
+                   container follows the option's probe-driven IsEnabled. -->
+              <ComboBox.ItemContainerTheme>
+                <ControlTheme TargetType="ComboBoxItem" BasedOn="{StaticResource {x:Type ComboBoxItem}}">
+                  <Setter Property="IsEnabled" Value="{ReflectionBinding IsEnabled}"/>
+                </ControlTheme>
+              </ComboBox.ItemContainerTheme>
+              <ComboBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:BackendOption">
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <TextBlock Text="{Binding Name}"/>
+                    <TextBlock Text="{Binding AvailabilityHint}" FontSize="11"
+                               VerticalAlignment="Center"
+                               Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                               IsVisible="{Binding AvailabilityHint, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                  </StackPanel>
+                </DataTemplate>
+              </ComboBox.ItemTemplate>
+            </ComboBox>
             <TextBlock Text="{Binding SelectedBackend.SolutionType.Description}"
                        TextWrapping="Wrap" FontSize="12"
                        Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"

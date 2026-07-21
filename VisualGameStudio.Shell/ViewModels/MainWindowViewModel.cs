@@ -57,6 +57,7 @@ public partial class MainWindowViewModel : ViewModelBase
     private readonly IBookmarkService _bookmarkService;
     private readonly IRefactoringService _refactoringService;
     private readonly IProjectTemplateService _projectTemplateService;
+    private readonly ICppToolchainProbe _cppToolchainProbe;
     private readonly IGitService _gitService;
     private readonly ILaunchConfigurationService _launchConfigurationService;
     private readonly IAutoSaveService _autoSaveService;
@@ -365,6 +366,7 @@ public partial class MainWindowViewModel : ViewModelBase
         IBookmarkService bookmarkService,
         IRefactoringService refactoringService,
         IProjectTemplateService projectTemplateService,
+        ICppToolchainProbe cppToolchainProbe,
         IGitService gitService,
         ILaunchConfigurationService launchConfigurationService,
         IAutoSaveService autoSaveService,
@@ -415,6 +417,7 @@ public partial class MainWindowViewModel : ViewModelBase
         _bookmarkService = bookmarkService;
         _refactoringService = refactoringService;
         _projectTemplateService = projectTemplateService;
+        _cppToolchainProbe = cppToolchainProbe;
         _gitService = gitService;
         _launchConfigurationService = launchConfigurationService;
         _autoSaveService = autoSaveService;
@@ -1958,7 +1961,7 @@ public partial class MainWindowViewModel : ViewModelBase
     {
         if (App.MainWindow == null) return;
 
-        var wizardVm = new ViewModels.Dialogs.NewProjectWizardViewModel(_projectTemplateService);
+        var wizardVm = new ViewModels.Dialogs.NewProjectWizardViewModel(_projectTemplateService, _cppToolchainProbe);
         var selectWindow = new Views.Dialogs.NewProjectSelectView(wizardVm);
 
         var result = await selectWindow.ShowDialog<ProjectCreationResult?>(App.MainWindow);
