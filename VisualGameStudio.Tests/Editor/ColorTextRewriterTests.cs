@@ -11,8 +11,10 @@ namespace VisualGameStudio.Tests.Editor;
 /// the picked alpha is translucent → four components) and re-emits the closing
 /// paren because the replace range includes it; VbHex digit count is
 /// PICKED-ALPHA-DRIVEN (a &lt; 255 → 8 digits &amp;H{A}{R}{G}{B}, else 6 digits
-/// &amp;H{R}{G}{B}), uppercase X2 hex.
-/// CppHex/BraceInit branches land in later tasks — until then they throw.
+/// &amp;H{R}{G}{B}), uppercase X2 hex; CppHex mirrors VbHex exactly but with a
+/// <c>0x</c> prefix (a &lt; 255 → 8 digits 0x{A}{R}{G}{B}, else 6 digits
+/// 0x{R}{G}{B}), uppercase X2 hex.
+/// BraceInit's branch lands in a later task — until then it throws.
 /// </summary>
 [TestFixture]
 public class ColorTextRewriterTests
@@ -66,17 +68,29 @@ public class ColorTextRewriterTests
     }
 
     // ---------------------------------------------------------------
-    // Future kinds — rewriter-first ordering: branches land in later
-    // tasks, so until then the kind name must surface in the throw.
+    // CppHex — mirrors VbHex exactly, but with a 0x prefix instead of &H
     // ---------------------------------------------------------------
 
     [Test]
-    public void CppHex_Throws_NotSupported_Yet()
+    public void CppHex_OpaquePick_EmitsSixDigits()
     {
-        var ex = Assert.Throws<NotSupportedException>(() =>
-            ColorTextRewriter.Rewrite(ColorMatchKind.CppHex, "0xFF33AAFF", 1, 2, 3, 255));
-        Assert.That(ex!.Message, Does.Contain("CppHex"));
+        var result = ColorTextRewriter.Rewrite(
+            ColorMatchKind.CppHex, "0x8033AAFF", 1, 2, 3, 255);
+        Assert.That(result, Is.EqualTo("0x010203"));
     }
+
+    [Test]
+    public void CppHex_TranslucentPick_EmitsEightDigits()
+    {
+        var result = ColorTextRewriter.Rewrite(
+            ColorMatchKind.CppHex, "0x33AAFF", 1, 2, 3, 128);
+        Assert.That(result, Is.EqualTo("0x80010203"));
+    }
+
+    // ---------------------------------------------------------------
+    // Future kinds — rewriter-first ordering: branches land in later
+    // tasks, so until then the kind name must surface in the throw.
+    // ---------------------------------------------------------------
 
     [Test]
     public void BraceInit_Throws_NotSupported_Yet()

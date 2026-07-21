@@ -9,7 +9,10 @@ namespace VisualGameStudio.Tests.Editor;
 /// the canonical LanguageFileTypes map) and the exact replace-range semantics the
 /// renderer's click-to-pick rewrite depends on:
 /// RgbCall = first R digit through the closing paren inclusive;
-/// VbHex = the &amp;H start through the literal end.
+/// VbHex = the &amp;H start through the literal end;
+/// CppHex = the 0x start through the literal end (exactly 6 or 8 hex digits,
+/// word-boundary bounded — mirrors VbHex but 0x is Cpp-only, &amp;H stays
+/// BasicLang-only).
 /// </summary>
 [TestFixture]
 public class ColorMatchFinderTests
@@ -160,6 +163,71 @@ public class ColorMatchFinderTests
 
         Assert.That(m.ReplaceStart, Is.EqualTo(line.IndexOf("&H")));
         Assert.That(m.ReplaceLength, Is.EqualTo("&H8033AAFF".Length));
+    }
+
+    // ---------------------------------------------------------------
+    // Cpp — CppHex pattern (0x literals, mirrors VbHex but Cpp-only)
+    // ---------------------------------------------------------------
+
+    [Test]
+    public void Cpp_CppHex_SixDigits_Matches()
+    {
+        const string line = "auto c = 0x33AAFF;";
+
+        var matches = ColorMatchFinder.FindMatches(line, ColorLanguage.Cpp);
+
+        Assert.That(matches, Has.Count.EqualTo(1));
+        var m = matches[0];
+        Assert.That(m.Kind, Is.EqualTo(ColorMatchKind.CppHex));
+        Assert.That(m.R, Is.EqualTo(0x33));
+        Assert.That(m.G, Is.EqualTo(0xAA));
+        Assert.That(m.B, Is.EqualTo(0xFF));
+        Assert.That(m.A, Is.EqualTo(255));
+        Assert.That(m.HasAlphaComponent, Is.False);
+
+        // Replace range: the 0x start through the literal end.
+        Assert.That(m.ReplaceStart, Is.EqualTo(line.IndexOf("0x")));
+        Assert.That(m.ReplaceLength, Is.EqualTo("0x33AAFF".Length));
+    }
+
+    [Test]
+    public void Cpp_CppHex_EightDigits_Matches()
+    {
+        const string line = "auto c = 0x8033AAFF;";
+
+        var matches = ColorMatchFinder.FindMatches(line, ColorLanguage.Cpp);
+
+        Assert.That(matches, Has.Count.EqualTo(1));
+        var m = matches[0];
+        Assert.That(m.Kind, Is.EqualTo(ColorMatchKind.CppHex));
+        Assert.That(m.A, Is.EqualTo(0x80));
+        Assert.That(m.R, Is.EqualTo(0x33));
+        Assert.That(m.G, Is.EqualTo(0xAA));
+        Assert.That(m.B, Is.EqualTo(0xFF));
+        Assert.That(m.HasAlphaComponent, Is.True);
+
+        Assert.That(m.ReplaceStart, Is.EqualTo(line.IndexOf("0x")));
+        Assert.That(m.ReplaceLength, Is.EqualTo("0x8033AAFF".Length));
+    }
+
+    [Test]
+    public void Bas_CppHex_NoMatch()
+    {
+        // 0x is C++-only syntax — &H stays .bas-only, 0x never lights up there.
+        var matches = ColorMatchFinder.FindMatches(
+            "auto c = 0x33AAFF;", ColorLanguage.BasicLang);
+
+        Assert.That(matches, Is.Empty);
+    }
+
+    [TestCase("auto c = 0xFFF;")]
+    [TestCase("auto c = 0xFFFFFFFFF;")]
+    public void Cpp_CppHex_ShortOrLongHex_NoMatch(string line)
+    {
+        // Exactly 6 or 8 hex digits only — not 7 (short) and not 9+ (long).
+        var matches = ColorMatchFinder.FindMatches(line, ColorLanguage.Cpp);
+
+        Assert.That(matches, Is.Empty);
     }
 
     // ---------------------------------------------------------------

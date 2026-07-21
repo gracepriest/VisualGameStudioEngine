@@ -13,9 +13,13 @@ namespace VisualGameStudio.Editor.TextMarkers;
 /// <item><see cref="ColorMatchKind.VbHex"/> digit count is picked-alpha-driven:
 /// a &lt; 255 → 8 digits <c>&amp;H{A}{R}{G}{B}</c>, else 6 digits
 /// <c>&amp;H{R}{G}{B}</c> — uppercase X2.</item>
+/// <item><see cref="ColorMatchKind.CppHex"/> mirrors <see cref="ColorMatchKind.VbHex"/>
+/// exactly, with a <c>0x</c> prefix instead of <c>&amp;H</c>: digit count is
+/// picked-alpha-driven, a &lt; 255 → 8 digits <c>0x{A}{R}{G}{B}</c>, else 6 digits
+/// <c>0x{R}{G}{B}</c> — uppercase X2.</item>
 /// </list>
-/// <see cref="ColorMatchKind.CppHex"/> and <see cref="ColorMatchKind.BraceInit"/>
-/// have no rewrite rules yet (their patterns land with their branches) — they throw.
+/// <see cref="ColorMatchKind.BraceInit"/> has no rewrite rule yet (its pattern lands
+/// with its branch) — it throws.
 /// </summary>
 public static class ColorTextRewriter
 {
@@ -45,6 +49,13 @@ public static class ColorTextRewriter
                 if (a < 255)
                     return $"&H{a:X2}{r:X2}{g:X2}{b:X2}";
                 return $"&H{r:X2}{g:X2}{b:X2}";
+
+            case ColorMatchKind.CppHex:
+                // Mirrors VbHex exactly: digit count follows the PICKED alpha,
+                // just with a 0x prefix instead of &H.
+                if (a < 255)
+                    return $"0x{a:X2}{r:X2}{g:X2}{b:X2}";
+                return $"0x{r:X2}{g:X2}{b:X2}";
 
             default:
                 throw new NotSupportedException(

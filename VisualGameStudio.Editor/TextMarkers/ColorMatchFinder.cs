@@ -46,7 +46,9 @@ public sealed record ColorMatch(
 /// Replace-range semantics (the renderer's click-to-pick rewrite depends on these
 /// exactly): <see cref="ColorMatchKind.RgbCall"/> spans from the first R digit
 /// through the closing paren inclusive; <see cref="ColorMatchKind.VbHex"/> spans
-/// from the <c>&amp;H</c> start through the end of the literal.
+/// from the <c>&amp;H</c> start through the end of the literal;
+/// <see cref="ColorMatchKind.CppHex"/> spans from the <c>0x</c> start through the
+/// end of the literal, analogous to <see cref="ColorMatchKind.VbHex"/>.
 /// </summary>
 public static class ColorMatchFinder
 {
@@ -63,6 +65,17 @@ public static class ColorMatchFinder
     /// </summary>
     private static readonly Regex HexColorPattern = new(
         @"&H([0-9A-Fa-f]{6,8})\b",
+        RegexOptions.Compiled);
+
+    /// <summary>
+    /// Matches C++-style hex color literals: 0xRRGGBB or 0xAARRGGBB. Unlike
+    /// <see cref="HexColorPattern"/>'s {6,8} (which admits 7 digits), this is an
+    /// EXACT 6-or-8 alternation so 7-digit and 9+-digit runs never match — the
+    /// trailing word boundary rejects a longer run because the extra hex digit
+    /// keeps both sides of the boundary as word characters.
+    /// </summary>
+    private static readonly Regex CppHexColorPattern = new(
+        @"0x([0-9A-Fa-f]{8}|[0-9A-Fa-f]{6})\b",
         RegexOptions.Compiled);
 
     /// <summary>
@@ -145,10 +158,11 @@ public static class ColorMatchFinder
     /// <summary>
     /// Finds every color value in a single line of source text, using the pattern
     /// set for <paramref name="language"/>. BasicLang runs {RgbCall, VbHex} with the
-    /// <see cref="EnginePrefix"/> optional on RgbCall names; Cpp runs {RgbCall} with
-    /// the prefix REQUIRED (unprefixed names never match — that keeps raylib-style
-    /// geometry calls like DrawRectangle(10, 20, 100, 50) swatch-free); None never
-    /// matches.
+    /// <see cref="EnginePrefix"/> optional on RgbCall names; Cpp runs
+    /// {RgbCall, CppHex} with the prefix REQUIRED on RgbCall names (unprefixed names
+    /// never match — that keeps raylib-style geometry calls like
+    /// DrawRectangle(10, 20, 100, 50) swatch-free) and <c>0x</c> hex literals
+    /// (Cpp-only, mirroring how <c>&amp;H</c> is BasicLang-only); None never matches.
     /// </summary>
     public static IReadOnlyList<ColorMatch> FindMatches(string lineText, ColorLanguage language)
     {
@@ -193,35 +207,64 @@ public static class ColorMatchFinder
                 HasAlphaComponent: match.Groups[6].Success));
         }
 
-        // Detect hex color patterns (&H literals are BasicLang-only syntax)
-        if (language != ColorLanguage.BasicLang)
-            return results;
-
-        foreach (Match match in HexColorPattern.Matches(lineText))
+        // Detect hex color patterns: &H is BasicLang-only, 0x is Cpp-only.
+        if (language == ColorLanguage.BasicLang)
         {
-            var hexStr = match.Groups[1].Value;
-            byte r, g, b, a = 255;
-
-            if (hexStr.Length == 8)
+            foreach (Match match in HexColorPattern.Matches(lineText))
             {
-                a = Convert.ToByte(hexStr.Substring(0, 2), 16);
-                r = Convert.ToByte(hexStr.Substring(2, 2), 16);
-                g = Convert.ToByte(hexStr.Substring(4, 2), 16);
-                b = Convert.ToByte(hexStr.Substring(6, 2), 16);
-            }
-            else // 6 chars
-            {
-                r = Convert.ToByte(hexStr.Substring(0, 2), 16);
-                g = Convert.ToByte(hexStr.Substring(2, 2), 16);
-                b = Convert.ToByte(hexStr.Substring(4, 2), 16);
-            }
+                var hexStr = match.Groups[1].Value;
+                byte r, g, b, a = 255;
 
-            // Replace range: the &H start through the literal end.
-            results.Add(new ColorMatch(
-                ColorMatchKind.VbHex,
-                match.Index, match.Length,
-                r, g, b, a,
-                HasAlphaComponent: hexStr.Length == 8));
+                if (hexStr.Length == 8)
+                {
+                    a = Convert.ToByte(hexStr.Substring(0, 2), 16);
+                    r = Convert.ToByte(hexStr.Substring(2, 2), 16);
+                    g = Convert.ToByte(hexStr.Substring(4, 2), 16);
+                    b = Convert.ToByte(hexStr.Substring(6, 2), 16);
+                }
+                else // 6 chars
+                {
+                    r = Convert.ToByte(hexStr.Substring(0, 2), 16);
+                    g = Convert.ToByte(hexStr.Substring(2, 2), 16);
+                    b = Convert.ToByte(hexStr.Substring(4, 2), 16);
+                }
+
+                // Replace range: the &H start through the literal end.
+                results.Add(new ColorMatch(
+                    ColorMatchKind.VbHex,
+                    match.Index, match.Length,
+                    r, g, b, a,
+                    HasAlphaComponent: hexStr.Length == 8));
+            }
+        }
+        else if (language == ColorLanguage.Cpp)
+        {
+            foreach (Match match in CppHexColorPattern.Matches(lineText))
+            {
+                var hexStr = match.Groups[1].Value;
+                byte r, g, b, a = 255;
+
+                if (hexStr.Length == 8)
+                {
+                    a = Convert.ToByte(hexStr.Substring(0, 2), 16);
+                    r = Convert.ToByte(hexStr.Substring(2, 2), 16);
+                    g = Convert.ToByte(hexStr.Substring(4, 2), 16);
+                    b = Convert.ToByte(hexStr.Substring(6, 2), 16);
+                }
+                else // 6 chars
+                {
+                    r = Convert.ToByte(hexStr.Substring(0, 2), 16);
+                    g = Convert.ToByte(hexStr.Substring(2, 2), 16);
+                    b = Convert.ToByte(hexStr.Substring(4, 2), 16);
+                }
+
+                // Replace range: the 0x start through the literal end.
+                results.Add(new ColorMatch(
+                    ColorMatchKind.CppHex,
+                    match.Index, match.Length,
+                    r, g, b, a,
+                    HasAlphaComponent: hexStr.Length == 8));
+            }
         }
 
         return results;
