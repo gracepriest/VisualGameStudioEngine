@@ -96,10 +96,12 @@ public static class ColorMatchFinder
         "DrawArc", "DrawArcLines", "SetTint", "SetTextColor",
 
         // framework.h audit (color-tail exports: params end in r, g, b [, a]).
-        // Exports whose color is NOT the parameter tail (e.g. Camera_Flash,
+        // Exports deliberately absent from the whitelist below (Camera_Flash,
         // Effects_Flash, Tween_Color, Lighting_SetDayAmbient, the Color_* utils,
-        // Cutscene_SetDialogueColors) are deliberately absent — trailing non-color
-        // args would misparse as components.
+        // Cutscene_SetDialogueColors, Light_SetColor, Path_DrawDebug) share one
+        // failure mode: a preceding numeric argument (or an earlier color) gets
+        // absorbed into the greedy 4-number capture window, misparsing the id or
+        // first color as R.
         "Atlas_DrawSprite", "Atlas_DrawSpriteEx", "Atlas_DrawSpritePro",
         "Batch_AddSprite", "Batch_AddSpriteSimple",
         "Cmd_SetBackgroundColor", "Cmd_SetTextColor", "Console_PrintColored",
@@ -111,16 +113,16 @@ public static class ColorMatchFinder
         "DrawGradientCircle", "DrawGradientLine", "DrawGradientRect4",
         "DrawGradientRectH", "DrawGradientRectV",
         "DrawSpline", "DrawTextCentered", "DrawTextExH", "DrawTextRight",
-        "DrawTextureH", "DrawTextureNPatch", "DrawTexturePro", "DrawTextureProH",
-        "DrawTextureRec", "DrawTextureRecH", "DrawTextureV", "DrawTextureVH",
-        "DrawTextureExH",
+        "DrawTextureExH", "DrawTextureH", "DrawTextureNPatch", "DrawTexturePro",
+        "DrawTextureProH", "DrawTextureRec", "DrawTextureRecH", "DrawTextureV",
+        "DrawTextureVH",
         "Ecs_SetEmitterColorEnd", "Ecs_SetEmitterColorStart",
         "Ecs_SetEmitterColorStop", "Ecs_SetEmitterTrailColor", "Ecs_SetSpriteTint",
         "Effects_SetFadeColor", "Effects_SetTintColor", "Effects_SetVignetteColor",
-        "Level_SetBackground", "Light_SetColor",
+        "Level_SetBackground",
         "Lighting_SetAmbientColor", "Lighting_SetDirectionalColor",
         "Lighting_SetShadowColor",
-        "Parallax_SetTint", "Path_DrawDebug",
+        "Parallax_SetTint",
         "Scene_SetTransitionColor", "Skeleton_Draw", "SpriteSheet_DrawFrame",
         "Trail_SetColor",
         "UI_SetBackgroundColor", "UI_SetBorderColor", "UI_SetDisabledColor",

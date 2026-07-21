@@ -273,6 +273,20 @@ public class ColorMatchFinderTests
         Assert.That(m.A, Is.EqualTo(255));
     }
 
+    // Light_SetColor(lightId, r, g, b) and Path_DrawDebug(pathId, r, g, b) have
+    // EXACTLY-3-component color tails preceded by a numeric id. The greedy
+    // 4-capture window would absorb the id as R (Light_SetColor(2, 255, 128, 0)
+    // -> R=2!) and hand the id slot to the click-to-pick rewriter — so both are
+    // excluded from the whitelist and must never match.
+    [TestCase("Light_SetColor(2, 255, 128, 0)")]
+    [TestCase("Path_DrawDebug(3, 255, 128, 0)")]
+    public void Bas_LightSetColor_IdAbsorption_NoMatch(string line)
+    {
+        var matches = ColorMatchFinder.FindMatches(line, ColorLanguage.BasicLang);
+
+        Assert.That(matches, Is.Empty);
+    }
+
     // ---------------------------------------------------------------
     // Language gate — Cpp matches ONLY Framework_-prefixed RgbCalls
     // (no VbHex, no unprefixed names); None never matches
