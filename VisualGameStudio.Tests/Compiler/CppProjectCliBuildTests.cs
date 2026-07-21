@@ -172,6 +172,96 @@ public class CppProjectCliBuildTests
         }
     }
 
+    private ProjectFile MakeCppProjectPinnedTo(string toolchainId)
+    {
+        // Minimal compilable source so the pin gate is reached (past BL6007).
+        File.WriteAllText(Path.Combine(_dir, "main.cpp"), "int main() { return 0; }\n");
+        var blproj = Path.Combine(_dir, "App.blproj");
+        File.WriteAllText(blproj, $"""
+            <BasicLangProject Version="1.0">
+              <PropertyGroup>
+                <ProjectName>App</ProjectName>
+                <OutputType>Exe</OutputType>
+                <Language>Cpp</Language>
+                <TargetBackend>Cpp</TargetBackend>
+                <CppToolchain>{toolchainId}</CppToolchain>
+              </PropertyGroup>
+            </BasicLangProject>
+            """);
+        return ProjectFile.Load(blproj);
+    }
+
+    [Test]
+    public void Build_UnknownToolchainId_FailsWithBL6015()
+    {
+        // Machine-independent: no machine can satisfy an id the resolver does not
+        // know, so this exercises the REAL TryFindById path everywhere.
+        var project = MakeCppProjectPinnedTo("borland");
+
+        var result = CppProjectBuilder.Build(project, "Debug");
+
+        Assert.That(result.Success, Is.False);
+        var diag = result.Diagnostics.FirstOrDefault(d => d.Code == "BL6015");
+        Assert.That(diag, Is.Not.Null, "expected BL6015; got: "
+            + string.Join("\n", result.Diagnostics.Select(CppDiagnosticsParser.FormatNormalized)));
+        Assert.That(diag!.Message, Does.Contain("borland"));
+    }
+
+    [Test]
+    public void Build_MissingToolchain_BL6015_NamesRequestedAndDetected()
+    {
+        // Deterministic on every machine: injected seams simulate "gcc requested,
+        // only msvc installed" regardless of what this machine actually has.
+        var project = MakeCppProjectPinnedTo("gcc");
+
+        var result = CppProjectBuilder.Build(project, "Debug",
+            resolveById: _ => null,
+            probeAvailability: () => new CppToolchainAvailability(Llvm: false, Gcc: false, Msvc: true));
+
+        Assert.That(result.Success, Is.False);
+        var diag = result.Diagnostics.FirstOrDefault(d => d.Code == "BL6015");
+        Assert.That(diag, Is.Not.Null);
+        Assert.That(diag!.Message,
+            Does.Contain("gcc").And.Contain("msvc").And.Contain("Install gcc"));
+    }
+
+    [Test]
+    public void Build_NoToolchainElement_UsesMachineProbe_AsToday()
+    {
+        // No <CppToolchain> = the pre-existing machine-probe path, unchanged:
+        // never BL6015, and the BL6005-vs-success split is exactly Find()'s.
+        var project = MakeCppProject(("main.cpp", "int main() { return 0; }\n"));
+
+        var result = CppProjectBuilder.Build(project, "Debug");
+
+        Assert.That(result.Diagnostics.Select(d => d.Code), Does.Not.Contain("BL6015"));
+        if (CppToolchain.Find() != null)
+            Assert.That(result.Success, Is.True, "probe build failed:\n" + result.RawToolchainOutput
+                + "\n" + string.Join("\n", result.Diagnostics.Select(CppDiagnosticsParser.FormatNormalized)));
+        else
+            Assert.That(result.Diagnostics.Select(d => d.Code), Does.Contain("BL6005"));
+    }
+
+    [Test]
+    public void Build_MissingToolchain_RealMachine_E2E()
+    {
+        // The un-mocked leg: on a machine without g++ (the dev machine keeps
+        // winlibs off PATH), pinning gcc must fail BL6015 through the REAL
+        // TryFindById / ProbeAvailability pair.
+        if (CppToolchain.ProbeAvailability().Gcc)
+            Assert.Ignore("g++ is installed on this machine; the mocked variant covers the miss");
+
+        var project = MakeCppProjectPinnedTo("gcc");
+
+        var result = CppProjectBuilder.Build(project, "Debug");
+
+        Assert.That(result.Success, Is.False);
+        var diag = result.Diagnostics.FirstOrDefault(d => d.Code == "BL6015");
+        Assert.That(diag, Is.Not.Null, "expected BL6015; got: "
+            + string.Join("\n", result.Diagnostics.Select(CppDiagnosticsParser.FormatNormalized)));
+        Assert.That(diag!.Message, Does.Contain("gcc"));
+    }
+
     [Test]
     public void Build_UnparseableFailure_FallsBackToBL6006()
     {

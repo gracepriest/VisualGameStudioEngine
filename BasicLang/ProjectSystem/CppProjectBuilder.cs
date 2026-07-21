@@ -32,7 +32,7 @@ namespace BasicLang.Compiler.ProjectSystem
         /// <summary>The resolved toolchain, or NULL — legitimately so on the IntelliSense
         /// path, which does not require one (the emitter falls back to the blessed clang++
         /// identity). Non-null whenever <see cref="Completed"/> is true on a BUILD, because
-        /// EmitCore hard-fails BL6005 first; that is the only reason Build may dereference
+        /// EmitCore hard-fails BL6005/BL6015 first; that is the only reason Build may dereference
         /// it unguarded. The declared type cannot express this, and BasicLang.csproj has
         /// CS8602/CS8604 in NoWarn, so the compiler will not warn a future caller either.</summary>
         public CppToolchain Toolchain { get; set; }
@@ -57,11 +57,20 @@ namespace BasicLang.Compiler.ProjectSystem
     /// </summary>
     public static class CppProjectBuilder
     {
-        public static CppProjectBuildResult Build(ProjectFile project, string configuration)
+        /// <summary>
+        /// <paramref name="resolveById"/> / <paramref name="probeAvailability"/> are test
+        /// seams for <see cref="CppToolchain.TryFindById"/> /
+        /// <see cref="CppToolchain.ProbeAvailability"/> (null = the real ones), threaded
+        /// through to <see cref="EmitCore"/>'s toolchain gate the same way
+        /// resolveToolchain is.
+        /// </summary>
+        public static CppProjectBuildResult Build(ProjectFile project, string configuration,
+            Func<string, CppToolchain> resolveById = null,
+            Func<CppToolchainAvailability> probeAvailability = null)
         {
             var result = new CppProjectBuildResult();
             var emit = EmitCore(project, configuration, result,
-                CppToolchain.Find, forIntelliSense: false);
+                CppToolchain.Find, forIntelliSense: false, resolveById, probeAvailability);
             if (!emit.Completed)
                 return result;
 
@@ -117,7 +126,8 @@ namespace BasicLang.Compiler.ProjectSystem
         /// <item>BL6007 no-sources — a project mid-creation still deserves completion.</item>
         /// <item>The entry-point rule — a project with no <c>Sub Main</c> YET would
         /// otherwise get no headers at all, which is the normal mid-edit state.</item>
-        /// <item>BL6005 no-toolchain — the entire point of the seam.</item>
+        /// <item>BL6005 no-toolchain (and BL6015 pinned-toolchain-missing) — the entire
+        /// point of the seam.</item>
         /// <item>Native libs (BL6009) and the engine framework auto-link — LINK-time
         /// concerns. <c>request.Libraries</c> never reaches <c>CppToolchain.FlagsFor</c>,
         /// so libraries contribute NOTHING to a compilation database (it carries compile
@@ -133,7 +143,9 @@ namespace BasicLang.Compiler.ProjectSystem
         /// ordering Task 8's test pins.
         /// </summary>
         internal static CppEmitOutcome EmitCore(ProjectFile project, string configuration,
-            CppProjectBuildResult result, Func<CppToolchain> resolveToolchain, bool forIntelliSense)
+            CppProjectBuildResult result, Func<CppToolchain> resolveToolchain, bool forIntelliSense,
+            Func<string, CppToolchain> resolveById = null,
+            Func<CppToolchainAvailability> probeAvailability = null)
         {
             var outcome = new CppEmitOutcome();
             var projectDir = Path.GetDirectoryName(project.FilePath) ?? ".";
@@ -315,10 +327,30 @@ namespace BasicLang.Compiler.ProjectSystem
             // ---- 6. Toolchain (hard requirement for ALL native projects, D6) ----
             // Deliberately after the obj/gen write: the headers must exist even when this
             // gate fires (Task 8's test pins that ordering, Task 9 depends on it).
-            var toolchain = resolveToolchain();
+            //
+            // A project may pin one specific toolchain via <CppToolchain> ("llvm" | "gcc" |
+            // "msvc"); then ONLY that toolchain satisfies the build — a machine that has
+            // some other compiler installed gets BL6015 naming both sides, never a silent
+            // substitute. No pin = the machine probe, exactly as before. The pin drives
+            // IntelliSense emission through the SAME resolution (so the compile database
+            // matches what a build would use), but IntelliSense keeps tolerating a null
+            // result the same way it tolerates BL6005's — clang++-identity fallback below.
+            var requestedId = project.CppToolchain;
+            var toolchain = string.IsNullOrEmpty(requestedId)
+                ? resolveToolchain()
+                : (resolveById ?? CppToolchain.TryFindById)(requestedId);
             outcome.Toolchain = toolchain;
             if (toolchain == null && !forIntelliSense)
             {
+                if (!string.IsNullOrEmpty(requestedId))
+                {
+                    Fail(result, "BL6015",
+                        $"C++ toolchain '{requestedId}' requested by the project is not installed. "
+                        + $"Detected: {(probeAvailability ?? CppToolchain.ProbeAvailability)().DetectedList}. "
+                        + $"Install {requestedId} or change <CppToolchain> in the project file.",
+                        project.FilePath);
+                    return outcome;
+                }
                 Fail(result, "BL6005",
                     "No C++ toolchain found. Probed: clang++ (PATH), g++ (PATH), MSVC (vswhere). "
                     + "Install LLVM/clang (https://releases.llvm.org), MinGW-w64, or Visual Studio Build Tools.",
