@@ -87,6 +87,20 @@ namespace BasicLang.Compiler.ProjectSystem
         };
 
         /// <summary>
+        /// Build a toolchain from an explicit, user-configured path (Settings override).
+        /// llvm/gcc: <paramref name="resolvedPath"/> is the compiler exe (invoked by full
+        /// path, bypassing PATH). msvc: <paramref name="resolvedPath"/> is a vcvars64.bat
+        /// (the existing cmd+vcvars mechanism is reused). Null for an unknown id.
+        /// </summary>
+        public static CppToolchain FromExplicit(string id, string resolvedPath) => id?.Trim().ToLowerInvariant() switch
+        {
+            "llvm" => new CppToolchain("clang++ (configured)", resolvedPath),
+            "gcc" => new CppToolchain("g++ (configured)", resolvedPath),
+            "msvc" => new CppToolchain("MSVC (cl.exe, configured)", "cmd.exe", resolvedPath),
+            _ => null,
+        };
+
+        /// <summary>
         /// Cheap installed/not-installed check for every known toolchain id.
         /// Deliberately never runs vcvars64.bat (seconds-slow): the MSVC check is
         /// vswhere reporting an instance whose vcvars64.bat exists on disk — the
