@@ -120,8 +120,14 @@ public partial class SearchableSettingItem : ObservableObject
     /// background enrichment pass that upgrades a recognized-but-unconfirmed Warning to Valid + the
     /// detected version. The prior background task is cancelled on every re-edit so a stale probe can
     /// never clobber a newer one's result. Never runs on the UI thread.
+    ///
+    /// <c>internal</c> (not <c>private</c>) so <see cref="SettingsViewModel"/> can also call this on
+    /// dialog OPEN (spec §2): <c>LoadFromService</c> sets the six FilePath properties directly,
+    /// bypassing <see cref="StringValue"/>'s setter — the only other caller of this method — so
+    /// without this seam a previously-saved Invalid/Warning path would show blank/gray until the user
+    /// re-touched the field. See <c>SettingsViewModel.RevalidateAllFilePathItems</c>.
     /// </summary>
-    private void Revalidate(string value)
+    internal void Revalidate(string value)
     {
         _validationCts?.Cancel();
 
@@ -600,6 +606,10 @@ public partial class SettingsViewModel : ViewModelBase
         InitializeShortcuts();
         LoadSettings();
         BuildSearchableSettings();
+        // Defensive: if _settingsService was already resolved above, LoadSettings() (via
+        // LoadFromService) ran BEFORE _allSettings existed, so the tail-of-LoadFromService
+        // revalidation below was a no-op for this construction. Revalidate now that the items exist.
+        RevalidateAllFilePathItems();
         BuildCategories();
         UpdateScopePaths();
 
@@ -623,6 +633,27 @@ public partial class SettingsViewModel : ViewModelBase
         UpdateScopePaths();
         // Re-snapshot against the injected service (this() snapshotted against the DI/absent one).
         SnapshotForRevert();
+    }
+
+    /// <summary>
+    /// Spec §2: validation must reflect the CURRENT value on dialog OPEN, not only on edit. The six
+    /// cpp.toolchain.* FilePath properties are set directly by <see cref="LoadFromService"/> (and, at
+    /// construction, potentially by the legacy load path in <see cref="LoadSettings"/>), bypassing
+    /// <see cref="SearchableSettingItem.StringValue"/>'s setter — the only other trigger for
+    /// <see cref="SearchableSettingItem.Revalidate"/> — so without this, a previously-saved
+    /// Invalid/Warning path would show blank/gray until the user re-touched the field.
+    ///
+    /// Sync existence-only per item (same as StringValue's edit-time sync pass); each call also opts
+    /// into that item's normal background --version enrichment (off the UI thread, CTS-debounced) —
+    /// this deliberately does not add a SEPARATE synchronous version-probe path, just reuses the
+    /// existing one. No-ops harmlessly if _allSettings isn't built yet (see call sites).
+    /// </summary>
+    private void RevalidateAllFilePathItems()
+    {
+        foreach (var item in _allSettings)
+        {
+            if (item.IsFilePath) item.Revalidate(item.StringValue);
+        }
     }
 
     private void OnExternalSettingsChanged(object? sender, SettingsChangedEventArgs e)
@@ -1779,6 +1810,12 @@ public partial class SettingsViewModel : ViewModelBase
         GccDebuggerPath = _settingsService.Get(CppToolchainOverrides.DebuggerKey("gcc"), "", SettingsScope.User);
         MsvcCompilerPath = _settingsService.Get(CppToolchainOverrides.CompilerKey("msvc"), "", SettingsScope.User);
         MsvcDebuggerPath = _settingsService.Get(CppToolchainOverrides.DebuggerKey("msvc"), "", SettingsScope.User);
+
+        // Spec §2: a value loaded from disk (dialog open, external settings-file change, or after
+        // Reset All) must show its validation status immediately, not only after the user re-touches
+        // the field. No-ops harmlessly if _allSettings isn't built yet (see the constructor's own
+        // defensive call for that ordering).
+        RevalidateAllFilePathItems();
     }
 
     private void LoadSettings()

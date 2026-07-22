@@ -158,6 +158,38 @@ public class SettingsDialogToolchainFieldsGuardTests
         }
     }
 
+    // Spec §2: validation must reflect the CURRENT value on dialog OPEN, not only on edit.
+    // LoadFromService sets the six FilePath properties directly (bypassing StringValue's setter, the
+    // only OTHER trigger for SearchableSettingItem.Revalidate), so without an explicit on-open
+    // revalidation pass, a previously-saved Invalid path would render blank/gray until the user
+    // re-touched the field — the user's core "make sure it's valid, in the menu" expectation. This
+    // test never touches the field: it pre-seeds an Invalid gcc compiler path directly in the store,
+    // then asserts the constructed dialog's item already shows Invalid.
+    [Test]
+    public void FilePath_Item_Validates_On_Dialog_Open_Without_Any_Edit()
+    {
+        var service = MakeService(out var home);
+        try
+        {
+            var badPath = @"C:\does\not\exist\g++.exe";
+            service.Set(CppToolchainOverrides.CompilerKey("gcc"), badPath, SettingsScope.User);
+
+            var vm = new SettingsViewModel(service); // constructed only — no field is ever touched
+            var item = GetItem(vm, CppToolchainOverrides.CompilerKey("gcc"));
+
+            Assert.That(item.StringValue, Is.EqualTo(badPath), "sanity: the item loaded the pre-seeded value");
+            Assert.That(item.ValidationSeverity, Is.EqualTo("#F14C4C"),
+                "an Invalid path must show its red severity immediately on open, not the neutral default");
+            Assert.That(item.ValidationMessage, Does.Contain("not found"),
+                "the validation message must be populated on open, not left blank until an edit");
+        }
+        finally
+        {
+            service.Dispose();
+            try { Directory.Delete(home, true); } catch { }
+        }
+    }
+
     private static SearchableSettingItem GetItem(SettingsViewModel vm, string key)
     {
         // BuildCategories/UpdateCategorySettings populate CategorySettings for the selected category;
