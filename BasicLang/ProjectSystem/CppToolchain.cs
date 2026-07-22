@@ -90,15 +90,24 @@ namespace BasicLang.Compiler.ProjectSystem
         /// Build a toolchain from an explicit, user-configured path (Settings override).
         /// llvm/gcc: <paramref name="resolvedPath"/> is the compiler exe (invoked by full
         /// path, bypassing PATH). msvc: <paramref name="resolvedPath"/> is a vcvars64.bat
-        /// (the existing cmd+vcvars mechanism is reused). Null for an unknown id.
+        /// (the existing cmd+vcvars mechanism is reused). Null for an unknown id or a
+        /// null/blank path — the latter matters most for msvc: a null vcvarsPath would
+        /// otherwise silently produce a ClangLike-kind toolchain with a "cmd.exe" driver
+        /// nobody asked for, exactly the Kind/DriverName mismatch EmitCore's compile
+        /// database write depends on being unrepresentable.
         /// </summary>
-        public static CppToolchain FromExplicit(string id, string resolvedPath) => id?.Trim().ToLowerInvariant() switch
+        public static CppToolchain FromExplicit(string id, string resolvedPath)
         {
-            "llvm" => new CppToolchain("clang++ (configured)", resolvedPath),
-            "gcc" => new CppToolchain("g++ (configured)", resolvedPath),
-            "msvc" => new CppToolchain("MSVC (cl.exe, configured)", "cmd.exe", resolvedPath),
-            _ => null,
-        };
+            if (string.IsNullOrWhiteSpace(resolvedPath)) return null;
+            resolvedPath = resolvedPath.Trim();
+            return id?.Trim().ToLowerInvariant() switch
+            {
+                "llvm" => new CppToolchain("clang++ (configured)", resolvedPath),
+                "gcc" => new CppToolchain("g++ (configured)", resolvedPath),
+                "msvc" => new CppToolchain("MSVC (cl.exe, configured)", "cmd.exe", resolvedPath),
+                _ => null,
+            };
+        }
 
         /// <summary>
         /// Cheap installed/not-installed check for every known toolchain id.
