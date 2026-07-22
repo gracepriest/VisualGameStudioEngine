@@ -107,6 +107,39 @@ public class CppToolchainOverridesTests
         Assert.That(r.State, Is.EqualTo(OverrideState.Usable));
     }
 
+    // ---- ResolveDebugger: same tri-state resolver as ResolveCompiler, over the
+    // cpp.toolchain.<id>.debugger key. Consumed at the F5 site (MainWindowViewModel,
+    // Task 10) via MwvmDebuggerOverrideSourceGuardTests.cs's source guard — MWVM itself
+    // is DI-only and never constructed in this suite.
+
+    [Test]
+    public void ResolveDebugger_Blank_Is_None()
+    {
+        var ov = new CppToolchainOverrides(new FakeSettings(), fileExists: _ => true);
+        Assert.That(ov.ResolveDebugger("gcc").State, Is.EqualTo(OverrideState.None));
+    }
+
+    [Test]
+    public void ResolveDebugger_Set_Existing_Is_Usable_And_Registers_Consumer()
+    {
+        var settings = new FakeSettings { ["cpp.toolchain.gcc.debugger"] = @"C:\w\gdb.exe" };
+        var ov = new CppToolchainOverrides(settings, fileExists: p => p == @"C:\w\gdb.exe");
+        var r = ov.ResolveDebugger("gcc");
+        Assert.That(r.State, Is.EqualTo(OverrideState.Usable));
+        Assert.That(r.ResolvedPath, Is.EqualTo(@"C:\w\gdb.exe"));
+        Assert.That(SettingsConsumerRegistry.IsRegistered("cpp.toolchain.gcc.debugger"), Is.True);
+    }
+
+    [Test]
+    public void ResolveDebugger_Set_Missing_Is_Invalid()
+    {
+        var settings = new FakeSettings { ["cpp.toolchain.llvm.debugger"] = @"C:\nope-dbg.exe" };
+        var ov = new CppToolchainOverrides(settings, fileExists: _ => false);
+        var r = ov.ResolveDebugger("llvm");
+        Assert.That(r.State, Is.EqualTo(OverrideState.Invalid));
+        Assert.That(r.Message, Does.Contain(@"C:\nope-dbg.exe"));
+    }
+
     // ---- UsableCompilerToolchain: the DRY'd resolver shared by BuildService's pinned
     // resolveById and IntelliSenseEmissionService's regen-caller resolver (both build
     // "usable override -> FromExplicit, else PATH probe" and must not duplicate the lambda).

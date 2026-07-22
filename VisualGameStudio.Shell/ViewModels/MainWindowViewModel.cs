@@ -58,6 +58,7 @@ public partial class MainWindowViewModel : ViewModelBase
     private readonly IRefactoringService _refactoringService;
     private readonly IProjectTemplateService _projectTemplateService;
     private readonly ICppToolchainProbe _cppToolchainProbe;
+    private readonly ProjectSystem.Services.CppToolchainOverrides _toolchainOverrides;
     private readonly IGitService _gitService;
     private readonly ILaunchConfigurationService _launchConfigurationService;
     private readonly IAutoSaveService _autoSaveService;
@@ -367,6 +368,7 @@ public partial class MainWindowViewModel : ViewModelBase
         IRefactoringService refactoringService,
         IProjectTemplateService projectTemplateService,
         ICppToolchainProbe cppToolchainProbe,
+        ProjectSystem.Services.CppToolchainOverrides toolchainOverrides,
         IGitService gitService,
         ILaunchConfigurationService launchConfigurationService,
         IAutoSaveService autoSaveService,
@@ -418,6 +420,7 @@ public partial class MainWindowViewModel : ViewModelBase
         _refactoringService = refactoringService;
         _projectTemplateService = projectTemplateService;
         _cppToolchainProbe = cppToolchainProbe;
+        _toolchainOverrides = toolchainOverrides;
         _gitService = gitService;
         _launchConfigurationService = launchConfigurationService;
         _autoSaveService = autoSaveService;
@@ -3586,9 +3589,35 @@ public partial class MainWindowViewModel : ViewModelBase
             return;
         }
 
+        // Per-backend debugger override (Task 10): a native project pinned to a backend
+        // (llvm/gcc/msvc) may have an explicit debugger path set in Settings > C++. A
+        // Usable override rides the config as AdapterExecutableOverride and counts as
+        // "installed" below; an Invalid one aborts F5 outright — never silently fall back
+        // to the auto-probe chain on a path the user explicitly set and got wrong.
+        string? debuggerOverridePath = null;
+        var currentProject = _projectService.CurrentProject;
+        var pinnedCppToolchain = currentProject.CppSettings?.CppToolchain;
+        if (currentProject.IsNativeBuild && !string.IsNullOrEmpty(pinnedCppToolchain))
+        {
+            var debuggerResolution = _toolchainOverrides.ResolveDebugger(pinnedCppToolchain);
+            if (debuggerResolution.State == ProjectSystem.Services.OverrideState.Invalid)
+            {
+                OutputPanel.AppendOutput(
+                    $"Error: {pinnedCppToolchain} debugger path is invalid — " +
+                    $"{debuggerResolution.Message}. Fix or clear it in Settings > C++.\n");
+                return;
+            }
+            if (debuggerResolution.State == ProjectSystem.Services.OverrideState.Usable)
+            {
+                debuggerOverridePath = debuggerResolution.ResolvedPath;
+            }
+        }
+
         // Installed? Asked NOW, not at startup — lldb-dap may have been installed
-        // mid-session (the one-click acquisition flow), and this F5 must see it.
-        if (descriptor.ResolveLaunchCommand() is null)
+        // mid-session (the one-click acquisition flow), and this F5 must see it. An
+        // override counts as installed even when ResolveLaunchCommand() finds nothing
+        // on the default chain.
+        if (debuggerOverridePath is null && descriptor.ResolveLaunchCommand() is null)
         {
             ReportDebugAdapterMissing(descriptor);   // for lldb-dap, this carries the download-offer toast
             return;
@@ -3670,7 +3699,11 @@ public partial class MainWindowViewModel : ViewModelBase
             StopOnEntry = stopOnEntry,
             // The registry's answer rides the config — the debug service resolves this id
             // instead of re-deriving the routing rule.
-            AdapterId = descriptor.Id
+            AdapterId = descriptor.Id,
+            // Task 10: a Usable per-backend debugger override (resolved above); null for a
+            // non-native/unpinned project or when no override is set — DebugService then
+            // falls to descriptor.ResolveLaunchCommand() as before.
+            AdapterExecutableOverride = debuggerOverridePath
         };
 
         // Collect all breakpoints to send to the debug adapter. Path-keyed, no extension
