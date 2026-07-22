@@ -62,15 +62,19 @@ namespace BasicLang.Compiler.ProjectSystem
         /// seams for <see cref="CppToolchain.TryFindById"/> /
         /// <see cref="CppToolchain.ProbeAvailability"/> (null = the real ones), threaded
         /// through to <see cref="EmitCore"/>'s toolchain gate the same way
-        /// resolveToolchain is.
+        /// resolveToolchain is. <paramref name="resolveToolchain"/> is the unpinned-project
+        /// toolchain resolver (null = <see cref="CppToolchain.Find"/>); the IDE's
+        /// BuildService injects an override-aware resolver here, keeping this compiler
+        /// layer settings-agnostic.
         /// </summary>
         public static CppProjectBuildResult Build(ProjectFile project, string configuration,
             Func<string, CppToolchain> resolveById = null,
-            Func<CppToolchainAvailability> probeAvailability = null)
+            Func<CppToolchainAvailability> probeAvailability = null,
+            Func<CppToolchain> resolveToolchain = null)
         {
             var result = new CppProjectBuildResult();
             var emit = EmitCore(project, configuration, result,
-                CppToolchain.Find, forIntelliSense: false, resolveById, probeAvailability);
+                resolveToolchain ?? CppToolchain.Find, forIntelliSense: false, resolveById, probeAvailability);
             if (!emit.Completed)
                 return result;
 
