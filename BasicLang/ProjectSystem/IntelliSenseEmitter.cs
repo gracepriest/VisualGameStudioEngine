@@ -1,3 +1,5 @@
+using System;
+
 namespace BasicLang.Compiler.ProjectSystem
 {
     /// <summary>
@@ -28,9 +30,18 @@ namespace BasicLang.Compiler.ProjectSystem
         /// the blessed default (clang++, GNU flags). Callers that have probed should pass
         /// what they found so the database matches what a real build would produce; callers
         /// that have not may pass null. For a project that pins &lt;CppToolchain&gt;, the pin
-        /// overrides this parameter — EmitCore resolves it by id (a cheap probe); otherwise
-        /// discovery stays the caller's choice, and a null here is a supported state, not
-        /// an error.
+        /// overrides this parameter — EmitCore resolves it by id via <paramref name="resolveById"/>
+        /// (a cheap probe by default); otherwise discovery stays the caller's choice, and a
+        /// null here is a supported state, not an error.
+        /// </param>
+        /// <param name="resolveById">
+        /// How EmitCore resolves a project's pinned &lt;CppToolchain&gt; id to a
+        /// <see cref="CppToolchain"/>. Defaults to <see cref="CppToolchain.TryFindById"/> (a PATH
+        /// probe) when null. A caller that knows about a settings-configured, possibly off-PATH
+        /// compiler override should pass a resolver that honors it — otherwise a pin to an
+        /// off-PATH toolchain resolves to null here and the compile database silently falls back
+        /// to the clang++ identity, drifting from what a real build (which DOES honor the
+        /// override) would use.
         /// </param>
         /// <returns>
         /// <see cref="CppProjectBuildResult.Success"/> is true when both artifacts were
@@ -38,11 +49,12 @@ namespace BasicLang.Compiler.ProjectSystem
         /// IO failure). No compile, link, or deploy is ever attempted.
         /// </returns>
         public static CppProjectBuildResult Emit(
-            ProjectFile project, string configuration, CppToolchain toolchain = null)
+            ProjectFile project, string configuration, CppToolchain toolchain = null,
+            Func<string, CppToolchain> resolveById = null)
         {
             var result = new CppProjectBuildResult();
             var outcome = CppProjectBuilder.EmitCore(
-                project, configuration, result, () => toolchain, forIntelliSense: true);
+                project, configuration, result, () => toolchain, forIntelliSense: true, resolveById);
             // EmitCore stops at the compile-database write, so Completed IS success here —
             // unlike Build, where it only means "ready to compile".
             result.Success = outcome.Completed;

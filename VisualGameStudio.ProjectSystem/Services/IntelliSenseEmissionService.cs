@@ -72,6 +72,26 @@ public sealed class IntelliSenseEmissionService : IIntelliSenseEmissionService, 
     }
 
     /// <summary>
+    /// Production entry point once per-backend C++ toolchain overrides exist (Task 7): the
+    /// emitted <c>compile_commands.json</c> must name whatever a real build would use, including
+    /// a pinned, possibly off-PATH override — otherwise a project pinned to e.g. an off-PATH gcc
+    /// gets a clangd database that still says <c>clang++</c> while the build itself compiles with
+    /// the override, and clangd's diagnostics drift from what actually happened.
+    /// </summary>
+    public IntelliSenseEmissionService(IOutputService output, CppToolchainOverrides overrides)
+        : this(output, (projectPath, configuration) => IntelliSenseEmitter.Emit(
+            ProjectFile.Load(projectPath), configuration, toolchain: null,
+            resolveById: id =>
+            {
+                var r = overrides.ResolveCompiler(id);
+                return r.State == OverrideState.Usable
+                    ? CppToolchain.FromExplicit(id, r.ResolvedPath)
+                    : CppToolchain.TryFindById(id);
+            }))
+    {
+    }
+
+    /// <summary>
     /// Seam constructor: <paramref name="emit"/> receives (project file path, configuration).
     /// PUBLIC deliberately — this assembly has no <c>InternalsVisibleTo</c> for
     /// VisualGameStudio.Tests, and the properties worth testing here (off-thread, coalescing,

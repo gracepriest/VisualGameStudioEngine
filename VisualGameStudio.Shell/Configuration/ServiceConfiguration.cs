@@ -94,8 +94,13 @@ public static class ServiceConfiguration
         // that a transient registration would throw away, letting two emissions race into obj/gen.
         // Constructed explicitly rather than by type: the class also exposes a public emitter-seam
         // constructor for tests, and naming the production one here keeps DI from having to choose.
+        // Threaded through CppToolchainOverrides (Task 7) so a project pinned to a possibly
+        // off-PATH compiler override gets a compile_commands.json that names it, matching what
+        // BuildService's own override-aware resolver would compile with.
         services.AddSingleton<IIntelliSenseEmissionService>(sp =>
-            new IntelliSenseEmissionService(sp.GetRequiredService<IOutputService>()));
+            new IntelliSenseEmissionService(
+                sp.GetRequiredService<IOutputService>(),
+                sp.GetRequiredService<CppToolchainOverrides>()));
         // Saving a .bas/.mod/.cls file under the current project re-runs that emission after a
         // 1.5s trailing-edge debounce (Task 10, Phase 3b), so clangd tracks edits between builds;
         // the coordinator also watches the open project's .blproj through IFileWatcherService
