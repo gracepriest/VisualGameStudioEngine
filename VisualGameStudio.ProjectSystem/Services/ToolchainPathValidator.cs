@@ -66,12 +66,12 @@ public static class ToolchainPathValidator
             return vcvars != null
                 ? new(ToolchainPathStatus.Valid, "vcvars64.bat found", null, vcvars)
                 : new(ToolchainPathStatus.Invalid,
-                    "Point at a vcvars64.bat or a Visual Studio install directory (cl.exe is not valid here).",
+                    $"Not a vcvars64.bat or Visual Studio install directory: {trimmed}",
                     null, null);
         }
 
         if (!exists(trimmed))
-            return new(ToolchainPathStatus.Invalid, "File not found — fix the path or clear it.", null, null);
+            return new(ToolchainPathStatus.Invalid, $"File not found: {trimmed}", null, null);
 
         // Existence passed. Enrichment: only smoke a recognized driver basename.
         var basename = Path.GetFileNameWithoutExtension(trimmed).ToLowerInvariant();

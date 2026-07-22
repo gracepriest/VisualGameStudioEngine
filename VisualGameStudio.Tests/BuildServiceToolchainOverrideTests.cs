@@ -17,9 +17,9 @@ namespace VisualGameStudio.Tests;
 /// wires the DI-injected <see cref="CppToolchainOverrides"/> reader into
 /// <c>CppProjectBuilder.Build</c>'s <c>resolveById</c>/<c>resolveToolchain</c> seams, and
 /// pre-validates a PINNED, set-but-Invalid override as a hard error before any emission
-/// happens. Every "on PATH" case here is faked through the ctor's <c>pathResolve</c>/
-/// <c>pathFind</c> test seams — winlibs stays OFF PATH (standing constraint) and none of
-/// these tests may depend on a real installed compiler.
+/// happens. Every "on PATH" case here is faked through the ctor's <c>pathResolve</c>
+/// test seam — winlibs stays OFF PATH (standing constraint) and none of these tests may
+/// depend on a real installed compiler.
 /// </summary>
 [TestFixture]
 public class BuildServiceToolchainOverrideTests
@@ -57,8 +57,7 @@ public class BuildServiceToolchainOverrideTests
 
         var output = new RecordingOutput();
         var buildService = new BuildService(output, new ProjectSerializer(), overrides,
-            pathResolve: _ => null,   // nothing on PATH, deterministically
-            pathFind: () => null);
+            pathResolve: _ => null);   // nothing on PATH, deterministically
 
         var project = await CreateCppProjectOnDisk("PinnedGccUsable",
             "int main(){ return 0; }\n", cppToolchain: "gcc");
@@ -93,12 +92,7 @@ public class BuildServiceToolchainOverrideTests
 
         var output = new RecordingOutput();
         var buildService = new BuildService(output, new ProjectSerializer(), overrides,
-            pathResolve: id => id == "llvm" ? CppToolchain.FromExplicit("llvm", llvmOnPathFake) : null,
-            // Not all backends are None here (gcc has a Usable override), so the
-            // "nothing configured at all" fast path must never fire in this scenario —
-            // proven by making it explode if it ever does.
-            pathFind: () => throw new InvalidOperationException(
-                "pathFind must not be called when a backend override is configured"));
+            pathResolve: id => id == "llvm" ? CppToolchain.FromExplicit("llvm", llvmOnPathFake) : null);
 
         var project = await CreateCppProjectOnDisk("UnpinnedTieBreak", "int main(){ return 0; }\n");
 
@@ -131,9 +125,7 @@ public class BuildServiceToolchainOverrideTests
             // PATH, this would resolve fine and the test's failure assertions below would
             // catch it. Throwing makes the proof airtight: the seam must never even run.
             pathResolve: _ => throw new InvalidOperationException(
-                "pathResolve must not be called for a pinned, set-but-Invalid override"),
-            pathFind: () => throw new InvalidOperationException(
-                "pathFind must not be called for a pinned, set-but-Invalid override"));
+                "pathResolve must not be called for a pinned, set-but-Invalid override"));
 
         var project = await CreateCppProjectOnDisk("PinnedGccInvalid",
             "int main(){ return 0; }\n", cppToolchain: "gcc");
@@ -146,6 +138,8 @@ public class BuildServiceToolchainOverrideTests
         Assert.That(diag, Is.Not.Null, "expected a BL6015 hard-error diagnostic.\n" + Describe(result, output));
         Assert.That(diag!.Message, Does.Contain("gcc"),
             "the message must name which backend's configured compiler path is broken");
+        Assert.That(diag.Message, Does.Contain(badPath),
+            "the message must name the actual misconfigured path, not just a generic advisory");
         Assert.That(diag.Message, Does.Contain("Settings"));
         Assert.That(diag.Message, Does.Contain("C++"));
 
@@ -185,14 +179,22 @@ public class BuildServiceToolchainOverrideTests
     }
 
     // ------------------------------------------------------------------
-    // 5. DI trap guard: the CONTAINER-composed IBuildService must carry a
-    //    non-null overrides reader. A directly-constructed BuildService (as in
-    //    tests 1-4 above) cannot catch a by-type-registration regression — only
-    //    exercising ServiceConfiguration.ConfigureServices can.
+    // 5. DI trap guard: the CONTAINER-composed IBuildService must carry the
+    //    CONTAINER'S OWN CppToolchainOverrides singleton. A directly-constructed
+    //    BuildService (as in tests 1-4 above) cannot catch a by-type-registration
+    //    regression — only exercising ServiceConfiguration.ConfigureServices can.
+    //    A plain Is.Not.Null check does NOT catch the regression this guards: under
+    //    a by-type AddSingleton<IBuildService, BuildService>() registration, MS DI
+    //    can't satisfy the 3-arg ctor (ProjectSerializer isn't container-registered)
+    //    and silently falls back to the 2-arg convenience ctor, which builds its OWN
+    //    inert `new CppToolchainOverrides(null)` — non-null, but never the container's
+    //    singleton, so every override reads as unset forever. Reference identity
+    //    against the resolved CppToolchainOverrides singleton is the only assertion
+    //    that actually distinguishes the factory wiring from the regression.
     // ------------------------------------------------------------------
 
     [Test]
-    public void DiComposedBuildService_CarriesNonNullOverridesReader()
+    public void DiComposedBuildService_UsesTheContainerOverridesSingleton()
     {
         var services = new ServiceCollection();
         services.ConfigureServices();
@@ -210,11 +212,9 @@ public class BuildServiceToolchainOverrideTests
         Assert.That(overridesField, Is.Not.Null, "BuildService must declare an _overrides field");
         var overridesValue = overridesField!.GetValue(buildService);
 
-        Assert.That(overridesValue, Is.Not.Null,
-            "the container-composed IBuildService has a NULL overrides reader — this is exactly " +
-            "the DI trap: a by-type AddSingleton<IBuildService, BuildService>() registration " +
-            "silently falls back to a convenience ctor and the whole override feature no-ops.");
-        Assert.That(overridesValue, Is.InstanceOf<CppToolchainOverrides>());
+        var containerOverrides = provider.GetRequiredService<CppToolchainOverrides>();
+        Assert.That(overridesValue, Is.SameAs(containerOverrides),
+            "BuildService's overrides reader must be the container singleton, not a convenience-ctor inert instance");
     }
 
     // ------------------------------------------------------------------

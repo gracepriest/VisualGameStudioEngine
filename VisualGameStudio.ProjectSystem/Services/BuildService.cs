@@ -16,7 +16,6 @@ public class BuildService : IBuildService
     private readonly ProjectSerializer _projectSerializer;
     private readonly CppToolchainOverrides _overrides;
     private readonly Func<string, CppToolchain> _pathResolve;
-    private readonly Func<CppToolchain> _pathFind;
     private CancellationTokenSource? _buildCts;
     private string _currentConfigurationName = "Debug";
 
@@ -59,21 +58,18 @@ public class BuildService : IBuildService
     /// BuildService&gt;()</c> — <see cref="ProjectSerializer"/> is not itself
     /// container-registered, so MS DI would silently fall back to the 1-arg convenience
     /// ctor above and leave <see cref="_overrides"/> a permanently-empty reader.
-    /// <paramref name="pathResolve"/>/<paramref name="pathFind"/> are test-only seams over
-    /// the machine-PATH probes (<see cref="CppToolchain.TryFindById"/> /
-    /// <see cref="CppToolchain.Find"/>) so override-precedence tests can fake "X on PATH"
-    /// without a real installed toolchain.
+    /// <paramref name="pathResolve"/> is a test-only seam over the machine-PATH probe
+    /// (<see cref="CppToolchain.TryFindById"/>) so override-precedence tests can fake "X on
+    /// PATH" without a real installed toolchain.
     /// </summary>
     public BuildService(IOutputService outputService, ProjectSerializer projectSerializer,
         CppToolchainOverrides overrides,
-        Func<string, CppToolchain>? pathResolve = null,
-        Func<CppToolchain>? pathFind = null)
+        Func<string, CppToolchain>? pathResolve = null)
     {
         _outputService = outputService;
         _projectSerializer = projectSerializer;
         _overrides = overrides;
         _pathResolve = pathResolve ?? CppToolchain.TryFindById;
-        _pathFind = pathFind ?? CppToolchain.Find;
     }
 
     public async Task<BuildResult> BuildProjectAsync(BasicLangProject project, CancellationToken cancellationToken = default)
@@ -1140,7 +1136,7 @@ public class BuildService : IBuildService
                 var pin = _overrides.ResolveCompiler(requestedId);
                 if (pin.State == OverrideState.Invalid)
                     return FailCppBuild(result,
-                        $"{requestedId} compiler path is set but not found: {pin.Message} " +
+                        $"{requestedId} compiler path is invalid — {pin.Message}. " +
                         "Fix or clear it in Settings › C++.", projectFile.FilePath);
             }
 
@@ -1157,16 +1153,15 @@ public class BuildService : IBuildService
 
             // Unpinned: fixed precedence llvm -> gcc -> msvc. A backend is a candidate
             // when its override is set&Usable, or blank&on-PATH; a set&Invalid backend is
-            // a non-candidate (skipped, never silently substituted).
+            // a non-candidate (skipped, never silently substituted). When nothing is
+            // configured for any backend, this loop is exactly today's pre-override
+            // behavior: each id's None branch calls _pathResolve(id) (TryFindById), which
+            // dispatches to the SAME FindClang/FindGcc/FindMsvc probes CppToolchain.Find
+            // walks in the SAME llvm->gcc->msvc order — no separate "all-None" fast path,
+            // so there is only one probe seam (_pathResolve) to fake in tests, not two that
+            // could silently disagree.
             Func<CppToolchain> resolveToolchain = () =>
             {
-                // Nothing configured for any backend: today's exact pre-override
-                // behavior, routed through the same single-shot probe rather than
-                // reimplementing it via three per-id lookups.
-                if (Array.TrueForAll(CppToolchainOverrides.Backends,
-                        id => _overrides.ResolveCompiler(id).State == OverrideState.None))
-                    return _pathFind();
-
                 foreach (var id in CppToolchainOverrides.Backends)       // fixed order llvm, gcc, msvc
                 {
                     var r = _overrides.ResolveCompiler(id);
