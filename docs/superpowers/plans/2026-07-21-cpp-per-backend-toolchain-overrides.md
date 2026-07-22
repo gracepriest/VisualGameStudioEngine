@@ -241,8 +241,11 @@ public static class ToolchainPathValidator
             return new(ToolchainPathStatus.Warning, ("Found; unrecognized name — using anyway." + pdbAdvisory).Trim(),
                 null, trimmed);
 
-        var probe = versionProbe ?? RealVersionProbe;
-        var vr = probe(trimmed);
+        // Version smoke is OPT-IN: null => no --version spawn. Build/probe/instant-dialog
+        // callers pass nothing (existence is the gate); only the dialog's BACKGROUND
+        // enrichment passes RealVersionProbe. This keeps builds and the wizard probe from
+        // ever spawning a process, and gives the dialog its instant red/green + later version.
+        var vr = versionProbe?.Invoke(trimmed) ?? new VersionProbeResult(Ran: false, Ok: false, Version: null);
         if (vr.Ran && vr.Ok)
         {
             // recognized + smoked clean; msvc.debugger stays Warning (PDB) despite a clean smoke.
@@ -273,7 +276,9 @@ public static class ToolchainPathValidator
         : id == "llvm" ? LlvmDrivers
         : Array.Empty<string>();
 
-    private static VersionProbeResult RealVersionProbe(string exePath)
+    /// <summary>The real --version smoke. Public so the Settings dialog's background
+    /// enrichment can opt in; build/probe callers pass null (no spawn).</summary>
+    public static VersionProbeResult RealVersionProbe(string exePath)
     {
         try
         {
@@ -287,6 +292,13 @@ public static class ToolchainPathValidator
     }
 }
 ```
+
+> **Two-tier threading (spec §2):** because the smoke is opt-in, the dialog gets its
+> split for free — call `Validate(...)` with no `versionProbe` synchronously for the
+> instant red/green (a recognized name reads provisional **Warning** "confirming…"),
+> then re-run `Validate(..., versionProbe: ToolchainPathValidator.RealVersionProbe)` on
+> a background `Task` (cancel on re-edit/close) to upgrade to **Valid** + version.
+> `CppToolchainOverrides` (Task 2) always passes null — build/probe never spawn a process.
 
 - [ ] **Step 4: Run to verify pass.**
 
@@ -441,7 +453,7 @@ public void All_Six_Toolchain_Keys_Are_In_Schema_With_Empty_Default()
     foreach (var id in CppToolchainOverrides.Backends)
         foreach (var key in new[] { CppToolchainOverrides.CompilerKey(id), CppToolchainOverrides.DebuggerKey(id) })
         {
-            Assert.That(svc.GetAllKnownKeys(), Does.Contain(key), key);      // or whatever the schema-key accessor is
+            Assert.That(svc.GetPropertySchema(key), Is.Not.Null, key);       // schema membership — the API EveryDialogSettingKey_ExistsInSchema uses
             Assert.That(svc.Get<string>(key, "sentinel"), Is.EqualTo(""));   // schema default seeds ""
         }
 }
@@ -574,9 +586,17 @@ Also confirm the CLI is unaffected: `dotnet build BasicLang/BasicLang.csproj -c 
 ## Task 6: `BuildService` — inject reader, override-aware resolvers, pre-validate
 
 **Files:**
-- Modify: `VisualGameStudio.ProjectSystem/Services/BuildService.cs` (ctor `:38-47`; `BuildCppProject` `:1090-1102`)
-- Modify: `VisualGameStudio.Shell/Configuration/ServiceConfiguration.cs` (BuildService registration — verify the container supplies the new dep)
+- Modify: `VisualGameStudio.ProjectSystem/Services/BuildService.cs` (ctor `:38-47`; `BuildCppProject` `:1090-1117`)
+- Modify: `VisualGameStudio.Shell/Configuration/ServiceConfiguration.cs:27` (BuildService registration — **factory**, see Step 4)
 - Test: `VisualGameStudio.Tests/BuildServiceToolchainOverrideTests.cs`
+
+> **⚠ DI trap (plan review):** `BuildService` is registered **by type**
+> (`AddSingleton<IBuildService, BuildService>()`, `ServiceConfiguration.cs:27`) and
+> `ProjectSerializer` is **not** in the container. If you add a 3-arg ctor and leave the
+> by-type registration, MS DI can't satisfy it and **silently falls back to the 1-arg
+> `BuildService(IOutputService)`** — `_overrides` stays null and the whole feature
+> no-ops while unit tests (which construct `BuildService` directly) stay green. Step 4
+> switches to a factory registration to prevent this.
 
 - [ ] **Step 1: Write the failing tests** (BuildService is DI-constructed but testable — see `BuildServicePipelineTests`). Construct a `BuildService` with a fake `IOutputService` + a `CppToolchainOverrides` over a fake `ISettingsService` + fake `fileExists`. Cases:
   1. Pinned gcc + usable gcc override (fake existing g++), nothing on PATH → build resolves via the override path (assert the compile command / build message names the override).
@@ -600,9 +620,9 @@ if (!string.IsNullOrEmpty(requestedId))
 {
     var pin = _overrides.ResolveCompiler(requestedId);
     if (pin.State == OverrideState.Invalid)
-        return FailCppBuild(
+        return FailCppBuild(result,
             $"{requestedId} compiler path is set but not found: {pin.Message} " +
-            "Fix or clear it in Settings › C++.");
+            "Fix or clear it in Settings › C++.", projectFile.FilePath);
 }
 
 Func<string, CppToolchain> resolveById = id =>
@@ -628,12 +648,41 @@ Func<CppToolchain> resolveToolchain = () =>
 var buildResult = CppProjectBuilder.Build(projectFile, configuration, resolveById, probeAvailability: null, resolveToolchain);
 ```
 
-(`FailCppBuild` = compose a failed `BuildResult` with the message via the existing output/diagnostic path — reuse whatever `BuildCppProject` already does for a BL-level failure. Do NOT fire a different code path than the existing failure surface.)
+**`FailCppBuild` does not exist yet — add it, mirroring the inline failure pattern
+`BuildCppProject` already uses (`BuildService.cs:1104-1117`):**
 
-- [ ] **Step 4: Run to verify pass.**
-Run: `dotnet test ... --filter "FullyQualifiedName~BuildServiceToolchainOverrideTests"` → PASS. Build the Shell to confirm DI still resolves BuildService's new dep.
+```csharp
+private BuildResult FailCppBuild(BuildResult result, string message, string? filePath)
+{
+    result.Diagnostics.Add(new DiagnosticItem
+    { Id = "BL6015", Message = message, FilePath = filePath ?? "",
+      Severity = DiagnosticSeverity.Error, Source = "cpp" });
+    _outputService.WriteError(message, OutputCategory.Build);
+    result.Success = false;
+    return result;
+}
+```
 
-- [ ] **Step 5: Commit.** `feat(cpp): BuildService wires per-backend compiler overrides (pinned + unpinned precedence, invalid→hard error)`
+(Match the exact `DiagnosticItem` field names + the `BuildResult`/`Success` shape the
+surrounding `BuildCppProject` uses — grep `:1104-1117` and copy it; do NOT invent a new
+failure surface.)
+
+- [ ] **Step 4: Switch BuildService to a factory registration** (`ServiceConfiguration.cs:27`), so the container actually supplies the new dep instead of falling back to the 1-arg ctor:
+
+```csharp
+// was: services.AddSingleton<IBuildService, BuildService>();
+services.AddSingleton<IBuildService>(sp => new BuildService(
+    sp.GetRequiredService<IOutputService>(),
+    new ProjectSerializer(),
+    sp.GetRequiredService<CppToolchainOverrides>()));
+```
+
+Keep the existing convenience ctors for tests/other callers. **Add a guard test** that the resolved `IBuildService` is a `BuildService` with a non-null overrides dep — or, more simply, an IDE-path integration assertion in Task 12 that a configured override actually reaches a real build. (A unit test constructing `BuildService` directly cannot catch this DI trap — the guard must exercise the container or the IDE path.)
+
+- [ ] **Step 5: Run to verify pass.**
+Run: `dotnet test ... --filter "FullyQualifiedName~BuildServiceToolchainOverrideTests"` → PASS. Then `dotnet build VisualGameStudio.Shell/VisualGameStudio.Shell.csproj -c Release` (factory registration compiles + resolves).
+
+- [ ] **Step 6: Commit.** `feat(cpp): BuildService wires per-backend compiler overrides (pinned + unpinned precedence, invalid→hard error); factory DI`
 
 ---
 
@@ -807,7 +856,7 @@ Run: `dotnet test ... --filter "FullyQualifiedName~MwvmDebuggerOverrideSourceGua
 ## Task 11: Settings dialog — `FilePath` control kind + six items + Browse + validation
 
 **Files:**
-- Modify: `VisualGameStudio.Shell/ViewModels/Dialogs/SettingsViewModel.cs` (enum `:137`; `SearchableSettingItem` `:19-88`; `MakeText`→add `MakeFilePath` `:1050`; six observable props + `LoadFromService` `:1607`; `GetSettingsKeyForProperty` `:1264`; `BuildSearchableSettings` C++ block `:1021`)
+- Modify: `VisualGameStudio.Shell/ViewModels/Dialogs/SettingsViewModel.cs`: enum `:137`; `SearchableSettingItem` `:19-88` (+`IsFilePath`, validation props, `BrowseCommand`, `IsModified` arm `:49-56`, `ResetToDefault` case `:92-107`); `MakeText`→add `MakeFilePath` `:1050`; six `[ObservableProperty]` props; **`GetStringSetting` `:1169` + `SetStringSetting` `:1190` six cases each**; `LoadFromService` `:1607`; `GetSettingsKeyForProperty` `:1264`; `BuildSearchableSettings` C++ block `:1022`; **`AutoSaveSettingToService` `:1226` (force User scope for `cpp.toolchain.*`)**
 - Modify: `VisualGameStudio.Shell/Views/Dialogs/SettingsDialog.axaml` (BOTH `<Panel>` copies: `:167-178` and `:280-291`)
 - Test: `VisualGameStudio.Tests/SettingsDialogToolchainFieldsGuardTests.cs` (source-guard — SettingsViewModel dialog wiring)
 
@@ -824,15 +873,37 @@ public void Six_Toolchain_Keys_Are_In_The_Dialog_Inventory()
         foreach (var key in new[] { CppToolchainOverrides.CompilerKey(id), CppToolchainOverrides.DebuggerKey(id) })
             Assert.That(vm.DialogSettingKeys, Does.Contain(key), key);
 }
+
+// Round-trips through the GetStringSetting/SetStringSetting proxy AND lands at User
+// scope even when the dialog's active scope is Workspace (spec §1).
+[Test]
+public void Toolchain_Path_Persists_At_User_Scope_And_Round_Trips()
+{
+    var svc = MakeService();
+    var vm = new SettingsViewModel(svc) { ActiveScope = SettingsScope.Workspace };
+    vm.GccCompilerPath = @"C:\w\g++.exe";            // exercises SetStringSetting + AutoSave
+    Assert.That(vm.GccCompilerPath, Is.EqualTo(@"C:\w\g++.exe"));                                  // GetStringSetting proxy
+    Assert.That(svc.Get<string>(CppToolchainOverrides.CompilerKey("gcc"), "", SettingsScope.User),
+        Is.EqualTo(@"C:\w\g++.exe"));                                                              // forced User scope
+}
 ```
+
+(This second test is the guard against the two silent traps the plan review caught:
+without the `GetStringSetting`/`SetStringSetting` cases the property never updates, and
+without the User-scope force the value lands at the wrong scope — both invisible to the
+inventory test alone. Match `MakeService`/`SettingsScope` to the existing
+`SettingsConsumerContractTests` construction; `ActiveScope` is a settable VM property.)
 
 - [ ] **Step 2: Run to verify failure.** → FAIL (keys not in inventory).
 
 - [ ] **Step 3: Implement the VM side.**
   - Enum: add `FilePath` to `SettingControlKind` (`:137`).
-  - `SearchableSettingItem`: add `public bool IsFilePath => ControlKind == SettingControlKind.FilePath;`, plus observable validation props `ValidationMessage` / `ValidationSeverity` (an enum or a brush-key string), and a `BrowseCommand` (`IAsyncRelayCommand`) + a `ToolchainSlotKind Slot`/`string BackendId` pair (so the item knows what to validate). On `StringValue` set → run `ToolchainPathValidator.Validate(BackendId, Slot, value)` **existence tier synchronously** to set red/green, then kick a background `Task` for the version smoke that updates `ValidationMessage` (cancel on re-edit — store the latest CTS). The Browse command resolves `IDialogService` via `App.Services` (pattern at `SettingsDialog.axaml.cs:59` / `SettingsViewModel.cs:115`), calls `ShowOpenFileDialogAsync(new FileDialogOptions{ Title=..., Filters={ new("Executable","*.exe"), new("Batch","*.bat"), new("All","*") } })`, and assigns the result to `StringValue`.
+  - `SearchableSettingItem`: add `public bool IsFilePath => ControlKind == SettingControlKind.FilePath;`, plus observable validation props `ValidationMessage` / `ValidationSeverity` (an enum or a brush-key string), and a `BrowseCommand` (`IAsyncRelayCommand`) + a `ToolchainSlotKind Slot`/`string BackendId` pair (so the item knows what to validate). On `StringValue` set → call `ToolchainPathValidator.Validate(BackendId, Slot, value)` **with no `versionProbe`** synchronously (existence only — instant red/green, never spawns a process), then kick a background `Task` calling `Validate(..., versionProbe: ToolchainPathValidator.RealVersionProbe)` to enrich with the version string (cancel the prior `CancellationTokenSource` on re-edit/close; marshal the result back onto `ValidationMessage`/`ValidationSeverity`). The Browse command resolves `IDialogService` via `App.Services` (pattern at `SettingsDialog.axaml.cs:59` / `SettingsViewModel.cs:115`), calls `ShowOpenFileDialogAsync(new FileDialogOptions{ Title=..., Filters={ new("Executable","*.exe"), new("Batch","*.bat"), new("All","*") } })`, and assigns the result to `StringValue`.
   - Add a `MakeFilePath(key, name, desc, category, prop, backendId, slot, defaultValue="")` helper mirroring `MakeText` but `ControlKind = SettingControlKind.FilePath` and carrying `BackendId`/`Slot`.
-  - Add six `[ObservableProperty]` string props (`LlvmCompilerPath`, `LlvmDebuggerPath`, `GccCompilerPath`, `GccDebuggerPath`, `MsvcCompilerPath`, `MsvcDebuggerPath`), six `GetSettingsKeyForProperty` cases → `CppToolchainOverrides.CompilerKey/DebuggerKey(id)`, six `LoadFromService` reads (mirror the clangd read at `:1607`), and six `MakeFilePath(...)` lines in the C++ block (`:1021`, after the clangd `MakeText`). Group them Compiler+Debugger per backend, labels "LLVM compiler path", "LLVM debugger path", etc.
+  - Add six `[ObservableProperty]` string props (`LlvmCompilerPath`, `LlvmDebuggerPath`, `GccCompilerPath`, `GccDebuggerPath`, `MsvcCompilerPath`, `MsvcDebuggerPath`), six `GetSettingsKeyForProperty` cases → `CppToolchainOverrides.CompilerKey/DebuggerKey(id)`, six `LoadFromService` reads (mirror the clangd read at `:1607`), and six `MakeFilePath(...)` lines in the C++ block (`:1022`, after the clangd `MakeText`). Group them Compiler+Debugger per backend, labels "LLVM compiler path", "LLVM debugger path", etc.
+  - **⚠ Wire the `StringValue` proxy switches (plan review — else the field is a dead textbox).** `SearchableSettingItem.StringValue` proxies through `Owner.GetStringSetting(prop)` (`:1169`) and `Owner.SetStringSetting(prop)` (`:1190`), both explicit per-property switches with no default fall-through for setting. Add all six props to **both**, mirroring the `ClangdPath` rows (`GetStringSetting` `:1185`, `SetStringSetting` `:1208`): `nameof(LlvmCompilerPath) => LlvmCompilerPath,` and `case nameof(LlvmCompilerPath): LlvmCompilerPath = value; break;` etc. Without these the typed path never reaches the VM property.
+  - **⚠ Force User scope for these keys (spec §1).** `AutoSaveSettingToService` (`:1226`) writes at `ActiveScope` (`:1233`). For the six `cpp.toolchain.*` keys, override to `SettingsScope.User` (e.g. `var scope = key.StartsWith("cpp.toolchain.") ? SettingsScope.User : ActiveScope;`), and have their `LoadFromService` reads use `SettingsScope.User` too, so the dialog always shows/edits the global toolchain config independent of the User/Workspace/Folder selector.
+  - **Extend the enum-driven switches for the new `FilePath` kind.** Add a `FilePath` arm to `IsModified` (`:49-56`, string-compare vs `DefaultValue` like the `TextBox` arm) and a `FilePath` case to `ResetToDefault` (`:92-107`), so the six fields get a Modified badge and can be reset — otherwise they silently can't.
 
 - [ ] **Step 4: Implement the AXAML side (both `<Panel>` copies).** Inside each `<Panel>` (`:167-178` and `:280-291`), add a FilePath sub-block gated by `IsFilePath` — a horizontal stack of a `TextBox` (Text `StringValue`), a Browse `Button` (Command `BrowseCommand`), and a validation `TextBlock` (Text `ValidationMessage`, Foreground bound to `ValidationSeverity`). Keep the existing `TextBox IsVisible="{Binding IsTextBox}"` untouched. Example (both copies identical):
 
@@ -863,6 +934,8 @@ Expected: PASS (inventory + all consumer/schema guards now cover the six keys). 
 
 - [ ] **Step 1: Write the integration test.** Fake off-PATH g++ fixture (a temp file that exists as `g++.exe`): configure `cpp.toolchain.gcc.compiler` in a fake settings store → (a) `CppToolchainProbeService.Probe().Gcc == true`; (b) a gcc-pinned `ProjectFile` built through `BuildService` with a faked-empty PATH resolves via the override path. This ties Task 6 + Task 8 together end-to-end.
 
+- [ ] **Step 1b: Write the wizard-VM reaction test (spec §6.1 wizard row).** Feed the real override-aware `CppToolchainProbeService` (over the same fake settings with the gcc override, gcc off PATH) into `NewProjectWizardViewModel` as its `ICppToolchainProbe`, then (mirroring `NewProjectWizardViewModelTests.NewVm`): `await vm.ToolchainProbeTask; vm.SelectedLanguage = ProjectLanguage.Cpp;` and assert the gcc backend `IsEnabled == true`, `AvailabilityHint == null` (hint cleared), and that c++23 is offered for it (`RecomputeCppStandards`). Confirms §5.3 — the wizard reacts to override-driven availability with no wizard code change.
+
 - [ ] **Step 2: Run it.** `dotnet test ... --filter "FullyQualifiedName~ToolchainOverrideIntegrationTests"` → PASS.
 
 - [ ] **Step 3: Definition-of-done greps.** Confirm:
@@ -889,3 +962,5 @@ Expected: baseline count + the new tests, all passing (1 known cpp-game-app BL60
 - **Two AXAML copies.** The `<Panel>` control block is duplicated (`:167-178`, `:280-291`); the FilePath sub-block must go in both or the field renders in only one of search-results / category views.
 - **Version smoke off the UI thread.** In the dialog item, existence validation is synchronous (instant red/green); the `--version` smoke runs on a background `Task` with a ~3 s timeout and is cancelled on re-edit/close — never block the UI thread on it.
 - **winlibs stays off PATH** — every "usable off-PATH" test uses a temp file that merely *exists*; never assume a real toolchain.
+- **Line numbers drift — grep the anchor, don't trust the number.** Cited lines may be off by a few. The anchors are unambiguous: the `ClangdPath`/clangd `MakeText` row, the two `x:DataType="vm:SearchableSettingItem"` `DataTemplate`s (both `<Panel>` copies), the clangd `Prop(...)` in the `cpp` schema, the `_ => ""` default in `GetStringSetting`, and the `ForceAllDialogConsumers` `ClangdLocator.Locate` line. Grep those, insert adjacent.
+- **BuildService DI is a factory, MWVM/probe are by-type.** Only `BuildService` needs the factory registration (its `ProjectSerializer` ctor arg isn't container-registered); `MainWindowViewModel` and `CppToolchainProbeService` resolve the `CppToolchainOverrides` singleton fine through their existing by-type registrations.
