@@ -1,5 +1,6 @@
 using System;
 using VisualGameStudio.Core.Abstractions.Services;
+using CppToolchain = BasicLang.Compiler.ProjectSystem.CppToolchain;
 
 namespace VisualGameStudio.ProjectSystem.Services;
 
@@ -36,6 +37,15 @@ public sealed class CppToolchainOverrides
     public ToolchainOverride ResolveCompiler(string id) => Resolve(id, ToolchainSlotKind.Compiler);
 
     public ToolchainOverride ResolveDebugger(string id) => Resolve(id, ToolchainSlotKind.Debugger);
+
+    /// <summary>Compiler toolchain for a PINNED backend id: a Usable override → FromExplicit; otherwise the PATH probe (pathResolve, default TryFindById). For the None/Invalid distinction (unpinned candidacy / hard-error), use ResolveCompiler directly.</summary>
+    public CppToolchain? UsableCompilerToolchain(string id, Func<string, CppToolchain?>? pathResolve = null)
+    {
+        var r = ResolveCompiler(id);
+        return r.State == OverrideState.Usable
+            ? CppToolchain.FromExplicit(id, r.ResolvedPath)
+            : (pathResolve ?? CppToolchain.TryFindById)(id);
+    }
 
     private ToolchainOverride Resolve(string id, ToolchainSlotKind kind)
     {

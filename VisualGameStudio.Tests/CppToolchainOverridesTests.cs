@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using BasicLang.Compiler.ProjectSystem;
 using NUnit.Framework;
 using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.ProjectSystem.Services;
@@ -104,5 +105,63 @@ public class CppToolchainOverridesTests
         var ov = new CppToolchainOverrides(settings, fileExists: p => p == @"C:\llvm\bin\clang++.exe");
         var r = ov.ResolveCompiler("LLVM");
         Assert.That(r.State, Is.EqualTo(OverrideState.Usable));
+    }
+
+    // ---- UsableCompilerToolchain: the DRY'd resolver shared by BuildService's pinned
+    // resolveById and IntelliSenseEmissionService's regen-caller resolver (both build
+    // "usable override -> FromExplicit, else PATH probe" and must not duplicate the lambda).
+
+    [Test]
+    public void UsableCompilerToolchain_UsableOverride_ReturnsFromExplicit_NeverProbesPath()
+    {
+        var path = @"C:\w\g++.exe";
+        var settings = new FakeSettings { ["cpp.toolchain.gcc.compiler"] = path };
+        var ov = new CppToolchainOverrides(settings, fileExists: p => p == path);
+
+        var tc = ov.UsableCompilerToolchain("gcc",
+            pathResolve: _ => throw new InvalidOperationException(
+                "must not fall through to the PATH probe when the override is Usable"));
+
+        Assert.That(tc, Is.Not.Null);
+        Assert.That(tc!.DriverName, Is.EqualTo(path));
+    }
+
+    [Test]
+    public void UsableCompilerToolchain_NoneOverride_FallsThroughToPathResolve()
+    {
+        var ov = new CppToolchainOverrides(new FakeSettings(), fileExists: _ => true);
+        var calledWith = "";
+        var probed = CppToolchain.FromExplicit("llvm", @"C:\path-probe\clang++.exe");
+
+        var tc = ov.UsableCompilerToolchain("llvm", pathResolve: id => { calledWith = id; return probed; });
+
+        Assert.That(calledWith, Is.EqualTo("llvm"));
+        Assert.That(tc, Is.SameAs(probed));
+    }
+
+    // The helper only special-cases Usable; None AND Invalid both fall through to
+    // pathResolve as non-candidates in the same way — the None/Invalid distinction (hard-error
+    // vs. silent candidacy skip) is the CALLER's job via ResolveCompiler directly, per the
+    // helper's own doc comment.
+    [Test]
+    public void UsableCompilerToolchain_InvalidOverride_AlsoFallsThroughToPathResolve()
+    {
+        var settings = new FakeSettings { ["cpp.toolchain.gcc.compiler"] = @"C:\nope.exe" };
+        var ov = new CppToolchainOverrides(settings, fileExists: _ => false);
+        var probeCalled = false;
+
+        var tc = ov.UsableCompilerToolchain("gcc", pathResolve: _ => { probeCalled = true; return null; });
+
+        Assert.That(probeCalled, Is.True);
+        Assert.That(tc, Is.Null);
+    }
+
+    [Test]
+    public void UsableCompilerToolchain_NoPathResolveSupplied_DefaultsToTryFindById()
+    {
+        // An id TryFindById does not recognize (its switch only knows llvm/gcc/msvc) resolves
+        // deterministically to null without spawning any real probe process.
+        var ov = new CppToolchainOverrides(new FakeSettings(), fileExists: _ => true);
+        Assert.That(ov.UsableCompilerToolchain("borland"), Is.Null);
     }
 }

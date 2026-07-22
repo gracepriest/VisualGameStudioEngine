@@ -66,6 +66,12 @@ public sealed class IntelliSenseEmissionService : IIntelliSenseEmissionService, 
     private Task _chain = Task.CompletedTask;
     private bool _disposed;
 
+    /// <summary>
+    /// D2/back-compat entry point: the toolchain-agnostic, no-override <see cref="DefaultEmit"/>.
+    /// Kept for this class's own tests (which exercise it directly, unaware of overrides);
+    /// production DI (Task 7) resolves through the <see cref="CppToolchainOverrides"/> ctor below
+    /// instead.
+    /// </summary>
     public IntelliSenseEmissionService(IOutputService output)
         : this(output, DefaultEmit)
     {
@@ -81,13 +87,7 @@ public sealed class IntelliSenseEmissionService : IIntelliSenseEmissionService, 
     public IntelliSenseEmissionService(IOutputService output, CppToolchainOverrides overrides)
         : this(output, (projectPath, configuration) => IntelliSenseEmitter.Emit(
             ProjectFile.Load(projectPath), configuration, toolchain: null,
-            resolveById: id =>
-            {
-                var r = overrides.ResolveCompiler(id);
-                return r.State == OverrideState.Usable
-                    ? CppToolchain.FromExplicit(id, r.ResolvedPath)
-                    : CppToolchain.TryFindById(id);
-            }))
+            resolveById: id => overrides.UsableCompilerToolchain(id)))
     {
     }
 

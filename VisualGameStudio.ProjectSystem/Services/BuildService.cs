@@ -1143,13 +1143,7 @@ public class BuildService : IBuildService
             // Pinned: a Usable override is authoritative (FromExplicit); otherwise fall
             // through to the PATH probe seam (a set-Invalid override was already
             // hard-failed above, so only None reaches here).
-            Func<string, CppToolchain> resolveById = id =>
-            {
-                var r = _overrides.ResolveCompiler(id);
-                return r.State == OverrideState.Usable
-                    ? CppToolchain.FromExplicit(id, r.ResolvedPath)
-                    : _pathResolve(id);
-            };
+            Func<string, CppToolchain> resolveById = id => _overrides.UsableCompilerToolchain(id, _pathResolve);
 
             // Unpinned: fixed precedence llvm -> gcc -> msvc. A backend is a candidate
             // when its override is set&Usable, or blank&on-PATH; a set&Invalid backend is
