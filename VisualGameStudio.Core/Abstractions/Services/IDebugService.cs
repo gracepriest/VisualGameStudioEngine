@@ -252,6 +252,15 @@ public class DebugConfiguration
     /// debug service merely resolves the id it is handed.
     /// </summary>
     public string? AdapterId { get; set; }
+
+    /// <summary>
+    /// Explicit debugger executable path overriding the resolved descriptor's own launch
+    /// command (settings `cpp.toolchain.*.debuggerPath`, per-backend); null = today's
+    /// descriptor resolution (probe / lldb-dap locator chain). Resolved by the caller at the
+    /// F5 site (Task 10) — this service only honors what it is handed, staying
+    /// project/settings-agnostic.
+    /// </summary>
+    public string? AdapterExecutableOverride { get; set; }
 }
 
 public class SourceBreakpoint

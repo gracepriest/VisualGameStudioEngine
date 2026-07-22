@@ -236,7 +236,7 @@ public class DebugService : IDebugService
             return null;
         }
 
-        var command = descriptor.ResolveLaunchCommand();
+        var command = ResolveCommand(config, descriptor);
         if (command == null)
         {
             _outputService.WriteError(
@@ -256,6 +256,21 @@ public class DebugService : IDebugService
             descriptor.Timeouts,
             descriptor.DisplayName);
     }
+
+    /// <summary>
+    /// The override-vs-descriptor decision, pulled out of <see cref="ResolveAdapterLaunch"/>
+    /// so it is unit-testable without a full debug session. When
+    /// <see cref="DebugConfiguration.AdapterExecutableOverride"/> is set, it is authoritative
+    /// (matching the lldb-dap factory's empty-args launch shape — see
+    /// <see cref="DebugAdapterDescriptor.LldbDap"/>) and always yields a non-null command, so
+    /// it passes the "not installed" null-gate in <see cref="ResolveAdapterLaunch"/>.
+    /// Otherwise falls through to <paramref name="descriptor"/>'s own resolution exactly as
+    /// before this override existed.
+    /// </summary>
+    public static DapLaunchCommand? ResolveCommand(DebugConfiguration config, DebugAdapterDescriptor descriptor) =>
+        config.AdapterExecutableOverride is string overridePath
+            ? new DapLaunchCommand(overridePath, string.Empty)
+            : descriptor.ResolveLaunchCommand();
 
     public async Task<bool> AttachToProcessAsync(int processId, Dictionary<string, IEnumerable<SourceBreakpoint>>? breakpoints = null, CancellationToken cancellationToken = default)
     {
