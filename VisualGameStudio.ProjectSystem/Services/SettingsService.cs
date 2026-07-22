@@ -1267,6 +1267,18 @@ public class SettingsService : ISettingsService, IDisposable
                     "Path to the clangd executable, used for C++ IntelliSense. Leave empty to search PATH."),
                 Prop(DebugAdapterDescriptor.LldbDapSettingsKey, SettingsPropertyType.String, "lldb-dap Path", "",
                     "Path to the lldb-dap executable, used for native C++ debugging. Leave empty to auto-detect."),
+                Prop(CppToolchainOverrides.CompilerKey("llvm"), SettingsPropertyType.String, "LLVM compiler path", "",
+                    "Path to clang++.exe. Blank = auto-detect on PATH."),
+                Prop(CppToolchainOverrides.DebuggerKey("llvm"), SettingsPropertyType.String, "LLVM debugger path", "",
+                    "Path to a DAP adapter (lldb-dap.exe). Blank = default lldb-dap locator."),
+                Prop(CppToolchainOverrides.CompilerKey("gcc"), SettingsPropertyType.String, "GCC compiler path", "",
+                    "Path to g++.exe. Blank = auto-detect on PATH."),
+                Prop(CppToolchainOverrides.DebuggerKey("gcc"), SettingsPropertyType.String, "GCC debugger path", "",
+                    "Path to a DAP adapter (lldb-dap.exe). Blank = default lldb-dap locator."),
+                Prop(CppToolchainOverrides.CompilerKey("msvc"), SettingsPropertyType.String, "MSVC compiler path", "",
+                    "Path to vcvars64.bat or a Visual Studio install directory. Blank = auto-detect via vswhere."),
+                Prop(CppToolchainOverrides.DebuggerKey("msvc"), SettingsPropertyType.String, "MSVC debugger path", "",
+                    "Path to a DAP adapter. Note: lldb-dap can't read MSVC PDB — breakpoints may not bind."),
             }
         });
     }

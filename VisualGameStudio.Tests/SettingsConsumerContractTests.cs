@@ -73,6 +73,7 @@ public class SettingsConsumerContractTests
 
         // ---- Static-class registrants: call the method that performs the read. ----
         _ = ClangdLocator.Locate(service);                           // cpp.clangd.path
+        new VisualGameStudio.ProjectSystem.Services.CppToolchainOverrides(service).RegisterAllConsumers(); // six cpp.toolchain.* keys
 
         // ---- Instance-ctor registrants: construct a cheap instance (mocks for the deps). ----
         _ = new DockFactory(service);                                   // workbench.startupEditor + sideBar.location
