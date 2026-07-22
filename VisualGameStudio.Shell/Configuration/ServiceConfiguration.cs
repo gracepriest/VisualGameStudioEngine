@@ -130,6 +130,7 @@ public static class ServiceConfiguration
         services.AddSingleton<ISnippetService, SnippetService>();
         services.AddSingleton<IProjectTemplateService, ProjectTemplateService>();
         services.AddSingleton<ICppToolchainProbe, CppToolchainProbeService>();
+        services.AddSingleton<CppToolchainOverrides>();
         services.AddSingleton<IAutoSaveService, AutoSaveService>();
         services.AddSingleton<IHotExitService, HotExitService>();
         services.AddSingleton<IFileWatcherService, FileWatcherService>();
