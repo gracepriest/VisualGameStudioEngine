@@ -6,6 +6,7 @@ using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Core.Models;
 using VisualGameStudio.ProjectSystem.Serialization;
 using MSBuildText = BasicLang.Compiler.ProjectSystem.MSBuildText;
+using CppToolchain = BasicLang.Compiler.ProjectSystem.CppToolchain;
 
 namespace VisualGameStudio.ProjectSystem.Services;
 
@@ -13,6 +14,9 @@ public class BuildService : IBuildService
 {
     private readonly IOutputService _outputService;
     private readonly ProjectSerializer _projectSerializer;
+    private readonly CppToolchainOverrides _overrides;
+    private readonly Func<string, CppToolchain> _pathResolve;
+    private readonly Func<CppToolchain> _pathFind;
     private CancellationTokenSource? _buildCts;
     private string _currentConfigurationName = "Debug";
 
@@ -40,10 +44,36 @@ public class BuildService : IBuildService
     {
     }
 
+    /// <summary>Convenience ctor for callers/tests that don't exercise per-backend
+    /// compiler overrides: a <see cref="CppToolchainOverrides"/> over a null settings
+    /// service resolves every backend to <see cref="OverrideState.None"/>, i.e. today's
+    /// plain machine-probe behavior.</summary>
     public BuildService(IOutputService outputService, ProjectSerializer projectSerializer)
+        : this(outputService, projectSerializer, new CppToolchainOverrides(null))
+    {
+    }
+
+    /// <summary>
+    /// Primary ctor. MUST be reached via the FACTORY registration in
+    /// ServiceConfiguration.cs, not a by-type <c>AddSingleton&lt;IBuildService,
+    /// BuildService&gt;()</c> — <see cref="ProjectSerializer"/> is not itself
+    /// container-registered, so MS DI would silently fall back to the 1-arg convenience
+    /// ctor above and leave <see cref="_overrides"/> a permanently-empty reader.
+    /// <paramref name="pathResolve"/>/<paramref name="pathFind"/> are test-only seams over
+    /// the machine-PATH probes (<see cref="CppToolchain.TryFindById"/> /
+    /// <see cref="CppToolchain.Find"/>) so override-precedence tests can fake "X on PATH"
+    /// without a real installed toolchain.
+    /// </summary>
+    public BuildService(IOutputService outputService, ProjectSerializer projectSerializer,
+        CppToolchainOverrides overrides,
+        Func<string, CppToolchain>? pathResolve = null,
+        Func<CppToolchain>? pathFind = null)
     {
         _outputService = outputService;
         _projectSerializer = projectSerializer;
+        _overrides = overrides;
+        _pathResolve = pathResolve ?? CppToolchain.TryFindById;
+        _pathFind = pathFind ?? CppToolchain.Find;
     }
 
     public async Task<BuildResult> BuildProjectAsync(BasicLangProject project, CancellationToken cancellationToken = default)
@@ -1099,7 +1129,56 @@ public class BuildService : IBuildService
         {
             var projectFile = BasicLang.Compiler.ProjectSystem.ProjectFile.Load(
                 Path.GetFullPath(project.FilePath));
-            cpp = BasicLang.Compiler.ProjectSystem.CppProjectBuilder.Build(projectFile, configuration);
+
+            var requestedId = projectFile.CppToolchain;
+
+            // Pre-validate a PINNED, set-but-Invalid override before EmitCore ever runs:
+            // an authoritative-when-set override must hard-fail even when that same
+            // backend also happens to be on PATH — never a silent fallback.
+            if (!string.IsNullOrEmpty(requestedId))
+            {
+                var pin = _overrides.ResolveCompiler(requestedId);
+                if (pin.State == OverrideState.Invalid)
+                    return FailCppBuild(result,
+                        $"{requestedId} compiler path is set but not found: {pin.Message} " +
+                        "Fix or clear it in Settings › C++.", projectFile.FilePath);
+            }
+
+            // Pinned: a Usable override is authoritative (FromExplicit); otherwise fall
+            // through to the PATH probe seam (a set-Invalid override was already
+            // hard-failed above, so only None reaches here).
+            Func<string, CppToolchain> resolveById = id =>
+            {
+                var r = _overrides.ResolveCompiler(id);
+                return r.State == OverrideState.Usable
+                    ? CppToolchain.FromExplicit(id, r.ResolvedPath)
+                    : _pathResolve(id);
+            };
+
+            // Unpinned: fixed precedence llvm -> gcc -> msvc. A backend is a candidate
+            // when its override is set&Usable, or blank&on-PATH; a set&Invalid backend is
+            // a non-candidate (skipped, never silently substituted).
+            Func<CppToolchain> resolveToolchain = () =>
+            {
+                // Nothing configured for any backend: today's exact pre-override
+                // behavior, routed through the same single-shot probe rather than
+                // reimplementing it via three per-id lookups.
+                if (Array.TrueForAll(CppToolchainOverrides.Backends,
+                        id => _overrides.ResolveCompiler(id).State == OverrideState.None))
+                    return _pathFind();
+
+                foreach (var id in CppToolchainOverrides.Backends)       // fixed order llvm, gcc, msvc
+                {
+                    var r = _overrides.ResolveCompiler(id);
+                    if (r.State == OverrideState.Usable) return CppToolchain.FromExplicit(id, r.ResolvedPath);
+                    if (r.State == OverrideState.None && _pathResolve(id) is { } tc) return tc;
+                    // Invalid -> non-candidate, skip
+                }
+                return null;                                             // -> BL6005 in EmitCore
+            };
+
+            cpp = BasicLang.Compiler.ProjectSystem.CppProjectBuilder.Build(
+                projectFile, configuration, resolveById, probeAvailability: null, resolveToolchain);
         }
         catch (Exception ex)
         {
@@ -1140,6 +1219,25 @@ public class BuildService : IBuildService
         result.Success = cpp.Success;
         result.ExecutablePath = cpp.ExecutablePath;
         result.OutputPath = cpp.OutputPath;
+        return result;
+    }
+
+    /// <summary>Records a hard C++-build failure using the SAME DiagnosticItem/BuildResult
+    /// shape the rest of <see cref="BuildCppProject"/> uses (mirrors the catch block above)
+    /// — a dedicated helper only for the pre-EmitCore, pinned-Invalid-override gate, not a
+    /// new failure surface.</summary>
+    private BuildResult FailCppBuild(BuildResult result, string message, string? filePath)
+    {
+        result.Diagnostics.Add(new DiagnosticItem
+        {
+            Id = "BL6015",
+            Message = message,
+            FilePath = filePath ?? "",
+            Severity = DiagnosticSeverity.Error,
+            Source = "cpp"
+        });
+        _outputService.WriteError(message, OutputCategory.Build);
+        result.Success = false;
         return result;
     }
 

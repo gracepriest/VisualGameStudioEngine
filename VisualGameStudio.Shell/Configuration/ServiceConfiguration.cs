@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Core.Events;
+using VisualGameStudio.ProjectSystem.Serialization;
 using VisualGameStudio.ProjectSystem.Services;
 using VisualGameStudio.Shell.Dock;
 using VisualGameStudio.Shell.Services;
@@ -24,7 +25,15 @@ public static class ServiceConfiguration
         services.AddSingleton<IOutputService, OutputService>();
         services.AddSingleton<IProjectService, ProjectService>();
         services.AddSingleton<ISolutionService, SolutionService>();
-        services.AddSingleton<IBuildService, BuildService>();
+        // FACTORY registration (not by-type): BuildService's ProjectSerializer ctor arg is
+        // not itself container-registered, so a by-type AddSingleton<IBuildService,
+        // BuildService>() would let MS DI silently fall back to the 1-arg convenience ctor,
+        // leaving the per-backend C++ toolchain overrides reader null and the whole feature
+        // a no-op that unit tests (which construct BuildService directly) would never catch.
+        services.AddSingleton<IBuildService>(sp => new BuildService(
+            sp.GetRequiredService<IOutputService>(),
+            new ProjectSerializer(),
+            sp.GetRequiredService<CppToolchainOverrides>()));
         // The IDE's language servers: one LanguageService per LanguageServerDescriptor, routed to
         // by file extension. Registered as the singleton that OWNS them — disposing the container
         // on shutdown disposes the registry, which disposes each service, which kills its server
