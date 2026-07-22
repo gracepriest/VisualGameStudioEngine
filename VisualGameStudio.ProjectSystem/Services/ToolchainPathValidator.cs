@@ -27,8 +27,26 @@ public static class ToolchainPathValidator
     private static readonly string[] GccDrivers  = { "g++", "c++", "gcc" };
     private static readonly string[] DapDrivers   = { "lldb-dap" };
 
+    /// <summary>
+    /// Validates a user-configured compiler/debugger path. Existence (via
+    /// <paramref name="fileExists"/>/<paramref name="dirExists"/>, defaulting to
+    /// <see cref="File.Exists(string)"/>/<see cref="Directory.Exists(string)"/>) is the
+    /// authoritative gate; a recognized driver basename additionally becomes eligible for a
+    /// <c>--version</c> smoke.
+    /// </summary>
+    /// <param name="backendId">"llvm" | "gcc" | "msvc" (case-insensitive).</param>
+    /// <param name="kind">Whether <paramref name="path"/> is a compiler or debugger slot.</param>
+    /// <param name="path">The user-configured path; blank/whitespace/null yields <see cref="ToolchainPathStatus.Empty"/>.</param>
+    /// <param name="fileExists">Injectable existence probe; defaults to <see cref="File.Exists(string)"/>.</param>
+    /// <param name="dirExists">Injectable directory-existence probe; defaults to <see cref="Directory.Exists(string)"/>.</param>
+    /// <param name="versionProbe">
+    /// OPT-IN <c>--version</c> smoke. Null (the default) means no process is ever spawned — a
+    /// recognized, existing binary resolves to <see cref="ToolchainPathStatus.Warning"/> rather
+    /// than <see cref="ToolchainPathStatus.Valid"/>. Build and probe callers must always pass
+    /// null; only the Settings dialog's background enrichment passes <see cref="RealVersionProbe"/>.
+    /// </param>
     public static ValidationResult Validate(
-        string backendId, ToolchainSlotKind kind, string? path,
+        string? backendId, ToolchainSlotKind kind, string? path,
         Func<string, bool>? fileExists = null,
         Func<string, bool>? dirExists = null,
         Func<string, VersionProbeResult>? versionProbe = null)
@@ -108,10 +126,19 @@ public static class ToolchainPathValidator
     {
         try
         {
+            // Stderr is deliberately NOT redirected (mirrors ClangdLocator's vswhere probe):
+            // RedirectStandardError without draining it (ErrorDataReceived + BeginErrorReadLine)
+            // fills the ~4KB pipe buffer and wedges a chatty binary forever — see
+            // LanguageService.BuildStartInfo's remarks. Only stdout is captured here.
             using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exePath, "--version")
-            { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true });
+            { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true });
             var outText = p!.StandardOutput.ReadToEnd();
-            var ok = p.WaitForExit(3000) && p.ExitCode == 0;
+            if (!p.WaitForExit(3000))
+            {
+                try { p.Kill(); } catch { /* best effort */ }
+                return new(true, false, null);
+            }
+            var ok = p.ExitCode == 0;
             return new(true, ok, ok ? outText.Split('\n').FirstOrDefault()?.Trim() : null);
         }
         catch { return new(true, false, null); }

@@ -82,6 +82,27 @@ public class ToolchainPathValidatorTests
     }
 
     [Test]
+    public void Msvc_Compiler_Existing_Dir_Without_Vcvars_Is_Invalid()
+    {
+        var dir = @"C:\NotVS";
+        var r = ToolchainPathValidator.Validate("msvc", ToolchainSlotKind.Compiler, dir,
+            fileExists: Files(), dirExists: Files(dir));
+        Assert.That(r.Status, Is.EqualTo(ToolchainPathStatus.Invalid));
+    }
+
+    [Test]
+    public void Recognized_Driver_With_No_VersionProbe_Is_Warning_Not_Valid()
+    {
+        // Pins the opt-in contract: omitting versionProbe entirely (the shape every
+        // build/probe caller uses) must never silently upgrade to Valid — Warning only.
+        var r = ToolchainPathValidator.Validate("llvm", ToolchainSlotKind.Compiler,
+            @"C:\llvm\bin\clang++.exe",
+            fileExists: Files(@"C:\llvm\bin\clang++.exe"));
+        Assert.That(r.Status, Is.EqualTo(ToolchainPathStatus.Warning));
+        Assert.That(r.Usable, Is.True);
+    }
+
+    [Test]
     public void Msvc_Debugger_Valid_LldbDap_Is_Warning_With_Pdb_Advisory()
     {
         var p = @"C:\llvm\bin\lldb-dap.exe";
