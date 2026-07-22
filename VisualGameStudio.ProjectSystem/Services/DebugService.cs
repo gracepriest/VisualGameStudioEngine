@@ -268,8 +268,8 @@ public class DebugService : IDebugService
     /// before this override existed.
     /// </summary>
     public static DapLaunchCommand? ResolveCommand(DebugConfiguration config, DebugAdapterDescriptor descriptor) =>
-        config.AdapterExecutableOverride is string overridePath
-            ? new DapLaunchCommand(overridePath, string.Empty)
+        !string.IsNullOrWhiteSpace(config.AdapterExecutableOverride)
+            ? new DapLaunchCommand(config.AdapterExecutableOverride, string.Empty)
             : descriptor.ResolveLaunchCommand();
 
     public async Task<bool> AttachToProcessAsync(int processId, Dictionary<string, IEnumerable<SourceBreakpoint>>? breakpoints = null, CancellationToken cancellationToken = default)

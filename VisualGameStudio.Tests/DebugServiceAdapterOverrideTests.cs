@@ -60,4 +60,21 @@ public class DebugServiceAdapterOverrideTests
 
         Assert.That(command, Is.Null);
     }
+
+    [Test]
+    public void ResolveCommand_WithWhitespaceOnlyOverride_FallsBackToDescriptorResolution()
+    {
+        var descriptor = DebugAdapterDescriptor.LldbDap(() => @"C:\probed\lldb-dap.exe");
+        var config = new DebugConfiguration
+        {
+            AdapterId = DebugAdapterDescriptor.LldbDapId,
+            AdapterExecutableOverride = "   ",
+        };
+
+        var command = DebugService.ResolveCommand(config, descriptor);
+
+        Assert.That(command, Is.Not.Null);
+        Assert.That(command!.FileName, Is.EqualTo(@"C:\probed\lldb-dap.exe"));
+        Assert.That(command.Arguments, Is.EqualTo(string.Empty));
+    }
 }
