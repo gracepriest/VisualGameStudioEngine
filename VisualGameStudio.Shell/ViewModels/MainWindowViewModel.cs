@@ -3590,7 +3590,7 @@ public partial class MainWindowViewModel : ViewModelBase
         }
 
         // Per-backend debugger override (Task 10): a native project pinned to a backend
-        // (llvm/gcc/msvc) may have an explicit debugger path set in Settings > C++. A
+        // (llvm/gcc/msvc) may have an explicit debugger path set in Settings › C++. A
         // Usable override rides the config as AdapterExecutableOverride and counts as
         // "installed" below; an Invalid one aborts F5 outright — never silently fall back
         // to the auto-probe chain on a path the user explicitly set and got wrong.
@@ -3604,7 +3604,7 @@ public partial class MainWindowViewModel : ViewModelBase
             {
                 OutputPanel.AppendOutput(
                     $"Error: {pinnedCppToolchain} debugger path is invalid — " +
-                    $"{debuggerResolution.Message}. Fix or clear it in Settings > C++.\n");
+                    $"{debuggerResolution.Message}. Fix or clear it in Settings › C++.\n");
                 return;
             }
             if (debuggerResolution.State == ProjectSystem.Services.OverrideState.Usable)

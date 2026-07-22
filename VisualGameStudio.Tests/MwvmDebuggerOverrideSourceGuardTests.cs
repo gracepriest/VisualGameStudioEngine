@@ -112,7 +112,7 @@ public class MwvmDebuggerOverrideSourceGuardTests
 
         var body = ExtractMethodBody(src, "private async Task StartDebuggingAsync()");
 
-        Assert.That(body, Does.Contain("debuggerOverridePath is null"),
+        Assert.That(body, Does.Match(@"debuggerOverridePath is null\s*&&\s*descriptor\.ResolveLaunchCommand\(\) is null"),
             "The installed-check must only report the adapter missing when there is no " +
             "usable override AND the default probe chain also finds nothing.");
     }
