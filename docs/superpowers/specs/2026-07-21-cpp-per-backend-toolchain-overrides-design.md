@@ -1,13 +1,14 @@
 # Per-backend C++ compiler & debugger overrides in Settings
 
 **Date:** 2026-07-21
-**Status:** Approved design (user approved all six sections in session)
+**Status:** Approved design (user approved all six sections in session); revised
+per two-lens review **r1** (codebase fact-check + canonical design review).
 **Base:** master @ `ba2f8f7`
 **Approach:** Approach A — an override-reader + a pure validator plus six flat
 settings keys, wired through *existing* extension seams (the `CppProjectBuilder`
-resolver seams, a widened debug-launch resolver, the wizard probe). No new
-persistence shape, no profile object (Approach B explicitly declined), no extra
-debug-adapter descriptors (Approach C explicitly declined).
+resolver seams, the F5 launch site, the wizard probe). No new persistence shape,
+no profile object (Approach B explicitly declined), no extra debug-adapter
+descriptors (Approach C explicitly declined).
 
 ## Motivation
 
@@ -54,7 +55,12 @@ All default to `""` (empty = auto-detect):
 | `cpp.toolchain.gcc.compiler`  | path to `g++.exe` | probe (PATH) |
 | `cpp.toolchain.gcc.debugger`  | path to a DAP adapter | lldb-dap locator chain |
 | `cpp.toolchain.msvc.compiler` | path to `vcvars64.bat` (or a VS-install dir it derives it from) | probe (vswhere) |
-| `cpp.toolchain.msvc.debugger` | path to a DAP adapter | lldb-dap locator chain |
+| `cpp.toolchain.msvc.debugger` | path to a DAP adapter (**see §2/§4.4 — limited**) | lldb-dap locator chain |
+
+> **r1 note on `cpp.toolchain.msvc.debugger`:** MSVC binaries carry PDB debug
+> info, which `lldb-dap` (a DWARF reader) cannot consume — so this field, though
+> retained (the user asked for all three), is honestly surfaced as *limited* by
+> validation (§2, §4.4) rather than presented as fully functional.
 
 **Decisions:**
 
@@ -84,39 +90,68 @@ All default to `""` (empty = auto-detect):
 
 All validation lives in one pure class, `ToolchainPathValidator`
 (`VisualGameStudio.ProjectSystem`), so it is unit-testable without a UI or a real
-toolchain.
+toolchain. The reader that consumes it, `CppToolchainOverrides` (§3), is a
+DI-registered service injected into `BuildService`, `MainWindowViewModel` (for the
+F5 path, §4) and `CppToolchainProbeService` (§5) — one reader, three consumers.
 
 - **Input:** `(backendId, kind = Compiler | Debugger, path)`.
 - **Output:** `ValidationResult { Status, Message, DetectedVersion? }`, status ∈
   `Empty | Valid | Warning | Invalid`.
 
+**The `Usable` predicate (r1).** Availability and authoritative-ness key off the
+**existence gate**, not off `Status == Valid`. Define:
+
+> `Usable(path)` ⇔ `Status ∈ { Valid, Warning }` — the existence gate passed.
+
+`Warning` is a legitimately-usable state (a renamed/wrapper binary that *will*
+build); only `Invalid` and `Empty` exclude a backend. Every consumer
+(§3.2 `FromExplicit`, §5.1 probe OR) uses this same `Usable` predicate — never a
+narrower `Status == Valid`. The reader exposes `HasUsableCompilerOverride(id)`
+(not `…Valid…`) to make this unambiguous.
+
 **Two-tier check per field:**
 
-1. **Existence (the gate — fast, deterministic, runs live):** the path must name
-   an existing file. For MSVC's compiler slot the target is a `vcvars64.bat`, or a
-   directory that contains `VC\Auxiliary\Build\vcvars64.bat` (the resolver derives
-   the `.bat`). Missing ⇒ **Invalid**. This is the check that gates
-   authoritative-ness and the one the §3/§4 resolver re-uses at build/debug time.
-2. **Version smoke (enrichment — runs on Browse / commit / dialog-open, never per
-   keystroke):** for exe fields, run `<path> --version` with a short timeout (the
-   same technique `CppToolchain.IsOnPath` already uses, `CppToolchain.cs:109-128`),
-   behind an **injected seam** so tests do not spawn processes. Success ⇒ **Valid**
-   with the version string (`clang++ 18.1.8`). Exists but the smoke cannot confirm
-   it — timed out, or the filename is not a recognized driver
-   (`clang++`/`clang`/`clang-cl`, `g++`/`c++`/`gcc`, `lldb-dap`) ⇒ **Warning**
-   ("found, couldn't confirm — using anyway"), so a wrapper or renamed binary still
-   works.
+1. **Existence (the gate — fast, deterministic, runs synchronously, drives the
+   immediate red/green):**
+   - **llvm/gcc compiler & any debugger:** the path must name an existing file.
+   - **MSVC compiler:** the path must **resolve to a `vcvars64.bat`** — either
+     directly, or as a directory containing `VC\Auxiliary\Build\vcvars64.bat`. An
+     existing path that is *neither* (e.g. someone points the slot at `cl.exe`)
+     ⇒ **Invalid**, not Warning. (Without this, a `cl.exe` path would pass
+     existence and get substituted as `_vcvarsPath` into `cmd /c "cl.exe" && cl …`
+     and fail cryptically — the exact silent trap this design exists to prevent.)
+   Missing / non-resolving ⇒ **Invalid**.
 
-**When it fires:** on the file-picker returning, on text-field commit (blur/Enter),
-and on dialog open (so a path valid last week but since deleted shows Invalid now).
-The `--version` run never happens on every keystroke.
+2. **Version smoke (enrichment — runs on Browse / commit / dialog-open, never per
+   keystroke; see the threading contract below):** gated on filename shape to
+   avoid executing an arbitrary binary.
+   - **Recognized driver basename** (`clang++`/`clang`/`clang-cl`; `g++`/`c++`/`gcc`;
+     `lldb-dap`) → run `<path> --version` with a short timeout (the technique
+     `CppToolchain.IsOnPath` already uses, `CppToolchain.cs:109-128`), behind an
+     **injected seam** so tests don't spawn processes. Success ⇒ **Valid** with the
+     version string; failure/timeout ⇒ **Warning**.
+   - **Unrecognized-but-existing basename** ⇒ **Warning** *without executing it*
+     (wrapper-friendly, but never runs an unrecognized binary).
+   - **MSVC compiler** (a resolved `vcvars64.bat`, no exe to smoke) ⇒ **Valid** —
+     existence is the authoritative gate for MSVC.
+   - **`msvc.debugger` slot** (r1): even a cleanly-smoking `lldb-dap` is capped at
+     **Warning** carrying the advisory *"lldb-dap can't read MSVC PDB debug info —
+     breakpoints may not bind."* The field stays usable (you may still launch), but
+     is never shown as silently functional.
+
+**When it fires & threading contract (r1):** the sync existence check runs on the
+UI thread on file-picker return, text-field commit (blur/Enter), and dialog open,
+driving the immediate red/green. The `--version` smoke runs **off the UI thread**
+(a `Task`) with a **~3 s timeout** and **per-field cancellation** on re-edit and on
+dialog close; its result is marshalled back to update `Status`/`DetectedVersion`.
+The smoke never runs on every keystroke.
 
 **"Authoritative but invalid" behavior:** because the Settings dialog live-applies
-edits (`SettingsViewModel.AutoSaveSettingToService`), a red/Invalid value is still
-*stored* (the developer does not lose their typing) — but it is flagged red in the
-dialog, and at build/debug time an invalid-but-set path produces a **hard error**,
-never a silent fall-back to auto-detect (§3, §4). That is the point of the
-authoritative choice: a broken override announces itself instead of quietly
+edits (`SettingsViewModel.AutoSaveSettingToService`), a red/`Invalid` value is
+still *stored* (the developer does not lose their typing) — but it is flagged red
+in the dialog, and at build/debug time an invalid-but-set path produces a **hard
+error**, never a silent fall-back to auto-detect (§3.3, §4.1). That is the point
+of the authoritative choice: a broken override announces itself instead of quietly
 reverting.
 
 **One definition, two call sites:** the same validator's existence check is what
@@ -126,10 +161,10 @@ the §3/§4 resolver calls at build/debug time.
 
 ## 3. Compiler wiring (build-time)
 
-Guiding constraint (from recon): `CppProjectBuilder` and `CppToolchain` live in
-the compiler (`BasicLang/`) and have **no settings access** — they are shared with
-the CLI. The override is therefore *injected as data* by the settings-aware IDE
-layer; the compiler stays settings-agnostic.
+Guiding constraint: `CppProjectBuilder` and `CppToolchain` live in the compiler
+(`BasicLang/`) and have **no settings access** — they are shared with the CLI. The
+override is therefore *injected as data* by the settings-aware IDE layer; the
+compiler stays settings-agnostic.
 
 ### 3.1 `CppToolchain` explicit-path factories
 
@@ -142,105 +177,130 @@ name. Add:
   `compile_commands.json`) returns the same explicit path.
 - **MSVC reuses the existing mechanism.** `CppToolchain.Compile` already runs
   `cmd /s /c ""<vcvarsPath>" >nul && cl …"` (`CppToolchain.cs:271-289`); the
-  override just substitutes the user's `vcvars64.bat` for the vswhere-discovered
-  one via the existing private-ctor `_vcvarsPath` field. No new compile path.
+  override just substitutes the user's resolved `vcvars64.bat` for the
+  vswhere-discovered one via the existing private-ctor `_vcvarsPath` field. No new
+  compile path.
 
 ### 3.2 `BuildService` owns the wiring
 
-`BuildService.BuildCppProject` (`BuildService.cs:1090-1102`) already has
-`ISettingsService`. It builds override-aware resolvers from the `CppToolchainOverrides`
-reader (§2 validator applied) and passes them through the seams `EmitCore` already
-exposes (`CppProjectBuilder.cs:67-69, 145-148, 338-342`):
+**r1 correction:** `BuildService` does **not** currently have `ISettingsService`
+— its ctor takes only `IOutputService` + `ProjectSerializer`
+(`BuildService.cs:38-47`). **Inject `ISettingsService`** (add a ctor param; the DI
+registration at `ServiceConfiguration.cs:27` is type-based, so the container
+supplies it) so it can construct/consult the `CppToolchainOverrides` reader.
 
-- `resolveById` — used for a pinned `<CppToolchain>`.
-- `resolveToolchain` — used for the unpinned machine-probe path.
+`BuildService.BuildCppProject` (`BuildService.cs:1090-1102`) builds override-aware
+resolvers and passes them through the seams `Build`/`EmitCore` expose
+(`CppProjectBuilder.cs:67-73, 338-342`):
 
-Per backend: a valid override ⇒ `FromExplicit…`; a blank field ⇒ today's
-`TryFindById` / `Find`. The override is **override-aware for both pinned and
-unpinned** projects — the unpinned `Find` equivalent iterates `llvm,gcc,msvc` and
-treats a backend as available when its override is valid *or* it is on PATH.
+- **Pinned `<CppToolchain>`** — flows through the **existing** `resolveById`
+  parameter (already declared *and already forwarded* to `EmitCore` at
+  `CppProjectBuilder.cs:73`). `BuildService` supplies an override-aware
+  `resolveById`: `Usable` override ⇒ `FromExplicit…`; blank ⇒ today's
+  `CppToolchain.TryFindById`.
+- **Unpinned (machine probe)** — today `Build` hardcodes `CppToolchain.Find`
+  (`CppProjectBuilder.cs:73`). **`Build` grows exactly one new optional param,
+  `resolveToolchain` (default null → `CppToolchain.Find`)** — `resolveById` and
+  `probeAvailability` already exist. `BuildService` supplies an override-aware
+  `resolveToolchain`.
 
-`CppProjectBuilder.Build()` grows two optional forwarding params (default `null`),
-forwarding to `EmitCore`'s existing seams. **The CLI (`Program.cs:440`) passes
-neither, so `BasicLang.exe` behavior is unchanged** — overrides are an IDE-settings
-feature.
+**Unpinned selection precedence (r1 — was unspecified):** iterate backends in
+today's fixed `Find` order **llvm → gcc → msvc**; a backend is a *candidate* if it
+has a `Usable` compiler override **or** is on PATH/vswhere; pick the **first
+candidate in that fixed order** (preserving today's clang-first preference).
+Within the chosen backend, a `Usable` override wins over PATH. (So the tie-break is
+by backend order, not a global override-beats-PATH rule.)
+
+**The CLI (`Program.cs:440`) passes none of these params, so `BasicLang.exe`
+behavior is unchanged** — overrides are an IDE-settings feature.
 
 ### 3.3 Invalid-but-set = hard error
 
-`BuildService` pre-validates the chosen backend's override (the §2 validator). If
-it is set but broken, the build fails with a clear Output message pointing at
-Settings › C++ (e.g. "llvm compiler path is set but not found: `…` — fix or clear
-it in Settings › C++"), never a silent fall-back to auto-detect. A blank field
-still falls through to the probe; a pinned-but-absent toolchain still yields the
-existing **BL6015** (`CppProjectBuilder.cs:347-351`).
+`BuildService` pre-validates the **chosen** backend's override — the pinned one, or
+the one the unpinned precedence selects (§3.2). If it is set but broken, the build
+fails with a clear Output message pointing at Settings › C++ ("llvm compiler path
+is set but not found: `…` — fix or clear it in Settings › C++"), never a silent
+fall-back. A blank field still falls through to the probe; a pinned-but-absent
+toolchain still yields the existing **BL6015** (`CppProjectBuilder.cs:347-351`).
 
 ### 3.4 Editing/building parity
 
-The same override-aware resolver feeds the IntelliSense / `compile_commands.json`
-emit path (`IntelliSenseEmitter.Emit` → `EmitCore` with `forIntelliSense:true`,
-`CompileCommandsWriter`, `CppProjectBuilder.cs:482`) wherever the IDE drives it, so
-clangd sees the same compiler the build uses — no drift between what compiles and
-what IntelliSense reasons about.
+**r1 correction:** `IntelliSenseEmitter.Emit` today forwards only
+`resolveToolchain` (`() => toolchain`) and takes **no `resolveById`**
+(`IntelliSenseEmitter.cs:40-45`) — so for a **pinned** backend (the primary
+override case, e.g. winlibs `g++` off PATH pinned to `gcc`) `EmitCore` would resolve
+by id via the default `TryFindById`, get null off PATH, and `compile_commands.json`
+would name `clang++` — clangd drifting from the build. Fix: **add an override-aware
+`resolveById` parameter to `IntelliSenseEmitter.Emit` and forward it to `EmitCore`**,
+supplied by the same IDE layer that drives IntelliSense regen, so clangd sees the
+overridden compiler the build uses. `IntelliSenseEmitter.cs` is therefore a modified
+file (§6.3).
 
 ---
 
 ## 4. Debugger wiring (F5)
 
-**Blocker (from recon):** `lldb-dap` serves *all* native C++ regardless of
-toolchain (`DebugAdapterDescriptor.cs:159-172`, routing on the single
-`IsNativeBuild` boolean), and launch resolution (`ResolveLaunchCommand()` / the
-`resolveExecutable` delegate) takes **no project argument** — it is a bare
-`Func<string?>` (`DebugAdapterDescriptor.cs:73, 122, 159`). A per-backend debugger
-override needs the project's backend.
+**r1 correction (material):** the earlier claim that `DebugService` holds the
+project and routes via `GetFor` was **wrong**. `registry.GetFor(project)` runs in
+`MainWindowViewModel.OnDebugAsync` (`MainWindowViewModel.cs:3582`), where
+`CurrentProject` is in scope; MWVM already calls `descriptor.ResolveLaunchCommand()`
+there (`:3591`) for its installed-check and builds a `DebugConfiguration` carrying
+only `AdapterId` (`:3664-3674`). `DebugService` receives that config, resolves the
+adapter via `registry.GetById(adapterId)`, and holds **neither the project nor
+`ISettingsService`**. So the per-backend debugger override is resolved **at the F5
+site (MWVM)**, where the project — and thus its pinned backend — is already in hand.
+**No descriptor-signature change; `DebugService` stays project- and
+settings-agnostic.**
 
-### 4.1 Thread the project into launch resolution
+### 4.1 Resolve + validate at the F5 site
 
-Widen `DebugAdapterDescriptor.ResolveLaunchCommand()` to
-`ResolveLaunchCommand(project)`, and the `LldbDap(...)` factory's resolver from
-`Func<string?>` to `Func<project, string?>`. `DebugService` already holds the
-project at the call site (it routed there via `GetFor(project)`,
-`DebugService.cs:230-257`) — it just passes it in. The `BasicLangManaged`
-descriptor ignores the arg. **No new adapters, no multiple descriptors** — routing
-stays the single `IsNativeBuild` boolean; the per-backend choice happens *inside*
-resolution.
+In `OnDebugAsync`, for a **native** project (`project.IsNativeBuild`; the override
+never applies to the managed BasicLang adapter), MWVM resolves the per-backend
+debugger override through the same `CppToolchainOverrides` reader used for the
+compiler: `overrides.ResolveDebugger(project.CppToolchain)` → tri-state. Fold it
+into the single "effective adapter path" computation MWVM already does for its
+installed-check (`:3591`):
 
-### 4.2 Resolution order (per the project's pinned backend)
+- **Invalid** (set but the file is gone) → abort F5 with the clear error ("gcc
+  debugger path is set but not found: `…` — fix or clear it in Settings › C++"),
+  never a silent fall-through.
+- **Usable(path)** → the effective adapter path is the override.
+- **None/blank** → the effective adapter path is `descriptor.ResolveLaunchCommand()`
+  (today's `LldbDapLocator` chain, `cpp.lldbDap.path` → `~/.vgs/tools` → PATH →
+  known dirs incl. winlibs).
 
-1. `cpp.toolchain.<backend>.debugger` — set & valid ⇒ authoritative.
-2. Blank ⇒ today's `LldbDapLocator.Locate` chain
-   (`cpp.lldbDap.path` → `~/.vgs/tools` → PATH → known dirs, winlibs included),
-   fully backward-compatible.
+If the effective path is null → the existing `ReportDebugAdapterMissing` flow
+(download-offer toast), unchanged.
 
-The registration lambda (`ServiceConfiguration.cs:116`) becomes:
+### 4.2 Thread the chosen path via `DebugConfiguration`
 
-```csharp
-DebugAdapterDescriptor.LldbDap(project =>
-    debuggerOverrides.Resolve(project.CppToolchain)   // per-backend, validated
-        ?? LldbDapLocator.Locate(settingsService))    // existing chain
-```
+`DebugConfiguration` gains **one optional field**, `AdapterExecutableOverride`
+(default null). MWVM sets it to the override path when `Usable`, leaves it null
+otherwise. `DebugService`, when it resolves the launch for `config.AdapterId`, uses
+`config.AdapterExecutableOverride` when present, else `descriptor.ResolveLaunchCommand()`
+exactly as today. **That is the whole `DebugService` change** — honor one optional
+field. MWVM owns the settings-aware resolution and the invalid-abort.
 
-`debuggerOverrides` is the **same** `CppToolchainOverrides` reader used for the
-compiler (§2/§3) — one class serves both tools.
-
-### 4.3 Scope choice
+### 4.3 Scope + the unpinned case
 
 The per-backend debugger override applies when the project **pins** a backend
-(`<CppToolchain>` set — which the wizard now always writes for these projects, per
-the 2026-07-20 batch). An unpinned project falls to the default chain, rather than
-inventing "last-built-with-backend-X" state. Deliberate simplification.
+(`<CppToolchain>` set — which the wizard always writes for these projects). An
+unpinned project falls to the default chain. This is benign even though §3.2 makes
+the unpinned *compiler* override-aware: the default debugger chain is
+backend-agnostic `lldb-dap` regardless of which compiler produced the binary, so the
+debugger does not depend on the unpinned compiler selection.
 
-### 4.4 Invalid-but-set = error (mirrors §3.3)
+### 4.4 `msvc.debugger` honesty
 
-`DebugService` (settings- and project-aware) pre-validates; a set-but-broken
-debugger path aborts F5 with a clear message ("gcc debugger path is set but not
-found: `…` — fix or clear it in Settings › C++"), distinct from the existing
-"adapter not installed" text (`DebugLaunchPolicy.ComposeAdapterMissingMessage`,
-`DebugLaunchPolicy.cs:85-98`), never a silent fall-through.
+(Cross-ref §2.) A `Usable` `lldb-dap` in the `msvc.debugger` slot is surfaced at
+**Warning** with the advisory "lldb-dap can't read MSVC PDB — breakpoints may not
+bind" (project history: lldb even mis-binds on `g++` DWARF5; MSVC PDB is worse).
+The field is **retained** (the user asked for all three) but never presented as
+silently functional.
 
-**Caveat (for the spec of record):** the override must point at a **DAP-speaking
-adapter** (realistically an `lldb-dap` build — winlibs and LLVM each ship one).
-Validation checks existence + filename shape; it cannot guarantee an arbitrary exe
-speaks DAP.
+**Caveat (for the record):** the override must point at a **DAP-speaking adapter**
+(realistically an `lldb-dap` build — winlibs and LLVM each ship one). Validation
+checks existence + filename shape; it cannot guarantee an arbitrary exe speaks DAP.
 
 ---
 
@@ -252,16 +312,17 @@ change**.
 ### 5.1 Make the probe override-aware — at the ProjectSystem boundary
 
 `CppToolchainProbeService` (`CppToolchainProbeService.cs:10-16`; it lives in
-ProjectSystem and can take `ISettingsService`; today it merely wraps the pure
-compiler-side probe) gains the `CppToolchainOverrides` reader. Its `Probe()`
-returns, per backend:
+ProjectSystem and can take `ISettingsService`/the overrides reader; today it merely
+wraps the pure compiler-side probe) gains the `CppToolchainOverrides` reader. Its
+`Probe()` returns, per backend:
 
-> `available = onPath/vswhere  OR  validCompilerOverride`
+> `available = onPath/vswhere  OR  HasUsableCompilerOverride(backend)`
 
-So gcc pointed at winlibs off PATH arrives as `Gcc = true`. The compiler-side
-`CppToolchain.ProbeAvailability()` (`CppToolchain.cs:95-96`) stays pure PATH/vswhere
-(shared with the CLI, no settings) — the OR happens only in the ProjectSystem
-adapter.
+(using the §2 `Usable` predicate — `Valid` *or* `Warning`, so a working wrapper
+counts). So gcc pointed at winlibs off PATH arrives as `Gcc = true`. The
+compiler-side `CppToolchain.ProbeAvailability()` (`CppToolchain.cs:95-96`) stays
+pure PATH/vswhere (shared with the CLI, no settings) — the OR happens only in the
+ProjectSystem adapter.
 
 ### 5.2 Availability keys off the *compiler* override only
 
@@ -278,15 +339,16 @@ wizard-VM edits.
 
 ### 5.4 Broken override ≠ available
 
-The probe ORs in "set **and valid**" (the fast existence check), so a set-but-broken
-override leaves the backend greyed in the wizard while the Settings page shows the
-red error — consistent, no "available but won't build."
+The probe ORs in `HasUsableCompilerOverride` (existence passed), so a set-but-broken
+(`Invalid`) override leaves the backend greyed in the wizard while the Settings page
+shows the red error — consistent, no "available but won't build."
 
 ### 5.5 Wizard/build agreement
 
-Because §3's override-aware resolver produces a real toolchain for an overridden
-backend, the build never trips BL6015 for it. "Shows available in the wizard" and
-"actually builds" cannot disagree.
+Because §3's override-aware resolver uses the **same `Usable` predicate** as the
+probe, a backend shown available in the wizard resolves to a real toolchain at build
+time (never trips BL6015 for it). "Shows available" and "actually builds" cannot
+disagree — including for a `Warning`-status wrapper.
 
 **Optional polish left OUT of v1** (keeps the probe's record a simple bool triple):
 a distinct `"(configured)"` hint to signal *why* a backend is available. Enabled is
@@ -297,22 +359,25 @@ enabled for now.
 ## 6. Testing strategy & component map
 
 Everything testable-in-isolation is pulled into pure/injectable units so nothing
-depends on a DI-constructed dialog or a real toolchain. Standing lessons honored:
-MWVM/dialogs are never constructed in tests (use pure classes + source-guards);
-**winlibs stays off PATH** so fixtures use *fake existing files*, not a real
-install; validate codegen through the CLI/optimizer (`CompileToCppOptimized`), not
-only the non-optimizing unit helper; exercise **both** entry points (CLI and IDE).
+depends on a DI-constructed dialog/MWVM or a real toolchain. Standing lessons
+honored: MWVM/dialogs are never constructed in tests (use pure classes +
+source-guards); **winlibs stays off PATH** so fixtures use *fake existing files*,
+not a real install; validate codegen through the CLI/optimizer
+(`CompileToCppOptimized`), not only the non-optimizing unit helper; exercise
+**both** entry points (CLI and IDE).
 
 ### 6.1 Units & tests
 
 | Unit (new unless noted) | Purpose | Key tests |
 |---|---|---|
-| `ToolchainPathValidator` (pure) | `(backend, kind, path)` → `Empty/Valid/Warning/Invalid` | empty→Empty; missing→Invalid; clang++→Valid(version) via **fake** version-probe seam; odd name→Warning; msvc dir→derives vcvars, missing→Invalid |
-| `CppToolchainOverrides` (reader) | reads 6 keys, applies validator → tri-state + `HasValidCompilerOverride` | fake `ISettingsService`: blank/valid/broken per backend; consumer registration asserted |
-| `CppToolchain` factories (BasicLang) | `FromExplicitCompiler` / msvc-vcvars | emitted **build command invokes the full override path** (assert via `CompileToCppOptimized` + CLI); msvc substitutes vcvars |
-| `BuildService` wiring | override-aware resolvers + pre-validate | pinned-gcc + valid override, nothing on PATH → builds with override; set-but-broken → **hard error, no silent fallback**; **`Build()` with no override params = today's behavior (CLI unchanged)** |
-| Descriptor + `DebugService` | project threaded into launch resolution | pinned gcc + valid debugger override → launches it; blank → existing locator chain (no regression); set-but-broken → F5 aborts with clear error; managed descriptor unaffected by widened signature |
-| `CppToolchainProbeService` | OR override validity | gcc override valid, off PATH → `Probe().Gcc==true`; broken → false; none → pure PATH result unchanged |
+| `ToolchainPathValidator` (pure) | `(backend, kind, path)` → `Empty/Valid/Warning/Invalid` + `Usable` | empty→Empty; missing→Invalid; clang++→Valid(version) via **fake** version-probe seam; unrecognized-but-existing basename→Warning **without executing**; **msvc compiler: dir→derives vcvars=Valid, `cl.exe`→Invalid**; **msvc.debugger valid lldb-dap→Warning + PDB advisory**; `Usable` = Valid∪Warning |
+| `CppToolchainOverrides` (reader, DI) | reads 6 keys, applies validator → tri-state + `HasUsableCompilerOverride` | fake `ISettingsService`: blank/usable/invalid per backend; consumer registration asserted |
+| `CppToolchain` factories (BasicLang) | `FromExplicitCompiler` / msvc-vcvars | emitted **build command invokes the full override path** (assert via `CompileToCppOptimized` + CLI); msvc substitutes resolved vcvars |
+| `BuildService` wiring (+`ISettingsService`) | override-aware `resolveById` + new `resolveToolchain`; pre-validate | pinned-gcc + usable override, nothing on PATH → builds with override; **unpinned: gcc override usable + off PATH → builds gcc; tie-break llvm>gcc>msvc order**; set-but-invalid → **hard error, no silent fallback**; **`Build()` with no override params = today's behavior (CLI unchanged)** |
+| `IntelliSenseEmitter` (+`resolveById`) | compile_commands parity | **pinned winlibs-gcc override → `compile_commands.json` names the override g++**, not clang++ |
+| `DebugConfiguration` + `DebugService` | honor `AdapterExecutableOverride` | config with override path → launch uses it; without → uses `descriptor.ResolveLaunchCommand()` (no regression) |
+| `CppToolchainOverrides.ResolveDebugger` + MWVM F5 (source-guard) | per-backend debugger resolution | pure: blank→chain, usable→path, invalid→error tri-state; **source-guard**: `OnDebugAsync` resolves the debugger override + aborts on invalid (MWVM not constructed) |
+| `CppToolchainProbeService` | OR override validity | gcc override usable, off PATH → `Probe().Gcc==true`; invalid → false; none → pure PATH result unchanged |
 | Wizard VM (existing tests) | availability follows probe | `FakeToolchainProbe` reporting gcc-via-override → backend enabled, hint cleared, c++23 offered |
 | Settings dialog | new `FilePath` control kind + 6 items | **source-guard** test (wcq pattern): each key present in `BuildSearchableSettings` + `GetSettingsKeyForProperty`; `SettingsConsumerContractTests` stays green |
 | Integration | ties §3 + §5 together | fake off-PATH g++ fixture: configure → wizard shows gcc available → build succeeds using the override path |
@@ -321,7 +386,7 @@ only the non-optimizing unit helper; exercise **both** entry points (CLI and IDE
 
 - 6 keys exist with `""` defaults + registered consumers.
 - No silent-fallback path for an invalid override (grep the resolver / BuildService
-  / DebugService for the error emission).
+  / the MWVM F5 site for the error emission).
 - `Program.cs` (CLI) passes no override params — CLI path unchanged.
 - All new pure classes are `public`, so **no new `InternalsVisibleTo`** is needed
   (only the existing BasicLang→Tests).
@@ -331,14 +396,28 @@ only the non-optimizing unit helper; exercise **both** entry points (CLI and IDE
 **NEW:** `ToolchainPathValidator.cs`, `CppToolchainOverrides.cs` (both
 `VisualGameStudio.ProjectSystem`), plus the test files above.
 
-**MODIFIED:** `CppToolchain.cs` (explicit-path factories), `CppProjectBuilder.cs`
-(forward the resolver seams from `Build()`), `BuildService.cs` (override-aware
-resolvers + pre-validate), `CppToolchainProbeService.cs` (OR overrides),
-`DebugAdapterDescriptor.cs` (project arg on `ResolveLaunchCommand` + widened
-`LldbDap` resolver), `DebugService.cs` (pass project + pre-validate),
-`SettingsService.cs` (6 keys in the `cpp` group), `SettingsViewModel.cs` +
-`SettingsDialog.axaml` (the `FilePath` control kind + 6 items), and
-`ServiceConfiguration.cs` (registration lambda + inject the overrides reader).
+**MODIFIED:**
+
+- `CppToolchain.cs` — explicit-path factories.
+- `CppProjectBuilder.cs` — add the one `resolveToolchain` forwarding param to
+  `Build()` (`resolveById`/`probeAvailability` already exist).
+- `IntelliSenseEmitter.cs` — add + forward an override-aware `resolveById` (§3.4).
+- `BuildService.cs` — **inject `ISettingsService`**; build override-aware resolvers
+  + pre-validate.
+- `CppToolchainProbeService.cs` — OR in `HasUsableCompilerOverride`.
+- `DebugConfiguration` model — new optional `AdapterExecutableOverride` field.
+- `DebugService.cs` — honor `AdapterExecutableOverride` when present.
+- `MainWindowViewModel.cs` — resolve + validate the per-backend debugger override at
+  the F5 site (`OnDebugAsync`), abort on invalid (source-guarded).
+- `SettingsService.cs` — 6 keys in the `cpp` group.
+- `SettingsViewModel.cs` + `SettingsDialog.axaml` — the `FilePath` control kind + 6
+  items.
+- `ServiceConfiguration.cs` — register `CppToolchainOverrides`; inject it (or
+  `ISettingsService`) into `BuildService`, `CppToolchainProbeService`, and
+  `MainWindowViewModel`.
+
+(The earlier plan to widen `DebugAdapterDescriptor.ResolveLaunchCommand(project)` is
+dropped in r1 — the F5-site resolution replaces it.)
 
 ---
 
@@ -350,10 +429,11 @@ resolvers + pre-validate), `CppToolchainProbeService.cs` (OR overrides),
   are an IDE-settings feature. (Possible follow-up: teach the CLI to read
   `~/.vgs/settings.json`.)
 - **A first-class toolchain-profile object / linker & extra-flags fields**
-  (Approach B) — declined; the flat six-key model is sufficient for the stated
-  goal and can grow into a profile later without rework of the resolvers.
-- **A Windows-native (cppvsdbg) debug adapter** — none exists today; the debugger
-  override points at a DAP-speaking adapter regardless of backend.
+  (Approach B) — declined; the flat six-key model is sufficient and can grow into a
+  profile later without rework of the resolvers.
+- **A Windows-native (cppvsdbg) PDB-capable debug adapter** — none exists today;
+  `msvc.debugger` is retained but honestly flagged as limited (§4.4) until such an
+  adapter ships.
 - **The `"(configured)"` wizard hint** (§5.5) — optional polish, deferred.
 
 ## Standing constraints preserved
