@@ -18,12 +18,12 @@ public sealed class CppToolchainOverrides
     public static string DebuggerKey(string id) => $"cpp.toolchain.{id}.debugger";
     public static readonly string[] Backends = { "llvm", "gcc", "msvc" };
 
-    private readonly ISettingsService _settings;
+    private readonly ISettingsService? _settings;
     private readonly Func<string, bool> _fileExists;
     private readonly Func<string, bool> _dirExists;
     private readonly Func<string, VersionProbeResult>? _versionProbe;
 
-    public CppToolchainOverrides(ISettingsService settings,
+    public CppToolchainOverrides(ISettingsService? settings,
         Func<string, bool>? fileExists = null, Func<string, bool>? dirExists = null,
         Func<string, VersionProbeResult>? versionProbe = null)
     {
@@ -33,15 +33,19 @@ public sealed class CppToolchainOverrides
         _versionProbe = versionProbe;
     }
 
-    public ToolchainOverride ResolveCompiler(string id) => Resolve(id, ToolchainSlotKind.Compiler, CompilerKey(id),
-        $"CppToolchainOverrides → {id} compiler path override");
+    public ToolchainOverride ResolveCompiler(string id) => Resolve(id, ToolchainSlotKind.Compiler);
 
-    public ToolchainOverride ResolveDebugger(string id) => Resolve(id, ToolchainSlotKind.Debugger, DebuggerKey(id),
-        $"CppToolchainOverrides → {id} debugger path override");
+    public ToolchainOverride ResolveDebugger(string id) => Resolve(id, ToolchainSlotKind.Debugger);
 
-    private ToolchainOverride Resolve(string id, ToolchainSlotKind kind, string key, string consumerDesc)
+    private ToolchainOverride Resolve(string id, ToolchainSlotKind kind)
     {
-        SettingsConsumerRegistry.RegisterConsumer(key, consumerDesc);
+        // Normalize BEFORE building the key: CppToolchain.TryFindById and every sibling
+        // treat backend ids case-insensitively, so an un-normalized id (e.g. UI-sourced,
+        // Task 11) must not silently build a differently-cased key that reads as unset.
+        id = id?.Trim().ToLowerInvariant() ?? "";
+        var key = kind == ToolchainSlotKind.Compiler ? CompilerKey(id) : DebuggerKey(id);
+        var slotName = kind == ToolchainSlotKind.Compiler ? "compiler" : "debugger";
+        SettingsConsumerRegistry.RegisterConsumer(key, $"CppToolchainOverrides → {id} {slotName} path override");
         var raw = _settings?.Get<string>(key, "") ?? "";
         var vr = ToolchainPathValidator.Validate(id, kind, raw, _fileExists, _dirExists, _versionProbe);
         return vr.Status switch

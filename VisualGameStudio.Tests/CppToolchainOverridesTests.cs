@@ -93,4 +93,16 @@ public class CppToolchainOverridesTests
         Assert.That(r.State, Is.EqualTo(OverrideState.Usable));
         Assert.That(r.ResolvedPath, Is.EqualTo(bat));
     }
+
+    [Test]
+    public void ResolveCompiler_Is_Case_Insensitive_On_Backend_Id()
+    {
+        // The lowercase key is what the schema/dialog actually persist under; an
+        // uppercase caller-supplied id (e.g. a differently-cased UI source) must still
+        // resolve it rather than silently reading as unset.
+        var settings = new FakeSettings { ["cpp.toolchain.llvm.compiler"] = @"C:\llvm\bin\clang++.exe" };
+        var ov = new CppToolchainOverrides(settings, fileExists: p => p == @"C:\llvm\bin\clang++.exe");
+        var r = ov.ResolveCompiler("LLVM");
+        Assert.That(r.State, Is.EqualTo(OverrideState.Usable));
+    }
 }
