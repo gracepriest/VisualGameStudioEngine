@@ -1,6 +1,8 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Data.Converters;
 using Avalonia.Media;
@@ -25,6 +27,11 @@ public partial class SearchableSettingItem : ObservableObject
     public string PropertyName { get; init; } = "";
     public SettingControlKind ControlKind { get; init; }
 
+    /// <summary>For FilePath settings (the six per-backend cpp.toolchain.* fields): which
+    /// backend/slot the path validates against. Unused by other control kinds.</summary>
+    public string BackendId { get; init; } = "";
+    public ToolchainSlotKind Slot { get; init; }
+
     /// <summary>For ComboBox settings: the list of choices.</summary>
     public ObservableCollection<string>? Choices { get; init; }
 
@@ -45,6 +52,7 @@ public partial class SearchableSettingItem : ObservableObject
     public bool IsComboBox => ControlKind == SettingControlKind.ComboBox;
     public bool IsTextBox => ControlKind == SettingControlKind.TextBox;
     public bool IsColorPicker => ControlKind == SettingControlKind.ColorPicker;
+    public bool IsFilePath => ControlKind == SettingControlKind.FilePath;
 
     public bool IsModified => ControlKind switch
     {
@@ -52,6 +60,7 @@ public partial class SearchableSettingItem : ObservableObject
         SettingControlKind.NumericUpDown => IntValue != (int)DefaultValue,
         SettingControlKind.ComboBox => !string.Equals(StringValue, (string)DefaultValue, StringComparison.Ordinal),
         SettingControlKind.TextBox => !string.Equals(StringValue, (string)DefaultValue, StringComparison.Ordinal),
+        SettingControlKind.FilePath => !string.Equals(StringValue, (string)DefaultValue, StringComparison.Ordinal),
         _ => false
     };
 
@@ -66,6 +75,19 @@ public partial class SearchableSettingItem : ObservableObject
     /// <summary>Whether the setting is set in the current active scope.</summary>
     [ObservableProperty]
     private bool _isSetInCurrentScope;
+
+    /// <summary>FilePath items only: the human-readable validation status ("" when empty/untouched).</summary>
+    [ObservableProperty]
+    private string _validationMessage = "";
+
+    /// <summary>FilePath items only: a color string (hex) for <see cref="ValidationMessage"/>'s
+    /// Foreground — bound directly in AXAML, same pattern as ProblemItemViewModel.SeverityColor.</summary>
+    [ObservableProperty]
+    private string _validationSeverity = "#808080";
+
+    /// <summary>Guards the background --version enrichment (Task 11): cancelled and replaced on
+    /// every re-edit so a stale probe can never overwrite a newer one's result.</summary>
+    private CancellationTokenSource? _validationCts;
 
     // -- Proxy value properties so the flat list can bind without knowing the concrete property name --
 
@@ -84,7 +106,81 @@ public partial class SearchableSettingItem : ObservableObject
     public string StringValue
     {
         get => Owner.GetStringSetting(PropertyName);
-        set { Owner.SetStringSetting(PropertyName, value); OnPropertyChanged(); OnPropertyChanged(nameof(IsModified)); }
+        set
+        {
+            Owner.SetStringSetting(PropertyName, value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsModified));
+            if (IsFilePath) Revalidate(value);
+        }
+    }
+
+    /// <summary>
+    /// Instant existence-only validation (no <c>--version</c> spawn — matches build/probe), then a
+    /// background enrichment pass that upgrades a recognized-but-unconfirmed Warning to Valid + the
+    /// detected version. The prior background task is cancelled on every re-edit so a stale probe can
+    /// never clobber a newer one's result. Never runs on the UI thread.
+    /// </summary>
+    private void Revalidate(string value)
+    {
+        _validationCts?.Cancel();
+
+        var sync = ToolchainPathValidator.Validate(BackendId, Slot, value);
+        ValidationMessage = sync.Message;
+        ValidationSeverity = SeverityColorFor(sync.Status);
+
+        if (sync.Status == ToolchainPathStatus.Empty) return;
+
+        var cts = new CancellationTokenSource();
+        _validationCts = cts;
+        var token = cts.Token;
+
+        Task.Run(() => ToolchainPathValidator.Validate(BackendId, Slot, value,
+                versionProbe: ToolchainPathValidator.RealVersionProbe), token)
+            .ContinueWith(t =>
+            {
+                if (token.IsCancellationRequested || t.IsCanceled || t.IsFaulted) return;
+                var enriched = t.Result;
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    if (token.IsCancellationRequested) return;
+                    ValidationMessage = enriched.Message;
+                    ValidationSeverity = SeverityColorFor(enriched.Status);
+                });
+            }, TaskScheduler.Default);
+    }
+
+    private static string SeverityColorFor(ToolchainPathStatus status) => status switch
+    {
+        ToolchainPathStatus.Invalid => "#F14C4C",
+        ToolchainPathStatus.Warning => "#CCA700",
+        ToolchainPathStatus.Valid => "#89D185",
+        _ => "#808080",
+    };
+
+    /// <summary>Browse for a compiler/debugger executable (FilePath items only). Resolves
+    /// IDialogService via App.Services, matching the pattern already used elsewhere in this
+    /// dialog (ConfirmResetAsync in SettingsDialog.axaml.cs / RefreshScopeBadges above).</summary>
+    [RelayCommand]
+    private async Task Browse()
+    {
+        if (App.Services?.GetService(typeof(IDialogService)) is not IDialogService dialogService) return;
+
+        var result = await dialogService.ShowOpenFileDialogAsync(new FileDialogOptions
+        {
+            Title = Name,
+            Filters = new List<FileDialogFilter>
+            {
+                new("Executable", "*.exe"),
+                new("Batch", "*.bat"),
+                new("All", "*"),
+            }
+        });
+
+        if (!string.IsNullOrEmpty(result))
+        {
+            StringValue = result;
+        }
     }
 
     /// <summary>Resets this setting to its default value.</summary>
@@ -101,6 +197,7 @@ public partial class SearchableSettingItem : ObservableObject
                 break;
             case SettingControlKind.ComboBox:
             case SettingControlKind.TextBox:
+            case SettingControlKind.FilePath:
                 StringValue = (string)DefaultValue;
                 break;
         }
@@ -140,7 +237,8 @@ public enum SettingControlKind
     NumericUpDown,
     ComboBox,
     TextBox,
-    ColorPicker
+    ColorPicker,
+    FilePath
 }
 
 /// <summary>
@@ -421,6 +519,25 @@ public partial class SettingsViewModel : ViewModelBase
     // -- C++ Settings --
     [ObservableProperty]
     private string _clangdPath = "";
+
+    // -- C++ per-backend toolchain overrides (Task 11) --
+    [ObservableProperty]
+    private string _llvmCompilerPath = "";
+
+    [ObservableProperty]
+    private string _llvmDebuggerPath = "";
+
+    [ObservableProperty]
+    private string _gccCompilerPath = "";
+
+    [ObservableProperty]
+    private string _gccDebuggerPath = "";
+
+    [ObservableProperty]
+    private string _msvcCompilerPath = "";
+
+    [ObservableProperty]
+    private string _msvcDebuggerPath = "";
 
     // -- Minimap Settings --
     [ObservableProperty]
@@ -1021,6 +1138,27 @@ public partial class SettingsViewModel : ViewModelBase
             // ===== C++ =====
             MakeText(LanguageServerDescriptor.ClangdSettingsKey, "clangd Path", "Path to the clangd executable, used for C++ IntelliSense. Leave empty to search PATH.", "C++", nameof(ClangdPath), ""),
 
+            // Per-backend compiler/debugger overrides (Task 11). Always User-scoped (see
+            // AutoSaveSettingToService / LoadFromService) regardless of the dialog's active scope.
+            MakeFilePath(CppToolchainOverrides.CompilerKey("llvm"), "LLVM Compiler Path",
+                "Path to clang++.exe. Blank = auto-detect on PATH.", "C++", nameof(LlvmCompilerPath),
+                "llvm", ToolchainSlotKind.Compiler),
+            MakeFilePath(CppToolchainOverrides.DebuggerKey("llvm"), "LLVM Debugger Path",
+                "Path to a DAP adapter (lldb-dap.exe). Blank = default lldb-dap locator.", "C++", nameof(LlvmDebuggerPath),
+                "llvm", ToolchainSlotKind.Debugger),
+            MakeFilePath(CppToolchainOverrides.CompilerKey("gcc"), "GCC Compiler Path",
+                "Path to g++.exe. Blank = auto-detect on PATH.", "C++", nameof(GccCompilerPath),
+                "gcc", ToolchainSlotKind.Compiler),
+            MakeFilePath(CppToolchainOverrides.DebuggerKey("gcc"), "GCC Debugger Path",
+                "Path to a DAP adapter (lldb-dap.exe). Blank = default lldb-dap locator.", "C++", nameof(GccDebuggerPath),
+                "gcc", ToolchainSlotKind.Debugger),
+            MakeFilePath(CppToolchainOverrides.CompilerKey("msvc"), "MSVC Compiler Path",
+                "Path to vcvars64.bat or a Visual Studio install directory. Blank = auto-detect via vswhere.", "C++", nameof(MsvcCompilerPath),
+                "msvc", ToolchainSlotKind.Compiler),
+            MakeFilePath(CppToolchainOverrides.DebuggerKey("msvc"), "MSVC Debugger Path",
+                "Path to a DAP adapter. Note: lldb-dap can't read MSVC PDB — breakpoints may not bind.", "C++", nameof(MsvcDebuggerPath),
+                "msvc", ToolchainSlotKind.Debugger),
+
             // ===== IntelliSense =====
             MakeBool("intellisense.autoComplete", "Enable Auto Complete", "Show completion suggestions as you type.", "IntelliSense", nameof(EnableAutoComplete), true),
             MakeBool("intellisense.quickInfo", "Show Quick Info", "Display type and documentation info on hover.", "IntelliSense", nameof(ShowQuickInfo), true),
@@ -1049,6 +1187,10 @@ public partial class SettingsViewModel : ViewModelBase
 
     private SearchableSettingItem MakeText(string key, string name, string desc, string category, string prop, string defaultValue = "") =>
         new() { Key = key, Name = name, Description = desc, Category = category, PropertyName = prop, ControlKind = SettingControlKind.TextBox, Owner = this, DefaultValue = defaultValue };
+
+    private SearchableSettingItem MakeFilePath(string key, string name, string desc, string category, string prop,
+        string backendId, ToolchainSlotKind slot, string defaultValue = "") =>
+        new() { Key = key, Name = name, Description = desc, Category = category, PropertyName = prop, ControlKind = SettingControlKind.FilePath, Owner = this, DefaultValue = defaultValue, BackendId = backendId, Slot = slot };
 
     private void RefreshAllScopeBadges()
     {
@@ -1183,6 +1325,12 @@ public partial class SettingsViewModel : ViewModelBase
         nameof(SideBarLocation) => SideBarLocation,
         nameof(LspServerPath) => LspServerPath,
         nameof(ClangdPath) => ClangdPath,
+        nameof(LlvmCompilerPath) => LlvmCompilerPath,
+        nameof(LlvmDebuggerPath) => LlvmDebuggerPath,
+        nameof(GccCompilerPath) => GccCompilerPath,
+        nameof(GccDebuggerPath) => GccDebuggerPath,
+        nameof(MsvcCompilerPath) => MsvcCompilerPath,
+        nameof(MsvcDebuggerPath) => MsvcDebuggerPath,
         nameof(MinimapSide) => MinimapSide,
         _ => ""
     };
@@ -1206,6 +1354,12 @@ public partial class SettingsViewModel : ViewModelBase
             case nameof(SideBarLocation): SideBarLocation = value; break;
             case nameof(LspServerPath): LspServerPath = value; break;
             case nameof(ClangdPath): ClangdPath = value; break;
+            case nameof(LlvmCompilerPath): LlvmCompilerPath = value; break;
+            case nameof(LlvmDebuggerPath): LlvmDebuggerPath = value; break;
+            case nameof(GccCompilerPath): GccCompilerPath = value; break;
+            case nameof(GccDebuggerPath): GccDebuggerPath = value; break;
+            case nameof(MsvcCompilerPath): MsvcCompilerPath = value; break;
+            case nameof(MsvcDebuggerPath): MsvcDebuggerPath = value; break;
             case nameof(MinimapSide): MinimapSide = value; break;
         }
 
@@ -1230,7 +1384,11 @@ public partial class SettingsViewModel : ViewModelBase
         var key = GetSettingsKeyForProperty(prop);
         if (string.IsNullOrEmpty(key)) return;
 
-        var scope = ActiveScope;
+        // The six cpp.toolchain.* keys are always User-scoped (spec §1): a per-backend compiler/
+        // debugger override is global toolchain config, not something that should silently split
+        // across User/Workspace/Folder depending on which scope tab happens to be active in the
+        // dialog. Force User regardless of ActiveScope; every other key keeps today's behavior.
+        var scope = key.StartsWith("cpp.toolchain.", StringComparison.Ordinal) ? SettingsScope.User : ActiveScope;
 
         // Special transformations: a couple of bool toggles persist as VS Code enum strings.
         // These used to `return` right here, BEFORE the SettingsChanged broadcast below — so a
@@ -1298,6 +1456,12 @@ public partial class SettingsViewModel : ViewModelBase
         nameof(LspServerPath) => "basiclang.lsp.path",
         nameof(LspAutoStart) => "basiclang.lsp.autoStart",
         nameof(ClangdPath) => LanguageServerDescriptor.ClangdSettingsKey,
+        nameof(LlvmCompilerPath) => CppToolchainOverrides.CompilerKey("llvm"),
+        nameof(LlvmDebuggerPath) => CppToolchainOverrides.DebuggerKey("llvm"),
+        nameof(GccCompilerPath) => CppToolchainOverrides.CompilerKey("gcc"),
+        nameof(GccDebuggerPath) => CppToolchainOverrides.DebuggerKey("gcc"),
+        nameof(MsvcCompilerPath) => CppToolchainOverrides.CompilerKey("msvc"),
+        nameof(MsvcDebuggerPath) => CppToolchainOverrides.DebuggerKey("msvc"),
         nameof(EnableAutoComplete) => "intellisense.autoComplete",
         nameof(ShowQuickInfo) => "intellisense.quickInfo",
         nameof(ShowSignatureHelp) => "intellisense.signatureHelp",
@@ -1605,6 +1769,16 @@ public partial class SettingsViewModel : ViewModelBase
         LspServerPath = _settingsService.Get("basiclang.lsp.path", "", scope);
         LspAutoStart = _settingsService.Get("basiclang.lsp.autoStart", true, scope);
         ClangdPath = _settingsService.Get(LanguageServerDescriptor.ClangdSettingsKey, "", scope);
+
+        // The six cpp.toolchain.* overrides are always User-scoped (spec §1): read at User here
+        // regardless of `scope` so the dialog shows/edits the global toolchain config independent of
+        // the active User/Workspace/Folder selector. Mirrors the AutoSaveSettingToService write-side force.
+        LlvmCompilerPath = _settingsService.Get(CppToolchainOverrides.CompilerKey("llvm"), "", SettingsScope.User);
+        LlvmDebuggerPath = _settingsService.Get(CppToolchainOverrides.DebuggerKey("llvm"), "", SettingsScope.User);
+        GccCompilerPath = _settingsService.Get(CppToolchainOverrides.CompilerKey("gcc"), "", SettingsScope.User);
+        GccDebuggerPath = _settingsService.Get(CppToolchainOverrides.DebuggerKey("gcc"), "", SettingsScope.User);
+        MsvcCompilerPath = _settingsService.Get(CppToolchainOverrides.CompilerKey("msvc"), "", SettingsScope.User);
+        MsvcDebuggerPath = _settingsService.Get(CppToolchainOverrides.DebuggerKey("msvc"), "", SettingsScope.User);
     }
 
     private void LoadSettings()

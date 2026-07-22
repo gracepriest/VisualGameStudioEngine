@@ -175,6 +175,15 @@
                                 MinWidth="170" IsVisible="{Binding IsComboBox}"/>
                       <TextBox Text="{Binding StringValue, Mode=TwoWay}"
                                MinWidth="200" IsVisible="{Binding IsTextBox}"/>
+                      <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding IsFilePath}">
+                        <TextBox Text="{Binding StringValue, Mode=TwoWay}" MinWidth="220"
+                                 FontFamily="Cascadia Code, Consolas, monospace" FontSize="12"/>
+                        <Button Content="Browse..." Command="{Binding BrowseCommand}" Padding="8,3" FontSize="11"/>
+                        <TextBlock Text="{Binding ValidationMessage}" FontSize="11" VerticalAlignment="Center"
+                                   MaxWidth="240" TextWrapping="Wrap"
+                                   Foreground="{Binding ValidationSeverity}"
+                                   IsVisible="{Binding ValidationMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                      </StackPanel>
                     </Panel>
 
                     <!-- Reset button -->
@@ -289,6 +298,15 @@
                                   MinWidth="170" IsVisible="{Binding IsComboBox}"/>
                         <TextBox Text="{Binding StringValue, Mode=TwoWay}"
                                  MinWidth="200" IsVisible="{Binding IsTextBox}"/>
+                        <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding IsFilePath}">
+                          <TextBox Text="{Binding StringValue, Mode=TwoWay}" MinWidth="220"
+                                   FontFamily="Cascadia Code, Consolas, monospace" FontSize="12"/>
+                          <Button Content="Browse..." Command="{Binding BrowseCommand}" Padding="8,3" FontSize="11"/>
+                          <TextBlock Text="{Binding ValidationMessage}" FontSize="11" VerticalAlignment="Center"
+                                     MaxWidth="240" TextWrapping="Wrap"
+                                     Foreground="{Binding ValidationSeverity}"
+                                     IsVisible="{Binding ValidationMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                        </StackPanel>
                       </Panel>
 
                       <!-- Reset button -->
