@@ -20,10 +20,30 @@ namespace VisualGameStudio.Tests.Compiler;
 [TestFixture]
 public class CppProjectBuilderResolveToolchainTests
 {
-    private static (string Dir, ProjectFile Project) MakeMinimalCppProject()
+    private string _dir = null!;
+
+    [SetUp]
+    public void SetUp()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "bl-cpb-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
+        _dir = Path.Combine(Path.GetTempPath(), "bl-cpb-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_dir);
+    }
+
+    // Retries like CppToolchainExplicitPathTests.cs's TearDown (same "wrote obj/compile_commands.json
+    // under a temp dir" scenario) — a transient Windows file lock (or AV scan) on a just-written
+    // file must not leak the temp dir.
+    [TearDown]
+    public void TearDown()
+    {
+        for (var i = 0; i < 3; i++)
+        {
+            try { Directory.Delete(_dir, recursive: true); return; }
+            catch { Thread.Sleep(200); }
+        }
+    }
+
+    private ProjectFile MakeMinimalCppProject()
+    {
         const string blproj = """
             <BasicLangProject Version="1.0">
               <PropertyGroup>
@@ -33,10 +53,10 @@ public class CppProjectBuilderResolveToolchainTests
               </PropertyGroup>
             </BasicLangProject>
             """;
-        File.WriteAllText(Path.Combine(dir, "App.bas"), "Sub Main()\n    PrintLine 7\nEnd Sub\n");
-        var projPath = Path.Combine(dir, "App.blproj");
+        File.WriteAllText(Path.Combine(_dir, "App.bas"), "Sub Main()\n    PrintLine 7\nEnd Sub\n");
+        var projPath = Path.Combine(_dir, "App.blproj");
         File.WriteAllText(projPath, blproj);
-        return (dir, ProjectFile.Load(projPath));
+        return ProjectFile.Load(projPath);
     }
 
     /// <summary>
@@ -51,57 +71,48 @@ public class CppProjectBuilderResolveToolchainTests
     [Test]
     public void Build_With_ResolveToolchain_Override_Reaches_CompileCommandsJson_AsTheDriver()
     {
-        var (dir, project) = MakeMinimalCppProject();
-        try
-        {
-            var overridePath = @"C:\fake-override\llvm\bin\clang++.exe"; // never on disk, never really executed
-            var result = CppProjectBuilder.Build(project, "Debug",
-                resolveToolchain: () => CppToolchain.FromExplicit("llvm", overridePath));
+        var project = MakeMinimalCppProject();
 
-            // Ignore result.Success: the fake path can't actually compile. What matters
-            // is that compile_commands.json was already written with it as the driver.
-            var ccPath = Path.Combine(dir, "obj", "compile_commands.json");
-            Assert.That(File.Exists(ccPath), Is.True,
-                "compile_commands.json must be written during EmitCore, before the (failing) compile step");
+        var overridePath = @"C:\fake-override\llvm\bin\clang++.exe"; // never on disk, never really executed
+        var result = CppProjectBuilder.Build(project, "Debug",
+            resolveToolchain: () => CppToolchain.FromExplicit("llvm", overridePath));
 
-            var db = JsonNode.Parse(File.ReadAllText(ccPath))!;
-            var args = db[0]!["arguments"]!.AsArray().Select(a => a!.GetValue<string>()).ToList();
-            Assert.That(args[0], Is.EqualTo(overridePath),
-                "the resolveToolchain override must reach arguments[0] (the driver a real build invokes) verbatim");
-        }
-        finally
-        {
-            try { Directory.Delete(dir, recursive: true); } catch { /* best-effort cleanup */ }
-        }
+        // Ignore result.Success: the fake path can't actually compile. What matters
+        // is that compile_commands.json was already written with it as the driver.
+        var ccPath = Path.Combine(_dir, "obj", "compile_commands.json");
+        Assert.That(File.Exists(ccPath), Is.True,
+            "compile_commands.json must be written during EmitCore, before the (failing) compile step");
+
+        var db = JsonNode.Parse(File.ReadAllText(ccPath))!;
+        var args = db[0]!["arguments"]!.AsArray().Select(a => a!.GetValue<string>()).ToList();
+        Assert.That(args[0], Is.EqualTo(overridePath),
+            "the resolveToolchain override must reach arguments[0] (the driver a real build invokes) verbatim");
     }
 
     /// <summary>
-    /// No resolveToolchain arg at all (the CLI's Program.cs call shape) must keep
-    /// today's behavior: the additive default (<c>resolveToolchain ?? CppToolchain.Find</c>)
-    /// routes to the real machine probe, not a null/no-op resolver. A CI box need not
-    /// have a real C++ toolchain installed for this to be deterministic — either Find
-    /// locates one (compile proceeds/fails on its own merits) or Build hard-fails with
-    /// BL6005, the documented "no toolchain found" outcome. Both prove Find ran; only a
-    /// crash or a silently-skipped toolchain gate would indicate the default broke.
+    /// No resolveToolchain arg at all (the CLI's Program.cs call shape) must keep today's
+    /// behavior: the additive default (<c>resolveToolchain ?? CppToolchain.Find</c>) routes
+    /// to the real machine probe, not a null/no-op resolver. Pinned to CppToolchain.Find()'s
+    /// OWN result (mirroring CppProjectCliBuildTests.cs's toolchain-availability branch)
+    /// rather than only checking "some diagnostic exists on failure": a broken default
+    /// (e.g. <c>?? (() => null)</c>) and a correct default that simply finds nothing both
+    /// land on the same BL6005 diagnostic, so a bare "failed with a diagnostic" assertion
+    /// can't tell them apart on a box with no toolchain, and says nothing at all on a box
+    /// that DOES have one (a broken default would silently no-op success/failure
+    /// unpredictably there too). Branching on Find()'s own verdict makes both machine
+    /// states an actual proof that Build's resolver ran the same probe.
     /// </summary>
     [Test]
     public void Build_With_No_ResolveToolchain_Arg_Defaults_To_Find()
     {
-        var (dir, project) = MakeMinimalCppProject();
-        try
-        {
-            var result = CppProjectBuilder.Build(project, "Debug");
+        var project = MakeMinimalCppProject();
 
-            Assert.That(result, Is.Not.Null);
-            if (!result.Success)
-            {
-                Assert.That(result.Diagnostics, Is.Not.Empty,
-                    "a failing build with no override must still fail through the normal toolchain gate (BL6005) or a real compile error, not silently");
-            }
-        }
-        finally
-        {
-            try { Directory.Delete(dir, recursive: true); } catch { /* best-effort cleanup */ }
-        }
+        var toolchainAvailable = CppToolchain.Find() != null;
+        var result = CppProjectBuilder.Build(project, "Debug"); // no override arg
+
+        if (toolchainAvailable)
+            Assert.That(result.Success, Is.True, "default must route to CppToolchain.Find and build");
+        else
+            Assert.That(result.Diagnostics.Select(d => d.Code), Does.Contain("BL6005"));
     }
 }
