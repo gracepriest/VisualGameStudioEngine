@@ -2,7 +2,9 @@
 
 **Date:** 2026-07-21
 **Status:** Approved design (user approved all six sections in session); revised
-per two-lens review **r1** (codebase fact-check + canonical design review).
+per two-lens review **r1** then **r2** (codebase fact-check + canonical design
+review). r2 fact-check lens: **approved**; r2 canonical items (authoritative-when-set
+availability, discriminating tie-break test, shared-reader DI) folded in.
 **Base:** master @ `ba2f8f7`
 **Approach:** Approach A — an override-reader + a pure validator plus six flat
 settings keys, wired through *existing* extension seams (the `CppProjectBuilder`
@@ -183,11 +185,12 @@ name. Add:
 
 ### 3.2 `BuildService` owns the wiring
 
-**r1 correction:** `BuildService` does **not** currently have `ISettingsService`
+**r1 correction:** `BuildService` does **not** currently have any settings access
 — its ctor takes only `IOutputService` + `ProjectSerializer`
-(`BuildService.cs:38-47`). **Inject `ISettingsService`** (add a ctor param; the DI
-registration at `ServiceConfiguration.cs:27` is type-based, so the container
-supplies it) so it can construct/consult the `CppToolchainOverrides` reader.
+(`BuildService.cs:38-47`). **Inject the shared `CppToolchainOverrides` reader** (a
+new ctor param; the DI registration at `ServiceConfiguration.cs:27` is type-based,
+so the container supplies it). The reader wraps `ISettingsService` + the validator,
+so `BuildService` never touches settings directly (§2 — one reader, three consumers).
 
 `BuildService.BuildCppProject` (`BuildService.cs:1090-1102`) builds override-aware
 resolvers and passes them through the seams `Build`/`EmitCore` expose
@@ -205,23 +208,31 @@ resolvers and passes them through the seams `Build`/`EmitCore` expose
   `resolveToolchain`.
 
 **Unpinned selection precedence (r1 — was unspecified):** iterate backends in
-today's fixed `Find` order **llvm → gcc → msvc**; a backend is a *candidate* if it
-has a `Usable` compiler override **or** is on PATH/vswhere; pick the **first
-candidate in that fixed order** (preserving today's clang-first preference).
-Within the chosen backend, a `Usable` override wins over PATH. (So the tie-break is
-by backend order, not a global override-beats-PATH rule.)
+today's fixed `Find` order **llvm → gcc → msvc**; a backend is a *candidate* when its
+override is **set and `Usable`**, or its override is **blank and it is on
+PATH/vswhere**. A **set-but-`Invalid`** override makes the backend a
+**non-candidate** — skipped, never silently masked by PATH (the broken override is
+surfaced in the Settings dialog and greys the backend in the wizard, §5.4, not as a
+build error for an unrelated unpinned project). Pick the **first candidate in that
+fixed order** (preserving today's clang-first preference); within it, a set `Usable`
+override is used, else PATH. The tie-break is by backend order, not a global
+override-beats-PATH rule — e.g. llvm on PATH (no override) + a `Usable` gcc override,
+unpinned → **llvm** wins by order.
 
 **The CLI (`Program.cs:440`) passes none of these params, so `BasicLang.exe`
 behavior is unchanged** — overrides are an IDE-settings feature.
 
 ### 3.3 Invalid-but-set = hard error
 
-`BuildService` pre-validates the **chosen** backend's override — the pinned one, or
-the one the unpinned precedence selects (§3.2). If it is set but broken, the build
-fails with a clear Output message pointing at Settings › C++ ("llvm compiler path
-is set but not found: `…` — fix or clear it in Settings › C++"), never a silent
-fall-back. A blank field still falls through to the probe; a pinned-but-absent
-toolchain still yields the existing **BL6015** (`CppProjectBuilder.cs:347-351`).
+When the project **pins** a backend whose override is **set but `Invalid`**,
+`BuildService` pre-validates and the build fails with a clear Output message pointing
+at Settings › C++ ("gcc compiler path is set but not found: `…` — fix or clear it in
+Settings › C++") — **even if that backend is also on PATH** (the set override is
+authoritative; PATH must not silently mask it, matching §5.1). It never silently
+falls back. For an **unpinned** project a set-`Invalid` backend is simply a
+non-candidate (§3.2) and the next candidate is used. A blank field still falls
+through to the probe; a pinned-but-absent (no override, not on PATH) toolchain still
+yields the existing **BL6015** (`CppProjectBuilder.cs:347-351`).
 
 ### 3.4 Editing/building parity
 
@@ -312,17 +323,20 @@ change**.
 ### 5.1 Make the probe override-aware — at the ProjectSystem boundary
 
 `CppToolchainProbeService` (`CppToolchainProbeService.cs:10-16`; it lives in
-ProjectSystem and can take `ISettingsService`/the overrides reader; today it merely
-wraps the pure compiler-side probe) gains the `CppToolchainOverrides` reader. Its
-`Probe()` returns, per backend:
+ProjectSystem; today it merely wraps the pure compiler-side probe) gains the injected
+`CppToolchainOverrides` reader. Because a **set** override is authoritative (§3.3),
+availability keys off the override when one is set, and off the probe only when it is
+blank — per backend:
 
-> `available = onPath/vswhere  OR  HasUsableCompilerOverride(backend)`
+> `available = (override set) ? Usable(override) : onPath/vswhere`
 
-(using the §2 `Usable` predicate — `Valid` *or* `Warning`, so a working wrapper
-counts). So gcc pointed at winlibs off PATH arrives as `Gcc = true`. The
-compiler-side `CppToolchain.ProbeAvailability()` (`CppToolchain.cs:95-96`) stays
-pure PATH/vswhere (shared with the CLI, no settings) — the OR happens only in the
-ProjectSystem adapter.
+(the §2 `Usable` predicate — `Valid` *or* `Warning`, so a working wrapper counts). So
+gcc pointed at winlibs off PATH arrives as `Gcc = true`; a **set-but-`Invalid`** gcc
+override arrives as `Gcc = false` **even when gcc is on PATH** — the broken setting
+greys the backend rather than PATH masking it, so the wizard and the build (§3.3)
+agree. The compiler-side `CppToolchain.ProbeAvailability()` (`CppToolchain.cs:95-96`)
+stays pure PATH/vswhere (shared with the CLI, no settings) — the override logic lives
+only in the ProjectSystem adapter.
 
 ### 5.2 Availability keys off the *compiler* override only
 
@@ -339,16 +353,18 @@ wizard-VM edits.
 
 ### 5.4 Broken override ≠ available
 
-The probe ORs in `HasUsableCompilerOverride` (existence passed), so a set-but-broken
-(`Invalid`) override leaves the backend greyed in the wizard while the Settings page
-shows the red error — consistent, no "available but won't build."
+Because a set override is authoritative (§5.1), a set-but-broken (`Invalid`) override
+leaves the backend greyed in the wizard — **whether or not it is on PATH** — while
+the Settings page shows the red error. Consistent, no "available but won't build."
 
 ### 5.5 Wizard/build agreement
 
-Because §3's override-aware resolver uses the **same `Usable` predicate** as the
-probe, a backend shown available in the wizard resolves to a real toolchain at build
-time (never trips BL6015 for it). "Shows available" and "actually builds" cannot
-disagree — including for a `Warning`-status wrapper.
+Because §3's resolver and the §5.1 probe apply the **same authoritative-when-set
+rule and the same `Usable` predicate**, a backend shown available in the wizard
+resolves to a real toolchain at build time, and a set-but-`Invalid` override greys it
+in both places (§3.3, §5.1). "Shows available" and "actually builds" cannot disagree
+— including for a `Warning`-status wrapper **and** for a broken override on a backend
+that is also on PATH.
 
 **Optional polish left OUT of v1** (keeps the probe's record a simple bool triple):
 a distinct `"(configured)"` hint to signal *why* a backend is available. Enabled is
@@ -373,11 +389,11 @@ not a real install; validate codegen through the CLI/optimizer
 | `ToolchainPathValidator` (pure) | `(backend, kind, path)` → `Empty/Valid/Warning/Invalid` + `Usable` | empty→Empty; missing→Invalid; clang++→Valid(version) via **fake** version-probe seam; unrecognized-but-existing basename→Warning **without executing**; **msvc compiler: dir→derives vcvars=Valid, `cl.exe`→Invalid**; **msvc.debugger valid lldb-dap→Warning + PDB advisory**; `Usable` = Valid∪Warning |
 | `CppToolchainOverrides` (reader, DI) | reads 6 keys, applies validator → tri-state + `HasUsableCompilerOverride` | fake `ISettingsService`: blank/usable/invalid per backend; consumer registration asserted |
 | `CppToolchain` factories (BasicLang) | `FromExplicitCompiler` / msvc-vcvars | emitted **build command invokes the full override path** (assert via `CompileToCppOptimized` + CLI); msvc substitutes resolved vcvars |
-| `BuildService` wiring (+`ISettingsService`) | override-aware `resolveById` + new `resolveToolchain`; pre-validate | pinned-gcc + usable override, nothing on PATH → builds with override; **unpinned: gcc override usable + off PATH → builds gcc; tie-break llvm>gcc>msvc order**; set-but-invalid → **hard error, no silent fallback**; **`Build()` with no override params = today's behavior (CLI unchanged)** |
+| `BuildService` wiring (+`CppToolchainOverrides`) | override-aware `resolveById` + new `resolveToolchain`; pre-validate | pinned-gcc + usable override, nothing on PATH → builds with override; **unpinned discriminating tie-break: llvm on PATH (no override) + usable gcc override → selects llvm (fixed order), NOT gcc**; unpinned single-candidate: only gcc usable → gcc; **pinned set-Invalid override while gcc is also on PATH → hard error, no fallback to PATH**; unpinned set-Invalid backend → skipped (non-candidate); **`Build()` with no override params = today's behavior (CLI unchanged)** |
 | `IntelliSenseEmitter` (+`resolveById`) | compile_commands parity | **pinned winlibs-gcc override → `compile_commands.json` names the override g++**, not clang++ |
 | `DebugConfiguration` + `DebugService` | honor `AdapterExecutableOverride` | config with override path → launch uses it; without → uses `descriptor.ResolveLaunchCommand()` (no regression) |
 | `CppToolchainOverrides.ResolveDebugger` + MWVM F5 (source-guard) | per-backend debugger resolution | pure: blank→chain, usable→path, invalid→error tri-state; **source-guard**: `OnDebugAsync` resolves the debugger override + aborts on invalid (MWVM not constructed) |
-| `CppToolchainProbeService` | OR override validity | gcc override usable, off PATH → `Probe().Gcc==true`; invalid → false; none → pure PATH result unchanged |
+| `CppToolchainProbeService` | authoritative-when-set availability | gcc override usable, off PATH → `Gcc==true`; **gcc override Invalid while gcc on PATH → `Gcc==false`**; blank → pure PATH result unchanged |
 | Wizard VM (existing tests) | availability follows probe | `FakeToolchainProbe` reporting gcc-via-override → backend enabled, hint cleared, c++23 offered |
 | Settings dialog | new `FilePath` control kind + 6 items | **source-guard** test (wcq pattern): each key present in `BuildSearchableSettings` + `GetSettingsKeyForProperty`; `SettingsConsumerContractTests` stays green |
 | Integration | ties §3 + §5 together | fake off-PATH g++ fixture: configure → wizard shows gcc available → build succeeds using the override path |
@@ -404,7 +420,8 @@ not a real install; validate codegen through the CLI/optimizer
 - `IntelliSenseEmitter.cs` — add + forward an override-aware `resolveById` (§3.4).
 - `BuildService.cs` — **inject `ISettingsService`**; build override-aware resolvers
   + pre-validate.
-- `CppToolchainProbeService.cs` — OR in `HasUsableCompilerOverride`.
+- `CppToolchainProbeService.cs` — apply the §5.1 availability rule
+  (override-when-set, else probe).
 - `DebugConfiguration` model — new optional `AdapterExecutableOverride` field.
 - `DebugService.cs` — honor `AdapterExecutableOverride` when present.
 - `MainWindowViewModel.cs` — resolve + validate the per-backend debugger override at
