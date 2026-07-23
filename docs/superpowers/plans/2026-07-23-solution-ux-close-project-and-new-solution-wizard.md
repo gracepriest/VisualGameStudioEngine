@@ -588,9 +588,15 @@ public async Task AddProject_writes_blproj_once_and_registers_without_git_reinit
 
 **Files:** scratch only (no commit)
 
-- [ ] **Step 0a — is the `.blproj` `<ProjectReference>` load-bearing?** Create two BasicLang projects in a temp solution: library `A` exporting a symbol, app `B` using it. Compile `B` via the CLI (`IDE/BasicLang.exe build …`) with and without a `<ProjectReference>` to `A` in `B.blproj`. Record whether cross-project resolution requires the `.blproj` element (expected: yes). If resolution instead comes only from the `.blsln`, adjust Task 12/13 accordingly.
-- [ ] **Step 0b — does a targeted XML add preserve `.blproj` content?** Take a real `.blproj` containing `PropertyGroup`, `CppToolchain`, and `Compile` items; run the intended `XDocument` load → add one `<ProjectReference>` → save; diff. Confirm nothing else changes. (Informs whether the optional Task 15 serializer round-trip is safe.)
-- [ ] Record findings inline in the plan/PR notes before proceeding.
+**RESULT — both probes ran 2026-07-23. Findings below are authoritative; they correct the plan's original assumption.**
+
+- [x] **Step 0a — is the `.blproj` `<ProjectReference>` load-bearing for symbol resolution? → REFUTED.**
+  `ProjectFile.ProjectReferences` is read by exactly one consumer: the LSP `WorkspaceManager` (IntelliSense). **No build path reads it** — neither `BasicLang/Program.cs::HandleBuildCommand` (CLI) nor `BuildService.CompileWithBasicLangApiAsync` (IDE); both pass only `project.GetSourceFiles()` (that project's own directory) to `CompileProjectFiles`. Empirical: building `B` (calling a symbol in `A`) produced a **byte-identical error with and without** the `<ProjectReference>`. Cross-project compilation is a **separate missing feature**, not a metadata write.
+  → **Impact:** keep the dual-write, but re-framed — `.blsln` = build **order** (`GetBuildOrder` topological sort), `.blproj` = **IntelliSense** (LSP). Feature D *declares* the dependency; it does not make cross-project builds compile. Do NOT claim otherwise in commit messages or UI copy.
+- [x] **Step 0b — does a targeted XML add preserve `.blproj` content? → PRESERVED, with a BOM gotcha.**
+  Every other element stays byte-identical (PropertyGroups, `CppStandard`/`CppToolchain`, `Compile` items, 2-space indent, self-closing style, CRLF). **BUT `XDocument.Save(path)` injects a UTF-8 BOM** (measured 458→540 bytes on a real repo `.blproj`; all real `.blproj` files are BOM-less). **Task 12 MUST write via `new StreamWriter(path, false, new UTF8Encoding(false))` + `doc.Save(writer)`** (or `File.WriteAllText(path, doc.ToString())`, which the `.blsln` writer already uses safely).
+  Also: append to `ItemGroups.FirstOrDefault(g => g.Elements("ProjectReference").Any()) ?? a new ItemGroup` — don't assume one exists.
+- **Discovered pre-existing bug (out of scope, file a follow-up):** `BasicLang/ProjectSystem/ProjectFile.cs::Save()` (~line 370) already uses plain `doc.Save(path)`, so it BOM-stamps any `.blproj` it rewrites today (e.g. `add package`).
 
 ---
 

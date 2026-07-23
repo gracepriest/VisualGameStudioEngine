@@ -318,20 +318,34 @@ the now-surfaced Set-as-Startup / Remove commands — must persist via
    `_solutionService.SaveSolutionAsync()` to persist `SolutionProject.ProjectReferences`
    to the `.blsln` ([SolutionSerializer.cs:145-148](../../VisualGameStudio.ProjectSystem/Serialization/SolutionSerializer.cs)).
    This store drives build order ([SolutionService.cs:245-305](../../VisualGameStudio.ProjectSystem/Services/SolutionService.cs)).
-2. **The `from` project's `.blproj` `<ProjectReference>`** — what the compiler
-   resolves ([ProjectFile.cs:202-207,337-344](../../BasicLang/ProjectSystem/ProjectFile.cs)).
+2. **The `from` project's `.blproj` `<ProjectReference>`** — consumed by the LSP
+   `WorkspaceManager` for cross-project **IntelliSense**
+   ([ProjectFile.cs:202-207,337-344](../../BasicLang/ProjectSystem/ProjectFile.cs)).
    Add `<ProjectReference Include="{relPath}" />` (`relPath =
    Path.GetRelativePath(fromProjectDir, toBlprojPath)`) via a **targeted XML add**
    (load the `.blproj` `XDocument`, add to an `ItemGroup`, save), idempotent (skip if
    an existing `<ProjectReference Include>` already matches, case-insensitive). A
    targeted add — not the IDE serializer — because `ProjectSerializer` does not model
    `<ProjectReference>` at all (see Risk).
+   **Write it with `new StreamWriter(path, false, new UTF8Encoding(false))` +
+   `doc.Save(writer)` — plain `XDocument.Save(path)` injects a UTF-8 BOM** (measured:
+   458→540 bytes on a real `.blproj`), and every real `.blproj` here is BOM-less.
 
-> **Plan Step 0 (empirical).** (a) Confirm the build / module resolver actually
-> consumes the `.blproj` `<ProjectReference>` to resolve cross-project symbols, so the
-> `.blproj` write is load-bearing (not just the `.blsln` model). (b) Confirm the
-> targeted XML add preserves all other `.blproj` content (PropertyGroups,
-> `CppToolchain`, `Compile` items).
+> **Step 0 RESULT (measured 2026-07-23 — corrects an earlier assumption).**
+> (a) **REFUTED:** the `.blproj` `<ProjectReference>` is *not* read by any build path
+> — neither the CLI `HandleBuildCommand` nor `BuildService.CompileWithBasicLangApiAsync`
+> inspects it; both compile only `project.GetSourceFiles()`. Adding the element
+> produced a byte-identical compile error. **Cross-project symbol resolution is a
+> separate, currently-missing compiler feature** — writing reference metadata does not
+> make cross-project calls compile (and the retired dialog's writes were equally inert).
+> The two stores are still each load-bearing, but for *these* reasons: the `.blsln`
+> entry drives **build order** (`SolutionService.GetBuildOrder` topological sort), and
+> the `.blproj` entry drives **IntelliSense** (LSP `WorkspaceManager`). Feature D is
+> therefore scoped as *declaring the dependency in both stores*, not as enabling
+> cross-project compilation.
+> (b) **PRESERVED:** the targeted XML add leaves every other element byte-identical
+> (PropertyGroups, `CppStandard`/`CppToolchain`, `Compile` items, indentation, CRLF) —
+> with the BOM caveat above.
 
 **Risk — IDE serializer erases `<ProjectReference>`.** `ProjectSerializer` (IDE-side)
 round-trips only `<Reference>` (assembly refs), never `<ProjectReference>`
