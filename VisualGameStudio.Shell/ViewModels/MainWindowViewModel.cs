@@ -6945,85 +6945,57 @@ public partial class MainWindowViewModel : ViewModelBase
         if (!_solutionService.HasSolution) return;
         if (App.MainWindow == null) return;
 
-        var vm = new ViewModels.Dialogs.AddProjectToSolutionViewModel();
-        var existingNames = _solutionService.CurrentSolution!.Projects.Select(p => p.Name);
-        vm.Initialize(_solutionService.CurrentSolution.SolutionDirectory, existingNames);
+        // Flush in-memory edits (e.g. project references added since load) before the
+        // template service reads the .blsln from disk to register the new project.
+        await _solutionService.SaveSolutionAsync();
 
-        var dialog = new Views.Dialogs.AddProjectToSolutionDialog
+        var sol = _solutionService.CurrentSolution!;
+
+        var wizardVm = new ViewModels.Dialogs.NewProjectWizardViewModel(_projectTemplateService, _cppToolchainProbe)
         {
-            DataContext = vm
+            Mode = ViewModels.Dialogs.WizardMode.AddToSolution,
+            Location = sol.SolutionDirectory // locked display path
         };
+        wizardVm.FinishAction = opts =>
+            _projectTemplateService.CreateProjectAsync(ProjectSystem.Services.SolutionWizardMapper.BuildAddToSolutionOptions(opts, sol));
 
-        var result = await dialog.ShowDialog<bool?>(App.MainWindow);
-        if (result != true || !vm.DialogResult) return;
+        var select = new Views.Dialogs.NewProjectSelectView(wizardVm);
+        await select.ShowDialog(App.MainWindow);
+
+        if (select.Outcome != Views.Dialogs.NewProjectSelectView.WizardOutcome.Created) return;
+
+        var result = select.Result;
+        if (result == null || !result.Success)
+        {
+            if (result != null && !string.IsNullOrEmpty(result.Error))
+            {
+                await _dialogService.ShowMessageAsync("Error", $"Failed to add project: {result.Error}",
+                    DialogButtons.Ok, DialogIcon.Error);
+            }
+            return;
+        }
 
         try
         {
-            var outputType = vm.GetOutputType();
-            var project = await _solutionService.AddNewProjectAsync(vm.ProjectName, outputType);
+            SetBusy(true, "Adding project to solution...");
+            var solution = await _solutionService.LoadSolutionAsync(sol.FilePath);
+            SolutionExplorer.LoadSolution(solution);
 
-            // Write a richer .blproj with backend and source file reference
-            var defaultCode = vm.GetDefaultCode();
-            var hasSource = !string.IsNullOrEmpty(defaultCode) && vm.SelectedTemplate != "Empty";
-            var compileItem = hasSource ? $"\n    <Compile Include=\"Program.bas\" />" : "";
-            var referencesXml = "";
-            var selectedRefs = vm.GetSelectedReferences();
-            if (selectedRefs.Count > 0)
+            foreach (var f in result.FilesToOpen)
             {
-                referencesXml = "\n  <ItemGroup>";
-                foreach (var refName in selectedRefs)
-                {
-                    referencesXml += $"\n    <ProjectReference Include=\"..\\{refName}\\{refName}.blproj\" />";
-                    _solutionService.AddProjectReference(vm.ProjectName, refName);
-                }
-                referencesXml += "\n  </ItemGroup>";
+                await OpenFileAsync(f);
             }
 
-            var blprojContent =
-$"""
-<?xml version="1.0" encoding="utf-8"?>
-<BasicLangProject Version="1.0">
-  <PropertyGroup>
-    <ProjectName>{vm.ProjectName}</ProjectName>
-    <OutputType>{outputType}</OutputType>
-    <RootNamespace>{vm.ProjectName}</RootNamespace>
-    <TargetBackend>{vm.SelectedBackend}</TargetBackend>
-  </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
-    <OutputPath>bin\Debug</OutputPath>
-    <DebugSymbols>true</DebugSymbols>
-    <Optimize>false</Optimize>
-  </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
-    <OutputPath>bin\Release</OutputPath>
-    <DebugSymbols>false</DebugSymbols>
-    <Optimize>true</Optimize>
-  </PropertyGroup>
-  <ItemGroup>{compileItem}
-  </ItemGroup>{referencesXml}
-</BasicLangProject>
-""";
-            await File.WriteAllTextAsync(project.AbsolutePath, blprojContent);
-
-            // Write default source file
-            if (hasSource)
-            {
-                var projectDir = Path.GetDirectoryName(project.AbsolutePath);
-                if (!string.IsNullOrEmpty(projectDir))
-                {
-                    var sourcePath = Path.Combine(projectDir, "Program.bas");
-                    await File.WriteAllTextAsync(sourcePath, defaultCode);
-                }
-            }
-
-            await _solutionService.SaveSolutionAsync();
-            SolutionExplorer.LoadSolution(_solutionService.CurrentSolution!);
-            StatusText = $"Project '{vm.ProjectName}' added to solution";
+            StatusText = "Project added to solution";
         }
         catch (Exception ex)
         {
             await _dialogService.ShowMessageAsync("Error", $"Failed to add project: {ex.Message}",
                 DialogButtons.Ok, DialogIcon.Error);
+        }
+        finally
+        {
+            SetBusy(false);
         }
     }
 
