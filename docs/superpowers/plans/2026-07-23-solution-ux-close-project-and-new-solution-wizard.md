@@ -251,7 +251,18 @@ public async Task CreateProject_routes_through_FinishAction()
     Assert.That(seen, Is.Not.Null);                 // delegate received the built options
     Assert.That(raised?.ProjectPath, Is.EqualTo("p"));
 }
+
+[Test]
+public void Backends_keep_LLVM_and_MSIL_selectable()   // user requirement: keep them as forward-looking options
+{
+    var vm = NewVm(out _);                             // BasicLang language by default
+    var names = vm.Backends.Select(b => b.Name).ToList();
+    Assert.That(names, Does.Contain("MSIL"));
+    Assert.That(names.Any(n => n.Contains("LLVM")), Is.True);
+}
 ```
+
+> **Scope note (LLVM/MSIL):** the standing rule (`MEMORY.md` → `backend-scope-csharp-cpp`) is do-not-test the LLVM/MSIL **backends** (codegen/build). The user separately requires they stay **selectable** in the wizard. This plan honors both: it proves "kept selectable" via the option-list test above and the pure `SolutionWizardMapper` passthrough (Task 1 uses `SolutionTypes.Llvm`) — neither compiles anything — and it scaffolds/loads only the in-scope **C# and C++** backends in the Task 7 E2E.
 
 - [ ] **Step 2: Run — verify fail.**
 
@@ -264,6 +275,7 @@ public async Task CreateProject_routes_through_FinishAction()
     ```csharp
     public WizardMode Mode { get; set; } = WizardMode.NewProject;
     public bool IsLocationLocked => Mode != WizardMode.NewProject;
+    public bool IsNewSolutionMode => Mode == WizardMode.NewSolution;   // Task 5 binds the Back button to this
     public Func<CreateProjectOptions, Task<ProjectCreationResult>> FinishAction { get; set; } = null!;
     ```
   - In the ctor, **after** `_templateService = templateService;`, default the delegate:
@@ -405,7 +417,13 @@ public void CommandPalette_targets_CloseProject_not_CloseFolder()
 > View/AXAML layer — verified by build + the Task 16 manual smoke, not unit tests (Avalonia windows aren't headless-tested in this repo).
 
 - [ ] **Step 1:** Author `NewSolutionView.axaml` bound to `NewSolutionViewModel`: name TextBox, location TextBox + Browse (code-behind folder picker, mirroring the existing configure view's Browse), an "Initialize Git repository" CheckBox, the `SolutionFilePreview` label, `ErrorMessage`, and Cancel/Next buttons (`Next` enabled on `CanConfirm`). Code-behind exposes the confirmed `(SolutionName, Location, InitializeGit)` or a cancel.
-- [ ] **Step 2:** In `NewProjectSelectView.axaml.cs` add `public enum WizardOutcome { Created, Cancelled, Back }` (or reuse `NewProjectConfigureView.WizardOutcome`) and `public WizardOutcome Outcome { get; private set; }`. Set `Created`/`Cancelled` on the existing close paths; add a **Back** button (bind `IsVisible` to a VM flag that is true only when `Mode == WizardMode.NewSolution`) whose handler sets `Outcome = Back` and closes.
+- [ ] **Step 2:** In `NewProjectSelectView.axaml.cs`, expose two **public** members the host (Task 6) reads after `ShowDialog` (today it only keeps a private `_result` and returns it via `Close(_result)`):
+  ```csharp
+  public enum WizardOutcome { Created, Cancelled, Back }   // or reuse NewProjectConfigureView.WizardOutcome
+  public WizardOutcome Outcome { get; private set; }
+  public ProjectCreationResult? Result { get; private set; }   // set alongside _result on the Created path
+  ```
+  Set `Outcome = Created`/`Cancelled` on the existing close paths (and assign `Result`). Add a **Back** button bound `IsVisible="{Binding IsNewSolutionMode}"` (the flag added in Task 2) whose handler sets `Outcome = Back` and closes.
 - [ ] **Step 3:** `dotnet clean` + build. Expected: succeeds.
 - [ ] **Step 4: Commit** — `feat(wizard): NewSolutionView window + SelectView Outcome/Back`.
 
@@ -430,7 +448,14 @@ public void CommandPalette_targets_CloseProject_not_CloseFolder()
      };
      ```
   3. Show `NewProjectSelectView(wizardVm)`; after `ShowDialog`, switch on `view.Outcome`: `Back` → loop to step 1 preserving the `NewSolutionViewModel`; `Cancelled` → return; `Created` → use `view.Result`.
-  4. On a successful result: `LoadSolutionAsync(result.SolutionPath!)` → `SolutionExplorer.LoadSolution(...)` → `_recentProjectsService.AddRecentProject(...)` → `foreach (var f in result.FilesToOpen) await OpenFileAsync(f);`. On failure, the wizard already surfaced the error; just return.
+  4. On a successful result, use the **same two-call sequence** the existing `OpenSolutionAsync` uses (`MainWindowViewModel.cs:6754-6758`) — there is no single `LoadSolutionAsync` host helper:
+     ```csharp
+     var solution = await _solutionService.LoadSolutionAsync(result.SolutionPath!);
+     SolutionExplorer.LoadSolution(solution);
+     _recentProjectsService.AddRecentProject(result.SolutionPath!, solution.SolutionName);
+     foreach (var f in result.FilesToOpen) await OpenFileAsync(f);
+     ```
+     On failure, the wizard already surfaced the error; just return.
 - [ ] **Step 2:** `dotnet clean` + build. Expected: succeeds.
 - [ ] **Step 3: Commit** — `feat(ide): guided New Solution wizard orchestration`.
 
@@ -440,15 +465,17 @@ public void CommandPalette_targets_CloseProject_not_CloseFolder()
 
 **Files:**
 - Test: `VisualGameStudio.Tests/Services/NewSolutionEndToEndTests.cs`
-- Create (if absent): `VisualGameStudio.Tests/…/FakeGitService.cs` (records `InitRepositoryAsync` calls; verify the real `IGitService` interface for the exact signature).
 
-- [ ] **Step 1: Write failing tests** — construct the real `ProjectTemplateService` with a `FakeGitService` (verify its ctor accepts `IGitService?`), a temp dir, then:
+Use **Moq** for `IGitService` (it's already a test dependency; `IGitService` is a ~70-member interface — a hand-rolled fake is needless boilerplate). Observe the init count with `.Verify(g => g.InitRepositoryAsync(It.IsAny<string>()), Times.Once/Never)`. Scaffold **only the in-scope C# and C++ backends** (per the LLVM/MSIL scope note in Task 2 — LLVM/MSIL "kept selectable" is already proven there without compiling anything).
+
+- [ ] **Step 1: Write failing tests** — construct the real `ProjectTemplateService` with the git mock (verify its ctor accepts `IGitService?`) in a temp dir:
 
 ```csharp
-[TestCase("dotnet")]  [TestCase("llvm")]   // proves LLVM survives
+[TestCase("dotnet")]   // in-scope C#
 public async Task NewSolution_creates_loadable_solution_with_first_project(string backendId)
 {
-    var svc = new ProjectTemplateService(fakeGit);      // adjust to real ctor
+    var git = new Mock<IGitService>();
+    var svc = new ProjectTemplateService(git.Object);   // adjust to real ctor
     var first = new CreateProjectOptions {
         Name = "App", SolutionType = SolutionTypes.All.First(t => t.Id == backendId),
         Template = ProjectTemplates.ConsoleApp };
@@ -460,7 +487,7 @@ public async Task NewSolution_creates_loadable_solution_with_first_project(strin
     var solution = await new SolutionService().LoadSolutionAsync(sr.SolutionPath!);
     Assert.That(solution.Projects.Select(p => p.Name), Does.Contain("App"));
     Assert.That(File.Exists(solution.Projects[0].GetFullPath(solution.SolutionDirectory)), Is.True);
-    Assert.That(fakeGit.InitCount, Is.EqualTo(1));       // solution-level git init only
+    git.Verify(g => g.InitRepositoryAsync(It.IsAny<string>()), Times.Once);   // solution-level git only
 }
 
 [Test]
@@ -473,13 +500,13 @@ public async Task NewSolution_cpp_first_project_travels_toolchain_and_standard()
 [Test]
 public async Task NewSolution_initGit_false_does_not_init()
 {
-    // initGit:false -> fakeGit.InitCount == 0
+    // initGit:false -> git.Verify(g => g.InitRepositoryAsync(It.IsAny<string>()), Times.Never)
 }
 ```
 
-- [ ] **Step 2: Run — verify fail** (until FakeGitService / ctor wiring compiles), then **implement** `FakeGitService` and fix construction.
+- [ ] **Step 2: Run — verify fail**, then fix construction (verify the real `ProjectTemplateService(IGitService?)` ctor).
 - [ ] **Step 3: Run — verify pass.**
-- [ ] **Step 4: Commit** — `test(solution): New Solution E2E (C#/LLVM/C++, git-init count)`.
+- [ ] **Step 4: Commit** — `test(solution): New Solution E2E (C#/C++, git-init count via Moq)`.
 
 ---
 
@@ -489,19 +516,20 @@ public async Task NewSolution_initGit_false_does_not_init()
 - Modify: `VisualGameStudio.Shell/ViewModels/MainWindowViewModel.cs` (`AddNewProjectToSolutionAsync` ~6868-6953)
 - Test: `VisualGameStudio.Tests/Services/AddProjectToSolutionEndToEndTests.cs`
 
-- [ ] **Step 1: Write failing E2E** — against real `ProjectTemplateService` + `SolutionService` + `FakeGitService` in a temp dir: create a solution with one project, then add a second via `BuildAddToSolutionOptions` + `CreateProjectAsync`:
+- [ ] **Step 1: Write failing E2E** — against real `ProjectTemplateService` + `SolutionService` + a Moq `IGitService` in a temp dir: create a solution with one project, then add a second via `BuildAddToSolutionOptions` + `CreateProjectAsync`:
 
 ```csharp
 [Test]
 public async Task AddProject_writes_blproj_once_and_registers_without_git_reinit()
 {
     // arrange: an on-disk solution with project "A" (via CreateSolutionAsync)
+    git.Invocations.Clear();                                   // ignore the solution-create init
     var opts = new CreateProjectOptions { Name = "B", SolutionType = SolutionTypes.DotNet, Template = ProjectTemplates.ConsoleApp };
     SolutionWizardMapper.BuildAddToSolutionOptions(opts, loadedSolution);
     var r = await svc.CreateProjectAsync(opts);
 
     Assert.That(r.Success, Is.True);
-    Assert.That(fakeGit.InitCount, Is.EqualTo(initCountAfterSolutionCreate)); // unchanged: no re-init
+    git.Verify(g => g.InitRepositoryAsync(It.IsAny<string>()), Times.Never);   // add path never re-inits git
     var reloaded = await new SolutionService().LoadSolutionAsync(loadedSolution.FilePath);
     Assert.That(reloaded.Projects.Select(p => p.Name), Does.Contain("B"));
     // .blproj for B exists and was written exactly once (no minimal-then-rich double write)
@@ -518,8 +546,12 @@ public async Task AddProject_writes_blproj_once_and_registers_without_git_reinit
          _projectTemplateService.CreateProjectAsync(
              SolutionWizardMapper.BuildAddToSolutionOptions(opts, _solutionService.CurrentSolution!));
      ```
-  4. Show `NewProjectSelectView`; on a successful result: reload
-     `LoadSolutionAsync(_solutionService.CurrentSolution!.FilePath)` → `SolutionExplorer.LoadSolution(...)` → open `result.FilesToOpen`.
+  4. Show `NewProjectSelectView`; on a successful result, reload via the two-call sequence (mirroring `OpenSolutionAsync`):
+     ```csharp
+     var solution = await _solutionService.LoadSolutionAsync(_solutionService.CurrentSolution!.FilePath);
+     SolutionExplorer.LoadSolution(solution);
+     foreach (var f in result.FilesToOpen) await OpenFileAsync(f);
+     ```
   Delete the old bespoke `.blproj`-string writer + reference XML block entirely.
 - [ ] **Step 4: Run — verify pass.**
 - [ ] **Step 5: Commit** — `feat(ide): unify Add Project to Solution onto reused pages + template service`.
@@ -606,10 +638,10 @@ public void Preserves_existing_content()
 
 Unlike `MainWindowViewModel`, **`SolutionExplorerViewModel` is constructable in tests** (ctor: `IProjectService, IFileService, IDialogService, IGitService?, IWorkspaceService?` + the new `ISolutionService`). Its ctor subscribes to five `IProjectService` events (`ProjectOpened/ProjectClosed/ProjectChanged/SolutionOpened/SolutionClosed`, `SolutionExplorerViewModel.cs:108-112`), so the fakes must expose them or construction throws.
 
-- [ ] **Step 1a: Author the fakes** (no shared doubles exist in the repo):
-  - `RecordingDialogService : IDialogService` — captures `LastMessage` from `ShowMessageAsync`.
-  - `FakeProjectService : IProjectService` — declares the five events (never raised here) + minimal members so the ctor binds.
-  - Use a **real** `SolutionService` + `IFileService`/`IWorkspaceService` fakes as needed. Seed an on-disk temp solution with projects A, B, C (via the real `ProjectTemplateService`), then `LoadSolutionAsync` into the `SolutionService` the VM holds.
+- [ ] **Step 1a: Build the fixture with Moq** — the existing `SolutionExplorerViewModelTests.cs` already uses Moq for service doubles; align with it (do NOT hand-roll fakes):
+  - `var dialog = new Mock<IDialogService>();` and capture the surfaced text via `.Callback` on the real `ShowMessageAsync` overload → `lastMessage`.
+  - `new Mock<IProjectService>()`, `new Mock<IFileService>()`, `new Mock<IWorkspaceService>()` (Moq auto-satisfies the five events the ctor subscribes to).
+  - Use a **real** `SolutionService` for the new `ISolutionService` param (needed for genuine cycle validation + on-disk persistence). Seed a temp solution with projects A, B, C via the real `ProjectTemplateService`, then `LoadSolutionAsync` into that `SolutionService`.
 
 - [ ] **Step 1b: Write failing tests** against the **public** apply method (keeps UI out) and the enablement predicate:
 
@@ -682,9 +714,10 @@ public void CanAddProjectReference_gated_on_two_projects_and_project_node()
             BlprojReferenceWriter.AddReference(fromBlproj, Path.GetRelativePath(fromDir, toBlproj));
         }
         await _solutionService.SaveSolutionAsync();     // <-- ISolutionService, NOT _projectService (that no-ops)
-        SolutionExplorer_Reload();                       // refresh tree from the updated model
+        LoadSolution(_solutionService.CurrentSolution!); // this VM's own reload method (used by MWVM at :6755)
     }
     ```
+  - **Update the one existing construction site:** adding `ISolutionService` as a **required** ctor param breaks `SolutionExplorerViewModelTests.cs:43` (`new SolutionExplorerViewModel(proj, file, dialog)` → CS7036 — it relies on the two trailing optionals). Add the new arg there (a real `SolutionService` or a `Mock<ISolutionService>`). Grep confirms this is the **only** non-DI construction site.
   - **Persistence fix — repoint ALL FOUR sites** (`SolutionExplorerViewModel.cs` lines **435, 481, 541, 602**) from `_projectService.SaveSolutionAsync()` to `_solutionService.SaveSolutionAsync()`. All four carry the identical no-op bug (`ProjectService.SaveSolutionAsync` early-returns when `_projectService.CurrentSolution` is null, which it always is on the live path — the solution lives on `_solutionService`). This is what the Task 16 DoD grep (`_projectService.SaveSolutionAsync` → zero hits) enforces.
 
 - [ ] **Step 4: Run — verify pass** (incl. a regression test that Set-as-Startup now persists on a `.blsln` reload).
