@@ -6793,22 +6793,78 @@ public partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task NewSolutionAsync()
     {
-        var name = await _dialogService.ShowInputDialogAsync("New Solution", "Enter solution name:");
-        if (string.IsNullOrWhiteSpace(name)) return;
+        if (App.MainWindow == null) return;
 
-        var directory = await _dialogService.ShowFolderDialogAsync(
-            new FolderDialogOptions { Title = "Select Solution Location" });
-        if (string.IsNullOrEmpty(directory)) return;
+        // One shared VM across the whole loop so a Back from window 2 re-shows
+        // window 1 with the previously entered name/location/git choice intact.
+        var nsVm = new ViewModels.Dialogs.NewSolutionViewModel();
+
+        ProjectCreationResult? result = null;
+
+        while (true)
+        {
+            var confirmed = await new Views.Dialogs.NewSolutionView(nsVm).ShowDialog<bool>(App.MainWindow);
+            if (!confirmed) return; // Cancel or X-close: abandon the whole flow
+
+            var name = nsVm.SolutionName;
+            var location = nsVm.Location;
+            var initGit = nsVm.InitializeGit;
+
+            var wizardVm = new ViewModels.Dialogs.NewProjectWizardViewModel(_projectTemplateService, _cppToolchainProbe)
+            {
+                Mode = ViewModels.Dialogs.WizardMode.NewSolution,
+                Location = Path.Combine(location, name) // locked display path for window 2
+            };
+            wizardVm.FinishAction = async first =>
+            {
+                var solOpts = ProjectSystem.Services.SolutionWizardMapper.BuildSolutionOptions(name, location, initGit, first);
+                var sr = await _projectTemplateService.CreateSolutionAsync(solOpts);
+                return ProjectSystem.Services.SolutionWizardMapper.ToProjectResult(sr);
+            };
+
+            var select = new Views.Dialogs.NewProjectSelectView(wizardVm);
+            await select.ShowDialog(App.MainWindow);
+
+            if (select.Outcome == Views.Dialogs.NewProjectSelectView.WizardOutcome.Back)
+            {
+                continue; // loop back to step (a); nsVm still holds the entered values
+            }
+
+            if (select.Outcome == Views.Dialogs.NewProjectSelectView.WizardOutcome.Cancelled)
+            {
+                return;
+            }
+
+            result = select.Result;
+            break;
+        }
+
+        if (result == null || !result.Success || string.IsNullOrEmpty(result.SolutionPath))
+        {
+            if (result != null && !string.IsNullOrEmpty(result.Error))
+            {
+                await _dialogService.ShowMessageAsync("Error", $"Failed to create solution: {result.Error}",
+                    DialogButtons.Ok, DialogIcon.Error);
+            }
+            return;
+        }
 
         try
         {
             SetBusy(true, "Creating solution...");
-            var solutionDir = Path.Combine(directory, name);
-            var solution = await _solutionService.CreateSolutionAsync(name, solutionDir);
+            var solution = await _solutionService.LoadSolutionAsync(result.SolutionPath!);
             SolutionExplorer.LoadSolution(solution);
+
+            // Track in recent projects
+            _recentProjectsService.AddRecentProject(result.SolutionPath!, solution.SolutionName);
 
             Title = $"{solution.SolutionName} - Visual Game Studio";
             StatusText = $"Solution created: {solution.SolutionName}";
+
+            foreach (var f in result.FilesToOpen)
+            {
+                await OpenFileAsync(f);
+            }
         }
         catch (Exception ex)
         {

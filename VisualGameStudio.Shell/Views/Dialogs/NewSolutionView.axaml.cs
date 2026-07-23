@@ -19,7 +19,12 @@ public partial class NewSolutionView : Window
     {
         _vm = vm;
         DataContext = vm;
-        vm.CloseDialog = Close;
+        // Close(bool) so the host's `await ShowDialog<bool>(...)` gets a clean
+        // confirmed/cancelled signal on every path (Confirm, Cancel, and the X-close,
+        // which falls back to default(bool) = false = cancelled). Re-showing this
+        // window after a Back no longer risks a stale DialogResult=true lingering
+        // from a previous confirm, because the return value is read fresh each time.
+        vm.CloseDialog = () => Close(vm.DialogResult);
     }
 
     // NewSolutionViewModel.BrowseLocation is a source-generated [RelayCommand] stub
