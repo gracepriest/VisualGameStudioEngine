@@ -1,12 +1,13 @@
 # Solution UX: Close Project + guided New Solution wizard — design
 
 **Date:** 2026-07-23
-**Status:** Draft for review (r2 — incorporates two rounds of two-lens review)
+**Status:** Draft for review (r3 — adds Feature D reference command per user decision)
 **Area:** IDE (`VisualGameStudio.Shell` + `VisualGameStudio.ProjectSystem`)
 
 ## Summary
 
-Three linked changes to how the IDE's File menu handles projects and solutions:
+Four linked changes to how the IDE's File menu and Solution Explorer handle
+projects and solutions:
 
 1. **Close Project** — add a File-menu item that closes the currently-open
    standalone project. The close logic already exists (reachable only via the
@@ -17,9 +18,12 @@ Three linked changes to how the IDE's File menu handles projects and solutions:
 3. **Unify "Add Project to Solution"** — point the solution's add-project flow at
    the same reused pages and the same creation service, retiring a divergent
    dialog (and its stale backend list) and a duplicate `.blproj` writer.
+4. **Solution Explorer "Add Project Reference"** — a project-scoped command that
+   restores (and generalizes) the reference-setting capability retired with the
+   old dialog.
 
-All three lean on machinery that already exists; the net new UI is a single
-window (solution name + location).
+Features 1-3 lean on machinery that already exists; the net new UI is two small
+windows (solution details; reference picker).
 
 ## Goals
 
@@ -49,12 +53,8 @@ window (solution name + location).
   command does today ([MainWindowViewModel.cs:6737-6772](../../VisualGameStudio.Shell/ViewModels/MainWindowViewModel.cs),
   which also does not prompt). Adding save-on-switch prompts is a separate,
   pre-existing concern and is out of scope here.
-- **Add-project reference picker — DECISION PENDING (see "Open decision").** The
-  retired dialog is currently the *only* UI that can set project→project
-  references; there is no Solution Explorer command and
-  `ISolutionService.AddProjectReference` is programmatic-only. Retiring the dialog
-  therefore removes that capability outright. How to handle this is an open
-  decision recorded below, not silently dropped.
+- *(Resolved.)* The project-reference capability retired with the old dialog is
+  restored — and generalized — as a Solution Explorer command; see **Feature D**.
 
 ## Background — how solutions work today
 
@@ -271,6 +271,53 @@ the stale `LLVM/MSIL` hardcoded list and the double `.blproj` write.
 - **"Add Existing Project to Solution"** unchanged (`AddExistingProjectAsync`).
 - `ISolutionService.AddNewProjectAsync` left in place but no longer called.
 
+## Feature D — Solution Explorer "Add Project Reference" command
+
+Restores — and generalizes — the reference capability retired with the old dialog,
+as a project-scoped Solution Explorer command available **anytime**, not only when
+adding a project.
+
+**Command.** Add `AddProjectReferenceCommand` to `SolutionExplorerViewModel`,
+mirroring the existing project-scoped commands `SetAsStartupProjectAsync` /
+`RemoveFromSolutionAsync`
+([SolutionExplorerViewModel.cs:518,575](../../VisualGameStudio.Shell/ViewModels/Panels/SolutionExplorerViewModel.cs)):
+gated on `SelectedNode?.IsProject == true` and `CurrentSolution` having ≥2
+projects. It reads the selected `SolutionProject` from the node and shows a small
+picker — a checkbox list of the *other* projects in the solution — reusing the
+`CheckableItem` pattern from the retired dialog.
+
+**Context menu.** Add "Add Project Reference…" to the project-node context menu in
+`SolutionExplorerView.axaml`, alongside Set as Startup / Remove from Solution.
+
+**Persistence (dual-write — the correctness crux).** References are consumed in
+two stores, so both must be updated (matching what the old dialog did at
+[MainWindowViewModel.cs:6895-6905](../../VisualGameStudio.Shell/ViewModels/MainWindowViewModel.cs)):
+
+1. **In-memory `.blsln` model + build order.** For each checked target call
+   `ISolutionService.AddProjectReference(from, to)`, which validates against
+   cycles ([SolutionService.cs:183-215](../../VisualGameStudio.ProjectSystem/Services/SolutionService.cs));
+   catch its `InvalidOperationException` ("would create a circular dependency"),
+   surface it as a dialog, and skip that target. Then `SaveSolutionAsync()` to
+   persist `SolutionProject.ProjectReferences` to the `.blsln`
+   ([SolutionSerializer.cs:145-147](../../VisualGameStudio.ProjectSystem/Serialization/SolutionSerializer.cs)).
+   This store drives build order (topological sort,
+   [SolutionService.cs:245-305](../../VisualGameStudio.ProjectSystem/Services/SolutionService.cs)).
+2. **The `from` project's `.blproj` `<ProjectReference>`.** This is what the
+   compiler actually resolves
+   ([ProjectFile.cs:202-206,337-340](../../BasicLang/ProjectSystem/ProjectFile.cs)).
+   Add `<ProjectReference Include="..\{to}\{to}.blproj" />` (relative path computed
+   from the two project locations) via a targeted XML add — the same element the
+   old dialog wrote — idempotent (skip if already present).
+
+`SolutionExplorerViewModel` gains an `ISolutionService` dependency for
+`AddProjectReference` (it currently holds only `IProjectService`); wire it in DI.
+
+> **Plan Step 0 (empirical).** Confirm which store the build actually needs: verify
+> that compiling project B which references library A resolves A only when the
+> `.blproj` `<ProjectReference>` is present (not merely the `.blsln` model), so the
+> dual-write — and specifically the `.blproj` write being load-bearing — is
+> justified rather than assumed.
+
 ## Shared seam — wizard modes, locking, cosmetics
 
 `NewProjectWizardViewModel`:
@@ -352,6 +399,14 @@ injected — the ctor accepts one, [:18](../../VisualGameStudio.ProjectSystem/Se
   the `.blproj` **once**, the reloaded solution contains the new project, and
   `InitRepositoryAsync` is **never** called (assert call count on the fake).
 
+**Add Project Reference (Feature D)**
+- Cycle rejection: A→B then B→A surfaces the circular-dependency error and leaves
+  no reference added.
+- Dual persistence: after the command, a `.blsln` reload shows `from.ProjectReferences`
+  contains `to`, **and** the `from` `.blproj` contains a `<ProjectReference>` to
+  `to`'s relative path; repeating the command is idempotent (no duplicate element).
+- Command disabled for a non-project node or a solution with <2 projects.
+
 **Regression**
 - Existing `NewProjectWizardViewModelTests` stay green.
 
@@ -369,23 +424,6 @@ injected — the ctor accepts one, [:18](../../VisualGameStudio.ProjectSystem/Se
   Select→SolutionDetails (new, NewSolution only). AddToSolution has no window 1,
   so Select's Back is hidden there.
 - **Backend availability greying** inherited unchanged from the reused pages.
-
-## Open decision — project-reference picker
-
-Retiring `AddProjectToSolutionViewModel` removes the *only* UI that sets
-project→project references (its checkable list wrote `<ProjectReference>` XML +
-called `AddProjectReference`, [AddProjectToSolutionViewModel.cs:38,71-74](../../VisualGameStudio.Shell/ViewModels/Dialogs/AddProjectToSolutionViewModel.cs);
-[MainWindowViewModel.cs:6895-6905](../../VisualGameStudio.Shell/ViewModels/MainWindowViewModel.cs)).
-There is no Solution Explorer reference command and `AddProjectReference` is
-programmatic-only, so retiring the dialog is a **total, not deferred, loss** until
-a replacement exists. Options:
-
-- **(a) Accept the loss for now** — ship the unified flow; references become a
-  follow-up (a Solution Explorer "Add Reference" command). Smallest scope.
-- **(b) Add a minimal Solution Explorer "Add Project Reference" command** in this
-  work so the capability moves rather than disappears.
-- **(c) Keep a reference-picker section on the reused Configure page** for
-  AddToSolution mode (adds mode-specific UI to the shared page).
 
 ## Files touched (anticipated)
 
@@ -406,5 +444,12 @@ a replacement exists. Options:
   `ViewModels/Dialogs/NewSolutionViewModel.cs` — **new** solution-details window.
 - `VisualGameStudio.ProjectSystem/Services/SolutionWizardMapper.cs` — **new** pure
   mappers.
+- `VisualGameStudio.Shell/ViewModels/Panels/SolutionExplorerViewModel.cs` +
+  `Views/Panels/SolutionExplorerView.axaml` — **Feature D** command + context menu
+  + `ISolutionService` injection.
+- `VisualGameStudio.Shell/Views/Dialogs/AddProjectReferenceDialog.axaml(.cs)` +
+  VM — **new** small reference picker (checkbox list).
+- `VisualGameStudio.ProjectSystem/…` — **new** `.blproj` `<ProjectReference>`
+  writer helper (targeted XML add, idempotent).
 - **Removed:** `AddProjectToSolutionViewModel.cs`, `AddProjectToSolutionDialog.axaml(.cs)`.
 - `VisualGameStudio.Tests/*` — new/updated tests + a reusable fake `IGitService`.
