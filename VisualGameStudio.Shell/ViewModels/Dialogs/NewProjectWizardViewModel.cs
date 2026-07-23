@@ -18,6 +18,11 @@ namespace VisualGameStudio.Shell.ViewModels.Dialogs;
 // project persistence.
 public enum ProjectLanguage { BasicLang, Cpp }
 
+/// <summary>Which flow is driving this wizard instance. The select/configure pages
+/// are shared: NewProject is today's standalone flow; NewSolution and AddToSolution
+/// are seams for a future solution-creation wizard reusing the same pages.</summary>
+public enum WizardMode { NewProject, NewSolution, AddToSolution }
+
 /// <summary>A selectable backend. For BasicLang it maps to a real SolutionType;
 /// for C++ it is a toolchain choice over the single "cpp" SolutionType that is
 /// written to the created project (its <c>CppToolchain</c>) when the toolchain
@@ -61,6 +66,23 @@ public partial class NewProjectWizardViewModel : ObservableObject
     // UI-only platform classification (spec): Windows shows all; Cross-platform
     // excludes these; All applies no filter. Not persisted.
     private static readonly HashSet<string> WindowsOnlyTemplateIds = new() { "winforms-app", "wpf-app" };
+
+    // ----- Wizard mode (seam for a future New Solution / Add-to-Solution wizard
+    // reusing these same select/configure pages) -----
+    /// <summary>Which flow owns this wizard instance. Defaults to today's standalone
+    /// behavior; NewSolution/AddToSolution are not yet driven by any caller.</summary>
+    public WizardMode Mode { get; set; } = WizardMode.NewProject;
+
+    /// <summary>True when the location field should be locked (read-only) because
+    /// it is dictated by an enclosing solution rather than chosen here.</summary>
+    public bool IsLocationLocked => Mode != WizardMode.NewProject;
+
+    public bool IsNewSolutionMode => Mode == WizardMode.NewSolution;
+
+    /// <summary>How CreateProjectAsync actually finishes. Defaults to the real
+    /// template service in the constructor; a solution-mode caller can replace it
+    /// to route through solution-aware creation instead.</summary>
+    public Func<CreateProjectOptions, Task<ProjectCreationResult>> FinishAction { get; set; } = null!;
 
     // ----- Window 1 state -----
     [ObservableProperty] private ProjectLanguage _selectedLanguage = ProjectLanguage.BasicLang;
@@ -132,6 +154,7 @@ public partial class NewProjectWizardViewModel : ObservableObject
     {
         _templateService = templateService;
         _toolchainProbe = toolchainProbe;
+        FinishAction = opts => _templateService.CreateProjectAsync(opts);
         Location = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "BasicLangProjects");
         SelectedLanguageOption = Languages[0];
@@ -371,6 +394,29 @@ public partial class NewProjectWizardViewModel : ObservableObject
     [RelayCommand]
     private void Cancel() => Cancelled?.Invoke(this, EventArgs.Empty);
 
+    /// <summary>Maps the wizard's current selections to the options the template
+    /// service (or an injected FinishAction) creates from. Extracted so a future
+    /// solution-mode flow can build the same options without duplicating the
+    /// mapping, and so it is independently testable.</summary>
+    public CreateProjectOptions BuildCreateOptions() => new()
+    {
+        Name = ProjectName,
+        Location = Location,
+        SolutionType = SelectedBackend!.SolutionType,
+        Template = SelectedTemplate!,
+        CreateSolutionFolder = CreateSolutionFolder,
+        CreateGitRepository = CreateGitRepository,
+        TargetFramework = TargetFramework,
+        Namespace = CustomNamespace,
+        // C++ projects carry the wizard's standard; the toolchain travels
+        // only when the selected one is actually installed — never persist
+        // an unavailable choice into the project.
+        CppStandard = SelectedLanguage == ProjectLanguage.Cpp ? CppStandard : null,
+        CppToolchain = SelectedLanguage == ProjectLanguage.Cpp && SelectedBackend is { IsEnabled: true }
+            ? SelectedBackend.ToolchainId
+            : null
+    };
+
     [RelayCommand]
     private async Task CreateProjectAsync()
     {
@@ -384,26 +430,8 @@ public partial class NewProjectWizardViewModel : ObservableObject
             // toolchain travels. Never faults — probe exceptions are swallowed.
             await ToolchainProbeTask;
 
-            var options = new CreateProjectOptions
-            {
-                Name = ProjectName,
-                Location = Location,
-                SolutionType = SelectedBackend!.SolutionType,
-                Template = SelectedTemplate!,
-                CreateSolutionFolder = CreateSolutionFolder,
-                CreateGitRepository = CreateGitRepository,
-                TargetFramework = TargetFramework,
-                Namespace = CustomNamespace,
-                // C++ projects carry the wizard's standard; the toolchain travels
-                // only when the selected one is actually installed — never persist
-                // an unavailable choice into the project.
-                CppStandard = SelectedLanguage == ProjectLanguage.Cpp ? CppStandard : null,
-                CppToolchain = SelectedLanguage == ProjectLanguage.Cpp && SelectedBackend is { IsEnabled: true }
-                    ? SelectedBackend.ToolchainId
-                    : null
-            };
-
-            var result = await _templateService.CreateProjectAsync(options);
+            var options = BuildCreateOptions();
+            var result = await FinishAction(options);
             if (result.Success)
             {
                 ProjectCreated?.Invoke(this, result);

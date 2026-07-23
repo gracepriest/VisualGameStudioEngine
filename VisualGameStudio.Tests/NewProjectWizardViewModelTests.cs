@@ -443,4 +443,54 @@ public class NewProjectWizardViewModelTests
         Assert.That(vm.HasError, Is.False);
         Assert.That(vm.ErrorMessage, Is.Null);
     }
+
+    [Test]
+    public void IsLocationLocked_only_in_solution_modes()
+    {
+        var vm = NewVm(out _);
+        Assert.That(vm.IsLocationLocked, Is.False);
+        vm.Mode = WizardMode.NewSolution;   Assert.That(vm.IsLocationLocked, Is.True);
+        vm.Mode = WizardMode.AddToSolution; Assert.That(vm.IsLocationLocked, Is.True);
+        Assert.That(vm.IsNewSolutionMode, Is.False);              // AddToSolution != NewSolution
+        vm.Mode = WizardMode.NewSolution;   Assert.That(vm.IsNewSolutionMode, Is.True);
+    }
+
+    [Test]
+    public void BuildCreateOptions_reflects_full_selection()
+    {
+        var vm = NewVm(out _);
+        vm.ProjectName = "App"; vm.Location = @"C:\x";
+        var o = vm.BuildCreateOptions();
+        Assert.That(o.Name, Is.EqualTo("App"));
+        Assert.That(o.Location, Is.EqualTo(@"C:\x"));
+        Assert.That(o.SolutionType, Is.EqualTo(vm.SelectedBackend!.SolutionType));
+        Assert.That(o.Template, Is.EqualTo(vm.SelectedTemplate));
+        Assert.That(o.TargetFramework, Is.EqualTo(vm.TargetFramework));
+        Assert.That(o.Namespace, Is.EqualTo(vm.CustomNamespace));
+    }
+
+    [Test]
+    public async Task CreateProject_routes_through_FinishAction()
+    {
+        var vm = NewVm(out _);
+        vm.ProjectName = "App"; vm.Location = @"C:\x";
+        CreateProjectOptions? seen = null;
+        vm.FinishAction = o => { seen = o; return Task.FromResult(new ProjectCreationResult { Success = true, ProjectPath = "p" }); };
+        ProjectCreationResult? raised = null;
+        vm.ProjectCreated += (_, r) => raised = r;
+
+        await vm.CreateProjectCommand.ExecuteAsync(null);
+
+        Assert.That(seen, Is.Not.Null);
+        Assert.That(raised?.ProjectPath, Is.EqualTo("p"));
+    }
+
+    [Test]
+    public void Backends_keep_LLVM_and_MSIL_selectable()   // user requirement: keep them as forward-looking options
+    {
+        var vm = NewVm(out _);                              // BasicLang language by default
+        var names = vm.Backends.Select(b => b.Name).ToList();
+        Assert.That(names, Does.Contain("MSIL"));
+        Assert.That(names.Any(n => n.Contains("LLVM")), Is.True);
+    }
 }
