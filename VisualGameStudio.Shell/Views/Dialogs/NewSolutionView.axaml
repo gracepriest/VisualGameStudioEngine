@@ -1,0 +1,99 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
+        mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="480"
+        x:Class="VisualGameStudio.Shell.Views.Dialogs.NewSolutionView"
+        x:DataType="vm:NewSolutionViewModel"
+        Title="New Solution"
+        Width="600" Height="480"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False">
+
+  <Design.DataContext>
+    <vm:NewSolutionViewModel/>
+  </Design.DataContext>
+
+  <Grid RowDefinitions="*,Auto" Background="#1E1E1E">
+    <!-- Main Content -->
+    <ScrollViewer Grid.Row="0" Padding="16">
+      <StackPanel Spacing="16">
+        <Border Background="#252526" CornerRadius="4" Padding="16">
+          <StackPanel Spacing="12">
+            <TextBlock Text="Configure New Solution"
+                       FontWeight="SemiBold"
+                       FontSize="16"/>
+
+            <!-- Solution Name -->
+            <StackPanel Spacing="4">
+              <TextBlock Text="Solution name"/>
+              <TextBox Text="{Binding SolutionName}"
+                       Watermark="Enter solution name"/>
+            </StackPanel>
+
+            <!-- Location -->
+            <StackPanel Spacing="4">
+              <TextBlock Text="Location"/>
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBox Grid.Column="0"
+                         Text="{Binding Location}"
+                         Watermark="Select location"
+                         Margin="0,0,4,0"/>
+                <Button Grid.Column="1"
+                        Content="Browse..."
+                        x:Name="BrowseButton"
+                        Width="80"/>
+              </Grid>
+            </StackPanel>
+
+            <!-- Initialize Git checkbox -->
+            <CheckBox Content="Initialize Git repository"
+                      IsChecked="{Binding InitializeGit}"/>
+
+            <!-- Preview -->
+            <StackPanel Spacing="4"
+                        IsVisible="{Binding SolutionFilePreview, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+              <TextBlock Text="Solution will be created at:"
+                         Foreground="#808080"
+                         FontSize="11"/>
+              <TextBlock Text="{Binding SolutionFilePreview}"
+                         FontSize="11"
+                         Foreground="#569CD6"
+                         TextWrapping="Wrap"/>
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
+        <!-- Error Message -->
+        <Border Background="#4E2A2A"
+                CornerRadius="4"
+                Padding="12"
+                IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+          <TextBlock Text="{Binding ErrorMessage}"
+                     Foreground="#F48771"/>
+        </Border>
+      </StackPanel>
+    </ScrollViewer>
+
+    <!-- Buttons -->
+    <Border Grid.Row="1"
+            Background="#2D2D2D"
+            Padding="16,12"
+            BorderThickness="0,1,0,0"
+            BorderBrush="#3C3C3C">
+      <StackPanel Orientation="Horizontal"
+                  HorizontalAlignment="Right"
+                  Spacing="8">
+        <Button Content="Next"
+                Command="{Binding ConfirmCommand}"
+                IsEnabled="{Binding CanConfirm}"
+                Width="100"
+                Classes="accent primary"/>
+        <Button Content="Cancel"
+                Command="{Binding CancelCommand}"
+                Width="100"/>
+      </StackPanel>
+    </Border>
+  </Grid>
+</Window>
