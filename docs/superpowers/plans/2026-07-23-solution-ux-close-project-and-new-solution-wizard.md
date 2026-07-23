@@ -208,34 +208,38 @@ public static class SolutionWizardMapper
 - Modify: `VisualGameStudio.Shell/ViewModels/Dialogs/NewProjectWizardViewModel.cs` (options block ~387-404; `CreateProjectAsync` ~375-414; ctor ~131-138)
 - Test: `VisualGameStudio.Tests/NewProjectWizardViewModelTests.cs` (extend existing)
 
-- [ ] **Step 1: Write failing tests** — add to the existing fixture (it already constructs the VM with fakes):
+- [ ] **Step 1: Write failing tests** — add to the existing fixture. The real helper is `NewVm(out FakeTemplateService svc, ToolchainAvailability? toolchains = null)` (`NewProjectWizardViewModelTests.cs:45`) — use it, not `MakeVm()`:
 
 ```csharp
 [Test]
 public void IsLocationLocked_only_in_solution_modes()
 {
-    var vm = MakeVm();                      // existing helper: new NewProjectWizardViewModel(fakeTemplateSvc, fakeProbe)
+    var vm = NewVm(out _);
     Assert.That(vm.IsLocationLocked, Is.False);
     vm.Mode = WizardMode.NewSolution;   Assert.That(vm.IsLocationLocked, Is.True);
     vm.Mode = WizardMode.AddToSolution; Assert.That(vm.IsLocationLocked, Is.True);
 }
 
 [Test]
-public void BuildCreateOptions_reflects_selection()
+public void BuildCreateOptions_reflects_full_selection()
 {
-    var vm = MakeVm();
+    var vm = NewVm(out _);
     vm.ProjectName = "App"; vm.Location = @"C:\x";
-    // (select a known backend/template via the existing test seams the fixture uses)
+    // (select a known backend/template via the existing fixture seams; for a C++ backend set CppStandard)
     var o = vm.BuildCreateOptions();
     Assert.That(o.Name, Is.EqualTo("App"));
     Assert.That(o.Location, Is.EqualTo(@"C:\x"));
     Assert.That(o.SolutionType, Is.EqualTo(vm.SelectedBackend!.SolutionType));
+    Assert.That(o.Template, Is.EqualTo(vm.SelectedTemplate));
+    Assert.That(o.TargetFramework, Is.EqualTo(vm.TargetFramework));
+    Assert.That(o.Namespace, Is.EqualTo(vm.CustomNamespace));
+    // C++ path: CppStandard/CppToolchain travel only when language==Cpp (assert in a C++ variant of this test)
 }
 
 [Test]
 public async Task CreateProject_routes_through_FinishAction()
 {
-    var vm = MakeVm();
+    var vm = NewVm(out _);
     vm.ProjectName = "App"; vm.Location = @"C:\x";
     CreateProjectOptions? seen = null;
     vm.FinishAction = o => { seen = o; return Task.FromResult(new ProjectCreationResult { Success = true, ProjectPath = "p" }); };
@@ -303,30 +307,30 @@ public async Task CreateProject_routes_through_FinishAction()
 - Modify: `VisualGameStudio.Shell/Views/MainWindow.axaml:178`
 - Test: `VisualGameStudio.Tests/…/MainWindowViewModel_CloseProjectTests.cs`
 
-- [ ] **Step 1: Write failing tests** (mirror how existing MWVM tests construct the VM with fakes):
+- [ ] **Step 1: Write failing tests as SOURCE-TEXT GUARDS.** `MainWindowViewModel` is DI-only (40+ ctor deps) and is **never constructed in tests** — the repo convention is source guards (see `VisualGameStudio.Tests/MwvmDebuggerOverrideSourceGuardTests.cs`, which reads the file text via a `ReadMainWindowViewModelSource()`/`ExtractMethodBody()` helper). `CommandPaletteViewModel.RegisterCommands` also requires a real MWVM, so guard it by source text too. The actual *behavior* (close + title/status reset, unsaved-changes prompt) is verified by the Task 16 manual smoke.
 
 ```csharp
 [Test]
-public void HasProjectOpen_true_for_standalone_project_false_under_solution()
+public void MainWindowViewModel_renames_close_and_wires_HasProjectOpen()
 {
-    var (vm, projSvc, solSvc) = MakeMwvm();
-    projSvc.RaiseProjectOpened(new BasicLangProject());   // fake raises ProjectOpened
-    Assert.That(vm.HasProjectOpen, Is.True);
-    solSvc.RaiseSolutionLoaded();                          // solution now open
-    Assert.That(vm.HasProjectOpen, Is.False);
-    projSvc.RaiseProjectClosed();
-    Assert.That(vm.HasProjectOpen, Is.False);
+    var src = ReadSource("VisualGameStudio.Shell/ViewModels/MainWindowViewModel.cs");
+    Assert.That(src, Does.Contain("CloseProjectAsync"));
+    Assert.That(src, Does.Not.Contain("CloseFolderAsync"));     // renamed, not duplicated
+    Assert.That(src, Does.Contain("HasProjectOpen"));
+    Assert.That(src, Does.Contain("RecomputeHasProjectOpen"));
 }
 
 [Test]
-public void CommandPalette_exposes_Close_Project_not_Close_Folder()
+public void CommandPalette_targets_CloseProject_not_CloseFolder()
 {
-    var palette = MakeCommandPalette();      // however the fixture builds it
-    var names = palette.AllCommandNames();   // or inspect the built command list
-    Assert.That(names, Does.Contain("Close Project"));
-    Assert.That(names, Does.Not.Contain("Close Folder"));
+    var src = ReadSource("VisualGameStudio.Shell/ViewModels/Dialogs/CommandPaletteViewModel.cs");
+    Assert.That(src, Does.Contain("\"Close Project\"").And.Contain("CloseProjectCommand"));
+    Assert.That(src, Does.Not.Contain("CloseFolderCommand"));
+    Assert.That(src, Does.Not.Contain("\"Close Folder\""));
 }
 ```
+
+(`ReadSource` = a small repo-root file reader mirroring `ReadMainWindowViewModelSource()` in `MwvmDebuggerOverrideSourceGuardTests.cs`. Also: rename/repoint any pre-existing test that references `CloseFolderCommand`/`CloseFolderAsync`.)
 
 - [ ] **Step 2: Run — verify fail.**
 
@@ -371,12 +375,21 @@ public void CommandPalette_exposes_Close_Project_not_Close_Folder()
     Assert.That(vm.SolutionFilePreview, Does.EndWith(@"MySln\MySln.blsln"));
     Assert.That(vm.CanConfirm, Is.True);
 }
+[Test] public void Existing_nonempty_target_dir_blocks_confirm()
+{
+    var dir = Path.Combine(Path.GetTempPath(), "vgs_" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(Path.Combine(dir, "MySln"));
+    File.WriteAllText(Path.Combine(dir, "MySln", "x.txt"), "x");   // target already populated
+    var vm = new NewSolutionViewModel { SolutionName = "MySln", Location = dir };
+    Assert.That(vm.CanConfirm, Is.False);
+    Assert.That(vm.ErrorMessage, Does.Contain("exists"));
+}
 [Test] public void InitializeGit_defaults_true() => Assert.That(new NewSolutionViewModel().InitializeGit, Is.True);
 ```
 
 - [ ] **Step 2: Run — verify fail.**
 
-- [ ] **Step 3: Implement** — mirror `AddProjectToSolutionViewModel`'s structure (CommunityToolkit `[ObservableProperty]`, `Create`/`Cancel`/`BrowseLocation` commands, `DialogResult`, `CloseDialog` action). Hard-block invalid chars via `Path.GetInvalidFileNameChars()`; surface (non-blocking) MSBuild special-char note via `BasicLang.Compiler.ProjectSystem.MSBuildText.FindSpecialCharacters`. Expose `SolutionName`, `Location`, `InitializeGit=true`, `ErrorMessage`, `SolutionFilePreview` (=`Path.Combine(Location, SolutionName, SolutionName + ".blsln")` when both set), and `CanConfirm`. `Confirm()` sets `DialogResult=true` + `CloseDialog?.Invoke()`.
+- [ ] **Step 3: Implement** — mirror `AddProjectToSolutionViewModel`'s structure (CommunityToolkit `[ObservableProperty]`, `Create`/`Cancel`/`BrowseLocation` commands, `DialogResult`, `CloseDialog` action). Three **hard-blocks** on `CanConfirm` (matching the spec): (a) non-empty name; (b) name contains no `Path.GetInvalidFileNameChars()`; (c) the target `Path.Combine(Location, SolutionName)` is not an existing non-empty directory (`Directory.Exists(target) && Directory.EnumerateFileSystemEntries(target).Any()` → block with an `ErrorMessage` containing "exists"). Also surface the (non-blocking) MSBuild special-char note via `BasicLang.Compiler.ProjectSystem.MSBuildText.FindSpecialCharacters`. Expose `SolutionName`, `Location`, `InitializeGit=true`, `ErrorMessage`, `SolutionFilePreview` (=`Path.Combine(Location, SolutionName, SolutionName + ".blsln")` when both set), and `CanConfirm`. `Confirm()` sets `DialogResult=true` + `CloseDialog?.Invoke()`.
 
 - [ ] **Step 4: Run — verify pass.**
 - [ ] **Step 5: Commit** — `feat(wizard): NewSolutionViewModel (name/location/git + validation)`.
@@ -532,9 +545,10 @@ public async Task AddProject_writes_blproj_once_and_registers_without_git_reinit
 - Delete: `VisualGameStudio.Shell/ViewModels/Dialogs/AddProjectToSolutionViewModel.cs`
 - Delete: `VisualGameStudio.Shell/Views/Dialogs/AddProjectToSolutionDialog.axaml` (+ `.axaml.cs`)
 
-- [ ] **Step 1:** Grep the solution for `AddProjectToSolution` — confirm only the (now-rewritten) `AddNewProjectToSolutionAsync` referenced it, and it no longer does. Delete the three files.
-- [ ] **Step 2:** `dotnet clean` + build. Expected: succeeds (no dangling references). If `CheckableItem` (defined in the deleted VM) is reused by the reference picker, move it to a shared location first — see Task 14.
-- [ ] **Step 3: Commit** — `refactor(ide): remove superseded AddProjectToSolution dialog`.
+- [ ] **Step 1: Move `CheckableItem` out first (unconditional).** `CheckableItem` is declared inside `AddProjectToSolutionViewModel.cs:218-228` and the Task 14 reference picker reuses it. Move it to its own shared file `VisualGameStudio.Shell/ViewModels/Dialogs/CheckableItem.cs` (same namespace) **before** deleting anything, so the deletion can't strand it.
+- [ ] **Step 2:** Grep the solution for `AddProjectToSolution` — confirm only the now-rewritten (Task 8) `AddNewProjectToSolutionAsync` referenced it, and it no longer does. Delete `AddProjectToSolutionViewModel.cs` + `AddProjectToSolutionDialog.axaml(.cs)`.
+- [ ] **Step 3:** `dotnet clean` + build. Expected: succeeds (no dangling references).
+- [ ] **Step 4: Commit** — `refactor(ide): remove superseded AddProjectToSolution dialog (CheckableItem hoisted)`.
 
 ---
 
@@ -590,16 +604,22 @@ public void Preserves_existing_content()
 - Modify: `VisualGameStudio.Shell/Configuration/ServiceConfiguration.cs` (inject `ISolutionService`)
 - Test: `VisualGameStudio.Tests/…/SolutionExplorer_ReferenceTests.cs`
 
-- [ ] **Step 1: Write failing tests** — construct the VM with fakes + a **real** `SolutionService` holding an in-memory solution with projects A, B, C on disk (temp). Test the extracted apply method (keeps UI out):
+Unlike `MainWindowViewModel`, **`SolutionExplorerViewModel` is constructable in tests** (ctor: `IProjectService, IFileService, IDialogService, IGitService?, IWorkspaceService?` + the new `ISolutionService`). Its ctor subscribes to five `IProjectService` events (`ProjectOpened/ProjectClosed/ProjectChanged/SolutionOpened/SolutionClosed`, `SolutionExplorerViewModel.cs:108-112`), so the fakes must expose them or construction throws.
+
+- [ ] **Step 1a: Author the fakes** (no shared doubles exist in the repo):
+  - `RecordingDialogService : IDialogService` — captures `LastMessage` from `ShowMessageAsync`.
+  - `FakeProjectService : IProjectService` — declares the five events (never raised here) + minimal members so the ctor binds.
+  - Use a **real** `SolutionService` + `IFileService`/`IWorkspaceService` fakes as needed. Seed an on-disk temp solution with projects A, B, C (via the real `ProjectTemplateService`), then `LoadSolutionAsync` into the `SolutionService` the VM holds.
+
+- [ ] **Step 1b: Write failing tests** against the **public** apply method (keeps UI out) and the enablement predicate:
 
 ```csharp
 [Test]
 public async Task ApplyReferences_dual_writes_blsln_and_blproj()
 {
-    // B references A
-    await vm.ApplyProjectReferencesAsync("B", new[] { "A" });
+    await vm.ApplyProjectReferencesAsync("B", new[] { "A" });                 // B references A
     var reloaded = await new SolutionService().LoadSolutionAsync(slnPath);
-    Assert.That(reloaded.GetProject("B")!.ProjectReferences, Does.Contain("A"));      // .blsln persisted
+    Assert.That(reloaded.GetProject("B")!.ProjectReferences, Does.Contain("A"));   // .blsln persisted on disk
     var bXml = XDocument.Load(bBlprojPath);
     Assert.That(bXml.Descendants("ProjectReference").Any(e => ((string)e.Attribute("Include")!).Contains("A.blproj")), Is.True); // .blproj persisted
 }
@@ -608,19 +628,44 @@ public async Task ApplyReferences_dual_writes_blsln_and_blproj()
 public async Task ApplyReferences_rejects_cycle_with_message()
 {
     await vm.ApplyProjectReferencesAsync("B", new[] { "A" });
-    await vm.ApplyProjectReferencesAsync("A", new[] { "B" });   // would cycle
-    Assert.That(lastDialogMessage, Does.Contain("circular"));   // surfaced ex.Message
+    await vm.ApplyProjectReferencesAsync("A", new[] { "B" });                 // would cycle
+    Assert.That(recordingDialog.LastMessage, Does.Contain("circular"));       // surfaced ex.Message
+    var reloadedA = (await new SolutionService().LoadSolutionAsync(slnPath)).GetProject("A")!;
     Assert.That(reloadedA.ProjectReferences, Does.Not.Contain("B"));
+}
+
+[Test]
+public void CanAddProjectReference_gated_on_two_projects_and_project_node()
+{
+    // single-project solution loaded, project node selected -> false
+    Assert.That(vm.CanAddProjectReference, Is.False);
+    // load the 3-project solution, select a project node -> true
+    SelectProjectNode(vm, "B");   Assert.That(vm.CanAddProjectReference, Is.True);
+    // select a non-project (file) node -> false
+    SelectFileNode(vm);           Assert.That(vm.CanAddProjectReference, Is.False);
 }
 ```
 
 - [ ] **Step 2: Run — verify fail.**
 - [ ] **Step 3: Implement**
   - Add `ISolutionService` to the ctor + field; register the dependency in `ServiceConfiguration.cs` (**verify** the explorer VM resolves the *same* singleton `MainWindowViewModel` uses — both are `AddSingleton`).
-  - `[RelayCommand] AddProjectReferenceAsync`: gate on `_solutionService.HasSolution && SelectedNode?.IsProject == true && CurrentSolution.Projects.Count >= 2`; show `AddProjectReferenceDialog` (Task 14) to collect target names; then `await ApplyProjectReferencesAsync(SelectedNode.Name, targets)`.
-  - Extract the testable core:
+  - Enablement predicate + command:
     ```csharp
-    internal async Task ApplyProjectReferencesAsync(string fromName, IEnumerable<string> targets)
+    public bool CanAddProjectReference =>
+        _solutionService.HasSolution && SelectedNode?.IsProject == true
+        && (_solutionService.CurrentSolution?.Projects.Count ?? 0) >= 2;
+
+    [RelayCommand(CanExecute = nameof(CanAddProjectReference))]
+    private async Task AddProjectReferenceAsync()
+    {
+        // show AddProjectReferenceDialog (Task 14) to collect target names, then:
+        await ApplyProjectReferencesAsync(SelectedNode!.Name, selectedTargets);
+    }
+    ```
+    In the `SelectedNode` change handler, call `AddProjectReferenceCommand.NotifyCanExecuteChanged();` so the menu enables/disables live.
+  - The testable core is **`public`** (Shell grants no `InternalsVisibleTo` to the test project — repo convention is public seams, never `internal`+IVT):
+    ```csharp
+    public async Task ApplyProjectReferencesAsync(string fromName, IEnumerable<string> targets)
     {
         foreach (var to in targets)
         {
@@ -628,19 +673,19 @@ public async Task ApplyReferences_rejects_cycle_with_message()
             catch (InvalidOperationException ex) { await _dialogService.ShowMessageAsync("Add Reference", ex.Message); continue; }
 
             // .blproj dual-write (relative path from the 'from' project dir to the 'to' .blproj)
-            var from = _solutionService.CurrentSolution!.GetProject(fromName)!;
-            var toProj = _solutionService.CurrentSolution.GetProject(to)!;
-            var fromDir = Path.GetDirectoryName(from.GetFullPath(_solutionService.CurrentSolution.SolutionDirectory))!;
-            var toBlproj = toProj.GetFullPath(_solutionService.CurrentSolution.SolutionDirectory);
-            BlprojReferenceWriter.AddReference(
-                from.GetFullPath(_solutionService.CurrentSolution.SolutionDirectory),
-                Path.GetRelativePath(fromDir, toBlproj));
+            var sol = _solutionService.CurrentSolution!;
+            var from = sol.GetProject(fromName)!;
+            var toProj = sol.GetProject(to)!;
+            var fromBlproj = from.GetFullPath(sol.SolutionDirectory);
+            var fromDir = Path.GetDirectoryName(fromBlproj)!;
+            var toBlproj = toProj.GetFullPath(sol.SolutionDirectory);
+            BlprojReferenceWriter.AddReference(fromBlproj, Path.GetRelativePath(fromDir, toBlproj));
         }
         await _solutionService.SaveSolutionAsync();     // <-- ISolutionService, NOT _projectService (that no-ops)
         SolutionExplorer_Reload();                       // refresh tree from the updated model
     }
     ```
-  - **Persistence fix:** change the `_projectService.SaveSolutionAsync()` calls in `SetAsStartupProjectAsync` (~541) and `RemoveFromSolutionAsync` (~602) to `_solutionService.SaveSolutionAsync()` (the `_projectService` variant no-ops because `_projectService.CurrentSolution` is null on the live path).
+  - **Persistence fix — repoint ALL FOUR sites** (`SolutionExplorerViewModel.cs` lines **435, 481, 541, 602**) from `_projectService.SaveSolutionAsync()` to `_solutionService.SaveSolutionAsync()`. All four carry the identical no-op bug (`ProjectService.SaveSolutionAsync` early-returns when `_projectService.CurrentSolution` is null, which it always is on the live path — the solution lives on `_solutionService`). This is what the Task 16 DoD grep (`_projectService.SaveSolutionAsync` → zero hits) enforces.
 
 - [ ] **Step 4: Run — verify pass** (incl. a regression test that Set-as-Startup now persists on a `.blsln` reload).
 - [ ] **Step 5: Commit** — `feat(explorer): Add Project Reference command + fix no-op solution saves`.
