@@ -1,7 +1,7 @@
 # Solution UX: Close Project + guided New Solution wizard — design
 
 **Date:** 2026-07-23
-**Status:** Draft for review (r3 — adds Feature D reference command per user decision)
+**Status:** Draft for review (r4 — Feature D hardened after a focused fact-check)
 **Area:** IDE (`VisualGameStudio.Shell` + `VisualGameStudio.ProjectSystem`)
 
 ## Summary
@@ -277,46 +277,71 @@ Restores — and generalizes — the reference capability retired with the old d
 as a project-scoped Solution Explorer command available **anytime**, not only when
 adding a project.
 
-**Command.** Add `AddProjectReferenceCommand` to `SolutionExplorerViewModel`,
-mirroring the existing project-scoped commands `SetAsStartupProjectAsync` /
-`RemoveFromSolutionAsync`
-([SolutionExplorerViewModel.cs:518,575](../../VisualGameStudio.Shell/ViewModels/Panels/SolutionExplorerViewModel.cs)):
-gated on `SelectedNode?.IsProject == true` and `CurrentSolution` having ≥2
-projects. It reads the selected `SolutionProject` from the node and shows a small
-picker — a checkbox list of the *other* projects in the solution — reusing the
+**There is no project context menu today.** The Solution Explorer has a single
+TreeView-level `ContextMenu` (Add / Open / Rename / Delete / Open in Explorer /
+Terminal / Copy Path, [SolutionExplorerView.axaml:41-91](../../VisualGameStudio.Shell/Views/Panels/SolutionExplorerView.axaml))
+that is **not node-type gated**, and the VM's existing project commands
+(`SetAsStartupProjectCommand`, `RemoveFromSolutionCommand`, `BuildProjectCommand`,
+[SolutionExplorerViewModel.cs:517,574,549](../../VisualGameStudio.Shell/ViewModels/Panels/SolutionExplorerViewModel.cs))
+are **orphaned — surfaced in no view**. So Feature D adds a **new project-node
+context section** (its items gated to `IsProject` nodes) and, since that section now
+exists, also surfaces those three orphaned commands there.
+
+**Command.** Add `AddProjectReferenceCommand` to `SolutionExplorerViewModel`, gated
+on `_solutionService.HasSolution`, `SelectedNode?.IsProject == true`, and the
+solution having ≥2 projects. Read the selected `SolutionProject`
+(`SelectedNode.Tag`, [SolutionExplorerViewModel.cs:276,554](../../VisualGameStudio.Shell/ViewModels/Panels/SolutionExplorerViewModel.cs))
+and show a small picker — a checkbox list of the *other* projects — reusing the
 `CheckableItem` pattern from the retired dialog.
 
-**Context menu.** Add "Add Project Reference…" to the project-node context menu in
-`SolutionExplorerView.axaml`, alongside Set as Startup / Remove from Solution.
+**⚠ Persistence must use `ISolutionService`, not `IProjectService`.** The VM's
+existing project commands persist via `_projectService.SaveSolutionAsync()`
+([:541,602](../../VisualGameStudio.Shell/ViewModels/Panels/SolutionExplorerViewModel.cs)),
+but the live solution is loaded through `_solutionService` (the `MainWindowViewModel`
+LoadSolution/CreateSolution paths), so `_projectService.CurrentSolution` is null and
+`ProjectService.SaveSolutionAsync` early-returns
+([ProjectService.cs:225](../../VisualGameStudio.ProjectSystem/Services/ProjectService.cs)) —
+**those existing saves silently no-op** (a pre-existing latent bug). Feature D — and
+the now-surfaced Set-as-Startup / Remove commands — must persist via
+`_solutionService.SaveSolutionAsync()` against the same instance the tree binds.
+`SolutionExplorerViewModel` gains an `ISolutionService` dependency (it holds only
+`IProjectService` today); it is the same DI singleton `MainWindowViewModel` uses, so
+`CurrentSolution` is shared.
 
-**Persistence (dual-write — the correctness crux).** References are consumed in
-two stores, so both must be updated (matching what the old dialog did at
-[MainWindowViewModel.cs:6895-6905](../../VisualGameStudio.Shell/ViewModels/MainWindowViewModel.cs)):
+**Dual-write persistence (the correctness crux).** For each checked target:
 
-1. **In-memory `.blsln` model + build order.** For each checked target call
-   `ISolutionService.AddProjectReference(from, to)`, which validates against
-   cycles ([SolutionService.cs:183-215](../../VisualGameStudio.ProjectSystem/Services/SolutionService.cs));
-   catch its `InvalidOperationException` ("would create a circular dependency"),
-   surface it as a dialog, and skip that target. Then `SaveSolutionAsync()` to
-   persist `SolutionProject.ProjectReferences` to the `.blsln`
-   ([SolutionSerializer.cs:145-147](../../VisualGameStudio.ProjectSystem/Serialization/SolutionSerializer.cs)).
-   This store drives build order (topological sort,
-   [SolutionService.cs:245-305](../../VisualGameStudio.ProjectSystem/Services/SolutionService.cs)).
-2. **The `from` project's `.blproj` `<ProjectReference>`.** This is what the
-   compiler actually resolves
-   ([ProjectFile.cs:202-206,337-340](../../BasicLang/ProjectSystem/ProjectFile.cs)).
-   Add `<ProjectReference Include="..\{to}\{to}.blproj" />` (relative path computed
-   from the two project locations) via a targeted XML add — the same element the
-   old dialog wrote — idempotent (skip if already present).
+1. **`.blsln` model + build order.** `_solutionService.AddProjectReference(from, to)`
+   — validates against cycles and throws `InvalidOperationException` for a cycle, an
+   unknown project, *or* a self-reference ([SolutionService.cs:183-215](../../VisualGameStudio.ProjectSystem/Services/SolutionService.cs));
+   catch it, surface **`ex.Message`** (not a hardcoded "circular dependency" string,
+   since three causes share the type), and skip that target. Then
+   `_solutionService.SaveSolutionAsync()` to persist `SolutionProject.ProjectReferences`
+   to the `.blsln` ([SolutionSerializer.cs:145-148](../../VisualGameStudio.ProjectSystem/Serialization/SolutionSerializer.cs)).
+   This store drives build order ([SolutionService.cs:245-305](../../VisualGameStudio.ProjectSystem/Services/SolutionService.cs)).
+2. **The `from` project's `.blproj` `<ProjectReference>`** — what the compiler
+   resolves ([ProjectFile.cs:202-207,337-344](../../BasicLang/ProjectSystem/ProjectFile.cs)).
+   Add `<ProjectReference Include="{relPath}" />` (`relPath =
+   Path.GetRelativePath(fromProjectDir, toBlprojPath)`) via a **targeted XML add**
+   (load the `.blproj` `XDocument`, add to an `ItemGroup`, save), idempotent (skip if
+   an existing `<ProjectReference Include>` already matches, case-insensitive). A
+   targeted add — not the IDE serializer — because `ProjectSerializer` does not model
+   `<ProjectReference>` at all (see Risk).
 
-`SolutionExplorerViewModel` gains an `ISolutionService` dependency for
-`AddProjectReference` (it currently holds only `IProjectService`); wire it in DI.
+> **Plan Step 0 (empirical).** (a) Confirm the build / module resolver actually
+> consumes the `.blproj` `<ProjectReference>` to resolve cross-project symbols, so the
+> `.blproj` write is load-bearing (not just the `.blsln` model). (b) Confirm the
+> targeted XML add preserves all other `.blproj` content (PropertyGroups,
+> `CppToolchain`, `Compile` items).
 
-> **Plan Step 0 (empirical).** Confirm which store the build actually needs: verify
-> that compiling project B which references library A resolves A only when the
-> `.blproj` `<ProjectReference>` is present (not merely the `.blsln` model), so the
-> dual-write — and specifically the `.blproj` write being load-bearing — is
-> justified rather than assumed.
+**Risk — IDE serializer erases `<ProjectReference>`.** `ProjectSerializer` (IDE-side)
+round-trips only `<Reference>` (assembly refs), never `<ProjectReference>`
+([ProjectSerializer.cs:165-176,279-287](../../VisualGameStudio.ProjectSystem/Serialization/ProjectSerializer.cs)).
+Any future IDE code that re-saves the `from` `.blproj` through
+`ProjectSerializer.SaveAsync` silently deletes the reference. Pre-existing hazard,
+not introduced here. **Recommended (fold in if cheap at plan time):** teach
+`ProjectSerializer` to round-trip `<ProjectReference>` into `BasicLangProject.References`
+(`IsProjectReference = true`, [ProjectItem.cs:36](../../VisualGameStudio.Core/Models/ProjectItem.cs))
+so references survive IDE saves.
 
 ## Shared seam — wizard modes, locking, cosmetics
 
@@ -400,11 +425,16 @@ injected — the ctor accepts one, [:18](../../VisualGameStudio.ProjectSystem/Se
   `InitRepositoryAsync` is **never** called (assert call count on the fake).
 
 **Add Project Reference (Feature D)**
-- Cycle rejection: A→B then B→A surfaces the circular-dependency error and leaves
-  no reference added.
-- Dual persistence: after the command, a `.blsln` reload shows `from.ProjectReferences`
-  contains `to`, **and** the `from` `.blproj` contains a `<ProjectReference>` to
-  `to`'s relative path; repeating the command is idempotent (no duplicate element).
+- Cycle rejection: A→B then B→A surfaces the error (via `ex.Message`) and leaves no
+  reference added.
+- Dual persistence, **verified on disk after reload** (this is what guards against
+  the `_projectService.SaveSolutionAsync` no-op): a `.blsln` reload shows
+  `from.ProjectReferences` contains `to`, **and** the `from` `.blproj` on disk
+  contains a `<ProjectReference>` to `to`'s relative path; repeating is idempotent
+  (no duplicate element).
+- Regression guard for the persistence fix: after Set-as-Startup / Remove via the
+  now-surfaced commands, a `.blsln` reload reflects the change (they persist through
+  `_solutionService`, not the null-`_projectService` no-op).
 - Command disabled for a non-project node or a solution with <2 projects.
 
 **Regression**
@@ -445,11 +475,15 @@ injected — the ctor accepts one, [:18](../../VisualGameStudio.ProjectSystem/Se
 - `VisualGameStudio.ProjectSystem/Services/SolutionWizardMapper.cs` — **new** pure
   mappers.
 - `VisualGameStudio.Shell/ViewModels/Panels/SolutionExplorerViewModel.cs` +
-  `Views/Panels/SolutionExplorerView.axaml` — **Feature D** command + context menu
-  + `ISolutionService` injection.
+  `Views/Panels/SolutionExplorerView.axaml` — **Feature D**: `AddProjectReferenceCommand`,
+  a **new** project-node context section (gated to `IsProject`) that also surfaces the
+  orphaned Set-as-Startup / Remove / Build commands, `ISolutionService` injection, and
+  switching those commands' persistence from the no-op `_projectService.SaveSolutionAsync`
+  to `_solutionService.SaveSolutionAsync`.
 - `VisualGameStudio.Shell/Views/Dialogs/AddProjectReferenceDialog.axaml(.cs)` +
   VM — **new** small reference picker (checkbox list).
-- `VisualGameStudio.ProjectSystem/…` — **new** `.blproj` `<ProjectReference>`
-  writer helper (targeted XML add, idempotent).
+- `VisualGameStudio.ProjectSystem/…` — **new** `.blproj` `<ProjectReference>` writer
+  helper (targeted XML add, idempotent); *optionally* teach `ProjectSerializer` to
+  round-trip `<ProjectReference>` (per the Feature D Risk).
 - **Removed:** `AddProjectToSolutionViewModel.cs`, `AddProjectToSolutionDialog.axaml(.cs)`.
 - `VisualGameStudio.Tests/*` — new/updated tests + a reusable fake `IGitService`.
