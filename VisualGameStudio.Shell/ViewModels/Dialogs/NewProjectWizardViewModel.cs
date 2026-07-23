@@ -79,6 +79,9 @@ public partial class NewProjectWizardViewModel : ObservableObject
 
     public bool IsNewSolutionMode => Mode == WizardMode.NewSolution;
 
+    /// <summary>Create-button label: "Create solution" in New-Solution mode, else "Create".</summary>
+    public string CreateButtonText => Mode == WizardMode.NewSolution ? "Create solution" : "Create";
+
     /// <summary>How CreateProjectAsync actually finishes. Defaults to the real
     /// template service in the constructor; a solution-mode caller can replace it
     /// to route through solution-aware creation instead.</summary>

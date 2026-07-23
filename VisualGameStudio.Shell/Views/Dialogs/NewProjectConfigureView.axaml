@@ -68,8 +68,10 @@
         <StackPanel>
           <TextBlock Text="Location" FontWeight="SemiBold" Margin="0,0,0,4"/>
           <Grid ColumnDefinitions="*,Auto">
-            <TextBox Grid.Column="0" Text="{Binding Location}" Watermark="Select project location"/>
-            <Button Grid.Column="1" Content="Browse..." Command="{Binding BrowseLocationCommand}" Margin="8,0,0,0"/>
+            <TextBox Grid.Column="0" Text="{Binding Location}" Watermark="Select project location"
+                     IsReadOnly="{Binding IsLocationLocked}"/>
+            <Button Grid.Column="1" Content="Browse..." Command="{Binding BrowseLocationCommand}" Margin="8,0,0,0"
+                    IsEnabled="{Binding !IsLocationLocked}"/>
           </Grid>
         </StackPanel>
 
@@ -95,8 +97,10 @@
         <!-- Options -->
         <StackPanel Spacing="8">
           <TextBlock Text="Options" FontWeight="SemiBold"/>
-          <CheckBox Content="Create solution folder" IsChecked="{Binding CreateSolutionFolder}"/>
-          <CheckBox Content="Initialize Git repository" IsChecked="{Binding CreateGitRepository}"/>
+          <CheckBox Content="Create solution folder" IsChecked="{Binding CreateSolutionFolder}"
+                    IsVisible="{Binding !IsLocationLocked}"/>
+          <CheckBox Content="Initialize Git repository" IsChecked="{Binding CreateGitRepository}"
+                    IsVisible="{Binding !IsLocationLocked}"/>
         </StackPanel>
 
         <!-- Advanced -->
@@ -123,7 +127,7 @@
                    FontStyle="Italic" VerticalAlignment="Center" Margin="12,0,0,0"
                    Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
         <Button Grid.Column="2" Content="Cancel" Command="{Binding CancelCommand}" MinWidth="80" Margin="0,0,8,0"/>
-        <Button Grid.Column="3" Content="Create" Command="{Binding CreateProjectCommand}"
+        <Button Grid.Column="3" Content="{Binding CreateButtonText}" Command="{Binding CreateProjectCommand}"
                 IsEnabled="{Binding CanCreate}" Classes="accent" MinWidth="80"/>
       </Grid>
     </Border>

@@ -456,6 +456,17 @@ public class NewProjectWizardViewModelTests
     }
 
     [Test]
+    public void CreateButtonText_reflects_mode()
+    {
+        var vm = NewVm(out _);
+        Assert.That(vm.CreateButtonText, Is.EqualTo("Create"));
+        vm.Mode = WizardMode.NewSolution;
+        Assert.That(vm.CreateButtonText, Is.EqualTo("Create solution"));
+        vm.Mode = WizardMode.AddToSolution;
+        Assert.That(vm.CreateButtonText, Is.EqualTo("Create"));
+    }
+
+    [Test]
     public void BuildCreateOptions_reflects_full_selection()
     {
         var vm = NewVm(out _);
