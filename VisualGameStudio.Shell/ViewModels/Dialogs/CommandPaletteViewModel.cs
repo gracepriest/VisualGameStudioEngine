@@ -232,7 +232,7 @@ public partial class CommandPaletteViewModel : ViewModelBase
         AddCommand("File", "Save All", "Ctrl+Shift+S", () => vm.SaveAllCommand.Execute(null));
         AddCommand("File", "Save Workspace As...", null, () => vm.SaveWorkspaceAsCommand.Execute(null));
         AddCommand("File", "Close Editor", "Ctrl+W", () => vm.CloseEditorCommand.Execute(null));
-        AddCommand("File", "Close Folder", null, () => vm.CloseFolderCommand.Execute(null));
+        AddCommand("File", "Close Project", null, () => vm.CloseProjectCommand.Execute(null));
         AddCommand("File", "Clear Recent Projects", null, () => vm.ClearRecentProjectsCommand.Execute(null));
         AddCommand("File", "Exit", "Alt+F4", () => vm.ExitCommand.Execute(null));
 

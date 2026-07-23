@@ -151,6 +151,14 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty]
     private bool _hasSolutionOpen;
 
+    /// <summary>
+    /// Gets whether a standalone project (not part of a solution) is currently open. Used to
+    /// gate the File > Close Project menu item — a project inside a solution is closed via
+    /// Close Solution instead.
+    /// </summary>
+    [ObservableProperty]
+    private bool _hasProjectOpen;
+
     [ObservableProperty]
     private int _caretLine = 1;
 
@@ -1027,6 +1035,7 @@ public partial class MainWindowViewModel : ViewModelBase
             ? $"{_solutionService.CurrentSolution!.SolutionName} - Visual Game Studio"
             : $"{e.Project.Name} - Visual Game Studio";
         StatusText = $"Project loaded: {e.Project.Name}";
+        RecomputeHasProjectOpen();
 
         // Give clangd its obj/gen headers + obj/compile_commands.json (Task 10). Both are build
         // outputs today, so on a fresh checkout they do not exist and C++ IntelliSense is dead
@@ -1369,6 +1378,7 @@ public partial class MainWindowViewModel : ViewModelBase
             ? $"{_solutionService.CurrentSolution!.SolutionName} - Visual Game Studio"
             : "Visual Game Studio";
         StatusText = "Ready";
+        RecomputeHasProjectOpen();
 
         // Persist this project's layout + open documents before we let go of it.
         SaveWorkspaceStateNow(e.Project.ProjectDirectory);
@@ -1391,6 +1401,15 @@ public partial class MainWindowViewModel : ViewModelBase
         _diagnosticsAggregator.Clear();
         ErrorList.UpdateDiagnostics(_diagnosticsAggregator.GetSnapshot());
     }
+
+    /// <summary>
+    /// Keeps <see cref="HasProjectOpen"/> in sync with project/solution state. A project is only
+    /// "closeable" via File > Close Project when it is a standalone project — one opened inside a
+    /// solution is closed via Close Solution instead, so HasProjectOpen is false whenever a
+    /// solution is loaded even if CurrentProject is non-null.
+    /// </summary>
+    private void RecomputeHasProjectOpen() =>
+        HasProjectOpen = _projectService.CurrentProject != null && !_solutionService.HasSolution;
 
     #region Per-project layout & session persistence
 
@@ -6713,7 +6732,7 @@ public partial class MainWindowViewModel : ViewModelBase
     }
 
     [RelayCommand]
-    private async Task CloseFolderAsync()
+    private async Task CloseProjectAsync()
     {
         if (_projectService.CurrentProject != null)
         {
@@ -6990,6 +7009,7 @@ $"""
         {
             Title = $"{_solutionService.CurrentSolution.SolutionName} - Visual Game Studio";
         }
+        RecomputeHasProjectOpen();
     }
 
     private void OnSolutionClosed(object? sender, EventArgs e)
@@ -6999,6 +7019,7 @@ $"""
         {
             Title = "Visual Game Studio";
         }
+        RecomputeHasProjectOpen();
     }
 
     [RelayCommand]

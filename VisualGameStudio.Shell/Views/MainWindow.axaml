@@ -175,6 +175,7 @@
         <MenuItem Header="_Save" Command="{Binding SaveCommand}" InputGesture="Ctrl+S"/>
         <MenuItem Header="Save _All" Command="{Binding SaveAllCommand}" InputGesture="Ctrl+Shift+S"/>
         <Separator/>
+        <MenuItem Header="Close _Project" Command="{Binding CloseProjectCommand}" IsEnabled="{Binding HasProjectOpen}"/>
         <MenuItem Header="C_lose Solution" Command="{Binding CloseSolutionCommand}" IsEnabled="{Binding HasSolutionOpen}"/>
         <MenuItem Header="E_xit" Command="{Binding ExitCommand}" InputGesture="Alt+F4"/>
       </MenuItem>
