@@ -40,7 +40,7 @@ public class SolutionExplorerViewModelTests
 
         _dialogService = new Mock<IDialogService>();
 
-        _vm = new SolutionExplorerViewModel(_projectService.Object, new Mock<IFileService>().Object, _dialogService.Object);
+        _vm = new SolutionExplorerViewModel(_projectService.Object, new Mock<IFileService>().Object, _dialogService.Object, new Mock<ISolutionService>().Object);
     }
 
     [TearDown]

@@ -7,6 +7,7 @@ using CommunityToolkit.Mvvm.Input;
 using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Core.Abstractions.ViewModels;
 using VisualGameStudio.Core.Models;
+using VisualGameStudio.ProjectSystem.Services;
 
 namespace VisualGameStudio.Shell.ViewModels.Panels;
 
@@ -15,6 +16,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     private readonly IProjectService _projectService;
     private readonly IFileService _fileService;
     private readonly IDialogService _dialogService;
+    private readonly ISolutionService _solutionService;
     private readonly IGitService? _gitService;
     private readonly IWorkspaceService? _workspaceService;
 
@@ -97,11 +99,12 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     [ObservableProperty]
     private string? _startupProjectName;
 
-    public SolutionExplorerViewModel(IProjectService projectService, IFileService fileService, IDialogService dialogService, IGitService? gitService = null, IWorkspaceService? workspaceService = null)
+    public SolutionExplorerViewModel(IProjectService projectService, IFileService fileService, IDialogService dialogService, ISolutionService solutionService, IGitService? gitService = null, IWorkspaceService? workspaceService = null)
     {
         _projectService = projectService;
         _fileService = fileService;
         _dialogService = dialogService;
+        _solutionService = solutionService;
         _gitService = gitService;
         _workspaceService = workspaceService;
 
@@ -120,6 +123,11 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         {
             _workspaceService.WorkspaceChanged += OnWorkspaceChanged;
         }
+    }
+
+    partial void OnSelectedNodeChanged(TreeNode? value)
+    {
+        AddProjectReferenceCommand.NotifyCanExecuteChanged();
     }
 
     private void OnProjectOpened(object? sender, ProjectEventArgs e)
@@ -432,7 +440,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
 
         try
         {
-            await _projectService.SaveSolutionAsync();
+            await _solutionService.SaveSolutionAsync();
         }
         catch { /* Solution save may not be implemented yet */ }
 
@@ -478,7 +486,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
 
         try
         {
-            await _projectService.SaveSolutionAsync();
+            await _solutionService.SaveSolutionAsync();
         }
         catch { /* Solution save may not be implemented yet */ }
 
@@ -538,7 +546,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
 
         try
         {
-            await _projectService.SaveSolutionAsync();
+            await _solutionService.SaveSolutionAsync();
         }
         catch { /* Solution save may not be implemented yet */ }
     }
@@ -599,12 +607,85 @@ public partial class SolutionExplorerViewModel : ViewModelBase
 
             try
             {
-                await _projectService.SaveSolutionAsync();
+                await _solutionService.SaveSolutionAsync();
             }
             catch { /* Solution save may not be implemented yet */ }
 
             LoadSolution(CurrentSolution);
         }
+    }
+
+    /// <summary>
+    /// Whether the "Add Project Reference" command is currently available: a solution must be
+    /// open, a project node must be selected, and the solution must contain at least two
+    /// projects (otherwise there is nothing to reference).
+    /// </summary>
+    public bool CanAddProjectReference =>
+        _solutionService.HasSolution && SelectedNode?.IsProject == true
+        && (_solutionService.CurrentSolution?.Projects.Count ?? 0) >= 2;
+
+    /// <summary>
+    /// Adds a project reference from the selected project to every other project in the
+    /// solution. This is a thin placeholder until the reference-picker dialog lands (next task):
+    /// once that dialog exists, replace the "all other projects" target list below with the
+    /// user's picked selection and call <see cref="ApplyProjectReferencesAsync"/> the same way.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanAddProjectReference))]
+    private async Task AddProjectReferenceAsync()
+    {
+        if (SelectedNode == null || !SelectedNode.IsProject) return;
+        var sol = _solutionService.CurrentSolution;
+        if (sol == null) return;
+
+        var fromName = SelectedNode.Name;
+        var targets = sol.Projects
+            .Select(p => p.Name)
+            .Where(name => !name.Equals(fromName, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (targets.Count == 0) return;
+
+        await ApplyProjectReferencesAsync(fromName, targets);
+    }
+
+    /// <summary>
+    /// Applies project references from <paramref name="fromName"/> to each name in
+    /// <paramref name="targets"/>, writing to both the .blsln (drives build order via
+    /// <see cref="ISolutionService.GetBuildOrder"/>) and the target's .blproj (drives
+    /// cross-project IntelliSense via the LSP). Does NOT make cross-project code compile —
+    /// that is a separate, currently missing, compiler capability.
+    /// </summary>
+    public async Task ApplyProjectReferencesAsync(string fromName, IEnumerable<string> targets)
+    {
+        var sol = _solutionService.CurrentSolution;
+        if (sol == null) return;
+
+        foreach (var to in targets)
+        {
+            try
+            {
+                _solutionService.AddProjectReference(fromName, to);
+            }
+            catch (InvalidOperationException ex)
+            {
+                // Three distinct causes share this exception type: circular dependency,
+                // an unknown project name, or a self-reference.
+                await _dialogService.ShowMessageAsync("Add Reference", ex.Message);
+                continue;
+            }
+
+            var from = sol.GetProject(fromName);
+            var toProj = sol.GetProject(to);
+            if (from == null || toProj == null) continue;
+
+            var fromBlproj = from.GetFullPath(sol.SolutionDirectory);
+            var fromDir = Path.GetDirectoryName(fromBlproj)!;
+            var toBlproj = toProj.GetFullPath(sol.SolutionDirectory);
+            BlprojReferenceWriter.AddReference(fromBlproj, Path.GetRelativePath(fromDir, toBlproj));
+        }
+
+        await _solutionService.SaveSolutionAsync();
+        LoadSolution(sol);
     }
 
     // ─── Multi-Root Workspace Support ────────────────────────────────
