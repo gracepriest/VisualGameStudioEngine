@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Xml.Linq;
 
 namespace BasicLang.Compiler.ProjectSystem
@@ -367,7 +368,14 @@ namespace BasicLang.Compiler.ProjectSystem
             // Remove null elements
             doc.Descendants().Where(e => e.IsEmpty && !e.HasAttributes).Remove();
 
-            doc.Save(path);
+            // Write BOM-less UTF-8. XDocument.Save(path) honors the declared "utf-8"
+            // encoding by emitting a UTF-8 BOM, but every .blproj/.blsln in this repo is
+            // BOM-less — a BOM corrupts the file for the other tooling that reads it.
+            using (var writer = new StreamWriter(path, false, new UTF8Encoding(false)))
+            {
+                doc.Save(writer);
+            }
+
             FilePath = path;
         }
 
