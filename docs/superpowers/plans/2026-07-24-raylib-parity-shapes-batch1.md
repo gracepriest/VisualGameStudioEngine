@@ -61,7 +61,7 @@ These are grounded in the actual codebase conventions (2467 existing exports / 2
 
 **Files:** none modified.
 
-- [ ] **Step 1: Restore raylib** — `nuget restore VisualGameStudioEngine.sln` (populates `packages\raylib.5.5.0\…`). If `nuget.exe` is unavailable, `msbuild -t:restore` or opening in VS once also works. Expected: `packages\raylib.5.5.0\build\native\raylib.targets` now exists.
+- [ ] **Step 1: Restore raylib** — `nuget restore VisualGameStudioEngine.sln` (populates `packages\raylib.5.5.0\…`). raylib here is wired via **packages.config**, NOT PackageReference, so a bare `msbuild -t:restore` is a NO-OP — if `nuget.exe` is unavailable use `msbuild VisualGameStudioEngine.sln -t:restore -p:RestorePackagesConfig=true`, or open the solution in VS once (auto-restore). Expected: `packages\raylib.5.5.0\build\native\raylib.targets` now exists.
 - [ ] **Step 2: Locate MSBuild** via vswhere (mirror `EngineAgent/engine_agent.py::_find_msbuild`):
   `& "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe`
 - [ ] **Step 3: Build the native engine (unmodified)** via the .sln target so output → repo-root `x64\Release\`:
