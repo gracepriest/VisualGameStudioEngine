@@ -24,6 +24,7 @@ namespace VisualGameStudio.Tests.Compiler;
 ///    (the Phase 4 Step-0 gate caught StrengthReductionPass dropping it).
 ///  - Split emission resets dedupe state per captured file, not globally.
 /// </summary>
+[Category("Integration")]
 [TestFixture]
 public class CppLineDirectiveTests
 {

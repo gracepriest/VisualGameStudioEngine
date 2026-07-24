@@ -14,6 +14,7 @@ namespace VisualGameStudio.Tests.Compiler;
 /// builds. These tests seed obj/gen with a good build, then drive a throwing build and assert
 /// the earlier headers survive byte-for-byte.
 /// </summary>
+[Category("Integration")]
 [TestFixture]
 [NonParallelizable]
 public class CppProjectBuilderCleanTests

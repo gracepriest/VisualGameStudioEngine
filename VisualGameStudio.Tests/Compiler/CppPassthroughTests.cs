@@ -14,6 +14,7 @@ namespace VisualGameStudio.Tests.Compiler;
 /// <c>#include</c> into generated C++ output. This is DISTINCT from the existing
 /// <c>#Include</c> directive (VB-style source-file splicing in the Preprocessor).
 /// </summary>
+[Category("Integration")]
 [TestFixture]
 public class CppPassthroughTests
 {

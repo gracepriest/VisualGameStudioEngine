@@ -42,6 +42,7 @@ namespace VisualGameStudio.Tests.Integration;
 /// parks on stdin and hangs forever.
 /// </para>
 /// </summary>
+[Category("Integration")]
 [TestFixture]
 [NonParallelizable] // spawns lldb-dap + a native debuggee; also runs a real MSVC build
 [Category("NativeDebugGate")]

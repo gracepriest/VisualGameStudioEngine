@@ -22,6 +22,7 @@ namespace VisualGameStudio.Tests.Integration;
 /// cross-file call), uses generous-but-bounded timeouts, and guarantees that no
 /// spawned process outlives the test.
 /// </summary>
+[Category("Integration")]
 [TestFixture]
 [NonParallelizable]
 [Category("IdeInAnger")]

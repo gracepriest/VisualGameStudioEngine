@@ -681,6 +681,7 @@ End Module";
     // Task 7: end-to-end - generated C++ must be accepted by a real C++ compiler
     // ========================================================================
 
+    [Category("Integration")]
     [Test]
     public void Cpp_EndToEnd_GeneratedCodeIsValidCpp()
     {

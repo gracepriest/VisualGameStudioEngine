@@ -46,7 +46,8 @@ from old docs): the legacy `VisualGameStudio` VB.NET IDE and the `VS.BasicLang` 
 ```powershell
 dotnet build VisualGameStudio.Shell/VisualGameStudio.Shell.csproj -c Release   # the IDE
 dotnet build BasicLang/BasicLang.csproj -c Release                             # compiler alone
-dotnet test  VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release   # full suite
+dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release                            # full suite (~39 min; integration tests compile/run native code, spawn clangd/DAP)
+dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --filter "TestCategory!=Integration"  # fast subset (~2 min; skips the [Category("Integration")] compile/run/spawn tests)
 IDE/VisualGameStudio.exe                                                        # run prebuilt IDE
 IDE/BasicLang.exe MyFile.bas --target=csharp                                   # CLI compile a file (pass source directly — there is no `compile` subcommand)
 IDE/BasicLang.exe build MyProject.blproj                                        # CLI build a project

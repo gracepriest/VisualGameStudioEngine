@@ -3,6 +3,7 @@ using NUnit.Framework;
 
 namespace VisualGameStudio.Tests.Compiler;
 
+[Category("Integration")]
 [TestFixture]
 [NonParallelizable]
 public class CppProjectCliBuildTests

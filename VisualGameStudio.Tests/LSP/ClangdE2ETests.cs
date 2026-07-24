@@ -65,6 +65,7 @@ namespace VisualGameStudio.Tests.LSP;
 /// real handshake, proving capture → build → remap end-to-end.
 /// </para>
 /// </summary>
+[Category("Integration")]
 [TestFixture]
 [Category("RequiresClangd")]
 [NonParallelizable] // spawns clangd + `dotnet BasicLang.dll --lsp` child processes

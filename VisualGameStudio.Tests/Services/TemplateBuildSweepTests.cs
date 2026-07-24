@@ -11,6 +11,7 @@ namespace VisualGameStudio.Tests.Services;
 /// behind File → New Project — a template that generates unbuildable code is
 /// broken no matter how nice the dialog is.
 /// </summary>
+[Category("Integration")]
 [TestFixture]
 [NonParallelizable]
 public class TemplateBuildSweepTests

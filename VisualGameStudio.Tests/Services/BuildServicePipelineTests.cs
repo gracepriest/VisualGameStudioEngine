@@ -24,6 +24,7 @@ namespace VisualGameStudio.Tests.Services;
 ///   4. semantic error        — diagnostics must carry file path + line so the
 ///                              Error List can navigate.
 /// </summary>
+[Category("Integration")]
 [TestFixture]
 [NonParallelizable]
 public class BuildServicePipelineTests

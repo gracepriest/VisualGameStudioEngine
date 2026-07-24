@@ -10,6 +10,7 @@ namespace VisualGameStudio.Tests.Compiler;
 /// bugs hide in whichever path the suite doesn't exercise (lesson learned:
 /// test through BOTH entry points).
 /// </summary>
+[Category("Integration")]
 [TestFixture]
 [NonParallelizable]
 public class CliBuildTests

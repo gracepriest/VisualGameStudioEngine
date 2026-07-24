@@ -16,6 +16,7 @@ namespace VisualGameStudio.Tests.Compiler;
 /// (those that actually compile) Assert.Ignore when no clang++/g++/MSVC is available; the
 /// entry-rule and semantic-error cases fail BEFORE the toolchain is needed and run everywhere.
 /// </summary>
+[Category("Integration")]
 [TestFixture]
 [NonParallelizable]
 public class MixedProjectBuildTests

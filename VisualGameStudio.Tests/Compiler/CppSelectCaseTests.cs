@@ -29,6 +29,7 @@ namespace VisualGameStudio.Tests.Compiler;
 /// does not wire them the DeadCodeEliminationPass deletes the bodies and the emitted
 /// <c>goto</c>s dangle. The non-optimized path never exercised that.
 /// </summary>
+[Category("Integration")]
 [TestFixture]
 public class CppSelectCaseTests
 {

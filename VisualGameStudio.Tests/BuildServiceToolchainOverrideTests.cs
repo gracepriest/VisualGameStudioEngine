@@ -153,6 +153,7 @@ public class BuildServiceToolchainOverrideTests
     // 4. No override configured at all -> unchanged (today's) behavior.
     // ------------------------------------------------------------------
 
+    [Category("Integration")]
     [Test]
     public async Task NoOverrideConfigured_UnchangedBehavior()
     {

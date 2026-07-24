@@ -17,6 +17,7 @@ namespace VisualGameStudio.Tests.Compiler;
 /// (<c>Program.cs</c>) calls <c>Build</c> with no override args at all, so its behavior
 /// must be unchanged by this additive param.
 /// </summary>
+[Category("Integration")]
 [TestFixture]
 public class CppProjectBuilderResolveToolchainTests
 {

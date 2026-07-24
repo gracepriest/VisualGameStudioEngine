@@ -47,6 +47,7 @@ namespace VisualGameStudio.Tests.Compiler;
 //        - C#  -> `collection[index] = value` (correct for both List and Dictionary in .NET)
 //   Dictionary READ of a missing key -> `.Get(k)` which throws (kept .NET-faithful).
 // ============================================================================
+[Category("Integration")]
 [TestFixture]
 public class CppCollectionTests
 {

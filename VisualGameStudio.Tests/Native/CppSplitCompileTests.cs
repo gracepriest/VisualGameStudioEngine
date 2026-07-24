@@ -16,6 +16,7 @@ namespace VisualGameStudio.Tests.Native;
 /// hand-written consumer TU) on one command line, runs the exe, and asserts stdout.
 /// Cleanly Ignored when no C++ compiler (clang++/g++/MSVC) is available.
 /// </summary>
+[Category("Integration")]
 [TestFixture]
 [NonParallelizable] // spawns compiler + child processes
 public class CppSplitCompileTests

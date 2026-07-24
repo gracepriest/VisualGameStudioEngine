@@ -12,6 +12,7 @@ namespace VisualGameStudio.Tests.Native;
 /// No compiler wiring is involved here — this validates the runtime const in isolation. If no
 /// C++ compiler is available (e.g. CI without a toolchain), the test is cleanly Ignored.
 /// </summary>
+[Category("Integration")]
 [TestFixture]
 public class CppCollectionsRuntimeTests
 {
