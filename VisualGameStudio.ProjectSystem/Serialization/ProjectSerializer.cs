@@ -174,6 +174,25 @@ public class ProjectSerializer
                     });
                 }
             }
+
+            // Project-to-project references. Parsed (and re-emitted on save) so an IDE
+            // save never silently deletes them — they feed cross-project IntelliSense via
+            // the LSP WorkspaceManager, which reads ProjectFile.ProjectReferences.
+            foreach (var projectReference in itemGroup.Elements("ProjectReference"))
+            {
+                var include = projectReference.Attribute("Include")?.Value;
+                if (!string.IsNullOrEmpty(include))
+                {
+                    project.References.Add(new ProjectReference
+                    {
+                        // Path keeps the raw Include verbatim so a save round-trips it
+                        // unchanged; Name is just the friendly project name for display.
+                        Name = Path.GetFileNameWithoutExtension(include),
+                        Path = include,
+                        IsProjectReference = true
+                    });
+                }
+            }
         }
 
         // Ensure default configurations exist
@@ -275,13 +294,28 @@ public class ProjectSerializer
             ));
         }
 
-        // Add References
-        if (project.References.Any())
+        // Add assembly References. Project-to-project references are emitted separately
+        // below as <ProjectReference> — mixing them would rewrite a project reference as
+        // an assembly reference and lose its path.
+        var assemblyReferences = project.References.Where(r => !r.IsProjectReference).ToList();
+        if (assemblyReferences.Any())
         {
             root.Add(new XElement("ItemGroup",
-                project.References.Select(r => new XElement("Reference",
+                assemblyReferences.Select(r => new XElement("Reference",
                     new XAttribute("Include", r.Name),
                     r.Path != null ? new XElement("HintPath", r.Path) : null
+                ))
+            ));
+        }
+
+        // Add ProjectReferences, re-emitting the raw Include path exactly as loaded so an
+        // IDE save preserves what the compiler-side ProjectFile / LSP WorkspaceManager read.
+        var projectReferences = project.References.Where(r => r.IsProjectReference).ToList();
+        if (projectReferences.Any())
+        {
+            root.Add(new XElement("ItemGroup",
+                projectReferences.Select(r => new XElement("ProjectReference",
+                    new XAttribute("Include", r.Path ?? r.Name)
                 ))
             ));
         }
