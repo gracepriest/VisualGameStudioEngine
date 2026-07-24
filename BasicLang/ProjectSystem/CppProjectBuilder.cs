@@ -91,25 +91,37 @@ namespace BasicLang.Compiler.ProjectSystem
 
             // ---- Engine DLL deploy ----
             if (emit.EngineLib != null)
-            {
                 foreach (var dll in EngineDeployment.LocateNativeDlls(emit.EngineLib))
-                {
-                    // A locked DLL (previous game run still open) must never
-                    // discard a successful build result — warn and continue,
-                    // mirroring the CLI's existing deploy precedent.
-                    try
-                    {
-                        var dest = Path.Combine(emit.OutputDir, Path.GetFileName(dll));
-                        File.Copy(dll, dest, overwrite: true);
-                        result.Messages.Add($"Deployed {Path.GetFileName(dll)}");
-                    }
-                    catch (Exception ex)
-                    {
-                        result.Messages.Add($"warning: could not deploy {Path.GetFileName(dll)}: {ex.Message}");
-                    }
-                }
-            }
+                    DeployDll(result, emit.OutputDir, dll);
+
+            // ---- MinGW C++ runtime deploy ----
+            // A MinGW-linked exe (g++ / winlibs-clang) dynamically imports libstdc++-6.dll,
+            // libgcc_s_seh-1.dll and libwinpthread-1.dll. With the toolchain off PATH the exe
+            // cannot resolve them at standalone launch ("libstdc++-6.dll not found"), so copy
+            // them next to it. Self-detecting via the compiler's bin dir: a no-op for MSVC-ABI
+            // toolchains (none of those DLLs live beside cl/clang there) and for libraries.
+            if (emit.IsExe)
+                foreach (var dll in CppRuntimeDeployment.LocateRuntimeDlls(emit.Toolchain?.ResolveCompilerDirectory()))
+                    DeployDll(result, emit.OutputDir, dll);
+
             return result;
+        }
+
+        // Copy one DLL next to the built exe. A locked DLL (a previous game run still
+        // open) must never discard a successful build result — warn and continue,
+        // mirroring the CLI's existing deploy precedent.
+        private static void DeployDll(CppProjectBuildResult result, string outputDir, string dll)
+        {
+            try
+            {
+                var dest = Path.Combine(outputDir, Path.GetFileName(dll));
+                File.Copy(dll, dest, overwrite: true);
+                result.Messages.Add($"Deployed {Path.GetFileName(dll)}");
+            }
+            catch (Exception ex)
+            {
+                result.Messages.Add($"warning: could not deploy {Path.GetFileName(dll)}: {ex.Message}");
+            }
         }
 
         /// <summary>

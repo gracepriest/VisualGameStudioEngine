@@ -192,6 +192,48 @@ namespace BasicLang.Compiler.ProjectSystem
         public string DriverName => _vcvarsPath != null ? "cl" : _executable;
 
         /// <summary>
+        /// Directory holding the compiler executable — where a MinGW toolchain co-locates its
+        /// runtime DLLs (libstdc++-6.dll, libgcc_s_seh-1.dll, libwinpthread-1.dll), so a build
+        /// can copy them next to the produced exe. Returns the executable's own directory when
+        /// the toolchain was configured by explicit path (the off-PATH winlibs override — the
+        /// case that actually needs the deploy); resolves a bare PATH name via <c>where</c>;
+        /// null for MSVC (its runtime is the system UCRT/vcruntime, never deployed) or when a
+        /// bare name cannot be resolved.
+        /// </summary>
+        public string ResolveCompilerDirectory()
+        {
+            if (_vcvarsPath != null) return null;               // MSVC — system runtime, nothing to deploy
+            if (Path.IsPathRooted(_executable))
+                return Path.GetDirectoryName(_executable);
+            return ResolveOnPath(_executable);                  // bare name -> `where`
+        }
+
+        /// <summary>Directory of the first PATH match of <paramref name="exe"/> (via <c>where</c>); null if unresolved.</summary>
+        private static string ResolveOnPath(string exe)
+        {
+            try
+            {
+                using var p = Process.Start(new ProcessStartInfo("where", exe)
+                {
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                });
+                var output = p.StandardOutput.ReadToEnd();
+                p.StandardError.ReadToEnd();
+                p.WaitForExit(10000);
+                if (p.ExitCode != 0) return null;
+                var first = output.Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.Length > 0);
+                return string.IsNullOrEmpty(first) ? null : Path.GetDirectoryName(first);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
         /// Ordered compile-flag tokens for one invocation. This is the single
         /// source of truth for flag spelling: <see cref="BuildCompileCommandArguments"/>
         /// (compile_commands.json argv) and <see cref="Compile"/> (real shell
