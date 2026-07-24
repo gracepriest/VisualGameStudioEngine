@@ -35,3 +35,14 @@ public class ProjectReference
     public string? Version { get; set; }
     public bool IsProjectReference { get; set; }
 }
+
+/// <summary>
+/// A NuGet package dependency (&lt;PackageReference Include="Name" Version="..." /&gt;). Modeled on
+/// <see cref="BasicLangProject"/> so IDE saves round-trip it instead of silently dropping it;
+/// the compiler-side build restores packages from these entries.
+/// </summary>
+public class PackageReference
+{
+    public string Name { get; set; } = "";
+    public string Version { get; set; } = "*";
+}

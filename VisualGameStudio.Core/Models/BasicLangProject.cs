@@ -19,6 +19,7 @@ public class BasicLangProject
 
     public List<ProjectItem> Items { get; set; } = new();
     public List<ProjectReference> References { get; set; } = new();
+    public List<PackageReference> PackageReferences { get; set; } = new();
     public Dictionary<string, BuildConfiguration> Configurations { get; set; } = new();
 
     public BuildConfiguration GetConfiguration(string name)

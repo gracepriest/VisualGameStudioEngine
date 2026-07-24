@@ -193,6 +193,25 @@ public class ProjectSerializer
                     });
                 }
             }
+
+            // NuGet package references. Parsed (and re-emitted on save) so an IDE save never
+            // silently deletes them — the compiler-side build restores packages from these.
+            // Version may be an attribute or a child <Version> element, matching the
+            // compiler-side ProjectFile; absent version defaults to "*".
+            foreach (var packageReference in itemGroup.Elements("PackageReference"))
+            {
+                var include = packageReference.Attribute("Include")?.Value;
+                if (!string.IsNullOrEmpty(include))
+                {
+                    var version = packageReference.Attribute("Version")?.Value
+                        ?? packageReference.Element("Version")?.Value;
+                    project.PackageReferences.Add(new PackageReference
+                    {
+                        Name = include,
+                        Version = string.IsNullOrEmpty(version) ? "*" : version
+                    });
+                }
+            }
         }
 
         // Ensure default configurations exist
@@ -316,6 +335,18 @@ public class ProjectSerializer
             root.Add(new XElement("ItemGroup",
                 projectReferences.Select(r => new XElement("ProjectReference",
                     new XAttribute("Include", r.Path ?? r.Name)
+                ))
+            ));
+        }
+
+        // Add PackageReferences (Include + Version attribute), so an IDE save preserves the
+        // NuGet packages the compiler-side build restores instead of dropping them.
+        if (project.PackageReferences.Any())
+        {
+            root.Add(new XElement("ItemGroup",
+                project.PackageReferences.Select(p => new XElement("PackageReference",
+                    new XAttribute("Include", p.Name),
+                    new XAttribute("Version", p.Version)
                 ))
             ));
         }
