@@ -129,6 +129,16 @@ Public Module Utiliy
         Public glyphs As IntPtr    ' GlyphInfo* (opaque to VB)
     End Structure
 
+    ' raylib GlyphInfo — returned by value from Framework_GetGlyphInfo (raylib text Batch 2)
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure GlyphInfo
+        Public value As Integer       ' Unicode codepoint
+        Public offsetX As Integer
+        Public offsetY As Integer
+        Public advanceX As Integer
+        Public image As Image
+    End Structure
+
     Public Enum TextureFilter
         Point = 0
         Bilinear = 1
