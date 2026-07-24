@@ -10752,6 +10752,116 @@ Public Module FrameworkWrapper
     End Sub
 #End Region
 
+    ' SHAPES (raylib 5.5 passthrough — Batch 1)
+#Region "Raylib Shapes (Batch 1)"
+    ' --- Group A: simple draws ---
+    ''' <summary>Draws a pixel at a Vector2 position</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawPixelV(position As Vector2, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a line using Vector2 start/end points</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawLineV(startPos As Vector2, endPos As Vector2, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a line with thickness</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawLineEx(startPos As Vector2, endPos As Vector2, thick As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a line using cubic-bezier curves in-out</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawLineBezier(startPos As Vector2, endPos As Vector2, thick As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a gradient-filled circle</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawCircleGradient(centerX As Integer, centerY As Integer, radius As Single, innerR As Byte, innerG As Byte, innerB As Byte, innerA As Byte, outerR As Byte, outerG As Byte, outerB As Byte, outerA As Byte)
+    End Sub
+
+    ''' <summary>Draws a filled circle at a Vector2 center</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawCircleV(center As Vector2, radius As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a circle outline at a Vector2 center</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawCircleLinesV(center As Vector2, radius As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a filled rectangle using Vector2 position/size</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawRectangleV(position As Vector2, size As Vector2, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a filled rectangle from a Rectangle</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawRectangleRec(rec As Rectangle, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a rectangle with rotation about an origin</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawRectanglePro(rec As Rectangle, origin As Vector2, rotation As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a vertical-gradient rectangle</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawRectangleGradientV(posX As Integer, posY As Integer, width As Integer, height As Integer, topR As Byte, topG As Byte, topB As Byte, topA As Byte, botR As Byte, botG As Byte, botB As Byte, botA As Byte)
+    End Sub
+
+    ''' <summary>Draws a horizontal-gradient rectangle</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawRectangleGradientH(posX As Integer, posY As Integer, width As Integer, height As Integer, leftR As Byte, leftG As Byte, leftB As Byte, leftA As Byte, rightR As Byte, rightG As Byte, rightB As Byte, rightA As Byte)
+    End Sub
+
+    ''' <summary>Draws a rectangle with a per-corner gradient</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawRectangleGradientEx(rec As Rectangle, tlR As Byte, tlG As Byte, tlB As Byte, tlA As Byte, blR As Byte, blG As Byte, blB As Byte, blA As Byte, trR As Byte, trG As Byte, trB As Byte, trA As Byte, brR As Byte, brG As Byte, brB As Byte, brA As Byte)
+    End Sub
+
+    ''' <summary>Draws a rectangle outline with thickness</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawRectangleLinesEx(rec As Rectangle, lineThick As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a rounded-rectangle outline with thickness</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawRectangleRoundedLinesEx(rec As Rectangle, roundness As Single, segments As Integer, lineThick As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a regular-polygon outline with thickness</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawPolyLinesEx(center As Vector2, sides As Integer, radius As Single, rotation As Single, lineThick As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a linear spline segment (2 points)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawSplineSegmentLinear(p1 As Vector2, p2 As Vector2, thick As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a B-Spline segment (4 points)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawSplineSegmentBasis(p1 As Vector2, p2 As Vector2, p3 As Vector2, p4 As Vector2, thick As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a Catmull-Rom spline segment (4 points)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawSplineSegmentCatmullRom(p1 As Vector2, p2 As Vector2, p3 As Vector2, p4 As Vector2, thick As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a quadratic-bezier spline segment (2 points, 1 control)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawSplineSegmentBezierQuadratic(p1 As Vector2, c2 As Vector2, p3 As Vector2, thick As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a cubic-bezier spline segment (2 points, 2 controls)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawSplineSegmentBezierCubic(p1 As Vector2, c2 As Vector2, c3 As Vector2, p4 As Vector2, thick As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+#End Region
+
 #Region "Text Measurement"
     ''' <summary>Measures the width in pixels of text at the given font size</summary>
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>

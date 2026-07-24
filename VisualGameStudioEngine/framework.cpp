@@ -28115,6 +28115,94 @@ extern "C" {
     }
 
     // ========================================================================
+    // SHAPES (raylib 5.5 passthrough — Batch 1)
+    // ========================================================================
+    // --- Group A: simple draws ---
+    void Framework_DrawPixelV(Vector2 position, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawPixelV(position, Color{r, g, b, a});
+    }
+
+    void Framework_DrawLineV(Vector2 startPos, Vector2 endPos, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawLineV(startPos, endPos, Color{r, g, b, a});
+    }
+
+    void Framework_DrawLineEx(Vector2 startPos, Vector2 endPos, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawLineEx(startPos, endPos, thick, Color{r, g, b, a});
+    }
+
+    void Framework_DrawLineBezier(Vector2 startPos, Vector2 endPos, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawLineBezier(startPos, endPos, thick, Color{r, g, b, a});
+    }
+
+    void Framework_DrawCircleGradient(int centerX, int centerY, float radius, unsigned char innerR, unsigned char innerG, unsigned char innerB, unsigned char innerA, unsigned char outerR, unsigned char outerG, unsigned char outerB, unsigned char outerA) {
+        DrawCircleGradient(centerX, centerY, radius, Color{innerR, innerG, innerB, innerA}, Color{outerR, outerG, outerB, outerA});
+    }
+
+    void Framework_DrawCircleV(Vector2 center, float radius, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawCircleV(center, radius, Color{r, g, b, a});
+    }
+
+    void Framework_DrawCircleLinesV(Vector2 center, float radius, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawCircleLinesV(center, radius, Color{r, g, b, a});
+    }
+
+    void Framework_DrawRectangleV(Vector2 position, Vector2 size, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawRectangleV(position, size, Color{r, g, b, a});
+    }
+
+    void Framework_DrawRectangleRec(Rectangle rec, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawRectangleRec(rec, Color{r, g, b, a});
+    }
+
+    void Framework_DrawRectanglePro(Rectangle rec, Vector2 origin, float rotation, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawRectanglePro(rec, origin, rotation, Color{r, g, b, a});
+    }
+
+    void Framework_DrawRectangleGradientV(int posX, int posY, int width, int height, unsigned char topR, unsigned char topG, unsigned char topB, unsigned char topA, unsigned char botR, unsigned char botG, unsigned char botB, unsigned char botA) {
+        DrawRectangleGradientV(posX, posY, width, height, Color{topR, topG, topB, topA}, Color{botR, botG, botB, botA});
+    }
+
+    void Framework_DrawRectangleGradientH(int posX, int posY, int width, int height, unsigned char leftR, unsigned char leftG, unsigned char leftB, unsigned char leftA, unsigned char rightR, unsigned char rightG, unsigned char rightB, unsigned char rightA) {
+        DrawRectangleGradientH(posX, posY, width, height, Color{leftR, leftG, leftB, leftA}, Color{rightR, rightG, rightB, rightA});
+    }
+
+    void Framework_DrawRectangleGradientEx(Rectangle rec, unsigned char tlR, unsigned char tlG, unsigned char tlB, unsigned char tlA, unsigned char blR, unsigned char blG, unsigned char blB, unsigned char blA, unsigned char trR, unsigned char trG, unsigned char trB, unsigned char trA, unsigned char brR, unsigned char brG, unsigned char brB, unsigned char brA) {
+        DrawRectangleGradientEx(rec, Color{tlR, tlG, tlB, tlA}, Color{blR, blG, blB, blA}, Color{trR, trG, trB, trA}, Color{brR, brG, brB, brA});
+    }
+
+    void Framework_DrawRectangleLinesEx(Rectangle rec, float lineThick, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawRectangleLinesEx(rec, lineThick, Color{r, g, b, a});
+    }
+
+    void Framework_DrawRectangleRoundedLinesEx(Rectangle rec, float roundness, int segments, float lineThick, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawRectangleRoundedLinesEx(rec, roundness, segments, lineThick, Color{r, g, b, a});
+    }
+
+    void Framework_DrawPolyLinesEx(Vector2 center, int sides, float radius, float rotation, float lineThick, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawPolyLinesEx(center, sides, radius, rotation, lineThick, Color{r, g, b, a});
+    }
+
+    void Framework_DrawSplineSegmentLinear(Vector2 p1, Vector2 p2, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawSplineSegmentLinear(p1, p2, thick, Color{r, g, b, a});
+    }
+
+    void Framework_DrawSplineSegmentBasis(Vector2 p1, Vector2 p2, Vector2 p3, Vector2 p4, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawSplineSegmentBasis(p1, p2, p3, p4, thick, Color{r, g, b, a});
+    }
+
+    void Framework_DrawSplineSegmentCatmullRom(Vector2 p1, Vector2 p2, Vector2 p3, Vector2 p4, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawSplineSegmentCatmullRom(p1, p2, p3, p4, thick, Color{r, g, b, a});
+    }
+
+    void Framework_DrawSplineSegmentBezierQuadratic(Vector2 p1, Vector2 c2, Vector2 p3, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawSplineSegmentBezierQuadratic(p1, c2, p3, thick, Color{r, g, b, a});
+    }
+
+    void Framework_DrawSplineSegmentBezierCubic(Vector2 p1, Vector2 c2, Vector2 c3, Vector2 p4, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawSplineSegmentBezierCubic(p1, c2, c3, p4, thick, Color{r, g, b, a});
+    }
+
+    // ========================================================================
     // TEXT MEASUREMENT
     // ========================================================================
 

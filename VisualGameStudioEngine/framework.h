@@ -4265,6 +4265,31 @@ extern "C" {
     __declspec(dllexport) void  Framework_DrawCircleSectorLines(float cx, float cy, float radius, float startAngle, float endAngle, int segments, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
 
     // ========================================================================
+    // SHAPES (raylib 5.5 passthrough — Batch 1)
+    // ========================================================================
+    // --- Group A: simple draws ---
+    __declspec(dllexport) void  Framework_DrawPixelV(Vector2 position, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawLineV(Vector2 startPos, Vector2 endPos, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawLineEx(Vector2 startPos, Vector2 endPos, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawLineBezier(Vector2 startPos, Vector2 endPos, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawCircleGradient(int centerX, int centerY, float radius, unsigned char innerR, unsigned char innerG, unsigned char innerB, unsigned char innerA, unsigned char outerR, unsigned char outerG, unsigned char outerB, unsigned char outerA);
+    __declspec(dllexport) void  Framework_DrawCircleV(Vector2 center, float radius, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawCircleLinesV(Vector2 center, float radius, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawRectangleV(Vector2 position, Vector2 size, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawRectangleRec(Rectangle rec, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawRectanglePro(Rectangle rec, Vector2 origin, float rotation, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawRectangleGradientV(int posX, int posY, int width, int height, unsigned char topR, unsigned char topG, unsigned char topB, unsigned char topA, unsigned char botR, unsigned char botG, unsigned char botB, unsigned char botA);
+    __declspec(dllexport) void  Framework_DrawRectangleGradientH(int posX, int posY, int width, int height, unsigned char leftR, unsigned char leftG, unsigned char leftB, unsigned char leftA, unsigned char rightR, unsigned char rightG, unsigned char rightB, unsigned char rightA);
+    __declspec(dllexport) void  Framework_DrawRectangleGradientEx(Rectangle rec, unsigned char tlR, unsigned char tlG, unsigned char tlB, unsigned char tlA, unsigned char blR, unsigned char blG, unsigned char blB, unsigned char blA, unsigned char trR, unsigned char trG, unsigned char trB, unsigned char trA, unsigned char brR, unsigned char brG, unsigned char brB, unsigned char brA);
+    __declspec(dllexport) void  Framework_DrawRectangleLinesEx(Rectangle rec, float lineThick, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawRectangleRoundedLinesEx(Rectangle rec, float roundness, int segments, float lineThick, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawPolyLinesEx(Vector2 center, int sides, float radius, float rotation, float lineThick, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawSplineSegmentLinear(Vector2 p1, Vector2 p2, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawSplineSegmentBasis(Vector2 p1, Vector2 p2, Vector2 p3, Vector2 p4, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawSplineSegmentCatmullRom(Vector2 p1, Vector2 p2, Vector2 p3, Vector2 p4, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawSplineSegmentBezierQuadratic(Vector2 p1, Vector2 c2, Vector2 p3, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawSplineSegmentBezierCubic(Vector2 p1, Vector2 c2, Vector2 c3, Vector2 p4, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    // ========================================================================
     // TEXT MEASUREMENT
     // ========================================================================
     __declspec(dllexport) int   Framework_MeasureText(const char* text, int fontSize);
