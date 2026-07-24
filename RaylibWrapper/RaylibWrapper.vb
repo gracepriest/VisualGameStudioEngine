@@ -11541,6 +11541,12 @@ Public Module FrameworkWrapper
         If ptr = IntPtr.Zero Then Return ""
         Return Marshal.PtrToStringAnsi(ptr)
     End Function
+
+    ' --- Faithful MeasureTextEx (Vector2 return; handle-based Framework_MeasureTextEx retained) ---
+    ''' <summary>Measures string size for a Font (faithful raylib MeasureTextEx)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_MeasureTextExV(font As Font, text As String, fontSize As Single, spacing As Single) As Vector2
+    End Function
 #End Region
 
 End Module

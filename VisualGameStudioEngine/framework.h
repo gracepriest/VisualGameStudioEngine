@@ -4343,6 +4343,8 @@ extern "C" {
     __declspec(dllexport) const char* Framework_TextToSnake(const char* text);
     __declspec(dllexport) const char* Framework_TextToCamel(const char* text);
     __declspec(dllexport) const char* Framework_CodepointToUTF8(int codepoint, int* utf8Size);
+    // --- Faithful MeasureTextEx (Vector2 return; handle-based Framework_MeasureTextEx retained) ---
+    __declspec(dllexport) Vector2 Framework_MeasureTextExV(Font font, const char* text, float fontSize, float spacing);
 
     // ========================================================================
     // TEXT MEASUREMENT

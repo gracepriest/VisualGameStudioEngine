@@ -28390,6 +28390,11 @@ extern "C" {
         return CodepointToUTF8(codepoint, utf8Size);
     }
 
+    // --- Faithful MeasureTextEx (Vector2 return; handle-based Framework_MeasureTextEx retained) ---
+    Vector2 Framework_MeasureTextExV(Font font, const char* text, float fontSize, float spacing) {
+        return MeasureTextEx(font, text, fontSize, spacing);
+    }
+
     // ========================================================================
     // TEXT MEASUREMENT
     // ========================================================================
