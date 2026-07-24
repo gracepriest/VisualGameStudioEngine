@@ -11463,6 +11463,84 @@ Public Module FrameworkWrapper
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
     Public Function Framework_TextToFloat(text As String) As Single
     End Function
+
+    ' --- Group 1b: string returns (IntPtr + PtrToStringAnsi; NEVER LPStr String) ---
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_TextSubtext(text As String, position As Integer, length As Integer) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_TextToUpper(text As String) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_TextToLower(text As String) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_TextToPascal(text As String) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_TextToSnake(text As String) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_TextToCamel(text As String) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_CodepointToUTF8(codepoint As Integer, ByRef utf8Size As Integer) As IntPtr
+    End Function
+
+    ''' <summary>Gets a piece of a text string</summary>
+    Public Function TextSubtext(text As String, position As Integer, length As Integer) As String
+        Dim ptr = Framework_TextSubtext(text, position, length)
+        If ptr = IntPtr.Zero Then Return ""
+        Return Marshal.PtrToStringAnsi(ptr)
+    End Function
+
+    ''' <summary>Gets upper-case version of the provided string</summary>
+    Public Function TextToUpper(text As String) As String
+        Dim ptr = Framework_TextToUpper(text)
+        If ptr = IntPtr.Zero Then Return ""
+        Return Marshal.PtrToStringAnsi(ptr)
+    End Function
+
+    ''' <summary>Gets lower-case version of the provided string</summary>
+    Public Function TextToLower(text As String) As String
+        Dim ptr = Framework_TextToLower(text)
+        If ptr = IntPtr.Zero Then Return ""
+        Return Marshal.PtrToStringAnsi(ptr)
+    End Function
+
+    ''' <summary>Gets Pascal-case notation version of the provided string</summary>
+    Public Function TextToPascal(text As String) As String
+        Dim ptr = Framework_TextToPascal(text)
+        If ptr = IntPtr.Zero Then Return ""
+        Return Marshal.PtrToStringAnsi(ptr)
+    End Function
+
+    ''' <summary>Gets Snake-case notation version of the provided string</summary>
+    Public Function TextToSnake(text As String) As String
+        Dim ptr = Framework_TextToSnake(text)
+        If ptr = IntPtr.Zero Then Return ""
+        Return Marshal.PtrToStringAnsi(ptr)
+    End Function
+
+    ''' <summary>Gets Camel-case notation version of the provided string</summary>
+    Public Function TextToCamel(text As String) As String
+        Dim ptr = Framework_TextToCamel(text)
+        If ptr = IntPtr.Zero Then Return ""
+        Return Marshal.PtrToStringAnsi(ptr)
+    End Function
+
+    ''' <summary>Encodes one codepoint into a UTF-8 byte array (array length returned via utf8Size)</summary>
+    Public Function CodepointToUTF8(codepoint As Integer, ByRef utf8Size As Integer) As String
+        Dim ptr = Framework_CodepointToUTF8(codepoint, utf8Size)
+        If ptr = IntPtr.Zero Then Return ""
+        Return Marshal.PtrToStringAnsi(ptr)
+    End Function
 #End Region
 
 End Module

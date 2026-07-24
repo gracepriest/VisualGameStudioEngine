@@ -4335,6 +4335,14 @@ extern "C" {
     __declspec(dllexport) int  Framework_TextFindIndex(const char* text, const char* find);
     __declspec(dllexport) int  Framework_TextToInteger(const char* text);
     __declspec(dllexport) float Framework_TextToFloat(const char* text);
+    // --- Group 1b: string returns (raylib static buffer; caller copies before next call) ---
+    __declspec(dllexport) const char* Framework_TextSubtext(const char* text, int position, int length);
+    __declspec(dllexport) const char* Framework_TextToUpper(const char* text);
+    __declspec(dllexport) const char* Framework_TextToLower(const char* text);
+    __declspec(dllexport) const char* Framework_TextToPascal(const char* text);
+    __declspec(dllexport) const char* Framework_TextToSnake(const char* text);
+    __declspec(dllexport) const char* Framework_TextToCamel(const char* text);
+    __declspec(dllexport) const char* Framework_CodepointToUTF8(int codepoint, int* utf8Size);
 
     // ========================================================================
     // TEXT MEASUREMENT

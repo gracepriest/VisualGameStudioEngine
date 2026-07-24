@@ -28361,6 +28361,35 @@ extern "C" {
         return TextToFloat(text);
     }
 
+    // --- Group 1b: string returns (raylib static buffer; caller copies before next call) ---
+    const char* Framework_TextSubtext(const char* text, int position, int length) {
+        return TextSubtext(text, position, length);
+    }
+
+    const char* Framework_TextToUpper(const char* text) {
+        return TextToUpper(text);
+    }
+
+    const char* Framework_TextToLower(const char* text) {
+        return TextToLower(text);
+    }
+
+    const char* Framework_TextToPascal(const char* text) {
+        return TextToPascal(text);
+    }
+
+    const char* Framework_TextToSnake(const char* text) {
+        return TextToSnake(text);
+    }
+
+    const char* Framework_TextToCamel(const char* text) {
+        return TextToCamel(text);
+    }
+
+    const char* Framework_CodepointToUTF8(int codepoint, int* utf8Size) {
+        return CodepointToUTF8(codepoint, utf8Size);
+    }
+
     // ========================================================================
     // TEXT MEASUREMENT
     // ========================================================================
