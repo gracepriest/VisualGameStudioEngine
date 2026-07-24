@@ -7,44 +7,48 @@ Visual Game Studio is a modern game development environment designed to make cre
 ## Components
 
 ### Game Engine (C++ DLL)
-- **Framework v1.0**: Direct Raylib wrapper for immediate-mode 2D game development (~2,300+ exported functions)
+- **Framework v1.0**: Direct Raylib wrapper for immediate-mode 2D game development (2,400+ exported functions)
 - **Engine v0.5**: Unity-like runtime with ECS, scene management, prefabs, and serialization
 - **2D Features**: Bezier curves & splines, gradient drawing, parallax scrolling, trail renderer, tilemap collisions, nine-slice sprites, sprite animation player
 - **Input**: Keyboard, mouse, gamepad/controller, multi-touch & gestures
 - **Utilities**: Random number generator (MT19937), color HSV/lerp, text measurement, screenshot/recording, window management
 
 ### BasicLang Compiler
-A custom programming language compiler with:
-- Full lexer and parser for a VB-like syntax
-- Semantic analysis with type checking and forward references
-- **Pattern matching** with When guards, Or patterns, Nothing patterns, range/comparison patterns
-- LINQ support for queries
-- Async/Await support
-- Class, interface, and module support with inheritance
-- Template/generic support
-- Inline code blocks (C#, C++, LLVM, MSIL)
-- Preprocessor directives (`#IfDef`, `#IfNDef`, `#Else`, `#EndIf`)
-- **4 backend targets**: C#, LLVM, MSIL, C++
-- Bitwise operators (`And`, `Or`, `Xor`, `Shl`, `Shr`) and compound assignments (`+=`, `-=`, `*=`, `/=`, `&=`, etc.)
-- Constructor validation, base class support, .NET interop
-- Number literal prefixes: Hex (`&H`), Octal (`&O`), Binary (`&B`), Char (`"A"c`)
-- Line continuation with underscore (`_`)
-- Protected/Protected Friend access modifiers
-- `Rem` keyword comments
-- Number parsing overflow protection (TryParse + InvariantCulture)
-- 8 additional type mappings across all 4 backends (Byte, Short, SByte, UByte, UShort, UInteger, ULong, Decimal)
-- Exception handling narrowed in IROptimizer
-- Async/Await warnings in non-C# backends via `#warning` directives
-- Modulo power-of-2 optimization (`x%N` to `x&(N-1)`)
-- Conditional namespace imports in C# backend
-- C++ ForEach body generation and indexer access fixes
-- Framework TODO replaced with `#error` for unknown functions
-- Multi-root workspace support in LSP
-- 43 error codes (BL1xxx-BL5xxx) with ErrorCodeMapper
-- **1,651 passing tests** (15 new compilation tests)
+A custom programming language compiler with a VB-like syntax.
+
+**Pipeline:** preprocess → lex → parse → semantic analysis → IR → optimize → backend.
+
+**Language features**
+- Classes, interfaces, and modules with inheritance
+- Generics / templates, compiled to real C++ templates on the native backend
+- **Pattern matching** — `When` guards, `Or` patterns, `Nothing` patterns, range, comparison, and type patterns
+- LINQ query expressions
+- Async/Await
+- Multi-file projects (`Import`/`Using`) and .NET interop
+- Conditional compilation (`#If`, `#IfDef`, `#IfNDef`, `#Else`, `#EndIf`)
+- Inline foreign code blocks, plus `#CppInclude` / `::` passthrough to native C++
+- Bitwise operators (`And`, `Or`, `Xor`, `Shl`, `Shr`) and compound assignment (`+=`, `-=`, `*=`, `/=`, `&=`, …)
+- Number literal prefixes — hex (`&H`), octal (`&O`), binary (`&B`), char (`"A"c`)
+- `Protected` / `Protected Friend` access, line continuation (`_`), `Rem` comments
+
+**Backend targets**
+| Target | Status | Notes |
+|---|---|---|
+| **C#** | Supported | Primary managed target; full .NET interop |
+| **C++** | Supported | Native executables via clang/gcc/MSVC, `-std=c++20`, links the engine DLL |
+| LLVM | Experimental | Present in-tree, not actively maintained |
+| MSIL | Experimental | Present in-tree, not actively maintained |
+
+> C# and C++ are the two maintained backends. LLVM and MSIL still build but are
+> unmaintained — please don't file issues against them.
+
+**Tooling** — the same binary also runs as a language server (`--lsp`) and a debug
+adapter (`--debug-adapter`). Diagnostics use structured error codes (BL1xxx–BL6xxx,
+with BL6xxx covering native C++ build and toolchain failures).
 
 ### Visual Game Studio IDE
-A full-featured Avalonia-based IDE (~93% VS Code feature parity) with:
+A full-featured, cross-platform Avalonia IDE offering a VS Code-class editing
+experience for BasicLang and C++:
 - **IntelliSense**: Code completion, parameter hints, quick info, signature help, inlay hints
 - **LSP Integration**: Language Server Protocol for 13+ features
 - **Syntax Highlighting**: Semantic token-based highlighting
@@ -69,20 +73,52 @@ A full-featured Avalonia-based IDE (~93% VS Code feature parity) with:
 - **Format Document**: With undo preservation
 - **Call/Type Hierarchy**: Navigate function call chains and type relationships
 - **Debugging**: Set Next Statement, restart debugging, exception breakpoint filters, inline debug values
+- **Session Persistence**: Per-project window layout, restored on reopen (View → Reset Layout)
+
+### C++ as a Peer Language
+
+C++ is a first-class language in the IDE, not just a compiler output format. You can
+open, edit, build, and debug `.cpp` / `.cc` / `.cxx` / `.h` / `.hpp` / `.hh` / `.hxx` /
+`.inl` files alongside BasicLang sources in the same project.
+
+- **clangd IntelliSense**: Completion, hover, diagnostics, and semantic highlighting for
+  C++ files, driven by a generated `compile_commands.json`. clangd is downloaded on
+  demand — no manual setup.
+- **Native debugging**: F5 debugging of native executables through `lldb-dap`, including
+  breakpoints set directly in `.bas` files (mapped via emitted `#line` directives).
+- **Mixed projects**: BasicLang and hand-written C++ in one project, sharing a build.
+- **Toolchain control**: Choose the C++ standard and toolchain (`llvm` / `gcc` / `msvc`)
+  per project. Settings → C++ lets you pin an explicit compiler and debugger path per
+  backend when your toolchain isn't on `PATH`; when set, the pinned path is
+  authoritative and a bad path fails the build loudly instead of silently falling back.
 
 ## Architecture
 
+**Editing & tooling** — the IDE speaks LSP and DAP to swappable servers, so BasicLang
+and C++ get equal treatment:
+
 ```
-VisualGameStudioEngine.dll (C++)    BasicLang.dll (C#)
-        |                                  |
-        v                                  v
-   Stable C ABI                     LSP Server
-        |                                  |
-        v                                  v
-  RaylibWrapper.vb (P/Invoke)     VisualGameStudio IDE
-        |                                  |
-        v                                  v
-   Your VB.NET Game              Code Editor Features
+              VisualGameStudio IDE (Avalonia shell)
+                             |
+       +---------------+-----+-----+----------------+
+       v               v           v                v
+ BasicLang.exe      clangd    BasicLang.exe      lldb-dap
+     --lsp         (C++ LSP)  --debug-adapter  (native debug)
+ (BasicLang LSP)              (managed debug)
+```
+
+**Build & runtime** — both backends converge on the same native engine:
+
+```
+BasicLang source (.bas / .cls / .mod)  +  hand-written C++
+        |
+        +-- C# backend  --> .NET assembly --> RaylibWrapper.vb (P/Invoke) --+
+        |                                                                  |
+        +-- C++ backend --> clang/gcc/msvc --> native .exe (links .lib) ---+
+                                                                           |
+                                                                           v
+                                                    VisualGameStudioEngine.dll
+                                                       (Raylib, stable C ABI)
 ```
 
 ### Visual Studio 2022 Extension
@@ -102,26 +138,29 @@ VisualGameStudioEngine.dll (C++)    BasicLang.dll (C#)
 
 ```
 VisualGameStudioEngine/
-├── BasicLang/                     # Compiler and LSP server (C#, ~45K lines)
-│   ├── Compiler/                  # Lexer, parser, semantic analysis
-│   └── LSP/                       # Language Server Protocol handlers
-├── VisualGameStudio.Core/         # Core models and services
-├── VisualGameStudio.Editor/       # Editor components (Avalonia)
-├── VisualGameStudio.ProjectSystem/ # Project and solution management
-├── VisualGameStudio.Shell/        # Main IDE application shell
-├── VisualGameStudio.Tests/        # Unit test suite (1,651 tests)
-├── VisualGameStudioEngine/        # C++ game engine DLL (Raylib-based)
-├── RaylibWrapper/                 # VB.NET P/Invoke bindings
-├── BasicLang.VisualStudio/        # VS 2022 VSIX extension (CPS + LSP)
-├── VS.BasicLang/                  # Legacy VS 2022 extension (MEF)
-├── vscode-basiclang/              # VS Code extension
-├── BasicLangAgent/                # AI agent for compiler
-├── IDEAgent/                      # AI agent for IDE
-├── EngineAgent/                   # AI agent for engine
-├── VSExtensionAgent/              # AI agent for VS extension
-├── SampleGames/                   # Sample games (Pong, SpaceShooter)
-├── TestVbDLL/                     # VB.NET engine test project
-└── docs/                          # Documentation
+├── BasicLang/                      # Compiler, LSP server, debug adapter (C#, ~83K lines)
+│   ├── Compiler/                   # Lexer, parser, semantic analysis
+│   ├── LSP/                        # Language Server Protocol handlers
+│   └── ProjectSystem/              # Project build, C++ toolchain, compile_commands
+├── VisualGameStudio.Core/          # Core models and service abstractions
+├── VisualGameStudio.Editor/        # Avalonia code editor (library, not the app)
+├── VisualGameStudio.ProjectSystem/ # Projects, build service, LSP client, debugging
+├── VisualGameStudio.Shell/         # Main IDE application shell — the run target
+├── VisualGameStudio.Tests/         # NUnit test suite
+├── VisualGameStudioEngine/         # C++ game engine DLL (Raylib-based)
+├── RaylibWrapper/                  # VB.NET P/Invoke bindings to the engine
+├── CPPengineTest/                  # Native C++ engine smoke test
+├── TestVbDLL/                      # VB.NET sample game exercising engine + wrapper
+├── BasicLang.VisualStudio/         # VS 2022 VSIX extension (CPS + LSP)
+├── vscode-basiclang/               # VS Code extension (not in the .sln)
+├── BasicLangAgent/                 # AI agent for compiler
+├── IDEAgent/                       # AI agent for IDE
+├── EngineAgent/                    # AI agent for engine
+├── VSExtensionAgent/               # AI agent for VS extension
+├── SampleGames/                    # Sample games (Pong, SpaceShooter)
+├── Samples/                        # Additional BasicLang samples
+├── IDE/                            # Prebuilt IDE + CLI binaries
+└── docs/                           # Documentation, specs, and design plans
 ```
 
 ## Quick Start
@@ -363,36 +402,39 @@ Real-time error checking with:
 
 ## Testing
 
-The project includes a comprehensive test suite with 1,651 unit tests covering:
+The project includes a comprehensive NUnit suite of 3,400+ tests covering:
 
 - **Core Models**: Project, solution, build configuration
 - **Editor Features**: Folding, bracket highlighting, completion, multi-cursor
 - **Services**: Bookmark, build, debug, language services
 - **LSP/IntelliSense**: Completion, document management, diagnostics, symbols
-- **Compiler**: Lexer, parser, token types
+- **Compiler**: Lexer, parser, semantic analysis, IR optimization, backends
+- **C++ Toolchain**: Native build, `compile_commands.json` emission, toolchain resolution
 
 ### Running Tests
 
 ```bash
-dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj
+dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release
 ```
 
-## Existing Documentation
+## Documentation
 
 The `docs/` folder contains detailed documentation:
 
 | File | Contents |
 |------|----------|
-| `docs/API_REFERENCE.md` | Full game engine API with code examples (35+ systems, ~548 functions) |
 | `docs/GETTING_STARTED.md` | Quick-start guide with step-by-step examples |
+| `docs/API_REFERENCE.md` | Full game engine API with code examples (35+ systems) |
+| `docs/BasicLang-Reference.md` | Full language syntax reference |
+| `docs/UserGuide.md` | End-user guide |
 | `docs/articles/engine-guide.md` | Engine architecture overview |
 | `docs/articles/basiclang-guide.md` | BasicLang language reference |
 | `docs/articles/debugging-guide.md` | Debugging instructions |
 | `docs/articles/ide-guide.md` | IDE user guide |
-| `docs/BasicLang-Reference.md` | Full language syntax reference |
-| `docs/UserGuide.md` | End-user guide |
 | `docs/IDE-Extensions.md` | VS 2022 and VS Code extension documentation |
 | `docs/vs2022-language-support-research.md` | VS 2022 custom language support research |
+| `docs/superpowers/specs/` | Design specs and rationale for major features |
+| `docs/superpowers/plans/` | Implementation plans |
 
 ---
 
@@ -1143,48 +1185,63 @@ A ref-counted handle system for safe, disposable texture management.
 
 ## Samples
 
-### Sample A: Framework-Only
+### BasicLang Projects
 
-`TestVbDLL/SampleA_FrameworkOnly.vb` - A "Catch the Falling Blocks" game demonstrating:
+Buildable `.blproj` projects, each with its own README:
+
+| Sample | Location |
+|---|---|
+| Pong | `SampleGames/Pong/` |
+| Space Shooter | `SampleGames/SpaceShooter/` |
+
+Single-file BasicLang sources also live in `Samples/` (Pong, Space Shooter, Platformer).
+
+### VB.NET Framework Sample
+
+`TestVbDLL/SampleA_FrameworkOnly.vb` — a "Catch the Falling Blocks" game
+demonstrating the framework layer directly from VB.NET:
 - Window initialization and game loop
 - Input handling (keyboard)
 - Basic 2D rendering
 - Pause/Resume functionality
 
-### Sample B: Engine ECS
-
-`TestVbDLL/SampleB_EngineECS.vb` - A space shooter demonstrating:
-- Entity Component System
-- Entity hierarchy
-- Prefab save/load
-- Physics overlap queries
-- Debug overlay
-- Scene serialization
+`TestVbDLL/` also contains a larger VB.NET game exercising the engine and wrapper
+end to end, plus `FrameworkTests.vb` for smoke-testing exports.
 
 ## Building
 
 ### Prerequisites
 - .NET 8.0 SDK
-- Visual Studio 2022 or VS Code
-- C++ compiler (for engine DLL)
+- Visual Studio 2022 (required to build the native engine DLL via MSBuild)
+- A C++ toolchain for compiling BasicLang to native code — clang/LLVM, gcc, or MSVC.
+  If yours isn't on `PATH`, pin it in the IDE under Settings → C++.
 
 ### Build Steps
 
-1. Build `VisualGameStudioEngine` (C++ DLL)
-2. Build `BasicLang` (C# compiler/LSP)
-3. Build `VisualGameStudio.Core`, `VisualGameStudio.Editor`, `VisualGameStudio.ProjectSystem`
-4. Build `RaylibWrapper` (VB.NET class library)
-5. Build `TestVbDLL` (VB.NET executable)
+The native engine builds through VS 2022 MSBuild on `VisualGameStudioEngine.vcxproj`
+(x64/Release), auto-discovered via `vswhere`. Everything else is `dotnet build`.
 
 ```bash
-# Build all projects
-dotnet build VisualGameStudioEngine.sln
+# The IDE (this is the build/run target — .Editor is a library)
+dotnet build VisualGameStudio.Shell/VisualGameStudio.Shell.csproj -c Release
+
+# The compiler alone
+dotnet build BasicLang/BasicLang.csproj -c Release
 
 # Run tests
-dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj
+dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release
+```
 
-# Run IDE
-dotnet run --project VisualGameStudio.Editor/VisualGameStudio.Editor.csproj
+### Running
+
+Prebuilt binaries live in `IDE/`:
+
+```bash
+IDE/VisualGameStudio.exe                       # run the IDE
+IDE/BasicLang.exe MyFile.bas --target=csharp   # compile a single file
+IDE/BasicLang.exe build MyProject.blproj       # build a project
+IDE/BasicLang.exe --lsp                        # run as a language server
+IDE/BasicLang.exe --debug-adapter              # run as a debug adapter
 ```
 
 ## Key Constants
@@ -1224,15 +1281,16 @@ End Enum
 ## Highlights
 
 - **Raylib Powered**: Built on one of the most beginner-friendly and performance-focused game libraries available.
-- **2,300+ API Functions**: Comprehensive 2D game engine with ~548 framework functions, ECS, audio, camera, scenes, tilemaps, and more.
+- **2,400+ API Functions**: Comprehensive 2D game engine with ECS, audio, camera, scenes, tilemaps, and more.
 - **Multi-Language Support**: Call the same framework from Visual Basic, C++, or C#, giving you freedom of choice.
-- **Full IDE**: Complete Avalonia-based development environment with ~93% VS Code feature parity.
+- **Full IDE**: Complete cross-platform Avalonia development environment with a VS Code-class editing experience.
+- **C++ Is a Peer Language**: Edit, build, and debug C++ next to BasicLang, with clangd IntelliSense and `lldb-dap` native debugging.
 - **VS 2022 Extension**: CPS-based VSIX with LSP, templates, and full project system integration.
-- **4 Backend Targets**: Compile BasicLang to C#, LLVM, MSIL, or C++.
-- **Comprehensive Testing**: 1,651 unit tests (including 15 compilation tests) ensuring code quality and reliability.
+- **Managed and Native**: Compile BasicLang to C# or to native executables via C++.
+- **Comprehensive Testing**: 3,400+ tests ensuring code quality and reliability.
 - **LSP Integration**: Modern editor features through Language Server Protocol.
 - **AI Agent Maintenance**: 4 Claude Agent SDK applications for automated compiler, IDE, engine, and extension maintenance.
 
 ## License
 
-See LICENSE file for details.
+MIT — see [LICENSE.txt](LICENSE.txt).
