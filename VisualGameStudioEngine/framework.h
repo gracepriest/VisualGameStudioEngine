@@ -4289,6 +4289,15 @@ extern "C" {
     __declspec(dllexport) void  Framework_DrawSplineSegmentCatmullRom(Vector2 p1, Vector2 p2, Vector2 p3, Vector2 p4, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
     __declspec(dllexport) void  Framework_DrawSplineSegmentBezierQuadratic(Vector2 p1, Vector2 c2, Vector2 p3, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
     __declspec(dllexport) void  Framework_DrawSplineSegmentBezierCubic(Vector2 p1, Vector2 c2, Vector2 c3, Vector2 p4, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    // --- Group B: Vector2[] draws ---
+    __declspec(dllexport) void  Framework_DrawLineStrip(const Vector2 *points, int pointCount, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawTriangleFan(const Vector2 *points, int pointCount, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawTriangleStrip(const Vector2 *points, int pointCount, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawSplineLinear(const Vector2 *points, int pointCount, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawSplineBasis(const Vector2 *points, int pointCount, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawSplineCatmullRom(const Vector2 *points, int pointCount, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawSplineBezierQuadratic(const Vector2 *points, int pointCount, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void  Framework_DrawSplineBezierCubic(const Vector2 *points, int pointCount, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
     // ========================================================================
     // TEXT MEASUREMENT
     // ========================================================================

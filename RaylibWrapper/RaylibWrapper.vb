@@ -10860,6 +10860,47 @@ Public Module FrameworkWrapper
     Public Sub Framework_DrawSplineSegmentBezierCubic(p1 As Vector2, c2 As Vector2, c3 As Vector2, p4 As Vector2, thick As Single, r As Byte, g As Byte, b As Byte, a As Byte)
     End Sub
 
+    ' --- Group B: Vector2() array draws ---
+    ''' <summary>Draws lines connecting a sequence of points</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawLineStrip(points As Vector2(), pointCount As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a triangle fan from a point array (first is center)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawTriangleFan(points As Vector2(), pointCount As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a triangle strip from a point array</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawTriangleStrip(points As Vector2(), pointCount As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a linear spline through a point array</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawSplineLinear(points As Vector2(), pointCount As Integer, thick As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a B-Spline through a point array</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawSplineBasis(points As Vector2(), pointCount As Integer, thick As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a Catmull-Rom spline through a point array</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawSplineCatmullRom(points As Vector2(), pointCount As Integer, thick As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a quadratic-bezier spline through a point array</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawSplineBezierQuadratic(points As Vector2(), pointCount As Integer, thick As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a cubic-bezier spline through a point array</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawSplineBezierCubic(points As Vector2(), pointCount As Integer, thick As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
 #End Region
 
 #Region "Text Measurement"

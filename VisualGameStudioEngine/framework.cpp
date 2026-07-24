@@ -28202,6 +28202,39 @@ extern "C" {
         DrawSplineSegmentBezierCubic(p1, c2, c3, p4, thick, Color{r, g, b, a});
     }
 
+    // --- Group B: Vector2[] draws ---
+    void Framework_DrawLineStrip(const Vector2 *points, int pointCount, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawLineStrip(points, pointCount, Color{r, g, b, a});
+    }
+
+    void Framework_DrawTriangleFan(const Vector2 *points, int pointCount, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawTriangleFan(points, pointCount, Color{r, g, b, a});
+    }
+
+    void Framework_DrawTriangleStrip(const Vector2 *points, int pointCount, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawTriangleStrip(points, pointCount, Color{r, g, b, a});
+    }
+
+    void Framework_DrawSplineLinear(const Vector2 *points, int pointCount, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawSplineLinear(points, pointCount, thick, Color{r, g, b, a});
+    }
+
+    void Framework_DrawSplineBasis(const Vector2 *points, int pointCount, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawSplineBasis(points, pointCount, thick, Color{r, g, b, a});
+    }
+
+    void Framework_DrawSplineCatmullRom(const Vector2 *points, int pointCount, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawSplineCatmullRom(points, pointCount, thick, Color{r, g, b, a});
+    }
+
+    void Framework_DrawSplineBezierQuadratic(const Vector2 *points, int pointCount, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawSplineBezierQuadratic(points, pointCount, thick, Color{r, g, b, a});
+    }
+
+    void Framework_DrawSplineBezierCubic(const Vector2 *points, int pointCount, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawSplineBezierCubic(points, pointCount, thick, Color{r, g, b, a});
+    }
+
     // ========================================================================
     // TEXT MEASUREMENT
     // ========================================================================
