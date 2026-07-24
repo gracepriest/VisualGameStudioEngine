@@ -10927,6 +10927,21 @@ Public Module FrameworkWrapper
     Public Function Framework_GetSplinePointBezierCubic(p1 As Vector2, c2 As Vector2, c3 As Vector2, p4 As Vector2, t As Single) As Vector2
     End Function
 
+    ' --- Group D: shapes-texture state ---
+    ''' <summary>Sets the texture and source rectangle used for shape drawing</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetShapesTexture(texture As Texture2D, source As Rectangle)
+    End Sub
+
+    ''' <summary>Gets the texture currently used for shape drawing</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetShapesTexture() As Texture2D
+    End Function
+
+    ''' <summary>Gets the source rectangle currently used for shape drawing</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetShapesTextureRectangle() As Rectangle
+    End Function
 #End Region
 
 #Region "Text Measurement"

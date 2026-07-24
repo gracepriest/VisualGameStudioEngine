@@ -4304,6 +4304,11 @@ extern "C" {
     __declspec(dllexport) Vector2 Framework_GetSplinePointCatmullRom(Vector2 p1, Vector2 p2, Vector2 p3, Vector2 p4, float t);
     __declspec(dllexport) Vector2 Framework_GetSplinePointBezierQuad(Vector2 p1, Vector2 c2, Vector2 p3, float t);
     __declspec(dllexport) Vector2 Framework_GetSplinePointBezierCubic(Vector2 p1, Vector2 c2, Vector2 c3, Vector2 p4, float t);
+    // --- Group D: shapes-texture state ---
+    __declspec(dllexport) void      Framework_SetShapesTexture(Texture2D texture, Rectangle source);
+    __declspec(dllexport) Texture2D Framework_GetShapesTexture();
+    __declspec(dllexport) Rectangle Framework_GetShapesTextureRectangle();
+
     // ========================================================================
     // TEXT MEASUREMENT
     // ========================================================================

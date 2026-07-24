@@ -28256,6 +28256,19 @@ extern "C" {
         return GetSplinePointBezierCubic(p1, c2, c3, p4, t);
     }
 
+    // --- Group D: shapes-texture state ---
+    void Framework_SetShapesTexture(Texture2D texture, Rectangle source) {
+        SetShapesTexture(texture, source);
+    }
+
+    Texture2D Framework_GetShapesTexture() {
+        return GetShapesTexture();
+    }
+
+    Rectangle Framework_GetShapesTextureRectangle() {
+        return GetShapesTextureRectangle();
+    }
+
     // ========================================================================
     // TEXT MEASUREMENT
     // ========================================================================
