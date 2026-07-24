@@ -4349,6 +4349,12 @@ extern "C" {
     __declspec(dllexport) const char* Framework_TextReplace(const char* text, const char* replace, const char* by);
     __declspec(dllexport) const char* Framework_TextInsert(const char* text, const char* insert, int position);
     __declspec(dllexport) const char* Framework_LoadUTF8(const int* codepoints, int length);
+    // --- Array/buffer wrappers (caller buffers; raylib's internal allocations freed here) ---
+    __declspec(dllexport) int Framework_LoadCodepoints(const char* text, int* outCodepoints, int outCapacity);
+    __declspec(dllexport) const char* Framework_TextJoin(const char** textList, int count, const char* delimiter);
+    __declspec(dllexport) int Framework_TextCopy(char* dst, const char* src);
+    __declspec(dllexport) void Framework_TextAppend(char* text, const char* append, int* position);
+    __declspec(dllexport) int Framework_TextSplit(const char* text, char delimiter, char* outBuf, int outCapacity);
 
     // ========================================================================
     // TEXT MEASUREMENT

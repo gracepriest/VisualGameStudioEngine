@@ -28427,6 +28427,38 @@ extern "C" {
         return g_utf8Buf;
     }
 
+    // --- Array/buffer wrappers (caller buffers; raylib's internal allocations freed here) ---
+    int Framework_LoadCodepoints(const char* text, int* outCodepoints, int outCapacity) {
+        int count = 0; int* cps = LoadCodepoints(text, &count);
+        int n = count < outCapacity ? count : outCapacity;
+        for (int i = 0; i < n; ++i) outCodepoints[i] = cps[i];
+        UnloadCodepoints(cps);          // raylib's paired free
+        return count;                   // full count so caller can detect truncation
+    }
+
+    const char* Framework_TextJoin(const char** textList, int count, const char* delimiter) {
+        return TextJoin(textList, count, delimiter);
+    }
+
+    int Framework_TextCopy(char* dst, const char* src) {
+        return TextCopy(dst, src);
+    }
+
+    void Framework_TextAppend(char* text, const char* append, int* position) {
+        TextAppend(text, append, position);
+    }
+
+    int Framework_TextSplit(const char* text, char delimiter, char* outBuf, int outCapacity) {
+        int count = 0; const char** parts = TextSplit(text, delimiter, &count);
+        int w = 0;
+        for (int i = 0; i < count; ++i) {
+            if (i > 0 && w < outCapacity - 1) outBuf[w++] = '\n';
+            for (const char* p = parts[i]; *p && w < outCapacity - 1; ++p) outBuf[w++] = *p;
+        }
+        if (outCapacity > 0) outBuf[w < outCapacity ? w : outCapacity - 1] = '\0';
+        return count;
+    }
+
     // ========================================================================
     // TEXT MEASUREMENT
     // ========================================================================

@@ -11581,6 +11581,38 @@ Public Module FrameworkWrapper
         If ptr = IntPtr.Zero Then Return ""
         Return Marshal.PtrToStringAnsi(ptr)
     End Function
+
+    ' --- Array/buffer wrappers (caller buffers; engine frees raylib's internal allocations) ---
+    ''' <summary>Loads all codepoints from a UTF-8 string into a caller buffer; returns the full count (size via GetCodepointCount)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadCodepoints(text As String, outCodepoints As Integer(), outCapacity As Integer) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_TextJoin(<MarshalAs(UnmanagedType.LPArray, ArraySubType:=UnmanagedType.LPStr)> textList As String(), count As Integer, delimiter As String) As IntPtr
+    End Function
+
+    ''' <summary>Copies one string to another (dst must be pre-sized); returns bytes copied</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_TextCopy(dst As System.Text.StringBuilder, src As String) As Integer
+    End Function
+
+    ''' <summary>Appends text at position and advances the cursor (text must be pre-sized)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_TextAppend(text As System.Text.StringBuilder, append As String, ByRef position As Integer)
+    End Sub
+
+    ''' <summary>Splits text on delimiter into '\n'-packed pieces in outBuf; returns piece count (split outBuf on vbLf)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_TextSplit(text As String, delimiter As Byte, outBuf As System.Text.StringBuilder, outCapacity As Integer) As Integer
+    End Function
+
+    ''' <summary>Joins text strings with a delimiter</summary>
+    Public Function TextJoin(textList As String(), delimiter As String) As String
+        Dim ptr = Framework_TextJoin(textList, textList.Length, delimiter)
+        If ptr = IntPtr.Zero Then Return ""
+        Return Marshal.PtrToStringAnsi(ptr)
+    End Function
 #End Region
 
 End Module
