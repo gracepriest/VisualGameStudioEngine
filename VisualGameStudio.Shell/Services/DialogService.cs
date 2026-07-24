@@ -358,4 +358,17 @@ public class DialogService : IDialogService
         var result = await dialog.ShowDialog<int?>(window);
         return result ?? -1;
     }
+
+    public async Task<IReadOnlyList<string>?> ShowAddProjectReferenceDialogAsync(string fromProjectName, IEnumerable<string> candidateProjectNames)
+    {
+        var window = GetMainWindow();
+        if (window == null) return null;
+
+        var viewModel = new ViewModels.Dialogs.AddProjectReferenceViewModel { FromProjectName = fromProjectName };
+        viewModel.Initialize(candidateProjectNames);
+        var dialog = new Views.Dialogs.AddProjectReferenceDialog(viewModel);
+
+        var confirmed = await dialog.ShowDialog<bool>(window);
+        return confirmed && viewModel.SelectedNames.Count > 0 ? viewModel.SelectedNames : null;
+    }
 }

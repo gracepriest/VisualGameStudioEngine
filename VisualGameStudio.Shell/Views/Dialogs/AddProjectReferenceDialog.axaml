@@ -1,0 +1,64 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
+        mc:Ignorable="d" d:DesignWidth="420" d:DesignHeight="380"
+        x:Class="VisualGameStudio.Shell.Views.Dialogs.AddProjectReferenceDialog"
+        x:DataType="vm:AddProjectReferenceViewModel"
+        Title="Add Project Reference"
+        Width="420" Height="380"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        Background="{DynamicResource IdeBg}">
+
+  <DockPanel Margin="16">
+    <!-- Header -->
+    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
+      <TextBlock Text="Add Project Reference" FontSize="16" FontWeight="Bold" Foreground="{DynamicResource IdeFg}"/>
+      <TextBlock Foreground="{DynamicResource IdeFgMuted}" Margin="0,4,0,0">
+        <TextBlock.Text>
+          <MultiBinding StringFormat="Choose the projects that '{0}' should reference:">
+            <Binding Path="FromProjectName"/>
+          </MultiBinding>
+        </TextBlock.Text>
+      </TextBlock>
+    </StackPanel>
+
+    <!-- Candidate list -->
+    <Border DockPanel.Dock="Top"
+            Background="{DynamicResource IdePanelBg}"
+            BorderBrush="{DynamicResource IdeBorder}"
+            BorderThickness="1"
+            CornerRadius="4"
+            Margin="0,0,0,16">
+      <ScrollViewer>
+        <ItemsControl ItemsSource="{Binding Candidates}" Margin="8">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate DataType="vm:CheckableItem">
+              <CheckBox IsChecked="{Binding IsChecked}"
+                        Content="{Binding Name}"
+                        Foreground="{DynamicResource IdeFg}"
+                        Margin="0,4"/>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+    </Border>
+
+    <!-- Buttons -->
+    <StackPanel DockPanel.Dock="Bottom"
+                Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                Spacing="8">
+      <Button Content="Cancel"
+              Classes="secondary"
+              Command="{Binding CancelCommand}"
+              Width="80"/>
+      <Button Content="OK"
+              Command="{Binding OkCommand}"
+              Width="80"
+              Classes="accent"/>
+    </StackPanel>
+  </DockPanel>
+</Window>

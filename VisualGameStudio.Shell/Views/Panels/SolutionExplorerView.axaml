@@ -87,6 +87,19 @@
             <MenuItem Header="Open in Explorer" Command="{Binding #SolutionTreeView.DataContext.OpenInExplorerCommand}"/>
             <MenuItem Header="Open in Terminal" Command="{Binding #SolutionTreeView.DataContext.OpenInTerminalCommand}"/>
             <MenuItem Header="Copy Path" Command="{Binding #SolutionTreeView.DataContext.CopyPathCommand}"/>
+            <Separator IsVisible="{Binding #SolutionTreeView.DataContext.SelectedIsProject}"/>
+            <MenuItem Header="Add Project Reference..."
+                      Command="{Binding #SolutionTreeView.DataContext.AddProjectReferenceCommand}"
+                      IsVisible="{Binding #SolutionTreeView.DataContext.SelectedIsProject}"/>
+            <MenuItem Header="Set as Startup Project"
+                      Command="{Binding #SolutionTreeView.DataContext.SetAsStartupProjectCommand}"
+                      IsVisible="{Binding #SolutionTreeView.DataContext.SelectedIsProject}"/>
+            <MenuItem Header="Build Project"
+                      Command="{Binding #SolutionTreeView.DataContext.BuildProjectCommand}"
+                      IsVisible="{Binding #SolutionTreeView.DataContext.SelectedIsProject}"/>
+            <MenuItem Header="Remove from Solution"
+                      Command="{Binding #SolutionTreeView.DataContext.RemoveFromSolutionCommand}"
+                      IsVisible="{Binding #SolutionTreeView.DataContext.SelectedIsProject}"/>
           </ContextMenu>
         </TreeView.ContextMenu>
 

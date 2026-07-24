@@ -24,6 +24,12 @@ public interface IDialogService
     Task<GoToLineColumnResult?> ShowGoToLineColumnDialogAsync(int currentLine, int totalLines);
     Task<GoToSymbolResult?> ShowGoToSymbolDialogAsync(string sourceCode, string? filePath = null);
     Task<int> ShowListSelectionAsync(string title, string prompt, IEnumerable<string> items);
+    /// <summary>
+    /// Shows the "Add Project Reference" picker: a checklist of candidate project names the
+    /// user may reference from <paramref name="fromProjectName"/>. Returns the checked names,
+    /// or null if the dialog was cancelled (or nothing was checked).
+    /// </summary>
+    Task<IReadOnlyList<string>?> ShowAddProjectReferenceDialogAsync(string fromProjectName, IEnumerable<string> candidateProjectNames);
 }
 
 public class GoToLineColumnResult

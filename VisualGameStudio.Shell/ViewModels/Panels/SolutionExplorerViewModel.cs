@@ -128,7 +128,15 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     partial void OnSelectedNodeChanged(TreeNode? value)
     {
         AddProjectReferenceCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(SelectedIsProject));
     }
+
+    /// <summary>
+    /// Whether the currently selected node is a project — gates the project-only section of
+    /// the Solution Explorer's context menu (Add Project Reference, Set as Startup Project,
+    /// Build Project, Remove from Solution).
+    /// </summary>
+    public bool SelectedIsProject => SelectedNode?.IsProject == true;
 
     private void OnProjectOpened(object? sender, ProjectEventArgs e)
     {
@@ -625,10 +633,10 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         && (_solutionService.CurrentSolution?.Projects.Count ?? 0) >= 2;
 
     /// <summary>
-    /// Adds a project reference from the selected project to every other project in the
-    /// solution. This is a thin placeholder until the reference-picker dialog lands (next task):
-    /// once that dialog exists, replace the "all other projects" target list below with the
-    /// user's picked selection and call <see cref="ApplyProjectReferencesAsync"/> the same way.
+    /// Adds a project reference from the selected project. Shows a picker dialog (via
+    /// <see cref="_dialogService"/>) listing every other project in the solution as a
+    /// candidate; the user checks the ones they want, and the checked set is applied through
+    /// <see cref="ApplyProjectReferencesAsync"/>.
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanAddProjectReference))]
     private async Task AddProjectReferenceAsync()
@@ -638,14 +646,17 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         if (sol == null) return;
 
         var fromName = SelectedNode.Name;
-        var targets = sol.Projects
+        var candidates = sol.Projects
             .Select(p => p.Name)
             .Where(name => !name.Equals(fromName, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        if (targets.Count == 0) return;
+        if (candidates.Count == 0) return;
 
-        await ApplyProjectReferencesAsync(fromName, targets);
+        var selected = await _dialogService.ShowAddProjectReferenceDialogAsync(fromName, candidates);
+        if (selected == null || selected.Count == 0) return;
+
+        await ApplyProjectReferencesAsync(fromName, selected);
     }
 
     /// <summary>
