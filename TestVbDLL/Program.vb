@@ -10,6 +10,12 @@ Module Program
             Return
         End If
 
+        ' raylib shapes Batch 1 smoke scene
+        If args.Length > 0 AndAlso args(0) = "--shapes" Then
+            Call New SampleShapesBatch1().Run()
+            Return
+        End If
+
         Dim game As New Game
         game.Run()
     End Sub
