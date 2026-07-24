@@ -28292,7 +28292,10 @@ extern "C" {
 // ANIMATION PLAYER STATE
 // ============================================================================
 namespace {
-    struct AnimClip {
+    // Renamed from AnimClip: collided (ODR) with the sprite-resource AnimClip at the top
+    // of this same translation unit (frames/loopMode/valid). Distinct type — the animation
+    // player's per-clip frame range. MSVC 14.44 rejects the duplicate; older toolsets did not.
+    struct PlayerAnimClip {
         std::string name;
         int startFrame;
         int endFrame;
@@ -28300,7 +28303,7 @@ namespace {
     };
 
     struct AnimationPlayer {
-        std::unordered_map<std::string, AnimClip> animations;
+        std::unordered_map<std::string, PlayerAnimClip> animations;
         std::string currentAnim;
         int currentFrame = 0;
         float timer = 0.0f;
@@ -28411,7 +28414,7 @@ extern "C" {
     void Framework_AnimPlayerAddAnimation(int handle, const char* name, int startFrame, int endFrame, float fps) {
         auto it = g_animPlayers.find(handle);
         if (it == g_animPlayers.end() || !name) return;
-        AnimClip clip;
+        PlayerAnimClip clip;
         clip.name = name;
         clip.startFrame = startFrame;
         clip.endFrame = endFrame;

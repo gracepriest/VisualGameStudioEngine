@@ -24,6 +24,7 @@
 
 // add headers that you want to pre-compile here
 #include "raylib.h"
+#include "rlgl.h"   // low-level GL (rlBegin/rlVertex2f/rlColor4ub/RL_TRIANGLES…); raylib.h no longer exposes it transitively in 5.5
 #include "platform.h"
 #include <sstream>  // For stringstream in asset pipeline
 
