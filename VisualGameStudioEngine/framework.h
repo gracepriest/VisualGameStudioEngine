@@ -4345,6 +4345,10 @@ extern "C" {
     __declspec(dllexport) const char* Framework_CodepointToUTF8(int codepoint, int* utf8Size);
     // --- Faithful MeasureTextEx (Vector2 return; handle-based Framework_MeasureTextEx retained) ---
     __declspec(dllexport) Vector2 Framework_MeasureTextExV(Font font, const char* text, float fontSize, float spacing);
+    // --- Malloc-return string wrappers (engine copies to a static buffer, then frees raylib's alloc) ---
+    __declspec(dllexport) const char* Framework_TextReplace(const char* text, const char* replace, const char* by);
+    __declspec(dllexport) const char* Framework_TextInsert(const char* text, const char* insert, int position);
+    __declspec(dllexport) const char* Framework_LoadUTF8(const int* codepoints, int length);
 
     // ========================================================================
     // TEXT MEASUREMENT

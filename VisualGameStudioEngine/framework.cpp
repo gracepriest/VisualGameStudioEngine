@@ -28395,6 +28395,38 @@ extern "C" {
         return MeasureTextEx(font, text, fontSize, spacing);
     }
 
+    // --- Malloc-return string wrappers (copy raylib's malloc'd result to an engine static
+    //     buffer, free raylib's alloc, return the static buffer; VB binds As IntPtr + PtrToStringAnsi) ---
+    static char g_textReplaceBuf[8192];
+    const char* Framework_TextReplace(const char* text, const char* replace, const char* by) {
+        char* r = TextReplace((char*)text, (char*)replace, (char*)by);   // raylib mallocs
+        if (!r) { g_textReplaceBuf[0] = '\0'; return g_textReplaceBuf; }
+        size_t n = 0; for (; r[n] && n < sizeof(g_textReplaceBuf) - 1; ++n) g_textReplaceBuf[n] = r[n];
+        g_textReplaceBuf[n] = '\0';
+        MemFree(r);
+        return g_textReplaceBuf;
+    }
+
+    static char g_textInsertBuf[8192];
+    const char* Framework_TextInsert(const char* text, const char* insert, int position) {
+        char* r = TextInsert((char*)text, (char*)insert, position);   // raylib mallocs
+        if (!r) { g_textInsertBuf[0] = '\0'; return g_textInsertBuf; }
+        size_t n = 0; for (; r[n] && n < sizeof(g_textInsertBuf) - 1; ++n) g_textInsertBuf[n] = r[n];
+        g_textInsertBuf[n] = '\0';
+        MemFree(r);
+        return g_textInsertBuf;
+    }
+
+    static char g_utf8Buf[8192];
+    const char* Framework_LoadUTF8(const int* codepoints, int length) {
+        char* r = LoadUTF8(codepoints, length);   // raylib mallocs
+        if (!r) { g_utf8Buf[0] = '\0'; return g_utf8Buf; }
+        size_t n = 0; for (; r[n] && n < sizeof(g_utf8Buf) - 1; ++n) g_utf8Buf[n] = r[n];
+        g_utf8Buf[n] = '\0';
+        UnloadUTF8(r);   // raylib's own paired free
+        return g_utf8Buf;
+    }
+
     // ========================================================================
     // TEXT MEASUREMENT
     // ========================================================================

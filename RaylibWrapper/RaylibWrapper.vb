@@ -11547,6 +11547,40 @@ Public Module FrameworkWrapper
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
     Public Function Framework_MeasureTextExV(font As Font, text As String, fontSize As Single, spacing As Single) As Vector2
     End Function
+
+    ' --- Malloc-return string wrappers (IntPtr + PtrToStringAnsi; engine already copied+freed) ---
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_TextReplace(text As String, replace As String, by As String) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_TextInsert(text As String, insert As String, position As Integer) As IntPtr
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_LoadUTF8(codepoints As Integer(), length As Integer) As IntPtr
+    End Function
+
+    ''' <summary>Replaces text string occurrences (memory managed by the engine)</summary>
+    Public Function TextReplace(text As String, replace As String, by As String) As String
+        Dim ptr = Framework_TextReplace(text, replace, by)
+        If ptr = IntPtr.Zero Then Return ""
+        Return Marshal.PtrToStringAnsi(ptr)
+    End Function
+
+    ''' <summary>Inserts text at a position (memory managed by the engine)</summary>
+    Public Function TextInsert(text As String, insert As String, position As Integer) As String
+        Dim ptr = Framework_TextInsert(text, insert, position)
+        If ptr = IntPtr.Zero Then Return ""
+        Return Marshal.PtrToStringAnsi(ptr)
+    End Function
+
+    ''' <summary>Loads UTF-8 text encoded from a codepoints array (memory managed by the engine)</summary>
+    Public Function LoadUTF8(codepoints As Integer(), length As Integer) As String
+        Dim ptr = Framework_LoadUTF8(codepoints, length)
+        If ptr = IntPtr.Zero Then Return ""
+        Return Marshal.PtrToStringAnsi(ptr)
+    End Function
 #End Region
 
 End Module
