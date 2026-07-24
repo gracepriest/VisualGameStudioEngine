@@ -4310,6 +4310,33 @@ extern "C" {
     __declspec(dllexport) Rectangle Framework_GetShapesTextureRectangle();
 
     // ========================================================================
+    // ==== TEXT (raylib 5.5 passthrough — Batch 2) ====
+    // ========================================================================
+    // --- Group 1a: font/draw/glyph/codepoint (non-string-return) ---
+    __declspec(dllexport) Font Framework_GetFontDefault();
+    __declspec(dllexport) Font Framework_LoadFont(const char* fileName);
+    __declspec(dllexport) Font Framework_LoadFontFromImage(Image image, unsigned char r, unsigned char g, unsigned char b, unsigned char a, int firstChar);
+    __declspec(dllexport) Font Framework_LoadFontFromMemory(const char* fileType, const unsigned char* fileData, int dataSize, int fontSize, int* codepoints, int codepointCount);
+    __declspec(dllexport) bool Framework_IsFontValid(Font font);
+    __declspec(dllexport) bool Framework_ExportFontAsCode(Font font, const char* fileName);
+    __declspec(dllexport) void Framework_DrawTextPro(Font font, const char* text, Vector2 position, Vector2 origin, float rotation, float fontSize, float spacing, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawTextCodepoint(Font font, int codepoint, Vector2 position, float fontSize, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawTextCodepoints(Font font, const int* codepoints, int count, Vector2 position, float fontSize, float spacing, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_SetTextLineSpacing(int spacing);
+    __declspec(dllexport) int  Framework_GetGlyphIndex(Font font, int codepoint);
+    __declspec(dllexport) GlyphInfo Framework_GetGlyphInfo(Font font, int codepoint);
+    __declspec(dllexport) Rectangle Framework_GetGlyphAtlasRec(Font font, int codepoint);
+    __declspec(dllexport) int  Framework_GetCodepointCount(const char* text);
+    __declspec(dllexport) int  Framework_GetCodepoint(const char* text, int* codepointSize);
+    __declspec(dllexport) int  Framework_GetCodepointNext(const char* text, int* codepointSize);
+    __declspec(dllexport) int  Framework_GetCodepointPrevious(const char* text, int* codepointSize);
+    __declspec(dllexport) bool Framework_TextIsEqual(const char* text1, const char* text2);
+    __declspec(dllexport) unsigned int Framework_TextLength(const char* text);
+    __declspec(dllexport) int  Framework_TextFindIndex(const char* text, const char* find);
+    __declspec(dllexport) int  Framework_TextToInteger(const char* text);
+    __declspec(dllexport) float Framework_TextToFloat(const char* text);
+
+    // ========================================================================
     // TEXT MEASUREMENT
     // ========================================================================
     __declspec(dllexport) int   Framework_MeasureText(const char* text, int fontSize);

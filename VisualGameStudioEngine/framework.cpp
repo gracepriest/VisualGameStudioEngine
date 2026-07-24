@@ -28270,6 +28270,98 @@ extern "C" {
     }
 
     // ========================================================================
+    // ==== TEXT (raylib 5.5 passthrough — Batch 2) ====
+    // ========================================================================
+    // --- Group 1a: font/draw/glyph/codepoint (non-string-return) ---
+    Font Framework_GetFontDefault() {
+        return GetFontDefault();
+    }
+
+    Font Framework_LoadFont(const char* fileName) {
+        return LoadFont(fileName);
+    }
+
+    Font Framework_LoadFontFromImage(Image image, unsigned char r, unsigned char g, unsigned char b, unsigned char a, int firstChar) {
+        return LoadFontFromImage(image, { r, g, b, a }, firstChar);
+    }
+
+    Font Framework_LoadFontFromMemory(const char* fileType, const unsigned char* fileData, int dataSize, int fontSize, int* codepoints, int codepointCount) {
+        return LoadFontFromMemory(fileType, fileData, dataSize, fontSize, codepoints, codepointCount);
+    }
+
+    bool Framework_IsFontValid(Font font) {
+        return IsFontValid(font);
+    }
+
+    bool Framework_ExportFontAsCode(Font font, const char* fileName) {
+        return ExportFontAsCode(font, fileName);
+    }
+
+    void Framework_DrawTextPro(Font font, const char* text, Vector2 position, Vector2 origin, float rotation, float fontSize, float spacing, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawTextPro(font, text, position, origin, rotation, fontSize, spacing, { r, g, b, a });
+    }
+
+    void Framework_DrawTextCodepoint(Font font, int codepoint, Vector2 position, float fontSize, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawTextCodepoint(font, codepoint, position, fontSize, { r, g, b, a });
+    }
+
+    void Framework_DrawTextCodepoints(Font font, const int* codepoints, int count, Vector2 position, float fontSize, float spacing, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        DrawTextCodepoints(font, codepoints, count, position, fontSize, spacing, { r, g, b, a });
+    }
+
+    void Framework_SetTextLineSpacing(int spacing) {
+        SetTextLineSpacing(spacing);
+    }
+
+    int Framework_GetGlyphIndex(Font font, int codepoint) {
+        return GetGlyphIndex(font, codepoint);
+    }
+
+    GlyphInfo Framework_GetGlyphInfo(Font font, int codepoint) {
+        return GetGlyphInfo(font, codepoint);
+    }
+
+    Rectangle Framework_GetGlyphAtlasRec(Font font, int codepoint) {
+        return GetGlyphAtlasRec(font, codepoint);
+    }
+
+    int Framework_GetCodepointCount(const char* text) {
+        return GetCodepointCount(text);
+    }
+
+    int Framework_GetCodepoint(const char* text, int* codepointSize) {
+        return GetCodepoint(text, codepointSize);
+    }
+
+    int Framework_GetCodepointNext(const char* text, int* codepointSize) {
+        return GetCodepointNext(text, codepointSize);
+    }
+
+    int Framework_GetCodepointPrevious(const char* text, int* codepointSize) {
+        return GetCodepointPrevious(text, codepointSize);
+    }
+
+    bool Framework_TextIsEqual(const char* text1, const char* text2) {
+        return TextIsEqual(text1, text2);
+    }
+
+    unsigned int Framework_TextLength(const char* text) {
+        return TextLength(text);
+    }
+
+    int Framework_TextFindIndex(const char* text, const char* find) {
+        return TextFindIndex(text, find);
+    }
+
+    int Framework_TextToInteger(const char* text) {
+        return TextToInteger(text);
+    }
+
+    float Framework_TextToFloat(const char* text) {
+        return TextToFloat(text);
+    }
+
+    // ========================================================================
     // TEXT MEASUREMENT
     // ========================================================================
 

@@ -11352,5 +11352,118 @@ Public Module FrameworkWrapper
     End Function
 #End Region
 
+#Region "Raylib Text (Batch 2)"
+    ' --- Group 1a: font/draw/glyph/codepoint (non-string-return) ---
+    ''' <summary>Gets the default Font</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetFontDefault() As Font
+    End Function
+
+    ''' <summary>Loads a font from file into GPU memory (VRAM)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadFont(fileName As String) As Font
+    End Function
+
+    ''' <summary>Loads a font from an Image (XNA style)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_LoadFontFromImage(image As Image, r As Byte, g As Byte, b As Byte, a As Byte, firstChar As Integer) As Font
+    End Function
+
+    ''' <summary>Loads a font from a memory buffer (fileType = extension, e.g. ".ttf")</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadFontFromMemory(fileType As String, fileData As Byte(), dataSize As Integer, fontSize As Integer, codepoints As Integer(), codepointCount As Integer) As Font
+    End Function
+
+    ''' <summary>Checks if a font is valid (font data loaded)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsFontValid(font As Font) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Exports a font as code file; returns true on success</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_ExportFontAsCode(font As Font, fileName As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Draws text using Font and pro parameters (rotation)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_DrawTextPro(font As Font, text As String, position As Vector2, origin As Vector2, rotation As Single, fontSize As Single, spacing As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws one character (codepoint)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawTextCodepoint(font As Font, codepoint As Integer, position As Vector2, fontSize As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws multiple characters (codepoints)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawTextCodepoints(font As Font, codepoints As Integer(), count As Integer, position As Vector2, fontSize As Single, spacing As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Sets vertical line spacing when drawing with line-breaks</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetTextLineSpacing(spacing As Integer)
+    End Sub
+
+    ''' <summary>Gets glyph index position in font for a codepoint</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetGlyphIndex(font As Font, codepoint As Integer) As Integer
+    End Function
+
+    ''' <summary>Gets glyph font info data for a codepoint</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetGlyphInfo(font As Font, codepoint As Integer) As GlyphInfo
+    End Function
+
+    ''' <summary>Gets glyph rectangle in font atlas for a codepoint</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetGlyphAtlasRec(font As Font, codepoint As Integer) As Rectangle
+    End Function
+
+    ''' <summary>Gets the total number of codepoints in a UTF-8 encoded string</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_GetCodepointCount(text As String) As Integer
+    End Function
+
+    ''' <summary>Gets the next codepoint in a UTF-8 encoded string (0x3f '?' on failure)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_GetCodepoint(text As String, ByRef codepointSize As Integer) As Integer
+    End Function
+
+    ''' <summary>Gets the next codepoint in a UTF-8 encoded string (0x3f '?' on failure)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_GetCodepointNext(text As String, ByRef codepointSize As Integer) As Integer
+    End Function
+
+    ''' <summary>Gets the previous codepoint in a UTF-8 encoded string (0x3f '?' on failure)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_GetCodepointPrevious(text As String, ByRef codepointSize As Integer) As Integer
+    End Function
+
+    ''' <summary>Checks if two text strings are equal</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_TextIsEqual(text1 As String, text2 As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Gets text length, checks for '\0' ending</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_TextLength(text As String) As UInteger
+    End Function
+
+    ''' <summary>Finds first text occurrence within a string</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_TextFindIndex(text As String, find As String) As Integer
+    End Function
+
+    ''' <summary>Gets integer value from text (negative values not supported)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_TextToInteger(text As String) As Integer
+    End Function
+
+    ''' <summary>Gets float value from text (negative values not supported)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_TextToFloat(text As String) As Single
+    End Function
+#End Region
+
 End Module
 
