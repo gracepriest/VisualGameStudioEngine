@@ -10901,6 +10901,32 @@ Public Module FrameworkWrapper
     Public Sub Framework_DrawSplineBezierCubic(points As Vector2(), pointCount As Integer, thick As Single, r As Byte, g As Byte, b As Byte, a As Byte)
     End Sub
 
+    ' --- Group C: spline-point evaluations (return Vector2) ---
+    ''' <summary>Evaluates a point on a linear spline segment</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetSplinePointLinear(startPos As Vector2, endPos As Vector2, t As Single) As Vector2
+    End Function
+
+    ''' <summary>Evaluates a point on a B-Spline segment</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetSplinePointBasis(p1 As Vector2, p2 As Vector2, p3 As Vector2, p4 As Vector2, t As Single) As Vector2
+    End Function
+
+    ''' <summary>Evaluates a point on a Catmull-Rom spline segment</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetSplinePointCatmullRom(p1 As Vector2, p2 As Vector2, p3 As Vector2, p4 As Vector2, t As Single) As Vector2
+    End Function
+
+    ''' <summary>Evaluates a point on a quadratic-bezier spline segment</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetSplinePointBezierQuad(p1 As Vector2, c2 As Vector2, p3 As Vector2, t As Single) As Vector2
+    End Function
+
+    ''' <summary>Evaluates a point on a cubic-bezier spline segment</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetSplinePointBezierCubic(p1 As Vector2, c2 As Vector2, c3 As Vector2, p4 As Vector2, t As Single) As Vector2
+    End Function
+
 #End Region
 
 #Region "Text Measurement"

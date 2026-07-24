@@ -28235,6 +28235,27 @@ extern "C" {
         DrawSplineBezierCubic(points, pointCount, thick, Color{r, g, b, a});
     }
 
+    // --- Group C: spline-point evaluations (return Vector2) ---
+    Vector2 Framework_GetSplinePointLinear(Vector2 startPos, Vector2 endPos, float t) {
+        return GetSplinePointLinear(startPos, endPos, t);
+    }
+
+    Vector2 Framework_GetSplinePointBasis(Vector2 p1, Vector2 p2, Vector2 p3, Vector2 p4, float t) {
+        return GetSplinePointBasis(p1, p2, p3, p4, t);
+    }
+
+    Vector2 Framework_GetSplinePointCatmullRom(Vector2 p1, Vector2 p2, Vector2 p3, Vector2 p4, float t) {
+        return GetSplinePointCatmullRom(p1, p2, p3, p4, t);
+    }
+
+    Vector2 Framework_GetSplinePointBezierQuad(Vector2 p1, Vector2 c2, Vector2 p3, float t) {
+        return GetSplinePointBezierQuad(p1, c2, p3, t);
+    }
+
+    Vector2 Framework_GetSplinePointBezierCubic(Vector2 p1, Vector2 c2, Vector2 c3, Vector2 p4, float t) {
+        return GetSplinePointBezierCubic(p1, c2, c3, p4, t);
+    }
+
     // ========================================================================
     // TEXT MEASUREMENT
     // ========================================================================

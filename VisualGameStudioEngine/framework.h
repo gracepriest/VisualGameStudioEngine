@@ -4298,6 +4298,12 @@ extern "C" {
     __declspec(dllexport) void  Framework_DrawSplineCatmullRom(const Vector2 *points, int pointCount, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
     __declspec(dllexport) void  Framework_DrawSplineBezierQuadratic(const Vector2 *points, int pointCount, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
     __declspec(dllexport) void  Framework_DrawSplineBezierCubic(const Vector2 *points, int pointCount, float thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    // --- Group C: spline-point evaluations (return Vector2) ---
+    __declspec(dllexport) Vector2 Framework_GetSplinePointLinear(Vector2 startPos, Vector2 endPos, float t);
+    __declspec(dllexport) Vector2 Framework_GetSplinePointBasis(Vector2 p1, Vector2 p2, Vector2 p3, Vector2 p4, float t);
+    __declspec(dllexport) Vector2 Framework_GetSplinePointCatmullRom(Vector2 p1, Vector2 p2, Vector2 p3, Vector2 p4, float t);
+    __declspec(dllexport) Vector2 Framework_GetSplinePointBezierQuad(Vector2 p1, Vector2 c2, Vector2 p3, float t);
+    __declspec(dllexport) Vector2 Framework_GetSplinePointBezierCubic(Vector2 p1, Vector2 c2, Vector2 c3, Vector2 p4, float t);
     // ========================================================================
     // TEXT MEASUREMENT
     // ========================================================================
