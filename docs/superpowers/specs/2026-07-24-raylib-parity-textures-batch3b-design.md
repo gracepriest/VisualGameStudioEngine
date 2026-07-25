@@ -46,8 +46,11 @@ back GPU memory and belong to **3d**.
    back is freed by the **existing** `Framework_UnloadImage(Image)` — no new Unload export is needed.
 2. **⛔ Caller-buffer for the two `Color*`-returning functions** (the key decision). Instead of
    returning raylib's heap pointer, the engine forwarder calls raylib, copies into a **caller-owned**
-   `Color[]`, frees raylib's buffer internally, and returns the count — the exact pattern shipped for
-   `Framework_LoadCodepoints` (`framework.cpp:28431`). This obviates `UnloadImageColors`/
+   `Color[]`, frees raylib's buffer internally, and returns the count — the same shape as the shipped
+   `Framework_LoadCodepoints` (`framework.cpp:28431`), with one deliberate difference: `LoadImageColors`
+   has **no capacity parameter** (the caller is contractually required to size `width*height`, which it
+   can always compute from the `Image`) so it copies unconditionally, whereas `LoadImagePalette` clamps
+   to `maxPaletteSize` exactly as `LoadCodepoints` clamps to `outCapacity`. This obviates `UnloadImageColors`/
    `UnloadImagePalette` and removes all leak risk:
    - `int Framework_LoadImageColors(Image image, Color* outColors)` — caller sizes `width*height`;
      returns `width*height` (0 if the image is invalid).
@@ -69,13 +72,19 @@ back GPU memory and belong to **3d**.
 6. **`bool` return → `As <MarshalAs(UnmanagedType.I1)> Boolean`** (C++ `bool` = 1 byte):
    `IsImageValid`, `ExportImage`, `ExportImageAsCode`.
 7. **Asset-path asymmetry.** File **readers** (`LoadImageRaw`, `LoadImageAnim`) resolve through the
-   engine's `ResolveAssetPath` (consistent with the existing `Framework_LoadImage`); absolute paths
-   pass through unchanged (`ResolveAssetPath` only prepends the asset root for relative paths). File
-   **writers** (`ExportImage`, `ExportImageAsCode`) pass the path through **as-is** — an export must
-   land exactly where the caller names it, never silently redirected into an asset root.
-8. **Naming:** faithful raylib names with the `Framework_` prefix; no `EntryPoint:=` remap. No name
-   collisions with existing exports (verified — the only image exports today are `Framework_LoadImage`,
-   `Framework_UnloadImage`, `Framework_ImageColorInvert/Resize/FlipVertical`).
+   engine's `ResolveAssetPath` (consistent with the existing `Framework_LoadImage`). Note
+   `ResolveAssetPath` does NOT prepend the asset root for absolute paths (its `p[0] != '\\' && p[1]
+   != ':'` guard skips `C:\…` and `/…`), but it still passes every path through `NormalizePath`,
+   which converts `\`→`/` **and lowercases** — so an absolute reader path is lowercased/slash-normalized,
+   not literally unchanged. Harmless on the Windows target (NTFS is case-insensitive and accepts `/`),
+   which keeps the §5.2 temp-file round-trips valid. File **writers** (`ExportImage`,
+   `ExportImageAsCode`) pass the path through **as-is** (no resolve, exact case) — an export must land
+   exactly where the caller names it, never silently redirected or case-folded.
+8. **Naming:** faithful raylib names with the `Framework_` prefix; no `EntryPoint:=` remap. **No name
+   collisions** — grep confirms none of the 22 new `Framework_<name>` symbols already exist in
+   `framework.h`/`framework.cpp` or `RaylibWrapper.vb`. (Other exports merely *contain* "Image" —
+   `Framework_LoadImage`, `Framework_LoadFontFromImage`, `Framework_UI_CreateImage`,
+   `Framework_Atlas_AddImage`, etc. — but none share a full name with the 22.)
 
 ---
 
@@ -148,9 +157,9 @@ writers use it as-is (`return ExportImage(image, fileName);`).
 
 **No new structs.** `Image` (:87), `Color` (:8), `Rectangle` (:54) are reused as-is. One cosmetic
 pickup flagged in 3a: add the explicit `<StructLayout(LayoutKind.Sequential)>` to the `Color` struct
-(:8) — every sibling has one and it is now load-bearing for by-value `Color` returns. Harmless today
-(a 4-byte all-`Byte` struct defaults to sequential) but made explicit while this batch touches
-`Utiliy.vb`.
+(:8) — every sibling struct has one and `Color` is the only one missing it. Purely for consistency:
+a 4-byte all-`Byte` struct already defaults to sequential and 3a proved by-value `Color` returns work
+without it, so this changes no behavior — it is done only while this batch already touches `Utiliy.vb`.
 
 ---
 
@@ -203,10 +212,12 @@ All 22 are CPU/RAM, so the automated suite is complete coverage (a window is nev
 
 ## 6. Risks
 
-- **`Image` by-value ABI (24 bytes, opaque ptr + 4 ints)** — the primary novelty. Low risk: `Font`
-  (identical shape class: opaque pointers + ints, larger) is already returned by value by
-  `Framework_LoadFontEx` and passed by value by `Framework_DrawTextEx`. The §5.2 first assertion
-  (`GenImageColor` dims correct after a by-value return) is the go/no-go.
+- **`Image` by-value ABI (24 bytes, opaque ptr + 4 ints)** — very low risk, and NOT novel: the
+  shipped `Framework_LoadImage` already **returns** `Image` by value (`framework.cpp:1238`, VB `… As
+  Image`) and `Framework_UnloadImage`/`Framework_LoadFontFromImage` already **pass** `Image` by value.
+  `Font` (same shape class, larger) is likewise returned/passed by value today. This batch just adds
+  more of an ABI the engine already exercises. The §5.2 first assertion (`GenImageColor` dims correct
+  after a by-value return) is a cheap smoke on it.
 - **Caller-buffer sizing contract** — `LoadImageColors` requires the caller to size `width*height`;
   under-sizing overflows. Mitigated by: the engine copies exactly `width*height` (the buffer the
   caller is contractually required to provide) and the NULL guard; the wrapper's XML doc states the
