@@ -1337,6 +1337,28 @@ extern "C" {
     void Framework_ImageColorBrightness(Image* img, int brightness) { ImageColorBrightness(img, brightness); }
     void Framework_ImageColorReplace(Image* img, unsigned char colorR, unsigned char colorG, unsigned char colorB, unsigned char colorA, unsigned char replaceR, unsigned char replaceG, unsigned char replaceB, unsigned char replaceA) { Color c = { colorR, colorG, colorB, colorA }; Color rep = { replaceR, replaceG, replaceB, replaceA }; ImageColorReplace(img, c, rep); }
 
+    // ==== IMAGE SOFTWARE DRAWING (raylib 5.5 passthrough — Batch 3c-ii) ====
+    void Framework_ImageClearBackground(Image* dst, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { Color c = { r, g, b, a }; ImageClearBackground(dst, c); }
+    void Framework_ImageDrawPixel(Image* dst, int posX, int posY, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { Color c = { r, g, b, a }; ImageDrawPixel(dst, posX, posY, c); }
+    void Framework_ImageDrawPixelV(Image* dst, Vector2 position, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { Color c = { r, g, b, a }; ImageDrawPixelV(dst, position, c); }
+    void Framework_ImageDrawLine(Image* dst, int startPosX, int startPosY, int endPosX, int endPosY, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { Color c = { r, g, b, a }; ImageDrawLine(dst, startPosX, startPosY, endPosX, endPosY, c); }
+    void Framework_ImageDrawLineV(Image* dst, Vector2 start, Vector2 end, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { Color c = { r, g, b, a }; ImageDrawLineV(dst, start, end, c); }
+    void Framework_ImageDrawLineEx(Image* dst, Vector2 start, Vector2 end, int thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { Color c = { r, g, b, a }; ImageDrawLineEx(dst, start, end, thick, c); }
+    void Framework_ImageDrawCircle(Image* dst, int centerX, int centerY, int radius, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { Color c = { r, g, b, a }; ImageDrawCircle(dst, centerX, centerY, radius, c); }
+    void Framework_ImageDrawCircleV(Image* dst, Vector2 center, int radius, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { Color c = { r, g, b, a }; ImageDrawCircleV(dst, center, radius, c); }
+    void Framework_ImageDrawCircleLines(Image* dst, int centerX, int centerY, int radius, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { Color c = { r, g, b, a }; ImageDrawCircleLines(dst, centerX, centerY, radius, c); }
+    void Framework_ImageDrawCircleLinesV(Image* dst, Vector2 center, int radius, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { Color c = { r, g, b, a }; ImageDrawCircleLinesV(dst, center, radius, c); }
+    void Framework_ImageDrawRectangle(Image* dst, int posX, int posY, int width, int height, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { Color c = { r, g, b, a }; ImageDrawRectangle(dst, posX, posY, width, height, c); }
+    void Framework_ImageDrawRectangleV(Image* dst, Vector2 position, Vector2 size, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { Color c = { r, g, b, a }; ImageDrawRectangleV(dst, position, size, c); }
+    void Framework_ImageDrawRectangleRec(Image* dst, Rectangle rec, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { Color c = { r, g, b, a }; ImageDrawRectangleRec(dst, rec, c); }
+    void Framework_ImageDrawRectangleLines(Image* dst, Rectangle rec, int thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { Color c = { r, g, b, a }; ImageDrawRectangleLines(dst, rec, thick, c); }
+    void Framework_ImageDrawTriangle(Image* dst, Vector2 v1, Vector2 v2, Vector2 v3, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { Color c = { r, g, b, a }; ImageDrawTriangle(dst, v1, v2, v3, c); }
+    void Framework_ImageDrawTriangleEx(Image* dst, Vector2 v1, Vector2 v2, Vector2 v3, unsigned char c1R, unsigned char c1G, unsigned char c1B, unsigned char c1A, unsigned char c2R, unsigned char c2G, unsigned char c2B, unsigned char c2A, unsigned char c3R, unsigned char c3G, unsigned char c3B, unsigned char c3A) { Color c1 = { c1R, c1G, c1B, c1A }; Color c2 = { c2R, c2G, c2B, c2A }; Color c3 = { c3R, c3G, c3B, c3A }; ImageDrawTriangleEx(dst, v1, v2, v3, c1, c2, c3); }
+    void Framework_ImageDrawTriangleLines(Image* dst, Vector2 v1, Vector2 v2, Vector2 v3, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { Color c = { r, g, b, a }; ImageDrawTriangleLines(dst, v1, v2, v3, c); }
+    void Framework_ImageDrawTriangleFan(Image* dst, Vector2* points, int pointCount, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { Color c = { r, g, b, a }; ImageDrawTriangleFan(dst, points, pointCount, c); }
+    void Framework_ImageDrawTriangleStrip(Image* dst, Vector2* points, int pointCount, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { Color c = { r, g, b, a }; ImageDrawTriangleStrip(dst, points, pointCount, c); }
+    void Framework_ImageDraw(Image* dst, Image src, Rectangle srcRec, Rectangle dstRec, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { Color tint = { r, g, b, a }; ImageDraw(dst, src, srcRec, dstRec, tint); }
+
     Font Framework_LoadFontEx(const char* fileName, int fontSize, int* glyphs, int glyphCount) {
         std::string path = ResolveAssetPath(fileName);
         return LoadFontEx(path.c_str(), fontSize, glyphs, glyphCount);

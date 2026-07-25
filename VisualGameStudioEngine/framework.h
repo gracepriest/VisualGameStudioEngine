@@ -468,6 +468,28 @@ extern "C" {
     __declspec(dllexport) void Framework_ImageColorBrightness(Image* img, int brightness);
     __declspec(dllexport) void Framework_ImageColorReplace(Image* img, unsigned char colorR, unsigned char colorG, unsigned char colorB, unsigned char colorA, unsigned char replaceR, unsigned char replaceG, unsigned char replaceB, unsigned char replaceA);
 
+    // ==== IMAGE SOFTWARE DRAWING (raylib 5.5 passthrough — Batch 3c-ii) ====
+    __declspec(dllexport) void Framework_ImageClearBackground(Image* dst, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_ImageDrawPixel(Image* dst, int posX, int posY, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_ImageDrawPixelV(Image* dst, Vector2 position, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_ImageDrawLine(Image* dst, int startPosX, int startPosY, int endPosX, int endPosY, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_ImageDrawLineV(Image* dst, Vector2 start, Vector2 end, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_ImageDrawLineEx(Image* dst, Vector2 start, Vector2 end, int thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_ImageDrawCircle(Image* dst, int centerX, int centerY, int radius, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_ImageDrawCircleV(Image* dst, Vector2 center, int radius, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_ImageDrawCircleLines(Image* dst, int centerX, int centerY, int radius, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_ImageDrawCircleLinesV(Image* dst, Vector2 center, int radius, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_ImageDrawRectangle(Image* dst, int posX, int posY, int width, int height, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_ImageDrawRectangleV(Image* dst, Vector2 position, Vector2 size, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_ImageDrawRectangleRec(Image* dst, Rectangle rec, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_ImageDrawRectangleLines(Image* dst, Rectangle rec, int thick, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_ImageDrawTriangle(Image* dst, Vector2 v1, Vector2 v2, Vector2 v3, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_ImageDrawTriangleEx(Image* dst, Vector2 v1, Vector2 v2, Vector2 v3, unsigned char c1R, unsigned char c1G, unsigned char c1B, unsigned char c1A, unsigned char c2R, unsigned char c2G, unsigned char c2B, unsigned char c2A, unsigned char c3R, unsigned char c3G, unsigned char c3B, unsigned char c3A);
+    __declspec(dllexport) void Framework_ImageDrawTriangleLines(Image* dst, Vector2 v1, Vector2 v2, Vector2 v3, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_ImageDrawTriangleFan(Image* dst, Vector2* points, int pointCount, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_ImageDrawTriangleStrip(Image* dst, Vector2* points, int pointCount, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_ImageDraw(Image* dst, Image src, Rectangle srcRec, Rectangle dstRec, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+
     // Fonts / advanced text
     __declspec(dllexport) Font      Framework_LoadFontEx(const char* fileName, int fontSize, int* glyphs, int glyphCount);
     __declspec(dllexport) void      Framework_UnloadFont(Font font);
