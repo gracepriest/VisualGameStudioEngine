@@ -22,6 +22,12 @@ Module Program
             Return
         End If
 
+        ' raylib textures Batch 3d smoke scene (GPU round-trips + font-image, GL-only)
+        If args.Length > 0 AndAlso args(0) = "--textures3d" Then
+            Call New SampleTextures3d().Run()
+            Return
+        End If
+
         Dim game As New Game
         game.Run()
     End Sub
