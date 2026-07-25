@@ -11777,5 +11777,74 @@ Public Module FrameworkWrapper
     End Function
 #End Region
 
+#Region "Raylib Image mutators (Batch 3c-i)"
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageFormat(ByRef img As Image, newFormat As Integer)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageToPOT(ByRef img As Image, fillR As Byte, fillG As Byte, fillB As Byte, fillA As Byte)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageCrop(ByRef img As Image, crop As Rectangle)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageAlphaCrop(ByRef img As Image, threshold As Single)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageAlphaClear(ByRef img As Image, r As Byte, g As Byte, b As Byte, a As Byte, threshold As Single)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageAlphaMask(ByRef img As Image, alphaMask As Image)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageAlphaPremultiply(ByRef img As Image)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageBlurGaussian(ByRef img As Image, blurSize As Integer)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageKernelConvolution(ByRef img As Image, kernel As Single(), kernelSize As Integer)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageResizeNN(ByRef img As Image, newWidth As Integer, newHeight As Integer)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageResizeCanvas(ByRef img As Image, newWidth As Integer, newHeight As Integer, offsetX As Integer, offsetY As Integer, fillR As Byte, fillG As Byte, fillB As Byte, fillA As Byte)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageMipmaps(ByRef img As Image)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageDither(ByRef img As Image, rBpp As Integer, gBpp As Integer, bBpp As Integer, aBpp As Integer)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageFlipHorizontal(ByRef img As Image)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageRotate(ByRef img As Image, degrees As Integer)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageRotateCW(ByRef img As Image)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageRotateCCW(ByRef img As Image)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageColorTint(ByRef img As Image, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageColorGrayscale(ByRef img As Image)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageColorContrast(ByRef img As Image, contrast As Single)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageColorBrightness(ByRef img As Image, brightness As Integer)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageColorReplace(ByRef img As Image, colorR As Byte, colorG As Byte, colorB As Byte, colorA As Byte, replaceR As Byte, replaceG As Byte, replaceB As Byte, replaceA As Byte)
+    End Sub
+#End Region
+
 End Module
 
