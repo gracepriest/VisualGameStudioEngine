@@ -139,6 +139,24 @@ Public Module Utiliy
         Public image As Image
     End Structure
 
+    ' raylib Vector3/Vector4 — returned/passed by value by raylib color/pixel fns (Batch 3a:
+    ' ColorToHSV -> Vector3, ColorNormalize -> Vector4, ColorFromNormalized <- Vector4). Also
+    ' needed by the later core/models batches.
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure Vector3
+        Public x As Single
+        Public y As Single
+        Public z As Single
+    End Structure
+
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure Vector4
+        Public x As Single
+        Public y As Single
+        Public z As Single
+        Public w As Single
+    End Structure
+
     Public Enum TextureFilter
         Point = 0
         Bilinear = 1
