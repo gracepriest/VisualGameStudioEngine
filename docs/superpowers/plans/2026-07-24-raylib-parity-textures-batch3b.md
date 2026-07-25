@@ -192,7 +192,7 @@ Assertions (spec §5.2; all GL-free, deterministic):
 - `GenImageChecked(2,2, 1,1, 255,0,0,255, 0,0,255,255)` → `GetImageColor(.,0,0)`==red, `GetImageColor(.,1,0)`==blue.
 - `ImageCopy(img)` → valid, same dims, `GetImageColor` matches. `ImageFromImage(img, RRect{0,0,2,1})` → `width==2, height==1`. `ImageFromChannel(img, 0)` → valid, same dims.
 - `GetImageAlphaBorder(GenImageColor(4,4,9,9,9,255), 0f)` → `{0,0,4,4}`.
-- `LoadImagePalette(GenImageColor(4,4, 7,8,9,255), 16, buf16)` → returns `1`, `buf16[0]=={7,8,9,255}`.
+- `LoadImagePalette(GenImageColor(4,4, 7,8,9,255), 16, buf16)` where `var buf16 = new RColor[16];` → returns `1`, `buf16[0]=={7,8,9,255}`.
 - `IsImageValid(new RImage())` (all-zero) → false.
 - Plausibility (formula-dependent): `GenImageGradientLinear/Radial/Square`, `GenImagePerlinNoise`, `GenImageCellular` → `IsImageValid` true + dims correct.
 - **File round-trip** (absolute temp paths, `try/finally` delete):
@@ -213,11 +213,11 @@ Assert.That(framesM, Is.EqualTo(1));
 ```
 - **`LoadImageRaw`:** write 16 bytes (`2×2 × {50,60,70,255}`) to an absolute temp file → `Framework_LoadImageRaw(tmpRaw, 2, 2, 7, 0)` → valid, `GetImageColor(.,0,0)=={50,60,70,255}`; delete in `finally`.
 - **`ExportImageAsCode`:** `Framework_ExportImageAsCode(img2, tmpH)` true and `File.Exists(tmpH)`; delete in `finally`.
-- [ ] **Step 1:** write it (RColor field comparisons: either `Assert.That((c.r,c.g,c.b,c.a), Is.EqualTo(((byte)…)))` tuples or per-field, matching `RaylibColorTests.cs`). **Step 2:** runs GREEN after Task 6 stages the fresh DLL (or stage `x64\Release\VisualGameStudioEngine.dll` for an immediate run). **Step 3: Commit** `test(raylib): image load/gen/query Batch 3b correctness incl. Image-by-value + caller-buffer (integration)`.
+- [ ] **Step 1:** write it (RColor field comparisons: either `Assert.That((c.r,c.g,c.b,c.a), Is.EqualTo(((byte)…)))` tuples or per-field, matching `RaylibColorTests.cs`). **Step 2:** the test project copies the engine DLL from `..\IDE\` (`VisualGameStudio.Tests.csproj` `<None>` staging), so it runs GREEN after Task 6 refreshes `IDE\`; for an immediate go/no-go run at this task, first copy the freshly built `x64\Release\VisualGameStudioEngine.dll` into `IDE\` (or directly into the test `bin\Release\net8.0\`) — otherwise it self-skips against the stale DLL. **Step 3: Commit** `test(raylib): image load/gen/query Batch 3b correctness incl. Image-by-value + caller-buffer (integration)`.
 
 ## Task 6: IDE refresh + DoD + finish
 - [ ] **Step 1:** clear locks (`dotnet build-server shutdown`, kill stray `--lsp`/testhost), robocopy `x64\Release\VisualGameStudioEngine.{dll,lib}` + `RaylibWrapper\bin\Release\net8.0\RaylibWrapper.dll` → `IDE\` (`/R:1 /W:1`). Commit `chore: refresh prebuilt IDE binaries (engine+wrapper) with raylib image Batch 3b`.
 - [ ] **Step 2:** run correctness suite (`--filter "FullyQualifiedName~RaylibImageTests"`) → GREEN (incl. the go/no-go first test).
 - [ ] **Step 3: DoD:** parity GREEN (22; counts 2581/2513); fast subset (`--filter "TestCategory!=Integration"`) no regression; correctness GREEN; grep guards (the 6 deferred names — `ImageText(`, `ImageTextEx(`, `GenImageText(`, `ExportImageToMemory(`, `UnloadImageColors(`, `UnloadImagePalette(` — are **absent** from framework.h/RaylibWrapper.vb; the existing `Framework_LoadImage/UnloadImage/ImageColorInvert/Resize/FlipVertical` are **untouched**). **No GUI smoke — all GL-free.**
-- [ ] **Step 4:** superpowers:finishing-a-development-branch → merge to master, push. Update memory ([[raylib-parity-textures-batch3a]] roadmap: mark 3b shipped; 3c/3d + the 3 deferred text-image fns next).
+- [ ] **Step 4:** superpowers:finishing-a-development-branch → merge to master, push. Update memory ([[raylib-parity-textures-batch3a]] roadmap: mark 3b shipped; remaining = 3c Image-mutate+draw (44), 3d Texture GPU (4), + the 4 deferred (`ImageText`/`ImageTextEx`/`GenImageText` → GUI-verified batch, `ExportImageToMemory` → file-I/O batch)).
 ```

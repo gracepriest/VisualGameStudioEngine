@@ -73,7 +73,7 @@ back GPU memory and belong to **3d**.
    `IsImageValid`, `ExportImage`, `ExportImageAsCode`.
 7. **Asset-path asymmetry.** File **readers** (`LoadImageRaw`, `LoadImageAnim`) resolve through the
    engine's `ResolveAssetPath` (consistent with the existing `Framework_LoadImage`). Note
-   `ResolveAssetPath` does NOT prepend the asset root for absolute paths (its `p[0] != '\\' && p[1]
+   `ResolveAssetPath` does NOT prepend the asset root for absolute paths (its `p[0] != '/' && p[1]
    != ':'` guard skips `C:\…` and `/…`), but it still passes every path through `NormalizePath`,
    which converts `\`→`/` **and lowercases** — so an absolute reader path is lowercased/slash-normalized,
    not literally unchanged. Harmless on the Windows target (NTFS is case-insensitive and accepts `/`),
