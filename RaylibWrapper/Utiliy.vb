@@ -5,6 +5,7 @@ Public Module Utiliy
     Public Const WINDOW_WIDTH = 1200
     Public WINDOW_HEIGHT = 720
 
+    <StructLayout(LayoutKind.Sequential)>
     Public Structure Color
         Public r As Byte
         Public g As Byte
