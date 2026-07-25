@@ -16,6 +16,12 @@ Module Program
             Return
         End If
 
+        ' raylib text Batch 2 smoke scene
+        If args.Length > 0 AndAlso args(0) = "--text" Then
+            Call New SampleTextBatch2().Run()
+            Return
+        End If
+
         Dim game As New Game
         game.Run()
     End Sub
