@@ -444,6 +444,30 @@ extern "C" {
     __declspec(dllexport) int       Framework_LoadImageColors(Image image, Color* outColors);
     __declspec(dllexport) int       Framework_LoadImagePalette(Image image, int maxPaletteSize, Color* outColors);
 
+    // ==== IMAGE MUTATORS (raylib 5.5 passthrough — Batch 3c-i) ====
+    __declspec(dllexport) void Framework_ImageFormat(Image* img, int newFormat);
+    __declspec(dllexport) void Framework_ImageToPOT(Image* img, unsigned char fillR, unsigned char fillG, unsigned char fillB, unsigned char fillA);
+    __declspec(dllexport) void Framework_ImageCrop(Image* img, Rectangle crop);
+    __declspec(dllexport) void Framework_ImageAlphaCrop(Image* img, float threshold);
+    __declspec(dllexport) void Framework_ImageAlphaClear(Image* img, unsigned char r, unsigned char g, unsigned char b, unsigned char a, float threshold);
+    __declspec(dllexport) void Framework_ImageAlphaMask(Image* img, Image alphaMask);
+    __declspec(dllexport) void Framework_ImageAlphaPremultiply(Image* img);
+    __declspec(dllexport) void Framework_ImageBlurGaussian(Image* img, int blurSize);
+    __declspec(dllexport) void Framework_ImageKernelConvolution(Image* img, const float* kernel, int kernelSize);
+    __declspec(dllexport) void Framework_ImageResizeNN(Image* img, int newWidth, int newHeight);
+    __declspec(dllexport) void Framework_ImageResizeCanvas(Image* img, int newWidth, int newHeight, int offsetX, int offsetY, unsigned char fillR, unsigned char fillG, unsigned char fillB, unsigned char fillA);
+    __declspec(dllexport) void Framework_ImageMipmaps(Image* img);
+    __declspec(dllexport) void Framework_ImageDither(Image* img, int rBpp, int gBpp, int bBpp, int aBpp);
+    __declspec(dllexport) void Framework_ImageFlipHorizontal(Image* img);
+    __declspec(dllexport) void Framework_ImageRotate(Image* img, int degrees);
+    __declspec(dllexport) void Framework_ImageRotateCW(Image* img);
+    __declspec(dllexport) void Framework_ImageRotateCCW(Image* img);
+    __declspec(dllexport) void Framework_ImageColorTint(Image* img, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_ImageColorGrayscale(Image* img);
+    __declspec(dllexport) void Framework_ImageColorContrast(Image* img, float contrast);
+    __declspec(dllexport) void Framework_ImageColorBrightness(Image* img, int brightness);
+    __declspec(dllexport) void Framework_ImageColorReplace(Image* img, unsigned char colorR, unsigned char colorG, unsigned char colorB, unsigned char colorA, unsigned char replaceR, unsigned char replaceG, unsigned char replaceB, unsigned char replaceA);
+
     // Fonts / advanced text
     __declspec(dllexport) Font      Framework_LoadFontEx(const char* fileName, int fontSize, int* glyphs, int glyphCount);
     __declspec(dllexport) void      Framework_UnloadFont(Font font);

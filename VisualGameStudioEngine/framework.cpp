@@ -1313,6 +1313,30 @@ extern "C" {
         return count;
     }
 
+    // ==== IMAGE MUTATORS (raylib 5.5 passthrough — Batch 3c-i) ====
+    void Framework_ImageFormat(Image* img, int newFormat) { ImageFormat(img, newFormat); }
+    void Framework_ImageToPOT(Image* img, unsigned char fillR, unsigned char fillG, unsigned char fillB, unsigned char fillA) { Color c = { fillR, fillG, fillB, fillA }; ImageToPOT(img, c); }
+    void Framework_ImageCrop(Image* img, Rectangle crop) { ImageCrop(img, crop); }
+    void Framework_ImageAlphaCrop(Image* img, float threshold) { ImageAlphaCrop(img, threshold); }
+    void Framework_ImageAlphaClear(Image* img, unsigned char r, unsigned char g, unsigned char b, unsigned char a, float threshold) { Color c = { r, g, b, a }; ImageAlphaClear(img, c, threshold); }
+    void Framework_ImageAlphaMask(Image* img, Image alphaMask) { ImageAlphaMask(img, alphaMask); }
+    void Framework_ImageAlphaPremultiply(Image* img) { ImageAlphaPremultiply(img); }
+    void Framework_ImageBlurGaussian(Image* img, int blurSize) { ImageBlurGaussian(img, blurSize); }
+    void Framework_ImageKernelConvolution(Image* img, const float* kernel, int kernelSize) { ImageKernelConvolution(img, kernel, kernelSize); }
+    void Framework_ImageResizeNN(Image* img, int newWidth, int newHeight) { ImageResizeNN(img, newWidth, newHeight); }
+    void Framework_ImageResizeCanvas(Image* img, int newWidth, int newHeight, int offsetX, int offsetY, unsigned char fillR, unsigned char fillG, unsigned char fillB, unsigned char fillA) { Color c = { fillR, fillG, fillB, fillA }; ImageResizeCanvas(img, newWidth, newHeight, offsetX, offsetY, c); }
+    void Framework_ImageMipmaps(Image* img) { ImageMipmaps(img); }
+    void Framework_ImageDither(Image* img, int rBpp, int gBpp, int bBpp, int aBpp) { ImageDither(img, rBpp, gBpp, bBpp, aBpp); }
+    void Framework_ImageFlipHorizontal(Image* img) { ImageFlipHorizontal(img); }
+    void Framework_ImageRotate(Image* img, int degrees) { ImageRotate(img, degrees); }
+    void Framework_ImageRotateCW(Image* img) { ImageRotateCW(img); }
+    void Framework_ImageRotateCCW(Image* img) { ImageRotateCCW(img); }
+    void Framework_ImageColorTint(Image* img, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { Color c = { r, g, b, a }; ImageColorTint(img, c); }
+    void Framework_ImageColorGrayscale(Image* img) { ImageColorGrayscale(img); }
+    void Framework_ImageColorContrast(Image* img, float contrast) { ImageColorContrast(img, contrast); }
+    void Framework_ImageColorBrightness(Image* img, int brightness) { ImageColorBrightness(img, brightness); }
+    void Framework_ImageColorReplace(Image* img, unsigned char colorR, unsigned char colorG, unsigned char colorB, unsigned char colorA, unsigned char replaceR, unsigned char replaceG, unsigned char replaceB, unsigned char replaceA) { Color c = { colorR, colorG, colorB, colorA }; Color rep = { replaceR, replaceG, replaceB, replaceA }; ImageColorReplace(img, c, rep); }
+
     Font Framework_LoadFontEx(const char* fileName, int fontSize, int* glyphs, int glyphCount) {
         std::string path = ResolveAssetPath(fileName);
         return LoadFontEx(path.c_str(), fontSize, glyphs, glyphCount);
