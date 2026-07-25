@@ -11846,5 +11846,68 @@ Public Module FrameworkWrapper
     End Sub
 #End Region
 
+#Region "Raylib Image software drawing (Batch 3c-ii)"
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageClearBackground(ByRef dst As Image, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageDrawPixel(ByRef dst As Image, posX As Integer, posY As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageDrawPixelV(ByRef dst As Image, position As Vector2, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageDrawLine(ByRef dst As Image, startPosX As Integer, startPosY As Integer, endPosX As Integer, endPosY As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageDrawLineV(ByRef dst As Image, start As Vector2, endPos As Vector2, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageDrawLineEx(ByRef dst As Image, start As Vector2, endPos As Vector2, thick As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageDrawCircle(ByRef dst As Image, centerX As Integer, centerY As Integer, radius As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageDrawCircleV(ByRef dst As Image, center As Vector2, radius As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageDrawCircleLines(ByRef dst As Image, centerX As Integer, centerY As Integer, radius As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageDrawCircleLinesV(ByRef dst As Image, center As Vector2, radius As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageDrawRectangle(ByRef dst As Image, posX As Integer, posY As Integer, width As Integer, height As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageDrawRectangleV(ByRef dst As Image, position As Vector2, size As Vector2, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageDrawRectangleRec(ByRef dst As Image, rec As Rectangle, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageDrawRectangleLines(ByRef dst As Image, rec As Rectangle, thick As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageDrawTriangle(ByRef dst As Image, v1 As Vector2, v2 As Vector2, v3 As Vector2, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageDrawTriangleEx(ByRef dst As Image, v1 As Vector2, v2 As Vector2, v3 As Vector2, c1R As Byte, c1G As Byte, c1B As Byte, c1A As Byte, c2R As Byte, c2G As Byte, c2B As Byte, c2A As Byte, c3R As Byte, c3G As Byte, c3B As Byte, c3A As Byte)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageDrawTriangleLines(ByRef dst As Image, v1 As Vector2, v2 As Vector2, v3 As Vector2, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageDrawTriangleFan(ByRef dst As Image, points As Vector2(), pointCount As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageDrawTriangleStrip(ByRef dst As Image, points As Vector2(), pointCount As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ImageDraw(ByRef dst As Image, src As Image, srcRec As Rectangle, dstRec As Rectangle, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+#End Region
+
 End Module
 
