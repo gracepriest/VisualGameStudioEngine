@@ -79,16 +79,18 @@ public class RaylibTextStringTests
         Assert.That(Framework_TextToFloat("3.5"), Is.EqualTo(3.5f).Within(1e-4));
     }
 
-    // Proves the malloc'd-return → engine-static-buffer → MemFree path with a CORRECT raylib
-    // function (TextReplace). NOTE: raylib 5.5's own TextInsert is upstream-buggy (indexes
-    // insert[i]/text[i] instead of insert[i-position]/text[i-insertLen], so it reads past the
-    // insert string) — our Framework_TextInsert is a faithful passthrough of that, so we assert
-    // only that the SAME wrapper path round-trips a string (marshaling + no crash + the freed
-    // buffer is never returned), not raylib's broken output.
+    // Proves the malloc'd-return → engine-static-buffer wrapper path with TextReplace (a correct
+    // raylib function). raylib 5.5's own TextInsert is upstream-buggy (indexes insert[i]/text[i]
+    // instead of insert[i-position]/text[i-insertLen], so it reads past the short insert string:
+    // it would return "a" for ("ac","b",1)). Our Framework_TextInsert deliberately DIVERGES from
+    // stock raylib and builds the correct result itself, so we assert the correct insertion.
     [Test] public void Replace_and_Insert_proves_malloc_free_wrappers()
     {
         Assert.That(S(() => Framework_TextReplace("a-b-c", "-", "+")), Is.EqualTo("a+b+c"));
-        Assert.That(S(() => Framework_TextInsert("ac", "b", 1)), Is.Not.Empty); // raylib bug: value is garbled upstream
+        Assert.That(S(() => Framework_TextInsert("ac", "b", 1)), Is.EqualTo("abc"));         // middle
+        Assert.That(S(() => Framework_TextInsert("hello", "XYZ", 2)), Is.EqualTo("heXYZllo")); // multi-char insert
+        Assert.That(S(() => Framework_TextInsert("hello", "X", 0)), Is.EqualTo("Xhello"));    // at start
+        Assert.That(S(() => Framework_TextInsert("ab", "cd", 2)), Is.EqualTo("abcd"));        // at end
     }
 
     [Test] public void Case_transforms_marshal_nonempty()

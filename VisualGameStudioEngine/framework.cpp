@@ -28477,12 +28477,24 @@ extern "C" {
     }
 
     static char g_textInsertBuf[8192];
+    // NOTE: this DELIBERATELY diverges from raylib 5.5's TextInsert, which is upstream-bugged —
+    // it indexes insert[i]/text[i] instead of insert[i-position]/text[i-insertLen], so it reads
+    // past the short insert string (e.g. ("ac","b",1) -> "a"). We build the correct result
+    // ourselves: text[0..position) + insert + text[position..end), into the engine static buffer.
     const char* Framework_TextInsert(const char* text, const char* insert, int position) {
-        char* r = TextInsert((char*)text, (char*)insert, position);   // raylib mallocs
-        if (!r) { g_textInsertBuf[0] = '\0'; return g_textInsertBuf; }
-        size_t n = 0; for (; r[n] && n < sizeof(g_textInsertBuf) - 1; ++n) g_textInsertBuf[n] = r[n];
+        if (!text) text = "";
+        if (!insert) insert = "";
+        size_t textLen = 0;   while (text[textLen]) ++textLen;
+        size_t insertLen = 0; while (insert[insertLen]) ++insertLen;
+        if (position < 0) position = 0;
+        if ((size_t)position > textLen) position = (int)textLen;   // clamp; insert at end if past the string
+
+        const size_t cap = sizeof(g_textInsertBuf) - 1;
+        size_t n = 0;
+        for (int i = 0; i < position && n < cap; ++i)               g_textInsertBuf[n++] = text[i];
+        for (size_t i = 0; i < insertLen && n < cap; ++i)           g_textInsertBuf[n++] = insert[i];
+        for (size_t i = (size_t)position; i < textLen && n < cap; ++i) g_textInsertBuf[n++] = text[i];
         g_textInsertBuf[n] = '\0';
-        MemFree(r);
         return g_textInsertBuf;
     }
 
