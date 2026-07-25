@@ -70,7 +70,7 @@ public partial class CodeEditorControl : UserControl
     private InlineFindReplaceControl? _inlineFindReplace;
     private StickyScrollControl? _stickyScroll;
     private bool _autoCloseBrackets = true;
-    private BasicLangIndentationStrategy? _indentationStrategy;
+    private IConfigurableIndentationStrategy? _indentationStrategy;
     private ILanguageService? _languageService;
     /// <summary>
     /// The single live settings store, pushed in from the host (CodeEditorDocumentView). Null in
@@ -416,6 +416,9 @@ public partial class CodeEditorControl : UserControl
         // No-ops before OnInitialized (_textEditor is null); whichever hook
         // fires last wins — both orders end with the correct highlighting.
         SetHighlightingForFile(filePath);
+
+        // Pick BasicLang vs C-style auto-indent for this file's language.
+        SelectIndentationStrategy();
 
         // Gate inline color swatches by file language.
         SetColorGateFile(filePath);
@@ -1449,14 +1452,30 @@ public partial class CodeEditorControl : UserControl
             return;
         }
 
-        // Handle Enter to auto-insert End blocks (Sub/End Sub, etc.)
+        // Handle Enter — language-specific block behavior.
         if (e.Key == Key.Enter && e.KeyModifiers == KeyModifiers.None)
         {
-            // Schedule after the default Enter handling (which inserts newline and applies indentation)
-            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            if (Core.Utilities.LanguageFileTypes.IsCppSourceFile(_documentFilePath))
             {
-                TryAutoInsertEndBlock();
-            }, Avalonia.Threading.DispatcherPriority.Background);
+                // C-style: pressing Enter between { and } opens an indented body line.
+                // Deliberately does NOT run TryAutoInsertEndBlock — the VB End/Next/Loop
+                // keywords wrongly matched C++ for/while/class/try/do lines.
+                if (TryExpandBraceBlock())
+                {
+                    e.Handled = true;
+                    return;
+                }
+            }
+            else
+            {
+                // BasicLang (and other non-C++ files): auto-insert the matching End block
+                // (Sub/End Sub, etc.). Scheduled after the default Enter handling
+                // (which inserts the newline and applies indentation).
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    TryAutoInsertEndBlock();
+                }, Avalonia.Threading.DispatcherPriority.Background);
+            }
         }
 
         // Handle Backspace to delete empty auto-close pairs
@@ -1754,13 +1773,8 @@ public partial class CodeEditorControl : UserControl
         _textEditor.Options.IndentationSize = 4;
         _textEditor.Options.ConvertTabsToSpaces = true;
 
-        // Smart indentation for BasicLang (auto-indent after Sub, Function, If, etc.)
-        _indentationStrategy = new BasicLangIndentationStrategy
-        {
-            IndentSize = _textEditor.Options.IndentationSize,
-            UseTabs = !_textEditor.Options.ConvertTabsToSpaces
-        };
-        _textEditor.TextArea.IndentationStrategy = _indentationStrategy;
+        // Smart indentation, chosen by file language (BasicLang keywords vs C-style braces).
+        SelectIndentationStrategy();
 
         // Apply initial font ligature setting
         ApplyFontLigatures(EnableFontLigatures);
@@ -2540,7 +2554,7 @@ public partial class CodeEditorControl : UserControl
 
     /// <summary>
     /// Applies the editor.tabSize / editor.insertSpaces settings to the AvaloniaEdit options and
-    /// keeps the BasicLang indentation strategy in sync. Replaces the hardcoded 4-spaces defaults
+    /// keeps the active indentation strategy in sync. Replaces the hardcoded 4-spaces defaults
     /// set at editor init so these become live, settings-driven values.
     /// </summary>
     public void SetIndentation(int indentationSize, bool convertTabsToSpaces)
@@ -2556,6 +2570,34 @@ public partial class CodeEditorControl : UserControl
             _indentationStrategy.IndentSize = _textEditor.Options.IndentationSize;
             _indentationStrategy.UseTabs = !convertTabsToSpaces;
         }
+    }
+
+    /// <summary>
+    /// Picks the indentation strategy for the current file: C-style (curly-brace) for C/C++,
+    /// BasicLang (Sub/If/For keywords) otherwise. Called at editor init and whenever the
+    /// document path changes (<see cref="SetLanguageService"/>) — the BasicLang keyword rules
+    /// never match C++ and would leave Enter jammed against a closing brace, so gating by
+    /// language is required. No-op before OnInitialized (the editor is not built yet); init
+    /// replays this once the editor exists.
+    /// </summary>
+    private void SelectIndentationStrategy()
+    {
+        if (_textEditor == null) return;
+
+        var wantCStyle = Core.Utilities.LanguageFileTypes.IsCppSourceFile(_documentFilePath);
+        var isCStyle = _indentationStrategy is CStyleIndentationStrategy;
+
+        // Only rebuild when the language kind actually changes.
+        if (_indentationStrategy == null || wantCStyle != isCStyle)
+        {
+            _indentationStrategy = wantCStyle
+                ? new CStyleIndentationStrategy()
+                : new BasicLangIndentationStrategy();
+            _textEditor.TextArea.IndentationStrategy = _indentationStrategy;
+        }
+
+        _indentationStrategy.IndentSize = _textEditor.Options.IndentationSize;
+        _indentationStrategy.UseTabs = !_textEditor.Options.ConvertTabsToSpaces;
     }
 
     /// <summary>
@@ -5040,11 +5082,23 @@ public partial class CodeEditorControl : UserControl
 
     private void OnTextAreaTextEntered(object? sender, TextInputEventArgs e)
     {
-        if (!_autoCloseBrackets || string.IsNullOrEmpty(e.Text) || e.Text.Length != 1) return;
-        if (_textEditor?.Document == null) return;
+        if (_textEditor?.Document == null || string.IsNullOrEmpty(e.Text) || e.Text.Length != 1) return;
 
         var typed = e.Text[0];
+        var isCpp = Core.Utilities.LanguageFileTypes.IsCppSourceFile(_documentFilePath);
+
+        // C-style: typing '}' on an otherwise-blank line snaps it back one indent level so it
+        // aligns under its opener. Runs regardless of the auto-close setting; '}' is never an
+        // auto-close opener so there is nothing further to do for it below.
+        if (isCpp && typed == '}')
+            DedentClosingBrace();
+
+        if (!_autoCloseBrackets) return;
         if (!AutoClosePairs.TryGetValue(typed, out var closing)) return;
+
+        // C++ uses ' for character literals ('a'), not string quoting — auto-closing it fights
+        // normal typing, so skip it for C/C++ files.
+        if (isCpp && typed == '\'') return;
 
         var offset = _textEditor.CaretOffset;
 
@@ -5071,6 +5125,29 @@ public partial class CodeEditorControl : UserControl
         _textEditor.Document.Insert(offset, closing.ToString());
         // Keep caret between the pair
         _textEditor.CaretOffset = offset;
+    }
+
+    /// <summary>
+    /// C-style helper: when the caret's line contains nothing but a single '}' (leading
+    /// whitespace + the brace the user just typed), re-indent that line one level shallower
+    /// so the closer lines up under its block opener.
+    /// </summary>
+    private void DedentClosingBrace()
+    {
+        if (_textEditor?.Document == null) return;
+
+        var doc = _textEditor.Document;
+        var line = doc.GetLineByOffset(_textEditor.CaretOffset);
+        var lineText = doc.GetText(line.Offset, line.Length);
+        if (lineText.Trim() != "}") return; // other code on the line — leave it alone
+
+        var currentIndent = Completion.CStyleIndentation.GetLineIndent(lineText);
+        var newIndent = Completion.CStyleIndentation.GetDedentedIndent(
+            currentIndent, _textEditor.Options.IndentationSize, !_textEditor.Options.ConvertTabsToSpaces);
+
+        if (newIndent == currentIndent) return;
+        doc.Replace(line.Offset, currentIndent.Length, newIndent,
+            AvaloniaEdit.Document.OffsetChangeMappingType.RemoveAndInsert);
     }
 
     private bool IsCaretInsideStringOrComment(int offset)
@@ -5149,6 +5226,43 @@ public partial class CodeEditorControl : UserControl
         doc.Insert(line.Offset, indent + Environment.NewLine);
         _textEditor.TextArea.Caret.Line = line.LineNumber;
         _textEditor.TextArea.Caret.Column = indent.Length + 1;
+    }
+
+    /// <summary>
+    /// C-style Enter handling: when the caret sits directly between an opening <c>{</c> and a
+    /// closing <c>}</c>, replace the default newline with an indented body line and push the
+    /// closer down (VS Code behavior). Returns true when it handled the key. The caller only
+    /// invokes this for C/C++ files.
+    /// </summary>
+    private bool TryExpandBraceBlock()
+    {
+        if (_textEditor?.Document == null) return false;
+
+        // Only for a single, empty caret — never over a selection, an open completion list,
+        // or an active snippet (stacked input handler owns the caret then).
+        if (!_textEditor.TextArea.Selection.IsEmpty) return false;
+        if (_completionWindow != null) return false;
+        if (!_textEditor.TextArea.StackedInputHandlers.IsEmpty) return false;
+
+        var doc = _textEditor.Document;
+        var offset = _textEditor.CaretOffset;
+        if (offset <= 0 || offset >= doc.TextLength) return false;
+
+        // Caret must be exactly between "{" and "}".
+        if (doc.GetCharAt(offset - 1) != '{' || doc.GetCharAt(offset) != '}') return false;
+
+        var caretLine = doc.GetLineByOffset(offset);
+        var lineText = doc.GetText(caretLine.Offset, caretLine.Length);
+        var baseIndent = Completion.CStyleIndentation.GetLineIndent(lineText);
+        var newLine = AvaloniaEdit.Document.TextUtilities.GetNewLineFromDocument(doc, caretLine.LineNumber);
+
+        var indentSize = _textEditor.Options.IndentationSize;
+        var useTabs = !_textEditor.Options.ConvertTabsToSpaces;
+        var (text, caretInText) = Completion.CStyleIndentation.BuildBraceExpansion(baseIndent, newLine, indentSize, useTabs);
+
+        doc.Insert(offset, text);
+        _textEditor.CaretOffset = offset + caretInText;
+        return true;
     }
 
     /// <summary>

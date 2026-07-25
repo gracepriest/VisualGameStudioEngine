@@ -13,7 +13,7 @@ namespace VisualGameStudio.Editor.Completion;
 /// - After End Sub, Next, Loop, etc. -> keeps same indent (those lines already outdented)
 /// - Else, ElseIf, Case, Catch, Finally -> same indent as block opener
 /// </summary>
-public class BasicLangIndentationStrategy : IIndentationStrategy
+public class BasicLangIndentationStrategy : IConfigurableIndentationStrategy
 {
     /// <summary>
     /// Number of spaces per indent level.
