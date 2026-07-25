@@ -4388,6 +4388,25 @@ extern "C" {
     __declspec(dllexport) void  Framework_Color_Brighten(unsigned char r, unsigned char g, unsigned char b, float factor, unsigned char* outR, unsigned char* outG, unsigned char* outB);
     __declspec(dllexport) void  Framework_Color_Invert(unsigned char r, unsigned char g, unsigned char b, unsigned char* outR, unsigned char* outG, unsigned char* outB);
 
+    // ==== COLOR/PIXEL (raylib 5.5 passthrough — Batch 3a) ====
+    __declspec(dllexport) bool    Framework_ColorIsEqual(unsigned char r, unsigned char g, unsigned char b, unsigned char a, unsigned char r2, unsigned char g2, unsigned char b2, unsigned char a2);
+    __declspec(dllexport) Color   Framework_Fade(unsigned char r, unsigned char g, unsigned char b, unsigned char a, float alpha);
+    __declspec(dllexport) int     Framework_ColorToInt(unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) Vector4 Framework_ColorNormalize(unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) Color   Framework_ColorFromNormalized(Vector4 normalized);
+    __declspec(dllexport) Vector3 Framework_ColorToHSV(unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) Color   Framework_ColorFromHSV(float h, float s, float v);
+    __declspec(dllexport) Color   Framework_ColorTint(unsigned char r, unsigned char g, unsigned char b, unsigned char a, unsigned char tr, unsigned char tg, unsigned char tb, unsigned char ta);
+    __declspec(dllexport) Color   Framework_ColorBrightness(unsigned char r, unsigned char g, unsigned char b, unsigned char a, float factor);
+    __declspec(dllexport) Color   Framework_ColorContrast(unsigned char r, unsigned char g, unsigned char b, unsigned char a, float contrast);
+    __declspec(dllexport) Color   Framework_ColorAlpha(unsigned char r, unsigned char g, unsigned char b, unsigned char a, float alpha);
+    __declspec(dllexport) Color   Framework_ColorAlphaBlend(unsigned char dr, unsigned char dg, unsigned char db, unsigned char da, unsigned char sr, unsigned char sg, unsigned char sb, unsigned char sa, unsigned char tr, unsigned char tg, unsigned char tb, unsigned char ta);
+    __declspec(dllexport) Color   Framework_ColorLerp(unsigned char r, unsigned char g, unsigned char b, unsigned char a, unsigned char r2, unsigned char g2, unsigned char b2, unsigned char a2, float factor);
+    __declspec(dllexport) Color   Framework_GetColor(unsigned int hexValue);
+    __declspec(dllexport) Color   Framework_GetPixelColor(void* srcPtr, int format);
+    __declspec(dllexport) void    Framework_SetPixelColor(void* dstPtr, unsigned char r, unsigned char g, unsigned char b, unsigned char a, int format);
+    __declspec(dllexport) int     Framework_GetPixelDataSize(int width, int height, int format);
+
     // ========================================================================
     // WINDOW/DISPLAY UTILITIES
     // ========================================================================

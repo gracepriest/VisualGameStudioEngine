@@ -28579,6 +28579,25 @@ extern "C" {
         *outB = 255 - b;
     }
 
+    // ==== COLOR/PIXEL (raylib 5.5 passthrough — Batch 3a) ====
+    bool    Framework_ColorIsEqual(unsigned char r, unsigned char g, unsigned char b, unsigned char a, unsigned char r2, unsigned char g2, unsigned char b2, unsigned char a2) { return ColorIsEqual(Color{r,g,b,a}, Color{r2,g2,b2,a2}); }
+    Color   Framework_Fade(unsigned char r, unsigned char g, unsigned char b, unsigned char a, float alpha) { return Fade(Color{r,g,b,a}, alpha); }
+    int     Framework_ColorToInt(unsigned char r, unsigned char g, unsigned char b, unsigned char a) { return ColorToInt(Color{r,g,b,a}); }
+    Vector4 Framework_ColorNormalize(unsigned char r, unsigned char g, unsigned char b, unsigned char a) { return ColorNormalize(Color{r,g,b,a}); }
+    Color   Framework_ColorFromNormalized(Vector4 normalized) { return ColorFromNormalized(normalized); }
+    Vector3 Framework_ColorToHSV(unsigned char r, unsigned char g, unsigned char b, unsigned char a) { return ColorToHSV(Color{r,g,b,a}); }
+    Color   Framework_ColorFromHSV(float h, float s, float v) { return ColorFromHSV(h, s, v); }
+    Color   Framework_ColorTint(unsigned char r, unsigned char g, unsigned char b, unsigned char a, unsigned char tr, unsigned char tg, unsigned char tb, unsigned char ta) { return ColorTint(Color{r,g,b,a}, Color{tr,tg,tb,ta}); }
+    Color   Framework_ColorBrightness(unsigned char r, unsigned char g, unsigned char b, unsigned char a, float factor) { return ColorBrightness(Color{r,g,b,a}, factor); }
+    Color   Framework_ColorContrast(unsigned char r, unsigned char g, unsigned char b, unsigned char a, float contrast) { return ColorContrast(Color{r,g,b,a}, contrast); }
+    Color   Framework_ColorAlpha(unsigned char r, unsigned char g, unsigned char b, unsigned char a, float alpha) { return ColorAlpha(Color{r,g,b,a}, alpha); }
+    Color   Framework_ColorAlphaBlend(unsigned char dr, unsigned char dg, unsigned char db, unsigned char da, unsigned char sr, unsigned char sg, unsigned char sb, unsigned char sa, unsigned char tr, unsigned char tg, unsigned char tb, unsigned char ta) { return ColorAlphaBlend(Color{dr,dg,db,da}, Color{sr,sg,sb,sa}, Color{tr,tg,tb,ta}); }
+    Color   Framework_ColorLerp(unsigned char r, unsigned char g, unsigned char b, unsigned char a, unsigned char r2, unsigned char g2, unsigned char b2, unsigned char a2, float factor) { return ColorLerp(Color{r,g,b,a}, Color{r2,g2,b2,a2}, factor); }
+    Color   Framework_GetColor(unsigned int hexValue) { return GetColor(hexValue); }
+    Color   Framework_GetPixelColor(void* srcPtr, int format) { return GetPixelColor(srcPtr, format); }
+    void    Framework_SetPixelColor(void* dstPtr, unsigned char r, unsigned char g, unsigned char b, unsigned char a, int format) { SetPixelColor(dstPtr, Color{r,g,b,a}, format); }
+    int     Framework_GetPixelDataSize(int width, int height, int format) { return GetPixelDataSize(width, height, format); }
+
     // ========================================================================
     // WINDOW/DISPLAY UTILITIES
     // ========================================================================

@@ -11615,5 +11615,75 @@ Public Module FrameworkWrapper
     End Function
 #End Region
 
+#Region "Raylib Color/Pixel (Batch 3a)"
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_ColorIsEqual(r As Byte, g As Byte, b As Byte, a As Byte, r2 As Byte, g2 As Byte, b2 As Byte, a2 As Byte) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_Fade(r As Byte, g As Byte, b As Byte, a As Byte, alpha As Single) As Color
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_ColorToInt(r As Byte, g As Byte, b As Byte, a As Byte) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_ColorNormalize(r As Byte, g As Byte, b As Byte, a As Byte) As Vector4
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_ColorFromNormalized(normalized As Vector4) As Color
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_ColorToHSV(r As Byte, g As Byte, b As Byte, a As Byte) As Vector3
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_ColorFromHSV(h As Single, s As Single, v As Single) As Color
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_ColorTint(r As Byte, g As Byte, b As Byte, a As Byte, tr As Byte, tg As Byte, tb As Byte, ta As Byte) As Color
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_ColorBrightness(r As Byte, g As Byte, b As Byte, a As Byte, factor As Single) As Color
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_ColorContrast(r As Byte, g As Byte, b As Byte, a As Byte, contrast As Single) As Color
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_ColorAlpha(r As Byte, g As Byte, b As Byte, a As Byte, alpha As Single) As Color
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_ColorAlphaBlend(dr As Byte, dg As Byte, db As Byte, da As Byte, sr As Byte, sg As Byte, sb As Byte, sa As Byte, tr As Byte, tg As Byte, tb As Byte, ta As Byte) As Color
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_ColorLerp(r As Byte, g As Byte, b As Byte, a As Byte, r2 As Byte, g2 As Byte, b2 As Byte, a2 As Byte, factor As Single) As Color
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetColor(hexValue As UInteger) As Color
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetPixelColor(srcPtr As IntPtr, format As Integer) As Color
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetPixelColor(dstPtr As IntPtr, r As Byte, g As Byte, b As Byte, a As Byte, format As Integer)
+    End Sub
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetPixelDataSize(width As Integer, height As Integer, format As Integer) As Integer
+    End Function
+#End Region
+
 End Module
 
