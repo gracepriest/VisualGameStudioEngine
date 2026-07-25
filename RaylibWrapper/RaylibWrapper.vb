@@ -11766,10 +11766,12 @@ Public Module FrameworkWrapper
     Public Function Framework_GetImageColor(image As Image, x As Integer, y As Integer) As Color
     End Function
 
+    ''' <summary>Loads all pixel colors from an image into a caller buffer (caller must pre-size outColors to image.width*image.height); returns that pixel count</summary>
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Function Framework_LoadImageColors(image As Image, outColors As Color()) As Integer
     End Function
 
+    ''' <summary>Loads an image's color palette into a caller buffer (caller must pre-size outColors to maxPaletteSize); returns the number of distinct colors found, capped at maxPaletteSize</summary>
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Function Framework_LoadImagePalette(image As Image, maxPaletteSize As Integer, outColors As Color()) As Integer
     End Function
