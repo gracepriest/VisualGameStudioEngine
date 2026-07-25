@@ -1359,6 +1359,17 @@ extern "C" {
     void Framework_ImageDrawTriangleStrip(Image* dst, Vector2* points, int pointCount, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { Color c = { r, g, b, a }; ImageDrawTriangleStrip(dst, points, pointCount, c); }
     void Framework_ImageDraw(Image* dst, Image src, Rectangle srcRec, Rectangle dstRec, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { Color tint = { r, g, b, a }; ImageDraw(dst, src, srcRec, dstRec, tint); }
 
+    // ==== TEXTURE GPU ROUND-TRIPS + FONT-IMAGE (raylib 5.5 passthrough — Batch 3d) ====
+    Texture2D Framework_LoadTextureFromImage(Image image) { return LoadTextureFromImage(image); }
+    TextureCubemap Framework_LoadTextureCubemap(Image image, int layout) { return LoadTextureCubemap(image, layout); }
+    Image Framework_LoadImageFromTexture(Texture2D texture) { return LoadImageFromTexture(texture); }
+    Image Framework_LoadImageFromScreen(void) { return LoadImageFromScreen(); }
+    Image Framework_ImageText(const char* text, int fontSize, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { Color c = { r, g, b, a }; return ImageText(text, fontSize, c); }
+    Image Framework_ImageTextEx(Font font, const char* text, float fontSize, float spacing, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { Color c = { r, g, b, a }; return ImageTextEx(font, text, fontSize, spacing, c); }
+    void Framework_ImageDrawText(Image* dst, const char* text, int posX, int posY, int fontSize, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { Color c = { r, g, b, a }; ImageDrawText(dst, text, posX, posY, fontSize, c); }
+    void Framework_ImageDrawTextEx(Image* dst, Font font, const char* text, Vector2 position, float fontSize, float spacing, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { Color c = { r, g, b, a }; ImageDrawTextEx(dst, font, text, position, fontSize, spacing, c); }
+    Image Framework_GenImageText(int width, int height, const char* text) { return GenImageText(width, height, text); }
+
     Font Framework_LoadFontEx(const char* fileName, int fontSize, int* glyphs, int glyphCount) {
         std::string path = ResolveAssetPath(fileName);
         return LoadFontEx(path.c_str(), fontSize, glyphs, glyphCount);

@@ -490,6 +490,17 @@ extern "C" {
     __declspec(dllexport) void Framework_ImageDrawTriangleStrip(Image* dst, Vector2* points, int pointCount, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
     __declspec(dllexport) void Framework_ImageDraw(Image* dst, Image src, Rectangle srcRec, Rectangle dstRec, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
 
+    // ==== TEXTURE GPU ROUND-TRIPS + FONT-IMAGE (raylib 5.5 passthrough — Batch 3d) ====
+    __declspec(dllexport) Texture2D Framework_LoadTextureFromImage(Image image);
+    __declspec(dllexport) TextureCubemap Framework_LoadTextureCubemap(Image image, int layout);
+    __declspec(dllexport) Image Framework_LoadImageFromTexture(Texture2D texture);
+    __declspec(dllexport) Image Framework_LoadImageFromScreen(void);
+    __declspec(dllexport) Image Framework_ImageText(const char* text, int fontSize, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) Image Framework_ImageTextEx(Font font, const char* text, float fontSize, float spacing, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_ImageDrawText(Image* dst, const char* text, int posX, int posY, int fontSize, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_ImageDrawTextEx(Image* dst, Font font, const char* text, Vector2 position, float fontSize, float spacing, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) Image Framework_GenImageText(int width, int height, const char* text);
+
     // Fonts / advanced text
     __declspec(dllexport) Font      Framework_LoadFontEx(const char* fileName, int fontSize, int* glyphs, int glyphCount);
     __declspec(dllexport) void      Framework_UnloadFont(Font font);
