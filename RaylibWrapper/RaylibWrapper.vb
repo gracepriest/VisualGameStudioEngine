@@ -11685,5 +11685,95 @@ Public Module FrameworkWrapper
     End Function
 #End Region
 
+#Region "Raylib Image load/gen/query (Batch 3b)"
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadImageRaw(fileName As String, width As Integer, height As Integer, format As Integer, headerSize As Integer) As Image
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadImageAnim(fileName As String, ByRef frames As Integer) As Image
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadImageAnimFromMemory(fileType As String, fileData As Byte(), dataSize As Integer, ByRef frames As Integer) As Image
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadImageFromMemory(fileType As String, fileData As Byte(), dataSize As Integer) As Image
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsImageValid(image As Image) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_ExportImage(image As Image, fileName As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_ExportImageAsCode(image As Image, fileName As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenImageColor(width As Integer, height As Integer, r As Byte, g As Byte, b As Byte, a As Byte) As Image
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenImageGradientLinear(width As Integer, height As Integer, direction As Integer, startR As Byte, startG As Byte, startB As Byte, startA As Byte, endR As Byte, endG As Byte, endB As Byte, endA As Byte) As Image
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenImageGradientRadial(width As Integer, height As Integer, density As Single, innerR As Byte, innerG As Byte, innerB As Byte, innerA As Byte, outerR As Byte, outerG As Byte, outerB As Byte, outerA As Byte) As Image
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenImageGradientSquare(width As Integer, height As Integer, density As Single, innerR As Byte, innerG As Byte, innerB As Byte, innerA As Byte, outerR As Byte, outerG As Byte, outerB As Byte, outerA As Byte) As Image
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenImageChecked(width As Integer, height As Integer, checksX As Integer, checksY As Integer, col1R As Byte, col1G As Byte, col1B As Byte, col1A As Byte, col2R As Byte, col2G As Byte, col2B As Byte, col2A As Byte) As Image
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenImageWhiteNoise(width As Integer, height As Integer, factor As Single) As Image
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenImagePerlinNoise(width As Integer, height As Integer, offsetX As Integer, offsetY As Integer, scale As Single) As Image
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenImageCellular(width As Integer, height As Integer, tileSize As Integer) As Image
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_ImageCopy(image As Image) As Image
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_ImageFromImage(image As Image, rec As Rectangle) As Image
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_ImageFromChannel(image As Image, selectedChannel As Integer) As Image
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetImageAlphaBorder(image As Image, threshold As Single) As Rectangle
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetImageColor(image As Image, x As Integer, y As Integer) As Color
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_LoadImageColors(image As Image, outColors As Color()) As Integer
+    End Function
+
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_LoadImagePalette(image As Image, maxPaletteSize As Integer, outColors As Color()) As Integer
+    End Function
+#End Region
+
 End Module
 

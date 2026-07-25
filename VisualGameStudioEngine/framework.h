@@ -420,6 +420,30 @@ extern "C" {
     __declspec(dllexport) void      Framework_ImageResize(Image* img, int w, int h);
     __declspec(dllexport) void      Framework_ImageFlipVertical(Image* img);
 
+    // ==== IMAGE LOAD/GEN/QUERY (raylib 5.5 passthrough — Batch 3b) ====
+    __declspec(dllexport) Image     Framework_LoadImageRaw(const char* fileName, int width, int height, int format, int headerSize);
+    __declspec(dllexport) Image     Framework_LoadImageAnim(const char* fileName, int* frames);
+    __declspec(dllexport) Image     Framework_LoadImageAnimFromMemory(const char* fileType, const unsigned char* fileData, int dataSize, int* frames);
+    __declspec(dllexport) Image     Framework_LoadImageFromMemory(const char* fileType, const unsigned char* fileData, int dataSize);
+    __declspec(dllexport) bool      Framework_IsImageValid(Image image);
+    __declspec(dllexport) bool      Framework_ExportImage(Image image, const char* fileName);
+    __declspec(dllexport) bool      Framework_ExportImageAsCode(Image image, const char* fileName);
+    __declspec(dllexport) Image     Framework_GenImageColor(int width, int height, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) Image     Framework_GenImageGradientLinear(int width, int height, int direction, unsigned char startR, unsigned char startG, unsigned char startB, unsigned char startA, unsigned char endR, unsigned char endG, unsigned char endB, unsigned char endA);
+    __declspec(dllexport) Image     Framework_GenImageGradientRadial(int width, int height, float density, unsigned char innerR, unsigned char innerG, unsigned char innerB, unsigned char innerA, unsigned char outerR, unsigned char outerG, unsigned char outerB, unsigned char outerA);
+    __declspec(dllexport) Image     Framework_GenImageGradientSquare(int width, int height, float density, unsigned char innerR, unsigned char innerG, unsigned char innerB, unsigned char innerA, unsigned char outerR, unsigned char outerG, unsigned char outerB, unsigned char outerA);
+    __declspec(dllexport) Image     Framework_GenImageChecked(int width, int height, int checksX, int checksY, unsigned char col1R, unsigned char col1G, unsigned char col1B, unsigned char col1A, unsigned char col2R, unsigned char col2G, unsigned char col2B, unsigned char col2A);
+    __declspec(dllexport) Image     Framework_GenImageWhiteNoise(int width, int height, float factor);
+    __declspec(dllexport) Image     Framework_GenImagePerlinNoise(int width, int height, int offsetX, int offsetY, float scale);
+    __declspec(dllexport) Image     Framework_GenImageCellular(int width, int height, int tileSize);
+    __declspec(dllexport) Image     Framework_ImageCopy(Image image);
+    __declspec(dllexport) Image     Framework_ImageFromImage(Image image, Rectangle rec);
+    __declspec(dllexport) Image     Framework_ImageFromChannel(Image image, int selectedChannel);
+    __declspec(dllexport) Rectangle Framework_GetImageAlphaBorder(Image image, float threshold);
+    __declspec(dllexport) Color     Framework_GetImageColor(Image image, int x, int y);
+    __declspec(dllexport) int       Framework_LoadImageColors(Image image, Color* outColors);
+    __declspec(dllexport) int       Framework_LoadImagePalette(Image image, int maxPaletteSize, Color* outColors);
+
     // Fonts / advanced text
     __declspec(dllexport) Font      Framework_LoadFontEx(const char* fileName, int fontSize, int* glyphs, int glyphCount);
     __declspec(dllexport) void      Framework_UnloadFont(Font font);

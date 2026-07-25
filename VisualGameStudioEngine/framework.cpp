@@ -1244,6 +1244,75 @@ extern "C" {
     void  Framework_ImageResize(Image* img, int w, int h) { ImageResize(img, w, h); }
     void  Framework_ImageFlipVertical(Image* img) { ImageFlipVertical(img); }
 
+    // ==== IMAGE LOAD/GEN/QUERY (raylib 5.5 passthrough — Batch 3b) ====
+    Image Framework_LoadImageRaw(const char* fileName, int width, int height, int format, int headerSize) {
+        std::string p = ResolveAssetPath(fileName);
+        return LoadImageRaw(p.c_str(), width, height, format, headerSize);
+    }
+    Image Framework_LoadImageAnim(const char* fileName, int* frames) {
+        std::string p = ResolveAssetPath(fileName);
+        return LoadImageAnim(p.c_str(), frames);
+    }
+    Image Framework_LoadImageAnimFromMemory(const char* fileType, const unsigned char* fileData, int dataSize, int* frames) {
+        return LoadImageAnimFromMemory(fileType, fileData, dataSize, frames);
+    }
+    Image Framework_LoadImageFromMemory(const char* fileType, const unsigned char* fileData, int dataSize) {
+        return LoadImageFromMemory(fileType, fileData, dataSize);
+    }
+    bool Framework_IsImageValid(Image image) { return IsImageValid(image); }
+    bool Framework_ExportImage(Image image, const char* fileName) { return ExportImage(image, fileName); }
+    bool Framework_ExportImageAsCode(Image image, const char* fileName) { return ExportImageAsCode(image, fileName); }
+    Image Framework_GenImageColor(int width, int height, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        return GenImageColor(width, height, Color{ r, g, b, a });
+    }
+    Image Framework_GenImageGradientLinear(int width, int height, int direction,
+            unsigned char startR, unsigned char startG, unsigned char startB, unsigned char startA,
+            unsigned char endR, unsigned char endG, unsigned char endB, unsigned char endA) {
+        return GenImageGradientLinear(width, height, direction, Color{ startR, startG, startB, startA }, Color{ endR, endG, endB, endA });
+    }
+    Image Framework_GenImageGradientRadial(int width, int height, float density,
+            unsigned char innerR, unsigned char innerG, unsigned char innerB, unsigned char innerA,
+            unsigned char outerR, unsigned char outerG, unsigned char outerB, unsigned char outerA) {
+        return GenImageGradientRadial(width, height, density, Color{ innerR, innerG, innerB, innerA }, Color{ outerR, outerG, outerB, outerA });
+    }
+    Image Framework_GenImageGradientSquare(int width, int height, float density,
+            unsigned char innerR, unsigned char innerG, unsigned char innerB, unsigned char innerA,
+            unsigned char outerR, unsigned char outerG, unsigned char outerB, unsigned char outerA) {
+        return GenImageGradientSquare(width, height, density, Color{ innerR, innerG, innerB, innerA }, Color{ outerR, outerG, outerB, outerA });
+    }
+    Image Framework_GenImageChecked(int width, int height, int checksX, int checksY,
+            unsigned char col1R, unsigned char col1G, unsigned char col1B, unsigned char col1A,
+            unsigned char col2R, unsigned char col2G, unsigned char col2B, unsigned char col2A) {
+        return GenImageChecked(width, height, checksX, checksY, Color{ col1R, col1G, col1B, col1A }, Color{ col2R, col2G, col2B, col2A });
+    }
+    Image Framework_GenImageWhiteNoise(int width, int height, float factor) { return GenImageWhiteNoise(width, height, factor); }
+    Image Framework_GenImagePerlinNoise(int width, int height, int offsetX, int offsetY, float scale) {
+        return GenImagePerlinNoise(width, height, offsetX, offsetY, scale);
+    }
+    Image Framework_GenImageCellular(int width, int height, int tileSize) { return GenImageCellular(width, height, tileSize); }
+    Image Framework_ImageCopy(Image image) { return ImageCopy(image); }
+    Image Framework_ImageFromImage(Image image, Rectangle rec) { return ImageFromImage(image, rec); }
+    Image Framework_ImageFromChannel(Image image, int selectedChannel) { return ImageFromChannel(image, selectedChannel); }
+    Rectangle Framework_GetImageAlphaBorder(Image image, float threshold) { return GetImageAlphaBorder(image, threshold); }
+    Color Framework_GetImageColor(Image image, int x, int y) { return GetImageColor(image, x, y); }
+    int Framework_LoadImageColors(Image image, Color* outColors) {
+        Color* src = LoadImageColors(image);
+        if (!src) return 0;
+        int n = image.width * image.height;
+        for (int i = 0; i < n; ++i) outColors[i] = src[i];
+        UnloadImageColors(src);
+        return n;
+    }
+    int Framework_LoadImagePalette(Image image, int maxPaletteSize, Color* outColors) {
+        int count = 0;
+        Color* pal = LoadImagePalette(image, maxPaletteSize, &count);
+        if (!pal) return 0;
+        int n = count < maxPaletteSize ? count : maxPaletteSize;
+        for (int i = 0; i < n; ++i) outColors[i] = pal[i];
+        UnloadImagePalette(pal);
+        return count;
+    }
+
     Font Framework_LoadFontEx(const char* fileName, int fontSize, int* glyphs, int glyphCount) {
         std::string path = ResolveAssetPath(fileName);
         return LoadFontEx(path.c_str(), fontSize, glyphs, glyphCount);
