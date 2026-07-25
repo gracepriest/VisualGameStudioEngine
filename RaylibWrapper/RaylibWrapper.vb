@@ -11939,5 +11939,18 @@ Public Module FrameworkWrapper
     End Function
 #End Region
 
+#Region "Raylib file-I/O / memory (ExportImageToMemory + MemFree)"
+    ' Encodes an in-RAM Image to bytes in memory. raylib's ExportImageToMemory is PNG-ONLY — pass ".png";
+    ' any other fileType returns a null IntPtr with fileSize 0. Returns raylib's malloc'd buffer as IntPtr
+    ' with the byte length via ByRef fileSize; copy it out (Marshal.Copy) then release it with Framework_MemFree.
+    ' MemFree is raylib's real rmem free — a mismatched allocator would be UB.
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_ExportImageToMemory(image As Image, fileType As String, ByRef fileSize As Integer) As IntPtr
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_MemFree(ptr As IntPtr)
+    End Sub
+#End Region
+
 End Module
 
