@@ -11909,5 +11909,35 @@ Public Module FrameworkWrapper
     End Sub
 #End Region
 
+#Region "Raylib Texture GPU + font-image (Batch 3d)"
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_LoadTextureFromImage(image As Image) As Texture2D
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_LoadTextureCubemap(image As Image, layout As Integer) As TextureCubemap
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_LoadImageFromTexture(texture As Texture2D) As Image
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_LoadImageFromScreen() As Image
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_ImageText(text As String, fontSize As Integer, r As Byte, g As Byte, b As Byte, a As Byte) As Image
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_ImageTextEx(font As Font, text As String, fontSize As Single, spacing As Single, r As Byte, g As Byte, b As Byte, a As Byte) As Image
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_ImageDrawText(ByRef dst As Image, text As String, posX As Integer, posY As Integer, fontSize As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_ImageDrawTextEx(ByRef dst As Image, font As Font, text As String, position As Vector2, fontSize As Single, spacing As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_GenImageText(width As Integer, height As Integer, text As String) As Image
+    End Function
+#End Region
+
 End Module
 
