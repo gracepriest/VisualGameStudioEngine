@@ -444,6 +444,12 @@ extern "C" {
     __declspec(dllexport) int       Framework_LoadImageColors(Image image, Color* outColors);
     __declspec(dllexport) int       Framework_LoadImagePalette(Image image, int maxPaletteSize, Color* outColors);
 
+    // ==== FILE-I/O / MEMORY (raylib passthrough) — encode an in-RAM Image to bytes + release the buffer ====
+    // ExportImageToMemory returns raylib's malloc'd encoded stream (*fileSize bytes); the caller marshals it
+    // (Marshal.Copy) then releases it with Framework_MemFree. MemFree is raylib's real rmem export.
+    __declspec(dllexport) unsigned char* Framework_ExportImageToMemory(Image image, const char* fileType, int* fileSize);
+    __declspec(dllexport) void           Framework_MemFree(void* ptr);
+
     // ==== IMAGE MUTATORS (raylib 5.5 passthrough — Batch 3c-i) ====
     __declspec(dllexport) void Framework_ImageFormat(Image* img, int newFormat);
     __declspec(dllexport) void Framework_ImageToPOT(Image* img, unsigned char fillR, unsigned char fillG, unsigned char fillB, unsigned char fillA);

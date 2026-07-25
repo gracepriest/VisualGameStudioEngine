@@ -1313,6 +1313,14 @@ extern "C" {
         return count;
     }
 
+    // ==== FILE-I/O / MEMORY (raylib passthrough) ====
+    // Returns raylib's malloc'd encoded buffer (*fileSize bytes) directly to the caller, who copies it out
+    // and then releases it via Framework_MemFree — single encode, no static buffer, no double-encode.
+    unsigned char* Framework_ExportImageToMemory(Image image, const char* fileType, int* fileSize) {
+        return ExportImageToMemory(image, fileType, fileSize);
+    }
+    void Framework_MemFree(void* ptr) { MemFree(ptr); }
+
     // ==== IMAGE MUTATORS (raylib 5.5 passthrough — Batch 3c-i) ====
     void Framework_ImageFormat(Image* img, int newFormat) { ImageFormat(img, newFormat); }
     void Framework_ImageToPOT(Image* img, unsigned char fillR, unsigned char fillG, unsigned char fillB, unsigned char fillA) { Color c = { fillR, fillG, fillB, fillA }; ImageToPOT(img, c); }
