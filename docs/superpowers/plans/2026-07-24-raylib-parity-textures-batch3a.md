@@ -36,7 +36,7 @@ The 17 functions are in the spec §3 table (authoritative). **No GUI smoke / Tes
 
 ## Task 0: Build baseline
 FOREGROUND. (Engine builds since Batch 1.)
-- [ ] **Step 1:** `msbuild VisualGameStudioEngine.sln -t:restore -p:RestorePackagesConfig=true` (idempotent).
+- [ ] **Step 1:** restore via the FULL MSBuild path (bare `msbuild` is not on PATH): `& "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\MSBuild.exe" VisualGameStudioEngine.sln -t:restore -p:RestorePackagesConfig=true` (idempotent).
 - [ ] **Step 2:** engine build → `& "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\MSBuild.exe" "VisualGameStudioEngine\VisualGameStudioEngine.vcxproj" -p:Configuration=Release -p:Platform=x64 "-p:SolutionDir=C:\Users\melvi\source\repos\VisualGameStudioEngine\" -v:minimal` → 0 errors.
 - [ ] **Step 3:** wrapper build → `dotnet build RaylibWrapper/RaylibWrapper.vbproj -c Release` → 0 errors.
 - [ ] **Step 4:** counts framework.h `__declspec(dllexport)` = **2542**; RaylibWrapper.vb `<DllImport` = **2474**. No commit.
@@ -69,7 +69,7 @@ End Structure
 - [ ] **Step 1:** write it. **Step 2:** run `--filter "FullyQualifiedName~RaylibColorParityTests"` → RED (17 missing). **Step 3: Commit** `test(raylib): color/pixel Batch 3a parity guard (red)`.
 
 ## Task 3: The 17 color/pixel functions (engine + wrapper)
-**Files:** framework.h (after :4389), framework.cpp (matching spot), RaylibWrapper.vb (new `#Region`). Add all 17 per spec §3, `.h`/`.cpp`/`.vb` in identical order.
+**Files:** framework.h (after :4389), framework.cpp (grep `Framework_Color_FromHSV` to find the real forwarder anchor — the .cpp definitions are NOT at the same line offset as the .h decls), RaylibWrapper.vb (new `#Region`). Add all 17 per spec §3, `.h`/`.cpp`/`.vb` in identical order.
 
 **Worked examples (one per return shape):**
 ```cpp
