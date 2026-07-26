@@ -12305,5 +12305,87 @@ Public Module FrameworkWrapper
     End Function
 #End Region
 
+#Region "Raylib rcore — Window state & control (Batch core-C1)"
+    ' Raw raylib window lifecycle/state/flag control, coexisting with the engine's MANAGED lifecycle
+    ' (Framework_Initialize/ShouldClose/Shutdown). No wrapper collisions — all 24 bind plain (import name == export name).
+    ' ⛔ Device-dependent: a real GL window must exist for the setters/state queries to be meaningful. bool returns are I1;
+    ' the unsigned-int state flags map to UInteger; SetWindowOpacity takes a Single. SetWindowIcon takes an Image BY VALUE;
+    ' SetWindowIcons takes the address of a pinned Image() (IntPtr) plus a count. GetWindowHandle returns the native OS
+    ' window handle As IntPtr. InitWindow's title marshals as Ansi. ToggleFullscreen/ToggleBorderlessWindowed/SetWindowSize/
+    ' SetWindowMinSize/SetWindowTitle are already bound elsewhere in this file and are intentionally NOT re-declared here.
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_InitWindow(width As Integer, height As Integer, title As String)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_CloseWindow()
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_WindowShouldClose() As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsWindowReady() As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsWindowFullscreen() As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsWindowHidden() As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsWindowMinimized() As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsWindowMaximized() As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsWindowFocused() As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsWindowResized() As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsWindowState(flag As UInteger) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetWindowState(flags As UInteger)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ClearWindowState(flags As UInteger)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_MaximizeWindow()
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_MinimizeWindow()
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_RestoreWindow()
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetWindowIcon(image As Image)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetWindowIcons(images As IntPtr, count As Integer)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetWindowPosition(x As Integer, y As Integer)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetWindowMonitor(monitor As Integer)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetWindowMaxSize(width As Integer, height As Integer)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetWindowOpacity(opacity As Single)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetWindowFocused()
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetWindowHandle() As IntPtr
+    End Function
+#End Region
+
 End Module
 
