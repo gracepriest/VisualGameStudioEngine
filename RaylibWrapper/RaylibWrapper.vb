@@ -12473,5 +12473,100 @@ Public Module FrameworkWrapper
     End Sub
 #End Region
 
+#Region "Raylib rcore — Timing/frame + Random + Misc + input stragglers (Batch core-C6)"
+    ' Raw rcore frame-control, RNG, misc, and the 2 input stragglers. SetTargetFPS/GetFrameTime/GetTime/GetFPS/
+    ' TakeScreenshot/MemFree are already bound elsewhere and are NOT re-declared here. TraceLog is variadic in raylib;
+    ' the engine exports a fixed 2-arg forwarder (routes text through "%s"), so this binds as (Integer, String) + Ansi.
+    ' Random-sequence and Mem* returns are raylib-heap pointers: LoadRandomSequence -> IntPtr freed with
+    ' UnloadRandomSequence (the managed LoadRandomSequence helper copies to Integer() then frees); MemAlloc/MemRealloc ->
+    ' IntPtr freed with Framework_MemFree.
+
+    ''' <summary>Swaps the back and front buffers (advanced manual frame control)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SwapScreenBuffer()
+    End Sub
+
+    ''' <summary>Registers all input events (advanced manual frame control)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_PollInputEvents()
+    End Sub
+
+    ''' <summary>Halts execution for the given number of seconds</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_WaitTime(seconds As Double)
+    End Sub
+
+    ''' <summary>Sets the seed for the random number generator</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetRandomSeed(seed As UInteger)
+    End Sub
+
+    ''' <summary>Gets a random value in [min, max] (both inclusive)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetRandomValue(min As Integer, max As Integer) As Integer
+    End Function
+
+    ''' <summary>Raw int* export for a no-repeat random sequence (use LoadRandomSequence for an Integer())</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_LoadRandomSequence(count As UInteger, min As Integer, max As Integer) As IntPtr
+    End Function
+
+    ''' <summary>Frees a random sequence returned by Framework_LoadRandomSequence</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadRandomSequence(sequence As IntPtr)
+    End Sub
+
+    ''' <summary>Loads a sequence of 'count' non-repeating random values in [min, max]</summary>
+    Public Function LoadRandomSequence(count As UInteger, min As Integer, max As Integer) As Integer()
+        Dim ptr = Framework_LoadRandomSequence(count, min, max)
+        If ptr = IntPtr.Zero Then Return Array.Empty(Of Integer)()
+        Dim n = CInt(count)
+        Dim result As Integer() = If(n > 0, New Integer(n - 1) {}, Array.Empty(Of Integer)())
+        If n > 0 Then Marshal.Copy(ptr, result, 0, n)
+        Framework_UnloadRandomSequence(ptr)
+        Return result
+    End Function
+
+    ''' <summary>Sets the init configuration flags (call before window creation to take effect)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetConfigFlags(flags As UInteger)
+    End Sub
+
+    ''' <summary>Opens a URL in the default system browser</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_OpenURL(url As String)
+    End Sub
+
+    ''' <summary>Writes a trace-log message at the given level (text routed through "%s" engine-side)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_TraceLog(logLevel As Integer, text As String)
+    End Sub
+
+    ''' <summary>Sets the minimum trace-log level threshold</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetTraceLogLevel(logLevel As Integer)
+    End Sub
+
+    ''' <summary>Allocates 'size' bytes from raylib's internal allocator (free with Framework_MemFree)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_MemAlloc(size As UInteger) As IntPtr
+    End Function
+
+    ''' <summary>Reallocates a raylib-heap buffer to 'size' bytes (free with Framework_MemFree)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_MemRealloc(ptr As IntPtr, size As UInteger) As IntPtr
+    End Function
+
+    ''' <summary>Sets gamepad vibration for both motors (duration in seconds)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetGamepadVibration(gamepad As Integer, leftMotor As Single, rightMotor As Single, duration As Single)
+    End Sub
+
+    ''' <summary>Gets the touch position XY for a touch point index</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetTouchPosition(index As Integer) As Vector2
+    End Function
+#End Region
+
 End Module
 
