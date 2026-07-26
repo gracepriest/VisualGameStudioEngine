@@ -40,9 +40,16 @@ VB mirrors: `<StructLayout(LayoutKind.Sequential)>`; pointers → `IntPtr`; `loo
   no engine copy). **`float* LoadWaveSamples`** (malloc, freed by UnloadWaveSamples) → return `IntPtr` +
   `Framework_UnloadWaveSamples(IntPtr)` (mirrors the ExportImageToMemory IntPtr+free pattern; NOT a static buffer).
 - **`bool` returns** (Is*/Export*) → `As Boolean`. **ExportWave/ExportWaveAsCode** → bool + string filename.
-- **⛔ NO raw-name collisions** with the custom layer (existing = `Framework_InitAudio`, `Framework_LoadSoundH`,
-  `Framework_Audio_*` — NOT the raw `InitAudioDevice`/`LoadSound`/`PlaySound` names). VERIFY per-name with a
-  redefinition grep before adding each (a genuine collision → engine won't compile, caught at build).
+- **⛔ Name collisions — engine C-ABI is clean; the VB wrapper is NOT (corrected in A2).** The raw engine exports
+  (`Framework_InitAudioDevice`/`LoadSound`/`PlaySound`) never collide with the engine's H-suffix layer
+  (`Framework_LoadSoundH`, `Framework_Audio_*`), so framework.h/.cpp always use the plain raylib names. BUT
+  `RaylibWrapper.vb` has a legacy **"Sound/Music Convenience Functions"** region of *managed* helpers (regular VB,
+  not DllImports) that squat the plain names as handle-based (`As Integer`): `Framework_LoadSound`/`PlaySound`/
+  `StopSound`/`SetSoundVolume` (A2) and `Framework_LoadMusic`/`PlayMusic`/`StopMusic` (A3). A raw import with the
+  same name → BC30301 (differ only by return type) or a confusing dual-dispatch overload. **CONVENTION:** for each
+  squatted name, the raw struct binding takes a **`Raw` suffix** and binds its export via
+  `<DllImport(EntryPoint:="Framework_<rawname>")>`; the engine ABI stays unsuffixed. Non-squatted names keep raylib's
+  exact spelling. Grep `RaylibWrapper.vb` for `(Function|Sub)\s+Framework_<name>\b` per name before adding.
 
 ## Decomposition — 4 auto-merged sub-batches (each: parity guard + correctness + build + ff-push)
 - **A1 — Device + Wave (16):** 5 device + 11 Wave (LoadWave, LoadWaveFromMemory, IsWaveValid, UnloadWave,

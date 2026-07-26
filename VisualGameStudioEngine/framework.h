@@ -621,6 +621,24 @@ extern "C" {
     __declspec(dllexport) float* Framework_LoadWaveSamples(Wave wave);
     __declspec(dllexport) void   Framework_UnloadWaveSamples(float* samples);
 
+    // ==== RAW RAUDIO PARITY — Sound (raylib 5.5 passthrough, Batch audio-A2) ====
+    // Raw raylib Sound API (struct BY VALUE); coexists with the handle-based Framework_*SoundH layer below.
+    __declspec(dllexport) Sound Framework_LoadSound(const char* fileName);
+    __declspec(dllexport) Sound Framework_LoadSoundFromWave(Wave wave);
+    __declspec(dllexport) Sound Framework_LoadSoundAlias(Sound source);
+    __declspec(dllexport) bool  Framework_IsSoundValid(Sound sound);
+    __declspec(dllexport) void  Framework_UpdateSound(Sound sound, const void* data, int sampleCount);
+    __declspec(dllexport) void  Framework_UnloadSound(Sound sound);
+    __declspec(dllexport) void  Framework_UnloadSoundAlias(Sound alias);
+    __declspec(dllexport) void  Framework_PlaySound(Sound sound);
+    __declspec(dllexport) void  Framework_StopSound(Sound sound);
+    __declspec(dllexport) void  Framework_PauseSound(Sound sound);
+    __declspec(dllexport) void  Framework_ResumeSound(Sound sound);
+    __declspec(dllexport) bool  Framework_IsSoundPlaying(Sound sound);
+    __declspec(dllexport) void  Framework_SetSoundVolume(Sound sound, float volume);
+    __declspec(dllexport) void  Framework_SetSoundPitch(Sound sound, float pitch);
+    __declspec(dllexport) void  Framework_SetSoundPan(Sound sound, float pan);
+
     // Sounds (handle-based)
     __declspec(dllexport) int   Framework_LoadSoundH(const char* file);
     __declspec(dllexport) void  Framework_UnloadSoundH(int h);

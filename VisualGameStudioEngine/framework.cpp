@@ -1918,6 +1918,25 @@ extern "C" {
     float* Framework_LoadWaveSamples(Wave wave) { return LoadWaveSamples(wave); }
     void   Framework_UnloadWaveSamples(float* samples) { UnloadWaveSamples(samples); }
 
+    // ==== RAW RAUDIO PARITY — Sound (raylib 5.5 passthrough, Batch audio-A2) ====
+    // PlaySound/StopSound/LoadSound here bind raylib's raudio (the same names the custom layer above
+    // already calls in this TU), not the Win32 PlaySound macro.
+    Sound Framework_LoadSound(const char* fileName) { return LoadSound(fileName); }
+    Sound Framework_LoadSoundFromWave(Wave wave) { return LoadSoundFromWave(wave); }
+    Sound Framework_LoadSoundAlias(Sound source) { return LoadSoundAlias(source); }
+    bool  Framework_IsSoundValid(Sound sound) { return IsSoundValid(sound); }
+    void  Framework_UpdateSound(Sound sound, const void* data, int sampleCount) { UpdateSound(sound, data, sampleCount); }
+    void  Framework_UnloadSound(Sound sound) { UnloadSound(sound); }
+    void  Framework_UnloadSoundAlias(Sound alias) { UnloadSoundAlias(alias); }
+    void  Framework_PlaySound(Sound sound) { PlaySound(sound); }
+    void  Framework_StopSound(Sound sound) { StopSound(sound); }
+    void  Framework_PauseSound(Sound sound) { PauseSound(sound); }
+    void  Framework_ResumeSound(Sound sound) { ResumeSound(sound); }
+    bool  Framework_IsSoundPlaying(Sound sound) { return IsSoundPlaying(sound); }
+    void  Framework_SetSoundVolume(Sound sound, float volume) { SetSoundVolume(sound, volume); }
+    void  Framework_SetSoundPitch(Sound sound, float pitch) { SetSoundPitch(sound, pitch); }
+    void  Framework_SetSoundPan(Sound sound, float pan) { SetSoundPan(sound, pan); }
+
     void Framework_PauseAllAudio() {
         g_audioPaused = true;
         for (auto& kv : g_sounds) {
