@@ -74,6 +74,7 @@ Every type name resolvable in a native project belongs to exactly one category:
 | `NativeOwned` | Pure C++ implementation; never crosses as a handle | Existing mapped primitives; after P1: `DateTime`, `TimeSpan`, `Guid`, `StringBuilder`, `Decimal`, `SByte` |
 | `ManagedOwned` | Lives in the GC heap; crosses only as a handle | `Regex`, `Stream`, `Uri`, `FileInfo`, `DirectoryInfo`, all user-assembly / NuGet types |
 | `Bridged` | Value-converted at the edge; both sides have a native representation | `String`, numeric primitives, blittable structs |
+| `Rejected` | Known to the registry, no permitted use in native projects; category-aware diagnostic | `Object` (has a legacy `void*` mapping, but erasure is unsound) |
 
 **Single source of truth.** One registry class in `BasicLang` replaces the three
 hand-synchronized sets that exist today: `CppCapabilityChecker.MappedTypeNames`,
@@ -93,8 +94,9 @@ Two migration details the registry must preserve explicitly:
   unaccounted for.
 - **`Object` keeps its deliberate asymmetry**: it is a `_typeMap` key (mapped
   to `void*`) yet rejected by the capability checker because `void*` erasure
-  is unsound. In registry terms: `Object` carries a mapping but no category
-  that permits use; the existing rationale comment moves into the registry.
+  is unsound. In registry terms it is category `Rejected` — the fourth
+  category exists precisely so this case (and truly unknown types) needs no
+  ad-hoc exception; the existing rationale comment moves into the registry.
 
 **Collision rule.** When a `NativeOwned` type appears in a managed signature
 (e.g. `System.DateTime` in a NuGet API), generated boundary code
@@ -123,7 +125,8 @@ A managed-object handle is a single 64-bit value packed as
   wraps every handle in `BasicLang::NetRef` — a `shared_ptr`-based RAII type
   whose deleter calls `blnet_release(handle)` — the same reference-semantics
   pattern as the existing `shared_ptr<BasicLang::List<T>>` collection layer.
-- Handles are not raw-copyable. Duplicating a reference goes through
+- A freshly created handle has **refcount 1**, owned by the receiving
+  `NetRef`. Handles are not raw-copyable. Duplicating a reference goes through
   `blnet_addref` (table refcount), so aliasing cannot bypass lifetime tracking.
   `NetRef` copy = `shared_ptr` copy (no ABI call); a *new independent* `NetRef`
   for the same object = `blnet_addref`.
@@ -168,6 +171,10 @@ Exceptions never unwind across the ABI in either direction.
   A managed exception becomes `{ status = BLNET_E_MANAGED_EXCEPTION,
   exception_type_name, message }` (strings per C3, retrieved via a
   per-thread `blnet_last_error` accessor to keep signatures uniform).
+  The same accessor serves **all** non-OK statuses on the current thread —
+  including retrieving a `BLNET_E_NATIVE_EXCEPTION` message after an inline
+  callback failure — so there is exactly one error-detail channel in the C
+  header, not per-direction variants.
   Generated native code checks status and rethrows through the existing
   `IRThrow` machinery as BL `NetException` carrying the original .NET type
   name and message. Hand-written C++ checks status codes directly or uses the
@@ -178,10 +185,11 @@ Exceptions never unwind across the ABI in either direction.
   `BLNET_E_NATIVE_EXCEPTION` + message. For **inline** dispatch (same-thread
   or `Immediate`), the managed dispatcher rethrows it as a .NET
   `BasicLangNativeException`. For **queued** dispatch there is no invoker left
-  to rethrow into: the failure is captured and surfaced on the pump thread —
-  `blnet_pump()` returns a non-OK status (or invokes a registered error hook)
-  carrying the exception message. Queued-callback failures are never silently
-  dropped.
+  to rethrow into: the failure is captured and surfaced on the pump thread.
+  Precisely: `blnet_pump()` **continues draining** the queue on a failure,
+  invokes the registered error hook (if any) **once per failure** with the
+  status and message, and returns the **first** failure's status
+  (`BLNET_OK` if none). Queued-callback failures are never silently dropped.
 - **The catch-all handler is the last line of defense and must itself be
   non-throwing.** Under Native AOT, an exception escaping an
   `[UnmanagedCallersOnly]` export is a process fail-fast. Per-thread
@@ -202,14 +210,38 @@ The reverse direction mirrors C2 exactly:
   `int32_t blnet_invoke_callback(uint64_t callback_handle, const uint64_t* args, int32_t argc, uint64_t* result)`
   — so the AOT shim needs exactly **one** unmanaged-function-pointer signature
   total, independent of callback shape or instance. Each argument occupies one
-  64-bit slot, encoded per C3: blittables by value (zero/sign-extended to 64
-  bits; floating point as its bit pattern), strings as UTF-8 `char*` under
-  C3's ownership rules, everything else as a C2 handle. `result` is one slot
-  encoded the same way (`NULL` for notification shapes, see below). No type
-  tags are needed: a callback's shape is fixed at registration, and both
-  sides' generated (or hand-written) code agree on the slot sequence at
+  64-bit slot, encoded as follows:
+  - **Blittable scalars** widen to 64 bits — integers zero/sign-extended per
+    signedness, floating point as its raw bit pattern in the low bits.
+  - **Blittable structs ≤ 8 bytes** are bit-copied into the slot (high bytes
+    zero).
+  - **Blittable structs > 8 bytes** cross as a pointer occupying one slot,
+    borrowed for the duration of the invocation under C3's in-parameter rule
+    — the callee copies, never retains the pointer.
+  - **Strings** cross as UTF-8 `char*` per C3's ownership rules;
+    **everything else** as a C2 handle.
+  - **Out/ByRef parameters** occupy one slot holding a caller-provided
+    pointer to their storage; the callee writes the value (encoded per this
+    section) through it before returning. This is sound only because
+    result-bearing callbacks are inline-only (see Callback shapes): the
+    pointer is live for the duration of the call and, per C6, never retained
+    past it.
+  - **`result`** is one slot carrying the **return value proper**, encoded
+    the same way; a struct return > 8 bytes goes through a caller-allocated
+    buffer whose pointer occupies the result slot. `result` is `NULL` for
+    void-returning callbacks even when out-parameters are present.
+  - **Queued invocations copy at enqueue**: > 8-byte structs into queue-owned
+    storage, strings per C3, and handle arguments are **addref'd at enqueue**
+    — the queue owns a reference, transferred to the callee at execution, so
+    a queued handle can never dangle; a handle already stale at enqueue fails
+    the invocation immediately with `BLNET_E_STALE_HANDLE`.
+
+  No type tags are needed: a callback's shape is fixed at registration, and
+  both sides' generated (or hand-written) code agree on the slot sequence at
   compile time. **This slot encoding is part of the ABI and is covered by
-  C7's version number.**
+  C7's version number.** Native code releases a callback registration via
+  `blnet_callback_release(callback_handle)`; the handle is valid until
+  released (C6).
 - Invoking a released callback fails with `BLNET_E_STALE_CALLBACK` —
   symmetric with C2, one diagnosis story in both directions.
 - **Callback shapes.** Every callback is classified at registration:
@@ -276,19 +308,26 @@ native test harness, wired as `[Category("Integration")]` NUnit tests:
 7. Native exception inside an **inline** callback → managed
    `BasicLangNativeException`.
 8. Same-thread callback fires inline; result-bearing inline callback returns
-   its value through the thunk's result slot.
-9. Cross-thread notification callback is queued and fires only on
-   `blnet_pump()`.
-10. Cross-thread invocation of a result-bearing, non-`Immediate` callback →
+   its value through the thunk's result slot, and a callback with a return
+   value **plus an out-parameter** writes both correctly (out-slot pointer
+   writeback).
+9. A callback taking a 16-byte blittable struct argument and returning a
+   struct result round-trips bit-exact through the thunk (pointer-in-slot
+   encoding both directions).
+10. Cross-thread notification callback is queued and fires only on
+    `blnet_pump()`; a handle argument addref'd at enqueue stays live even if
+    the enqueuing side's reference is released before the pump runs.
+11. Cross-thread invocation of a result-bearing, non-`Immediate` callback →
     `BLNET_E_CROSS_THREAD_RESULT` (immediate, managed-side exception; nothing
     queued).
-11. Queued callback that throws natively → failure surfaced from
-    `blnet_pump()` (status or error hook), not silently dropped.
-12. Deadlock guard: pump thread inside a synchronous managed call while a
+12. Queued callbacks that throw natively → pump continues draining, error
+    hook fires once per failure, `blnet_pump()` returns the first failure's
+    status.
+13. Deadlock guard: pump thread inside a synchronous managed call while a
     cross-thread notification is queued → no hang; defined ordering (the
     notification fires on the *next* pump).
-13. ABI version mismatch → fail-fast diagnostic.
-14. Concurrency: parallel create/release hammering the table (thread-safety).
+14. ABI version mismatch → fail-fast diagnostic.
+15. Concurrency: parallel create/release hammering the table (thread-safety).
 
 These conformance tests become the acceptance gate P2's real shim must pass
 unchanged.
