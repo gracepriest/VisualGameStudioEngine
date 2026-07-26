@@ -12387,5 +12387,91 @@ Public Module FrameworkWrapper
     End Function
 #End Region
 
+#Region "Raylib rcore — Window/monitor query & clipboard (Batch core-C2)"
+    ' Raw rcore query getters + clipboard. GetScreenWidth/Height, GetMonitor{Width,Height,Count,RefreshRate} and
+    ' GetCurrentMonitor are already bound above (managed monitor region) and are NOT re-declared here. Vector2/Image
+    ' returns marshal by value; const char* returns come back as IntPtr and are copied with PtrToStringAnsi (never an
+    ' LPStr String return — that would free raylib-owned memory); SetClipboardText marshals its input Ansi.
+
+    ''' <summary>Gets current render width (considers HiDPI)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetRenderWidth() As Integer
+    End Function
+
+    ''' <summary>Gets current render height (considers HiDPI)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetRenderHeight() As Integer
+    End Function
+
+    ''' <summary>Gets the specified monitor's position</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetMonitorPosition(monitor As Integer) As Vector2
+    End Function
+
+    ''' <summary>Gets the specified monitor's physical width in millimetres</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetMonitorPhysicalWidth(monitor As Integer) As Integer
+    End Function
+
+    ''' <summary>Gets the specified monitor's physical height in millimetres</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetMonitorPhysicalHeight(monitor As Integer) As Integer
+    End Function
+
+    ''' <summary>Gets the window position XY on the monitor</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetWindowPosition() As Vector2
+    End Function
+
+    ''' <summary>Gets the window DPI scale factor</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetWindowScaleDPI() As Vector2
+    End Function
+
+    ''' <summary>Raw const char* export for the monitor name (use GetMonitorName for a String)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetMonitorName(monitor As Integer) As IntPtr
+    End Function
+
+    ''' <summary>Gets the human-readable name of the specified monitor</summary>
+    Public Function GetMonitorName(monitor As Integer) As String
+        Dim ptr = Framework_GetMonitorName(monitor)
+        If ptr = IntPtr.Zero Then Return ""
+        Return Marshal.PtrToStringAnsi(ptr)
+    End Function
+
+    ''' <summary>Sets the clipboard text content</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_SetClipboardText(text As String)
+    End Sub
+
+    ''' <summary>Raw const char* export for the clipboard text (use GetClipboardText for a String)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetClipboardText() As IntPtr
+    End Function
+
+    ''' <summary>Gets the clipboard text content</summary>
+    Public Function GetClipboardText() As String
+        Dim ptr = Framework_GetClipboardText()
+        If ptr = IntPtr.Zero Then Return ""
+        Return Marshal.PtrToStringAnsi(ptr)
+    End Function
+
+    ''' <summary>Gets the clipboard image content (Image by value; free with UnloadImage)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetClipboardImage() As Image
+    End Function
+
+    ''' <summary>Enables waiting for events on EndDrawing (no automatic polling)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_EnableEventWaiting()
+    End Sub
+
+    ''' <summary>Disables waiting for events on EndDrawing (automatic polling)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DisableEventWaiting()
+    End Sub
+#End Region
+
 End Module
 
