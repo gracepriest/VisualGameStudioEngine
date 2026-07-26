@@ -1984,6 +1984,15 @@ extern "C" {
     Matrix  Framework_GetCameraMatrix(Camera camera) { return GetCameraMatrix(camera); }
     Matrix  Framework_GetCameraMatrix2D(Camera2D camera) { return GetCameraMatrix2D(camera); }
 
+    // ==== RAW RCORE PARITY — Compression / Encoding (raylib 5.5 passthrough, Batch core-C10) ====
+    unsigned char* Framework_CompressData(const unsigned char* data, int dataSize, int* compDataSize) { return CompressData(data, dataSize, compDataSize); }
+    unsigned char* Framework_DecompressData(const unsigned char* compData, int compDataSize, int* dataSize) { return DecompressData(compData, compDataSize, dataSize); }
+    char*          Framework_EncodeDataBase64(const unsigned char* data, int dataSize, int* outputSize) { return EncodeDataBase64(data, dataSize, outputSize); }
+    unsigned char* Framework_DecodeDataBase64(const unsigned char* data, int* outputSize) { return DecodeDataBase64(data, outputSize); }
+    unsigned int   Framework_ComputeCRC32(unsigned char* data, int dataSize) { return ComputeCRC32(data, dataSize); }
+    unsigned int*  Framework_ComputeMD5(unsigned char* data, int dataSize) { return ComputeMD5(data, dataSize); }
+    unsigned int*  Framework_ComputeSHA1(unsigned char* data, int dataSize) { return ComputeSHA1(data, dataSize); }
+
     void Framework_PauseAllAudio() {
         g_audioPaused = true;
         for (auto& kv : g_sounds) {

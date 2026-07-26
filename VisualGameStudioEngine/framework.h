@@ -692,6 +692,19 @@ extern "C" {
     __declspec(dllexport) Matrix  Framework_GetCameraMatrix(Camera camera);
     __declspec(dllexport) Matrix  Framework_GetCameraMatrix2D(Camera2D camera);
 
+    // ==== RAW RCORE PARITY — Compression / Encoding (raylib 5.5 passthrough, Batch core-C10) ====
+    // DEFLATE + Base64 helpers hand back a raylib-malloc'd buffer plus its length via int*; the caller copies it out
+    // (Marshal.Copy) then releases it with Framework_MemFree (raylib's rmem allocator — a mismatched free is UB).
+    // ComputeCRC32 returns the hash value directly; ComputeMD5/ComputeSHA1 return a pointer to a STATIC internal
+    // buffer (int[4] / int[5]) — read the 16 / 20 bytes out, do NOT free them.
+    __declspec(dllexport) unsigned char* Framework_CompressData(const unsigned char* data, int dataSize, int* compDataSize);
+    __declspec(dllexport) unsigned char* Framework_DecompressData(const unsigned char* compData, int compDataSize, int* dataSize);
+    __declspec(dllexport) char*          Framework_EncodeDataBase64(const unsigned char* data, int dataSize, int* outputSize);
+    __declspec(dllexport) unsigned char* Framework_DecodeDataBase64(const unsigned char* data, int* outputSize);
+    __declspec(dllexport) unsigned int   Framework_ComputeCRC32(unsigned char* data, int dataSize);
+    __declspec(dllexport) unsigned int*  Framework_ComputeMD5(unsigned char* data, int dataSize);
+    __declspec(dllexport) unsigned int*  Framework_ComputeSHA1(unsigned char* data, int dataSize);
+
     // Sounds (handle-based)
     __declspec(dllexport) int   Framework_LoadSoundH(const char* file);
     __declspec(dllexport) void  Framework_UnloadSoundH(int h);

@@ -50,7 +50,7 @@ To add across the batches: `Matrix` (C5 ✅), `Camera3D` (C5 ✅), `Ray` (C5 ✅
 | C7 | File data I/O | 7 | — | headless | `LoadFileData`(`IntPtr`+`ByRef int`), text variants. |
 | C8 | File-system path queries | 15 | — | headless | all string/bool/int. |
 | C9 | Directory listing & dropped files | 7 | FilePathList | headless | `char**` list marshaling. |
-| C10 | Compression / Encoding | 7 | — | headless | round-trips + known CRC/MD5/SHA1 vectors. |
+| **C10** | **Compression / Encoding** | **7** | — | **headless** | **SHIPPED — see below.** |
 | C11 | Automation events | 8 | AutomationEvent, AutomationEventList | device-lite | record/play. |
 | — | Deferred callbacks | +5 | — | — | `SetTraceLogCallback` + 4 file-I/O callbacks; fold into the audio-callback batch. |
 
@@ -75,3 +75,13 @@ callbacks last.
   `GetCameraMatrix` view matrix (`m14 == -eye.z` = the Matrix-marshaling proof), `GetWorldToScreenEx` target→center,
   `GetScreenToWorldRayEx` origin=camera.position + dir=-Z, and the two non-Ex variants' deterministic headless behavior
   (`GetScreenToWorldRay` copies `camera.position`; `GetWorldToScreen`→NaN). Zero wrapper collisions (all 8 plain).
+- **C10 — Compression / Encoding (7) 🏁 SHIPPED** (counts in the memory topic). `CompressData`/`DecompressData`/
+  `EncodeDataBase64`/`DecodeDataBase64` return a raylib-malloc'd buffer + size via `int*` → wrapper returns `IntPtr` +
+  `ByRef Integer`, caller `Marshal.Copy` + `Framework_MemFree` (reuses the existing `ExportImageToMemory`/`MemFree`
+  ownership pattern). ⚠ `DecodeDataBase64` scans its input to a NUL → that ONE input marshals as an Ansi `String`.
+  `ComputeCRC32`→`UInteger`; `ComputeMD5`/`ComputeSHA1` return a pointer to a STATIC `int[4]`/`int[5]` (never freed).
+  Headless fast-subset correctness: DEFLATE round-trip (+shrinks repetitive data), Base64 `Man`⇄`TWFu` + all-byte
+  round-trip, CRC-32 `0xCBF43926`, MD5 byte-for-byte vs .NET. **⚠ raylib 5.5 `ComputeSHA1` has UPSTREAM undefined
+  behaviour (CHANGELOG #5957, fixed after 5.5) → does NOT yield the standard digest; we FAITHFULLY pass it through and
+  contract-test it (deterministic, input-sensitive 20-byte static buffer) rather than pin the buggy value.** A raylib
+  bump past 5.5 makes it standard for free. Zero wrapper collisions (all 7 plain).
