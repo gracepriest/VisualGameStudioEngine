@@ -8200,29 +8200,11 @@ public partial class MainWindowViewModel : ViewModelBase
             // Check if the file is open
             if (_openDocuments.TryGetValue(filePath, out var doc))
             {
-                // Apply edits in reverse order to preserve offsets
-                var sortedEdits = fileEdits.OrderByDescending(e => e.StartLine).ThenByDescending(e => e.StartColumn).ToList();
-                var text = doc.Text;
-                var lines = text.Split('\n');
-
-                foreach (var e in sortedEdits)
-                {
-                    var startLine = e.StartLine - 1;
-                    var endLine = e.EndLine - 1;
-                    var startCol = e.StartColumn - 1;
-                    var endCol = e.EndColumn - 1;
-
-                    if (startLine >= 0 && startLine < lines.Length)
-                    {
-                        if (startLine == endLine && startCol >= 0 && endCol <= lines[startLine].Length)
-                        {
-                            var line = lines[startLine];
-                            lines[startLine] = line.Substring(0, startCol) + e.NewText + line.Substring(endCol);
-                        }
-                    }
-                }
-
-                doc.SetContent(string.Join("\n", lines));
+                // Apply at real offsets on the live document. A whole-buffer SetContent here
+                // reset the caret to the document end (and cleared undo / reset the dirty
+                // flag); targeted replaces preserve the caret, undo history, and dirty state,
+                // and correctly handle multi-line edits.
+                VisualGameStudio.Editor.Formatting.LspTextEditApplier.Apply(doc.TextDocument, fileEdits);
             }
             else
             {

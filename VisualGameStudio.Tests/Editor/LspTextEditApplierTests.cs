@@ -99,4 +99,25 @@ public class LspTextEditApplierTests
         Assert.DoesNotThrow(() => LspTextEditApplier.Apply(doc, System.Array.Empty<TextEditInfo>()));
         Assert.That(doc.Text, Is.EqualTo(Sample));
     }
+
+    // Workspace-edit (rename/refactor) scenario: multiple occurrences across lines, with the
+    // caret on one of the renamed lines. ApplyWorkspaceEditAsync used to SetContent the whole
+    // buffer here, jumping the caret to the end and clearing undo — this locks caret-safety.
+    [Test]
+    public void Apply_RenameAcrossLines_AppliesAllOccurrences_AndKeepsCaretOnItsLine()
+    {
+        var doc = new TextDocument("int foo = 1;\nreturn foo + foo;\n");
+        var caret = OffsetAt(doc, 2, 12);   // on line 2, at the '+' (past the first 'foo')
+        var edits = new[]
+        {
+            new TextEditInfo { StartLine = 1, StartColumn = 5, EndLine = 1, EndColumn = 8, NewText = "myField" },   // foo -> myField
+            new TextEditInfo { StartLine = 2, StartColumn = 8, EndLine = 2, EndColumn = 11, NewText = "myField" },
+            new TextEditInfo { StartLine = 2, StartColumn = 14, EndLine = 2, EndColumn = 17, NewText = "myField" },
+        };
+
+        var newCaret = TrackCaret(doc, caret, () => LspTextEditApplier.Apply(doc, edits));
+
+        Assert.That(doc.Text, Is.EqualTo("int myField = 1;\nreturn myField + myField;\n"));
+        Assert.That(doc.GetLineByOffset(newCaret).LineNumber, Is.EqualTo(2), "caret stayed on line 2, not the document end");
+    }
 }
