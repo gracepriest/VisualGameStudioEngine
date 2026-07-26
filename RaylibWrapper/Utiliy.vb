@@ -169,6 +169,24 @@ Public Module Utiliy
         Public data As IntPtr           ' Buffer data pointer
     End Structure
 
+    ' raylib AudioStream — handle to the audio system's internal buffer/processor (raudio module, Batch audio-A2).
+    ' The two leading pointers are opaque (rAudioBuffer*/rAudioProcessor*); the struct is embedded BY VALUE in Sound/Music.
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure AudioStream
+        Public buffer As IntPtr         ' Pointer to internal data used by the audio system
+        Public processor As IntPtr      ' Pointer to internal data processor, useful for audio effects
+        Public sampleRate As UInteger   ' Frequency (samples per second)
+        Public sampleSize As UInteger   ' Bit depth (bits per sample): 8, 16, 32
+        Public channels As UInteger     ' Number of channels (1-mono, 2-stereo, ...)
+    End Structure
+
+    ' raylib Sound — a playable sound backed by an AudioStream (raudio module, Batch audio-A2). Passed BY VALUE.
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure Sound
+        Public stream As AudioStream    ' Audio stream
+        Public frameCount As UInteger   ' Total number of frames (considering channels)
+    End Structure
+
     Public Enum TextureFilter
         Point = 0
         Bilinear = 1

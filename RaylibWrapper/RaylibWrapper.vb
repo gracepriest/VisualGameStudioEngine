@@ -12001,5 +12001,60 @@ Public Module FrameworkWrapper
     End Sub
 #End Region
 
+#Region "Raylib raudio — Sound (Batch audio-A2)"
+    ' Raw raylib Sound API (struct BY VALUE), coexisting with the handle-based Framework_*SoundH layer.
+    ' Sound embeds an AudioStream; both are blittable structs in Utiliy.vb. C bool returns use I1.
+    ' NAMING: the legacy "Sound Convenience Functions" region above already exposes handle-based (As Integer)
+    ' helpers named Framework_LoadSound/PlaySound/StopSound/SetSoundVolume, so those four raw struct bindings take a
+    ' "Raw" suffix and bind their raw engine export via EntryPoint. The other 11 keep raylib's exact names. (The raw
+    ' engine C-ABI export names in framework.h are unsuffixed — the suffix is a VB-only disambiguator.)
+    ' Framework_PlaySound is raylib's raudio call (distinct from the Win32 PlaySound macro; resolved engine-side).
+    <DllImport(ENGINE_DLL, EntryPoint:="Framework_LoadSound", CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadSoundRaw(fileName As String) As Sound
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_LoadSoundFromWave(wave As Wave) As Sound
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_LoadSoundAlias(source As Sound) As Sound
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsSoundValid(sound As Sound) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UpdateSound(sound As Sound, data As IntPtr, sampleCount As Integer)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadSound(sound As Sound)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadSoundAlias(aliasSound As Sound)
+    End Sub
+    <DllImport(ENGINE_DLL, EntryPoint:="Framework_PlaySound", CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_PlaySoundRaw(sound As Sound)
+    End Sub
+    <DllImport(ENGINE_DLL, EntryPoint:="Framework_StopSound", CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_StopSoundRaw(sound As Sound)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_PauseSound(sound As Sound)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ResumeSound(sound As Sound)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsSoundPlaying(sound As Sound) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, EntryPoint:="Framework_SetSoundVolume", CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetSoundVolumeRaw(sound As Sound, volume As Single)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetSoundPitch(sound As Sound, pitch As Single)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetSoundPan(sound As Sound, pan As Single)
+    End Sub
+#End Region
+
 End Module
 
