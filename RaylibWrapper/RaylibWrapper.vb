@@ -12056,5 +12056,61 @@ Public Module FrameworkWrapper
     End Sub
 #End Region
 
+#Region "Raylib raudio — Music (Batch audio-A3)"
+    ' Raw raylib Music streaming API (struct BY VALUE), coexisting with the handle-based Framework_*MusicH layer.
+    ' Music embeds an AudioStream and adds a `looping` C bool (I1) + an opaque context tail; the struct is in Utiliy.vb.
+    ' NAMING: unlike A2, raylib's raw names carry a "Stream" suffix (LoadMusicStream/PlayMusicStream/StopMusicStream),
+    ' so they do NOT collide with the legacy un-suffixed convenience helpers (Framework_LoadMusic/PlayMusic/StopMusic).
+    ' All 16 keep raylib's exact spelling — no "Raw" suffix / EntryPoint aliasing needed. C bool returns use I1.
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadMusicStream(fileName As String) As Music
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadMusicStreamFromMemory(fileType As String, data As Byte(), dataSize As Integer) As Music
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsMusicValid(music As Music) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadMusicStream(music As Music)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_PlayMusicStream(music As Music)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsMusicStreamPlaying(music As Music) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UpdateMusicStream(music As Music)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_StopMusicStream(music As Music)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_PauseMusicStream(music As Music)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ResumeMusicStream(music As Music)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SeekMusicStream(music As Music, position As Single)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetMusicVolume(music As Music, volume As Single)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetMusicPitch(music As Music, pitch As Single)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetMusicPan(music As Music, pan As Single)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetMusicTimeLength(music As Music) As Single
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetMusicTimePlayed(music As Music) As Single
+    End Function
+#End Region
+
 End Module
 

@@ -187,6 +187,18 @@ Public Module Utiliy
         Public frameCount As UInteger   ' Total number of frames (considering channels)
     End Structure
 
+    ' raylib Music — streaming audio backed by an AudioStream (raudio module, Batch audio-A3). Passed BY VALUE.
+    ' Mirrors Sound (stream + frameCount) plus a `looping` flag and an opaque decoder-context tail. `looping` is a
+    ' C bool (1 byte) → <MarshalAs(UnmanagedType.I1)> so the trailing ctxType/ctxData fields stay correctly aligned.
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure Music
+        Public stream As AudioStream                                ' Audio stream
+        Public frameCount As UInteger                               ' Total number of frames (considering channels)
+        <MarshalAs(UnmanagedType.I1)> Public looping As Boolean     ' Music looping enable
+        Public ctxType As Integer                                   ' Type of music context (audio filetype)
+        Public ctxData As IntPtr                                    ' Audio context data, depends on type
+    End Structure
+
     Public Enum TextureFilter
         Point = 0
         Bilinear = 1
