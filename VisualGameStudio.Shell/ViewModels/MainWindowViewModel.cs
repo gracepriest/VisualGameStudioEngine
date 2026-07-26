@@ -8117,30 +8117,9 @@ public partial class MainWindowViewModel : ViewModelBase
         var edits = await svc.FormatDocumentAsync(doc.FilePath, BuildFormattingOptions());
         if (edits.Count == 0) return 0;
 
-        // Apply the edits in reverse order to preserve offsets.
-        var sortedEdits = edits.OrderByDescending(e => e.StartLine).ThenByDescending(e => e.StartColumn).ToList();
-        var lines = doc.Text.Split('\n');
-
-        foreach (var edit in sortedEdits)
-        {
-            // Convert to 0-based indices.
-            var startLine = edit.StartLine - 1;
-            var endLine = edit.EndLine - 1;
-            var startCol = edit.StartColumn - 1;
-            var endCol = edit.EndColumn - 1;
-
-            // Simple line-based replacement for now.
-            if (startLine >= 0 && startLine < lines.Length)
-            {
-                if (startLine == endLine && startCol >= 0 && endCol <= lines[startLine].Length)
-                {
-                    var line = lines[startLine];
-                    lines[startLine] = line.Substring(0, startCol) + edit.NewText + line.Substring(endCol);
-                }
-            }
-        }
-
-        doc.ReplaceContent(string.Join("\n", lines));
+        // Apply at the edits' real offsets (handles multi-line edits and preserves the
+        // caret) instead of rebuilding the whole buffer via ReplaceContent.
+        VisualGameStudio.Editor.Formatting.LspTextEditApplier.Apply(doc.TextDocument, edits);
         return edits.Count;
     }
 
@@ -8152,34 +8131,10 @@ public partial class MainWindowViewModel : ViewModelBase
         if (svc is not { IsConnected: true }) return;
 
         var edits = await svc.OnTypeFormattingAsync(document.FilePath, line, column, triggerCharacter);
-        if (edits.Count > 0)
-        {
-            // Apply the edits in reverse order to preserve offsets
-            var sortedEdits = edits.OrderByDescending(e => e.StartLine).ThenByDescending(e => e.StartColumn).ToList();
-            var text = document.Text;
-            var lines = text.Split('\n');
-
-            foreach (var edit in sortedEdits)
-            {
-                // Convert to 0-based indices
-                var startLine = edit.StartLine - 1;
-                var endLine = edit.EndLine - 1;
-                var startCol = edit.StartColumn - 1;
-                var endCol = edit.EndColumn - 1;
-
-                // Simple line-based replacement for now
-                if (startLine >= 0 && startLine < lines.Length)
-                {
-                    if (startLine == endLine && startCol >= 0 && endCol <= lines[startLine].Length)
-                    {
-                        var lineText = lines[startLine];
-                        lines[startLine] = lineText.Substring(0, startCol) + edit.NewText + lineText.Substring(endCol);
-                    }
-                }
-            }
-
-            document.ReplaceContent(string.Join("\n", lines));
-        }
+        // Apply at the edits' real offsets so the caret rides along. A whole-document
+        // rebuild + ReplaceContent remaps a caret sitting inside the replaced range to the
+        // END of the document — that was the "Enter jumps to just behind the }" bug.
+        VisualGameStudio.Editor.Formatting.LspTextEditApplier.Apply(document.TextDocument, edits);
     }
 
     private async Task ShowCodeActionsAsync()
