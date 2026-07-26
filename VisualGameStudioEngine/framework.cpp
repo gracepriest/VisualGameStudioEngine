@@ -1974,6 +1974,16 @@ extern "C" {
     void Framework_SetAudioStreamPan(AudioStream stream, float pan) { SetAudioStreamPan(stream, pan); }
     void Framework_SetAudioStreamBufferSizeDefault(int size) { SetAudioStreamBufferSizeDefault(size); }
 
+    // ==== RAW RCORE PARITY — Screen-space / camera math (raylib 5.5 passthrough, Batch core-C5) ====
+    Ray     Framework_GetScreenToWorldRay(Vector2 position, Camera camera) { return GetScreenToWorldRay(position, camera); }
+    Ray     Framework_GetScreenToWorldRayEx(Vector2 position, Camera camera, int width, int height) { return GetScreenToWorldRayEx(position, camera, width, height); }
+    Vector2 Framework_GetWorldToScreen(Vector3 position, Camera camera) { return GetWorldToScreen(position, camera); }
+    Vector2 Framework_GetWorldToScreenEx(Vector3 position, Camera camera, int width, int height) { return GetWorldToScreenEx(position, camera, width, height); }
+    Vector2 Framework_GetWorldToScreen2D(Vector2 position, Camera2D camera) { return GetWorldToScreen2D(position, camera); }
+    Vector2 Framework_GetScreenToWorld2D(Vector2 position, Camera2D camera) { return GetScreenToWorld2D(position, camera); }
+    Matrix  Framework_GetCameraMatrix(Camera camera) { return GetCameraMatrix(camera); }
+    Matrix  Framework_GetCameraMatrix2D(Camera2D camera) { return GetCameraMatrix2D(camera); }
+
     void Framework_PauseAllAudio() {
         g_audioPaused = true;
         for (auto& kv : g_sounds) {

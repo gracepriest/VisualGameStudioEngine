@@ -679,6 +679,19 @@ extern "C" {
     __declspec(dllexport) void Framework_SetAudioStreamPan(AudioStream stream, float pan);
     __declspec(dllexport) void Framework_SetAudioStreamBufferSizeDefault(int size);
 
+    // ==== RAW RCORE PARITY — Screen-space / camera math (raylib 5.5 passthrough, Batch core-C5) ====
+    // Pure-math ray/projection/view-matrix helpers (structs BY VALUE). The *Ex/*2D/*Matrix* variants need no window or
+    // GL context (explicit width/height or camera-only), so they are fully headless; the two non-Ex variants read the
+    // current screen size internally. raylib's `Camera` is a typedef of Camera3D; the wrapper marshals it as Camera3D.
+    __declspec(dllexport) Ray     Framework_GetScreenToWorldRay(Vector2 position, Camera camera);
+    __declspec(dllexport) Ray     Framework_GetScreenToWorldRayEx(Vector2 position, Camera camera, int width, int height);
+    __declspec(dllexport) Vector2 Framework_GetWorldToScreen(Vector3 position, Camera camera);
+    __declspec(dllexport) Vector2 Framework_GetWorldToScreenEx(Vector3 position, Camera camera, int width, int height);
+    __declspec(dllexport) Vector2 Framework_GetWorldToScreen2D(Vector2 position, Camera2D camera);
+    __declspec(dllexport) Vector2 Framework_GetScreenToWorld2D(Vector2 position, Camera2D camera);
+    __declspec(dllexport) Matrix  Framework_GetCameraMatrix(Camera camera);
+    __declspec(dllexport) Matrix  Framework_GetCameraMatrix2D(Camera2D camera);
+
     // Sounds (handle-based)
     __declspec(dllexport) int   Framework_LoadSoundH(const char* file);
     __declspec(dllexport) void  Framework_UnloadSoundH(int h);
