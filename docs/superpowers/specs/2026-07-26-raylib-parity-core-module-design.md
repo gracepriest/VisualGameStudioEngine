@@ -42,7 +42,7 @@ To add across the batches: `Matrix` (C5 ✅), `Camera3D` (C5 ✅), `Ray` (C5 ✅
 | # | Batch | Fns | New structs | Test | Notes |
 |---|---|---|---|---|---|
 | **C1** | **Window state & control** | **24** | — | **device+headless** | **SHIPPED — see below** (24 not 23: `GetWindowHandle` was genuinely unbound). |
-| C2 | Window/monitor query & clipboard | 14 | — | device-lite | render/monitor/DPI getters, clipboard (`IntPtr`+`PtrToStringAnsi`). |
+| **C2** | **Window/monitor query & clipboard** | **13** | — | **device-lite** | **SHIPPED — see below** (13 not 14: 7 screen/monitor getters were already bound). |
 | C3 | Drawing modes & VR | 10 | Camera3D✅, Matrix✅, VrDeviceInfo, VrStereoConfig | device | hardest marshaling (VR nested arrays). |
 | C4 | Shaders | 8 | Matrix✅ | device | `LoadShader(FromMemory)`, `SetShaderValue*` (`const void*`→IntPtr). |
 | **C5** | **Screen-space / camera math** | **8** | **Ray✅, Camera3D✅, Matrix✅** | **headless** | **SHIPPED — see below.** |
@@ -124,3 +124,22 @@ callbacks last.
   be created (headless CI); on this workstation the window WAS created and every assertion ran (fully runtime-verified).
   The parity guard (2 headless tests) runs in the fast subset. `SetWindowIcon(s)` covered by the parity guard only — the
   by-value `Image` marshaling is already exercised by the rtextures fixtures.
+- **C2 — Window/monitor query & clipboard (13) 🏁 SHIPPED** (counts 2767/2699, both +13 — 13 not the estimated 14: the
+  query subsection is raylib.h 997–1016 = 20 functions, but 7 screen/monitor getters (`GetScreenWidth`/`Height`,
+  `GetMonitor{Width,Height,Count,RefreshRate}`, `GetCurrentMonitor`) were ALREADY exported in the managed monitor
+  section, so only 13 were new — the memory's cached "14" was stale, confirmed by grep). Bound: 6 plain `int`/void getters
+  (`GetRenderWidth`/`Height`, `GetMonitorPhysicalWidth`/`Height`, `EnableEventWaiting`/`DisableEventWaiting`), 3
+  `Vector2`-by-value returns (`GetMonitorPosition`, `GetWindowPosition`, `GetWindowScaleDPI` — the module's FIRST raw
+  `Vector2` returns; plain `As Vector2`, a `<StructLayout(Sequential)>` two-`Single` struct, exactly the pre-existing
+  `GetMousePosition` idiom), 1 `Image`-by-value return (`GetClipboardImage`), 2 `const char*` returns (`GetMonitorName`,
+  `GetClipboardText`) → raw export `As IntPtr` + a managed `As String` helper doing `PtrToStringAnsi` with an
+  `IntPtr.Zero` guard (NEVER an `LPStr String` return — that would free raylib-owned memory), and 1 Ansi string input
+  (`SetClipboardText`, `CharSet:=CharSet.Ansi`). Zero wrapper collisions (all 13 plain; the 2 String helpers are also
+  collision-free). Duplicate-export guard asserts the 7 already-bound getters each still appear exactly once.
+  **Correctness is `[Category("Integration")]` + `[NonParallelizable]`** (needs a real GL window): `InitWindow(320,240)` →
+  hide → `GetRenderWidth/Height ≥ GetScreenWidth/Height`, `GetMonitorCount ≥ 1`, current-monitor index in range, positive
+  monitor video size, non-negative physical size, `GetWindowScaleDPI` ≥ 1 on both axes (proves the `Vector2` return ABI),
+  finite monitor/window positions, a non-empty `GetMonitorName` String, an ASCII clipboard `Set`→`Get` round-trip, and
+  `GetClipboardImage`/event-waiting toggles under `DoesNotThrow`. Self-`Ignore`s when headless; on this workstation the
+  window WAS created and every assertion ran (fully runtime-verified). The parity guard (3 headless tests incl. a
+  type-aware wrapper scan + a raylib.h completeness cross-check over the 997–1016 range) runs in the fast subset.

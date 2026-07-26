@@ -2064,6 +2064,24 @@ extern "C" {
     void  Framework_SetWindowFocused(void) { SetWindowFocused(); }
     void* Framework_GetWindowHandle(void) { return GetWindowHandle(); }
 
+    // ==== RAW RCORE PARITY — Window/monitor query & clipboard (raylib 5.5 passthrough, Batch core-C2) ====
+    // 1:1 forwarders for the screen/render/monitor query getters and clipboard access. The screen-size / monitor-metric
+    // getters already bound in the managed section (GetScreenWidth/Height, GetMonitor{Width,Height,Count,RefreshRate},
+    // GetCurrentMonitor) are not repeated here.
+    int         Framework_GetRenderWidth(void) { return GetRenderWidth(); }
+    int         Framework_GetRenderHeight(void) { return GetRenderHeight(); }
+    Vector2     Framework_GetMonitorPosition(int monitor) { return GetMonitorPosition(monitor); }
+    int         Framework_GetMonitorPhysicalWidth(int monitor) { return GetMonitorPhysicalWidth(monitor); }
+    int         Framework_GetMonitorPhysicalHeight(int monitor) { return GetMonitorPhysicalHeight(monitor); }
+    Vector2     Framework_GetWindowPosition(void) { return GetWindowPosition(); }
+    Vector2     Framework_GetWindowScaleDPI(void) { return GetWindowScaleDPI(); }
+    const char* Framework_GetMonitorName(int monitor) { return GetMonitorName(monitor); }
+    void        Framework_SetClipboardText(const char* text) { SetClipboardText(text); }
+    const char* Framework_GetClipboardText(void) { return GetClipboardText(); }
+    Image       Framework_GetClipboardImage(void) { return GetClipboardImage(); }
+    void        Framework_EnableEventWaiting(void) { EnableEventWaiting(); }
+    void        Framework_DisableEventWaiting(void) { DisableEventWaiting(); }
+
     void Framework_PauseAllAudio() {
         g_audioPaused = true;
         for (auto& kv : g_sounds) {

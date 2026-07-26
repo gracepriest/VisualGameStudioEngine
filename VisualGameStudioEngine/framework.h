@@ -772,6 +772,25 @@ extern "C" {
     __declspec(dllexport) void  Framework_SetWindowFocused(void);
     __declspec(dllexport) void* Framework_GetWindowHandle(void);
 
+    // ==== RAW RCORE PARITY — Window/monitor query & clipboard (raylib 5.5 passthrough, Batch core-C2) ====
+    // Thin 1:1 forwarders for raylib's screen/render/monitor query getters and clipboard access. GetScreenWidth/Height,
+    // GetMonitorWidth/Height/Count/RefreshRate and GetCurrentMonitor are already exported (managed monitor section) and
+    // are NOT re-declared here. Vector2/Image returns come back by value; const char* returns are raw pointers into
+    // raylib-owned memory (the wrapper copies via PtrToStringAnsi); SetClipboardText takes a const char* (Ansi).
+    __declspec(dllexport) int         Framework_GetRenderWidth(void);
+    __declspec(dllexport) int         Framework_GetRenderHeight(void);
+    __declspec(dllexport) Vector2     Framework_GetMonitorPosition(int monitor);
+    __declspec(dllexport) int         Framework_GetMonitorPhysicalWidth(int monitor);
+    __declspec(dllexport) int         Framework_GetMonitorPhysicalHeight(int monitor);
+    __declspec(dllexport) Vector2     Framework_GetWindowPosition(void);
+    __declspec(dllexport) Vector2     Framework_GetWindowScaleDPI(void);
+    __declspec(dllexport) const char* Framework_GetMonitorName(int monitor);
+    __declspec(dllexport) void        Framework_SetClipboardText(const char* text);
+    __declspec(dllexport) const char* Framework_GetClipboardText(void);
+    __declspec(dllexport) Image       Framework_GetClipboardImage(void);
+    __declspec(dllexport) void        Framework_EnableEventWaiting(void);
+    __declspec(dllexport) void        Framework_DisableEventWaiting(void);
+
     // Sounds (handle-based)
     __declspec(dllexport) int   Framework_LoadSoundH(const char* file);
     __declspec(dllexport) void  Framework_UnloadSoundH(int h);
