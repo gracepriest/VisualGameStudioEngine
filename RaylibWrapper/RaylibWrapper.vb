@@ -11952,5 +11952,54 @@ Public Module FrameworkWrapper
     End Sub
 #End Region
 
+#Region "Raylib raudio — device + Wave (Batch audio-A1)"
+    ' Raw raylib raudio passthroughs, coexisting with the custom Framework_Audio_*/…H layer.
+    ' Wave is pure PCM data in RAM (headless-testable); WaveCrop/WaveFormat mutate it in place (ByRef).
+    ' C bool returns use <MarshalAs(UnmanagedType.I1)> (1-byte) — .NET's default Boolean is a 4-byte BOOL.
+    ' SetMasterVolume/GetMasterVolume are already bound elsewhere — not repeated here.
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_InitAudioDevice()
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_CloseAudioDevice()
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsAudioDeviceReady() As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadWave(fileName As String) As Wave
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadWaveFromMemory(fileType As String, fileData As Byte(), dataSize As Integer) As Wave
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsWaveValid(wave As Wave) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadWave(wave As Wave)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_ExportWave(wave As Wave, fileName As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_ExportWaveAsCode(wave As Wave, fileName As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_WaveCopy(wave As Wave) As Wave
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_WaveCrop(ByRef wave As Wave, initFrame As Integer, finalFrame As Integer)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_WaveFormat(ByRef wave As Wave, sampleRate As Integer, sampleSize As Integer, channels As Integer)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_LoadWaveSamples(wave As Wave) As IntPtr
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadWaveSamples(samples As IntPtr)
+    End Sub
+#End Region
+
 End Module
 

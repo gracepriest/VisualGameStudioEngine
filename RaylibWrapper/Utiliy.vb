@@ -158,6 +158,17 @@ Public Module Utiliy
         Public w As Single
     End Structure
 
+    ' raylib Wave — PCM audio data held in RAM (raudio module, Batch audio-A1). Returned/passed BY VALUE;
+    ' WaveCrop/WaveFormat mutate it in place (ByRef). `data` is the raw sample buffer pointer.
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure Wave
+        Public frameCount As UInteger   ' Total number of frames (considering channels)
+        Public sampleRate As UInteger   ' Frequency (samples per second)
+        Public sampleSize As UInteger   ' Bit depth (bits per sample): 8, 16, 32
+        Public channels As UInteger     ' Number of channels (1-mono, 2-stereo, ...)
+        Public data As IntPtr           ' Buffer data pointer
+    End Structure
+
     Public Enum TextureFilter
         Point = 0
         Bilinear = 1
