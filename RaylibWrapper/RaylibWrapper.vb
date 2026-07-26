@@ -12191,5 +12191,36 @@ Public Module FrameworkWrapper
     End Function
 #End Region
 
+#Region "Raylib rcore — Compression / Encoding (Batch core-C10)"
+    ' Raw raylib DEFLATE/Base64/hash helpers. No wrapper collisions — all 7 bind plain. The four heap-returning
+    ' functions hand back a raylib-malloc'd buffer as IntPtr plus its length via ByRef; copy it out (Marshal.Copy)
+    ' then release it with Framework_MemFree (already bound — raylib's rmem allocator; a mismatched free is UB).
+    ' Binary inputs pass as Byte() + explicit length. ⚠ DecodeDataBase64 scans its input until a NUL byte (no length
+    ' param), so that ONE input marshals as an Ansi String (guarantees the terminator), not Byte(). ComputeCRC32
+    ' returns the value directly; ComputeMD5/ComputeSHA1 return a pointer to a STATIC int[4]/int[5] — read 16/20 bytes,
+    ' do NOT MemFree.
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_CompressData(data As Byte(), dataSize As Integer, ByRef compDataSize As Integer) As IntPtr
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_DecompressData(compData As Byte(), compDataSize As Integer, ByRef dataSize As Integer) As IntPtr
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_EncodeDataBase64(data As Byte(), dataSize As Integer, ByRef outputSize As Integer) As IntPtr
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_DecodeDataBase64(data As String, ByRef outputSize As Integer) As IntPtr
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_ComputeCRC32(data As Byte(), dataSize As Integer) As UInteger
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_ComputeMD5(data As Byte(), dataSize As Integer) As IntPtr
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_ComputeSHA1(data As Byte(), dataSize As Integer) As IntPtr
+    End Function
+#End Region
+
 End Module
 
