@@ -6,7 +6,7 @@
 
 **Architecture:** One C# source of truth (`BlnetContract` + `BoundaryTypeRegistry`) feeds everything: the capability checker/type mapper (replacing three hand-synced lists), the generated status sections of two checked-in C++ headers (drift-tested, following the existing `CppRuntimeSources.cs` single-source pattern), and the C# shim enum. The native side of the contract (NetRef, callback table, queue, pump, universal thunk) is header-only C++ stored as string constants in `BlnetRuntimeSources.cs` — P2 later emits the same strings. Conformance runs a hand-written AOT shim (`NativeLib=Shared` + `[UnmanagedCallersOnly]`) against a native harness compiled via the existing `CppCompile` test helper.
 
-**Tech Stack:** C# (net9.0 for the shim; SDK 9.0.309 installed), C++20, NUnit, Native AOT publish, existing `CppCompile.FindRunCompiler()` probe (clang++/g++/MSVC-vcvars).
+**Tech Stack:** C# (net8.0 for the shim — it MUST match VisualGameStudio.Tests' net8.0 so the ProjectReference resolves (NU1201 otherwise); Native AOT `NativeLib=Shared` is fully supported on net8.0 and SDK 9.0.309 publishes it), C++20, NUnit, existing `CppCompile.FindRunCompiler()` probe (clang++/g++/MSVC-vcvars).
 
 **Read first:** the spec (path above) — sections C1–C7 define every rule implemented here. Skills: @superpowers:test-driven-development, @superpowers:verification-before-completion.
 
@@ -93,6 +93,7 @@ public class BlnetContractTests
     {
         var header = BlnetContract.GenerateStatusHeader();
         Assert.That(header, Does.StartWith("/* GENERATED from BlnetContract"));
+        Assert.That(header, Does.Contain($"#define BLNET_ABI_VERSION {BlnetContract.AbiVersion}"));
         foreach (var (name, value, _) in BlnetContract.StatusCodes)
             Assert.That(header, Does.Contain($"#define {name} {value}"));
     }
@@ -145,7 +146,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         public static string GenerateStatusHeader()
         {
             var sb = new System.Text.StringBuilder();
-            sb.Append("/* GENERATED from BlnetContract.StatusCodes — do not edit by hand. */\n");
+            sb.Append("/* GENERATED from BlnetContract — do not edit by hand. */\n");
+            sb.Append($"#define BLNET_ABI_VERSION {AbiVersion}\n");
             foreach (var (name, value, doc) in StatusCodes)
                 sb.Append($"#define {name} {value} /* {doc} */\n");
             return sb.ToString();
@@ -352,12 +354,12 @@ Expected: same pass count as before the change (the BL6009 flake exit-1 is norma
 ### Task 4: Mechanical mapper invariant
 
 **Files:**
-- Modify: `BasicLang/TypeMapper.cs` — add to `CppTypeMapper`:
+- Modify: `BasicLang/TypeMapper.cs` — `CppTypeMapper` lives in namespace `BasicLang.Compiler.CodeGen` (~line 201), `_typeMap` is a protected instance `Dictionary` on `TypeMapperBase`, and parameterless construction works. Add to `CppTypeMapper`:
 ```csharp
 /// <summary>Invariant hook: BlnetContractTests asserts these equal BoundaryTypeRegistry's Bridged set + 'Object'.</summary>
-internal static IEnumerable<string> MappedTypeNamesForInvariantCheck => new CppTypeMapper().GetMappedTypeNames();
+internal IEnumerable<string> MappedTypeNamesForInvariantCheck => _typeMap.Keys;
 ```
-(Adapt to the class's actual shape — if `_typeMap` is an instance field, add an internal instance property/method exposing `_typeMap.Keys` and construct one instance in the test; `InternalsVisibleTo` for the test assembly already exists — tests already use `CppCodeGenerator.RuntimeHeaderFileName`, an `internal const`.)
+The test constructs `new BasicLang.Compiler.CodeGen.CppTypeMapper()` (add the `using`) and reads the property. `InternalsVisibleTo` for the test assembly already exists — tests already use `CppCodeGenerator.RuntimeHeaderFileName`, an `internal const`.
 - Test: append to `BlnetContractTests.cs`:
 
 ```csharp
@@ -368,7 +370,7 @@ public void MapperInvariant_TypeMapKeys_Equal_BridgedPlusObject()
         .NamesInCategory(BasicLang.BoundaryTypeCategory.Bridged)
         .Append("Object")
         .Select(n => n.ToLowerInvariant()).OrderBy(n => n).ToArray();
-    var actual = BasicLang.CppTypeMapper.MappedTypeNamesForInvariantCheck
+    var actual = new BasicLang.Compiler.CodeGen.CppTypeMapper().MappedTypeNamesForInvariantCheck
         .Select(n => n.ToLowerInvariant()).OrderBy(n => n).ToArray();
     Assert.That(actual, Is.EqualTo(expected),
         "CppTypeMapper._typeMap and BoundaryTypeRegistry drifted — update the registry, not a parallel list");
@@ -607,6 +609,7 @@ inline int32_t BLNET_CALL blnet_invoke_callback(
                 break;
             }
             case BLNET_SLOT_STRUCT: {
+                if (!args[i]) break; /* null struct pointer: tolerated as a null slot, no copy */
                 auto size = static_cast<size_t>(snapshot.slots[i].size);
                 std::vector<unsigned char> buf(size);
                 std::memcpy(buf.data(), reinterpret_cast<const void*>(args[i]), size);
@@ -617,7 +620,13 @@ inline int32_t BLNET_CALL blnet_invoke_callback(
             case BLNET_SLOT_HANDLE: {
                 if (args[i] && g_shim.addref) {
                     int32_t st = g_shim.addref(args[i]);
-                    if (st != BLNET_OK) return st; /* stale at enqueue fails the invocation immediately */
+                    if (st != BLNET_OK) {
+                        /* stale at enqueue fails the invocation immediately — but first
+                           release the refs already taken for EARLIER handle slots, or
+                           they leak (the queue never sees this invocation). */
+                        for (auto h : q.owned_handles) if (g_shim.release) g_shim.release(h);
+                        return st;
+                    }
                     q.owned_handles.push_back(args[i]);
                 }
                 break;
@@ -654,7 +663,9 @@ inline int32_t blnet_pump() {
             st = invoke_entry(snapshot, q.args.data(), static_cast<int32_t>(q.args.size()), nullptr);
         if (st != BLNET_OK) {
             if (first_failure == BLNET_OK) first_failure = st;
-            if (detail::g_error_hook) detail::g_error_hook(st, detail::g_native_error.c_str());
+            /* a throwing hook must not leave g_pumping stuck true */
+            if (detail::g_error_hook)
+                try { detail::g_error_hook(st, detail::g_native_error.c_str()); } catch (...) {}
         }
         for (auto h : q.owned_handles) if (g_shim.release) g_shim.release(h);
         /* owned_strings / owned_structs free when q goes out of scope — queue-owned storage, pump-freed */
@@ -756,7 +767,7 @@ Each test compiles a small `main` (via the Task 5 `Run` helper) exercising the c
 - [ ] **Test: Immediate flag.** `result_bearing=true, immediate=true`, invoked from a thread → runs inline on that thread, result slot filled.
 - [ ] **Test: pump drain semantics.** Queue three notifications; the 2nd throws `std::runtime_error("boom2")`, the 3rd throws `"boom3"`. Install an error hook counting invocations and recording messages. `blnet_pump()` → all three attempted, hook fired twice, return status == `BLNET_E_NATIVE_EXCEPTION` (first failure), queue empty after.
 - [ ] **Test: pump reentry.** Register a notification whose body calls `blnet_pump()` (we are ON the pump thread inside a drain) → inner call returns `BLNET_E_PUMP_REENTRY`; also spawn a thread calling `blnet_pump()` while main pumps a long queue — the loser returns `BLNET_E_PUMP_REENTRY`. (Deterministic version: the in-callback reentry alone is sufficient; the two-thread race is best-effort and may be omitted if flaky.)
-- [ ] **Test: string deep-copy at enqueue.** Register a 1-arg notification with `BLNET_SLOT_STRING`; invoke from a thread passing a stack buffer; overwrite the buffer after join, then pump — callback must see the ORIGINAL contents (non-ASCII bytes included, e.g. `u8"héllo"`).
+- [ ] **Test: string deep-copy at enqueue.** Register a 1-arg notification with `BLNET_SLOT_STRING`; invoke from a thread passing a stack buffer; overwrite the buffer after join, then pump — callback must see the ORIGINAL contents (non-ASCII bytes included, e.g. `"h\xC3\xA9llo"` — a narrow literal with explicit UTF-8 byte escapes; in C++20 `u8"..."` is `const char8_t*` and does NOT convert to `const char*` on any toolchain).
 - [ ] **Commit** — `git commit -m "test(blnet): native-side runtime conformance (callback table, queue, pump) via CppCompile"`
 
 ---
@@ -769,7 +780,9 @@ Each test compiles a small `main` (via the Task 5 `Run` helper) exercising the c
 ```xml
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <!-- net8.0: must match VisualGameStudio.Tests (net8.0) or its ProjectReference fails NU1201.
+         Native AOT NativeLib=Shared is fully supported on net8.0. -->
+    <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -781,7 +794,10 @@ Each test compiles a small `main` (via the Task 5 `Run` helper) exercising the c
 </Project>
 ```
 
-- Create: `VisualGameStudio.Tests/TestAssets/BlnetTestShim/BlnetStatus.cs` — paste the exact output of `BlnetContract.GenerateStatusEnumCs()` wrapped in `namespace BlnetTestShim;` (a drift test pins it).
+- Create: `VisualGameStudio.Tests/TestAssets/BlnetTestShim/BlnetStatus.cs` — paste the exact output of `BlnetContract.GenerateStatusEnumCs()` wrapped in `namespace BlnetTestShim;`, plus (same regenerate-from-contract rule):
+```csharp
+public static class ShimAbi { public const int AbiVersion = 1; } // keep equal to BlnetContract.AbiVersion (drift-tested)
+```
 - Create: `VisualGameStudio.Tests/TestAssets/BlnetTestShim/HandleTable.cs`:
 
 ```csharp
@@ -871,13 +887,20 @@ public sealed class HandleTable
 }
 ```
 
-- Modify: `VisualGameStudio.Tests/VisualGameStudio.Tests.csproj` — add:
+- Modify: `VisualGameStudio.Tests/VisualGameStudio.Tests.csproj` — add (all three items, unconditionally):
 ```xml
 <ItemGroup>
   <ProjectReference Include="TestAssets\BlnetTestShim\BlnetTestShim.csproj" />
+  <!-- The test csproj uses default SDK globs with NO existing Compile excludes: without this
+       Remove, the shim's sources (and its nested obj\ generated AssemblyInfo files) are
+       double-compiled into the test assembly -> CS0436 type conflicts + CS0579 duplicate
+       attributes. Required, not conditional. -->
+  <Compile Remove="TestAssets\**" />
+  <!-- Task 9's fixture reads main.cpp.txt from TestContext.CurrentContext.TestDirectory;
+       'Update' (not 'Include') because a .txt is already a default None item. -->
+  <None Update="TestAssets\BlnetHarness\main.cpp.txt" CopyToOutputDirectory="PreserveNewest" />
 </ItemGroup>
 ```
-(If the csproj globs `**/*.cs`, add `<Compile Remove="TestAssets\**" />` beside existing excludes so the shim sources aren't double-compiled into the test assembly — check the existing exclude patterns and follow them.)
 
 - Create: `VisualGameStudio.Tests/Blnet/HandleTableTests.cs` — fast tests (no Category), TDD order:
 
@@ -969,6 +992,8 @@ public void ShimStatusEnum_MatchesContract()
     foreach (var (name, value, _) in BlnetContract.StatusCodes)
         Assert.That((int)Enum.Parse<BlnetTestShim.BlnetStatus>(name), Is.EqualTo(value),
             "BlnetStatus.cs drifted — regenerate from BlnetContract.GenerateStatusEnumCs()");
+    Assert.That(BlnetTestShim.ShimAbi.AbiVersion, Is.EqualTo(BlnetContract.AbiVersion),
+        "ShimAbi.AbiVersion drifted from BlnetContract.AbiVersion");
 }
 ```
 
@@ -1018,12 +1043,12 @@ public static unsafe class Exports
     private static string? Utf8ToString(byte* p) => p == null ? null : Marshal.PtrToStringUTF8((nint)p);
 
     [UnmanagedCallersOnly(EntryPoint = "blnet_abi_version", CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
-    public static int AbiVersion() => 1; // keep equal to BlnetContract.AbiVersion (conformance scenario 14 exercises the mismatch path)
+    public static int AbiVersion() => ShimAbi.AbiVersion; // single source: drift-tested against BlnetContract.AbiVersion
 
     [UnmanagedCallersOnly(EntryPoint = "blnet_initialize", CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
     public static int Initialize(int expectedAbi, void* vtable)
     {
-        if (expectedAbi != 1) return (int)BlnetStatus.BLNET_E_VERSION_MISMATCH;
+        if (expectedAbi != ShimAbi.AbiVersion) return (int)BlnetStatus.BLNET_E_VERSION_MISMATCH;
         var vt = (void**)vtable;
         _thunk = (delegate* unmanaged[Cdecl]<ulong, ulong*, int, ulong*, int>)vt[0];
         _getNativeError = (delegate* unmanaged[Cdecl]<byte**, int>)vt[1];
@@ -1257,7 +1282,7 @@ Scenario bodies (write each, run, iterate):
 2. **stale_handle** — create, `blnet_release` once via NetRef destruction, then `test_list_add` on the dead handle → expect `BLNET_E_STALE_HANDLE` returned (NOT a crash).
 3. **double_release_addref** — `blnet_addref` then two releases OK, third → stale; `test_list_count` between releases proves aliveness matches refcount.
 4. **generation_reuse** — release; `test_create_list` again (slot reuse); old handle still stale, new handle works.
-5. **string_roundtrip** — `test_echo(u8"héllo wörld ✓")` → returned buffer equal byte-for-byte; free via `blnet_free`.
+5. **string_roundtrip** — `test_echo("h\xC3\xA9llo w\xC3\xB6rld \xE2\x9C\x93")` → returned buffer equal byte-for-byte; free via `blnet_free`. (Narrow literal with UTF-8 byte escapes — not `u8"..."`, which is `const char8_t*` in C++20; the escapes also remove any MSVC source-encoding dependency.)
 6. **managed_exception** — `test_throw()` → `BLNET_E_MANAGED_EXCEPTION`; `blnet_last_error` yields type containing `ArgumentException` and message containing `bøøm`; NetCheck path: wrap in try/catch and assert the C++ exception message carries both.
 
 - [ ] **Steps: write fixture + harness scenarios 1–6, red → green one scenario at a time. Commit** — `git commit -m "test(blnet): ABI conformance scenarios 1-6 (handles, strings, exceptions) against the AOT shim"`
@@ -1282,7 +1307,7 @@ Extend `main.cpp.txt` + `[TestCase]`s. Register callbacks with `blnet_register_c
 
 ### Task 11: Conformance scenarios 14–16 + version mismatch
 
-14. **version_mismatch** — call `blnet_initialize(999, &vtable)` FIRST → expect `BLNET_E_VERSION_MISMATCH`; then `blnet_initialize(1, ...)` → OK. (Run this scenario in its own harness invocation so the failed init can't poison others — it already is, since every scenario is a fresh process.)
+14. **version_mismatch** — call `blnet_initialize(BLNET_ABI_VERSION + 998, &vtable)` FIRST → expect `BLNET_E_VERSION_MISMATCH`; then `blnet_initialize(BLNET_ABI_VERSION, ...)` → OK, and `REQUIRE(shim_abi_version() == BLNET_ABI_VERSION, ...)`. (The harness's normal startup init also uses `BLNET_ABI_VERSION` — never a literal — so a `BlnetContract.AbiVersion` bump mechanically breaks the drift test AND the conformance suite until both sides regenerate, which is exactly C7's intent. Each scenario is a fresh process, so the failed init can't poison others.)
 15. **concurrency_hammer** — 8 `std::thread`s × 2,000 iterations of create/add/count/release through the shim (each thread wraps calls in `BlnetCallScope`); zero non-OK statuses; final create/release still OK.
 16. **stale_callback_via_release** — register, `blnet_callback_release`, `test_invoke` inline → `BLNET_E_STALE_CALLBACK`; release again → `BLNET_E_STALE_CALLBACK`.
 
@@ -1307,4 +1332,4 @@ Expected: all green.
 - AOT publish needs VC++ link.exe — present on this machine (the engine's vcxproj builds via vswhere), but the first publish downloads ILCompiler NuGet packages (~1 min network).
 - `CallConvCdecl` on `[UnmanagedCallersOnly]` is correct on x64 (the CallConv is a no-op there but keeps the header honest for x86).
 - If g++/winlibs is the found compiler and `std::thread` fails to link, prefer MSVC (reorder in a local probe) — do NOT modify `CppCompile.FindRunCompiler()` for this; write a local probe in the fixture if needed.
-- MSVC `cl` needs `/utf-8` if the harness contains non-ASCII string literals; add it to the local harness compile args (again: do not modify the shared helper), or keep non-ASCII bytes as `\xNN` escapes.
+- Non-ASCII string content in the harness/tests MUST use `\xNN`-escaped narrow literals (as the scenarios above already do): C++20 makes `u8"..."` a `const char8_t*` (a hard compile error against `const char*` on clang, g++, AND MSVC), and raw non-ASCII source bytes would additionally need MSVC's `/utf-8`. The escape form sidesteps both.
