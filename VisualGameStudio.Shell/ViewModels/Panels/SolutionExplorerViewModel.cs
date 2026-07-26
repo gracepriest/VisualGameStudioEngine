@@ -1329,24 +1329,21 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     // ─── Inline Rename (F2) ─────────────────────────────────────────
 
     [RelayCommand]
-    private void StartRename()
+    private async Task StartRenameAsync()
     {
         if (SelectedNode == null || SelectedNode.IsProject || SelectedNode.IsSolution) return;
 
-        // Pre-select filename without extension for files
-        if (SelectedNode.IsFile)
-        {
-            var nameWithoutExt = Path.GetFileNameWithoutExtension(SelectedNode.Name);
-            RenameText = SelectedNode.Name;
-            RenameSelectionLength = nameWithoutExt.Length;
-        }
-        else
-        {
-            RenameText = SelectedNode.Name;
-            RenameSelectionLength = SelectedNode.Name.Length;
-        }
+        // Prompt for the new name, prefilled with the current one. The inline-edit UI the
+        // IsRenaming/RenameText fields were originally designed for was never wired into the
+        // view (the tree only ever shows a static TextBlock and F2 wasn't bound), so both
+        // rename entry points silently did nothing. A dialog is the reliable surface.
+        var current = SelectedNode.Name;
+        var newName = await _dialogService.ShowInputDialogAsync("Rename", $"New name for '{current}':", current);
+        if (string.IsNullOrWhiteSpace(newName) || newName.Trim() == current) return;
 
-        IsRenaming = true;
+        RenameText = newName.Trim();
+        IsRenaming = true;               // satisfies the ConfirmRenameAsync guard
+        await ConfirmRenameAsync();
     }
 
     [ObservableProperty]

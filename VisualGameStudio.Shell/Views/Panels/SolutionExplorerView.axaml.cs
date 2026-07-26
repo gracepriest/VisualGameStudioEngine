@@ -62,6 +62,15 @@ public partial class SolutionExplorerView : UserControl
                 }
                 break;
 
+            case Key.F2:
+                // Rename the selected node (the context-menu InputGesture is display-only).
+                if (selectedNode != null && vm.StartRenameCommand.CanExecute(null))
+                {
+                    vm.StartRenameCommand.Execute(null);
+                    e.Handled = true;
+                }
+                break;
+
             case Key.Right:
                 // Expand folder, or move to first child if already expanded
                 if (selectedNode != null && (selectedNode.IsFolder || selectedNode.IsProject))
