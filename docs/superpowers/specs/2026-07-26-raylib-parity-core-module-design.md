@@ -46,7 +46,7 @@ To add across the batches: `Matrix` (C5 ✅), `Camera3D` (C5 ✅), `Ray` (C5 ✅
 | C3 | Drawing modes & VR | 10 | Camera3D✅, Matrix✅, VrDeviceInfo, VrStereoConfig | device | hardest marshaling (VR nested arrays). |
 | C4 | Shaders | 8 | Matrix✅ | device | `LoadShader(FromMemory)`, `SetShaderValue*` (`const void*`→IntPtr). |
 | **C5** | **Screen-space / camera math** | **8** | **Ray✅, Camera3D✅, Matrix✅** | **headless** | **SHIPPED — see below.** |
-| C6 | Timing/frame + Random + Misc + 2 input stragglers | 15 | — | headless (partial) | `TraceLog` bound as fixed 2-arg `(int,const char*)` → `TraceLog(lvl,"%s",text)`. |
+| **C6** | **Timing/frame + Random + Misc + 2 input stragglers** | **15** | — | **headless (partial)** | **SHIPPED — see below.** `TraceLog` fixed 2-arg `(int,const char*)`→`TraceLog(lvl,"%s",text)`; ⛔ `WaitTime` needs InitWindow's timer. |
 | **C7** | **File data I/O** | **7** | — | **headless** | **SHIPPED — see below.** |
 | **C8** | **File-system path queries** | **15** | — | **headless** | **SHIPPED — see below.** |
 | C9 | Directory listing & dropped files | 7 | FilePathList | headless | `char**` list marshaling. |
@@ -143,3 +143,27 @@ callbacks last.
   `GetClipboardImage`/event-waiting toggles under `DoesNotThrow`. Self-`Ignore`s when headless; on this workstation the
   window WAS created and every assertion ran (fully runtime-verified). The parity guard (3 headless tests incl. a
   type-aware wrapper scan + a raylib.h completeness cross-check over the 997–1016 range) runs in the fast subset.
+- **C6 — Timing/frame + Random + Misc + 2 input stragglers (15) 🏁 SHIPPED** (counts 2782/2714, both +15). The 15 span
+  four raylib.h groups: frame control (`SwapScreenBuffer`, `PollInputEvents`, `WaitTime`), random (`SetRandomSeed`,
+  `GetRandomValue`, `LoadRandomSequence`, `UnloadRandomSequence`), misc (`SetConfigFlags`, `OpenURL`, `TraceLog`,
+  `SetTraceLogLevel`, `MemAlloc`, `MemRealloc`), and 2 input stragglers (`SetGamepadVibration` — a raylib-5.5 addition;
+  `GetTouchPosition` — `Vector2` return), which are the ONLY rcore input-section functions the engine hadn't already
+  bound. 6 timing/misc functions were already exported (`SetTargetFPS`, `GetFrameTime`, `GetTime`, `GetFPS`,
+  `TakeScreenshot`, `MemFree`) and are not re-declared. Marshaling: `WaitTime(double)`→`Double`; `unsigned int`
+  seed/flags/size→`UInteger`; `LoadRandomSequence`→raylib-heap `int*` bound `As IntPtr` + a managed `LoadRandomSequence`
+  `As Integer()` helper that `Marshal.Copy`s then frees via `UnloadRandomSequence`; `MemAlloc`/`MemRealloc`→`IntPtr`
+  (freed with `MemFree`); `OpenURL`/`TraceLog` inputs Ansi. ⛔ **`TraceLog` is variadic** — bound as a FIXED 2-arg
+  forwarder `TraceLog(level,"%s",text)` that routes the caller's text through `%s`, dodging cross-P/Invoke varargs AND
+  format-string injection (the correctness test passes literal `%s %d %x` text and asserts no AV). ⛔ **`WaitTime`
+  busy-waits on `GetTime()`, whose time base is only initialized by `InitWindow`** — called headlessly it spins forever
+  (1 core, unkillable), so it is exercised ONLY in the integration fixture under a live window, never headlessly.
+  ⛔ **`OpenURL` is never invoked at runtime** (it would launch a browser) — parity-guard name/type coverage only.
+  **Split correctness:** a HEADLESS fast-subset fixture with real oracles — `SetRandomSeed` determinism (same seed →
+  identical sequence), `GetRandomValue` inclusive-range + both-bounds-reachable, `LoadRandomSequence` distinct-in-range
+  permutation, a `MemAlloc`→write→`MemRealloc`→read-back round-trip (AVs if the alloc is bogus), and `TraceLog`/
+  `SetTraceLogLevel`/`SetConfigFlags` ABI-smoke — PLUS an `[Integration]`+`[NonParallelizable]` fixture that, under a
+  hidden window, reads `GetTouchPosition` (finite `Vector2`) and ABI-smokes `PollInputEvents`/`SwapScreenBuffer`/
+  `SetGamepadVibration`/`WaitTime`. Parity guard (3 headless tests): name 3-way for all 15, a completeness cross-check
+  that {13 non-input}∪{6 already-bound} exactly covers raylib's `Timing..MemFree` range, a SECOND cross-check that the
+  ENTIRE rcore input section is now bound (proving only these 2 stragglers remained), the type-aware wrapper scan, and
+  the duplicate-export guard.

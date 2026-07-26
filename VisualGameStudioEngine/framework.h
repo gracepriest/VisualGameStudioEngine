@@ -791,6 +791,29 @@ extern "C" {
     __declspec(dllexport) void        Framework_EnableEventWaiting(void);
     __declspec(dllexport) void        Framework_DisableEventWaiting(void);
 
+    // ==== RAW RCORE PARITY — Timing/frame + Random + Misc + input stragglers (raylib 5.5 passthrough, Batch core-C6) ====
+    // Thin 1:1 forwarders. SetTargetFPS/GetFrameTime/GetTime/GetFPS/TakeScreenshot/MemFree are already exported elsewhere
+    // and are NOT re-declared here. TraceLog is variadic in raylib; it is bound as a FIXED 2-arg forwarder that routes the
+    // caller's text through a "%s" format (TraceLog(level,"%s",text)) — dodging cross-P/Invoke varargs AND avoiding
+    // format-string injection from user text. LoadRandomSequence returns a raylib-heap int* that MUST be freed with
+    // UnloadRandomSequence; MemAlloc/MemRealloc return raylib-heap void* freed with MemFree. The 2 input stragglers
+    // (SetGamepadVibration, GetTouchPosition) are the only rcore input-section functions the engine did not already bind.
+    __declspec(dllexport) void    Framework_SwapScreenBuffer(void);
+    __declspec(dllexport) void    Framework_PollInputEvents(void);
+    __declspec(dllexport) void    Framework_WaitTime(double seconds);
+    __declspec(dllexport) void    Framework_SetRandomSeed(unsigned int seed);
+    __declspec(dllexport) int     Framework_GetRandomValue(int min, int max);
+    __declspec(dllexport) int*    Framework_LoadRandomSequence(unsigned int count, int min, int max);
+    __declspec(dllexport) void    Framework_UnloadRandomSequence(int* sequence);
+    __declspec(dllexport) void    Framework_SetConfigFlags(unsigned int flags);
+    __declspec(dllexport) void    Framework_OpenURL(const char* url);
+    __declspec(dllexport) void    Framework_TraceLog(int logLevel, const char* text);
+    __declspec(dllexport) void    Framework_SetTraceLogLevel(int logLevel);
+    __declspec(dllexport) void*   Framework_MemAlloc(unsigned int size);
+    __declspec(dllexport) void*   Framework_MemRealloc(void* ptr, unsigned int size);
+    __declspec(dllexport) void    Framework_SetGamepadVibration(int gamepad, float leftMotor, float rightMotor, float duration);
+    __declspec(dllexport) Vector2 Framework_GetTouchPosition(int index);
+
     // Sounds (handle-based)
     __declspec(dllexport) int   Framework_LoadSoundH(const char* file);
     __declspec(dllexport) void  Framework_UnloadSoundH(int h);

@@ -2082,6 +2082,25 @@ extern "C" {
     void        Framework_EnableEventWaiting(void) { EnableEventWaiting(); }
     void        Framework_DisableEventWaiting(void) { DisableEventWaiting(); }
 
+    // ==== RAW RCORE PARITY — Timing/frame + Random + Misc + input stragglers (raylib 5.5 passthrough, Batch core-C6) ====
+    // SetTargetFPS/GetFrameTime/GetTime/GetFPS/TakeScreenshot/MemFree already exported elsewhere — not repeated here.
+    void    Framework_SwapScreenBuffer(void) { SwapScreenBuffer(); }
+    void    Framework_PollInputEvents(void) { PollInputEvents(); }
+    void    Framework_WaitTime(double seconds) { WaitTime(seconds); }
+    void    Framework_SetRandomSeed(unsigned int seed) { SetRandomSeed(seed); }
+    int     Framework_GetRandomValue(int min, int max) { return GetRandomValue(min, max); }
+    int*    Framework_LoadRandomSequence(unsigned int count, int min, int max) { return LoadRandomSequence(count, min, max); }
+    void    Framework_UnloadRandomSequence(int* sequence) { UnloadRandomSequence(sequence); }
+    void    Framework_SetConfigFlags(unsigned int flags) { SetConfigFlags(flags); }
+    void    Framework_OpenURL(const char* url) { OpenURL(url); }
+    // TraceLog is variadic; route the caller's text through "%s" to dodge varargs marshaling and format-string injection.
+    void    Framework_TraceLog(int logLevel, const char* text) { TraceLog(logLevel, "%s", text); }
+    void    Framework_SetTraceLogLevel(int logLevel) { SetTraceLogLevel(logLevel); }
+    void*   Framework_MemAlloc(unsigned int size) { return MemAlloc(size); }
+    void*   Framework_MemRealloc(void* ptr, unsigned int size) { return MemRealloc(ptr, size); }
+    void    Framework_SetGamepadVibration(int gamepad, float leftMotor, float rightMotor, float duration) { SetGamepadVibration(gamepad, leftMotor, rightMotor, duration); }
+    Vector2 Framework_GetTouchPosition(int index) { return GetTouchPosition(index); }
+
     void Framework_PauseAllAudio() {
         g_audioPaused = true;
         for (auto& kv : g_sounds) {
