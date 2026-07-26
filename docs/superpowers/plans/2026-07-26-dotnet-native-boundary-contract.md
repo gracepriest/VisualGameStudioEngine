@@ -345,7 +345,7 @@ if (category == BoundaryTypeCategory.Rejected)
 - [ ] **Step 2: Build + run the fast subset**
 
 Run: `dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --filter "TestCategory!=Integration" > test-run.txt 2>&1`
-Expected: same pass count as before the change (the BL6009 flake exit-1 is normal — check the failure list, not the exit code).
+Expected: same pass count as before the change (the BL6009 flake exit-1 is normal — check the failure list, not the exit code). **Record the pass count** — Task 12 Step 1 compares against exactly this baseline number.
 
 - [ ] **Step 3: Commit** — `git commit -m "refactor(blnet): CppCapabilityChecker reads BoundaryTypeRegistry (behavior-preserving)"`
 
@@ -557,7 +557,9 @@ inline blnet_callback blnet_register_callback(
     if (!detail::g_cb_freelist.empty()) { index = detail::g_cb_freelist.back(); detail::g_cb_freelist.pop_back(); }
     else { index = static_cast<uint32_t>(detail::g_callbacks.size()); detail::g_callbacks.emplace_back(); }
     auto& e = detail::g_callbacks[index];
-    e.fn = std::move(fn); e.slots.assign(slots, slots + argc); e.flags = flags; e.alive = true;
+    e.fn = std::move(fn); e.flags = flags; e.alive = true;
+    e.slots.clear();
+    if (argc > 0) e.slots.assign(slots, slots + argc); /* guard: zero-arg registration may pass slots == nullptr */
     return (static_cast<uint64_t>(e.generation) << 32) | index;
 }
 
@@ -897,7 +899,8 @@ public sealed class HandleTable
        attributes. Required, not conditional. -->
   <Compile Remove="TestAssets\**" />
   <!-- Task 9's fixture reads main.cpp.txt from TestContext.CurrentContext.TestDirectory;
-       'Update' (not 'Include') because a .txt is already a default None item. -->
+       'Update' (not 'Include') because a .txt is already a default None item. Harmless
+       MSBuild no-op until Task 9 creates the file. -->
   <None Update="TestAssets\BlnetHarness\main.cpp.txt" CopyToOutputDirectory="PreserveNewest" />
 </ItemGroup>
 ```
@@ -1129,7 +1132,7 @@ public static unsafe class Exports
             {
                 byte* msg = null;
                 if (_getNativeError(&msg) == (int)BlnetStatus.BLNET_OK && msg != null)
-                { _lastErrorType = "BasicLangNativeException"; _lastErrorMessage = Utf8ToString(msg); NativeMemory.Free(msg); }
+                { _lastErrorType = "BasicLangNativeException"; _lastErrorMessage = Utf8ToString(msg); NativeMemory.Free(msg); /* == blnet_free's allocator: the buffer came from blnet_alloc */ }
             }
             return st;
         }
@@ -1145,6 +1148,8 @@ public static unsafe class Exports
             var local = new ulong[argc];
             for (int i = 0; i < argc; i++) local[i] = args[i];
             int st = 0;
+            // NB: 'fixed' over a ZERO-length array yields a null pointer — fine for argc == 0
+            // (the thunk never dereferences args then); do not "fix" this.
             var t = new Thread(() => { fixed (ulong* p = local) st = _thunk(cb, p, argc, null); });
             t.Start(); t.Join();
             return st; // cross-thread: queued (notification) / BLNET_E_CROSS_THREAD_RESULT (result-bearing)
