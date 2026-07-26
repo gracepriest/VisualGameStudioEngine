@@ -27,12 +27,6 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     private TreeNode? _selectedNode;
 
     [ObservableProperty]
-    private bool _isRenaming;
-
-    [ObservableProperty]
-    private string _renameText = "";
-
-    [ObservableProperty]
     private bool _isCreatingNew;
 
     [ObservableProperty]
@@ -1328,42 +1322,38 @@ public partial class SolutionExplorerViewModel : ViewModelBase
 
     // ─── Inline Rename (F2) ─────────────────────────────────────────
 
+    /// <summary>
+    /// Begins in-place rename of the selected node: the item template swaps its name TextBlock
+    /// for a TextBox bound to <see cref="TreeNode.EditingName"/>. Committed by ConfirmRename
+    /// (Enter / focus lost) or discarded by CancelRename (Escape).
+    /// </summary>
     [RelayCommand]
-    private async Task StartRenameAsync()
+    private void StartRename()
     {
-        if (SelectedNode == null || SelectedNode.IsProject || SelectedNode.IsSolution) return;
+        var node = SelectedNode;
+        if (node == null || node.IsProject || node.IsSolution) return;
 
-        // Prompt for the new name, prefilled with the current one. The inline-edit UI the
-        // IsRenaming/RenameText fields were originally designed for was never wired into the
-        // view (the tree only ever shows a static TextBlock and F2 wasn't bound), so both
-        // rename entry points silently did nothing. A dialog is the reliable surface.
-        var current = SelectedNode.Name;
-        var newName = await _dialogService.ShowInputDialogAsync("Rename", $"New name for '{current}':", current);
-        if (string.IsNullOrWhiteSpace(newName) || newName.Trim() == current) return;
-
-        RenameText = newName.Trim();
-        IsRenaming = true;               // satisfies the ConfirmRenameAsync guard
-        await ConfirmRenameAsync();
+        node.EditingName = node.Name;
+        node.IsEditing = true;
     }
 
-    [ObservableProperty]
-    private int _renameSelectionLength;
-
     [RelayCommand]
-    private async Task ConfirmRenameAsync()
+    private async Task ConfirmRenameAsync(TreeNode? node)
     {
-        if (!IsRenaming || SelectedNode == null || string.IsNullOrWhiteSpace(RenameText)) return;
+        // Act on the node the editor is bound to (passed by the view). Falling back to
+        // SelectedNode is unreliable — it can drift from the editing node after a tree refresh.
+        node ??= SelectedNode;
+        if (node == null || !node.IsEditing) return;
 
-        var oldPath = SelectedNode.FullPath;
-        var newName = RenameText.Trim();
+        // Leave edit mode first so a follow-on LostFocus (fired when the editor hides) is a no-op.
+        node.IsEditing = false;
+
+        var newName = (node.EditingName ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(newName) || newName == node.Name) return;
+
+        var oldPath = node.FullPath;
         var parentDir = Path.GetDirectoryName(oldPath) ?? "";
         var newPath = Path.Combine(parentDir, newName);
-
-        if (oldPath == newPath)
-        {
-            CancelRename();
-            return;
-        }
 
         // Validate name
         var invalidChars = Path.GetInvalidFileNameChars();
@@ -1382,7 +1372,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
 
         try
         {
-            if (SelectedNode.IsFile)
+            if (node.IsFile)
             {
                 File.Move(oldPath, newPath);
 
@@ -1403,7 +1393,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
 
                 FileRenamed?.Invoke(this, (oldPath, newPath));
             }
-            else if (SelectedNode.IsFolder)
+            else if (node.IsFolder)
             {
                 Directory.Move(oldPath, newPath);
 
@@ -1433,17 +1423,13 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         {
             await _dialogService.ShowMessageAsync("Error", $"Failed to rename: {ex.Message}");
         }
-        finally
-        {
-            CancelRename();
-        }
     }
 
     [RelayCommand]
-    private void CancelRename()
+    private void CancelRename(TreeNode? node)
     {
-        IsRenaming = false;
-        RenameText = "";
+        node ??= SelectedNode;
+        if (node != null) node.IsEditing = false;
     }
 
     // ─── Delete with Confirmation ───────────────────────────────────
@@ -2156,6 +2142,19 @@ public partial class TreeNode : ObservableObject
 
     [ObservableProperty]
     private bool _isSelected;
+
+    /// <summary>
+    /// True while this node's name is being edited in place (F2 / Rename). The item template
+    /// swaps its name TextBlock for an editable TextBox bound to <see cref="EditingName"/>.
+    /// </summary>
+    [ObservableProperty]
+    private bool _isEditing;
+
+    /// <summary>
+    /// The working name shown in the inline rename editor while <see cref="IsEditing"/> is true.
+    /// </summary>
+    [ObservableProperty]
+    private string _editingName = "";
 
     [ObservableProperty]
     private bool _isCut;

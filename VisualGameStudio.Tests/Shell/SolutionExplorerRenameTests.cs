@@ -7,10 +7,9 @@ using VisualGameStudio.Shell.ViewModels.Panels;
 namespace VisualGameStudio.Tests.Shell;
 
 /// <summary>
-/// File rename in the Solution Explorer (F2 / right-click → Rename). The rename logic lived in
-/// the ViewModel but was never surfaced in the view (no inline editor, F2 unbound), so both
-/// entry points did nothing. StartRename now prompts via IDialogService.ShowInputDialogAsync and
-/// applies the rename through the existing move/project-update path.
+/// In-place (inline) file rename in the Solution Explorer. StartRename puts the selected node
+/// into edit mode (IsEditing + EditingName); the view swaps the name TextBlock for a TextBox.
+/// ConfirmRename applies the move/project-update using EditingName; CancelRename discards.
 /// </summary>
 [TestFixture]
 public class SolutionExplorerRenameTests
@@ -18,7 +17,6 @@ public class SolutionExplorerRenameTests
     private string _dir = null!;
     private BasicLangProject _project = null!;
     private Mock<IProjectService> _projectService = null!;
-    private Mock<IDialogService> _dialogService = null!;
     private SolutionExplorerViewModel _vm = null!;
 
     [SetUp]
@@ -34,11 +32,9 @@ public class SolutionExplorerRenameTests
         _projectService.Setup(p => p.CurrentProject).Returns(_project);
         _projectService.Setup(p => p.SaveProjectAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
 
-        _dialogService = new Mock<IDialogService>();
-
         _vm = new SolutionExplorerViewModel(
             _projectService.Object, new Mock<IFileService>().Object,
-            _dialogService.Object, new Mock<ISolutionService>().Object);
+            new Mock<IDialogService>().Object, new Mock<ISolutionService>().Object);
     }
 
     [TearDown]
@@ -53,54 +49,79 @@ public class SolutionExplorerRenameTests
     }
 
     [Test]
-    public async Task StartRename_ConfirmedInDialog_MovesFileAndUpdatesProjectItem()
+    public void StartRename_EntersEditModeSeededWithCurrentName()
     {
-        SelectFileNode("main.cpp");
-        _dialogService
-            .Setup(d => d.ShowInputDialogAsync("Rename", It.IsAny<string>(), "main.cpp"))
-            .ReturnsAsync("renamed.cpp");
+        var node = SelectFileNode("main.cpp");
 
-        string? renamedFrom = null, renamedTo = null;
-        _vm.FileRenamed += (_, e) => { renamedFrom = e.OldPath; renamedTo = e.NewPath; };
-
-        await _vm.StartRenameCommand.ExecuteAsync(null);
+        _vm.StartRenameCommand.Execute(null);
 
         Assert.Multiple(() =>
         {
-            Assert.That(File.Exists(Path.Combine(_dir, "renamed.cpp")), Is.True, "file moved to new name");
-            Assert.That(File.Exists(Path.Combine(_dir, "main.cpp")), Is.False, "old file gone");
-            Assert.That(_project.Items.Single().Include, Is.EqualTo("renamed.cpp"), "project item updated");
-            Assert.That(renamedFrom, Does.EndWith("main.cpp"));
-            Assert.That(renamedTo, Does.EndWith("renamed.cpp"));
+            Assert.That(node.IsEditing, Is.True);
+            Assert.That(node.EditingName, Is.EqualTo("main.cpp"));
         });
     }
 
     [Test]
-    public async Task StartRename_CancelledDialog_DoesNothing()
+    public void StartRename_OnProjectOrSolutionNode_DoesNothing()
     {
-        SelectFileNode("main.cpp");
-        _dialogService
-            .Setup(d => d.ShowInputDialogAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
-            .ReturnsAsync((string?)null); // user cancelled
+        var proj = new TreeNode { Name = "App", NodeType = TreeNodeType.Project };
+        _vm.SelectedNode = proj;
 
-        await _vm.StartRenameCommand.ExecuteAsync(null);
+        _vm.StartRenameCommand.Execute(null);
 
-        Assert.That(File.Exists(Path.Combine(_dir, "main.cpp")), Is.True, "file untouched when cancelled");
-        Assert.That(_project.Items.Single().Include, Is.EqualTo("main.cpp"));
+        Assert.That(proj.IsEditing, Is.False);
     }
 
     [Test]
-    public async Task StartRename_PrefillsDialogWithCurrentName()
+    public async Task ConfirmRename_MovesFileUpdatesProjectItemAndFiresEvent()
     {
-        SelectFileNode("main.cpp");
-        string? passedDefault = null;
-        _dialogService
-            .Setup(d => d.ShowInputDialogAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
-            .Callback<string, string, string>((_, _, def) => passedDefault = def)
-            .ReturnsAsync((string?)null);
+        var node = SelectFileNode("main.cpp");
+        _vm.StartRenameCommand.Execute(null);
+        node.EditingName = "renamed.cpp";           // as if typed into the editor
 
-        await _vm.StartRenameCommand.ExecuteAsync(null);
+        string? from = null, to = null;
+        _vm.FileRenamed += (_, e) => { from = e.OldPath; to = e.NewPath; };
 
-        Assert.That(passedDefault, Is.EqualTo("main.cpp"), "dialog is prefilled with the current file name");
+        await _vm.ConfirmRenameCommand.ExecuteAsync(node);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(File.Exists(Path.Combine(_dir, "renamed.cpp")), Is.True);
+            Assert.That(File.Exists(Path.Combine(_dir, "main.cpp")), Is.False);
+            Assert.That(_project.Items.Single().Include, Is.EqualTo("renamed.cpp"));
+            Assert.That(node.IsEditing, Is.False, "edit mode ends after commit");
+            Assert.That(from, Does.EndWith("main.cpp"));
+            Assert.That(to, Does.EndWith("renamed.cpp"));
+        });
+    }
+
+    [Test]
+    public async Task ConfirmRename_UnchangedName_LeavesFileAndEndsEditMode()
+    {
+        var node = SelectFileNode("main.cpp");
+        _vm.StartRenameCommand.Execute(null);       // EditingName stays "main.cpp"
+
+        await _vm.ConfirmRenameCommand.ExecuteAsync(node);
+
+        Assert.That(File.Exists(Path.Combine(_dir, "main.cpp")), Is.True);
+        Assert.That(node.IsEditing, Is.False);
+    }
+
+    [Test]
+    public void CancelRename_DiscardsWithoutMoving()
+    {
+        var node = SelectFileNode("main.cpp");
+        _vm.StartRenameCommand.Execute(null);
+        node.EditingName = "renamed.cpp";
+
+        _vm.CancelRenameCommand.Execute(node);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(node.IsEditing, Is.False);
+            Assert.That(File.Exists(Path.Combine(_dir, "main.cpp")), Is.True, "cancel does not move the file");
+            Assert.That(File.Exists(Path.Combine(_dir, "renamed.cpp")), Is.False);
+        });
     }
 }

@@ -38,6 +38,12 @@
                 DoubleTapped="OnTreeViewDoubleTapped"
                 AutomationProperties.Name="Solution Explorer Tree">
 
+        <TreeView.KeyBindings>
+          <!-- The context-menu InputGesture is display-only in this codebase, so F2 needs a
+               real binding. -->
+          <KeyBinding Gesture="F2" Command="{Binding StartRenameCommand}"/>
+        </TreeView.KeyBindings>
+
         <TreeView.ContextMenu>
           <ContextMenu>
             <MenuItem Header="Add">
@@ -115,11 +121,19 @@
                          FontWeight="Bold"
                          VerticalAlignment="Center"/>
 
-              <!-- Name (always visible - rename handled elsewhere) -->
-              <TextBlock Grid.Column="1"
-                         Text="{Binding Name}"
-                         Foreground="#CCCCCC"
-                         VerticalAlignment="Center"/>
+              <!-- Name display, swapped for an inline editor while renaming (F2 / Rename). -->
+              <Panel Grid.Column="1" VerticalAlignment="Center">
+                <TextBlock Text="{Binding Name}"
+                           Foreground="#CCCCCC"
+                           VerticalAlignment="Center"
+                           IsVisible="{Binding !IsEditing}"/>
+                <TextBox Text="{Binding EditingName, Mode=TwoWay}"
+                         IsVisible="{Binding IsEditing}"
+                         VerticalAlignment="Center"
+                         Padding="1,0" Margin="0" MinHeight="0"
+                         LostFocus="OnRenameEditorLostFocus"
+                         AttachedToVisualTree="OnRenameEditorAttached"/>
+              </Panel>
             </Grid>
           </TreeDataTemplate>
         </TreeView.ItemTemplate>

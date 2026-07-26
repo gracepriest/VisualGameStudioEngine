@@ -35,6 +35,10 @@ public partial class SolutionExplorerView : UserControl
         if (DataContext is not SolutionExplorerViewModel vm) { base.OnKeyDown(e); return; }
         var selectedNode = vm.SelectedNode;
 
+        // While renaming in place, the inline editor owns the keyboard — don't run tree
+        // navigation / type-ahead (which would eat the first keystroke before focus lands).
+        if (selectedNode != null && selectedNode.IsEditing) { base.OnKeyDown(e); return; }
+
         switch (e.Key)
         {
             case Key.Enter:
@@ -237,5 +241,99 @@ public partial class SolutionExplorerView : UserControl
         {
             vm.OpenFileCommand.Execute(null);
         }
+    }
+
+    // ─── Inline rename editor (per-node TextBox in the item template) ───────────────
+
+    private void OnRenameEditorAttached(object? sender, VisualTreeAttachmentEventArgs e)
+    {
+        if (sender is not TextBox tb) return;
+
+        // Focus the editor whenever it becomes visible (editing starts), not just at attach.
+        tb.PropertyChanged -= OnRenameEditorPropertyChanged;
+        tb.PropertyChanged += OnRenameEditorPropertyChanged;
+
+        // Handle Enter/Escape at the TUNNEL phase so they are not swallowed by the tree's own
+        // navigation (Enter=open, Escape=…) or a default button before the editor sees them.
+        tb.RemoveHandler(InputElement.KeyDownEvent, OnRenameEditorPreviewKeyDown);
+        tb.AddHandler(InputElement.KeyDownEvent, OnRenameEditorPreviewKeyDown,
+            RoutingStrategies.Tunnel, handledEventsToo: true);
+
+        // Stop tree-navigation keys from bubbling out of the editor to the TreeView (which would
+        // move the tree selection mid-rename, e.g. Left at the caret edge selecting the parent
+        // project). Runs at the BUBBLE phase — after the TextBox has already moved the caret.
+        tb.RemoveHandler(InputElement.KeyDownEvent, OnRenameEditorBubbleKeyDown);
+        tb.AddHandler(InputElement.KeyDownEvent, OnRenameEditorBubbleKeyDown, RoutingStrategies.Bubble);
+
+        if (tb.IsVisible) FocusRenameEditor(tb);
+    }
+
+    private void OnRenameEditorPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
+    {
+        if (sender is TextBox tb && e.Property == Visual.IsVisibleProperty && tb.IsVisible)
+            FocusRenameEditor(tb);
+    }
+
+    private void OnRenameEditorPreviewKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (DataContext is not SolutionExplorerViewModel vm || sender is not TextBox tb) return;
+        var node = tb.DataContext as TreeNode;
+
+        // NOTE: the Enter key is Key.Return in Avalonia (Key.Enter is a distinct value).
+        if (e.Key == Key.Return)
+        {
+            // Flush the typed text into the bound model, then commit the node the editor is on.
+            if (node != null) node.EditingName = tb.Text ?? "";
+            vm.ConfirmRenameCommand.Execute(node);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            vm.CancelRenameCommand.Execute(node);
+            e.Handled = true;
+        }
+    }
+
+    private void OnRenameEditorBubbleKeyDown(object? sender, KeyEventArgs e)
+    {
+        // The editor owns these keys while renaming; don't let them reach the TreeView.
+        switch (e.Key)
+        {
+            case Key.Left:
+            case Key.Right:
+            case Key.Up:
+            case Key.Down:
+            case Key.Home:
+            case Key.End:
+            case Key.PageUp:
+            case Key.PageDown:
+                e.Handled = true;
+                break;
+        }
+    }
+
+    private void OnRenameEditorLostFocus(object? sender, RoutedEventArgs e)
+    {
+        // Clicking away commits (VS-like). No-op if Enter/Escape already left edit mode,
+        // since ConfirmRename guards on the node still being in edit mode.
+        if (DataContext is not SolutionExplorerViewModel vm || sender is not TextBox tb) return;
+        var node = tb.DataContext as TreeNode;
+        if (node != null) node.EditingName = tb.Text ?? "";
+        vm.ConfirmRenameCommand.Execute(node);
+    }
+
+    private static void FocusRenameEditor(TextBox tb)
+    {
+        // A just-shown (IsVisible-toggled) control isn't arranged yet and refuses focus, which
+        // drops the first keystroke to the tree's type-ahead. Force it to arrange itself now so
+        // Focus() lands synchronously; the next real layout pass re-arranges it correctly.
+        if (!tb.IsMeasureValid || !tb.IsArrangeValid)
+        {
+            tb.Measure(Size.Infinity);
+            tb.Arrange(new Rect(tb.DesiredSize));
+        }
+
+        tb.Focus();
+        tb.SelectAll();
     }
 }
