@@ -48,7 +48,7 @@ To add across the batches: `Matrix` (C5 ✅), `Camera3D` (C5 ✅), `Ray` (C5 ✅
 | **C5** | **Screen-space / camera math** | **8** | **Ray✅, Camera3D✅, Matrix✅** | **headless** | **SHIPPED — see below.** |
 | C6 | Timing/frame + Random + Misc + 2 input stragglers | 15 | — | headless (partial) | `TraceLog` bound as fixed 2-arg `(int,const char*)` → `TraceLog(lvl,"%s",text)`. |
 | **C7** | **File data I/O** | **7** | — | **headless** | **SHIPPED — see below.** |
-| C8 | File-system path queries | 15 | — | headless | all string/bool/int. |
+| **C8** | **File-system path queries** | **15** | — | **headless** | **SHIPPED — see below.** |
 | C9 | Directory listing & dropped files | 7 | FilePathList | headless | `char**` list marshaling. |
 | **C10** | **Compression / Encoding** | **7** | — | **headless** | **SHIPPED — see below.** |
 | C11 | Automation events | 8 | AutomationEvent, AutomationEventList | device-lite | record/play. |
@@ -93,3 +93,14 @@ callbacks last.
   Save↔Load bytes, Save↔Load ASCII text (no newline → immune to text-mode CRLF translation), and `ExportDataAsCode`
   emits a real C header. ⚠ raylib 5.5 `ExportDataAsCode` formats bytes with `%x` (byte 1 → `0x1`, not `0x01`) — the
   test keys on `static unsigned char` / `_DATA_SIZE` and bytes ≥ 0x10. Zero wrapper collisions (all 7 plain).
+- **C8 — File-system path queries (15) 🏁 SHIPPED** (counts in the memory topic). `FileExists`/`DirectoryExists`/
+  `IsFileExtension`/`ChangeDirectory`/`IsPathFile`/`IsFileNameValid` → `bool` (I1); `GetFileLength`/`MakeDirectory` →
+  `Integer`; the 7 path getters → `const char*` returned as `IntPtr` + `PtrToStringAnsi` (never freed). Zero collisions.
+  Fully headless, cross-checked vs .NET's `File`/`Directory`. **⛔ REAL BUG FOUND + FIXED: `GetFileName`/`GetFileExtension`
+  raylib-return a pointer INTO the input string (an offset), not a static buffer — across P/Invoke the CLR frees the
+  marshaled input right after the call, so the returned pointer DANGLES → `PtrToStringAnsi` reads freed memory (empty).**
+  Fix: the `.cpp` forwarder copies raylib's result into an engine-side `static char[4096]` while the input is still
+  alive (value identical to raylib; `GetFileExtension`'s NULL preserved). The other 5 getters use raylib's own static
+  buffer and are unaffected. ⛔ raylib `GetDirectoryPath` prepends `./` to a relative path (faithful). ⛔
+  `ChangeDirectory` mutates process cwd → its test is `[NonParallelizable]` + restores the original dir. Observed the
+  real getter outputs via a PowerShell P/Invoke against the staged DLL before diagnosing (same tactic as C7's `%x`).

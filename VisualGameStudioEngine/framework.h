@@ -717,6 +717,27 @@ extern "C" {
     __declspec(dllexport) void           Framework_UnloadFileText(char* text);
     __declspec(dllexport) bool           Framework_SaveFileText(const char* fileName, char* text);
 
+    // ==== RAW RCORE PARITY — File-system path queries (raylib 5.5 passthrough, Batch core-C8) ====
+    // Pure path/existence helpers — all headless. const char* returns: the caller PtrToStringAnsi's immediately and
+    // never frees them. Most point at raylib's OWN static buffer; ⛔ GetFileName/GetFileExtension raylib-return a pointer
+    // INTO the input (dangles across P/Invoke input-marshaling), so the .cpp forwarder copies those into an engine
+    // static buffer to keep them valid (see framework.cpp). bool returns are I1.
+    __declspec(dllexport) bool        Framework_FileExists(const char* fileName);
+    __declspec(dllexport) bool        Framework_DirectoryExists(const char* dirPath);
+    __declspec(dllexport) bool        Framework_IsFileExtension(const char* fileName, const char* ext);
+    __declspec(dllexport) int         Framework_GetFileLength(const char* fileName);
+    __declspec(dllexport) const char* Framework_GetFileExtension(const char* fileName);
+    __declspec(dllexport) const char* Framework_GetFileName(const char* filePath);
+    __declspec(dllexport) const char* Framework_GetFileNameWithoutExt(const char* filePath);
+    __declspec(dllexport) const char* Framework_GetDirectoryPath(const char* filePath);
+    __declspec(dllexport) const char* Framework_GetPrevDirectoryPath(const char* dirPath);
+    __declspec(dllexport) const char* Framework_GetWorkingDirectory(void);
+    __declspec(dllexport) const char* Framework_GetApplicationDirectory(void);
+    __declspec(dllexport) int         Framework_MakeDirectory(const char* dirPath);
+    __declspec(dllexport) bool        Framework_ChangeDirectory(const char* dir);
+    __declspec(dllexport) bool        Framework_IsPathFile(const char* path);
+    __declspec(dllexport) bool        Framework_IsFileNameValid(const char* fileName);
+
     // Sounds (handle-based)
     __declspec(dllexport) int   Framework_LoadSoundH(const char* file);
     __declspec(dllexport) void  Framework_UnloadSoundH(int h);

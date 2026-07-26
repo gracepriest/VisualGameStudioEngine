@@ -2002,6 +2002,39 @@ extern "C" {
     void           Framework_UnloadFileText(char* text) { UnloadFileText(text); }
     bool           Framework_SaveFileText(const char* fileName, char* text) { return SaveFileText(fileName, text); }
 
+    // ==== RAW RCORE PARITY — File-system path queries (raylib 5.5 passthrough, Batch core-C8) ====
+    bool        Framework_FileExists(const char* fileName) { return FileExists(fileName); }
+    bool        Framework_DirectoryExists(const char* dirPath) { return DirectoryExists(dirPath); }
+    bool        Framework_IsFileExtension(const char* fileName, const char* ext) { return IsFileExtension(fileName, ext); }
+    int         Framework_GetFileLength(const char* fileName) { return GetFileLength(fileName); }
+    // ⛔ raylib's GetFileExtension/GetFileName return a pointer INTO the input string (an offset), NOT a static buffer
+    // (unlike GetFileNameWithoutExt/GetDirectoryPath/GetPrevDirectoryPath). Across the P/Invoke boundary the CLR frees
+    // the marshaled input right after the call, so returning that pointer as-is dangles → PtrToStringAnsi reads freed
+    // memory (empty/garbage). Copy raylib's result into an engine-side static buffer WHILE the input is still alive so
+    // the returned pointer stays valid. Value is identical to raylib's; NULL (no extension) is preserved.
+    const char* Framework_GetFileExtension(const char* fileName) {
+        const char* r = GetFileExtension(fileName);
+        if (!r) return nullptr;
+        static char buf[4096];
+        strncpy(buf, r, sizeof(buf) - 1); buf[sizeof(buf) - 1] = '\0';
+        return buf;
+    }
+    const char* Framework_GetFileName(const char* filePath) {
+        const char* r = GetFileName(filePath);
+        static char buf[4096];
+        if (r) { strncpy(buf, r, sizeof(buf) - 1); buf[sizeof(buf) - 1] = '\0'; } else buf[0] = '\0';
+        return buf;
+    }
+    const char* Framework_GetFileNameWithoutExt(const char* filePath) { return GetFileNameWithoutExt(filePath); }
+    const char* Framework_GetDirectoryPath(const char* filePath) { return GetDirectoryPath(filePath); }
+    const char* Framework_GetPrevDirectoryPath(const char* dirPath) { return GetPrevDirectoryPath(dirPath); }
+    const char* Framework_GetWorkingDirectory(void) { return GetWorkingDirectory(); }
+    const char* Framework_GetApplicationDirectory(void) { return GetApplicationDirectory(); }
+    int         Framework_MakeDirectory(const char* dirPath) { return MakeDirectory(dirPath); }
+    bool        Framework_ChangeDirectory(const char* dir) { return ChangeDirectory(dir); }
+    bool        Framework_IsPathFile(const char* path) { return IsPathFile(path); }
+    bool        Framework_IsFileNameValid(const char* fileName) { return IsFileNameValid(fileName); }
+
     void Framework_PauseAllAudio() {
         g_audioPaused = true;
         for (auto& kv : g_sounds) {
