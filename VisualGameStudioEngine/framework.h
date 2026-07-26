@@ -660,6 +660,25 @@ extern "C" {
     __declspec(dllexport) float Framework_GetMusicTimeLength(Music music);
     __declspec(dllexport) float Framework_GetMusicTimePlayed(Music music);
 
+    // ==== RAW RAUDIO PARITY — AudioStream (raylib 5.5 passthrough, Batch audio-A4) ====
+    // Raw raylib low-level AudioStream API (struct BY VALUE); reuses the AudioStream struct defined in A2. None of
+    // these names are squatted — all bind plain. The 5 AudioCallback fn-pointer fns (SetAudioStreamCallback,
+    // Attach/DetachAudioStreamProcessor, Attach/DetachAudioMixedProcessor) are DEFERRED to a dedicated callbacks batch.
+    __declspec(dllexport) AudioStream Framework_LoadAudioStream(unsigned int sampleRate, unsigned int sampleSize, unsigned int channels);
+    __declspec(dllexport) bool Framework_IsAudioStreamValid(AudioStream stream);
+    __declspec(dllexport) void Framework_UnloadAudioStream(AudioStream stream);
+    __declspec(dllexport) void Framework_UpdateAudioStream(AudioStream stream, const void* data, int frameCount);
+    __declspec(dllexport) bool Framework_IsAudioStreamProcessed(AudioStream stream);
+    __declspec(dllexport) void Framework_PlayAudioStream(AudioStream stream);
+    __declspec(dllexport) void Framework_PauseAudioStream(AudioStream stream);
+    __declspec(dllexport) void Framework_ResumeAudioStream(AudioStream stream);
+    __declspec(dllexport) bool Framework_IsAudioStreamPlaying(AudioStream stream);
+    __declspec(dllexport) void Framework_StopAudioStream(AudioStream stream);
+    __declspec(dllexport) void Framework_SetAudioStreamVolume(AudioStream stream, float volume);
+    __declspec(dllexport) void Framework_SetAudioStreamPitch(AudioStream stream, float pitch);
+    __declspec(dllexport) void Framework_SetAudioStreamPan(AudioStream stream, float pan);
+    __declspec(dllexport) void Framework_SetAudioStreamBufferSizeDefault(int size);
+
     // Sounds (handle-based)
     __declspec(dllexport) int   Framework_LoadSoundH(const char* file);
     __declspec(dllexport) void  Framework_UnloadSoundH(int h);

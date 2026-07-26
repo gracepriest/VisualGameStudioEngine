@@ -1957,6 +1957,23 @@ extern "C" {
     float Framework_GetMusicTimeLength(Music music) { return GetMusicTimeLength(music); }
     float Framework_GetMusicTimePlayed(Music music) { return GetMusicTimePlayed(music); }
 
+    // ==== RAW RAUDIO PARITY — AudioStream (raylib 5.5 passthrough, Batch audio-A4) ====
+    // Raw raylib low-level AudioStream forwarders (struct BY VALUE). The 5 AudioCallback fn-pointer fns are deferred.
+    AudioStream Framework_LoadAudioStream(unsigned int sampleRate, unsigned int sampleSize, unsigned int channels) { return LoadAudioStream(sampleRate, sampleSize, channels); }
+    bool Framework_IsAudioStreamValid(AudioStream stream) { return IsAudioStreamValid(stream); }
+    void Framework_UnloadAudioStream(AudioStream stream) { UnloadAudioStream(stream); }
+    void Framework_UpdateAudioStream(AudioStream stream, const void* data, int frameCount) { UpdateAudioStream(stream, data, frameCount); }
+    bool Framework_IsAudioStreamProcessed(AudioStream stream) { return IsAudioStreamProcessed(stream); }
+    void Framework_PlayAudioStream(AudioStream stream) { PlayAudioStream(stream); }
+    void Framework_PauseAudioStream(AudioStream stream) { PauseAudioStream(stream); }
+    void Framework_ResumeAudioStream(AudioStream stream) { ResumeAudioStream(stream); }
+    bool Framework_IsAudioStreamPlaying(AudioStream stream) { return IsAudioStreamPlaying(stream); }
+    void Framework_StopAudioStream(AudioStream stream) { StopAudioStream(stream); }
+    void Framework_SetAudioStreamVolume(AudioStream stream, float volume) { SetAudioStreamVolume(stream, volume); }
+    void Framework_SetAudioStreamPitch(AudioStream stream, float pitch) { SetAudioStreamPitch(stream, pitch); }
+    void Framework_SetAudioStreamPan(AudioStream stream, float pan) { SetAudioStreamPan(stream, pan); }
+    void Framework_SetAudioStreamBufferSizeDefault(int size) { SetAudioStreamBufferSizeDefault(size); }
+
     void Framework_PauseAllAudio() {
         g_audioPaused = true;
         for (auto& kv : g_sounds) {

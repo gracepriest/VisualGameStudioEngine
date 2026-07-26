@@ -70,8 +70,14 @@ VB mirrors: `<StructLayout(LayoutKind.Sequential)>`; pointers → `IntPtr`; `loo
   Two Music-specific facts encoded in the test: (1) the stream keeps the SOURCE format — the mixer resamples per-buffer
   (LoadSoundFromWave, by contrast, resamples to the device up-front); (2) raylib **streams from the caller's buffer**
   (`drwav_init_memory` keeps a pointer, no copy) → the input bytes must stay pinned for the whole Music lifetime.
-- **A4 — AudioStream (14):** the non-callback AudioStream fns. Needs a device → smoke. The 5 callback fns stay
-  deferred to a dedicated "audio callbacks" batch (delegate/GC-pinning design).
+- **A4 — AudioStream (14):** the non-callback AudioStream fns. Reuses the AudioStream struct from A2 (no new struct).
+  **🏁 SHIPPED** (counts 2693/2625). Zero wrapper collisions (all 14 bind plain). The device-backed test is the
+  cleanest by-value check of the batch: LoadAudioStream stores the requested sampleRate/sampleSize/channels VERBATIM
+  (no device resample at this layer), so the fields round-trip exactly. The 5 callback fns stay deferred to a dedicated
+  "audio callbacks" batch (delegate/GC-pinning design).
+
+**🏁 raudio raw-passthrough surface COMPLETE — A1+A2+A3+A4 = 59 of the 61 passthroughs shipped.** Remaining raudio work:
+the 5 deferred AudioCallback fn-pointer fns, and a consolidated `TestVbDLL --audio` smoke across A1–A4.
 
 ## Verification (per sub-batch)
 - **Parity guard** (headless text scan) per sub-batch — the sub-batch's names present as `Framework_<name>(` in
