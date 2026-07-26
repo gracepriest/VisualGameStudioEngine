@@ -12112,5 +12112,54 @@ Public Module FrameworkWrapper
     End Function
 #End Region
 
+#Region "Raylib raudio — AudioStream (Batch audio-A4)"
+    ' Raw raylib low-level AudioStream API (struct BY VALUE), reusing the AudioStream struct from A2. No wrapper
+    ' collisions — none of these 14 names are squatted, so all bind plain with raylib's exact spelling. C bool returns
+    ' use I1. const void* data (UpdateAudioStream) → IntPtr + frameCount (caller pins its own buffer). The 5
+    ' AudioCallback fn-pointer fns are DEFERRED to a dedicated callbacks batch (delegate/GC-pinning design).
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_LoadAudioStream(sampleRate As UInteger, sampleSize As UInteger, channels As UInteger) As AudioStream
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsAudioStreamValid(stream As AudioStream) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadAudioStream(stream As AudioStream)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UpdateAudioStream(stream As AudioStream, data As IntPtr, frameCount As Integer)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsAudioStreamProcessed(stream As AudioStream) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_PlayAudioStream(stream As AudioStream)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_PauseAudioStream(stream As AudioStream)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ResumeAudioStream(stream As AudioStream)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsAudioStreamPlaying(stream As AudioStream) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_StopAudioStream(stream As AudioStream)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetAudioStreamVolume(stream As AudioStream, volume As Single)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetAudioStreamPitch(stream As AudioStream, pitch As Single)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetAudioStreamPan(stream As AudioStream, pan As Single)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetAudioStreamBufferSizeDefault(size As Integer)
+    End Sub
+#End Region
+
 End Module
 
