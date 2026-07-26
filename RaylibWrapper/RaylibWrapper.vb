@@ -12161,5 +12161,35 @@ Public Module FrameworkWrapper
     End Sub
 #End Region
 
+#Region "Raylib rcore — Screen-space / camera math (Batch core-C5)"
+    ' Raw raylib screen-space/view-matrix helpers (structs BY VALUE). No wrapper collisions — all 8 bind plain with
+    ' raylib's exact spelling. `Camera` is a typedef of Camera3D, so it marshals as the Camera3D struct. The *Ex/*2D/
+    ' *Matrix* variants are pure math (no window); the two non-Ex variants read the current screen size internally.
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetScreenToWorldRay(position As Vector2, camera As Camera3D) As Ray
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetScreenToWorldRayEx(position As Vector2, camera As Camera3D, width As Integer, height As Integer) As Ray
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetWorldToScreen(position As Vector3, camera As Camera3D) As Vector2
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetWorldToScreenEx(position As Vector3, camera As Camera3D, width As Integer, height As Integer) As Vector2
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetWorldToScreen2D(position As Vector2, camera As Camera2D) As Vector2
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetScreenToWorld2D(position As Vector2, camera As Camera2D) As Vector2
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetCameraMatrix(camera As Camera3D) As Matrix
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetCameraMatrix2D(camera As Camera2D) As Matrix
+    End Function
+#End Region
+
 End Module
 

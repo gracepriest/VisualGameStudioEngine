@@ -158,6 +158,47 @@ Public Module Utiliy
         Public w As Single
     End Structure
 
+    ' raylib Matrix — 4x4, column-major (OpenGL style). Returned BY VALUE by the core screen-space helpers
+    ' (GetCameraMatrix/GetCameraMatrix2D; core Batch C5). ⚠ raylib DECLARES the 16 floats in a scrambled order
+    ' (m0,m4,m8,m12 / m1,m5,m9,m13 / …) — memory layout follows that order, so the fields MUST be listed in the
+    ' same sequence for the sequential marshaling to line up byte-for-byte with the C struct.
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure Matrix
+        Public m0 As Single
+        Public m4 As Single
+        Public m8 As Single
+        Public m12 As Single
+        Public m1 As Single
+        Public m5 As Single
+        Public m9 As Single
+        Public m13 As Single
+        Public m2 As Single
+        Public m6 As Single
+        Public m10 As Single
+        Public m14 As Single
+        Public m3 As Single
+        Public m7 As Single
+        Public m11 As Single
+        Public m15 As Single
+    End Structure
+
+    ' raylib Camera3D (aka Camera) — passed BY VALUE to the core screen-space / view-matrix helpers (Batch C5).
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure Camera3D
+        Public position As Vector3
+        Public target As Vector3
+        Public up As Vector3
+        Public fovy As Single
+        Public projection As Integer
+    End Structure
+
+    ' raylib Ray — origin + normalized direction. Returned BY VALUE by GetScreenToWorldRay(Ex) (Batch C5).
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure Ray
+        Public position As Vector3
+        Public direction As Vector3
+    End Structure
+
     ' raylib Wave — PCM audio data held in RAM (raudio module, Batch audio-A1). Returned/passed BY VALUE;
     ' WaveCrop/WaveFormat mutate it in place (ByRef). `data` is the raw sample buffer pointer.
     <StructLayout(LayoutKind.Sequential)>
