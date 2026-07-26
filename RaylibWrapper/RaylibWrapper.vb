@@ -12251,5 +12251,59 @@ Public Module FrameworkWrapper
     End Function
 #End Region
 
+#Region "Raylib rcore — File-system path queries (Batch core-C8)"
+    ' Raw raylib path/existence helpers. No wrapper collisions — all 15 bind plain. String inputs marshal as Ansi.
+    ' bool returns use I1; int returns map straight. ⛔ All 7 const char* returns come back As IntPtr + PtrToStringAnsi
+    ' at the call site (never As String — a String return would free the buffer with the wrong allocator; the buffer is
+    ' not the caller's to free anyway). Buffer provenance differs: 5 getters return raylib's OWN static buffer, while
+    ' GetFileName/GetFileExtension return an ENGINE static buffer (the .cpp forwarder copies raylib's input-relative
+    ' pointer there so it survives P/Invoke input-marshaling — see framework.cpp). Either way: copy immediately, do not free.
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_FileExists(fileName As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_DirectoryExists(dirPath As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_IsFileExtension(fileName As String, ext As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_GetFileLength(fileName As String) As Integer
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_GetFileExtension(fileName As String) As IntPtr
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_GetFileName(filePath As String) As IntPtr
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_GetFileNameWithoutExt(filePath As String) As IntPtr
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_GetDirectoryPath(filePath As String) As IntPtr
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_GetPrevDirectoryPath(dirPath As String) As IntPtr
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetWorkingDirectory() As IntPtr
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetApplicationDirectory() As IntPtr
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_MakeDirectory(dirPath As String) As Integer
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_ChangeDirectory(dir As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_IsPathFile(path As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_IsFileNameValid(fileName As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+#End Region
+
 End Module
 
