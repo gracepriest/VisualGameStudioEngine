@@ -1937,6 +1937,26 @@ extern "C" {
     void  Framework_SetSoundPitch(Sound sound, float pitch) { SetSoundPitch(sound, pitch); }
     void  Framework_SetSoundPan(Sound sound, float pan) { SetSoundPan(sound, pan); }
 
+    // ==== RAW RAUDIO PARITY — Music (raylib 5.5 passthrough, Batch audio-A3) ====
+    // Raw raylib Music streaming forwarders. Names carry raylib's "Stream" suffix (LoadMusicStream/PlayMusicStream/
+    // StopMusicStream), so they don't collide with the handle-based Framework_*MusicH layer above.
+    Music Framework_LoadMusicStream(const char* fileName) { return LoadMusicStream(fileName); }
+    Music Framework_LoadMusicStreamFromMemory(const char* fileType, const unsigned char* data, int dataSize) { return LoadMusicStreamFromMemory(fileType, data, dataSize); }
+    bool  Framework_IsMusicValid(Music music) { return IsMusicValid(music); }
+    void  Framework_UnloadMusicStream(Music music) { UnloadMusicStream(music); }
+    void  Framework_PlayMusicStream(Music music) { PlayMusicStream(music); }
+    bool  Framework_IsMusicStreamPlaying(Music music) { return IsMusicStreamPlaying(music); }
+    void  Framework_UpdateMusicStream(Music music) { UpdateMusicStream(music); }
+    void  Framework_StopMusicStream(Music music) { StopMusicStream(music); }
+    void  Framework_PauseMusicStream(Music music) { PauseMusicStream(music); }
+    void  Framework_ResumeMusicStream(Music music) { ResumeMusicStream(music); }
+    void  Framework_SeekMusicStream(Music music, float position) { SeekMusicStream(music, position); }
+    void  Framework_SetMusicVolume(Music music, float volume) { SetMusicVolume(music, volume); }
+    void  Framework_SetMusicPitch(Music music, float pitch) { SetMusicPitch(music, pitch); }
+    void  Framework_SetMusicPan(Music music, float pan) { SetMusicPan(music, pan); }
+    float Framework_GetMusicTimeLength(Music music) { return GetMusicTimeLength(music); }
+    float Framework_GetMusicTimePlayed(Music music) { return GetMusicTimePlayed(music); }
+
     void Framework_PauseAllAudio() {
         g_audioPaused = true;
         for (auto& kv : g_sounds) {

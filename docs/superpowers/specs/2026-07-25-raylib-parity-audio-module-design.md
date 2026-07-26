@@ -44,12 +44,18 @@ VB mirrors: `<StructLayout(LayoutKind.Sequential)>`; pointers → `IntPtr`; `loo
   (`Framework_InitAudioDevice`/`LoadSound`/`PlaySound`) never collide with the engine's H-suffix layer
   (`Framework_LoadSoundH`, `Framework_Audio_*`), so framework.h/.cpp always use the plain raylib names. BUT
   `RaylibWrapper.vb` has a legacy **"Sound/Music Convenience Functions"** region of *managed* helpers (regular VB,
-  not DllImports) that squat the plain names as handle-based (`As Integer`): `Framework_LoadSound`/`PlaySound`/
-  `StopSound`/`SetSoundVolume` (A2) and `Framework_LoadMusic`/`PlayMusic`/`StopMusic` (A3). A raw import with the
-  same name → BC30301 (differ only by return type) or a confusing dual-dispatch overload. **CONVENTION:** for each
-  squatted name, the raw struct binding takes a **`Raw` suffix** and binds its export via
-  `<DllImport(EntryPoint:="Framework_<rawname>")>`; the engine ABI stays unsuffixed. Non-squatted names keep raylib's
-  exact spelling. Grep `RaylibWrapper.vb` for `(Function|Sub)\s+Framework_<name>\b` per name before adding.
+  not DllImports) that squat some plain names as handle-based (`As Integer`). A raw import with the same name →
+  BC30301 (differ only by return type) or a confusing dual-dispatch overload. **CONVENTION:** for each squatted name,
+  the raw struct binding takes a **`Raw` suffix** and binds its export via `<DllImport(EntryPoint:="Framework_<rawname>")>`;
+  the engine ABI stays unsuffixed. Non-squatted names keep raylib's exact spelling. **Grep `RaylibWrapper.vb` for
+  `(Function|Sub)\s+Framework_<name>\b` per name before adding** — do not trust a prediction; check the actual name.
+  - **A2 (Sound) HIT it:** `Framework_LoadSound`/`PlaySound`/`StopSound`/`SetSoundVolume` are squatted → those four
+    took the `Raw` suffix + EntryPoint; the other 11 kept raylib's spelling.
+  - **A3 (Music) did NOT (prediction was wrong about the mechanism).** The convenience region squats the *un-suffixed*
+    `Framework_LoadMusic`/`PlayMusic`/`StopMusic`, but raylib's **raw** Music names all carry a **`Stream`** suffix
+    (`LoadMusicStream`/`PlayMusicStream`/`StopMusicStream`), so they are distinct names — **zero collisions**, all 16
+    bind unsuffixed with raylib's exact spelling. (`SetMusicVolume`/`SetMusicPitch` only collide with the H-suffixed
+    `…VolumeH`/`…PitchH`, which are different names too.) The per-name grep is what caught this — heed it over memory.
 
 ## Decomposition — 4 auto-merged sub-batches (each: parity guard + correctness + build + ff-push)
 - **A1 — Device + Wave (16):** 5 device + 11 Wave (LoadWave, LoadWaveFromMemory, IsWaveValid, UnloadWave,
@@ -59,7 +65,11 @@ VB mirrors: `<StructLayout(LayoutKind.Sequential)>`; pointers → `IntPtr`; `loo
 - **A2 — Sound (15):** LoadSound, LoadSoundFromWave, LoadSoundAlias, IsSoundValid, UpdateSound, UnloadSound,
   UnloadSoundAlias, PlaySound, StopSound, PauseSound, ResumeSound, IsSoundPlaying, SetSoundVolume, SetSoundPitch,
   SetSoundPan. Defines **AudioStream + Sound** structs. Playback needs a device → smoke; struct-marshaling headless.
-- **A3 — Music (16):** the full Music group. Defines **Music** struct. Needs a device → smoke.
+- **A3 — Music (16):** the full Music group. Defines **Music** struct (adds a `looping` C bool → I1, plus a
+  ctxType/ctxData decoder tail). Needs a device → device-backed correctness + smoke. **🏁 SHIPPED** (counts 2679/2611).
+  Two Music-specific facts encoded in the test: (1) the stream keeps the SOURCE format — the mixer resamples per-buffer
+  (LoadSoundFromWave, by contrast, resamples to the device up-front); (2) raylib **streams from the caller's buffer**
+  (`drwav_init_memory` keeps a pointer, no copy) → the input bytes must stay pinned for the whole Music lifetime.
 - **A4 — AudioStream (14):** the non-callback AudioStream fns. Needs a device → smoke. The 5 callback fns stay
   deferred to a dedicated "audio callbacks" batch (delegate/GC-pinning design).
 

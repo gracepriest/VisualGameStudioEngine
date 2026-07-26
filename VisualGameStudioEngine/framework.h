@@ -639,6 +639,27 @@ extern "C" {
     __declspec(dllexport) void  Framework_SetSoundPitch(Sound sound, float pitch);
     __declspec(dllexport) void  Framework_SetSoundPan(Sound sound, float pan);
 
+    // ==== RAW RAUDIO PARITY — Music (raylib 5.5 passthrough, Batch audio-A3) ====
+    // Raw raylib Music streaming API (struct BY VALUE); coexists with the handle-based Framework_*MusicH layer below.
+    // raylib's names carry a "Stream" suffix (LoadMusicStream/PlayMusicStream/StopMusicStream), so they do NOT collide
+    // with the un-suffixed handle-based convenience helpers — no EntryPoint aliasing is needed on the wrapper side.
+    __declspec(dllexport) Music Framework_LoadMusicStream(const char* fileName);
+    __declspec(dllexport) Music Framework_LoadMusicStreamFromMemory(const char* fileType, const unsigned char* data, int dataSize);
+    __declspec(dllexport) bool  Framework_IsMusicValid(Music music);
+    __declspec(dllexport) void  Framework_UnloadMusicStream(Music music);
+    __declspec(dllexport) void  Framework_PlayMusicStream(Music music);
+    __declspec(dllexport) bool  Framework_IsMusicStreamPlaying(Music music);
+    __declspec(dllexport) void  Framework_UpdateMusicStream(Music music);
+    __declspec(dllexport) void  Framework_StopMusicStream(Music music);
+    __declspec(dllexport) void  Framework_PauseMusicStream(Music music);
+    __declspec(dllexport) void  Framework_ResumeMusicStream(Music music);
+    __declspec(dllexport) void  Framework_SeekMusicStream(Music music, float position);
+    __declspec(dllexport) void  Framework_SetMusicVolume(Music music, float volume);
+    __declspec(dllexport) void  Framework_SetMusicPitch(Music music, float pitch);
+    __declspec(dllexport) void  Framework_SetMusicPan(Music music, float pan);
+    __declspec(dllexport) float Framework_GetMusicTimeLength(Music music);
+    __declspec(dllexport) float Framework_GetMusicTimePlayed(Music music);
+
     // Sounds (handle-based)
     __declspec(dllexport) int   Framework_LoadSoundH(const char* file);
     __declspec(dllexport) void  Framework_UnloadSoundH(int h);
