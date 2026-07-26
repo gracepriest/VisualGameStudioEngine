@@ -12222,5 +12222,34 @@ Public Module FrameworkWrapper
     End Function
 #End Region
 
+#Region "Raylib rcore — File data I/O (Batch core-C7)"
+    ' Raw raylib file byte/text I/O. No wrapper collisions — all 7 bind plain. LoadFileData returns a raylib-malloc'd
+    ' buffer as IntPtr + length via ByRef → Marshal.Copy then release with Framework_UnloadFileData (raylib's own free,
+    ' NOT the caller's allocator). LoadFileText returns a NUL-terminated char* as IntPtr → PtrToStringAnsi then
+    ' Framework_UnloadFileText (return As IntPtr, never As String — a String return would be freed with the wrong
+    ' allocator). Save*/ExportDataAsCode return bool (I1). Path/text string inputs marshal as Ansi.
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadFileData(fileName As String, ByRef dataSize As Integer) As IntPtr
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadFileData(data As IntPtr)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_SaveFileData(fileName As String, data As Byte(), dataSize As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_ExportDataAsCode(data As Byte(), dataSize As Integer, fileName As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadFileText(fileName As String) As IntPtr
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadFileText(text As IntPtr)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_SaveFileText(fileName As String, text As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+#End Region
+
 End Module
 
