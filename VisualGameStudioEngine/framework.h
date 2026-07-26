@@ -604,6 +604,23 @@ extern "C" {
     __declspec(dllexport) void  Framework_PauseAllAudio();
     __declspec(dllexport) void  Framework_ResumeAllAudio();
 
+    // ==== RAW RAUDIO PARITY — device + Wave (raylib 5.5 passthrough, Batch audio-A1) ====
+    // Coexists with the custom Framework_Audio_*/…H layer above. SetMasterVolume/GetMasterVolume already bound.
+    __declspec(dllexport) void   Framework_InitAudioDevice();
+    __declspec(dllexport) void   Framework_CloseAudioDevice();
+    __declspec(dllexport) bool   Framework_IsAudioDeviceReady();
+    __declspec(dllexport) Wave   Framework_LoadWave(const char* fileName);
+    __declspec(dllexport) Wave   Framework_LoadWaveFromMemory(const char* fileType, const unsigned char* fileData, int dataSize);
+    __declspec(dllexport) bool   Framework_IsWaveValid(Wave wave);
+    __declspec(dllexport) void   Framework_UnloadWave(Wave wave);
+    __declspec(dllexport) bool   Framework_ExportWave(Wave wave, const char* fileName);
+    __declspec(dllexport) bool   Framework_ExportWaveAsCode(Wave wave, const char* fileName);
+    __declspec(dllexport) Wave   Framework_WaveCopy(Wave wave);
+    __declspec(dllexport) void   Framework_WaveCrop(Wave* wave, int initFrame, int finalFrame);
+    __declspec(dllexport) void   Framework_WaveFormat(Wave* wave, int sampleRate, int sampleSize, int channels);
+    __declspec(dllexport) float* Framework_LoadWaveSamples(Wave wave);
+    __declspec(dllexport) void   Framework_UnloadWaveSamples(float* samples);
+
     // Sounds (handle-based)
     __declspec(dllexport) int   Framework_LoadSoundH(const char* file);
     __declspec(dllexport) void  Framework_UnloadSoundH(int h);

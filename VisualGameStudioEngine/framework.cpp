@@ -1901,6 +1901,23 @@ extern "C" {
         return g_masterVolume;
     }
 
+    // ==== RAW RAUDIO PARITY — device + Wave (raylib 5.5 passthrough, Batch audio-A1) ====
+    // Stateless passthroughs over raylib's raudio; coexist with the custom stateful Framework_Audio_* layer.
+    void   Framework_InitAudioDevice() { InitAudioDevice(); }
+    void   Framework_CloseAudioDevice() { CloseAudioDevice(); }
+    bool   Framework_IsAudioDeviceReady() { return IsAudioDeviceReady(); }
+    Wave   Framework_LoadWave(const char* fileName) { return LoadWave(fileName); }
+    Wave   Framework_LoadWaveFromMemory(const char* fileType, const unsigned char* fileData, int dataSize) { return LoadWaveFromMemory(fileType, fileData, dataSize); }
+    bool   Framework_IsWaveValid(Wave wave) { return IsWaveValid(wave); }
+    void   Framework_UnloadWave(Wave wave) { UnloadWave(wave); }
+    bool   Framework_ExportWave(Wave wave, const char* fileName) { return ExportWave(wave, fileName); }
+    bool   Framework_ExportWaveAsCode(Wave wave, const char* fileName) { return ExportWaveAsCode(wave, fileName); }
+    Wave   Framework_WaveCopy(Wave wave) { return WaveCopy(wave); }
+    void   Framework_WaveCrop(Wave* wave, int initFrame, int finalFrame) { WaveCrop(wave, initFrame, finalFrame); }
+    void   Framework_WaveFormat(Wave* wave, int sampleRate, int sampleSize, int channels) { WaveFormat(wave, sampleRate, sampleSize, channels); }
+    float* Framework_LoadWaveSamples(Wave wave) { return LoadWaveSamples(wave); }
+    void   Framework_UnloadWaveSamples(float* samples) { UnloadWaveSamples(samples); }
+
     void Framework_PauseAllAudio() {
         g_audioPaused = true;
         for (auto& kv : g_sounds) {
