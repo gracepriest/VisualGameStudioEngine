@@ -71,7 +71,7 @@ Every type name resolvable in a native project belongs to exactly one category:
 
 | Category | Meaning | Examples |
 |---|---|---|
-| `NativeOwned` | Pure C++ implementation; never crosses as a handle | Existing mapped primitives; after P1: `DateTime`, `TimeSpan`, `Guid`, `StringBuilder`, `Decimal`, `SByte` |
+| `NativeOwned` | Pure C++ implementation; never crosses as a handle | After P1: `DateTime`, `TimeSpan`, `Guid`, `StringBuilder`, `Decimal`, `SByte` |
 | `ManagedOwned` | Lives in the GC heap; crosses only as a handle | `Regex`, `Stream`, `Uri`, `FileInfo`, `DirectoryInfo`, all user-assembly / NuGet types |
 | `Bridged` | Value-converted at the edge; both sides have a native representation | `String`, numeric primitives, blittable structs |
 | `Rejected` | Known to the registry, no permitted use in native projects; category-aware diagnostic | `Object` (has a legacy `void*` mapping, but erasure is unsound) |
@@ -187,9 +187,10 @@ Exceptions never unwind across the ABI in either direction.
   `BasicLangNativeException`. For **queued** dispatch there is no invoker left
   to rethrow into: the failure is captured and surfaced on the pump thread.
   Precisely: `blnet_pump()` **continues draining** the queue on a failure,
-  invokes the registered error hook (if any) **once per failure** with the
-  status and message, and returns the **first** failure's status
-  (`BLNET_OK` if none). Queued-callback failures are never silently dropped.
+  invokes the error hook registered via `blnet_set_error_hook` (if any)
+  **once per failure** with the status and message, and returns the
+  **first** failure's status (`BLNET_OK` if none). Queued-callback failures
+  are never silently dropped.
 - **The catch-all handler is the last line of defense and must itself be
   non-throwing.** Under Native AOT, an exception escaping an
   `[UnmanagedCallersOnly]` export is a process fail-fast. Per-thread
@@ -234,7 +235,9 @@ The reverse direction mirrors C2 exactly:
     storage, strings per C3, and handle arguments are **addref'd at enqueue**
     — the queue owns a reference, transferred to the callee at execution, so
     a queued handle can never dangle; a handle already stale at enqueue fails
-    the invocation immediately with `BLNET_E_STALE_HANDLE`.
+    the invocation immediately with `BLNET_E_STALE_HANDLE`. The pump frees
+    queue-owned argument storage (string and struct copies, the queue's
+    handle reference) after each invocation completes.
 
   No type tags are needed: a callback's shape is fixed at registration, and
   both sides' generated (or hand-written) code agree on the slot sequence at
@@ -273,6 +276,9 @@ The reverse direction mirrors C2 exactly:
   cross-thread inline dispatch and accepts reentrancy; the default is safe.
 - `blnet_pump()` is callable from exactly one thread at a time (the thread the
   contract calls the *pump thread*); queued callbacks execute on it.
+  Concurrent entry from a second thread is a **defined failure**,
+  `BLNET_E_PUMP_REENTRY` — diagnosable error over corruption, per the
+  contract's philosophy.
 
 ### C6. Threading and GC
 
@@ -328,6 +334,8 @@ native test harness, wired as `[Category("Integration")]` NUnit tests:
     notification fires on the *next* pump).
 14. ABI version mismatch → fail-fast diagnostic.
 15. Concurrency: parallel create/release hammering the table (thread-safety).
+16. Invoking a callback after `blnet_callback_release` →
+    `BLNET_E_STALE_CALLBACK` (the C5 symmetry claim, exercised).
 
 These conformance tests become the acceptance gate P2's real shim must pass
 unchanged.
