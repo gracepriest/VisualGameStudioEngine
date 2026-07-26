@@ -738,6 +738,40 @@ extern "C" {
     __declspec(dllexport) bool        Framework_IsPathFile(const char* path);
     __declspec(dllexport) bool        Framework_IsFileNameValid(const char* fileName);
 
+    // ==== RAW RCORE PARITY — Window state & control (raylib 5.5 passthrough, Batch core-C1) ====
+    // Raw raylib window lifecycle + state/flag control, COEXISTING with the engine's own MANAGED lifecycle
+    // (Framework_Initialize/Framework_ShouldClose/Framework_Shutdown, which also wire up the camera/timing/ECS). A raw
+    // consumer that drives raylib directly uses these; ⛔ do NOT mix the two window paths in one process. Device-dependent
+    // (a real GL window must exist for the setters/state to mean anything). Signatures marshal trivially: void/bool/int,
+    // unsigned-int flags, a float opacity. SetWindowIcon takes an Image BY VALUE; SetWindowIcons takes a pointer to an
+    // Image[] plus a count. GetWindowHandle returns the native OS window handle as void* (IntPtr on the managed side).
+    // NOTE: ToggleFullscreen / ToggleBorderlessWindowed / SetWindowSize / SetWindowMinSize / SetWindowTitle are already
+    // exported by the engine's window-utilities block — they are intentionally NOT re-declared here.
+    __declspec(dllexport) void  Framework_InitWindow(int width, int height, const char* title);
+    __declspec(dllexport) void  Framework_CloseWindow(void);
+    __declspec(dllexport) bool  Framework_WindowShouldClose(void);
+    __declspec(dllexport) bool  Framework_IsWindowReady(void);
+    __declspec(dllexport) bool  Framework_IsWindowFullscreen(void);
+    __declspec(dllexport) bool  Framework_IsWindowHidden(void);
+    __declspec(dllexport) bool  Framework_IsWindowMinimized(void);
+    __declspec(dllexport) bool  Framework_IsWindowMaximized(void);
+    __declspec(dllexport) bool  Framework_IsWindowFocused(void);
+    __declspec(dllexport) bool  Framework_IsWindowResized(void);
+    __declspec(dllexport) bool  Framework_IsWindowState(unsigned int flag);
+    __declspec(dllexport) void  Framework_SetWindowState(unsigned int flags);
+    __declspec(dllexport) void  Framework_ClearWindowState(unsigned int flags);
+    __declspec(dllexport) void  Framework_MaximizeWindow(void);
+    __declspec(dllexport) void  Framework_MinimizeWindow(void);
+    __declspec(dllexport) void  Framework_RestoreWindow(void);
+    __declspec(dllexport) void  Framework_SetWindowIcon(Image image);
+    __declspec(dllexport) void  Framework_SetWindowIcons(Image* images, int count);
+    __declspec(dllexport) void  Framework_SetWindowPosition(int x, int y);
+    __declspec(dllexport) void  Framework_SetWindowMonitor(int monitor);
+    __declspec(dllexport) void  Framework_SetWindowMaxSize(int width, int height);
+    __declspec(dllexport) void  Framework_SetWindowOpacity(float opacity);
+    __declspec(dllexport) void  Framework_SetWindowFocused(void);
+    __declspec(dllexport) void* Framework_GetWindowHandle(void);
+
     // Sounds (handle-based)
     __declspec(dllexport) int   Framework_LoadSoundH(const char* file);
     __declspec(dllexport) void  Framework_UnloadSoundH(int h);

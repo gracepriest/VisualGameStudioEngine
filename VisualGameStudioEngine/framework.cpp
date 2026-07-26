@@ -2035,6 +2035,35 @@ extern "C" {
     bool        Framework_IsPathFile(const char* path) { return IsPathFile(path); }
     bool        Framework_IsFileNameValid(const char* fileName) { return IsFileNameValid(fileName); }
 
+    // ==== RAW RCORE PARITY — Window state & control (raylib 5.5 passthrough, Batch core-C1) ====
+    // Thin 1:1 forwarders to raylib's window API. These coexist with the engine's managed lifecycle (Framework_Initialize
+    // wraps InitWindow + camera/timing setup; Framework_Shutdown wraps CloseWindow after tearing systems down). A raw
+    // consumer calls Framework_InitWindow / Framework_CloseWindow directly and owns the window lifecycle itself.
+    void  Framework_InitWindow(int width, int height, const char* title) { InitWindow(width, height, title); }
+    void  Framework_CloseWindow(void) { CloseWindow(); }
+    bool  Framework_WindowShouldClose(void) { return WindowShouldClose(); }
+    bool  Framework_IsWindowReady(void) { return IsWindowReady(); }
+    bool  Framework_IsWindowFullscreen(void) { return IsWindowFullscreen(); }
+    bool  Framework_IsWindowHidden(void) { return IsWindowHidden(); }
+    bool  Framework_IsWindowMinimized(void) { return IsWindowMinimized(); }
+    bool  Framework_IsWindowMaximized(void) { return IsWindowMaximized(); }
+    bool  Framework_IsWindowFocused(void) { return IsWindowFocused(); }
+    bool  Framework_IsWindowResized(void) { return IsWindowResized(); }
+    bool  Framework_IsWindowState(unsigned int flag) { return IsWindowState(flag); }
+    void  Framework_SetWindowState(unsigned int flags) { SetWindowState(flags); }
+    void  Framework_ClearWindowState(unsigned int flags) { ClearWindowState(flags); }
+    void  Framework_MaximizeWindow(void) { MaximizeWindow(); }
+    void  Framework_MinimizeWindow(void) { MinimizeWindow(); }
+    void  Framework_RestoreWindow(void) { RestoreWindow(); }
+    void  Framework_SetWindowIcon(Image image) { SetWindowIcon(image); }
+    void  Framework_SetWindowIcons(Image* images, int count) { SetWindowIcons(images, count); }
+    void  Framework_SetWindowPosition(int x, int y) { SetWindowPosition(x, y); }
+    void  Framework_SetWindowMonitor(int monitor) { SetWindowMonitor(monitor); }
+    void  Framework_SetWindowMaxSize(int width, int height) { SetWindowMaxSize(width, height); }
+    void  Framework_SetWindowOpacity(float opacity) { SetWindowOpacity(opacity); }
+    void  Framework_SetWindowFocused(void) { SetWindowFocused(); }
+    void* Framework_GetWindowHandle(void) { return GetWindowHandle(); }
+
     void Framework_PauseAllAudio() {
         g_audioPaused = true;
         for (auto& kv : g_sounds) {

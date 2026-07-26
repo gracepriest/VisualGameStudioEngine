@@ -41,7 +41,7 @@ To add across the batches: `Matrix` (C5 ✅), `Camera3D` (C5 ✅), `Ray` (C5 ✅
 
 | # | Batch | Fns | New structs | Test | Notes |
 |---|---|---|---|---|---|
-| C1 | Window state & control | 23 | — | device-lite | `InitWindow`…`SetWindowFocused`; splittable 12+11. |
+| **C1** | **Window state & control** | **24** | — | **device+headless** | **SHIPPED — see below** (24 not 23: `GetWindowHandle` was genuinely unbound). |
 | C2 | Window/monitor query & clipboard | 14 | — | device-lite | render/monitor/DPI getters, clipboard (`IntPtr`+`PtrToStringAnsi`). |
 | C3 | Drawing modes & VR | 10 | Camera3D✅, Matrix✅, VrDeviceInfo, VrStereoConfig | device | hardest marshaling (VR nested arrays). |
 | C4 | Shaders | 8 | Matrix✅ | device | `LoadShader(FromMemory)`, `SetShaderValue*` (`const void*`→IntPtr). |
@@ -104,3 +104,23 @@ callbacks last.
   buffer and are unaffected. ⛔ raylib `GetDirectoryPath` prepends `./` to a relative path (faithful). ⛔
   `ChangeDirectory` mutates process cwd → its test is `[NonParallelizable]` + restores the original dir. Observed the
   real getter outputs via a PowerShell P/Invoke against the staged DLL before diagnosing (same tactic as C7's `%x`).
+- **C1 — Window state & control (24) 🏁 SHIPPED** (counts 2754/2686, both +24 — one MORE than the estimated 23:
+  `GetWindowHandle`, last in raylib.h's window-control section (968–996), was genuinely unbound). Bound the 24
+  functions the engine did not already export raw; the 5 pre-existing window utilities (`ToggleFullscreen`,
+  `ToggleBorderlessWindowed`, `SetWindowSize`, `SetWindowMinSize`, `SetWindowTitle`) are intentionally NOT re-declared,
+  and a parity-guard test asserts each is still declared exactly once (duplicate-export guard). Zero wrapper collisions
+  (all 24 plain). ⛔ These raw window forwarders COEXIST with the engine's MANAGED lifecycle: `Framework_Initialize`
+  wraps `InitWindow` + camera/timing setup, `Framework_ShouldClose` wraps `WindowShouldClose`, `Framework_Shutdown`
+  wraps `CloseWindow` after tearing systems down. A raw consumer drives `Framework_InitWindow`/`Framework_CloseWindow`
+  itself and must not mix the two window paths in one process (exact raudio-A1 precedent: raw `InitAudioDevice`
+  coexisting with the engine's audio init). Marshaling: `void`/`bool`(I1)/`int`, unsigned-int state flags → `UInteger`,
+  `SetWindowOpacity`(float)→`Single`, `SetWindowIcon(Image)` BY VALUE, `SetWindowIcons(Image*, int)` → `IntPtr` + count,
+  `GetWindowHandle` → `void*` → `IntPtr`. **Correctness is `[Category("Integration")]` + `[NonParallelizable]`** (needs a
+  real GL window, unlike C5/C7/C8/C10): `InitWindow(320,240)` → hide immediately via `SetWindowState(FLAG_WINDOW_HIDDEN)`
+  → assert the HIDDEN flag round-trips through `Is/SetWindowHidden`+`IsWindowState`, a non-visible `FLAG_WINDOW_RESIZABLE`
+  round-trips through `Set`/`Clear`/`IsWindowState`, `GetWindowHandle` ≠ 0, `GetScreenWidth/Height` == 320/240 (oracle via
+  the already-bound C2 getters), `WindowShouldClose` == false, then the remaining setters run under `DoesNotThrow` purely
+  to prove their P/Invoke ABI (a wrong signature → AccessViolation). Self-`Ignore`s the whole test if no GL context can
+  be created (headless CI); on this workstation the window WAS created and every assertion ran (fully runtime-verified).
+  The parity guard (2 headless tests) runs in the fast subset. `SetWindowIcon(s)` covered by the parity guard only — the
+  by-value `Image` marshaling is already exercised by the rtextures fixtures.
