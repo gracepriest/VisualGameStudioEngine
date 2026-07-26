@@ -1993,6 +1993,15 @@ extern "C" {
     unsigned int*  Framework_ComputeMD5(unsigned char* data, int dataSize) { return ComputeMD5(data, dataSize); }
     unsigned int*  Framework_ComputeSHA1(unsigned char* data, int dataSize) { return ComputeSHA1(data, dataSize); }
 
+    // ==== RAW RCORE PARITY — File data I/O (raylib 5.5 passthrough, Batch core-C7) ====
+    unsigned char* Framework_LoadFileData(const char* fileName, int* dataSize) { return LoadFileData(fileName, dataSize); }
+    void           Framework_UnloadFileData(unsigned char* data) { UnloadFileData(data); }
+    bool           Framework_SaveFileData(const char* fileName, void* data, int dataSize) { return SaveFileData(fileName, data, dataSize); }
+    bool           Framework_ExportDataAsCode(const unsigned char* data, int dataSize, const char* fileName) { return ExportDataAsCode(data, dataSize, fileName); }
+    char*          Framework_LoadFileText(const char* fileName) { return LoadFileText(fileName); }
+    void           Framework_UnloadFileText(char* text) { UnloadFileText(text); }
+    bool           Framework_SaveFileText(const char* fileName, char* text) { return SaveFileText(fileName, text); }
+
     void Framework_PauseAllAudio() {
         g_audioPaused = true;
         for (auto& kv : g_sounds) {

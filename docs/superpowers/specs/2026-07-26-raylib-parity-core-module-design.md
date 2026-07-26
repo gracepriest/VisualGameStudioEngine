@@ -47,7 +47,7 @@ To add across the batches: `Matrix` (C5 ✅), `Camera3D` (C5 ✅), `Ray` (C5 ✅
 | C4 | Shaders | 8 | Matrix✅ | device | `LoadShader(FromMemory)`, `SetShaderValue*` (`const void*`→IntPtr). |
 | **C5** | **Screen-space / camera math** | **8** | **Ray✅, Camera3D✅, Matrix✅** | **headless** | **SHIPPED — see below.** |
 | C6 | Timing/frame + Random + Misc + 2 input stragglers | 15 | — | headless (partial) | `TraceLog` bound as fixed 2-arg `(int,const char*)` → `TraceLog(lvl,"%s",text)`. |
-| C7 | File data I/O | 7 | — | headless | `LoadFileData`(`IntPtr`+`ByRef int`), text variants. |
+| **C7** | **File data I/O** | **7** | — | **headless** | **SHIPPED — see below.** |
 | C8 | File-system path queries | 15 | — | headless | all string/bool/int. |
 | C9 | Directory listing & dropped files | 7 | FilePathList | headless | `char**` list marshaling. |
 | **C10** | **Compression / Encoding** | **7** | — | **headless** | **SHIPPED — see below.** |
@@ -85,3 +85,11 @@ callbacks last.
   behaviour (CHANGELOG #5957, fixed after 5.5) → does NOT yield the standard digest; we FAITHFULLY pass it through and
   contract-test it (deterministic, input-sensitive 20-byte static buffer) rather than pin the buggy value.** A raylib
   bump past 5.5 makes it standard for free. Zero wrapper collisions (all 7 plain).
+- **C7 — File data I/O (7) 🏁 SHIPPED** (counts in the memory topic). `LoadFileData` → `IntPtr` + `ByRef Integer`
+  (freed by `Framework_UnloadFileData`); `LoadFileText` → `IntPtr` + `PtrToStringAnsi` (freed by
+  `Framework_UnloadFileText`) — heap buffers use raylib's OWN `Unload*`, never the caller's allocator.
+  `SaveFileData`/`SaveFileText`/`ExportDataAsCode` → `bool` (I1); path/text/data inputs marshal as Ansi `String` /
+  `Byte()`. Headless fast-subset correctness (temp-file round-trips, cross-checked with .NET's `File` API):
+  Save↔Load bytes, Save↔Load ASCII text (no newline → immune to text-mode CRLF translation), and `ExportDataAsCode`
+  emits a real C header. ⚠ raylib 5.5 `ExportDataAsCode` formats bytes with `%x` (byte 1 → `0x1`, not `0x01`) — the
+  test keys on `static unsigned char` / `_DATA_SIZE` and bytes ≥ 0x10. Zero wrapper collisions (all 7 plain).

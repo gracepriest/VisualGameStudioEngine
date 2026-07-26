@@ -705,6 +705,18 @@ extern "C" {
     __declspec(dllexport) unsigned int*  Framework_ComputeMD5(unsigned char* data, int dataSize);
     __declspec(dllexport) unsigned int*  Framework_ComputeSHA1(unsigned char* data, int dataSize);
 
+    // ==== RAW RCORE PARITY — File data I/O (raylib 5.5 passthrough, Batch core-C7) ====
+    // LoadFileData/LoadFileText return a raylib-malloc'd buffer; release it with the MATCHING Framework_UnloadFileData/
+    // Framework_UnloadFileText (raylib frees via its own rmem allocator — the caller must not free it any other way).
+    // SaveFileData/SaveFileText/ExportDataAsCode return bool (success). All headless — plain file I/O, no window or GL.
+    __declspec(dllexport) unsigned char* Framework_LoadFileData(const char* fileName, int* dataSize);
+    __declspec(dllexport) void           Framework_UnloadFileData(unsigned char* data);
+    __declspec(dllexport) bool           Framework_SaveFileData(const char* fileName, void* data, int dataSize);
+    __declspec(dllexport) bool           Framework_ExportDataAsCode(const unsigned char* data, int dataSize, const char* fileName);
+    __declspec(dllexport) char*          Framework_LoadFileText(const char* fileName);
+    __declspec(dllexport) void           Framework_UnloadFileText(char* text);
+    __declspec(dllexport) bool           Framework_SaveFileText(const char* fileName, char* text);
+
     // Sounds (handle-based)
     __declspec(dllexport) int   Framework_LoadSoundH(const char* file);
     __declspec(dllexport) void  Framework_UnloadSoundH(int h);
