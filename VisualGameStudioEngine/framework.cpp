@@ -2253,6 +2253,18 @@ extern "C" {
     void Framework_DrawBillboardRec(Camera camera, Texture2D texture, Rectangle source, Vector3 position, Vector2 size, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawBillboardRec(camera, texture, source, position, size, Color{r, g, b, a}); }
     void Framework_DrawBillboardPro(Camera camera, Texture2D texture, Rectangle source, Vector3 position, Vector3 up, Vector2 size, Vector2 origin, float rotation, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawBillboardPro(camera, texture, source, position, up, size, origin, rotation, Color{r, g, b, a}); }
 
+    // ==== RAW rmodels PARITY — Materials + material-drawn meshes (raylib 5.5 passthrough, Batch models-materials) ====
+    // 1:1 forwarders. Material/MaterialMap/Mesh/Texture2D/Matrix by value; Material*/Model* and const Matrix* passthrough.
+    // LoadMaterialDefault + DrawMesh/DrawMeshInstanced need a live GL context.
+    Material* Framework_LoadMaterials(const char* fileName, int* materialCount) { return LoadMaterials(fileName, materialCount); }
+    Material Framework_LoadMaterialDefault(void) { return LoadMaterialDefault(); }
+    bool Framework_IsMaterialValid(Material material) { return IsMaterialValid(material); }
+    void Framework_UnloadMaterial(Material material) { UnloadMaterial(material); }
+    void Framework_SetMaterialTexture(Material* material, int mapType, Texture2D texture) { SetMaterialTexture(material, mapType, texture); }
+    void Framework_SetModelMeshMaterial(Model* model, int meshId, int materialId) { SetModelMeshMaterial(model, meshId, materialId); }
+    void Framework_DrawMesh(Mesh mesh, Material material, Matrix transform) { DrawMesh(mesh, material, transform); }
+    void Framework_DrawMeshInstanced(Mesh mesh, Material material, const Matrix* transforms, int instances) { DrawMeshInstanced(mesh, material, transforms, instances); }
+
     void Framework_PauseAllAudio() {
         g_audioPaused = true;
         for (auto& kv : g_sounds) {

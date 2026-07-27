@@ -1006,6 +1006,24 @@ extern "C" {
     __declspec(dllexport) void Framework_DrawBillboardRec(Camera camera, Texture2D texture, Rectangle source, Vector3 position, Vector2 size, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
     __declspec(dllexport) void Framework_DrawBillboardPro(Camera camera, Texture2D texture, Rectangle source, Vector3 position, Vector3 up, Vector2 size, Vector2 origin, float rotation, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
 
+    // ==== RAW rmodels PARITY — Materials + material-drawn meshes (raylib 5.5 passthrough, Batch models-materials) ====
+    // 6 material fns + DrawMesh/DrawMeshInstanced (relocated from the mesh sub-batch — they take a Material BY VALUE, and
+    // LoadMaterialDefault finally provides a valid one). New structs Material (Shader + MaterialMap* maps + float[4] params,
+    // 40 B) and MaterialMap (Texture2D + Color + float, 28 B); both fully blittable, passed/returned BY VALUE where raylib does.
+    // LoadMaterials returns a raylib-owned Material* array + writes the count through int* (opaque pointer to the caller — kept
+    // as a passthrough, no per-element marshaling here). SetMaterialTexture/SetModelMeshMaterial take Material*/Model* the callee
+    // mutates -> pointer params. DrawMeshInstanced takes a const Matrix* transforms array. IsMaterialValid checks the shader id
+    // and is headless-safe on a zeroed Material (no deref); LoadMaterialDefault + the two draws need a live GL context
+    // (correctness = Integration).
+    __declspec(dllexport) Material* Framework_LoadMaterials(const char* fileName, int* materialCount);
+    __declspec(dllexport) Material Framework_LoadMaterialDefault(void);
+    __declspec(dllexport) bool Framework_IsMaterialValid(Material material);
+    __declspec(dllexport) void Framework_UnloadMaterial(Material material);
+    __declspec(dllexport) void Framework_SetMaterialTexture(Material* material, int mapType, Texture2D texture);
+    __declspec(dllexport) void Framework_SetModelMeshMaterial(Model* model, int meshId, int materialId);
+    __declspec(dllexport) void Framework_DrawMesh(Mesh mesh, Material material, Matrix transform);
+    __declspec(dllexport) void Framework_DrawMeshInstanced(Mesh mesh, Material material, const Matrix* transforms, int instances);
+
     // Sounds (handle-based)
     __declspec(dllexport) int   Framework_LoadSoundH(const char* file);
     __declspec(dllexport) void  Framework_UnloadSoundH(int h);
