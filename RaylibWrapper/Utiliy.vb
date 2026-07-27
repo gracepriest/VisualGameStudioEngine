@@ -303,6 +303,43 @@ Public Module Utiliy
         Public params As Single()
     End Structure
 
+    ' raylib Transform — a bone/vertex TRS (rmodels animations sub-batch). Fully blittable: Vector3 translation (12 B) +
+    ' Quaternion rotation (raylib typedefs Quaternion = Vector4, 16 B) + Vector3 scale (12 B) = 40 bytes. Appears only behind
+    ' pointers this batch (Model.bindPose = Transform*, ModelAnimation.framePoses = Transform**), declared for consumers that
+    ' walk those arrays via Marshal.PtrToStructure.
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure Transform
+        Public translation As Vector3
+        Public rotation As Vector4      ' Quaternion
+        Public scale As Vector3
+    End Structure
+
+    ' raylib BoneInfo — one skeleton bone (rmodels animations sub-batch). char[32] name + int parent = 36 bytes. The name is an
+    ' inline fixed 32-byte array (ByValArray of Byte — the proven pattern here, matching Material.params / VrStereoConfig, and
+    ' robust for by-value marshaling regardless of content; decode via Encoding.ASCII if needed). Appears only behind pointers
+    ' this batch (Model.bones / ModelAnimation.bones = BoneInfo*); declared for consumers.
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure BoneInfo
+        <MarshalAs(UnmanagedType.ByValArray, SizeConst:=32)>
+        Public name As Byte()
+        Public parent As Integer
+    End Structure
+
+    ' raylib ModelAnimation — a skeletal animation (rmodels animations sub-batch, CLOSES rmodels). Passed BY VALUE to
+    ' UpdateModelAnimation/UpdateModelAnimationBones/UnloadModelAnimation/IsModelAnimationValid; RETURNED as a raylib-owned
+    ' ModelAnimation* array (IntPtr) by LoadModelAnimations. Layout mirrors raylib.h: int boneCount@0; int frameCount@4;
+    ' BoneInfo* bones@8 (raylib-owned -> IntPtr); Transform** framePoses@16 (raylib-owned -> IntPtr); char[32] name@24 (inline
+    ' ByValArray Byte). Size = 56 bytes on x64. The bones/framePoses arrays stay engine-owned — the wrapper never walks them.
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure ModelAnimation
+        Public boneCount As Integer
+        Public frameCount As Integer
+        Public bones As IntPtr          ' BoneInfo*
+        Public framePoses As IntPtr     ' Transform**
+        <MarshalAs(UnmanagedType.ByValArray, SizeConst:=32)>
+        Public name As Byte()
+    End Structure
+
     ' raylib VrDeviceInfo — head-mounted-display parameters passed BY VALUE to LoadVrStereoConfig (Batch core-C3). The two
     ' trailing float[4] arrays are NESTED FIXED-SIZE arrays: <MarshalAs(ByValArray, SizeConst:=4)> inlines 4 floats each
     ' (NOT a pointer). Layout: 2 int + 5 float + 4 float + 4 float = 60 bytes.

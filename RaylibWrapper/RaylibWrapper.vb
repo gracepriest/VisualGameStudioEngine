@@ -13346,5 +13346,44 @@ Public Module FrameworkWrapper
     End Sub
 #End Region
 
+#Region "Raylib rmodels — Model animations (Batch models-animations, CLOSES rmodels)"
+    ' 6 fns closing the rmodels module. New struct ModelAnimation (56 B) in Utiliy.vb, passed BY VALUE to Update*/Unload
+    ' (single)/IsValid; its bones/framePoses stay raylib-owned pointers (IntPtr). LoadModelAnimations returns the raylib-owned
+    ' ModelAnimation* array as IntPtr + writes the count through ByRef animCount (CharSet.Ansi path); UnloadModelAnimations
+    ' takes that array pointer + count back. Model by value on Update*/IsValid; IsModelAnimationValid -> <MarshalAs(I1)>
+    ' Boolean. BoneInfo/Transform (also new in Utiliy.vb) appear only behind ModelAnimation's/Model's pointers. Update* need a
+    ' real animated model asset; the load/unload/validate paths have deref-free empty cases (see the tests).
+
+    ''' <summary>Loads model animations from a file; returns the raylib-owned ModelAnimation* array as IntPtr and the count via ByRef.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadModelAnimations(fileName As String, ByRef animCount As Integer) As IntPtr
+    End Function
+
+    ''' <summary>Updates a model's animation pose on the CPU for the given frame.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UpdateModelAnimation(model As Model, anim As ModelAnimation, frame As Integer)
+    End Sub
+
+    ''' <summary>Updates a model's animation bone matrices for the given frame (GPU skinning).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UpdateModelAnimationBones(model As Model, anim As ModelAnimation, frame As Integer)
+    End Sub
+
+    ''' <summary>Unloads a single animation's data.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadModelAnimation(anim As ModelAnimation)
+    End Sub
+
+    ''' <summary>Unloads a raylib-owned ModelAnimation array (pass the IntPtr + count from LoadModelAnimations).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadModelAnimations(animations As IntPtr, animCount As Integer)
+    End Sub
+
+    ''' <summary>Checks whether an animation's skeleton matches a model's.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsModelAnimationValid(model As Model, anim As ModelAnimation) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+#End Region
+
 End Module
 
