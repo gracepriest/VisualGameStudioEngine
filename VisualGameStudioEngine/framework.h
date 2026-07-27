@@ -908,6 +908,14 @@ extern "C" {
     __declspec(dllexport) Vector2 Framework_GetGesturePinchVector(void);
     __declspec(dllexport) float   Framework_GetGesturePinchAngle(void);
 
+    // ==== RAW rcamera PARITY — Camera system update (raylib 5.5 passthrough, Batch rcamera) ====
+    // raylib's `Camera` is a typedef of Camera3D; both take a Camera* the function MUTATES IN PLACE (bind ByRef Camera3D
+    // on the wrapper side). UpdateCamera reads input for the built-in modes (a no-op headless / in CAMERA_CUSTOM);
+    // UpdateCameraPro applies the movement/rotation/zoom args directly via raymath — no input, no GL — so it is fully
+    // deterministic headless. movement/rotation are Vector3 BY VALUE, zoom is a float.
+    __declspec(dllexport) void Framework_UpdateCamera(Camera3D* camera, int mode);
+    __declspec(dllexport) void Framework_UpdateCameraPro(Camera3D* camera, Vector3 movement, Vector3 rotation, float zoom);
+
     // Sounds (handle-based)
     __declspec(dllexport) int   Framework_LoadSoundH(const char* file);
     __declspec(dllexport) void  Framework_UnloadSoundH(int h);

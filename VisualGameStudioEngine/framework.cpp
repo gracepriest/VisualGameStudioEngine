@@ -2172,6 +2172,11 @@ extern "C" {
     Vector2 Framework_GetGesturePinchVector(void) { return GetGesturePinchVector(); }
     float   Framework_GetGesturePinchAngle(void) { return GetGesturePinchAngle(); }
 
+    // ==== RAW rcamera PARITY — Camera system update (raylib 5.5 passthrough, Batch rcamera) ====
+    // 1:1 forwarders. Camera3D* == raylib Camera*; mutated in place. Vector3 args by value.
+    void Framework_UpdateCamera(Camera3D* camera, int mode) { UpdateCamera(camera, mode); }
+    void Framework_UpdateCameraPro(Camera3D* camera, Vector3 movement, Vector3 rotation, float zoom) { UpdateCameraPro(camera, movement, rotation, zoom); }
+
     void Framework_PauseAllAudio() {
         g_audioPaused = true;
         for (auto& kv : g_sounds) {
