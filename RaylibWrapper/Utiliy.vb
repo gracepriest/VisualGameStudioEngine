@@ -278,6 +278,31 @@ Public Module Utiliy
         Public bindPose As IntPtr       ' Transform*
     End Structure
 
+    ' raylib MaterialMap — one texture slot of a Material (rmodels materials sub-batch). Fully blittable: an embedded Texture2D
+    ' (20 B), a Color (4 B) and a float value (4 B) = 28 bytes, all 4-byte-aligned (no padding). Nested BY VALUE inside the
+    ' raylib-owned MaterialMap[] array that Material.maps points at (MAX_MATERIAL_MAPS entries); we don't expose the array
+    ' directly here — SetMaterialTexture mutates it through the engine. Field order/widths mirror raylib.h exactly
+    ' (Texture2D texture; Color color; float value).
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure MaterialMap
+        Public texture As Texture2D
+        Public color As Color
+        Public value As Single
+    End Structure
+
+    ' raylib Material — a Shader plus its texture maps (rmodels materials sub-batch). Fully blittable and passed/RETURNED BY
+    ' VALUE (LoadMaterialDefault returns it via hidden-sret; IsMaterialValid/UnloadMaterial/DrawMesh/DrawMeshInstanced take it
+    ' by value). Layout mirrors raylib.h: Shader shader (16 B: uint id@0, then int* locs@8 after 4 B pad); MaterialMap* maps
+    ' (raylib-owned array pointer -> IntPtr) @16; float params[4] (a NESTED FIXED-SIZE inline array, ByValArray SizeConst:=4,
+    ' 16 B) @24. Size = 40 bytes on x64. The maps array itself stays engine-owned — the wrapper never walks it.
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure Material
+        Public shader As Shader
+        Public maps As IntPtr           ' MaterialMap* (raylib-owned, MAX_MATERIAL_MAPS entries)
+        <MarshalAs(UnmanagedType.ByValArray, SizeConst:=4)>
+        Public params As Single()
+    End Structure
+
     ' raylib VrDeviceInfo — head-mounted-display parameters passed BY VALUE to LoadVrStereoConfig (Batch core-C3). The two
     ' trailing float[4] arrays are NESTED FIXED-SIZE arrays: <MarshalAs(ByValArray, SizeConst:=4)> inlines 4 floats each
     ' (NOT a pointer). Layout: 2 int + 5 float + 4 float + 4 float = 60 bytes.

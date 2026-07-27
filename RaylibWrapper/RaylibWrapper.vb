@@ -13295,5 +13295,56 @@ Public Module FrameworkWrapper
     End Sub
 #End Region
 
+#Region "Raylib rmodels — Materials + material-drawn meshes (Batch models-materials)"
+    ' 6 material fns + DrawMesh/DrawMeshInstanced (relocated from the mesh sub-batch — they take a Material BY VALUE, and
+    ' LoadMaterialDefault finally provides a valid one to draw with). New structs Material (40 B) + MaterialMap (28 B) in
+    ' Utiliy.vb, both blittable and passed/returned BY VALUE where raylib does. LoadMaterials returns the raylib-owned
+    ' Material* array as IntPtr and writes the element count through ByRef materialCount (no per-element marshaling — the array
+    ' stays engine-owned). SetMaterialTexture/SetModelMeshMaterial mutate a Material/Model through a ByRef pointer.
+    ' DrawMeshInstanced takes a const Matrix* transforms array -> Matrix() LPArray. IsMaterialValid is headless-safe on a
+    ' zeroed Material (checks the shader id, no deref); LoadMaterialDefault + the two draws need a live GL context (Integration).
+    ' LoadMaterials path -> CharSet.Ansi String.
+
+    ''' <summary>Loads materials from a model file; returns the raylib-owned Material* array as IntPtr and the count via ByRef.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadMaterials(fileName As String, ByRef materialCount As Integer) As IntPtr
+    End Function
+
+    ''' <summary>Loads the default material (DIFFUSE/SPECULAR/NORMAL maps); Material returned by value.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_LoadMaterialDefault() As Material
+    End Function
+
+    ''' <summary>Checks whether a material is valid (shader assigned, map textures loaded).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsMaterialValid(material As Material) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Unloads a material from GPU memory (VRAM).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadMaterial(material As Material)
+    End Sub
+
+    ''' <summary>Sets the texture for a material map type (MATERIAL_MAP_DIFFUSE, ...); mutates the material in place.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetMaterialTexture(ByRef material As Material, mapType As Integer, texture As Texture2D)
+    End Sub
+
+    ''' <summary>Sets the material index used by a model's mesh; mutates the model in place.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetModelMeshMaterial(ByRef model As Model, meshId As Integer, materialId As Integer)
+    End Sub
+
+    ''' <summary>Draws a 3D mesh with a material and transform.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawMesh(mesh As Mesh, material As Material, transform As Matrix)
+    End Sub
+
+    ''' <summary>Draws multiple mesh instances with a material and per-instance transforms.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawMeshInstanced(mesh As Mesh, material As Material, transforms As Matrix(), instances As Integer)
+    End Sub
+#End Region
+
 End Module
 
