@@ -1359,12 +1359,31 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (target == null || source == null || !target.IsNumeric() || !source.IsNumeric())
                 return false;
 
+            // A floating-point literal must NOT smuggle into a Decimal through
+            // double space: 'Dim d As Decimal = 1.5' stays an error until
+            // Decimal-context literal conversion (from the literal's exact
+            // decimal text) lands in P1 Task 4. Integral literals widen fine.
+            if (target.Name == "Decimal" && source.IsFloatingPoint())
+                return false;
+
             var expr = initializer;
             if (expr is UnaryExpressionNode u && (u.Operator == "-" || u.Operator == "+"))
                 expr = u.Operand;
 
             return expr is LiteralExpressionNode lit
                 && lit.Value is int or long or float or double or decimal or short or byte;
+        }
+
+        /// <summary>
+        /// True when one operand is Decimal and the other is Single/Double —
+        /// the pair with no implicit conversion in either direction (spec 6.1).
+        /// Shared by the binary arithmetic, comparison, and compound-assignment
+        /// gates so all three raise the same CType-hinted error.
+        /// </summary>
+        private static bool IsDecimalFloatingMix(TypeInfo left, TypeInfo right)
+        {
+            return (left.Name == "Decimal" && right.IsFloatingPoint())
+                || (right.Name == "Decimal" && left.IsFloatingPoint());
         }
 
         private void RegisterStdLibFunction(string name, SymbolKind kind, TypeInfo returnType, (string name, TypeInfo type)[] parameters)
@@ -1558,6 +1577,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 if (toType.Name == "Integer") return "Use CInt() for explicit conversion";
                 if (toType.Name == "Short") return "Use CShort() for explicit conversion";
                 if (toType.Name == "Byte") return "Use CByte() for explicit conversion";
+                if (toType.Name == "Decimal") return "Use CType(value, Decimal) for explicit conversion";
             }
 
             // Object to specific type
@@ -4832,6 +4852,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     Error($"Operator '{node.Operator}' requires numeric operands", node.Line, node.Column);
                 }
+                else if (IsDecimalFloatingMix(targetType, valueType))
+                {
+                    // 'd += 0.5' is Decimal += Double until Task 4's
+                    // Decimal-context literal conversion — same spec 6.1 rule
+                    // as the binary path.
+                    Error($"Operator '{node.Operator}' cannot mix Decimal and floating-point operands. Use CType(value, Decimal) for explicit conversion",
+                          node.Line, node.Column);
+                }
             }
         }
 
@@ -4878,6 +4906,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     else
                     {
                         resultType = _typeManager.GetCommonType(leftType, rightType);
+                        if (resultType == null)
+                        {
+                            // GetCommonType's null sentinel: Decimal mixed with
+                            // Single/Double has no implicit conversion in either
+                            // direction (spec 6.1) — require an explicit CType.
+                            Error($"Arithmetic operator '{node.Operator}' cannot mix Decimal and floating-point operands. Use CType(value, Decimal) for explicit conversion",
+                                  node.Line, node.Column);
+                            // Type the node as the Decimal side so downstream
+                            // checks don't cascade a second, misleading error.
+                            resultType = leftType.Name == "Decimal" ? leftType : rightType;
+                        }
                     }
                     break;
 
@@ -4912,6 +4951,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         leftType.Kind != TypeKind.TypeParameter && rightType.Kind != TypeKind.TypeParameter)
                     {
                         Error($"Comparison operator '{node.Operator}' requires numeric operands",
+                              node.Line, node.Column);
+                    }
+                    else if (IsDecimalFloatingMix(leftType, rightType))
+                    {
+                        // Same rule as arithmetic (spec 6.1): no implicit
+                        // Decimal <-> Single/Double conversion for ordering either.
+                        Error($"Comparison operator '{node.Operator}' cannot mix Decimal and floating-point operands. Use CType(value, Decimal) for explicit conversion",
                               node.Line, node.Column);
                     }
                     resultType = _typeManager.BooleanType;

@@ -108,6 +108,149 @@ End Module";
     }
 
     // ====================================================================
+    // Decimal analyzer gates (P1 Task 3, spec 6.1) — no literal contexts yet
+    // ====================================================================
+
+    [TestCase("Dim c As Decimal = a + b")]
+    [TestCase("Dim c As Decimal = a + 1")]
+    [TestCase("Dim c As Decimal = 1 + a")]      // symmetric integral widening
+    [TestCase("Dim c As Decimal = a * b")]
+    [TestCase("Dim ok As Boolean = a < b")]
+    [TestCase("Dim c As Decimal = -a")]         // unary minus
+    [TestCase("a += 1")]                        // compound with integral
+    public void Decimal_OperatorGates_Analyze(string stmt)
+        => AssertAnalyzesClean(Wrap("Dim a As Decimal = 1\nDim b As Decimal = 2\n" + stmt));
+
+    [TestCase("Dim c = a + x")]                 // arithmetic mix
+    [TestCase("Dim c = a + 0.5")]               // Double literal in operand position stays an error until Task 4
+    [TestCase("Dim ok As Boolean = a < x")]     // comparison mix
+    [TestCase("a += 0.5")]                      // compound mix (Double literal) stays an error until Task 4
+    public void Decimal_Op_Double_Errors_WithCTypeHint(string stmt)
+        => AssertAnalysisError(Wrap("Dim a As Decimal = 1\nDim x As Double = 0.5\n" + stmt),
+            new[] { "Decimal", "CType" });
+
+    /// <summary>
+    /// Decimal + Long must type Decimal, not Long (the Decimal rung sits BEFORE
+    /// the Double/Single/Long ladder in GetCommonType). TypeManager is public and
+    /// reachable from tests, so this is the direct unit assertion; the
+    /// analyzer-level proof rides along in <see cref="Decimal_PlusLong_ResultIsNotDoubleAssignable"/>.
+    /// Decimal is not registered in TypeManager's built-in table (it resolves via
+    /// the analyzer's .NET-type fallback), so the operand is constructed directly.
+    /// </summary>
+    [Test]
+    public void Decimal_CommonType_BeatsLadder()
+    {
+        var tm = new TypeManager();
+        var dec = new TypeInfo("Decimal", TypeKind.Class);
+
+        Assert.That(tm.GetCommonType(dec, tm.LongType)?.Name, Is.EqualTo("Decimal"));
+        Assert.That(tm.GetCommonType(tm.LongType, dec)?.Name, Is.EqualTo("Decimal"));
+        Assert.That(tm.GetCommonType(dec, tm.IntegerType)?.Name, Is.EqualTo("Decimal"));
+        Assert.That(tm.GetCommonType(dec, dec)?.Name, Is.EqualTo("Decimal"));
+
+        // Decimal op Single/Double has no implicit common type: null sentinel,
+        // the binary-visit call site raises the CType-hinted error (spec 6.1).
+        Assert.That(tm.GetCommonType(dec, tm.DoubleType), Is.Null);
+        Assert.That(tm.GetCommonType(tm.DoubleType, dec), Is.Null);
+        Assert.That(tm.GetCommonType(dec, tm.SingleType), Is.Null);
+        Assert.That(tm.GetCommonType(tm.SingleType, dec), Is.Null);
+    }
+
+    /// <summary>
+    /// Analyzer-level ladder proof: if 'a + l' typed Long (ladder win) or Double,
+    /// the Double assignment would be legal — the error proves the result is Decimal.
+    /// The Decimal assignment right above it must stay clean (Decimal <- Decimal).
+    /// </summary>
+    [Test]
+    public void Decimal_PlusLong_ResultIsNotDoubleAssignable()
+    {
+        AssertAnalyzesClean(Wrap("Dim a As Decimal = 1\nDim l As Long = 2\nDim c As Decimal = a + l"));
+        AssertAnalysisError(Wrap("Dim a As Decimal = 1\nDim l As Long = 2\nDim d As Double = a + l"),
+            new[] { "Decimal", "Double" });
+    }
+
+    [Test]
+    public void Decimal_AssignmentRules_IntegralWidens_FloatingRejected()
+    {
+        // Non-literal integral -> Decimal is legal (spec 6.1 assignment rules).
+        AssertAnalyzesClean(Wrap("Dim l As Long = 2\nDim c As Decimal = l"));
+        // Non-literal floating -> Decimal and Decimal -> floating are both illegal.
+        AssertAnalysisError(Wrap("Dim x As Double = 0.5\nDim c As Decimal = x"),
+            new[] { "Decimal", "CType" });
+        AssertAnalysisError(Wrap("Dim a As Decimal = 1\nDim y As Double = a"),
+            new[] { "Decimal", "Double" });
+    }
+
+    /// <summary>
+    /// A floating-point LITERAL initializer stays an error until Task 4 adds
+    /// Decimal-context literal conversion (the IsNumericLiteralAssignable
+    /// carve-out must not smuggle 1.5 into a Decimal through double space).
+    /// Task 4 flips this assertion to clean.
+    /// </summary>
+    [Test]
+    public void Decimal_FloatingLiteralInit_ErrorsUntilTask4()
+        => AssertAnalysisError(Wrap("Dim a As Decimal = 1.5"), new[] { "Decimal", "CType" });
+
+    // ====================================================================
+    // Analyzer-level helpers
+    // ====================================================================
+
+    private static string Wrap(string body)
+        => "Module M\n Sub Main()\n" + body + "\n End Sub\nEnd Module";
+
+    /// <summary>
+    /// Runs Lexer -> Parser -> SemanticAnalyzer (the standard analyzer-test idiom,
+    /// cf. TypeInferenceTests) and returns the semantic error messages. Parse
+    /// errors fail the test immediately — every input here must be syntactically valid.
+    /// </summary>
+    private static List<string> AnalyzeErrors(string source)
+    {
+        var lexer = new Lexer(source);
+        var tokens = lexer.Tokenize();
+        var parser = new Parser(tokens);
+        var ast = parser.Parse();
+        Assert.That(parser.Errors, Is.Empty,
+            "parse errors:\n" + string.Join("\n", parser.Errors.Select(e => e.Message)));
+
+        var analyzer = new SemanticAnalyzer();
+        analyzer.Analyze(ast);
+        return analyzer.Errors.Select(e => e.Message).ToList();
+    }
+
+    private static void AssertAnalyzesClean(string source)
+    {
+        var errors = AnalyzeErrors(source);
+        Assert.That(errors, Is.Empty,
+            "expected clean analysis but got:\n" + string.Join("\n", errors));
+    }
+
+    private static void AssertAnalysisError(string source, string[] expectContains)
+    {
+        var errors = AnalyzeErrors(source);
+        Assert.That(errors, Is.Not.Empty, "expected a semantic error but analysis was clean");
+        Assert.That(errors.Any(msg => expectContains.All(msg.Contains)),
+            $"no error contained all of [{string.Join(", ", expectContains)}]; got:\n" + string.Join("\n", errors));
+    }
+
+    // ====================================================================
+    // C# backend smoke: integer-valued Decimal programs avoid the Task-4
+    // literal gap (10 and 3 emit as plain integer constants, valid C#).
+    // ====================================================================
+
+    [Test]
+    [Category("Integration")]
+    public void Decimal_IntegerArithmetic_RunsOnCSharp()
+        => Assert.That(CompileRunCSharp(@"Module M
+ Sub Main()
+  Dim a As Decimal = 10
+  Dim b As Decimal = 3
+  Console.WriteLine(a + b)
+  Console.WriteLine(a - b)
+  Console.WriteLine(a < b)
+ End Sub
+End Module"), Is.EqualTo("13\n7\nFalse"));
+
+    // ====================================================================
     // C# end-to-end helper (reused by later native-BCL tasks)
     // ====================================================================
 
@@ -148,7 +291,7 @@ End Module";
 
             // Build via the CLI. 120s: a first dotnet build in a fresh temp dir
             // includes restore, which can exceed 60s on a cold cache.
-            var (buildExit, buildOut, buildErr) = RunProcess(
+            var (buildExit, buildOut, buildErr) = CliTestHarness.RunProcess(
                 CliTestHarness.CliPath(),
                 new[] { "build", Path.Combine(projectDir, "App.blproj") },
                 projectDir,
@@ -160,7 +303,7 @@ End Module";
             Assert.That(exes, Is.Not.Empty,
                 $"CLI build claimed success but produced no App.exe.\nSTDOUT:\n{buildOut}");
 
-            var (runExit, runOut, runErr) = RunProcess(
+            var (runExit, runOut, runErr) = CliTestHarness.RunProcess(
                 exes[0], Array.Empty<string>(), Path.GetDirectoryName(exes[0])!, timeoutMs: 60_000);
             Assert.That(runExit, Is.EqualTo(0),
                 $"compiled program exited nonzero ({runExit}).\nSTDOUT:\n{runOut}\nSTDERR:\n{runErr}");
@@ -171,38 +314,6 @@ End Module";
         {
             try { Directory.Delete(rootDir, recursive: true); } catch { /* best-effort temp cleanup */ }
         }
-    }
-
-    /// <summary>
-    /// Spawns a process with redirected output, a hard timeout, and kill-tree on
-    /// hang (BasicLang.exe spawns dotnet build — a timed-out compile must not
-    /// leak child processes).
-    /// </summary>
-    private static (int ExitCode, string StdOut, string StdErr) RunProcess(
-        string fileName, string[] args, string workingDir, int timeoutMs)
-    {
-        using var process = new System.Diagnostics.Process
-        {
-            StartInfo = new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = fileName,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true,
-                WorkingDirectory = workingDir,
-            }
-        };
-        foreach (var a in args) process.StartInfo.ArgumentList.Add(a);
-        process.Start();
-        var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEndAsync();
-        if (!process.WaitForExit(timeoutMs))
-        {
-            try { process.Kill(entireProcessTree: true); } catch { }
-            Assert.Fail($"process timed out after {timeoutMs / 1000}s: {fileName} {string.Join(" ", args)}");
-        }
-        return (process.ExitCode, stdout.GetAwaiter().GetResult(), stderr.GetAwaiter().GetResult());
     }
 
     private static bool DotnetOnPath()

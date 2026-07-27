@@ -48,7 +48,7 @@ public class TypeInfo
         {
             return Name == "Integer" || Name == "Long" || Name == "Single" || Name == "Double" ||
                    Name == "Byte" || Name == "SByte" || Name == "Short" || Name == "UByte" ||
-                   Name == "UShort" || Name == "UInteger" || Name == "ULong";
+                   Name == "UShort" || Name == "UInteger" || Name == "ULong" || Name == "Decimal";
         }
 
         public bool IsIntegral()
@@ -101,6 +101,12 @@ public class TypeInfo
                 if (Name == "Single" && other.IsIntegral())
                     return true;
                 if (Name == "Long" && other.Name == "Integer")
+                    return true;
+                // Integrals widen to Decimal implicitly (spec 6.1 assignment
+                // rules, matching .NET); Single/Double never do — there is no
+                // implicit conversion between Decimal and the binary floating
+                // types in either direction.
+                if (Name == "Decimal" && other.IsIntegral())
                     return true;
             }
             
@@ -561,11 +567,34 @@ public class TypeInfo
             return left.IsAssignableFrom(right);
         }
         
+        /// <summary>
+        /// Returns the promoted type for a binary operation, or NULL when the
+        /// pair has no implicit common type (today only Decimal vs
+        /// Single/Double, spec 6.1). This method has no diagnostics channel:
+        /// the null sentinel is turned into the CType-hinted error at the
+        /// Visit(BinaryExpressionNode) call site.
+        /// </summary>
         public TypeInfo GetCommonType(TypeInfo left, TypeInfo right)
         {
             if (left.Equals(right))
                 return left;
-                
+
+            // Decimal promotions come BEFORE the Double/Single/Long ladder
+            // (else Decimal + Long would silently type Long): Decimal op
+            // integral -> Decimal (integrals widen implicitly, matching .NET);
+            // Decimal op Single/Double -> null (no implicit conversion in
+            // either direction, matching C#). A Decimal paired with a
+            // non-numeric type falls through to the assignability/hierarchy
+            // logic below like any other type.
+            if (left.Name == "Decimal" || right.Name == "Decimal")
+            {
+                var other = left.Name == "Decimal" ? right : left;
+                if (other.Name == "Decimal" || other.IsIntegral())
+                    return left.Name == "Decimal" ? left : right;
+                if (other.IsFloatingPoint())
+                    return null;
+            }
+
             // Numeric promotions
             if (left.IsNumeric() && right.IsNumeric())
             {
