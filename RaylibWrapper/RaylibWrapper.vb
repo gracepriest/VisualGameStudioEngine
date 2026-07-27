@@ -12958,5 +12958,47 @@ Public Module FrameworkWrapper
     End Sub
 #End Region
 
+#Region "Raylib rmodels — 3D collision detection (Batch models-collision)"
+    ' The geometric-collision half of rmodels: pure raymath, no GL/device — deterministic headless. New structs BoundingBox
+    ' (2 Vector3) and RayCollision (I1 hit + Single distance + 2 Vector3) live in Utiliy.vb, passed/returned BY VALUE.
+    ' The Check* predicates return C bool -> <MarshalAs(I1)> Boolean. GetRayCollisionMesh is deferred to the mesh sub-batch
+    ' (it needs the Mesh struct); everything here uses only Vector3/Ray/BoundingBox/RayCollision.
+
+    ''' <summary>Checks collision between two spheres.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_CheckCollisionSpheres(center1 As Vector3, radius1 As Single, center2 As Vector3, radius2 As Single) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Checks collision between two bounding boxes.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_CheckCollisionBoxes(box1 As BoundingBox, box2 As BoundingBox) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Checks collision between a bounding box and a sphere.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_CheckCollisionBoxSphere(box As BoundingBox, center As Vector3, radius As Single) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Gets collision info between a ray and a sphere (RayCollision returned by value).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetRayCollisionSphere(ray As Ray, center As Vector3, radius As Single) As RayCollision
+    End Function
+
+    ''' <summary>Gets collision info between a ray and a bounding box (RayCollision returned by value).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetRayCollisionBox(ray As Ray, box As BoundingBox) As RayCollision
+    End Function
+
+    ''' <summary>Gets collision info between a ray and a triangle (RayCollision returned by value).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetRayCollisionTriangle(ray As Ray, p1 As Vector3, p2 As Vector3, p3 As Vector3) As RayCollision
+    End Function
+
+    ''' <summary>Gets collision info between a ray and a quad (RayCollision returned by value).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetRayCollisionQuad(ray As Ray, p1 As Vector3, p2 As Vector3, p3 As Vector3, p4 As Vector3) As RayCollision
+    End Function
+#End Region
+
 End Module
 

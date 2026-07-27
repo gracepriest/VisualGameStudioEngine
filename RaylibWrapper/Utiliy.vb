@@ -210,6 +210,26 @@ Public Module Utiliy
         Public direction As Vector3
     End Structure
 
+    ' raylib BoundingBox — axis-aligned min/max corners. Passed BY VALUE to the rmodels collision helpers (Batch
+    ' models-collision). 2 * Vector3 = 24 bytes, blittable.
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure BoundingBox
+        Public min As Vector3
+        Public max As Vector3
+    End Structure
+
+    ' raylib RayCollision — ray/geometry hit result. RETURNED BY VALUE by the rmodels GetRayCollision* helpers (Batch
+    ' models-collision). C `bool hit` -> <MarshalAs(I1)> Boolean (1 byte + 3 pad); then Single distance @ offset 4, Vector3
+    ' point @ 8, Vector3 normal @ 20 = 32 bytes, matching the C layout. (A 32-byte struct returns via hidden-sret on Win64;
+    ' .NET 8 handles the marshalable-but-not-blittable by-value return — the same mechanism proven for VrStereoConfig in C3.)
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure RayCollision
+        <MarshalAs(UnmanagedType.I1)> Public hit As Boolean
+        Public distance As Single
+        Public point As Vector3
+        Public normal As Vector3
+    End Structure
+
     ' raylib VrDeviceInfo — head-mounted-display parameters passed BY VALUE to LoadVrStereoConfig (Batch core-C3). The two
     ' trailing float[4] arrays are NESTED FIXED-SIZE arrays: <MarshalAs(ByValArray, SizeConst:=4)> inlines 4 floats each
     ' (NOT a pointer). Layout: 2 int + 5 float + 4 float + 4 float = 60 bytes.
