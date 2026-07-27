@@ -982,6 +982,30 @@ extern "C" {
     __declspec(dllexport) bool Framework_ExportMeshAsCode(Mesh mesh, const char* fileName);
     __declspec(dllexport) RayCollision Framework_GetRayCollisionMesh(Ray ray, Mesh mesh, Matrix transform);
 
+    // ==== RAW rmodels PARITY — Model loading & drawing (raylib 5.5 passthrough, Batch models-model) ====
+    // 5 model-management fns + 10 model/billboard draws. New struct Model (embedded Matrix + int counts + raylib-owned
+    // pointers as IntPtr); passed/returned BY VALUE (LoadModel/LoadModelFromMesh return it via hidden-sret). Color -> r,g,b,a
+    // bytes reconstructed as Color{r,g,b,a} in the forwarder (the models-draw convention); Camera/Texture2D/Rectangle/
+    // Vector3/Vector2 by value. ⚠ IsModelValid derefs model.meshes[i] for meshCount iterations with NO null-guard (raylib 5.5)
+    // → any meshCount>0 with a null/garbage meshes ptr access-violates, so only an empty/zeroed model validates headlessly; a
+    // real check needs a GPU-loaded model. GetModelBoundingBox also walks the meshes; LoadModel/LoadModelFromMesh + the draws
+    // need a live GL context (correctness = Integration).
+    __declspec(dllexport) Model Framework_LoadModel(const char* fileName);
+    __declspec(dllexport) Model Framework_LoadModelFromMesh(Mesh mesh);
+    __declspec(dllexport) bool Framework_IsModelValid(Model model);
+    __declspec(dllexport) void Framework_UnloadModel(Model model);
+    __declspec(dllexport) BoundingBox Framework_GetModelBoundingBox(Model model);
+    __declspec(dllexport) void Framework_DrawModel(Model model, Vector3 position, float scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawModelEx(Model model, Vector3 position, Vector3 rotationAxis, float rotationAngle, Vector3 scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawModelWires(Model model, Vector3 position, float scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawModelWiresEx(Model model, Vector3 position, Vector3 rotationAxis, float rotationAngle, Vector3 scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawModelPoints(Model model, Vector3 position, float scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawModelPointsEx(Model model, Vector3 position, Vector3 rotationAxis, float rotationAngle, Vector3 scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawBoundingBox(BoundingBox box, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawBillboard(Camera camera, Texture2D texture, Vector3 position, float scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawBillboardRec(Camera camera, Texture2D texture, Rectangle source, Vector3 position, Vector2 size, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawBillboardPro(Camera camera, Texture2D texture, Rectangle source, Vector3 position, Vector3 up, Vector2 size, Vector2 origin, float rotation, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+
     // Sounds (handle-based)
     __declspec(dllexport) int   Framework_LoadSoundH(const char* file);
     __declspec(dllexport) void  Framework_UnloadSoundH(int h);

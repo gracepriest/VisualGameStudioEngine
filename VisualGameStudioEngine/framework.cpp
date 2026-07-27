@@ -2234,6 +2234,25 @@ extern "C" {
     bool Framework_ExportMeshAsCode(Mesh mesh, const char* fileName) { return ExportMeshAsCode(mesh, fileName); }
     RayCollision Framework_GetRayCollisionMesh(Ray ray, Mesh mesh, Matrix transform) { return GetRayCollisionMesh(ray, mesh, transform); }
 
+    // ==== RAW rmodels PARITY — Model loading & drawing (raylib 5.5 passthrough, Batch models-model) ====
+    // 1:1 forwarders. Model/Mesh/Camera/Texture2D/Rectangle/Vector3/Vector2/BoundingBox by value; Color reconstructed from
+    // r,g,b,a bytes; const char* file path passthrough. LoadModel/LoadModelFromMesh + the draws need a live GL context.
+    Model Framework_LoadModel(const char* fileName) { return LoadModel(fileName); }
+    Model Framework_LoadModelFromMesh(Mesh mesh) { return LoadModelFromMesh(mesh); }
+    bool Framework_IsModelValid(Model model) { return IsModelValid(model); }
+    void Framework_UnloadModel(Model model) { UnloadModel(model); }
+    BoundingBox Framework_GetModelBoundingBox(Model model) { return GetModelBoundingBox(model); }
+    void Framework_DrawModel(Model model, Vector3 position, float scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawModel(model, position, scale, Color{r, g, b, a}); }
+    void Framework_DrawModelEx(Model model, Vector3 position, Vector3 rotationAxis, float rotationAngle, Vector3 scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawModelEx(model, position, rotationAxis, rotationAngle, scale, Color{r, g, b, a}); }
+    void Framework_DrawModelWires(Model model, Vector3 position, float scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawModelWires(model, position, scale, Color{r, g, b, a}); }
+    void Framework_DrawModelWiresEx(Model model, Vector3 position, Vector3 rotationAxis, float rotationAngle, Vector3 scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawModelWiresEx(model, position, rotationAxis, rotationAngle, scale, Color{r, g, b, a}); }
+    void Framework_DrawModelPoints(Model model, Vector3 position, float scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawModelPoints(model, position, scale, Color{r, g, b, a}); }
+    void Framework_DrawModelPointsEx(Model model, Vector3 position, Vector3 rotationAxis, float rotationAngle, Vector3 scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawModelPointsEx(model, position, rotationAxis, rotationAngle, scale, Color{r, g, b, a}); }
+    void Framework_DrawBoundingBox(BoundingBox box, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawBoundingBox(box, Color{r, g, b, a}); }
+    void Framework_DrawBillboard(Camera camera, Texture2D texture, Vector3 position, float scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawBillboard(camera, texture, position, scale, Color{r, g, b, a}); }
+    void Framework_DrawBillboardRec(Camera camera, Texture2D texture, Rectangle source, Vector3 position, Vector2 size, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawBillboardRec(camera, texture, source, position, size, Color{r, g, b, a}); }
+    void Framework_DrawBillboardPro(Camera camera, Texture2D texture, Rectangle source, Vector3 position, Vector3 up, Vector2 size, Vector2 origin, float rotation, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawBillboardPro(camera, texture, source, position, up, size, origin, rotation, Color{r, g, b, a}); }
+
     void Framework_PauseAllAudio() {
         g_audioPaused = true;
         for (auto& kv : g_sounds) {
