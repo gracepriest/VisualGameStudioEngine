@@ -49,3 +49,39 @@ public class BlnetContractTests
             Assert.That(cs, Does.Contain($"{name} = {value},"));
     }
 }
+
+[TestFixture]
+public class BoundaryTypeRegistryTests
+{
+    [TestCase("Integer")] [TestCase("String")] [TestCase("ULong")] [TestCase("Void")]
+    public void TodaysMappedPrimitives_AreBridged(string name) =>
+        Assert.That(BasicLang.BoundaryTypeRegistry.Categorize(name),
+            Is.EqualTo(BasicLang.BoundaryTypeCategory.Bridged));
+
+    [TestCase("Object")] [TestCase("Decimal")] [TestCase("SByte")]
+    [TestCase("DateTime")] [TestCase("DateTimeOffset")] [TestCase("TimeSpan")]
+    [TestCase("Guid")] [TestCase("StringBuilder")] [TestCase("Regex")]
+    [TestCase("Uri")] [TestCase("Stream")] [TestCase("FileInfo")] [TestCase("DirectoryInfo")]
+    public void TodaysRejectList_IsRejected(string name) =>
+        Assert.That(BasicLang.BoundaryTypeRegistry.Categorize(name),
+            Is.EqualTo(BasicLang.BoundaryTypeCategory.Rejected));
+
+    [Test]
+    public void CategorizeIsCaseInsensitive() =>
+        Assert.That(BasicLang.BoundaryTypeRegistry.Categorize("datetime"),
+            Is.EqualTo(BasicLang.BoundaryTypeCategory.Rejected));
+
+    [Test]
+    public void UnknownName_IsUnknown() =>
+        Assert.That(BasicLang.BoundaryTypeRegistry.Categorize("MyGameSprite"),
+            Is.EqualTo(BasicLang.BoundaryTypeCategory.Unknown));
+
+    [Test]
+    public void NativeOwnedAndManagedOwned_StartEmpty_PreP1()
+    {
+        Assert.That(BasicLang.BoundaryTypeRegistry.NamesInCategory(
+            BasicLang.BoundaryTypeCategory.NativeOwned), Is.Empty);
+        Assert.That(BasicLang.BoundaryTypeRegistry.NamesInCategory(
+            BasicLang.BoundaryTypeCategory.ManagedOwned), Is.Empty);
+    }
+}
