@@ -230,6 +230,34 @@ Public Module Utiliy
         Public normal As Vector3
     End Structure
 
+    ' raylib Mesh — CPU + GPU vertex data (rmodels mesh sub-batch). Every array field is a raylib-owned native pointer
+    ' (float* / unsigned short* / unsigned char* / Matrix*), opaque to VB -> IntPtr. Passed BY VALUE to UnloadMesh /
+    ' UpdateMeshBuffer / GetMeshBoundingBox / ExportMesh(AsCode) / GetRayCollisionMesh, RETURNED BY VALUE by the 11 GenMesh*
+    ' generators, and mutated in place (ByRef) by UploadMesh / GenMeshTangents. FULLY BLITTABLE (ints + pointers only), so
+    ' the by-value return uses the ordinary hidden-sret path on Win64 — no non-blittable marshaling. Field order and widths
+    ' mirror raylib.h's Mesh exactly (2 int counts; 5 float* + uchar* colors + ushort* indices vertex attrs; 2 float* anim +
+    ' uchar* boneIds + float* boneWeights + Matrix* boneMatrices + int boneCount; then the GL ids). Size = 120 bytes on x64.
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure Mesh
+        Public vertexCount As Integer
+        Public triangleCount As Integer
+        Public vertices As IntPtr       ' float*  (XYZ per vertex)
+        Public texcoords As IntPtr      ' float*  (UV)
+        Public texcoords2 As IntPtr     ' float*  (UV, second set)
+        Public normals As IntPtr        ' float*  (XYZ)
+        Public tangents As IntPtr       ' float*  (XYZW)
+        Public colors As IntPtr         ' unsigned char*  (RGBA)
+        Public indices As IntPtr        ' unsigned short*
+        Public animVertices As IntPtr   ' float*
+        Public animNormals As IntPtr    ' float*
+        Public boneIds As IntPtr        ' unsigned char*
+        Public boneWeights As IntPtr    ' float*
+        Public boneMatrices As IntPtr   ' Matrix*
+        Public boneCount As Integer
+        Public vaoId As UInteger        ' OpenGL VAO id
+        Public vboId As IntPtr          ' unsigned int*  (OpenGL VBO ids)
+    End Structure
+
     ' raylib VrDeviceInfo — head-mounted-display parameters passed BY VALUE to LoadVrStereoConfig (Batch core-C3). The two
     ' trailing float[4] arrays are NESTED FIXED-SIZE arrays: <MarshalAs(ByValArray, SizeConst:=4)> inlines 4 floats each
     ' (NOT a pointer). Layout: 2 int + 5 float + 4 float + 4 float = 60 bytes.

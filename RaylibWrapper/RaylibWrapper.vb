@@ -13107,5 +13107,109 @@ Public Module FrameworkWrapper
     End Sub
 #End Region
 
+#Region "Raylib rmodels — Mesh generation & management (Batch models-mesh)"
+    ' The mesh half of rmodels: 11 GenMesh* generators + 7 mesh-management fns + GetRayCollisionMesh (deferred here from the
+    ' collision batch — it needs Mesh). New struct Mesh (Utiliy.vb) is a big blittable struct (int counts + raylib-owned
+    ' array pointers as IntPtr + GL ids); passed/returned BY VALUE, mutated in place via ByRef for UploadMesh/GenMeshTangents.
+    ' GenMesh* upload to GPU internally (live GL context required → correctness = Integration); GetMeshBoundingBox and
+    ' GetRayCollisionMesh are pure math (headless oracles on a hand-built Mesh). C bool -> <MarshalAs(I1)> Boolean; file-path
+    ' char* -> CharSet.Ansi String. DrawMesh/DrawMeshInstanced are deferred to the materials batch (they take a Material).
+
+    ''' <summary>Generates a polygonal mesh.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenMeshPoly(sides As Integer, radius As Single) As Mesh
+    End Function
+
+    ''' <summary>Generates a plane mesh (with subdivisions).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenMeshPlane(width As Single, length As Single, resX As Integer, resZ As Integer) As Mesh
+    End Function
+
+    ''' <summary>Generates a cuboid mesh.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenMeshCube(width As Single, height As Single, length As Single) As Mesh
+    End Function
+
+    ''' <summary>Generates a standard sphere mesh.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenMeshSphere(radius As Single, rings As Integer, slices As Integer) As Mesh
+    End Function
+
+    ''' <summary>Generates a half-sphere mesh (no bottom cap).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenMeshHemiSphere(radius As Single, rings As Integer, slices As Integer) As Mesh
+    End Function
+
+    ''' <summary>Generates a cylinder mesh.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenMeshCylinder(radius As Single, height As Single, slices As Integer) As Mesh
+    End Function
+
+    ''' <summary>Generates a cone/pyramid mesh.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenMeshCone(radius As Single, height As Single, slices As Integer) As Mesh
+    End Function
+
+    ''' <summary>Generates a torus mesh.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenMeshTorus(radius As Single, size As Single, radSeg As Integer, sides As Integer) As Mesh
+    End Function
+
+    ''' <summary>Generates a trefoil-knot mesh.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenMeshKnot(radius As Single, size As Single, radSeg As Integer, sides As Integer) As Mesh
+    End Function
+
+    ''' <summary>Generates a heightmap mesh from image data.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenMeshHeightmap(heightmap As Image, size As Vector3) As Mesh
+    End Function
+
+    ''' <summary>Generates a cubes-based map mesh from image data.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenMeshCubicmap(cubicmap As Image, cubeSize As Vector3) As Mesh
+    End Function
+
+    ''' <summary>Uploads mesh vertex data to the GPU and fills in VAO/VBO ids (mutates the mesh in place).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UploadMesh(ByRef mesh As Mesh, <MarshalAs(UnmanagedType.I1)> dynamic As Boolean)
+    End Sub
+
+    ''' <summary>Updates mesh vertex data in the GPU for a specific buffer index.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UpdateMeshBuffer(mesh As Mesh, index As Integer, data As IntPtr, dataSize As Integer, offset As Integer)
+    End Sub
+
+    ''' <summary>Unloads mesh data from CPU and GPU.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadMesh(mesh As Mesh)
+    End Sub
+
+    ''' <summary>Computes mesh bounding-box limits (BoundingBox returned by value).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetMeshBoundingBox(mesh As Mesh) As BoundingBox
+    End Function
+
+    ''' <summary>Computes mesh tangents (mutates the mesh in place, allocating the tangents array).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_GenMeshTangents(ByRef mesh As Mesh)
+    End Sub
+
+    ''' <summary>Exports mesh data to a file; returns True on success.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_ExportMesh(mesh As Mesh, fileName As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Exports mesh as a code file (.h) of vertex-attribute arrays; returns True on success.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_ExportMeshAsCode(mesh As Mesh, fileName As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Gets collision info between a ray and a mesh under a transform (RayCollision returned by value).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetRayCollisionMesh(ray As Ray, mesh As Mesh, transform As Matrix) As RayCollision
+    End Function
+#End Region
+
 End Module
 
