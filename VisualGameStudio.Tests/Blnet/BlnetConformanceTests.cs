@@ -109,7 +109,7 @@ public class BlnetConformanceTests
         if (!exited)
         {
             try { proc.Kill(entireProcessTree: true); } catch { /* already gone */ }
-            try { proc.WaitForExit(); } catch { /* best effort */ }
+            try { proc.WaitForExit(5000); } catch { /* best effort */ }
         }
         try { Task.WaitAll(new Task[] { so, se }, 10_000); } catch { /* partial output is fine */ }
         var stdout = so.IsCompletedSuccessfully ? so.Result : string.Empty;
@@ -123,6 +123,13 @@ public class BlnetConformanceTests
     [TestCase("generation_reuse")]        // spec test 4
     [TestCase("string_roundtrip")]        // spec test 5
     [TestCase("managed_exception")]       // spec test 6
+    [TestCase("inline_native_exception")]      // spec test 7
+    [TestCase("inline_result_and_out")]        // spec test 8
+    [TestCase("struct_slots")]                 // spec test 9
+    [TestCase("queued_notification_addref")]   // spec test 10
+    [TestCase("cross_thread_result_rejected")] // spec test 11
+    [TestCase("pump_error_surfacing")]         // spec test 12
+    [TestCase("deadlock_guard")]               // spec test 13
     public void Conformance(string scenario) =>
         Assert.That(RunScenario(scenario), Does.StartWith("PASS " + scenario));
 }

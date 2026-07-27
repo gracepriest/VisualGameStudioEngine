@@ -172,6 +172,224 @@ static int scenario_managed_exception() {
     return 0;
 }
 
+/* ---- scenario 7: a native exception inside an inline callback surfaces as
+   BLNET_E_NATIVE_EXCEPTION (C4/C5). The callback body throws "n\xC3\xA4tive boom"
+   ("native" with a-umlaut UTF-8 bytes); the invoke runs inline because the harness
+   wraps test_invoke in BlnetCallScope (depth > 0 -> same-thread dispatch). The shim
+   pulls the message across via get_native_error and re-exposes it through
+   blnet_last_error under the synthetic type BasicLangNativeException. ---- */
+static int scenario_inline_native_exception() {
+    blnet_callback cb = blnet_register_callback(
+        [](const uint64_t*, int32_t, uint64_t*) -> int32_t {
+            throw std::runtime_error("n\xC3\xA4tive boom");
+        },
+        nullptr, 0, CallbackFlags{});
+    int32_t st;
+    { BlnetCallScope s; st = test_invoke(cb, nullptr, 0, nullptr); }
+    REQUIRE(st == BLNET_E_NATIVE_EXCEPTION, "inline_native_exception", "inline throw did not return BLNET_E_NATIVE_EXCEPTION");
+    char* type = nullptr; char* msg = nullptr;
+    REQUIRE(g_shim.last_error(&type, &msg) == BLNET_OK, "inline_native_exception", "blnet_last_error failed");
+    const bool type_ok = contains(type, "BasicLangNativeException");
+    const bool msg_ok  = contains(msg, "n\xC3\xA4tive boom");
+    if (type) g_shim.free_(type);
+    if (msg)  g_shim.free_(msg);
+    REQUIRE(type_ok, "inline_native_exception", "last-error type is not BasicLangNativeException");
+    REQUIRE(msg_ok,  "inline_native_exception", "last-error message lacks the native boom UTF-8 bytes");
+    printf("PASS inline_native_exception\n");
+    return 0;
+}
+
+/* ---- scenario 8: inline result-bearing callback with a VALUE and an OUT slot (C5).
+   Inline (BlnetCallScope around test_invoke) so result-bearing is allowed. The body
+   reads args[0] as an int, doubles it into *result, and writes arg0+1 through the
+   caller's OUT pointer in args[1]. ---- */
+static int scenario_inline_result_and_out() {
+    BlnetSlotDesc slots[] = { {BLNET_SLOT_VALUE, 0}, {BLNET_SLOT_OUT, 4} };
+    CallbackFlags flags; flags.result_bearing = true;
+    blnet_callback cb = blnet_register_callback(
+        [](const uint64_t* args, int32_t, uint64_t* result) -> int32_t {
+            const int32_t v = static_cast<int32_t>(args[0]);
+            *result = static_cast<uint64_t>(v * 2);
+            *reinterpret_cast<int32_t*>(args[1]) = v + 1;
+            return BLNET_OK;
+        },
+        slots, 2, flags);
+    int32_t out_val = 0;
+    uint64_t args[2] = { 21, reinterpret_cast<uint64_t>(&out_val) };
+    uint64_t result = 0;
+    int32_t st;
+    { BlnetCallScope s; st = test_invoke(cb, args, 2, &result); }
+    REQUIRE(st == BLNET_OK, "inline_result_and_out", "inline result-bearing invoke failed");
+    REQUIRE(result == 42, "inline_result_and_out", "result slot != 42");
+    REQUIRE(out_val == 22, "inline_result_and_out", "out-slot int != 22");
+    printf("PASS inline_result_and_out\n");
+    return 0;
+}
+
+/* ---- scenario 9: a 16-byte struct crosses via BLNET_SLOT_STRUCT (borrowed pointer)
+   and comes back through a caller-allocated out-buffer whose ADDRESS is pre-loaded
+   into the result slot. Values are exactly representable doubles so the round trip
+   is bit-exact under operator==. ---- */
+static int scenario_struct_slots() {
+    struct Pt { double x; double y; };
+    static_assert(sizeof(Pt) == 16, "Pt must be exactly 16 bytes");
+    BlnetSlotDesc slots[] = { {BLNET_SLOT_STRUCT, 16} };
+    CallbackFlags flags; flags.result_bearing = true;
+    blnet_callback cb = blnet_register_callback(
+        [](const uint64_t* args, int32_t, uint64_t* result) -> int32_t {
+            const Pt* in = reinterpret_cast<const Pt*>(args[0]);
+            Pt* out = reinterpret_cast<Pt*>(*result); /* caller pre-loaded the out-buffer address */
+            out->x = in->x * 2; out->y = in->y * 2;
+            return BLNET_OK;
+        },
+        slots, 1, flags);
+    Pt in_pt{1.5, 2.25};
+    Pt out_pt{0.0, 0.0};
+    uint64_t args[1] = { reinterpret_cast<uint64_t>(&in_pt) };
+    uint64_t result = reinterpret_cast<uint64_t>(&out_pt);
+    int32_t st;
+    { BlnetCallScope s; st = test_invoke(cb, args, 1, &result); }
+    REQUIRE(st == BLNET_OK, "struct_slots", "inline struct invoke failed");
+    REQUIRE(out_pt.x == 3.0, "struct_slots", "out struct x != 3.0 (bit-exact)");
+    REQUIRE(out_pt.y == 4.5, "struct_slots", "out struct y != 4.5 (bit-exact)");
+    printf("PASS struct_slots\n");
+    return 0;
+}
+
+/* ---- scenario 10: a cross-thread notification with a HANDLE slot is queued, and the
+   queue's addref keeps the object alive across the caller's release until the pump
+   runs it (C5/C2). The shim invokes the thunk on a fresh .NET thread (depth 0 there
+   -> queued) and JOINS it, so by the time test_invoke_from_thread returns the
+   invocation is enqueued but NOT executed. Globals (s10_*) carry the callback's
+   observations out; the callback body never REQUIREs. All s10_ writes happen on the
+   pump thread (== main), so plain statics are race-free. ---- */
+static bool    s10_ran = false;
+static int32_t s10_status = -1;
+static int32_t s10_count = -1;
+
+static int scenario_queued_notification_addref() {
+    BlnetSlotDesc slots[] = { {BLNET_SLOT_HANDLE, 0} };
+    blnet_callback cb = blnet_register_callback(
+        [](const uint64_t* args, int32_t, uint64_t*) -> int32_t {
+            int32_t count = 0; int32_t st;
+            { BlnetCallScope s; st = test_list_count(args[0], &count); }
+            s10_status = st; s10_count = count; s10_ran = true;
+            return BLNET_OK;
+        },
+        slots, 1, CallbackFlags{});
+    uint64_t h = 0;
+    { BlnetCallScope s; NetCheck(test_create_list(&h)); }
+    {
+        NetRef ref(h);
+        { BlnetCallScope s; NetCheck(test_list_add(ref.get(), 42)); }
+        uint64_t inv_args[1] = { ref.get() };
+        int32_t st;
+        { BlnetCallScope s; st = test_invoke_from_thread(cb, inv_args, 1); }
+        REQUIRE(st == BLNET_OK, "queued_notification_addref", "cross-thread notification enqueue failed");
+        REQUIRE(!s10_ran, "queued_notification_addref", "notification ran before blnet_pump");
+    } /* NetRef released HERE - the queue's addref is now the only ref keeping the list alive */
+    int32_t pump_st = blnet_pump();
+    REQUIRE(pump_st == BLNET_OK, "queued_notification_addref", "blnet_pump failed");
+    REQUIRE(s10_ran, "queued_notification_addref", "notification did not run during blnet_pump");
+    REQUIRE(s10_status == BLNET_OK, "queued_notification_addref", "handle was dead inside the pumped callback (queue addref missing)");
+    REQUIRE(s10_count == 1, "queued_notification_addref", "count inside the pumped callback != 1");
+    int32_t st, count = 0;
+    { BlnetCallScope s; st = test_list_count(h, &count); }
+    REQUIRE(st == BLNET_E_STALE_HANDLE, "queued_notification_addref", "handle still alive after the pump (queue release missing)");
+    printf("PASS queued_notification_addref\n");
+    return 0;
+}
+
+/* ---- scenario 11: a result-bearing callback (without Immediate) invoked cross-thread
+   is REJECTED with BLNET_E_CROSS_THREAD_RESULT - never run, never queued (C5/C6).
+   The shim's Join gives happens-before, so reading s11_ran after the call is safe. ---- */
+static bool s11_ran = false;
+
+static int scenario_cross_thread_result_rejected() {
+    CallbackFlags flags; flags.result_bearing = true;
+    blnet_callback cb = blnet_register_callback(
+        [](const uint64_t*, int32_t, uint64_t*) -> int32_t { s11_ran = true; return BLNET_OK; },
+        nullptr, 0, flags);
+    int32_t st;
+    { BlnetCallScope s; st = test_invoke_from_thread(cb, nullptr, 0); }
+    REQUIRE(st == BLNET_E_CROSS_THREAD_RESULT, "cross_thread_result_rejected", "cross-thread result-bearing invoke was not rejected");
+    REQUIRE(!s11_ran, "cross_thread_result_rejected", "rejected callback still ran");
+    int32_t pump_st = blnet_pump();
+    REQUIRE(pump_st == BLNET_OK, "cross_thread_result_rejected", "blnet_pump failed after the rejection");
+    REQUIRE(!s11_ran, "cross_thread_result_rejected", "rejected callback was queued anyway (ran on pump)");
+    printf("PASS cross_thread_result_rejected\n");
+    return 0;
+}
+
+/* ---- scenario 12: the pump CONTINUES past failing notifications, fires the error
+   hook per failure (queue order preserved), and returns the FIRST failure's status;
+   a drained queue pumps clean afterwards (C4/C5). The hook must be a capture-less
+   lambda (raw function pointer), so its observations go through globals. ---- */
+static bool s12_first_ran = false;
+static int  s12_hook_fires = 0;
+static std::string s12_hook_msgs;
+
+static int scenario_pump_error_surfacing() {
+    blnet_callback cb1 = blnet_register_callback(
+        [](const uint64_t*, int32_t, uint64_t*) -> int32_t { s12_first_ran = true; return BLNET_OK; },
+        nullptr, 0, CallbackFlags{});
+    blnet_callback cb2 = blnet_register_callback(
+        [](const uint64_t*, int32_t, uint64_t*) -> int32_t { throw std::runtime_error("boom2"); },
+        nullptr, 0, CallbackFlags{});
+    blnet_callback cb3 = blnet_register_callback(
+        [](const uint64_t*, int32_t, uint64_t*) -> int32_t { throw std::runtime_error("boom3"); },
+        nullptr, 0, CallbackFlags{});
+    int32_t st;
+    { BlnetCallScope s; st = test_invoke_from_thread(cb1, nullptr, 0); }
+    REQUIRE(st == BLNET_OK, "pump_error_surfacing", "enqueue #1 failed");
+    { BlnetCallScope s; st = test_invoke_from_thread(cb2, nullptr, 0); }
+    REQUIRE(st == BLNET_OK, "pump_error_surfacing", "enqueue #2 failed");
+    { BlnetCallScope s; st = test_invoke_from_thread(cb3, nullptr, 0); }
+    REQUIRE(st == BLNET_OK, "pump_error_surfacing", "enqueue #3 failed");
+    blnet_set_error_hook([](int32_t, const char* msg) {
+        ++s12_hook_fires;
+        s12_hook_msgs += msg ? msg : "<null>";
+        s12_hook_msgs += ";";
+    });
+    int32_t pump_st = blnet_pump();
+    REQUIRE(pump_st == BLNET_E_NATIVE_EXCEPTION, "pump_error_surfacing", "pump did not return the first failure status");
+    REQUIRE(s12_first_ran, "pump_error_surfacing", "callback #1 did not run (pump stopped at a failure?)");
+    REQUIRE(s12_hook_fires == 2, "pump_error_surfacing", "error hook did not fire exactly twice");
+    const size_t p2 = s12_hook_msgs.find("boom2");
+    const size_t p3 = s12_hook_msgs.find("boom3");
+    REQUIRE(p2 != std::string::npos, "pump_error_surfacing", "hook messages lack boom2");
+    REQUIRE(p3 != std::string::npos, "pump_error_surfacing", "hook messages lack boom3");
+    REQUIRE(p2 < p3, "pump_error_surfacing", "boom2 did not precede boom3 (queue order broken)");
+    int32_t pump2 = blnet_pump();
+    REQUIRE(pump2 == BLNET_OK, "pump_error_surfacing", "second pump on a drained queue was not OK");
+    REQUIRE(s12_hook_fires == 2, "pump_error_surfacing", "hook fired again on a drained queue");
+    printf("PASS pump_error_surfacing\n");
+    return 0;
+}
+
+/* ---- scenario 13: enqueue never blocks on the pump (deadlock guard, C6). We are ON
+   the pump thread; the shim spawns a .NET thread whose invoke queues the notification
+   and then JOINS that thread before returning. A design where enqueue blocked until
+   the pump ran the callback would deadlock right here (pump thread waiting on Join,
+   spawned thread waiting on a pump that can never run) and the fixture's 60 s timeout
+   would kill the process - so merely RETURNING is the property under test. ---- */
+static bool s13_ran = false;
+
+static int scenario_deadlock_guard() {
+    blnet_callback cb = blnet_register_callback(
+        [](const uint64_t*, int32_t, uint64_t*) -> int32_t { s13_ran = true; return BLNET_OK; },
+        nullptr, 0, CallbackFlags{});
+    int32_t st;
+    { BlnetCallScope s; st = test_invoke_from_thread(cb, nullptr, 0); }
+    REQUIRE(st == BLNET_OK, "deadlock_guard", "cross-thread notification enqueue failed");
+    REQUIRE(!s13_ran, "deadlock_guard", "notification ran before blnet_pump");
+    int32_t pump_st = blnet_pump();
+    REQUIRE(pump_st == BLNET_OK, "deadlock_guard", "blnet_pump failed");
+    REQUIRE(s13_ran, "deadlock_guard", "notification did not run during blnet_pump");
+    printf("PASS deadlock_guard\n");
+    return 0;
+}
+
 int main(int argc, char** argv) {
     setvbuf(stdout, nullptr, _IONBF, 0); /* unbuffered: output must survive a timeout kill or AV */
     if (argc < 2) { printf("FAIL usage: harness <scenario>\n"); return 1; }
@@ -216,6 +434,13 @@ int main(int argc, char** argv) {
         if (strcmp(scenario, "generation_reuse") == 0) return scenario_generation_reuse();
         if (strcmp(scenario, "string_roundtrip") == 0) return scenario_string_roundtrip();
         if (strcmp(scenario, "managed_exception") == 0) return scenario_managed_exception();
+        if (strcmp(scenario, "inline_native_exception") == 0) return scenario_inline_native_exception();
+        if (strcmp(scenario, "inline_result_and_out") == 0) return scenario_inline_result_and_out();
+        if (strcmp(scenario, "struct_slots") == 0) return scenario_struct_slots();
+        if (strcmp(scenario, "queued_notification_addref") == 0) return scenario_queued_notification_addref();
+        if (strcmp(scenario, "cross_thread_result_rejected") == 0) return scenario_cross_thread_result_rejected();
+        if (strcmp(scenario, "pump_error_surfacing") == 0) return scenario_pump_error_surfacing();
+        if (strcmp(scenario, "deadlock_guard") == 0) return scenario_deadlock_guard();
     } catch (const std::exception& ex) {
         printf("FAIL %s: unexpected exception: %s\n", scenario, ex.what());
         return 1;
