@@ -1024,6 +1024,21 @@ extern "C" {
     __declspec(dllexport) void Framework_DrawMesh(Mesh mesh, Material material, Matrix transform);
     __declspec(dllexport) void Framework_DrawMeshInstanced(Mesh mesh, Material material, const Matrix* transforms, int instances);
 
+    // ==== RAW rmodels PARITY — Model animations (raylib 5.5 passthrough, Batch models-animations) — CLOSES rmodels ====
+    // 6 fns. New struct ModelAnimation (int boneCount, frameCount; BoneInfo* bones; Transform** framePoses; char name[32]) —
+    // 56 B, passed BY VALUE to UpdateModelAnimation/UpdateModelAnimationBones/UnloadModelAnimation/IsModelAnimationValid; its
+    // bones/framePoses stay raylib-owned pointers (opaque to the wrapper). LoadModelAnimations returns a raylib-owned
+    // ModelAnimation* array + the count through int*; UnloadModelAnimations takes that array pointer back. BoneInfo (char[32]
+    // name + int parent, 36 B) and Transform (Vector3 translation; Quaternion rotation; Vector3 scale, 40 B) are declared for
+    // consumers but appear here only behind pointers. IsModelAnimationValid short-circuits false on a boneCount mismatch (no
+    // deref); UnloadModelAnimation(s) are free()-of-NULL-safe on a zeroed/empty animation. Update* need a real animated model.
+    __declspec(dllexport) ModelAnimation* Framework_LoadModelAnimations(const char* fileName, int* animCount);
+    __declspec(dllexport) void Framework_UpdateModelAnimation(Model model, ModelAnimation anim, int frame);
+    __declspec(dllexport) void Framework_UpdateModelAnimationBones(Model model, ModelAnimation anim, int frame);
+    __declspec(dllexport) void Framework_UnloadModelAnimation(ModelAnimation anim);
+    __declspec(dllexport) void Framework_UnloadModelAnimations(ModelAnimation* animations, int animCount);
+    __declspec(dllexport) bool Framework_IsModelAnimationValid(Model model, ModelAnimation anim);
+
     // Sounds (handle-based)
     __declspec(dllexport) int   Framework_LoadSoundH(const char* file);
     __declspec(dllexport) void  Framework_UnloadSoundH(int h);

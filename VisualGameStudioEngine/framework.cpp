@@ -2265,6 +2265,15 @@ extern "C" {
     void Framework_DrawMesh(Mesh mesh, Material material, Matrix transform) { DrawMesh(mesh, material, transform); }
     void Framework_DrawMeshInstanced(Mesh mesh, Material material, const Matrix* transforms, int instances) { DrawMeshInstanced(mesh, material, transforms, instances); }
 
+    // ==== RAW rmodels PARITY — Model animations (raylib 5.5 passthrough, Batch models-animations) — CLOSES rmodels ====
+    // 1:1 forwarders. Model/ModelAnimation by value; ModelAnimation* array passthrough. Update* need a real animated model.
+    ModelAnimation* Framework_LoadModelAnimations(const char* fileName, int* animCount) { return LoadModelAnimations(fileName, animCount); }
+    void Framework_UpdateModelAnimation(Model model, ModelAnimation anim, int frame) { UpdateModelAnimation(model, anim, frame); }
+    void Framework_UpdateModelAnimationBones(Model model, ModelAnimation anim, int frame) { UpdateModelAnimationBones(model, anim, frame); }
+    void Framework_UnloadModelAnimation(ModelAnimation anim) { UnloadModelAnimation(anim); }
+    void Framework_UnloadModelAnimations(ModelAnimation* animations, int animCount) { UnloadModelAnimations(animations, animCount); }
+    bool Framework_IsModelAnimationValid(Model model, ModelAnimation anim) { return IsModelAnimationValid(model, anim); }
+
     void Framework_PauseAllAudio() {
         g_audioPaused = true;
         for (auto& kv : g_sounds) {
