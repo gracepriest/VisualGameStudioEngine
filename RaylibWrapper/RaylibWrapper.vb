@@ -12807,5 +12807,92 @@ Public Module FrameworkWrapper
     End Sub
 #End Region
 
+#Region "Raylib rcore/raudio — Callbacks (deferred fn-pointers, Batch callbacks)"
+    ' Raw raylib callback setters (5 rcore + 5 raudio). Each binding takes an <UnmanagedFunctionPointer(Cdecl)> delegate,
+    ' which the marshaler converts to a native function pointer. ⛔ raylib RETAINS the pointer, so the CALLER must keep the
+    ' delegate object alive (GC.KeepAlive / a field) for as long as raylib may invoke it — a collected delegate frees the
+    ' thunk and the next callback crashes (same lifetime rule as SetAutomationEventList). Pass Nothing to reset a callback
+    ' to raylib's default. All const char*/char*/void* callback args are IntPtr (use PtrToStringAnsi for text); C bool
+    ' returns are <MarshalAs(I1)> Boolean. TraceLogCallback's args is a va_list (opaque IntPtr on Win64; when the logged
+    ' message has no format specifiers, text is the literal message).
+
+    ''' <summary>Custom trace-log callback. text is a const char* (format string); args is a va_list (opaque on Win64).</summary>
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Sub TraceLogCallback(logLevel As Integer, text As IntPtr, args As IntPtr)
+
+    ''' <summary>Custom binary-file loader. Returns an unsigned char* buffer and writes the size via dataSize. ⛔ raylib later
+    ''' frees the buffer with RL_FREE, so a managed callback must return RL_MALLOC-compatible memory (e.g. via Framework_MemAlloc),
+    ''' NOT Marshal.AllocHGlobal — a heap mismatch corrupts the heap.</summary>
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Function LoadFileDataCallback(fileName As IntPtr, ByRef dataSize As Integer) As IntPtr
+
+    ''' <summary>Custom binary-file saver. data is a void* of dataSize bytes; returns success.</summary>
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Function SaveFileDataCallback(fileName As IntPtr, data As IntPtr, dataSize As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+
+    ''' <summary>Custom text-file loader. Returns a char* string. ⛔ raylib later frees it with RL_FREE, so return
+    ''' RL_MALLOC-compatible memory (e.g. via Framework_MemAlloc), NOT Marshal.AllocHGlobal — a heap mismatch corrupts the heap.</summary>
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Function LoadFileTextCallback(fileName As IntPtr) As IntPtr
+
+    ''' <summary>Custom text-file saver. text is a char*; returns success.</summary>
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Function SaveFileTextCallback(fileName As IntPtr, text As IntPtr) As <MarshalAs(UnmanagedType.I1)> Boolean
+
+    ''' <summary>Audio thread callback / processor. bufferData points to 'frames' samples (float for processors).</summary>
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Sub AudioCallback(bufferData As IntPtr, frames As UInteger)
+
+    ''' <summary>Sets a custom trace-log message callback (Nothing = raylib default). Keep the delegate alive.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetTraceLogCallback(callback As TraceLogCallback)
+    End Sub
+
+    ''' <summary>Sets a custom binary-file data loader (Nothing = raylib default). Keep the delegate alive.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetLoadFileDataCallback(callback As LoadFileDataCallback)
+    End Sub
+
+    ''' <summary>Sets a custom binary-file data saver (Nothing = raylib default). Keep the delegate alive.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetSaveFileDataCallback(callback As SaveFileDataCallback)
+    End Sub
+
+    ''' <summary>Sets a custom text-file loader (Nothing = raylib default). Keep the delegate alive.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetLoadFileTextCallback(callback As LoadFileTextCallback)
+    End Sub
+
+    ''' <summary>Sets a custom text-file saver (Nothing = raylib default). Keep the delegate alive.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetSaveFileTextCallback(callback As SaveFileTextCallback)
+    End Sub
+
+    ''' <summary>Sets the audio-thread callback for a stream (AudioStream by value). Keep the delegate alive.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetAudioStreamCallback(stream As AudioStream, callback As AudioCallback)
+    End Sub
+
+    ''' <summary>Attaches an audio-stream processor (receives samples as float). Keep the delegate alive.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AttachAudioStreamProcessor(stream As AudioStream, processor As AudioCallback)
+    End Sub
+
+    ''' <summary>Detaches an audio-stream processor (pass the same delegate used to attach).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DetachAudioStreamProcessor(stream As AudioStream, processor As AudioCallback)
+    End Sub
+
+    ''' <summary>Attaches a processor to the whole audio pipeline (receives mixed samples as float). Keep the delegate alive.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AttachAudioMixedProcessor(processor As AudioCallback)
+    End Sub
+
+    ''' <summary>Detaches a whole-pipeline processor (pass the same delegate used to attach).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DetachAudioMixedProcessor(processor As AudioCallback)
+    End Sub
+#End Region
+
 End Module
 
