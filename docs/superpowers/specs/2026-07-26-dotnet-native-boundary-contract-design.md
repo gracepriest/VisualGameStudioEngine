@@ -1,7 +1,7 @@
 # .NET ⇄ Native Boundary Contract (v1) — Design
 
 **Date:** 2026-07-26
-**Status:** Approved design, pre-implementation
+**Status:** Implemented (conformance suite: VisualGameStudio.Tests/Blnet/) — P1/P2 pending
 **Owner feature:** .NET class access in `SolutionType.Native` projects (BL + C++ mixed, compiled to native via the C++ backend)
 
 ## Context
