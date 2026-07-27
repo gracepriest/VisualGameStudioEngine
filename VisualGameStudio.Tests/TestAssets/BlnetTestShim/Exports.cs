@@ -35,11 +35,18 @@ public static unsafe class Exports
     [UnmanagedCallersOnly(EntryPoint = "blnet_initialize", CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
     public static int Initialize(int expectedAbi, void* vtable)
     {
-        if (expectedAbi != ShimAbi.AbiVersion) return (int)BlnetStatus.BLNET_E_VERSION_MISMATCH;
-        var vt = (void**)vtable;
-        _thunk = (delegate* unmanaged[Cdecl]<ulong, ulong*, int, ulong*, int>)vt[0];
-        _getNativeError = (delegate* unmanaged[Cdecl]<byte**, int>)vt[1];
-        return (int)BlnetStatus.BLNET_OK;
+        try
+        {
+            if (expectedAbi != ShimAbi.AbiVersion) return (int)BlnetStatus.BLNET_E_VERSION_MISMATCH;
+            // C4: an exception escaping [UnmanagedCallersOnly] under Native AOT is a FailFast —
+            // guard the dereference and keep the whole body non-throwing like every other export.
+            if (vtable == null) return (int)BlnetStatus.BLNET_E_MANAGED_EXCEPTION;
+            var vt = (void**)vtable;
+            _thunk = (delegate* unmanaged[Cdecl]<ulong, ulong*, int, ulong*, int>)vt[0];
+            _getNativeError = (delegate* unmanaged[Cdecl]<byte**, int>)vt[1];
+            return (int)BlnetStatus.BLNET_OK;
+        }
+        catch (Exception ex) { return Fail(ex); }
     }
 
     [UnmanagedCallersOnly(EntryPoint = "blnet_addref", CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
@@ -112,11 +119,17 @@ public static unsafe class Exports
         try
         {
             int st = _thunk(cb, args, argc, result);
-            if (st == (int)BlnetStatus.BLNET_E_NATIVE_EXCEPTION && _getNativeError != null)
+            if (st == (int)BlnetStatus.BLNET_E_NATIVE_EXCEPTION)
             {
-                byte* msg = null;
-                if (_getNativeError(&msg) == (int)BlnetStatus.BLNET_OK && msg != null)
-                { _lastErrorType = "BasicLangNativeException"; _lastErrorMessage = Utf8ToString(msg); NativeMemory.Free(msg); /* == blnet_free's allocator: the buffer came from blnet_alloc */ }
+                // Reset FIRST: if pulling the native error fails (null fn / bad status / null
+                // msg), blnet_last_error must not report a previous unrelated error's details.
+                _lastErrorType = "BasicLangNativeException"; _lastErrorMessage = null;
+                if (_getNativeError != null)
+                {
+                    byte* msg = null;
+                    if (_getNativeError(&msg) == (int)BlnetStatus.BLNET_OK && msg != null)
+                    { _lastErrorMessage = Utf8ToString(msg); NativeMemory.Free(msg); /* == blnet_free's allocator: the buffer came from blnet_alloc */ }
+                }
             }
             return st;
         }
@@ -134,7 +147,9 @@ public static unsafe class Exports
             int st = 0;
             // NB: 'fixed' over a ZERO-length array yields a null pointer — fine for argc == 0
             // (the thunk never dereferences args then); do not "fix" this.
-            var t = new Thread(() => { fixed (ulong* p = local) st = _thunk(cb, p, argc, null); });
+            // An unhandled exception on a spawned thread kills the process (e.g. a null _thunk
+            // when the harness calls before blnet_initialize) — degrade to a status instead.
+            var t = new Thread(() => { try { fixed (ulong* p = local) st = _thunk(cb, p, argc, null); } catch { st = (int)BlnetStatus.BLNET_E_MANAGED_EXCEPTION; } });
             t.Start(); t.Join();
             return st; // cross-thread: queued (notification) / BLNET_E_CROSS_THREAD_RESULT (result-bearing)
         }

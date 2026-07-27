@@ -1013,6 +1013,8 @@ public void ShimStatusEnum_MatchesContract()
 
 Contract exports (every body wrapped in the non-throwing catch-all per C4):
 
+> **Execution deviation (Task 8 review):** Exports.cs as committed hardens three spots beyond this code block — null-vtable guard + try/catch in Initialize, try/catch inside TestInvokeFromThread's thread lambda, and unconditional error-slot reset on the native-exception path in TestInvoke. Rationale: an exception escaping [UnmanagedCallersOnly] under AOT is FailFast; an unhandled exception on a spawned thread kills the test host.
+
 ```csharp
 using System.Runtime.InteropServices;
 using System.Text;
