@@ -62,7 +62,10 @@ category; it is `NativeOwned` alongside `DateTime`).
 - The C# backend's conversion channel is reconciled too:
   `CSharpBackend.ConvertMethodForType` maps `Byte → Convert.ToSByte` (the C#
   backend is internally split on Byte's signedness). It becomes
-  `Byte → Convert.ToByte`, `SByte → Convert.ToSByte`.
+  `Byte → Convert.ToByte`, `SByte → Convert.ToSByte`. (A fourth, DORMANT
+  channel exists: `CSharpTypeMapper` in TypeMapper.cs maps `Byte → sbyte` /
+  `Decimal → decimal`; verified never consulted by any caller, but its Byte
+  entry is fixed to `byte` in passing so no dead contradiction ships.)
 - The parent contract spec's C1 example rows list SByte under
   NativeOwned-after-P1; those examples are updated to match this spec
   (SByte = Bridged) in the same change.
@@ -89,9 +92,10 @@ emission (the collections precedent).
 | `BasicLang::DateTimeOffset` | struct `{DateTime utcDateTime; int16_t offsetMinutes}` (offset ±14:00, whole minutes) | value |
 | `BasicLang::StringBuilder` | class over `std::string`; **reference type**: mapped as `std::shared_ptr<BasicLang::StringBuilder>`; inherits `std::enable_shared_from_this`; `Append`-family returns `shared_from_this()` so chains emit uniformly with `->` | reference |
 
-- The six value types define C++ operator overloads (`+ - * /` where
-  applicable, `== != < <= > >=`) so BL arithmetic and comparisons lower
-  through the normal binary-op path with zero codegen special-casing.
+- The six value types define C++ operator overloads (`+ - * / %` where
+  applicable, unary `-` on TimeSpan/Decimal, `++`/`--` on Decimal,
+  `== != < <= > >=`) so BL arithmetic and comparisons lower through the
+  normal binary/unary-op paths with zero codegen special-casing.
   DateTime/TimeSpan cross-type operators follow .NET: `dt + ts → DateTime`,
   `dt - dt → TimeSpan`, `dt - ts → DateTime`.
 - DateTime semantics rules preserved from .NET: arithmetic and comparison
@@ -161,7 +165,12 @@ clean member diagnostic — adding a member later is additive.
   .NET returns the `DayOfWeek`/`DateTimeKind` enums; the numeric values match
   .NET exactly — Sunday=0…Saturday=6; Unspecified=0, Utc=1, Local=2 — so a
   later native-enum upgrade is value-compatible). Native BCL enum types are
-  out of P1 scope (section 13).
+  out of P1 scope (section 13). **C#-backend consequence pinned**: for
+  surface members whose v1 type diverges from the real .NET member type
+  (exactly these two), the C# backend emits an explicit `(int)` cast —
+  without it csc fails CS0266 on the typed temp (a regression vs today's
+  Object degrade), and `WriteLine(dt.DayOfWeek)` would print `Sunday` on C#
+  vs `0` on C++ (a parity diff).
 - **TimeSpan**: statics `FromDays FromHours FromMinutes FromSeconds
   FromMilliseconds FromTicks Parse Zero MinValue MaxValue`; ctor
   `(h,m,s)` / `(d,h,m,s)`; properties `Days Hours Minutes Seconds Milliseconds
@@ -175,7 +184,8 @@ clean member diagnostic — adding a member later is additive.
   mixed-endian layout (`_a,_b,_c` little-endian, `_d.._k` verbatim).
 - **StringBuilder**: ctor `()` / `(String)`; methods `Append AppendLine
   AppendFormat Insert Remove Replace Clear ToString` (Append-family returns
-  the same builder for chaining); properties `Length Capacity`. This is
+  the same builder for chaining); properties `Length Capacity`; operators
+  `= <>` (shared_ptr reference equality — matching the 6.1 table). This is
   exactly the surface `SemanticAnalyzer.GetCommonMethodReturnType` already
   types.
 - **Decimal**: operators `+ - * / Mod == != < <= > >=`; statics
@@ -215,7 +225,10 @@ front-end work below therefore fixes the C# backend too.
 
 - **SByte becomes a first-class numeric primitive**: added to `IsNumeric()`,
   `IsIntegral()`, and `IsSigned()`; it participates in the existing integer
-  promotion ladder like the other sized integers.
+  promotion ladder like the other sized integers. `Byte` moves from
+  `IsSigned()` to `IsUnsigned()` in the same change (the helpers currently
+  have zero call sites, but shipping them contradicting Byte's new unsigned
+  semantics would be a fresh drift trap).
 - **Decimal joins `IsNumeric()`** with these promotion rules in
   `GetCommonType`: `Decimal op <any integral>` → Decimal (integrals widen to
   Decimal implicitly, matching .NET); `Decimal op Single/Double` → **compile
@@ -233,18 +246,54 @@ front-end work below therefore fixes the C# backend too.
   | TimeSpan | `+`/`-` | TimeSpan | TimeSpan |
   | (unary) `-` | | TimeSpan | TimeSpan |
   | Decimal | `+ - * / Mod` | Decimal (or integral, widened) | Decimal |
+  | (unary) `-` | | Decimal | Decimal |
   | any P1 value type | `= <> < <= > >=` | same type | Boolean |
   | Guid / StringBuilder | `= <>` only | same type | Boolean |
 
   DateTimeOffset comparisons compare the UTC instant. Ordering operators on
   Guid/StringBuilder remain errors. All other P1-type operand combinations
-  keep today's clean analyzer error.
-- **Decimal literals**: BasicLang has no `m` suffix. A numeric LITERAL
-  initializing/assigned to a Decimal context converts at COMPILE TIME using
-  the literal's decimal text verbatim (no double round-trip): the C# backend
-  emits the literal with an `m` suffix (`1.5m`); the C++ backend emits an
-  exact Decimal constant (from the digits and scale of the literal text).
-  Non-literal Single/Double values still require an explicit conversion.
+  keep today's clean analyzer error. Integral-widening on Decimal is
+  **symmetric** (`1 + d` is valid, like .NET) — unlike the deliberately
+  directional DateTime rows. `++`/`--` on Decimal are accepted (they gate on
+  `IsNumeric` in the analyzer's separate unary path) and the C++ struct
+  provides `operator++`/`operator--` (pre/post, via ±1).
+- **Compound assignment is a separate gate** (the analyzer validates `+=`
+  `-=` etc. on its own path, NOT through `Visit(BinaryExpressionNode)`): it
+  is wired to the SAME operator table — `x op= y` is legal iff `x op y` is
+  legal AND the result type equals the target's type (`dt += ts` and
+  `ts -= ts2` work; `dt += dt` errors). Without this wiring, `dt += ts`
+  would keep failing with the misleading numeric-operands message after
+  everything else ships.
+- **`GetCommonType` wiring caveats** (it is an ordered ladder with no
+  diagnostics channel): the Decimal branch is checked BEFORE the
+  Double/Single/Long rungs (else `Decimal + Long` silently types Long); the
+  `Decimal op Single/Double → error` is raised at the call site in
+  `Visit(BinaryExpressionNode)`, not inside `GetCommonType`.
+- **Decimal literals**: BasicLang has no `m` suffix. A numeric LITERAL in a
+  **Decimal context** converts at COMPILE TIME using the literal's decimal
+  text verbatim (no double round-trip). Decimal context = ALL of: `Dim`
+  initializer, plain assignment, operand of an operator whose other operand
+  is Decimal (`d * 1.08`, `total + 0.05`), argument to a Decimal parameter,
+  `Return` in a Decimal function, and `For ... Step` against a Decimal loop
+  variable — a literal is still a literal in operand position, and without
+  this list the most common money pattern (`d * 1.08`) would be a hard
+  error.
+  **Pinned plumbing** (the literal's text is DISCARDED today at the parser —
+  this rule is unimplementable without it): the lexeme is carried from the
+  token onto `LiteralExpressionNode`; when Decimal context is established
+  the analyzer converts the TEXT via `decimal.Parse(text,
+  InvariantCulture)` and the IR constant carries a **`System.Decimal`
+  value** (not a double). Consequences, both load-bearing: the
+  `IROptimizer`'s `is double` constant-fold patterns then safely SKIP
+  Decimal constants (folding them in double space would silently violate
+  faithfulness on the optimizer-validated path); the C# backend emits
+  `value.ToString(InvariantCulture) + "m"`, and the C++ backend emits an
+  exact constant from the value's `GetBits`.
+  **The explicit conversion is `CType(x, Decimal)`** — the only named escape
+  for genuine non-literal Single/Double → Decimal. It is wired on BOTH
+  backends (C#: `(decimal)x`; C++: the `Decimal(double)` converting ctor per
+  section 10's rounding rule), and the `Decimal op Single/Double` analyzer
+  error's hint names it.
 - **Blast radius**: these are shared front-end changes; the full fast subset
   on the C# backend is the regression gate (section 14.1).
 
@@ -308,7 +357,8 @@ front-end work below therefore fixes the C# backend too.
 The date category — `Now() Today() Year(d) Month(d) Day(d) Hour(d)
 Minute(d) Second(d) DateAdd(d, interval, n) DateDiff(d1, d2, interval)
 FormatDate(d, fmt)` — comes to the C++ backend. Signatures follow the
-repo's EXISTING C#-side registrations verbatim: `DateAdd(DateTime, String,
+repo's EXISTING C# StdLib function-table signatures
+(`StdLib/CSharpStdLib.cs`) verbatim: `DateAdd(DateTime, String,
 Integer)` = (date, interval, number) and `DateDiff(DateTime, DateTime,
 String)` = (date1, date2, interval) — NOT classic VB argument order.
 `NewGuid()` emits `BasicLang::Guid::NewGuid().ToString()` (String return,
@@ -377,6 +427,13 @@ type's definition, pinned here:
   `12.0 * 10 = 120.0` (scale 1 + 0 = 1, matching real .NET).
 - **Div**: long division to up to 28–29 significant digits, last digit
   rounded; divide-by-zero throws.
+- **Mod (remainder)**: takes the SIGN OF THE DIVIDEND (truncated division,
+  the .NET rule — `3.5 Mod 1 = 0.5`, `-3.5 Mod 1 = -0.5`); result scale
+  follows the max-scale rule like subtraction. The section 12.2 vector
+  battery includes negative-dividend cases.
+- **Unary negate** (`operator-()`) and **increment/decrement**
+  (`operator++`/`operator--`, pre/post, via ±1) — required by 6.1's
+  analyzer acceptance.
 - **Round** defaults to banker's rounding (`MidpointRounding.ToEven`);
   `Truncate`/`Floor`/`Ceiling` per .NET.
 - **ToString** is scale-preserving (`1.10` prints `"1.10"`); **Parse**
@@ -504,13 +561,20 @@ Create: `BasicLang/NativeBclSurface.cs`,
 `BasicLang/Compiler/CodeGen/CPlusPlus/CppDecimalRuntime.cs`, new test files
 (`VisualGameStudio.Tests/Blnet/` or `Compiler/` per plan).
 Modify: `BoundaryTypeRegistry.cs`, `CppCapabilityChecker.cs`,
-`TypeMapper.cs` (SByte/Byte), `SymbolTable.cs` (IsNumeric/IsIntegral/
-IsSigned/GetCommonType per 6.1), `CppCodeGenerator.cs` (+`.Split.cs`;
-incl. `EmitStdLibCall` date category, `InitializeTypeMap` Decimal removal),
-`CppRuntimeSources.cs` (shim removal), `StdLib/CppStdLib.cs` (support
-matrix), `CSharpBackend.cs` (Decimal `m`-suffix literal emission;
-`ConvertMethodForType` Byte/SByte), `SemanticAnalyzer.cs` (surface-backed
-typing, operator validation per 6.1, stdlib date-function registrations,
-DateTimeOffset), `IRBuilder.cs` (KnownNetStaticTypes),
+`TypeMapper.cs` (SByte/Byte incl. the dormant CSharpTypeMapper entry),
+`SymbolTable.cs` (IsNumeric/IsIntegral/IsSigned/IsUnsigned/GetCommonType per
+6.1), `BasicLangLexer.cs`/`Parser.cs`/`ASTNodes.cs` (literal lexeme carried
+onto LiteralExpressionNode per 6.1), `IRNodes.cs`/`IRBuilder.cs`
+(System.Decimal constant values; KnownNetStaticTypes), `IROptimizer.cs`
+(verify `is double` folds skip Decimal constants — behavior, likely no code),
+`CppCodeGenerator.cs` (+`.Split.cs`; incl. `EmitStdLibCall` date category,
+`InitializeTypeMap` Decimal removal), `CppRuntimeSources.cs` (shim removal),
+`StdLib/CppStdLib.cs` (support matrix), `CSharpBackend.cs` (Decimal
+`m`-suffix constant emission via InvariantCulture; `(int)` casts for
+divergent-typed surface members DayOfWeek/Kind; `CType(x, Decimal)`
+lowering; `ConvertMethodForType` Byte/SByte), `SemanticAnalyzer.cs`
+(surface-backed typing, operator + compound-assignment validation per 6.1,
+Decimal-context literal conversion, stdlib date-function registrations,
+DateTimeOffset), 
 `docs/superpowers/specs/2026-07-26-dotnet-native-boundary-contract-design.md`
 (C1 example rows: SByte → Bridged), enumerated existing tests.
