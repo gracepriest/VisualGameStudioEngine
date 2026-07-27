@@ -916,6 +916,19 @@ extern "C" {
     __declspec(dllexport) void Framework_UpdateCamera(Camera3D* camera, int mode);
     __declspec(dllexport) void Framework_UpdateCameraPro(Camera3D* camera, Vector3 movement, Vector3 rotation, float zoom);
 
+    // ==== RAW rmodels PARITY — 3D collision detection (raylib 5.5 passthrough, Batch models-collision) ====
+    // The geometric collision half of rmodels: pure raymath (no GL, no device, no static state) so every one is
+    // deterministic headless. BoundingBox {Vector3 min, Vector3 max} and RayCollision {bool hit; float distance; Vector3
+    // point; Vector3 normal} are new structs, passed/returned BY VALUE. GetRayCollisionMesh is DEFERRED to the mesh
+    // sub-batch (it needs the big Mesh struct). Everything here uses only Vector3/Ray/BoundingBox/RayCollision.
+    __declspec(dllexport) bool         Framework_CheckCollisionSpheres(Vector3 center1, float radius1, Vector3 center2, float radius2);
+    __declspec(dllexport) bool         Framework_CheckCollisionBoxes(BoundingBox box1, BoundingBox box2);
+    __declspec(dllexport) bool         Framework_CheckCollisionBoxSphere(BoundingBox box, Vector3 center, float radius);
+    __declspec(dllexport) RayCollision Framework_GetRayCollisionSphere(Ray ray, Vector3 center, float radius);
+    __declspec(dllexport) RayCollision Framework_GetRayCollisionBox(Ray ray, BoundingBox box);
+    __declspec(dllexport) RayCollision Framework_GetRayCollisionTriangle(Ray ray, Vector3 p1, Vector3 p2, Vector3 p3);
+    __declspec(dllexport) RayCollision Framework_GetRayCollisionQuad(Ray ray, Vector3 p1, Vector3 p2, Vector3 p3, Vector3 p4);
+
     // Sounds (handle-based)
     __declspec(dllexport) int   Framework_LoadSoundH(const char* file);
     __declspec(dllexport) void  Framework_UnloadSoundH(int h);
