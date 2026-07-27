@@ -842,6 +842,25 @@ extern "C" {
     __declspec(dllexport) void   Framework_SetShaderValueMatrix(Shader shader, int locIndex, Matrix mat);
     __declspec(dllexport) void   Framework_SetShaderValueTexture(Shader shader, int locIndex, Texture2D texture);
 
+    // ==== RAW RCORE PARITY — Drawing modes & VR simulator (raylib 5.5 passthrough, Batch core-C3) ====
+    // The remaining raw drawing-mode + VR functions (BeginMode2D/EndMode2D, BeginTextureMode/EndTextureMode,
+    // BeginShaderMode/EndShaderMode are already exported above). BeginMode3D takes Camera3D BY VALUE; BeginBlendMode/
+    // BeginScissorMode take ints. The VR half uses two structs with NESTED FIXED-SIZE ARRAYS: VrDeviceInfo (2 int + 5 float
+    // + float[4] + float[4] = 60 B) is passed BY VALUE to LoadVrStereoConfig, which RETURNS VrStereoConfig BY VALUE
+    // (Matrix[2] + Matrix[2] + 6x float[2] = 304 B). BeginVrStereoMode + UnloadVrStereoConfig take VrStereoConfig by value.
+    // LoadVrStereoConfig is pure CPU math (raylib zeroes the config when no GL context is active); the Begin*Mode calls
+    // need a live context. Structs mirrored in RaylibWrapper/Utiliy.vb with <MarshalAs(ByValArray, SizeConst)>.
+    __declspec(dllexport) void            Framework_BeginMode3D(Camera3D camera);
+    __declspec(dllexport) void            Framework_EndMode3D();
+    __declspec(dllexport) void            Framework_BeginBlendMode(int mode);
+    __declspec(dllexport) void            Framework_EndBlendMode();
+    __declspec(dllexport) void            Framework_BeginScissorMode(int x, int y, int width, int height);
+    __declspec(dllexport) void            Framework_EndScissorMode();
+    __declspec(dllexport) void            Framework_BeginVrStereoMode(VrStereoConfig config);
+    __declspec(dllexport) void            Framework_EndVrStereoMode();
+    __declspec(dllexport) VrStereoConfig  Framework_LoadVrStereoConfig(VrDeviceInfo device);
+    __declspec(dllexport) void            Framework_UnloadVrStereoConfig(VrStereoConfig config);
+
     // Sounds (handle-based)
     __declspec(dllexport) int   Framework_LoadSoundH(const char* file);
     __declspec(dllexport) void  Framework_UnloadSoundH(int h);

@@ -2123,6 +2123,19 @@ extern "C" {
     void   Framework_SetShaderValueMatrix(Shader shader, int locIndex, Matrix mat) { SetShaderValueMatrix(shader, locIndex, mat); }
     void   Framework_SetShaderValueTexture(Shader shader, int locIndex, Texture2D texture) { SetShaderValueTexture(shader, locIndex, texture); }
 
+    // ==== RAW RCORE PARITY — Drawing modes & VR simulator (raylib 5.5 passthrough, Batch core-C3) ====
+    // 1:1 forwarders. Camera3D/VrStereoConfig/VrDeviceInfo pass by value; LoadVrStereoConfig returns VrStereoConfig by value.
+    void            Framework_BeginMode3D(Camera3D camera) { BeginMode3D(camera); }
+    void            Framework_EndMode3D() { EndMode3D(); }
+    void            Framework_BeginBlendMode(int mode) { BeginBlendMode(mode); }
+    void            Framework_EndBlendMode() { EndBlendMode(); }
+    void            Framework_BeginScissorMode(int x, int y, int width, int height) { BeginScissorMode(x, y, width, height); }
+    void            Framework_EndScissorMode() { EndScissorMode(); }
+    void            Framework_BeginVrStereoMode(VrStereoConfig config) { BeginVrStereoMode(config); }
+    void            Framework_EndVrStereoMode() { EndVrStereoMode(); }
+    VrStereoConfig  Framework_LoadVrStereoConfig(VrDeviceInfo device) { return LoadVrStereoConfig(device); }
+    void            Framework_UnloadVrStereoConfig(VrStereoConfig config) { UnloadVrStereoConfig(config); }
+
     void Framework_PauseAllAudio() {
         g_audioPaused = true;
         for (auto& kv : g_sounds) {

@@ -43,7 +43,7 @@ To add across the batches: `Matrix` (C5 ✅), `Camera3D` (C5 ✅), `Ray` (C5 ✅
 |---|---|---|---|---|---|
 | **C1** | **Window state & control** | **24** | — | **device+headless** | **SHIPPED — see below** (24 not 23: `GetWindowHandle` was genuinely unbound). |
 | **C2** | **Window/monitor query & clipboard** | **13** | — | **device-lite** | **SHIPPED — see below** (13 not 14: 7 screen/monitor getters were already bound). |
-| C3 | Drawing modes & VR | 10 | Camera3D✅, Matrix✅, VrDeviceInfo, VrStereoConfig | device | hardest marshaling (VR nested arrays). |
+| **C3** | **Drawing modes & VR** | **10** | **Camera3D✅, Matrix✅, VrDeviceInfo, VrStereoConfig** | **device** | **SHIPPED — see below** (10 new of 16; nested-array structs — the module's hardest marshaling). |
 | **C4** | **Shaders** | **8** | **Shader✅, Matrix✅, Texture2D✅** | **device** | **SHIPPED — see below** (8 new: `GetShaderLocation`+`UnloadShader` were already bound raw; 10-fn family total). |
 | **C5** | **Screen-space / camera math** | **8** | **Ray✅, Camera3D✅, Matrix✅** | **headless** | **SHIPPED — see below.** |
 | **C6** | **Timing/frame + Random + Misc + 2 input stragglers** | **15** | — | **headless (partial)** | **SHIPPED — see below.** `TraceLog` fixed 2-arg `(int,const char*)`→`TraceLog(lvl,"%s",text)`; ⛔ `WaitTime` needs InitWindow's timer. |
@@ -206,3 +206,28 @@ callbacks last.
   anchor), and drives every setter with real payloads — a float, a vec2, an identity `Matrix` by value, and a **real
   GPU-loaded** `Texture2D` (`GenImageColor`→`LoadTextureFromImage`, so `SetShaderValueTexture` exercises a non-zero id
   rather than raylib's early-return-on-0 no-op). A wrong by-value struct ABI would AV under the setters, not silently pass.
+
+- **C3 — Drawing modes & VR simulator (10) 🏁 SHIPPED** (counts 2807/2739, both +10). `BeginMode3D`, `EndMode3D`,
+  `BeginBlendMode`, `EndBlendMode`, `BeginScissorMode`, `EndScissorMode`, `BeginVrStereoMode`, `EndVrStereoMode`,
+  `LoadVrStereoConfig`, `UnloadVrStereoConfig`. The drawing-mode/VR block is **16** functions; 6 were already bound
+  (`BeginMode2D`/`EndMode2D`, `BeginTextureMode`/`EndTextureMode`, `BeginShaderMode`/`EndShaderMode`) so C3 adds the other
+  **10**, no re-declaration. **The module's hardest marshaling**: two brand-new structs with **nested fixed-size arrays**
+  (`<MarshalAs(UnmanagedType.ByValArray, SizeConst:=N)>`) — `VrDeviceInfo` (2 int + 5 float + two `float[4]` = 60 B) and
+  `VrStereoConfig` (`Matrix[2]` + `Matrix[2]` + six `float[2]` = **304 B, NON-BLITTABLE**). `LoadVrStereoConfig` **returns
+  the non-blittable VrStereoConfig BY VALUE** — the sharpest ABI risk in the module (a non-blittable struct return can
+  throw `MarshalDirectiveException`). ⭐ **It works on .NET 8**: the by-value return marshals cleanly, and
+  `<ByValArray SizeConst:=2> Matrix()` correctly inlines two 64-byte Matrix structs (not a pointer). `Camera3D`/`Matrix`
+  already existed; `BeginBlendMode`/`BeginScissorMode` take plain ints. **Split correctness:** a HEADLESS fast-subset
+  **canary** proves the non-blittable return JITs + round-trips structurally (raylib zeroes the config with no GL context,
+  so it asserts every ByValArray came back at its `SizeConst` length + `UnloadVrStereoConfig` round-trips the by-value
+  param) — this is the `MarshalDirectiveException` tripwire and it runs on CI. Then an `[Integration]`+`[NonParallelizable]`
+  **value oracle** under a live window: `LoadVrStereoConfig` now computes real data, so it asserts `viewOffset` is a per-eye
+  translation matrix — diagonal `== 1`, and `m12 == +IPD/2` (eye 0) / `-IPD/2` (eye 1), **exactly ±0.035** = 0.07·0.5. That
+  one assertion proves, in a single shot, (a) `VrDeviceInfo` marshalled IN (the IPD was used), (b) the nested `Matrix[2]`
+  marshalled OUT at correct element+field offsets, and (c) the scrambled Matrix field order (`m12` at field index 3). Plus
+  the draw-mode calls (`BeginMode3D` Camera3D-by-value, blend/scissor, `BeginVrStereoMode` VrStereoConfig-by-value) run
+  inside `BeginDrawing`/`EndDrawing` under `DoesNotThrow`. ⚠ raylib 5.5's eye-sign convention is **eye 0 = +IPD/2** (my first
+  guess was flipped; the test caught it — magnitude was exact, only the sign assumption was wrong). Parity guard (3 headless):
+  name 3-way for all 16 + raylib.h `BeginMode2D..UnloadVrStereoConfig` range == 16 cross-check + a full-order type-scan of
+  both VR structs (every ByValArray SizeConst + field sequence — the headless defense against a struct reorder) + the
+  binding types (Camera3D/VrStereoConfig/VrDeviceInfo by value, int params, VrStereoConfig return) + dup-export guard on the 10.
