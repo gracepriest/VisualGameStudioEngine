@@ -878,6 +878,23 @@ extern "C" {
     __declspec(dllexport) void                Framework_StopAutomationEventRecording();
     __declspec(dllexport) void                Framework_PlayAutomationEvent(AutomationEvent event);
 
+    // ==== RAW rcore/raudio PARITY — Callbacks (deferred fn-pointers, Batch callbacks) ====
+    // The 10 raylib function-pointer setters (5 rcore SetXxxCallback + 5 raudio AudioCallback). Each takes a raylib callback
+    // typedef (from raylib.h); the wrapper passes a marshaled managed delegate (<UnmanagedFunctionPointer(Cdecl)>). raylib
+    // RETAINS the callback pointer, so the managed caller must keep the delegate alive (GC-pinning) for as long as raylib may
+    // invoke it — same lifetime discipline as SetAutomationEventList (C11). TraceLogCallback's 3rd arg is a va_list (on Win64
+    // an opaque pointer). The 3 audio-stream fns take AudioStream by value.
+    __declspec(dllexport) void Framework_SetTraceLogCallback(TraceLogCallback callback);
+    __declspec(dllexport) void Framework_SetLoadFileDataCallback(LoadFileDataCallback callback);
+    __declspec(dllexport) void Framework_SetSaveFileDataCallback(SaveFileDataCallback callback);
+    __declspec(dllexport) void Framework_SetLoadFileTextCallback(LoadFileTextCallback callback);
+    __declspec(dllexport) void Framework_SetSaveFileTextCallback(SaveFileTextCallback callback);
+    __declspec(dllexport) void Framework_SetAudioStreamCallback(AudioStream stream, AudioCallback callback);
+    __declspec(dllexport) void Framework_AttachAudioStreamProcessor(AudioStream stream, AudioCallback processor);
+    __declspec(dllexport) void Framework_DetachAudioStreamProcessor(AudioStream stream, AudioCallback processor);
+    __declspec(dllexport) void Framework_AttachAudioMixedProcessor(AudioCallback processor);
+    __declspec(dllexport) void Framework_DetachAudioMixedProcessor(AudioCallback processor);
+
     // Sounds (handle-based)
     __declspec(dllexport) int   Framework_LoadSoundH(const char* file);
     __declspec(dllexport) void  Framework_UnloadSoundH(int h);

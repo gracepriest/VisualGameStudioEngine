@@ -2148,6 +2148,19 @@ extern "C" {
     void                Framework_StopAutomationEventRecording() { StopAutomationEventRecording(); }
     void                Framework_PlayAutomationEvent(AutomationEvent event) { PlayAutomationEvent(event); }
 
+    // ==== RAW rcore/raudio PARITY — Callbacks (deferred fn-pointers, Batch callbacks) ====
+    // 1:1 forwarders. raylib retains each callback pointer; the managed caller owns the delegate lifetime.
+    void Framework_SetTraceLogCallback(TraceLogCallback callback) { SetTraceLogCallback(callback); }
+    void Framework_SetLoadFileDataCallback(LoadFileDataCallback callback) { SetLoadFileDataCallback(callback); }
+    void Framework_SetSaveFileDataCallback(SaveFileDataCallback callback) { SetSaveFileDataCallback(callback); }
+    void Framework_SetLoadFileTextCallback(LoadFileTextCallback callback) { SetLoadFileTextCallback(callback); }
+    void Framework_SetSaveFileTextCallback(SaveFileTextCallback callback) { SetSaveFileTextCallback(callback); }
+    void Framework_SetAudioStreamCallback(AudioStream stream, AudioCallback callback) { SetAudioStreamCallback(stream, callback); }
+    void Framework_AttachAudioStreamProcessor(AudioStream stream, AudioCallback processor) { AttachAudioStreamProcessor(stream, processor); }
+    void Framework_DetachAudioStreamProcessor(AudioStream stream, AudioCallback processor) { DetachAudioStreamProcessor(stream, processor); }
+    void Framework_AttachAudioMixedProcessor(AudioCallback processor) { AttachAudioMixedProcessor(processor); }
+    void Framework_DetachAudioMixedProcessor(AudioCallback processor) { DetachAudioMixedProcessor(processor); }
+
     void Framework_PauseAllAudio() {
         g_audioPaused = true;
         for (auto& kv : g_sounds) {

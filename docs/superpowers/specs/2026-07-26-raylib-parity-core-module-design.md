@@ -52,7 +52,7 @@ To add across the batches: `Matrix` (C5 ✅), `Camera3D` (C5 ✅), `Ray` (C5 ✅
 | **C9** | **Directory listing & dropped files** | **7** | **FilePathList ✅** | **headless (partial)** | **SHIPPED — see below.** First by-value struct-with-`char**`-array return. |
 | **C10** | **Compression / Encoding** | **7** | — | **headless** | **SHIPPED — see below.** |
 | **C11** | **Automation events** | **8** | **AutomationEvent, AutomationEventList** | **device-lite** | **SHIPPED — see below** (all 8 new; retained-pointer SetAutomationEventList → IntPtr). |
-| — | Deferred callbacks | +5 | — | — | `SetTraceLogCallback` + 4 file-I/O callbacks; fold into the audio-callback batch. |
+| **— (callbacks)** | **Deferred callbacks** | **10** | **6 delegate types** | **headless + device** | **SHIPPED — see below** (5 rcore `SetXxxCallback` + 5 raudio `AudioCallback` fn-pointers; **completes rcore parity**). |
 
 Recommended order (front-load headless exact-correctness): **C5 → C10 → C7 → C8 → C1 → C2 → C6 → C9 → C4 → C3 → C11**,
 callbacks last.
@@ -252,3 +252,26 @@ callbacks last.
   (3 headless): genuine 3-way (header + **framework.cpp forwarder** + wrapper) + raylib.h `LoadAutomationEventList..
   PlayAutomationEvent` range==8 + type-scan of both structs + bindings (IntPtr for Set, I1 Export, by-value list/event,
   Ansi) + dup-export guard.
+
+- **Deferred callbacks (10) 🏁 SHIPPED — COMPLETES rcore parity** (counts 2825/2757, both +10). 5 rcore
+  `SetTraceLogCallback`/`SetLoadFileDataCallback`/`SetSaveFileDataCallback`/`SetLoadFileTextCallback`/`SetSaveFileTextCallback`
+  + 5 raudio `SetAudioStreamCallback`/`Attach`+`DetachAudioStreamProcessor`/`Attach`+`DetachAudioMixedProcessor`. All new. The
+  module's **first function-pointer bindings**: 6 `<UnmanagedFunctionPointer(CallingConvention.Cdecl)>` delegate types
+  (mirroring raylib's callback typedefs) that each binding takes directly (the marshaler builds a native→managed thunk).
+  Marshaling: `const char*`/`char*`/`void*`/`va_list`→**IntPtr**, `int*` out→**ByRef Integer**, C `bool`→**I1** Boolean,
+  `unsigned int`→UInteger; the 3 audio-stream fns take `AudioStream` by value (existing struct). ⛔ **raylib RETAINS each
+  callback pointer**, so the managed caller MUST keep the delegate alive (GC) as long as raylib may call it and reset to
+  `Nothing` (→ NULL fn-ptr → raylib default) when done — a collected delegate frees the thunk and the next callback crashes
+  (same lifetime discipline as C11's retained pointer, one level up: a *function* pointer). No collision with the engine's
+  dozens of existing `Framework_*Callback`/`*Processor` exports. `TraceLogCallback`'s 3rd arg is a `va_list` (opaque IntPtr
+  on Win64). **Split correctness:** the 5 rcore callbacks get a **HEADLESS END-TO-END** proof (not ABI smoke) — install a
+  managed delegate, trigger the bound raylib fn (`SaveFileData`/`LoadFileData`/`SaveFileText`/`LoadFileText`/`TraceLog`, all
+  headless), and assert the callback **actually FIRED** with the correct marshaled args + propagated return (proving
+  delegate→fn-ptr→raylib-stores-it→raylib-invokes-it→args/return-marshal-back). Each resets its callback to `Nothing` in a
+  finally + `GC.KeepAlive`s across the trigger; `[NonParallelizable]` (mutates global raylib callback state). ⚠ `TraceLog`
+  text arrives as the format string `"%s"` (the C6 forwarder wraps as `TraceLog(lvl,"%s",text)`), so that test asserts the
+  log *level* + fired, not the message. The 5 raudio callbacks get an `[Integration]` ABI-smoke (AudioCallback delegate +
+  AudioStream-by-value Attach/Detach/SetStream under a live device, `DoesNotThrow`; firing is audio-thread/timing-dependent).
+  Parity guard (3 headless): genuine 3-way (header + framework.cpp forwarder + wrapper) + rcore-range==5 cross-check + a scan
+  that all 6 delegates are `<UnmanagedFunctionPointer(Cdecl)>` with the right signatures and every binding takes the delegate
+  type + dup-export guard. **🏁 rcore parity DONE: 127/127.**
