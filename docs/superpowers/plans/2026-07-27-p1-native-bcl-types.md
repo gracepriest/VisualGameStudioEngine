@@ -92,7 +92,7 @@ public class NativeBclFrontEndTests
 }
 ```
 
-(Adapt the `Parse` helper to the actual lexer/parser constructor signatures — Read how existing tests in `VisualGameStudio.Tests/Compiler/` construct them and copy that idiom. `FindFirstLiteral` walks the AST for the first `LiteralExpressionNode`.)
+(Adapt the `Parse` helper to the actual lexer/parser constructor signatures — Read how existing tests in `VisualGameStudio.Tests/Compiler/` construct them and copy that idiom. `FindFirstLiteral` walks the AST for the first `LiteralExpressionNode`. Verified real names: the lexer class is `Lexer` (`new Lexer(source).Tokenize()`), and the token's lexeme property is `Lexeme` — so Step 3 sets `Text = token.Lexeme`.)
 
 - [ ] **Step 2: Run to verify red** — `dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --filter "FullyQualifiedName~NativeBclFrontEndTests" > test-run.txt 2>&1`. Expected: build FAILS (`Text` not defined). Read test-run.txt to confirm the reason.
 - [ ] **Step 3: Implement** — add to `LiteralExpressionNode`: `public string? Text { get; set; }` (nullable; null means "not captured", callers must handle). At BOTH Parser construction sites, set `Text = token.Text` (Read the token class first for the lexeme property's actual name — the lexer stores it as the second `AddToken` argument). Verify the token type used for numbers with a fractional part (recon: `TokenType.DoubleLiteral`) and that integer literals also carry text (they do — same AddToken shape).
@@ -206,10 +206,15 @@ Spec §6.1 pinned plumbing. Decimal-context literals convert from TEXT at compil
 
 ```csharp
 [Test] public void DecimalLiteral_InOperandPosition_Works()          // d * 1.08 (the money pattern)
-    => Assert.That(CompileRunCSharp(MoneyProgram()), Is.EqualTo("21.59"));
+    => Assert.That(CompileRunCSharp(MoneyProgram()), Is.EqualTo("21.5892"));
     // MoneyProgram: Dim d As Decimal = 19.99 : Console.WriteLine(d * 1.08) — expected output pinned
-    // by REAL .NET: verify by running the equivalent C# once; 19.99m*1.08m = 21.5892; WriteLine gives "21.5892".
-    // Use a program whose expected output you have verified against real .NET first (e.g. print d*1.08 directly).
+    // by REAL .NET (verified): 19.99m*1.08m = 21.5892 (scale 2+2=4); WriteLine prints "21.5892".
+    // Rule: NEVER hand-round an expectation — real .NET output is the oracle.
+
+[Test] public void DecimalLiteral_ArgumentReturnAndForStepContexts_Work()
+    // covers the remaining §6.1 context list: literal as argument to a Decimal parameter,
+    // Return 1.5 from a Decimal function, and For d As Decimal = 0 To 1 Step 0.25 (loop count 5).
+    // One program printing all three results; expectations verified against real .NET first.
 
 [Test] public void DecimalLiteral_ScalePreserved()                   // "1.50" stays scale-2
     => Assert.That(CompileRunCSharp("...Console.WriteLine(CStr(1.50))..." /* Dim x As Decimal = 1.50 : WriteLine(x) */), Is.EqualTo("1.50"));
@@ -240,7 +245,7 @@ IMPORTANT: before writing the money test, RUN the real .NET expression in a scra
 Spec §4 + §6.1 table + §7 item 2. Creates the single-source table and wires: member typing (LookupNetTypeMember FIRST for the seven P1 names), the DateTime/TimeSpan/DateTimeOffset operator rows in the binary/compound gates, DateTimeOffset into `CommonNetTypes` (~SemanticAnalyzer.cs:67–96) and `KnownNetStaticTypes` (~IRBuilder.cs:3619–3639), and the VB date-function analyzer registrations (typing only — C# emissions already exist; C++ emissions come in Task 12). End-to-end on the C# backend.
 
 **Files:**
-- Create: `BasicLang/NativeBclSurface.cs` — the table per spec §5's per-type lists EXACTLY (including: DayOfWeek/Kind typed `Integer`; NO TryParse anywhere; StringBuilder `= <>`; the §6.1 operator rows incl. `(unary) -` on TimeSpan and Decimal). Shape per plan header note 3. Include a doc comment: "single source (spec §4); consumed by analyzer typing, operator gates, CppCapabilityChecker member pass (Task 10), codegen dispatch (Task 9), drift tests."
+- Create: `BasicLang/NativeBclSurface.cs` — the table per spec §5's per-type lists EXACTLY (including: DayOfWeek/Kind typed `Integer`; NO TryParse anywhere; NO `ToByteArray` on Guid (spec §5: not BL-callable in v1 — the native out-param form is tests/P2-only); StringBuilder `= <>`; the §6.1 operator rows incl. `(unary) -` on TimeSpan and Decimal). Shape per plan header note 3. Include a doc comment: "single source (spec §4); consumed by analyzer typing, operator gates, CppCapabilityChecker member pass (Task 10), codegen dispatch (Task 9), drift tests."
 - Modify: `BasicLang/SemanticAnalyzer.cs`, `BasicLang/IRBuilder.cs`, `BasicLang/CSharpBackend.cs` (the `(int)` cast for DayOfWeek/Kind per spec §5)
 - Test: append to `NativeBclFrontEndTests.cs`
 
@@ -277,6 +282,15 @@ End Module"), Is.EqualTo("30\n31\n31\nFalse").Or.EqualTo("30\r\n31\r\n31\r\nFals
 [Test] public void StdlibDateFunctions_TypeAsDateTime()
     => AssertAnalyzesClean("Dim d As DateTime = Now()\nDim y As Integer = Year(d)");
 
+[Test] public void Kind_TypesInteger_And_PrintsNumber_OnCSharp()   // the second (int)-cast member
+    => Assert.That(CompileRunCSharp("... Console.WriteLine(DateTime.UtcNow.Kind) ..."), Is.EqualTo("1")); // Utc=1
+
+[Test] public void GuidStringBuilder_EqualityTypes_OrderingStaysError()
+{
+    AssertAnalyzesClean("Dim g1 As Guid = Guid.NewGuid()\nDim g2 As Guid = g1\nDim eq As Boolean = g1 = g2");
+    AssertAnalysisError("Dim g1 As Guid = Guid.NewGuid()\nDim g2 As Guid = g1\nDim x = g1 < g2", expectContains: new[] { "operator" });
+}
+
 [Test] public void SurfaceRegistryCoherence()  // drift test, both directions (spec §4.5)
 {
     // every NativeOwned name in BoundaryTypeRegistry has ≥1 surface entry and vice versa.
@@ -287,8 +301,8 @@ End Module"), Is.EqualTo("30\n31\n31\nFalse").Or.EqualTo("30\r\n31\r\n31\r\nFals
 ```
 
 - [ ] **Step 2: Red.** (Operators fail "requires numeric operands"; chain types Object so the `As Integer` assignment errors or the C# temp breaks; DayOfWeek prints "Sunday".)
-- [ ] **Step 3: Implement** — table first; then binary/compound gate consults the (LeftType, Op, RightType) rows before the numeric path; `LookupNetTypeMember` consults the surface FIRST for the seven names (return typed results; MISSES fall through to existing behavior — the C# backend stays permissive, spec's clean-diagnostic enforcement is C++-only via Task 10's checker pass); `GetCommonMethodReturnType` untouched (StringBuilder rows already there — keep, the surface supersedes for the seven names but must AGREE: copy the StringBuilder rows into the surface identically). CSharpBackend: when emitting a member access whose surface-declared type diverges from real .NET (exactly DayOfWeek/Kind — drive it off a `RequiresCSharpIntCast` flag on those two surface entries, not name matching), wrap in `(int)(...)`. Stdlib registrations: mirror `CSharpStdLib.cs` (~95–106) signatures into `RegisterStdLibFunction` calls (Now()→DateTime, Today()→DateTime, Year/Month/Day/Hour/Minute/Second(DateTime)→Integer, DateAdd(DateTime, String, Integer)→DateTime, DateDiff(DateTime, DateTime, String)→Long — READ the C# table for the exact return types and copy; FormatDate(DateTime, String)→String).
-- [ ] **Step 4: Green + fast subset** (member-typing changes can shift C#-backend temp types Object→concrete — the suite is the blast-radius gate; investigate ANY failure, don't paper).
+- [ ] **Step 3: Implement** — table first; then binary/compound gate consults the (LeftType, Op, RightType) rows before the numeric path; `LookupNetTypeMember` consults the surface FIRST for the seven names (return typed results; MISSES fall through to existing behavior — the C# backend stays permissive, spec's clean-diagnostic enforcement is C++-only via Task 10's checker pass); `GetCommonMethodReturnType` untouched (StringBuilder rows already there — keep, the surface supersedes for the seven names but must AGREE: copy the StringBuilder rows into the surface identically). CSharpBackend: when emitting a member access whose surface-declared type diverges from real .NET (exactly DayOfWeek/Kind — drive it off a `RequiresCSharpIntCast` flag on those two surface entries, not name matching), wrap in `(int)(...)`. Stdlib registrations: mirror `CSharpStdLib.cs` (~95–106) signatures into `RegisterStdLibFunction` calls — READ the C# table and copy return types VERBATIM (verified: `DateDiff` returns **Integer** in the repo table, not VB.NET's Long; the repo table wins).
+- [ ] **Step 4: Green + fast subset** (member-typing changes can shift C#-backend temp types Object→concrete — the suite is the blast-radius gate; investigate ANY failure, don't paper). If a SHIM-ERA C++ pin fails here (`Cpp_ConsoleTemplateSurface_LowersToValidCpp` — it consumes the same analyzed types), the typing change reached the live shim path: reconcile deliberately (prefer keeping the shim IR-shape-keyed until Task 10); do NOT silently pull Task 10's re-pin forward.
 - [ ] **Step 5: Commit** — `git commit -m "feat(p1): NativeBclSurface single-source table; DateTime/TimeSpan operator gates; surface-backed member typing; stdlib date typing"`
 
 ---
@@ -459,7 +473,7 @@ template<> struct std::hash<BasicLang::DateTime> {   /* ticks only — Kind excl
 };
 ```
 
-Method bodies not shown inline above (`Init`, `Year/Month/Day/DayOfYear` via civil_from_days, `AddMonths` with clamp, `Now/UtcNow/Today/ToLocalTime/ToUniversalTime` via `time()`/`localtime_s`/`gmtime`/`mktime` — with out-of-range instants THROWING per spec §9, `ToString`/`Parse`, `Interval`, `CheckedAdd`) are written by the executor against the Step 1 vectors; the civil-date algorithms are the standard Hinnant `days_from_civil`/`civil_from_days` (~15 lines each — transcribe from the well-known form).
+Method bodies not shown inline above (`Init`, `Year/Month/Day/DayOfYear` via civil_from_days, `AddMonths` with clamp, `Now/UtcNow/Today/ToLocalTime/ToUniversalTime` via `time()`/`localtime_s`/`gmtime`/`mktime` — with out-of-range instants THROWING per spec §9, `ToString`/`Parse`, `Interval`, `CheckedAdd`) are written by the executor against the Step 1 vectors; the civil-date algorithms are the standard Hinnant `days_from_civil`/`civil_from_days` (~15 lines each — transcribe from the well-known form). **ODR rule:** define bodies in-class, or mark out-of-class header definitions `inline` — the header is included by MULTIPLE TUs in split emission; a missing `inline` stays green in Task 6's single-TU tests and explodes as duplicate-symbol link errors only at Task 9's split smoke.
 
 - [ ] **Step 1: Write the failing native tests.** Fixture `CppBclRuntimeTests` (`[Category("Integration")]`), `Run(mainBody)` helper compiling `#include "bl_bcltypes.hpp"` + body with `extraFiles = { ["bl_bcltypes.hpp"] = CppBclRuntime.BclHeader }`. Marker-style programs (value-independent comparisons). Vectors, one test each:
   - **Calendar**: `DateTime(2024,2,29)` OK; `DateTime(2023,2,29)` throws; `DaysInMonth(2024,2)==29`; `IsLeapYear(1900)==false`, `(2000)==true`; `DateTime(2026,7,26).DayOfWeek()==0` (Sunday — verified real .NET); `DateTime(2026,1,1).DayOfYear()==1`; `DateTime(2026,12,31).DayOfYear()==365`.
@@ -468,13 +482,14 @@ Method bodies not shown inline above (`Init`, `Year/Month/Day/DayOfYear` via civ
   - **Arithmetic**: `(d2-d1).Days()==30` for Jan 1→31; `d1 + TimeSpan::FromDays(1.0)` → next day; comparisons ticks-only across Kind.
   - **TimeSpan components vs totals**: `FromSeconds(90).Minutes()==1`, `.Seconds()==30`, `.TotalMinutes()==1.5`; sign: `FromSeconds(-90).Minutes()==-1`.
   - **FromMilliseconds rounding**: `FromSeconds(0.0001).Ticks()==0` (rounds to ms — the documented .NET trap).
-  - **ToString/Parse**: `DateTime(2026,7,26,13,5,9).ToString()` == `"07/26/2026 13:05:09"`; `ToString("yyyy-MM-dd")` == `"2026-07-26"`; `Parse` of both round-trips; TimeSpan `"c"`: `TimeSpan(1,2,3).ToString()=="01:02:03"`, `TimeSpan(1,1,2,3).ToString()=="1.01:02:03"`, negative gets `-`.
+  - **ToString/Parse**: `DateTime(2026,7,26,13,5,9).ToString()` == `"07/26/2026 13:05:09"`; `ToString("yyyy-MM-dd")` == `"2026-07-26"`; `Parse` of both round-trips; `Parse` also accepts the "O" round-trip (`"2026-07-26T13:05:09.0000000"`) and "s" sortable (`"2026-07-26T13:05:09"`) forms (spec §9); TimeSpan `"c"`: `TimeSpan(1,2,3).ToString()=="01:02:03"`, `TimeSpan(1,1,2,3).ToString()=="1.01:02:03"`, negative gets `-`.
   - **ostream + hash**: `cout << dt` equals `dt.ToString()`; `std::hash<DateTime>` equal for equal ticks with different Kind.
   - **Overflow/exceptions**: `MaxValue().AddDays(1.0)` throws; `TimeSpan::MinValue().Negate()` throws; caught as `std::runtime_error` (spec §11).
   - **Local time**: `Now().Kind()==KindLocal`; `UtcNow().Kind()==KindUtc`; `ToUniversalTime(ToLocalTime(x))` tick-stable for a contemporary date; a pre-1970 `ToLocalTime` THROWS (spec §9) — assert the throw, message contains "range".
 - [ ] **Step 2: Red** (type missing) → create `CppBclRuntime.cs` with the header text; iterate compile+behavior to green, one vector-test at a time.
-- [ ] **Step 3: Full fixture green.** — `dotnet test ... --filter "FullyQualifiedName~CppBclRuntimeTests" > t.txt 2>&1` (timeout 600000).
-- [ ] **Step 4: Commit** — `git commit -m "feat(p1): native DateTime+TimeSpan (bl_bcltypes.hpp) with calendar/arithmetic/format vector tests"`
+- [ ] **Step 3: Fast content pins** (spec §12 layer 1) — a FAST fixture section (no Category) asserting `CppBclRuntime.BclHeader` `Does.Contain` the load-bearing markers: the SOURCE-OF-TRUTH banner, `struct TimeSpan`, `struct DateTime`, `std::hash<BasicLang::DateTime>`, the ostream inserters. (Task 8 adds the same for the Decimal header; Task 9 adds the both-modes-emission pin.)
+- [ ] **Step 4: Full fixture green.** — `dotnet test ... --filter "FullyQualifiedName~CppBclRuntimeTests" > t.txt 2>&1` (timeout 600000).
+- [ ] **Step 5: Commit** — `git commit -m "feat(p1): native DateTime+TimeSpan (bl_bcltypes.hpp) with calendar/arithmetic/format vector tests"`
 
 ---
 
@@ -488,6 +503,8 @@ Extend `bl_bcltypes.hpp` (same file/constant) per spec §3/§5.
 /* ---- Guid: 16 bytes, .NET field layout. Spec §3. ---- */
 struct Guid {
     int32_t a_ = 0; int16_t b_ = 0, c_ = 0; uint8_t d_[8] = {};
+    Guid() = default;
+    explicit Guid(const std::string& s) { *this = Parse(s); }  /* spec §5 ctor (String); New Guid("...") lowers here */
     static Guid NewGuid();                    /* v4 from OS CSPRNG: BCryptGenRandom (Windows) /
                                                  getrandom//dev/urandom (else). NEVER rand()/mt19937.
                                                  version nibble := 4, variant := 10xx (RFC 4122). */
@@ -495,6 +512,7 @@ struct Guid {
     static Guid Parse(const std::string& s);  /* accepts D/N/B/P; throws on bad input */
     std::string ToString() const;             /* "D": lowercase 8-4-4-4-12 */
     std::string ToString(const std::string& fmt) const;   /* D N B P */
+    /* NATIVE-ONLY (not on the BL surface, spec §5): tests + the §8 conversion pair use it */
     void ToByteArray(uint8_t out[16]) const;  /* .NET order: a,b,c little-endian then d_ verbatim (spec §8) */
     int32_t CompareTo(const Guid& o) const;   /* field-by-field a,b,c then bytes — NOT memcmp of ToByteArray */
     bool operator==(const Guid& o) const = default;
@@ -540,7 +558,9 @@ public:
        NB: requires the object to be OWNED by a shared_ptr — codegen always constructs via
        make_shared (Task 9), and the runtime tests must too. */
     std::shared_ptr<StringBuilder> Append(const std::string& s) { buf_ += s; return shared_from_this(); }
+    std::shared_ptr<StringBuilder> Append(int32_t v) { buf_ += std::to_string(v); return shared_from_this(); }  /* REQUIRED: without it, Append(Integer) is ambiguous (int32->int64 and int32->double are both rank Conversion) */
     std::shared_ptr<StringBuilder> Append(int64_t v) { buf_ += std::to_string(v); return shared_from_this(); }
+    std::shared_ptr<StringBuilder> Append(bool v) { buf_ += (v ? "True" : "False"); return shared_from_this(); } /* else bool promotes to int and prints 1/0 vs .NET True/False */
     std::shared_ptr<StringBuilder> Append(double v);   /* invariant formatting, matches the backend's existing double->string style */
     std::shared_ptr<StringBuilder> AppendLine(const std::string& s = "") { buf_ += s; buf_ += "\n"; return shared_from_this(); }
     std::shared_ptr<StringBuilder> AppendFormat(const std::string& fmt, const std::string& a0); /* {0} only, v1 */
@@ -555,13 +575,30 @@ public:
 inline std::ostream& operator<<(std::ostream& os, const std::shared_ptr<StringBuilder>& sb) {
     return os << (sb ? sb->ToString() : std::string());
 }
+/* spec §6.2 requires inserters for ALL FIVE value structs — Guid and DateTimeOffset too: */
+inline std::ostream& operator<<(std::ostream& os, const Guid& v) { return os << v.ToString(); }
+inline std::ostream& operator<<(std::ostream& os, const DateTimeOffset& v) { return os << v.ToString(); }
 
-/* hash: Guid (all 16 bytes via ToByteArray), DateTimeOffset (UTC instant — matches equality) */
+} /* namespace BasicLang (close before the hash specializations) */
+
+template<> struct std::hash<BasicLang::Guid> {
+    size_t operator()(const BasicLang::Guid& v) const noexcept {
+        uint8_t b[16]; v.ToByteArray(b);
+        size_t h = 1469598103934665603ULL;                    /* FNV-1a over all 16 bytes */
+        for (uint8_t x : b) { h ^= x; h *= 1099511628211ULL; }
+        return h;
+    }
+};
+template<> struct std::hash<BasicLang::DateTimeOffset> {      /* UTC instant — matches equality (spec §6.2) */
+    size_t operator()(const BasicLang::DateTimeOffset& v) const noexcept {
+        return std::hash<int64_t>{}(v.UtcDateTime().Ticks());
+    }
+};
 ```
 
 - [ ] **Step 1: Failing native tests** (append to `CppBclRuntimeTests`):
-  - **Guid**: `NewGuid()` twice → unequal; version nibble '4' and variant in {8,9,a,b} at the pinned string positions; `Parse(g.ToString()) == g`; `ToString()` lowercase D-format shape (regex via C++ manual check or length+dash positions); `ToByteArray` of `Parse("00112233-4455-6677-8899-aabbccddeeff")` == the .NET byte order `33 22 11 00 55 44 77 66 88 99 aa bb cc dd ee ff` (spec §8 pin); `Empty().ToString()=="00000000-0000-0000-0000-000000000000"`; CompareTo consistent with field order.
-  - **DateTimeOffset**: `DateTimeOffset(DateTime(2026,1,1,10,0,0), TimeSpan::FromHours(2.0)) == DateTimeOffset(DateTime(2026,1,1,9,0,0), TimeSpan::FromHours(1.0))` (UTC-instant equality — the spec's own example); `FromUnixTimeSeconds(0).UtcDateTime()` == 1970-01-01; `ToUnixTimeSeconds` round-trip; offset > 14h throws; `ToOffset` preserves the instant.
+  - **Guid**: `NewGuid()` twice → unequal; version nibble '4' and variant in {8,9,a,b} at the pinned string positions; `Parse(g.ToString()) == g`; `Guid("...")` string-ctor equals `Parse("...")`; `ToString()` lowercase D-format shape (regex via C++ manual check or length+dash positions); `ToByteArray` of `Parse("00112233-4455-6677-8899-aabbccddeeff")` == the .NET byte order `33 22 11 00 55 44 77 66 88 99 aa bb cc dd ee ff` (spec §8 pin); `Empty().ToString()=="00000000-0000-0000-0000-000000000000"`; CompareTo consistent with field order; `cout << g` equals `g.ToString()`; `std::hash<Guid>` equal for equal guids.
+  - **DateTimeOffset**: `DateTimeOffset(DateTime(2026,1,1,10,0,0), TimeSpan::FromHours(2.0)) == DateTimeOffset(DateTime(2026,1,1,9,0,0), TimeSpan::FromHours(1.0))` (UTC-instant equality — the spec's own example); `FromUnixTimeSeconds(0).UtcDateTime()` == 1970-01-01; `ToUnixTimeSeconds` round-trip; offset > 14h throws; `ToOffset` preserves the instant; `cout << dto` equals `dto.ToString()`; `std::hash<DateTimeOffset>` equal for equal instants at different offsets.
   - **StringBuilder**: chaining `make_shared<StringBuilder>()->Append("a")->Append("b")->AppendLine("c")` → ToString `"abc\n"`; ALIASING: two `shared_ptr` to one builder observe each other's Append (the reference-semantics proof); `Insert/Remove` byte-index behavior + out-of-range throws (`std::runtime_error`); `Replace` all occurrences; `Length()` counts bytes for a `\xC3\xA9` payload (==2 for "é").
 - [ ] **Step 2: Red → implement → green** (same loop; full fixture re-run green).
 - [ ] **Step 3: Commit** — `git commit -m "feat(p1): native Guid+DateTimeOffset+StringBuilder in bl_bcltypes.hpp with vector tests"`
@@ -574,7 +611,7 @@ Spec §10. Own file/constant (`bl_decimal.hpp`), included BY `bl_bcltypes.hpp`? 
 
 **Representation** (exact): `struct Decimal { uint32_t lo_, mid_, hi_, flags_; }` — flags bits 16–23 = scale (0–28), bit 31 = sign, all others zero. `GetBits` order `{lo, mid, hi, flags}` (spec §8).
 
-**Public surface** (all members from spec §5's Decimal list, plus): ctors from `int32_t/int64_t` (exact, scale 0), `Decimal(double)` explicit converting ctor (the CType path — .NET's observable rounding: format the double with shortest round-trip `%.17g`-then-trim or `std::to_chars`, parse the text; pin exact behavior by parity vectors), `static Decimal FromParts(uint32_t lo, uint32_t mid, uint32_t hi, bool neg, uint8_t scale)` (the literal-emission entry Task 9 uses), `Parse`, `ToString`, `Round(d[,digits])` (banker's), `Truncate/Floor/Ceiling`, `CompareTo`, operators `+ - * / %` and comparisons, unary `-`, `++/--` (±1), `MinValue/MaxValue/Zero/One`, ostream `<<` (ToString), `std::hash` over the SCALE-NORMALIZED form (divide out trailing zeros first — `1.0` and `1.00` hash equal; simplest: hash the ToString of the normalized value or normalize the limbs).
+**Public surface** (all members from spec §5's Decimal list — explicitly including `static Compare(a, b)` returning −1/0/1): ctors from `int32_t/int64_t` (exact, scale 0), `Decimal(double)` explicit converting ctor (the CType path — .NET's observable rounding: format the double with shortest round-trip `%.17g`-then-trim or `std::to_chars`, parse the text; pin exact behavior by parity vectors), **`double ToDouble() const`** (the REVERSE direction spec §10 pins with `↔` — Task 9 lowers `CType(d, Double)`/`CDbl(d)` to it; without it that cast passes analysis and dies as `static_cast` on a struct), `static Decimal FromParts(uint32_t lo, uint32_t mid, uint32_t hi, bool neg, uint8_t scale)` (the literal-emission entry Task 9 uses), `Parse`, `ToString`, `Round(d[,digits])` (banker's), `Truncate/Floor/Ceiling`, `CompareTo`, operators `+ - * / %` and comparisons, unary `-`, `++/--` (±1), `MinValue/MaxValue/Zero/One`, ostream `<<` (ToString), `std::hash` over the SCALE-NORMALIZED form (divide out trailing zeros first — `1.0` and `1.00` hash equal; simplest: hash the ToString of the normalized value or normalize the limbs).
 
 **Algorithms** (exact contracts; internal 96/192-bit helpers over `uint32_t[3]`/`uint32_t[6]` limbs or `uint64_t` pairs, executor's choice):
 - Compare: align scales by scaling the LOWER-scale side up ×10^diff into a 192-bit temp; compare sign then magnitude.
@@ -593,7 +630,8 @@ Spec §10. Own file/constant (`bl_decimal.hpp`), included BY `bl_bcltypes.hpp`? 
   - Money loop: summing `0.10` a thousand times == `100.00` EXACTLY and prints `"100.00"`.
   - Div: `1 / 3` prints 28 threes (`"0.3333333333333333333333333333"`); `10 / 4` prints `"2.5"`; div-by-zero throws.
   - Mod: `3.5 Mod 1 == 0.5`; `-3.5 Mod 1 == -0.5` (dividend sign).
-  - Equality/hash: `1.0 == 1.00` TRUE and hashes equal; CompareTo consistent.
+  - Equality/hash: `1.0 == 1.00` TRUE and hashes equal; CompareTo consistent; `Compare(1.0, 1.00)==0`, `Compare(1, 2)==-1` (static form).
+  - ToDouble: `Decimal from 1.5 → ToDouble() == 1.5`; `ToDouble(Parse("0.1"))` round-trips through `Decimal(double)` back to `0.1`.
   - Round: `Round(2.5)==2`, `Round(3.5)==4` (banker's); `Round(2.675, 2)` prints `"2.68"` (exact decimal, unlike double); `Truncate(-3.7)==-3`; `Floor(-3.7)==-4`; `Ceiling(-3.7)==-3`.
   - Unary/incr: `-(1.5)` prints `"-1.5"`; `++` adds exactly 1 preserving scale (`1.50`→`2.50`).
   - Round-trip: `Parse(x.ToString()) == x` INCLUDING scale for a value table incl. `0.000...1` (28 frac digits) and MaxValue.
@@ -610,11 +648,12 @@ Spec §6.2. Everything lands DEAD (Categorize() still returns Rejected for the s
 
 **Files:** `BasicLang/CppCodeGenerator.cs` + `CppCodeGenerator.Split.cs`; test additions to `CppBclEndToEndTests.cs` (create) for the splice smoke.
 
-- [ ] **Step 1: Header splice, BOTH modes.** Read `CppCodeGenerator.cs` `EmitRuntimePreamble`/`EmitDotNetSurfaceHelpers` (~358–391, `SpliceRuntimeSource` ~398) and `Split.cs` `EmitRuntimeHeader` (~347–391). Splice `CppBclRuntime.BclHeader` + `CppDecimalRuntime.DecimalHeader` UNCONDITIONALLY in both modes (spec §12; open item §14.4 measures cost later — note: the headers open their own `namespace BasicLang`, so splice OUTSIDE the existing open namespace block the way `CppCollectionsRuntime.Source` is handled — READ how the collections const is spliced and mirror it; the `#pragma once`/`#include` lines must be hoisted or tolerated per how the existing splice handles the collections' includes — match the established mechanism EXACTLY; if the splice mechanism requires include-free pre-indented fragments, restructure the constants into (includes-list, body) pairs the way `CppRuntimeSources` does, and keep the standalone-testable whole-file properties as concatenations of those pieces).
-  Smoke test (Integration): compile ANY trivial BL program via `CompileToCppOptimized` + `CppCompile` — the generated TU now contains the new headers and must compile+run. Also one split-mode smoke via the existing split-emission test helpers (Grep `CppSplitCompileTests` and mirror).
-- [ ] **Step 2: MapType branch (dead)** — in `CppCodeGenerator.MapType` (~477–558), BEFORE the `_typeMap.ContainsKey` early return (~541–545): `if (BoundaryTypeRegistry.Categorize(type.Name) == BoundaryTypeCategory.NativeOwned) return type.Name.Equals("StringBuilder", OrdinalIgnoreCase) ? "std::shared_ptr<BasicLang::StringBuilder>" : "BasicLang::" + CanonicalName(type.Name);` (CanonicalName fixes case: DateTime, TimeSpan, Guid, Decimal, DateTimeOffset). REMOVE `_typeMap["Decimal"] = "long double"` from `InitializeTypeMap` (~1765) — Grep first for anything depending on it (expect nothing; Decimal is Rejected so no path reaches it). Add MapTypeName entries (~738–758) for the five value names + `stringbuilder`; fix the stale `datetime → std::time_t` LATER (Task 10 dismantles the shim — leave it for now, it's live).
-- [ ] **Step 3: Construction/access/dispatch (dead)** — `Visit(IRNewObject)` (~2740–2762): NativeOwned + not StringBuilder → value construction `result = BasicLang::X(args);`; StringBuilder → `std::make_shared<BasicLang::StringBuilder>(args)`. `MemberAccessOp` (~714–736): NativeOwned value types → `.`; StringBuilder → `->`. Property bridge (~2962–2973): extend the field-access rewrite to consult `NativeBclSurface` Property entries for NativeOwned receivers (`.Year` → `.Year()`; DateTimeOffset's BL `DateTime` property → `ClockDateTime()`, `Ticks` → `TicksValue()` — add a per-entry optional CppName to the surface shape for exactly these renames). Static dispatch: where static-name field/call accesses resolve (the `IsDateTimeNowAccess` neighborhood ~1386 and `EmitStdLibCall`'s dotted-name handling ~2101–2152): NativeOwned type-name receiver + surface StaticMethod/StaticProperty → `BasicLang::X::Member(args)` / member-call form. `EmitToStringShim` (~2857–2886): NativeOwned receivers → emit the native `ToString(...)` member call (route BEFORE the existing `datetime` case). CType lowering: the conversion-emission site (find via how `CType(x, Double)` lowers — Grep `static_cast` in CppCodeGenerator) gains Decimal target → `BasicLang::Decimal(static_cast<double>(x))` (the converting ctor); Decimal literal constants: `Visit(IRConstant)`-equivalent site emits `BasicLang::Decimal::FromParts(lo, mid, hi, neg, scale)` from `decimal.GetBits` when `Value is decimal`. SByte/Byte cout: locate the WriteLine lowering (~2115) and wrap `int8_t/uint8_t`-typed args in `static_cast<int32_t>(...)` (open item §14.6 — verify current Byte behavior first; if Byte already prints numerically via some path, match it).
-- [ ] **Step 4: Green** — the full fast subset AND the splice smoke (Integration). All new machinery is dead; any behavior change = a bug in the "inert" claim — investigate.
+- [ ] **Step 1: Header splice, BOTH modes.** Read `CppCodeGenerator.cs` `EmitRuntimePreamble`/`EmitDotNetSurfaceHelpers` (~358–391, `SpliceRuntimeSource` ~398) and `Split.cs` `EmitRuntimeHeader` (~347–391). Splice `CppBclRuntime.BclHeader` + `CppDecimalRuntime.DecimalHeader` UNCONDITIONALLY in both modes (spec §12; open item §14.4 measures cost later). **The established mechanism** (verified): spliced consts are INCLUDE-FREE bodies starting at `namespace BasicLang {` (like `CppCollectionsRuntime.Source`); std headers are GENERATOR-OWNED in two hardcoded include sets — combined mode (~CppCodeGenerator.cs:277, merged with the always-on `_headerIncludes` {iostream, vector, string, memory}) and split mode (~Split.cs:354). So: structure the new runtime classes as (IncludesList, Body) pieces — the Body is what gets spliced (no `#pragma once`, no `#include` lines, opens its own `namespace BasicLang`); the standalone-testable whole-file properties (`BclHeader`/`DecimalHeader`) are `Includes + Body` concatenations for Tasks 6–8's extraFiles tests. Add the new std includes (`<chrono>`, `<cstdio>`, `<cstring>`, `<cstdint>`, `<functional>`, `<ostream>`) UNCONDITIONALLY to BOTH generator include sets, and promote `<stdexcept>` to unconditional in combined mode (it is currently gated on usesCollections). `<memory>` is already unconditional — don't duplicate. Mirror the collections splice's namespace/indentation handling, **NOT any usage-conditional guard around it** — the BCL headers are unconditional in both modes.
+  Smoke test (Integration): compile ANY trivial BL program via `CompileToCppOptimized` + `CppCompile` — the generated TU now contains the new headers and must compile+run. Also one split-mode smoke via the existing split-emission test helpers (Grep `CppSplitCompileTests` and mirror). PLUS a FAST both-modes pin (spec §12 layer 1): generate combined output and the split `BasicLangRuntime.g.h` string for a trivial program and assert both `Does.Contain("struct DateTime")` and `Does.Contain("struct Decimal")` — the cheap presence guard that doesn't need a compiler.
+- [ ] **Step 2: MapType branch (dead)** — in `CppCodeGenerator.MapType` (~477–558), BEFORE the `_typeMap.ContainsKey` early return (~541–545): `if (BoundaryTypeRegistry.Categorize(type.Name) == BoundaryTypeCategory.NativeOwned) return type.Name.Equals("StringBuilder", OrdinalIgnoreCase) ? "std::shared_ptr<BasicLang::StringBuilder>" : "BasicLang::" + CanonicalName(type.Name);` (CanonicalName fixes case: DateTime, TimeSpan, Guid, Decimal, DateTimeOffset). REMOVE `_typeMap["Decimal"] = "long double"` from `InitializeTypeMap` (~1765) — Grep first for anything depending on it (expect nothing; Decimal is Rejected so no path reaches it). Add MapTypeName entries (~738–758) for the five value names + `stringbuilder`; fix the stale `datetime → std::time_t` LATER (Task 10 dismantles the shim — leave it for now, it's live). `GetDefaultValue` (~3389): verified its `{}` fallback zero-inits all five value structs to exactly the spec §6.2 pinned defaults (MinValue/Zero/Empty/0D) and gives a null shared_ptr for StringBuilder — NO entry needed; add a one-line comment there noting the P1 reliance.
+- [ ] **Step 3: Construction/access/dispatch (dead)** — `Visit(IRNewObject)` (~2740–2762): NativeOwned + not StringBuilder → value construction `result = BasicLang::X(args);`; StringBuilder → `std::make_shared<BasicLang::StringBuilder>(args)`. `MemberAccessOp` (~714–736): NativeOwned value types → `.`; StringBuilder → `->`. Property bridge (~2962–2973): extend the field-access rewrite to consult `NativeBclSurface` Property entries for NativeOwned receivers (`.Year` → `.Year()`; DateTimeOffset's BL `DateTime` property → `ClockDateTime()`, `Ticks` → `TicksValue()` — add a per-entry optional CppName to the surface shape for exactly these renames). Static dispatch: where static-name field/call accesses resolve (the `IsDateTimeNowAccess` neighborhood ~1386 and `EmitStdLibCall`'s dotted-name handling ~2101–2152): NativeOwned type-name receiver + surface StaticMethod/StaticProperty → `BasicLang::X::Member(args)` / member-call form. `EmitToStringShim` (~2857–2886): NativeOwned receivers → emit the native `ToString(...)` member call (route BEFORE the existing `datetime` case). CType lowering: the conversion-emission site (`Visit(IRCast)` ~2616 emits `static_cast` — Read it) gains BOTH Decimal directions: target Decimal → `BasicLang::Decimal(static_cast<double>(x))` (converting ctor); SOURCE Decimal with target Double/Single → `(x).ToDouble()` (without this, `CType(d, Double)`/`CDbl(d)` — valid on C# via real .NET's explicit operator — emits `static_cast<double>` on a struct, a raw C++ error). Decimal literal constants: `Visit(IRConstant)`-equivalent site emits `BasicLang::Decimal::FromParts(lo, mid, hi, neg, scale)` from `decimal.GetBits` when `Value is decimal`.
+  **NOTE — the Byte/SByte WriteLine numeric cast does NOT land here**: it changes LIVE Byte output (verified: `cout << uint8_t` prints a character today) and would violate this task's inertness claim. It lands in Task 10 (where behavior change is expected and pinned).
+- [ ] **Step 4: Green** — the full fast subset AND the splice smoke (Integration) AND the fast both-modes pin. All new machinery is dead (the ONE deliberate live change is the header splice itself); any OTHER behavior change = a bug in the "inert" claim — investigate.
 - [ ] **Step 5: Commit** — `git commit -m "feat(p1): inert codegen wiring - header splice both modes, NativeOwned MapType/dispatch/constants (registry still rejects)"`
 
 ---
@@ -630,7 +669,7 @@ Spec §2 + §4.1 + §6.2. ONE commit activates everything Task 9 staged. This is
   - `NativeBclFrontEndTests.SurfaceRegistryCoherence`: re-point at the registry per its Task 5 TODO.
   - `CppCollectionTests`: the 5 `*_StillRejected` swap DateTime→`Regex` / Decimal→`Stream` (keep the scenario shapes; they now pin the REMAINING reject list).
   - `CppBackendTests`: `Cpp_InterfaceReturn_FuncOfUnmappedArg_ThrowsCapabilityError` re-targets Regex; `Cpp_ConsoleTemplateSurface_LowersToValidCpp` re-pins to the native lowering (`BasicLang::DateTime::Now()`, native `ToString`; delete the `Does.Not.Contain("DateTime->")`-era assertions that enforced the shim).
-- [ ] **Step 2: The flip.** `BoundaryTypeRegistry`: move the six to NativeOwned, SByte to Bridged; rewrite the doc comment (post-P1 invariant: `_typeMap` keys == Bridged + Object; NativeOwned handled by name in the generator; surface table coherence test named). `CppTypeMapper` (TypeMapper.cs ~208–222): add `SByte → int8_t`, fix `Byte → uint8_t`. `CppCapabilityChecker.CheckType`: `if (category == BoundaryTypeCategory.NativeOwned) return;` immediately after the Bridged early-return.
+- [ ] **Step 2: The flip.** `BoundaryTypeRegistry`: move the six to NativeOwned, SByte to Bridged; rewrite the doc comment (post-P1 invariant: `_typeMap` keys == Bridged + Object; NativeOwned handled by name in the generator; surface table coherence test named). `CppTypeMapper` (TypeMapper.cs ~208–222): add `SByte → int8_t`, fix `Byte → uint8_t`. First run the spec §14.5 sweep: Grep the test project for C++ expectations pinning Byte to `int8_t` (pre-verified result: NONE — only one non-output `As Byte` use in CompilationTests.cs; record the sweep result for Task 14's report). `CppCapabilityChecker.CheckType`: `if (category == BoundaryTypeCategory.NativeOwned) return;` immediately after the Bridged early-return. **Byte/SByte WriteLine numeric print lands HERE** (moved from Task 9 — it changes live Byte output from character to number, matching .NET/C#): wrap `int8_t/uint8_t`-typed WriteLine/Write args in `static_cast<int32_t>(...)` at the cout lowering (~2115), and add a pin test in this commit (`Dim b As Byte = 65 : Console.WriteLine(b)` → `"65"` on C++, Integration).
 - [ ] **Step 3: Member-surface capability pass** (spec §4.1). New checker walk over each function's instructions: for `IRInstanceMethodCall`/`IRFieldAccess` whose RECEIVER type name is NativeOwned, and `IRNewObject` whose class name is NativeOwned, consult `NativeBclSurface`; unknown member/arity → `diags.Add($"'{Type}' has no native member '{Member}' on the C++ backend ({where})")`; unknown ctor arity → similar. ALSO: extend the walk to expression-position temporaries for REJECTED types (`IRNewObject` of a Rejected class name → the existing "no C++ mapping" diagnostic) — closing the pre-existing leak (spec §4.1). Read the checker's existing instruction loop (~50–135) and mirror its structure; keep the hand-mirrored-walk sync comment updated.
 - [ ] **Step 4: Shim dismantling.** Remove: `_dateTimeValues` (+ its population ~1317–1326 and temp retyping ~1434), `IsDateTimeNowAccess` (~1386) + its rewrite site (~2939–2944), `EmitToStringShim`'s `datetime` case (~2868–2871), `MapTypeName["datetime"] → std::time_t` (→ `BasicLang::DateTime`), `CppRuntimeSources.DotNetSurfaceHelpers`' `Now`/`FormatTime` (verify the const's remaining content and its splice sites still balance; if the const becomes empty, remove its splice calls too). `DateTime.Now` now flows: static dispatch (Task 9) → `BasicLang::DateTime::Now()`.
 - [ ] **Step 5: Contract doc sync** — edit `2026-07-26-dotnet-native-boundary-contract-design.md` C1 example rows: SByte out of the NativeOwned examples (→ Bridged mention), per spec §2.
@@ -648,12 +687,14 @@ Spec §12 layers 3–4. BL programs per type through `CompileToCppOptimized` + c
 - [ ] **Step 1: Failing tests, one per bullet** (copy the `CompileToCppOptimized`+`CompileRun` idiom from `CppCollectionTests` ~103–132/243–270; expected outputs verified against the C# backend run of the SAME program where possible — pre-parity sanity):
   - DateTime: declare/construct/Now-into-local (`Dim d = DateTime.Now` — the case the old shim couldn't do), components, AddDays/AddMonths clamp, dt2−dt1 → TimeSpan.Days, dt+ts, comparisons, `ToString("yyyy-MM-dd")`, Parse round-trip, `Console.WriteLine(d)` (ostream inserter path).
   - TimeSpan: FromX factories, components vs totals, compound `ts += ts2`.
-  - Guid: NewGuid structural (two differ; ToString shape), Parse round-trip, `Dictionary(Of Guid, String)` add/lookup (the hash story, spec §6.2).
-  - StringBuilder: chaining program printing the built string; aliasing program (two variables, one builder); `List(Of ...)`? NO — keep v1 surface only.
+  - Guid: NewGuid structural (two differ; ToString shape), Parse round-trip, `New Guid("...")` string-ctor, `Console.WriteLine(g)` (inserter path), `Dictionary(Of Guid, String)` add/lookup (the hash story, spec §6.2).
+  - StringBuilder: chaining program printing the built string incl. `Append(anInteger)` (the overload-ambiguity pin); aliasing program (two variables, one builder); `List(Of ...)`? NO — keep v1 surface only.
   - Decimal: THE money program (`19.99 * 1.08` etc.), scale-preserving prints, `0.1+0.2=0.3` as BL, For-loop accumulation, `CType(x, Decimal)`, Mod with negative dividend, `d += 1`, unary minus, `++`.
-  - DateTimeOffset: construct with offset, UTC-instant equality program, ToUnixTimeSeconds.
+  - DateTimeOffset: construct with offset, UTC-instant equality program, ToUnixTimeSeconds, `Console.WriteLine(dto)`.
+  - Try/Catch over a P1 runtime throw: BL program catching Decimal divide-by-zero and printing the caught marker — proves the spec §11 runtime_error→BL-catch flow end-to-end.
+  - `CType(d, Double)` / `CDbl(d)` on C++ (the ToDouble path).
   - SByte on C++: arithmetic + WriteLine prints NUMBER (the §14.6 pin).
-  - MEMBER DIAGNOSTICS (fast, not Integration — these only run the checker): unknown member per type (`d.ToBinary()`) asserts `CppCapabilityException` message contains type + member; unknown ctor arity; Rejected-type-in-expression-position (`Console.WriteLine(New Regex("x"))`-shaped) now cleanly rejected — the leak-closure proof.
+  - MEMBER DIAGNOSTICS (fast, not Integration — these only run the checker): unknown member per type (`d.ToBinary()`) asserts `CppCapabilityException` message contains type + member; `g.ToByteArray()` cleanly rejected (not on the BL surface — spec §5); unknown ctor arity; Rejected-type-in-expression-position (`Console.WriteLine(New Regex("x"))`-shaped) now cleanly rejected — the leak-closure proof.
 - [ ] **Step 2: Iterate to green** — failures here are REAL integration bugs (dispatch, bridge, splice); fix at the responsible layer, never by weakening a vector. If a fix requires changing behavior pinned by Tasks 6–8 native tests, STOP and reconcile deliberately.
 - [ ] **Step 3: CLI leg** — one representative program per type family via `IDE/BasicLang.exe prog.bas --target=cpp` (repo law: both entry points). Assert exit 0 + expected stdout of the produced exe.
 - [ ] **Step 4: Commit** — `git commit -m "test(p1): BL-to-C++ end-to-end per type (optimizer+CLI) + member-diagnostic coverage"`
@@ -678,7 +719,7 @@ Spec §12.5 with the discipline paragraph: fixed literal dates/guids, invariant-
 
 - [ ] **Step 1: The harness.** `RunBothBackends(blSource) → (csOut, cppOut)`: compile+run via the C# path and the C++ path (reuse Task 2's `CompileRunCSharp` + Task 11's C++ helper). Culture forcing: the C# leg must run under invariant culture — inject `System.Globalization.CultureInfo.DefaultThreadCurrentCulture = System.Globalization.CultureInfo.InvariantCulture;` as the first emitted statement of Main FOR THE PARITY HARNESS ONLY (mechanism: check whether the C# backend has a Main-preamble hook; if not, wrap: the harness compiles the generated .cs with a tiny wrapper Main that sets culture then calls the generated entry — pick the least invasive mechanism and document it in the fixture header; do NOT change production emission).
   Normalize `\r\n`→`\n`; assert `csOut == cppOut` with both outputs in the failure message.
-- [ ] **Step 2: Parity programs** (one test each; ~10 programs): the Decimal money battery as BL (arithmetic, loop accumulation, Round/Mod, scale prints); DateTime literal-date arithmetic + `ToString("yyyy-MM-dd HH:mm:ss")` + DayOfWeek-as-number; TimeSpan components/totals; Guid `Parse(fixed).ToString()` round-trip; StringBuilder chain; DateTimeOffset fixed-offset equality prints; SByte/Byte arithmetic + WriteLine; stdlib `DateAdd/DateDiff/FormatDate` on fixed dates.
+- [ ] **Step 2: Parity programs** (one test each; ~12 programs): the Decimal money battery as BL (arithmetic, loop accumulation, Round/Mod, scale prints); `CType(d, Double)` and `CType(x, Decimal)` round-trips; DateTime literal-date arithmetic + `ToString("yyyy-MM-dd HH:mm:ss")` + DayOfWeek-as-number + `WriteLine(d.Kind)`; an UNINITIALIZED `Dim d As DateTime` printed (default-value parity: `01/01/0001 00:00:00`); TimeSpan components/totals; Guid `Parse(fixed).ToString()` round-trip; StringBuilder chain incl. `Append(Integer)` and `Append(Boolean)`; DateTimeOffset fixed-offset equality prints; SByte/Byte arithmetic + WriteLine (numeric print parity); stdlib `DateAdd/DateDiff/FormatDate` on fixed dates.
 - [ ] **Step 3: Iterate.** A diff = a real semantic divergence: fix the C++ side to match .NET unless the spec documents the divergence (§9's list) — in which case the PROGRAM was undisciplined, fix the program (e.g. avoid default `ToString()` only if it proves culture-fragile even under forced invariant — it shouldn't be).
 - [ ] **Step 4: Commit** — `git commit -m "test(p1): cross-backend parity oracle - identical stdout C# vs C++ for the BCL battery"`
 

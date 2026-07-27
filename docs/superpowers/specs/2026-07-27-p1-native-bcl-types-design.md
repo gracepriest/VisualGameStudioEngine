@@ -179,9 +179,14 @@ clean member diagnostic — adding a member later is additive.
   The double-based `From*` factories round to the nearest millisecond (the
   documented .NET behavior); `FromTicks` is exact.
 - **Guid**: statics `NewGuid Parse Empty`; ctor `(String)`; methods
-  `ToString([format: D|N|B|P]) ToByteArray CompareTo`; operators `== !=`.
-  Default `ToString` = lowercase "D". `ToByteArray` is pinned to .NET's
-  mixed-endian layout (`_a,_b,_c` little-endian, `_d.._k` verbatim).
+  `ToString([format: D|N|B|P]) CompareTo`; operators `== !=`.
+  Default `ToString` = lowercase "D". **`ToByteArray` is NOT on the BL v1
+  surface** (its natural BL return, a `Byte()` array, has no pinned C++
+  mapping in v1; the NATIVE out-param form `ToByteArray(uint8_t[16])` exists
+  in the runtime header for tests and the §8 conversion pair, and the byte
+  order stays pinned to .NET's mixed-endian layout — `_a,_b,_c`
+  little-endian, `_d.._k` verbatim). A BL call to `ToByteArray` gets the
+  clean unknown-member diagnostic.
 - **StringBuilder**: ctor `()` / `(String)`; methods `Append AppendLine
   AppendFormat Insert Remove Replace Clear ToString` (Append-family returns
   the same builder for chaining); properties `Length Capacity`; operators
