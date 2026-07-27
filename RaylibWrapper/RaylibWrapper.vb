@@ -12568,5 +12568,89 @@ Public Module FrameworkWrapper
     End Function
 #End Region
 
+#Region "Raylib rcore — Directory listing & dropped files (Batch core-C9)"
+    ' Raw rcore directory/dropped-file queries. FilePathList (Utiliy.vb) is returned BY VALUE and passed BY VALUE to its
+    ' matching Unload. The managed String() helpers copy the char** paths out (Marshal.ReadIntPtr + PtrToStringAnsi) BEFORE
+    ' calling Unload (which frees the strings), so the copy is taken while the buffer is alive. GetFileModTime returns C
+    ' `long` = 32-bit on Win64 -> Integer. Directory listing is headless; dropped-file queries need a window.
+
+    ''' <summary>Raw FilePathList export for a directory listing (use LoadDirectoryFiles for a String())</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadDirectoryFiles(dirPath As String) As FilePathList
+    End Function
+
+    ''' <summary>Raw FilePathList export for a filtered/recursive directory listing</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadDirectoryFilesEx(basePath As String, filter As String, <MarshalAs(UnmanagedType.I1)> scanSubdirs As Boolean) As FilePathList
+    End Function
+
+    ''' <summary>Frees a FilePathList returned by Framework_LoadDirectoryFiles(Ex)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadDirectoryFiles(files As FilePathList)
+    End Sub
+
+    ''' <summary>Checks whether a file has been dropped onto the window (needs a window)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsFileDropped() As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Raw FilePathList export for the dropped files (use LoadDroppedFiles for a String())</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_LoadDroppedFiles() As FilePathList
+    End Function
+
+    ''' <summary>Frees/clears the dropped-files list</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadDroppedFiles(files As FilePathList)
+    End Sub
+
+    ''' <summary>Gets a file's last-write time (Unix seconds; raylib returns a 32-bit long)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_GetFileModTime(fileName As String) As Integer
+    End Function
+
+    ''' <summary>Copies the char** paths out of a FilePathList into a managed String() (no free)</summary>
+    Private Function MarshalFilePathList(list As FilePathList) As String()
+        Dim n = CInt(list.count)
+        If n <= 0 OrElse list.paths = IntPtr.Zero Then Return Array.Empty(Of String)()
+        Dim result(n - 1) As String
+        For i = 0 To n - 1
+            Dim entry = Marshal.ReadIntPtr(list.paths, i * IntPtr.Size)
+            result(i) = If(entry = IntPtr.Zero, "", Marshal.PtrToStringAnsi(entry))
+        Next
+        Return result
+    End Function
+
+    ''' <summary>Lists the files in a directory as a managed String() (allocates then frees the native list)</summary>
+    Public Function LoadDirectoryFiles(dirPath As String) As String()
+        Dim list = Framework_LoadDirectoryFiles(dirPath)
+        Try
+            Return MarshalFilePathList(list)
+        Finally
+            Framework_UnloadDirectoryFiles(list)
+        End Try
+    End Function
+
+    ''' <summary>Lists directory files with an extension filter and optional recursion as a managed String()</summary>
+    Public Function LoadDirectoryFilesEx(basePath As String, filter As String, scanSubdirs As Boolean) As String()
+        Dim list = Framework_LoadDirectoryFilesEx(basePath, filter, scanSubdirs)
+        Try
+            Return MarshalFilePathList(list)
+        Finally
+            Framework_UnloadDirectoryFiles(list)
+        End Try
+    End Function
+
+    ''' <summary>Returns the dropped file paths as a managed String() (consumes and clears the drop buffer)</summary>
+    Public Function LoadDroppedFiles() As String()
+        Dim list = Framework_LoadDroppedFiles()
+        Try
+            Return MarshalFilePathList(list)
+        Finally
+            Framework_UnloadDroppedFiles(list)
+        End Try
+    End Function
+#End Region
+
 End Module
 

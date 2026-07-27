@@ -94,6 +94,17 @@ Public Module Utiliy
         Public format As Integer
     End Structure
 
+    ' raylib FilePathList — a heap-owned list of file paths. Returned BY VALUE from LoadDirectoryFiles(Ex)/LoadDroppedFiles
+    ' and freed BY VALUE via UnloadDirectoryFiles/UnloadDroppedFiles. 'paths' is a char** (pointer to an array of 'count'
+    ' char* entries); walk it with Marshal.ReadIntPtr(paths, i * IntPtr.Size) + PtrToStringAnsi, copying the strings out
+    ' BEFORE the matching Unload frees them. Layout matches C { unsigned int; unsigned int; char** } = 16 bytes on x64.
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure FilePathList
+        Public capacity As UInteger
+        Public count As UInteger
+        Public paths As IntPtr   ' char** — array of 'count' char* entries
+    End Structure
+
     <StructLayout(LayoutKind.Sequential)>
     Public Structure RenderTexture2D
         Public id As UInteger
