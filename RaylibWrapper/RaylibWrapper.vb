@@ -12652,5 +12652,53 @@ Public Module FrameworkWrapper
     End Function
 #End Region
 
+#Region "Raylib rcore — Shader management (Batch core-C4)"
+    ' Raw raylib shader API (parity). Shader (Utiliy.vb) = {Integer id, IntPtr locs} returned/passed BY VALUE. GetShaderLocation
+    ' and UnloadShader are already bound in the "Shaders" region above as raw passthroughs, so C4 adds the remaining 8:
+    ' LoadShader, LoadShaderFromMemory, IsShaderValid, GetShaderLocationAttrib, SetShaderValue(V), SetShaderValueMatrix,
+    ' SetShaderValueTexture. SetShaderValue(V) take a const void* -> IntPtr (the caller pins/marshals the payload) plus a
+    ' uniformType enum (ShaderUniformDataType). Loading/using shaders needs a GL context (a window).
+
+    ''' <summary>Loads a shader from vertex/fragment shader files (Nothing = raylib default stage)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadShader(vsFileName As String, fsFileName As String) As Shader
+    End Function
+
+    ''' <summary>Loads a shader from vertex/fragment shader code strings (Nothing = raylib default stage)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadShaderFromMemory(vsCode As String, fsCode As String) As Shader
+    End Function
+
+    ''' <summary>Checks whether a shader is valid (loaded on GPU)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsShaderValid(shader As Shader) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Gets a shader attribute location by name</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_GetShaderLocationAttrib(shader As Shader, attribName As String) As Integer
+    End Function
+
+    ''' <summary>Sets a shader uniform value; value points to the payload, uniformType is a ShaderUniformDataType</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetShaderValue(shader As Shader, locIndex As Integer, value As IntPtr, uniformType As Integer)
+    End Sub
+
+    ''' <summary>Sets a shader uniform value vector (count elements)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetShaderValueV(shader As Shader, locIndex As Integer, value As IntPtr, uniformType As Integer, count As Integer)
+    End Sub
+
+    ''' <summary>Sets a shader uniform value (4x4 matrix, by value)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetShaderValueMatrix(shader As Shader, locIndex As Integer, mat As Matrix)
+    End Sub
+
+    ''' <summary>Sets a shader uniform value for a texture sampler2d (by value)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetShaderValueTexture(shader As Shader, locIndex As Integer, texture As Texture2D)
+    End Sub
+#End Region
+
 End Module
 
