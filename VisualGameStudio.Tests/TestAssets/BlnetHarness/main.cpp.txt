@@ -1,0 +1,220 @@
+/* main.cpp - blnet ABI conformance harness (Task 9+).
+ *
+ * Native C++ program that LoadLibrary's the Native-AOT published BlnetTestShim.dll,
+ * binds the 7 contract exports (by the BLNET_EXPORT_* macro names so a header/shim
+ * name drift breaks loudly here) plus the shim's test exports, initializes the
+ * boundary (vtable handshake), then runs ONE scenario named by argv[1].
+ *
+ * Exit protocol: 0 = PASS (stdout starts with "PASS <scenario>"),
+ *                1 = scenario failure ("FAIL <scenario>: <detail>"),
+ *                2 = bind/load failure.
+ * Each scenario runs in a FRESH process (the fixture spawns one per TestCase), so
+ * shim static state never leaks between scenarios.
+ *
+ * Checked in as .txt so nothing compiles it in place; the conformance fixture copies
+ * it to a temp dir as main.cpp next to the emitted blnet.h / blnet_runtime.hpp.
+ * ASCII-only: non-ASCII test data is written as \xNN UTF-8 byte escapes.
+ */
+#include "blnet.h"
+#include "blnet_runtime.hpp"
+#include <windows.h>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <stdexcept>
+#include <string>
+#include <thread>
+
+using namespace BasicLang::blnet;
+
+/* Test-export signatures (beyond the contract, shim test surface) */
+static int32_t (BLNET_CALL *test_create_list)(uint64_t*);
+static int32_t (BLNET_CALL *test_list_add)(uint64_t, int32_t);
+static int32_t (BLNET_CALL *test_list_count)(uint64_t, int32_t*);
+static int32_t (BLNET_CALL *test_echo)(const char*, char**);
+static int32_t (BLNET_CALL *test_throw)(void);
+static int32_t (BLNET_CALL *test_invoke)(uint64_t, uint64_t*, int32_t, uint64_t*);
+static int32_t (BLNET_CALL *test_invoke_from_thread)(uint64_t, uint64_t*, int32_t);
+static int32_t (BLNET_CALL *shim_initialize)(int32_t, const BlnetNativeVtable*);
+static int32_t (BLNET_CALL *shim_abi_version)(void);
+
+#define REQUIRE(cond, name, detail) \
+    do { if (!(cond)) { printf("FAIL %s: %s\n", name, detail); return 1; } } while (0)
+
+template <typename T> static void bind(HMODULE m, T& fn, const char* name) {
+    fn = reinterpret_cast<T>(GetProcAddress(m, name));
+    if (!fn) { printf("FAIL bind: missing export %s\n", name); exit(2); }
+}
+
+/* ---- scenario 1: create -> add -> count round-trips a live handle ---- */
+static int scenario_handle_roundtrip() {
+    uint64_t h = 0;
+    { BlnetCallScope s; NetCheck(test_create_list(&h)); }
+    NetRef ref(h);
+    { BlnetCallScope s; NetCheck(test_list_add(ref.get(), 42)); }
+    int32_t count = 0;
+    { BlnetCallScope s; NetCheck(test_list_count(ref.get(), &count)); }
+    REQUIRE(count == 1, "handle_roundtrip", "count != 1");
+    printf("PASS handle_roundtrip\n");
+    return 0;
+}
+
+/* ---- scenario 2: use-after-release RETURNS BLNET_E_STALE_HANDLE (never crashes) ---- */
+static int scenario_stale_handle() {
+    uint64_t h = 0;
+    { BlnetCallScope s; NetCheck(test_create_list(&h)); }
+    { NetRef ref(h); } /* scope exit -> blnet_release -> refcount 0 -> slot freed */
+    int32_t st;
+    { BlnetCallScope s; st = test_list_add(h, 1); } /* raw status: failure is EXPECTED here */
+    REQUIRE(st == BLNET_E_STALE_HANDLE, "stale_handle", "dead-handle use did not return BLNET_E_STALE_HANDLE");
+    printf("PASS stale_handle\n");
+    return 0;
+}
+
+/* ---- scenario 3: refcount protocol - addref/release pair, aliveness tracks the
+   count, and the release AFTER free is stale (double-release detection) ---- */
+static int scenario_double_release_addref() {
+    uint64_t h = 0;
+    { BlnetCallScope s; NetCheck(test_create_list(&h)); }        /* born refcount 1 */
+    { BlnetCallScope s; NetCheck(g_shim.addref(h)); }            /* refcount 2 */
+    int32_t st, count = 0;
+    { BlnetCallScope s; st = g_shim.release(h); }                /* refcount 1 */
+    REQUIRE(st == BLNET_OK, "double_release_addref", "first release failed");
+    { BlnetCallScope s; st = test_list_count(h, &count); }
+    REQUIRE(st == BLNET_OK, "double_release_addref", "handle dead after first release (refcount still 1)");
+    { BlnetCallScope s; st = g_shim.release(h); }                /* refcount 0 -> freed */
+    REQUIRE(st == BLNET_OK, "double_release_addref", "second release failed");
+    { BlnetCallScope s; st = test_list_count(h, &count); }
+    REQUIRE(st == BLNET_E_STALE_HANDLE, "double_release_addref", "handle still alive after refcount hit zero");
+    { BlnetCallScope s; st = g_shim.release(h); }                /* third release: past zero */
+    REQUIRE(st == BLNET_E_STALE_HANDLE, "double_release_addref", "release past zero did not return BLNET_E_STALE_HANDLE");
+    printf("PASS double_release_addref\n");
+    return 0;
+}
+
+/* ---- scenario 4: slot reuse bumps the generation - the recycled slot's new handle
+   works while the old handle stays stale (C2 generation tagging).
+   In this fresh process the first create takes index 1 (index 0 is burned); after
+   its release the next create reuses index 1 -> same low-32, different high-32. ---- */
+static int scenario_generation_reuse() {
+    uint64_t h1 = 0;
+    { BlnetCallScope s; NetCheck(test_create_list(&h1)); }
+    { BlnetCallScope s; NetCheck(g_shim.release(h1)); }          /* freed -> slot to freelist */
+    uint64_t h2 = 0;
+    { BlnetCallScope s; NetCheck(test_create_list(&h2)); }       /* reuses the slot */
+    REQUIRE((h1 & 0xFFFFFFFFull) == (h2 & 0xFFFFFFFFull), "generation_reuse", "slot index was not reused");
+    REQUIRE(h1 != h2, "generation_reuse", "generation did not change on slot reuse");
+    int32_t st, count = -1;
+    { BlnetCallScope s; st = test_list_add(h1, 7); }             /* old handle must stay dead */
+    REQUIRE(st == BLNET_E_STALE_HANDLE, "generation_reuse", "old handle usable after slot reuse");
+    { BlnetCallScope s; NetCheck(test_list_add(h2, 7)); }        /* new handle must work */
+    { BlnetCallScope s; NetCheck(test_list_count(h2, &count)); }
+    REQUIRE(count == 1, "generation_reuse", "new handle count != 1");
+    { BlnetCallScope s; NetCheck(g_shim.release(h2)); }
+    printf("PASS generation_reuse\n");
+    return 0;
+}
+
+/* ---- scenario 5: UTF-8 string crosses the boundary byte-for-byte both ways (C3).
+   Input is "hello world" with e-acute, o-umlaut and a check mark, written as \xNN
+   UTF-8 byte escapes (narrow literal, NEVER u8"..."; keeps the source ASCII-clean
+   and removes any compiler source-encoding dependency). Output buffer comes from
+   blnet_alloc inside the shim; the receiver frees it via blnet_free. ---- */
+static int scenario_string_roundtrip() {
+    const char* input = "h\xC3\xA9llo w\xC3\xB6rld \xE2\x9C\x93";
+    char* out = nullptr;
+    int32_t st;
+    { BlnetCallScope s; st = test_echo(input, &out); }
+    REQUIRE(st == BLNET_OK, "string_roundtrip", "echo failed");
+    REQUIRE(out != nullptr, "string_roundtrip", "echo returned a null buffer");
+    const bool same = std::strcmp(out, input) == 0;
+    g_shim.free_(out);
+    REQUIRE(same, "string_roundtrip", "echoed bytes differ from the input");
+    printf("PASS string_roundtrip\n");
+    return 0;
+}
+
+static bool contains(const char* haystack, const char* needle) {
+    return haystack && std::strstr(haystack, needle) != nullptr;
+}
+
+/* ---- scenario 6: a managed exception surfaces as BLNET_E_MANAGED_EXCEPTION with
+   details via blnet_last_error (C4). The shim throws ArgumentException("b\xC3\xB8\xC3\xB8m
+   from managed") - "boom" with o-slash UTF-8 bytes. Two lenses, in this order:
+   (a) raw status + our own blnet_last_error inspection FIRST (NetCheck itself calls
+   blnet_last_error, so keep the raw-path inspection independent of it), then
+   (b) NetCheck on a FRESH throw -> std::runtime_error carrying type + message. ---- */
+static int scenario_managed_exception() {
+    int32_t st;
+    { BlnetCallScope s; st = test_throw(); }
+    REQUIRE(st == BLNET_E_MANAGED_EXCEPTION, "managed_exception", "test_throw did not return BLNET_E_MANAGED_EXCEPTION");
+    char* type = nullptr; char* msg = nullptr;
+    REQUIRE(g_shim.last_error(&type, &msg) == BLNET_OK, "managed_exception", "blnet_last_error failed");
+    const bool type_ok = contains(type, "ArgumentException");
+    const bool msg_ok  = contains(msg, "b\xC3\xB8\xC3\xB8m");
+    if (type) g_shim.free_(type);
+    if (msg)  g_shim.free_(msg);
+    REQUIRE(type_ok, "managed_exception", "last-error type does not contain ArgumentException");
+    REQUIRE(msg_ok,  "managed_exception", "last-error message does not contain the boom UTF-8 bytes");
+
+    bool threw = false;
+    std::string what;
+    try {
+        BlnetCallScope s;
+        NetCheck(test_throw());
+    } catch (const std::runtime_error& ex) { threw = true; what = ex.what(); }
+    REQUIRE(threw, "managed_exception", "NetCheck did not throw on BLNET_E_MANAGED_EXCEPTION");
+    REQUIRE(what.find("ArgumentException") != std::string::npos, "managed_exception", "NetCheck what() lacks the exception type");
+    REQUIRE(what.find("b\xC3\xB8\xC3\xB8m") != std::string::npos, "managed_exception", "NetCheck what() lacks the boom UTF-8 bytes");
+    printf("PASS managed_exception\n");
+    return 0;
+}
+
+int main(int argc, char** argv) {
+    if (argc < 2) { printf("FAIL usage: harness <scenario>\n"); return 1; }
+
+    HMODULE m = LoadLibraryA("BlnetTestShim.dll");
+    if (!m) { printf("FAIL load: BlnetTestShim.dll (error %lu)\n", GetLastError()); return 2; }
+
+    /* Contract exports - bound straight into the runtime's ShimApi so NetCheck /
+       NetRef / blnet_get_native_error work. Names come from the BLNET_EXPORT_*
+       macros in blnet.h, never string literals here. */
+    bind(m, g_shim.abi_version, BLNET_EXPORT_ABI_VERSION);
+    bind(m, g_shim.initialize,  BLNET_EXPORT_INITIALIZE);
+    bind(m, g_shim.addref,      BLNET_EXPORT_ADDREF);
+    bind(m, g_shim.release,     BLNET_EXPORT_RELEASE);
+    bind(m, g_shim.alloc,       BLNET_EXPORT_ALLOC);
+    bind(m, g_shim.free_,       BLNET_EXPORT_FREE);
+    bind(m, g_shim.last_error,  BLNET_EXPORT_LAST_ERROR);
+    shim_abi_version = g_shim.abi_version;
+    shim_initialize  = g_shim.initialize;
+
+    /* Test exports (shim-only surface, literal names by design). */
+    bind(m, test_create_list,        "blnet_test_create_list");
+    bind(m, test_list_add,           "blnet_test_list_add");
+    bind(m, test_list_count,         "blnet_test_list_count");
+    bind(m, test_echo,               "blnet_test_echo");
+    bind(m, test_throw,              "blnet_test_throw");
+    bind(m, test_invoke,             "blnet_test_invoke");
+    bind(m, test_invoke_from_thread, "blnet_test_invoke_from_thread");
+
+    /* C7 handshake: version agreement, then hand the shim the native vtable. */
+    static BlnetNativeVtable vt{ &blnet_invoke_callback, &blnet_get_native_error };
+    REQUIRE(shim_abi_version() == BLNET_ABI_VERSION, "init", "shim ABI version != BLNET_ABI_VERSION");
+    REQUIRE(shim_initialize(BLNET_ABI_VERSION, &vt) == BLNET_OK, "init", "blnet_initialize failed");
+
+    const char* scenario = argv[1];
+    try {
+        if (strcmp(scenario, "handle_roundtrip") == 0) return scenario_handle_roundtrip();
+        if (strcmp(scenario, "stale_handle") == 0) return scenario_stale_handle();
+        if (strcmp(scenario, "double_release_addref") == 0) return scenario_double_release_addref();
+        if (strcmp(scenario, "generation_reuse") == 0) return scenario_generation_reuse();
+        if (strcmp(scenario, "string_roundtrip") == 0) return scenario_string_roundtrip();
+        if (strcmp(scenario, "managed_exception") == 0) return scenario_managed_exception();
+    } catch (const std::exception& ex) {
+        printf("FAIL %s: unexpected exception: %s\n", scenario, ex.what());
+        return 1;
+    }
+    printf("FAIL unknown scenario: %s\n", scenario);
+    return 1;
+}
