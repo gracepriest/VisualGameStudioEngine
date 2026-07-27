@@ -60,7 +60,8 @@ public class BlnetConformanceTests
         var exePath = Path.Combine(workDir, "harness.exe");
         var args = string.Format(compiler.argsTemplate, srcPath, exePath);
         var r = Run(new ProcessStartInfo(compiler.exe, args) { WorkingDirectory = workDir }, 120_000);
-        Assert.That(r.Exited, Is.True, $"harness compile timed out after 120 s:\n{r.StdOut}\n{r.StdErr}");
+        Assert.That(r.Exited, Is.True,
+            $"harness compile TIMED OUT after 120 s — killed; partial output:\n{r.StdOut}\n{r.StdErr}");
         Assert.That(r.ExitCode, Is.EqualTo(0),
             $"harness compilation failed (exit {r.ExitCode}):\n{r.StdOut}\n{r.StdErr}");
         Assert.That(File.Exists(exePath), Is.True, $"compiler produced no executable at {exePath}");
@@ -80,16 +81,19 @@ public class BlnetConformanceTests
         psi.ArgumentList.Add(name);
         var r = Run(psi, 60_000);
         Assert.That(r.Exited, Is.True,
-            $"harness scenario '{name}' timed out after 60 s (possible deadlock):\n{r.StdOut}\n{r.StdErr}");
+            $"harness scenario '{name}' TIMED OUT after 60 s — killed (possible deadlock); partial output:\n{r.StdOut}\n{r.StdErr}");
         Assert.That(r.ExitCode, Is.EqualTo(0),
             $"harness scenario '{name}' exited with {r.ExitCode}:\n{r.StdOut}\n{r.StdErr}");
         return r.StdOut;
     }
 
     /// <summary>
-    /// Run a child to completion capturing both streams without pipe-buffer deadlock
-    /// (stderr drained async while stdout is read synchronously — the same pattern as
-    /// <see cref="Native.CppCompile"/>); kills the process tree on timeout.
+    /// Run a child to completion capturing both streams, with a timeout that can ACTUALLY
+    /// fire: both streams are read asynchronously so <c>WaitForExit(timeoutMs)</c> is a real
+    /// hang detector (a synchronous <c>ReadToEnd()</c> would block until the child exits and
+    /// the timeout could never trip — and this fixture's timeout IS the deadlock guard for
+    /// the later scenarios). On timeout the whole process tree is killed; killing closes the
+    /// pipes, so a bounded wait then collects whatever (partial) output had arrived.
     /// </summary>
     private static (bool Exited, int ExitCode, string StdOut, string StdErr) Run(
         ProcessStartInfo psi, int timeoutMs)
@@ -99,16 +103,18 @@ public class BlnetConformanceTests
         psi.UseShellExecute = false;
         psi.CreateNoWindow = true;
         using var proc = Process.Start(psi)!;
-        var errTask = proc.StandardError.ReadToEndAsync();
-        var stdout = proc.StandardOutput.ReadToEnd();
-        if (!proc.WaitForExit(timeoutMs))
+        var so = proc.StandardOutput.ReadToEndAsync();
+        var se = proc.StandardError.ReadToEndAsync();
+        bool exited = proc.WaitForExit(timeoutMs);
+        if (!exited)
         {
             try { proc.Kill(entireProcessTree: true); } catch { /* already gone */ }
-            try { errTask.Wait(2000); } catch { /* ignore */ }
-            return (false, -1, stdout, errTask.IsCompletedSuccessfully ? errTask.Result : string.Empty);
+            try { proc.WaitForExit(); } catch { /* best effort */ }
         }
-        proc.WaitForExit(); // drain handles fully
-        return (true, proc.ExitCode, stdout, errTask.GetAwaiter().GetResult());
+        try { Task.WaitAll(new Task[] { so, se }, 10_000); } catch { /* partial output is fine */ }
+        var stdout = so.IsCompletedSuccessfully ? so.Result : string.Empty;
+        var stderr = se.IsCompletedSuccessfully ? se.Result : string.Empty;
+        return (exited, exited ? proc.ExitCode : -1, stdout, stderr);
     }
 
     [TestCase("handle_roundtrip")]        // spec test 1

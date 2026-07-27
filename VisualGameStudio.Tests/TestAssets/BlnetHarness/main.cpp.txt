@@ -7,7 +7,7 @@
  *
  * Exit protocol: 0 = PASS (stdout starts with "PASS <scenario>"),
  *                1 = scenario failure ("FAIL <scenario>: <detail>"),
- *                2 = bind/load failure.
+ *                2 = environmental failure (load/bind/init handshake).
  * Each scenario runs in a FRESH process (the fixture spawns one per TestCase), so
  * shim static state never leaks between scenarios.
  *
@@ -38,6 +38,8 @@ static int32_t (BLNET_CALL *test_invoke_from_thread)(uint64_t, uint64_t*, int32_
 static int32_t (BLNET_CALL *shim_initialize)(int32_t, const BlnetNativeVtable*);
 static int32_t (BLNET_CALL *shim_abi_version)(void);
 
+/* use only in scenario functions / main - inside NativeCallbackFn lambdas, set a flag and
+   REQUIRE it after the invoke (return-from-macro would only exit the callback) */
 #define REQUIRE(cond, name, detail) \
     do { if (!(cond)) { printf("FAIL %s: %s\n", name, detail); return 1; } } while (0)
 
@@ -171,6 +173,7 @@ static int scenario_managed_exception() {
 }
 
 int main(int argc, char** argv) {
+    setvbuf(stdout, nullptr, _IONBF, 0); /* unbuffered: output must survive a timeout kill or AV */
     if (argc < 2) { printf("FAIL usage: harness <scenario>\n"); return 1; }
 
     HMODULE m = LoadLibraryA("BlnetTestShim.dll");
@@ -198,10 +201,12 @@ int main(int argc, char** argv) {
     bind(m, test_invoke,             "blnet_test_invoke");
     bind(m, test_invoke_from_thread, "blnet_test_invoke_from_thread");
 
-    /* C7 handshake: version agreement, then hand the shim the native vtable. */
+    /* C7 handshake: version agreement, then hand the shim the native vtable.
+       Handshake failures are ENVIRONMENTAL (exit 2, like bind failures), not
+       scenario failures (exit 1). */
     static BlnetNativeVtable vt{ &blnet_invoke_callback, &blnet_get_native_error };
-    REQUIRE(shim_abi_version() == BLNET_ABI_VERSION, "init", "shim ABI version != BLNET_ABI_VERSION");
-    REQUIRE(shim_initialize(BLNET_ABI_VERSION, &vt) == BLNET_OK, "init", "blnet_initialize failed");
+    if (shim_abi_version() != BLNET_ABI_VERSION) { printf("FAIL init: shim ABI version != BLNET_ABI_VERSION\n"); return 2; }
+    if (shim_initialize(BLNET_ABI_VERSION, &vt) != BLNET_OK) { printf("FAIL init: blnet_initialize failed\n"); return 2; }
 
     const char* scenario = argv[1];
     try {
