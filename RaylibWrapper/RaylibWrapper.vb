@@ -12758,5 +12758,54 @@ Public Module FrameworkWrapper
     End Sub
 #End Region
 
+#Region "Raylib rcore — Automation events (Batch core-C11)"
+    ' Raw rcore automation-event functions. AutomationEventList (Utiliy.vb) = {UInteger,UInteger,IntPtr} blittable, returned
+    ' BY VALUE by Load and passed BY VALUE to Unload/Export. AutomationEvent = {UInteger,UInteger, ByValArray SizeConst:=4
+    ' Integer()} passed BY VALUE to PlayAutomationEvent. ⛔ SetAutomationEventList takes a POINTER that raylib RETAINS while
+    ' recording, so it binds As IntPtr — the caller must pin/allocate the AutomationEventList at a stable address and keep it
+    ' alive for the whole recording session. List management + export are headless; recording/replay need the input/frame system.
+
+    ''' <summary>Loads an automation event list from a file (Nothing = new empty list, capacity = MAX_AUTOMATION_EVENTS)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadAutomationEventList(fileName As String) As AutomationEventList
+    End Function
+
+    ''' <summary>Unloads an automation event list (frees the raylib-owned events array)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadAutomationEventList(list As AutomationEventList)
+    End Sub
+
+    ''' <summary>Exports an automation event list as a text file</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_ExportAutomationEventList(list As AutomationEventList, fileName As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Sets the automation event list to record into. raylib RETAINS this pointer while recording — pass a pinned/
+    ''' unmanaged AutomationEventList address and keep it alive until StopAutomationEventRecording.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetAutomationEventList(list As IntPtr)
+    End Sub
+
+    ''' <summary>Sets the automation event internal base frame to start recording</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetAutomationEventBaseFrame(frame As Integer)
+    End Sub
+
+    ''' <summary>Starts recording automation events (an event list must be set first)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_StartAutomationEventRecording()
+    End Sub
+
+    ''' <summary>Stops recording automation events</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_StopAutomationEventRecording()
+    End Sub
+
+    ''' <summary>Plays a recorded automation event (AutomationEvent by value; 'evt' avoids the VB Event keyword)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_PlayAutomationEvent(evt As AutomationEvent)
+    End Sub
+#End Region
+
 End Module
 

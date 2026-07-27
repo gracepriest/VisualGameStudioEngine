@@ -252,6 +252,28 @@ Public Module Utiliy
         Public scaleIn As Single()
     End Structure
 
+    ' raylib AutomationEvent — one recorded input event, passed BY VALUE to PlayAutomationEvent (Batch core-C11). The
+    ' trailing int[4] params is a NESTED FIXED-SIZE array: <MarshalAs(ByValArray, SizeConst:=4)> (inline, not a pointer).
+    ' Layout: uint frame + uint type + int[4] = 24 bytes; non-blittable.
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure AutomationEvent
+        Public frame As UInteger
+        Public type As UInteger
+        <MarshalAs(UnmanagedType.ByValArray, SizeConst:=4)>
+        Public params As Integer()
+    End Structure
+
+    ' raylib AutomationEventList — a recorded event list. {UInteger capacity, UInteger count, IntPtr events} = 16 bytes,
+    ' blittable. The events pointer is raylib-owned (allocated by LoadAutomationEventList, freed by UnloadAutomationEventList).
+    ' Returned BY VALUE by Load and passed BY VALUE to Unload/Export. ⛔ SetAutomationEventList takes a POINTER to this and
+    ' raylib RETAINS it while recording, so that binding takes an IntPtr and the caller must keep the list at a stable address.
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure AutomationEventList
+        Public capacity As UInteger
+        Public count As UInteger
+        Public events As IntPtr   ' AutomationEvent* — raylib-owned
+    End Structure
+
     ' raylib Wave — PCM audio data held in RAM (raudio module, Batch audio-A1). Returned/passed BY VALUE;
     ' WaveCrop/WaveFormat mutate it in place (ByRef). `data` is the raw sample buffer pointer.
     <StructLayout(LayoutKind.Sequential)>
