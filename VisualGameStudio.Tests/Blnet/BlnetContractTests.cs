@@ -64,6 +64,26 @@ public class BlnetContractTests
 }
 
 [TestFixture]
+public class BlnetRuntimeSourcesTests
+{
+    [Test]
+    public void Header_ContainsGeneratedStatusSection() =>
+        Assert.That(BlnetRuntimeSources.BlnetHeader,
+            Does.Contain(BlnetContract.GenerateStatusHeader()));
+
+    [Test]
+    public void Header_DefinesCallMacro_HandleTypes_AndAllExportNames()
+    {
+        var h = BlnetRuntimeSources.BlnetHeader;
+        Assert.That(h, Does.Contain("#define BLNET_CALL"));
+        Assert.That(h, Does.Contain("typedef uint64_t blnet_handle;"));
+        foreach (var export in new[] { "blnet_abi_version", "blnet_initialize", "blnet_addref",
+            "blnet_release", "blnet_alloc", "blnet_free", "blnet_last_error" })
+            Assert.That(h, Does.Contain($"\"{export}\""));
+    }
+}
+
+[TestFixture]
 public class BoundaryTypeRegistryTests
 {
     [TestCase("Integer")] [TestCase("String")] [TestCase("ULong")] [TestCase("Void")]
