@@ -431,22 +431,41 @@ static int scenario_concurrency_hammer() {
     constexpr int kIters = 2000;
     std::atomic<int> status_failures{0};  /* any non-OK status from any shim call */
     std::atomic<int> count_mismatches{0}; /* count != adds performed in that iteration */
+    std::atomic<int> first_bad_status{0}; /* first non-OK status observed (0 = none; BLNET_OK == 0) */
     std::thread threads[kThreads];
     for (int t = 0; t < kThreads; ++t) {
-        threads[t] = std::thread([&status_failures, &count_mismatches]() {
+        threads[t] = std::thread([&status_failures, &count_mismatches, &first_bad_status]() {
             BlnetCallScope scope; /* thread_local depth: covers all this thread's shim calls */
+            auto bad = [&](int32_t st) {
+                ++status_failures;
+                int expected = 0;
+                first_bad_status.compare_exchange_strong(expected, static_cast<int>(st));
+            };
             for (int i = 0; i < kIters; ++i) {
                 uint64_t h = 0;
-                if (test_create_list(&h) != BLNET_OK) { ++status_failures; continue; }
-                if (test_list_add(h, i) != BLNET_OK) ++status_failures;
+                int32_t st = test_create_list(&h);
+                if (st != BLNET_OK) { bad(st); continue; }
+                st = test_list_add(h, i);
+                const bool added = st == BLNET_OK;
+                if (!added) bad(st);
                 int32_t count = -1;
-                if (test_list_count(h, &count) != BLNET_OK) ++status_failures;
-                else if (count != 1) ++count_mismatches;
-                if (g_shim.release(h) != BLNET_OK) ++status_failures;
+                st = test_list_count(h, &count);
+                if (st != BLNET_OK) bad(st);
+                /* tally independence: only judge the count when the add succeeded,
+                   so one add failure cannot bump both tallies */
+                else if (added && count != 1) ++count_mismatches;
+                st = g_shim.release(h);
+                if (st != BLNET_OK) bad(st);
             }
         });
     }
     for (auto& th : threads) th.join();
+    /* failure path only: surface the evidence the static FAIL strings discard
+       (fixture pattern-matches PASS <name>; extra lines before a FAIL just show
+       up in the NUnit failure message) */
+    if (status_failures.load() != 0 || count_mismatches.load() != 0)
+        printf("note: status_failures=%d count_mismatches=%d first_bad_status=%d\n",
+            status_failures.load(), count_mismatches.load(), first_bad_status.load());
     REQUIRE(status_failures.load() == 0, "concurrency_hammer", "non-OK statuses under concurrent create/add/count/release");
     REQUIRE(count_mismatches.load() == 0, "concurrency_hammer", "per-iteration count != 1 under concurrency (cross-handle interference)");
     uint64_t h = 0;
@@ -516,6 +535,7 @@ int main(int argc, char** argv) {
        handshake ever happened - so it dispatches BEFORE the shared handshake block
        and performs its own mismatched-then-correct init sequence. Every other
        scenario takes the normal handshake path below. */
+    /* NB: dispatches OUTSIDE main's try/catch - keep NetCheck/throwing calls out of scenario_version_mismatch */
     if (strcmp(scenario, "version_mismatch") == 0) return scenario_version_mismatch();
 
     /* C7 handshake: version agreement, then hand the shim the native vtable.
