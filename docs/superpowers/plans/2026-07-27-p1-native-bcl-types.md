@@ -95,7 +95,7 @@ public class NativeBclFrontEndTests
 (Adapt the `Parse` helper to the actual lexer/parser constructor signatures — Read how existing tests in `VisualGameStudio.Tests/Compiler/` construct them and copy that idiom. `FindFirstLiteral` walks the AST for the first `LiteralExpressionNode`. Verified real names: the lexer class is `Lexer` (`new Lexer(source).Tokenize()`), and the token's lexeme property is `Lexeme` — so Step 3 sets `Text = token.Lexeme`.)
 
 - [ ] **Step 2: Run to verify red** — `dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --filter "FullyQualifiedName~NativeBclFrontEndTests" > test-run.txt 2>&1`. Expected: build FAILS (`Text` not defined). Read test-run.txt to confirm the reason.
-- [ ] **Step 3: Implement** — add to `LiteralExpressionNode`: `public string? Text { get; set; }` (nullable; null means "not captured", callers must handle). At BOTH Parser construction sites, set `Text = token.Text` (Read the token class first for the lexeme property's actual name — the lexer stores it as the second `AddToken` argument). Verify the token type used for numbers with a fractional part (recon: `TokenType.DoubleLiteral`) and that integer literals also carry text (they do — same AddToken shape).
+- [ ] **Step 3: Implement** — add to `LiteralExpressionNode`: `public string? Text { get; set; }` (nullable; null means "not captured", callers must handle). At BOTH Parser construction sites, set `Text = token.Lexeme` (verified property name; the lexer stores it as the second `AddToken` argument). Verify the token type used for numbers with a fractional part (recon: `TokenType.DoubleLiteral`) and that integer literals also carry text (they do — same AddToken shape).
 - [ ] **Step 4: Green + fast subset** — task filter green; then the full fast subset (no behavior change: expect baseline 3394 + 1 = 3395 passed, 0 failed).
 - [ ] **Step 5: Commit** — `git add BasicLang/ASTNodes.cs BasicLang/Parser.cs VisualGameStudio.Tests/Compiler/NativeBclFrontEndTests.cs` then `git commit -m "feat(p1): literal lexeme carried onto LiteralExpressionNode (inert; Decimal literals need the text)"`
 
@@ -289,6 +289,8 @@ End Module"), Is.EqualTo("30\n31\n31\nFalse").Or.EqualTo("30\r\n31\r\n31\r\nFals
 {
     AssertAnalyzesClean("Dim g1 As Guid = Guid.NewGuid()\nDim g2 As Guid = g1\nDim eq As Boolean = g1 = g2");
     AssertAnalysisError("Dim g1 As Guid = Guid.NewGuid()\nDim g2 As Guid = g1\nDim x = g1 < g2", expectContains: new[] { "operator" });
+    AssertAnalyzesClean("Dim sb1 As New StringBuilder()\nDim sb2 As StringBuilder = sb1\nDim eq As Boolean = sb1 = sb2");
+    AssertAnalysisError("Dim sb1 As New StringBuilder()\nDim sb2 As StringBuilder = sb1\nDim x = sb1 < sb2", expectContains: new[] { "operator" });
 }
 
 [Test] public void SurfaceRegistryCoherence()  // drift test, both directions (spec §4.5)
