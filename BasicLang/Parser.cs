@@ -3046,12 +3046,12 @@ namespace BasicLang.Compiler
                 Check(TokenType.BooleanLiteral))
             {
                 var t = Advance();
-                return new LiteralExpressionNode(t.Line, t.Column) { Value = t.Value, LiteralType = t.Type };
+                return new LiteralExpressionNode(t.Line, t.Column) { Value = t.Value, LiteralType = t.Type, Text = t.Lexeme };
             }
             if (Match(TokenType.Nothing))
             {
                 var t = Previous();
-                return new LiteralExpressionNode(t.Line, t.Column) { Value = null, LiteralType = TokenType.Nothing };
+                return new LiteralExpressionNode(t.Line, t.Column) { Value = null, LiteralType = TokenType.Nothing, Text = t.Lexeme };
             }
             // ::-qualified foreign C++ name as a simple Case value (Case ns::const, Case ::kMax).
             // Reuse the same foreign-name stitcher as full expression parsing so a foreign
@@ -4035,6 +4035,7 @@ namespace BasicLang.Compiler
                 var literal = new LiteralExpressionNode(token.Line, token.Column);
                 literal.Value = token.Value;
                 literal.LiteralType = token.Type;
+                literal.Text = token.Lexeme;
                 return literal;
             }
 
@@ -4045,6 +4046,7 @@ namespace BasicLang.Compiler
                 var literal = new LiteralExpressionNode(token.Line, token.Column);
                 literal.Value = null;
                 literal.LiteralType = TokenType.Nothing;
+                literal.Text = token.Lexeme;
                 return literal;
             }
 

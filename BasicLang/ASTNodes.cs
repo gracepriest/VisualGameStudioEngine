@@ -1402,6 +1402,14 @@ namespace BasicLang.Compiler.AST
         public object Value { get; set; }
         public TokenType LiteralType { get; set; }
 
+        /// <summary>
+        /// The literal's original source text (token lexeme), e.g. "1.50". Null when not
+        /// captured at construction (e.g. synthesized literals with no source token).
+        /// Needed downstream because the parsed Value (a double) loses information the
+        /// source text carries, such as Decimal scale.
+        /// </summary>
+        public string? Text { get; set; }
+
         public LiteralExpressionNode(int line, int column) : base(line, column) { }
 
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
