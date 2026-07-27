@@ -92,7 +92,7 @@ emission (the collections precedent).
 | `BasicLang::DateTimeOffset` | struct `{DateTime utcDateTime; int16_t offsetMinutes}` (offset ±14:00, whole minutes) | value |
 | `BasicLang::StringBuilder` | class over `std::string`; **reference type**: mapped as `std::shared_ptr<BasicLang::StringBuilder>`; inherits `std::enable_shared_from_this`; `Append`-family returns `shared_from_this()` so chains emit uniformly with `->` | reference |
 
-- The six value types define C++ operator overloads (`+ - * / %` where
+- The five value structs define C++ operator overloads (`+ - * / %` where
   applicable, unary `-` on TimeSpan/Decimal, `++`/`--` on Decimal,
   `== != < <= > >=`) so BL arithmetic and comparisons lower through the
   normal binary/unary-op paths with zero codegen special-casing.
@@ -429,8 +429,8 @@ type's definition, pinned here:
   rounded; divide-by-zero throws.
 - **Mod (remainder)**: takes the SIGN OF THE DIVIDEND (truncated division,
   the .NET rule — `3.5 Mod 1 = 0.5`, `-3.5 Mod 1 = -0.5`); result scale
-  follows the max-scale rule like subtraction. The section 12.2 vector
-  battery includes negative-dividend cases.
+  follows the max-scale rule like subtraction. The section 12 Decimal
+  vector battery (testing layer 2) includes negative-dividend cases.
 - **Unary negate** (`operator-()`) and **increment/decrement**
   (`operator++`/`operator--`, pre/post, via ±1) — required by 6.1's
   analyzer acceptance.
