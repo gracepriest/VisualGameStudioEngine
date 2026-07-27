@@ -895,6 +895,19 @@ extern "C" {
     __declspec(dllexport) void Framework_AttachAudioMixedProcessor(AudioCallback processor);
     __declspec(dllexport) void Framework_DetachAudioMixedProcessor(AudioCallback processor);
 
+    // ==== RAW rgestures PARITY — Gestures & touch handling (raylib 5.5 passthrough, Batch rgestures) ====
+    // The 8 rgestures functions. State lives in raylib's static GESTURES struct (updated by PollInputEvents under a window);
+    // the getters are pure reads (no GL), so headless they return zero/default. flags/gesture are bit-flag uints;
+    // GetGestureDragVector/GetGesturePinchVector return Vector2 BY VALUE.
+    __declspec(dllexport) void    Framework_SetGesturesEnabled(unsigned int flags);
+    __declspec(dllexport) bool    Framework_IsGestureDetected(unsigned int gesture);
+    __declspec(dllexport) int     Framework_GetGestureDetected(void);
+    __declspec(dllexport) float   Framework_GetGestureHoldDuration(void);
+    __declspec(dllexport) Vector2 Framework_GetGestureDragVector(void);
+    __declspec(dllexport) float   Framework_GetGestureDragAngle(void);
+    __declspec(dllexport) Vector2 Framework_GetGesturePinchVector(void);
+    __declspec(dllexport) float   Framework_GetGesturePinchAngle(void);
+
     // Sounds (handle-based)
     __declspec(dllexport) int   Framework_LoadSoundH(const char* file);
     __declspec(dllexport) void  Framework_UnloadSoundH(int h);

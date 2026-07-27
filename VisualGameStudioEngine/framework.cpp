@@ -2161,6 +2161,17 @@ extern "C" {
     void Framework_AttachAudioMixedProcessor(AudioCallback processor) { AttachAudioMixedProcessor(processor); }
     void Framework_DetachAudioMixedProcessor(AudioCallback processor) { DetachAudioMixedProcessor(processor); }
 
+    // ==== RAW rgestures PARITY — Gestures & touch handling (raylib 5.5 passthrough, Batch rgestures) ====
+    // 1:1 forwarders. Vector2 returned by value.
+    void    Framework_SetGesturesEnabled(unsigned int flags) { SetGesturesEnabled(flags); }
+    bool    Framework_IsGestureDetected(unsigned int gesture) { return IsGestureDetected(gesture); }
+    int     Framework_GetGestureDetected(void) { return GetGestureDetected(); }
+    float   Framework_GetGestureHoldDuration(void) { return GetGestureHoldDuration(); }
+    Vector2 Framework_GetGestureDragVector(void) { return GetGestureDragVector(); }
+    float   Framework_GetGestureDragAngle(void) { return GetGestureDragAngle(); }
+    Vector2 Framework_GetGesturePinchVector(void) { return GetGesturePinchVector(); }
+    float   Framework_GetGesturePinchAngle(void) { return GetGesturePinchAngle(); }
+
     void Framework_PauseAllAudio() {
         g_audioPaused = true;
         for (auto& kv : g_sounds) {
