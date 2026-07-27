@@ -2187,6 +2187,29 @@ extern "C" {
     RayCollision Framework_GetRayCollisionTriangle(Ray ray, Vector3 p1, Vector3 p2, Vector3 p3) { return GetRayCollisionTriangle(ray, p1, p2, p3); }
     RayCollision Framework_GetRayCollisionQuad(Ray ray, Vector3 p1, Vector3 p2, Vector3 p3, Vector3 p4) { return GetRayCollisionQuad(ray, p1, p2, p3, p4); }
 
+    // ==== RAW rmodels PARITY — Basic 3D shapes drawing (raylib 5.5 passthrough, Batch models-shapes) ====
+    // 1:1 forwarders. Color reconstructed from r,g,b,a bytes; Vector3/Vector2/Ray by value; const Vector3* array passthrough.
+    void Framework_DrawLine3D(Vector3 startPos, Vector3 endPos, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawLine3D(startPos, endPos, Color{r, g, b, a}); }
+    void Framework_DrawPoint3D(Vector3 position, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawPoint3D(position, Color{r, g, b, a}); }
+    void Framework_DrawCircle3D(Vector3 center, float radius, Vector3 rotationAxis, float rotationAngle, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawCircle3D(center, radius, rotationAxis, rotationAngle, Color{r, g, b, a}); }
+    void Framework_DrawTriangle3D(Vector3 v1, Vector3 v2, Vector3 v3, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawTriangle3D(v1, v2, v3, Color{r, g, b, a}); }
+    void Framework_DrawTriangleStrip3D(const Vector3* points, int pointCount, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawTriangleStrip3D(points, pointCount, Color{r, g, b, a}); }
+    void Framework_DrawCube(Vector3 position, float width, float height, float length, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawCube(position, width, height, length, Color{r, g, b, a}); }
+    void Framework_DrawCubeV(Vector3 position, Vector3 size, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawCubeV(position, size, Color{r, g, b, a}); }
+    void Framework_DrawCubeWires(Vector3 position, float width, float height, float length, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawCubeWires(position, width, height, length, Color{r, g, b, a}); }
+    void Framework_DrawCubeWiresV(Vector3 position, Vector3 size, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawCubeWiresV(position, size, Color{r, g, b, a}); }
+    void Framework_DrawSphere(Vector3 centerPos, float radius, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawSphere(centerPos, radius, Color{r, g, b, a}); }
+    void Framework_DrawSphereEx(Vector3 centerPos, float radius, int rings, int slices, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawSphereEx(centerPos, radius, rings, slices, Color{r, g, b, a}); }
+    void Framework_DrawSphereWires(Vector3 centerPos, float radius, int rings, int slices, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawSphereWires(centerPos, radius, rings, slices, Color{r, g, b, a}); }
+    void Framework_DrawCylinder(Vector3 position, float radiusTop, float radiusBottom, float height, int slices, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawCylinder(position, radiusTop, radiusBottom, height, slices, Color{r, g, b, a}); }
+    void Framework_DrawCylinderEx(Vector3 startPos, Vector3 endPos, float startRadius, float endRadius, int sides, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawCylinderEx(startPos, endPos, startRadius, endRadius, sides, Color{r, g, b, a}); }
+    void Framework_DrawCylinderWires(Vector3 position, float radiusTop, float radiusBottom, float height, int slices, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawCylinderWires(position, radiusTop, radiusBottom, height, slices, Color{r, g, b, a}); }
+    void Framework_DrawCylinderWiresEx(Vector3 startPos, Vector3 endPos, float startRadius, float endRadius, int sides, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawCylinderWiresEx(startPos, endPos, startRadius, endRadius, sides, Color{r, g, b, a}); }
+    void Framework_DrawCapsule(Vector3 startPos, Vector3 endPos, float radius, int slices, int rings, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawCapsule(startPos, endPos, radius, slices, rings, Color{r, g, b, a}); }
+    void Framework_DrawCapsuleWires(Vector3 startPos, Vector3 endPos, float radius, int slices, int rings, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawCapsuleWires(startPos, endPos, radius, slices, rings, Color{r, g, b, a}); }
+    void Framework_DrawPlane(Vector3 centerPos, Vector2 size, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawPlane(centerPos, size, Color{r, g, b, a}); }
+    void Framework_DrawRay(Ray ray, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawRay(ray, Color{r, g, b, a}); }
+
     void Framework_PauseAllAudio() {
         g_audioPaused = true;
         for (auto& kv : g_sounds) {

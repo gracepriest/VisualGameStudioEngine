@@ -929,6 +929,32 @@ extern "C" {
     __declspec(dllexport) RayCollision Framework_GetRayCollisionTriangle(Ray ray, Vector3 p1, Vector3 p2, Vector3 p3);
     __declspec(dllexport) RayCollision Framework_GetRayCollisionQuad(Ray ray, Vector3 p1, Vector3 p2, Vector3 p3, Vector3 p4);
 
+    // ==== RAW rmodels PARITY — Basic 3D shapes drawing (raylib 5.5 passthrough, Batch models-shapes) ====
+    // The basic-3d-shapes half of rmodels: 20 immediate-mode 3D primitive draws (DrawGrid already exported above).
+    // Color is expanded to r,g,b,a bytes (the 2D-shapes-batch convention) and reconstructed as Color{r,g,b,a} in the
+    // forwarder; Vector3/Vector2/Ray by value; DrawTriangleStrip3D takes a const Vector3* array. These DRAW via rlgl, so
+    // they require a live GL context (correctness = Integration; the parity guard is headless).
+    __declspec(dllexport) void Framework_DrawLine3D(Vector3 startPos, Vector3 endPos, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawPoint3D(Vector3 position, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawCircle3D(Vector3 center, float radius, Vector3 rotationAxis, float rotationAngle, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawTriangle3D(Vector3 v1, Vector3 v2, Vector3 v3, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawTriangleStrip3D(const Vector3* points, int pointCount, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawCube(Vector3 position, float width, float height, float length, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawCubeV(Vector3 position, Vector3 size, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawCubeWires(Vector3 position, float width, float height, float length, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawCubeWiresV(Vector3 position, Vector3 size, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawSphere(Vector3 centerPos, float radius, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawSphereEx(Vector3 centerPos, float radius, int rings, int slices, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawSphereWires(Vector3 centerPos, float radius, int rings, int slices, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawCylinder(Vector3 position, float radiusTop, float radiusBottom, float height, int slices, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawCylinderEx(Vector3 startPos, Vector3 endPos, float startRadius, float endRadius, int sides, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawCylinderWires(Vector3 position, float radiusTop, float radiusBottom, float height, int slices, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawCylinderWiresEx(Vector3 startPos, Vector3 endPos, float startRadius, float endRadius, int sides, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawCapsule(Vector3 startPos, Vector3 endPos, float radius, int slices, int rings, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawCapsuleWires(Vector3 startPos, Vector3 endPos, float radius, int slices, int rings, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawPlane(Vector3 centerPos, Vector2 size, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawRay(Ray ray, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+
     // Sounds (handle-based)
     __declspec(dllexport) int   Framework_LoadSoundH(const char* file);
     __declspec(dllexport) void  Framework_UnloadSoundH(int h);
