@@ -13,9 +13,10 @@ namespace VisualGameStudio.Tests.Native;
 ///      raylib.h completeness cross-check: the GenMeshPoly..GenMeshCubicmap range is exactly the 11 generators, and the
 ///      UploadMesh..ExportMeshAsCode range is exactly the 7 bound management fns PLUS the two DEFERRED draws
 ///      (DrawMesh/DrawMeshInstanced), so nothing in the mesh surface was silently missed.
-///   2. Deferred_mesh_draws_are_not_bound_yet — DrawMesh/DrawMeshInstanced take a Material by value and are deferred to
-///      the materials batch; this asserts they are NOT bound yet (an honest deferral marker that flips when materials lands,
-///      mirroring how the collision batch asserted GetRayCollisionMesh was deferred here).
+///   2. Mesh_draws_were_handed_off_to_the_materials_batch — DrawMesh/DrawMeshInstanced take a Material by value, so they were
+///      deferred out of this batch and bound in the materials batch (which owns their full 3-way + marshaling checks). This
+///      confirms the handoff landed — it was the honest deferral marker (previously asserting NOT bound) flipped when
+///      materials shipped, mirroring how the collision batch's GetRayCollisionMesh deferral flipped into this batch.
 ///   3. Wrapper_mesh_bindings_declare_the_correct_marshaling — TYPE scan: GenMesh* are Functions returning Mesh;
 ///      UploadMesh/GenMeshTangents take ByRef Mesh (mutate-in-place); the rest take Mesh by value; ExportMesh(AsCode) return
 ///      <MarshalAs(I1)> Boolean with CharSet.Ansi String paths; GetMeshBoundingBox->BoundingBox, GetRayCollisionMesh->RayCollision.
@@ -94,17 +95,19 @@ public class RaylibModelsMeshParityTests
     }
 
     [Test]
-    public void Deferred_mesh_draws_are_not_bound_yet()
+    public void Mesh_draws_were_handed_off_to_the_materials_batch()
     {
         var root = RepoRoot();
         var wrapper = File.ReadAllText(Path.Combine(root, "RaylibWrapper", "RaylibWrapper.vb"));
 
-        // DrawMesh/DrawMeshInstanced need a Material by value -> materials batch. This tripwire flips (and must be updated)
-        // when that batch lands. "Framework_DrawMesh(" does not substring-match "Framework_DrawMeshInstanced(".
+        // DrawMesh/DrawMeshInstanced need a Material by value, so they were deferred out of the mesh batch and bound in the
+        // materials batch. This is the deferral marker flipped: it asserted NOT-bound before materials shipped, and now
+        // confirms the handoff. RaylibModelsMaterialsParityTests owns their full 3-way + marshaling verification.
+        // "Framework_DrawMesh(" does not substring-match "Framework_DrawMeshInstanced(".
         Assert.Multiple(() =>
         {
-            Assert.That(wrapper.Contains("Framework_DrawMesh("), Is.False, "Framework_DrawMesh is deferred to the materials batch");
-            Assert.That(wrapper.Contains("Framework_DrawMeshInstanced("), Is.False, "Framework_DrawMeshInstanced is deferred to the materials batch");
+            Assert.That(wrapper.Contains("Framework_DrawMesh("), Is.True, "Framework_DrawMesh is now bound by the materials batch");
+            Assert.That(wrapper.Contains("Framework_DrawMeshInstanced("), Is.True, "Framework_DrawMeshInstanced is now bound by the materials batch");
         });
     }
 
