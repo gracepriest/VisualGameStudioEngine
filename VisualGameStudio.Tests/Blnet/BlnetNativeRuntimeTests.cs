@@ -224,6 +224,8 @@ int main() {
     {
         var output = Run(@"
 #include <thread>
+#include <string>
+#include <stdexcept>
 using namespace BasicLang::blnet;
 static int g_attempted = 0;
 static int g_hook_count = 0;
@@ -301,6 +303,7 @@ int main() {
         var output = Run(@"
 #include <thread>
 #include <cstring>
+#include <string>
 using namespace BasicLang::blnet;
 static std::string g_seen;
 int main() {

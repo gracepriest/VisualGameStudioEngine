@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- net8.0: must match VisualGameStudio.Tests (net8.0) or its ProjectReference fails NU1201.
+         Native AOT NativeLib=Shared is fully supported on net8.0. -->
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- AOT applies at publish; a normal build stays a managed lib the test project can reference. -->
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <RootNamespace>BlnetTestShim</RootNamespace>
+  </PropertyGroup>
+</Project>

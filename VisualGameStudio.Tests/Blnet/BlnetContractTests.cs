@@ -61,6 +61,16 @@ public class BlnetContractTests
         Assert.That(actual, Is.EqualTo(expected),
             "CppTypeMapper._typeMap and BoundaryTypeRegistry drifted — update the registry, not a parallel list");
     }
+
+    [Test]
+    public void ShimStatusEnum_MatchesContract()
+    {
+        foreach (var (name, value, _) in BlnetContract.StatusCodes)
+            Assert.That((int)Enum.Parse<BlnetTestShim.BlnetStatus>(name), Is.EqualTo(value),
+                "BlnetStatus.cs drifted — regenerate from BlnetContract.GenerateStatusEnumCs()");
+        Assert.That(BlnetTestShim.ShimAbi.AbiVersion, Is.EqualTo(BlnetContract.AbiVersion),
+            "ShimAbi.AbiVersion drifted from BlnetContract.AbiVersion");
+    }
 }
 
 [TestFixture]

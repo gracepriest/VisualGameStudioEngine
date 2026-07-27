@@ -55,4 +55,17 @@
     <None Include="..\IDE\VisualGameStudioEngine.dll" Link="VisualGameStudioEngine.dll" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="TestAssets\BlnetTestShim\BlnetTestShim.csproj" />
+    <!-- The test csproj uses default SDK globs with NO existing Compile excludes: without this
+         Remove, the shim's sources (and its nested obj\ generated AssemblyInfo files) are
+         double-compiled into the test assembly -> CS0436 type conflicts + CS0579 duplicate
+         attributes. Required, not conditional. -->
+    <Compile Remove="TestAssets\**" />
+    <!-- Task 9's fixture reads main.cpp.txt from TestContext.CurrentContext.TestDirectory;
+         'Update' (not 'Include') because a .txt is already a default None item. Harmless
+         MSBuild no-op until Task 9 creates the file. -->
+    <None Update="TestAssets\BlnetHarness\main.cpp.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
