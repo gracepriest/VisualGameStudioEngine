@@ -12894,5 +12894,51 @@ Public Module FrameworkWrapper
     End Sub
 #End Region
 
+#Region "Raylib rgestures — Gestures & touch handling (Batch rgestures)"
+    ' Raw rgestures functions. flags/gesture are bit-flag UIntegers (GESTURE_TAP=1, GESTURE_DRAG=8, ...). Gesture state is
+    ' updated by PollInputEvents under a window; the getters are pure reads so they return zero/default headless.
+    ' GetGestureDragVector/GetGesturePinchVector return Vector2 BY VALUE (the raw-Vector2-return idiom from Batch C2).
+
+    ''' <summary>Enables a set of gestures using bit flags (GESTURE_* values OR'd together)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetGesturesEnabled(flags As UInteger)
+    End Sub
+
+    ''' <summary>Checks whether a specific gesture has been detected</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsGestureDetected(gesture As UInteger) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Gets the latest detected gesture (GESTURE_* value; GESTURE_NONE = 0)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetGestureDetected() As Integer
+    End Function
+
+    ''' <summary>Gets the gesture hold time in seconds</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetGestureHoldDuration() As Single
+    End Function
+
+    ''' <summary>Gets the gesture drag vector (Vector2 by value)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetGestureDragVector() As Vector2
+    End Function
+
+    ''' <summary>Gets the gesture drag angle</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetGestureDragAngle() As Single
+    End Function
+
+    ''' <summary>Gets the gesture pinch delta (Vector2 by value)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetGesturePinchVector() As Vector2
+    End Function
+
+    ''' <summary>Gets the gesture pinch angle</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetGesturePinchAngle() As Single
+    End Function
+#End Region
+
 End Module
 
