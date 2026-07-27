@@ -13000,5 +13000,112 @@ Public Module FrameworkWrapper
     End Function
 #End Region
 
+#Region "Raylib rmodels — Basic 3D shapes drawing (Batch models-shapes)"
+    ' The 20 basic-3d-shapes draws (DrawGrid already bound elsewhere). Color is expanded to r,g,b,a Bytes (the 2D-shapes
+    ' convention, matching Framework_DrawLineStrip/ClearBackground); Vector3/Vector2/Ray by value; DrawTriangleStrip3D takes
+    ' a Vector3() array (const Vector3* passthrough). All Subs (void). These DRAW via rlgl -> a live GL context is required,
+    ' so correctness lives in an [Integration] test; the parity guard is headless.
+
+    ''' <summary>Draws a line in 3D world space.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawLine3D(startPos As Vector3, endPos As Vector3, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a point in 3D space (a small line).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawPoint3D(position As Vector3, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a circle in 3D world space.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawCircle3D(center As Vector3, radius As Single, rotationAxis As Vector3, rotationAngle As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a color-filled triangle (counter-clockwise winding).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawTriangle3D(v1 As Vector3, v2 As Vector3, v3 As Vector3, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a triangle strip defined by an array of points (const Vector3*).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawTriangleStrip3D(points As Vector3(), pointCount As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a cube.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawCube(position As Vector3, width As Single, height As Single, length As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a cube (Vector3 size version).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawCubeV(position As Vector3, size As Vector3, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws cube wires.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawCubeWires(position As Vector3, width As Single, height As Single, length As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws cube wires (Vector3 size version).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawCubeWiresV(position As Vector3, size As Vector3, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a sphere.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawSphere(centerPos As Vector3, radius As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a sphere with extended parameters (rings/slices).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawSphereEx(centerPos As Vector3, radius As Single, rings As Integer, slices As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws sphere wires (rings/slices).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawSphereWires(centerPos As Vector3, radius As Single, rings As Integer, slices As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a cylinder/cone.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawCylinder(position As Vector3, radiusTop As Single, radiusBottom As Single, height As Single, slices As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a cylinder with base at startPos and top at endPos.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawCylinderEx(startPos As Vector3, endPos As Vector3, startRadius As Single, endRadius As Single, sides As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws cylinder/cone wires.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawCylinderWires(position As Vector3, radiusTop As Single, radiusBottom As Single, height As Single, slices As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws cylinder wires with base at startPos and top at endPos.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawCylinderWiresEx(startPos As Vector3, endPos As Vector3, startRadius As Single, endRadius As Single, sides As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a capsule with the centers of its sphere caps at startPos and endPos.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawCapsule(startPos As Vector3, endPos As Vector3, radius As Single, slices As Integer, rings As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws capsule wireframe with the centers of its sphere caps at startPos and endPos.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawCapsuleWires(startPos As Vector3, endPos As Vector3, radius As Single, slices As Integer, rings As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a plane in the XZ axis.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawPlane(centerPos As Vector3, size As Vector2, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a ray line.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawRay(ray As Ray, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+#End Region
+
 End Module
 
