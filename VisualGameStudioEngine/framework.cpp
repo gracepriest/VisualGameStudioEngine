@@ -2210,6 +2210,30 @@ extern "C" {
     void Framework_DrawPlane(Vector3 centerPos, Vector2 size, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawPlane(centerPos, size, Color{r, g, b, a}); }
     void Framework_DrawRay(Ray ray, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawRay(ray, Color{r, g, b, a}); }
 
+    // ==== RAW rmodels PARITY — Mesh generation & management (raylib 5.5 passthrough, Batch models-mesh) ====
+    // 1:1 forwarders. Mesh/Image/Ray/Matrix by value; Mesh* mutate-in-place for UploadMesh/GenMeshTangents; const void* and
+    // const char* passthrough. GenMesh* upload to GPU internally (need a live GL context). DrawMesh/DrawMeshInstanced are
+    // deferred to the materials batch — they take a Material by value.
+    Mesh Framework_GenMeshPoly(int sides, float radius) { return GenMeshPoly(sides, radius); }
+    Mesh Framework_GenMeshPlane(float width, float length, int resX, int resZ) { return GenMeshPlane(width, length, resX, resZ); }
+    Mesh Framework_GenMeshCube(float width, float height, float length) { return GenMeshCube(width, height, length); }
+    Mesh Framework_GenMeshSphere(float radius, int rings, int slices) { return GenMeshSphere(radius, rings, slices); }
+    Mesh Framework_GenMeshHemiSphere(float radius, int rings, int slices) { return GenMeshHemiSphere(radius, rings, slices); }
+    Mesh Framework_GenMeshCylinder(float radius, float height, int slices) { return GenMeshCylinder(radius, height, slices); }
+    Mesh Framework_GenMeshCone(float radius, float height, int slices) { return GenMeshCone(radius, height, slices); }
+    Mesh Framework_GenMeshTorus(float radius, float size, int radSeg, int sides) { return GenMeshTorus(radius, size, radSeg, sides); }
+    Mesh Framework_GenMeshKnot(float radius, float size, int radSeg, int sides) { return GenMeshKnot(radius, size, radSeg, sides); }
+    Mesh Framework_GenMeshHeightmap(Image heightmap, Vector3 size) { return GenMeshHeightmap(heightmap, size); }
+    Mesh Framework_GenMeshCubicmap(Image cubicmap, Vector3 cubeSize) { return GenMeshCubicmap(cubicmap, cubeSize); }
+    void Framework_UploadMesh(Mesh* mesh, bool dynamic) { UploadMesh(mesh, dynamic); }
+    void Framework_UpdateMeshBuffer(Mesh mesh, int index, const void* data, int dataSize, int offset) { UpdateMeshBuffer(mesh, index, data, dataSize, offset); }
+    void Framework_UnloadMesh(Mesh mesh) { UnloadMesh(mesh); }
+    BoundingBox Framework_GetMeshBoundingBox(Mesh mesh) { return GetMeshBoundingBox(mesh); }
+    void Framework_GenMeshTangents(Mesh* mesh) { GenMeshTangents(mesh); }
+    bool Framework_ExportMesh(Mesh mesh, const char* fileName) { return ExportMesh(mesh, fileName); }
+    bool Framework_ExportMeshAsCode(Mesh mesh, const char* fileName) { return ExportMeshAsCode(mesh, fileName); }
+    RayCollision Framework_GetRayCollisionMesh(Ray ray, Mesh mesh, Matrix transform) { return GetRayCollisionMesh(ray, mesh, transform); }
+
     void Framework_PauseAllAudio() {
         g_audioPaused = true;
         for (auto& kv : g_sounds) {

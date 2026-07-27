@@ -955,6 +955,33 @@ extern "C" {
     __declspec(dllexport) void Framework_DrawPlane(Vector3 centerPos, Vector2 size, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
     __declspec(dllexport) void Framework_DrawRay(Ray ray, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
 
+    // ==== RAW rmodels PARITY — Mesh generation & management (raylib 5.5 passthrough, Batch models-mesh) ====
+    // The mesh half of rmodels: 11 GenMesh* generators (return Mesh by value; they call UploadMesh internally, so they need
+    // a live GL context), 7 mesh-management fns, and GetRayCollisionMesh (deferred here from the collision batch — it needs
+    // the Mesh struct). Mesh is a big blittable struct (2 int counts + array pointers + GL ids); passed/returned BY VALUE,
+    // mutated in place via Mesh* for UploadMesh/GenMeshTangents. GetMeshBoundingBox and GetRayCollisionMesh are pure math
+    // (headless). DrawMesh/DrawMeshInstanced are DEFERRED to the materials batch (they take a Material by value — the only
+    // two mesh fns that need it). All 1:1 raylib passthroughs.
+    __declspec(dllexport) Mesh Framework_GenMeshPoly(int sides, float radius);
+    __declspec(dllexport) Mesh Framework_GenMeshPlane(float width, float length, int resX, int resZ);
+    __declspec(dllexport) Mesh Framework_GenMeshCube(float width, float height, float length);
+    __declspec(dllexport) Mesh Framework_GenMeshSphere(float radius, int rings, int slices);
+    __declspec(dllexport) Mesh Framework_GenMeshHemiSphere(float radius, int rings, int slices);
+    __declspec(dllexport) Mesh Framework_GenMeshCylinder(float radius, float height, int slices);
+    __declspec(dllexport) Mesh Framework_GenMeshCone(float radius, float height, int slices);
+    __declspec(dllexport) Mesh Framework_GenMeshTorus(float radius, float size, int radSeg, int sides);
+    __declspec(dllexport) Mesh Framework_GenMeshKnot(float radius, float size, int radSeg, int sides);
+    __declspec(dllexport) Mesh Framework_GenMeshHeightmap(Image heightmap, Vector3 size);
+    __declspec(dllexport) Mesh Framework_GenMeshCubicmap(Image cubicmap, Vector3 cubeSize);
+    __declspec(dllexport) void Framework_UploadMesh(Mesh* mesh, bool dynamic);
+    __declspec(dllexport) void Framework_UpdateMeshBuffer(Mesh mesh, int index, const void* data, int dataSize, int offset);
+    __declspec(dllexport) void Framework_UnloadMesh(Mesh mesh);
+    __declspec(dllexport) BoundingBox Framework_GetMeshBoundingBox(Mesh mesh);
+    __declspec(dllexport) void Framework_GenMeshTangents(Mesh* mesh);
+    __declspec(dllexport) bool Framework_ExportMesh(Mesh mesh, const char* fileName);
+    __declspec(dllexport) bool Framework_ExportMeshAsCode(Mesh mesh, const char* fileName);
+    __declspec(dllexport) RayCollision Framework_GetRayCollisionMesh(Ray ray, Mesh mesh, Matrix transform);
+
     // Sounds (handle-based)
     __declspec(dllexport) int   Framework_LoadSoundH(const char* file);
     __declspec(dllexport) void  Framework_UnloadSoundH(int h);
