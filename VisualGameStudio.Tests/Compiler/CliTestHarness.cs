@@ -81,5 +81,5 @@ internal static class CliTestHarness
     private static string DrainedOrNote(Task<string> read)
         => read.Status == TaskStatus.RanToCompletion
             ? read.Result
-            : "<output not fully captured: pipe still open, likely inherited by a surviving child process>";
+            : "<output not fully captured: pipe still open (likely inherited by a surviving child process) or the read faulted>";
 }

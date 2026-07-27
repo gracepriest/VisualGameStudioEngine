@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -882,6 +883,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     return b ? "true" : "false";
                 if (constant.Value is null)
                     return "null";
+                // Same m-suffix rule as EmitConstant, should a Decimal default
+                // parameter value ever reach here.
+                if (constant.Value is decimal dm)
+                    return dm.ToString(CultureInfo.InvariantCulture) + "m";
                 return constant.Value.ToString();
             }
             return "default";
@@ -3638,6 +3643,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             if (constant.Value is float f)
                 return $"{f}f";
+
+            // System.Decimal constant (spec 6.1: a literal converted from its
+            // source text in a Decimal context) — the m suffix keeps the C#
+            // compiler in decimal space, and decimal.ToString round-trips the
+            // exact value including scale ('1.50' stays 1.50m).
+            if (constant.Value is decimal dm)
+                return dm.ToString(CultureInfo.InvariantCulture) + "m";
 
             return constant.Value.ToString();
         }

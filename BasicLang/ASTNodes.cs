@@ -1405,8 +1405,9 @@ namespace BasicLang.Compiler.AST
         /// <summary>
         /// The literal's original source text (token lexeme), e.g. "1.50". Null when not
         /// captured at construction (e.g. synthesized literals with no source token).
-        /// Needed downstream because the parsed Value (a double) loses information the
-        /// source text carries, such as Decimal scale.
+        /// Needed downstream because the parsed Value (e.g. a double for a
+        /// floating-point literal) loses information the source text carries,
+        /// such as Decimal scale.
         /// </summary>
         public string? Text { get; set; }
 

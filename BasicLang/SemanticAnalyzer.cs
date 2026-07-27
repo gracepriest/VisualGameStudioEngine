@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using BasicLang.Compiler.AST;
 using BasicLang.Compiler;
@@ -1359,10 +1360,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (target == null || source == null || !target.IsNumeric() || !source.IsNumeric())
                 return false;
 
-            // A floating-point literal must NOT smuggle into a Decimal through
-            // double space: 'Dim d As Decimal = 1.5' stays an error until
-            // Decimal-context literal conversion (from the literal's exact
-            // decimal text) lands in P1 Task 4. Integral literals widen fine.
+            // A floating-point literal reaching this check against a Decimal
+            // target was NOT retyped by the Decimal-context rule
+            // (TryRetypeLiteralToDecimal runs first and pre-empts this path):
+            // it has no source text to convert exactly, so keep rejecting it
+            // rather than smuggle it into a Decimal through double space
+            // (spec 6.1). Integral literals widen fine.
             if (target.Name == "Decimal" && source.IsFloatingPoint())
                 return false;
 
@@ -1375,10 +1378,86 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
+        /// Spec 6.1 "Decimal literals": in a Decimal context a numeric LITERAL
+        /// converts at compile time from its SOURCE TEXT — never through the
+        /// double value — so 'Dim d As Decimal = 1.50' keeps its scale and
+        /// 'd * 1.08' is exact. This helper detects the literal shape
+        /// (optionally under unary +/-), verifies the exact conversion is
+        /// possible via <see cref="TryConvertDecimalLiteral"/>, and RETYPES the
+        /// literal node (and its unary wrapper) to Decimal so the IRBuilder
+        /// emits a System.Decimal constant. Callers invoke it AFTER visiting
+        /// the expression (Visit(LiteralExpressionNode) would overwrite the
+        /// retype) and re-read the node type on success. Returns false when
+        /// 'expr' is not a convertible literal — callers then fall through to
+        /// the normal (rejecting) type checks.
+        /// </summary>
+        private bool TryRetypeLiteralToDecimal(ExpressionNode expr, TypeInfo contextType)
+        {
+            if (expr == null || contextType == null || contextType.Name != "Decimal")
+                return false;
+
+            var inner = expr;
+            if (inner is UnaryExpressionNode unary && (unary.Operator == "-" || unary.Operator == "+"))
+                inner = unary.Operand;
+
+            if (inner is not LiteralExpressionNode literal)
+                return false;
+            if (literal.LiteralType is not (TokenType.IntegerLiteral or TokenType.LongLiteral
+                or TokenType.SingleLiteral or TokenType.DoubleLiteral))
+                return false;
+            if (!TryConvertDecimalLiteral(literal, out _))
+                return false;
+
+            SetNodeType(literal, contextType);
+            if (!ReferenceEquals(inner, expr))
+                SetNodeType(expr, contextType);
+            return true;
+        }
+
+        /// <summary>
+        /// The single source of truth for converting a numeric literal to
+        /// System.Decimal (spec 6.1): parse the SOURCE TEXT with
+        /// InvariantCulture (stripping a trailing F/f/L/l type suffix;
+        /// NumberStyles.Float admits exponent forms like 1.5E2). Integral
+        /// literals whose lexeme is not decimal-parseable (hex '&amp;HFF')
+        /// convert exactly from the boxed value instead — integers are exact in
+        /// decimal. A floating literal with no usable text does NOT convert
+        /// (that would round-trip through double and violate text
+        /// faithfulness). Used by the analyzer to decide retyping and by the
+        /// IRBuilder to build the IR constant, so the two can never drift.
+        /// </summary>
+        public static bool TryConvertDecimalLiteral(LiteralExpressionNode literal, out decimal value)
+        {
+            value = 0m;
+            if (literal == null)
+                return false;
+
+            if (literal.Text is string text)
+            {
+                var trimmed = text.TrimEnd('F', 'f', 'L', 'l');
+                if (decimal.TryParse(trimmed, NumberStyles.Float, CultureInfo.InvariantCulture, out value))
+                    return true;
+            }
+
+            // Integral (or already-decimal) fallback: exact by construction.
+            switch (literal.Value)
+            {
+                case int i: value = i; return true;
+                case long l: value = l; return true;
+                case short s: value = s; return true;
+                case byte b: value = b; return true;
+                case sbyte sb: value = sb; return true;
+                case decimal d: value = d; return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
         /// True when one operand is Decimal and the other is Single/Double —
         /// the pair with no implicit conversion in either direction (spec 6.1).
-        /// Shared by the binary arithmetic, comparison, and compound-assignment
-        /// gates so all three raise the same CType-hinted error.
+        /// Used by the comparison and compound-assignment gates; the arithmetic
+        /// gate reaches the same error via GetCommonType's null sentinel.
         /// </summary>
         private static bool IsDecimalFloatingMix(TypeInfo left, TypeInfo right)
         {
@@ -2946,6 +3025,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     _lambdaTargetType = varType;
 
                 node.Initializer.Accept(this);
+                // Spec 6.1: a Dim initializer is a Decimal context — a numeric
+                // literal converts from its source text and retypes to Decimal.
+                TryRetypeLiteralToDecimal(node.Initializer, varType);
                 var initType = GetNodeType(node.Initializer);
 
                 if (initType != null && !varType.IsAssignableFrom(initType)
@@ -4498,11 +4580,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(ForLoopNode node)
         {
-            // Determine loop variable type (use specified type or default to Integer)
+            // Determine loop variable type (use specified type or default to Integer).
+            // ResolveTypeName backs up the bare TypeManager lookup: Decimal (and
+            // other .NET-fallback types) are not in the built-in table, and
+            // silently falling back to Integer would mistype the loop variable —
+            // the spec 6.1 For...Step Decimal context needs the real type here.
             TypeInfo loopVarType = _typeManager.IntegerType;
             if (!string.IsNullOrEmpty(node.VariableType))
             {
-                loopVarType = _typeManager.GetType(node.VariableType) ?? _typeManager.IntegerType;
+                loopVarType = _typeManager.GetType(node.VariableType)
+                    ?? ResolveTypeName(node.VariableType)
+                    ?? _typeManager.IntegerType;
             }
 
             // Define loop variable
@@ -4516,8 +4604,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 Error($"Loop variable '{node.Variable}' conflicts with existing symbol", node.Line, node.Column);
             }
 
-            // Check start, end, and step expressions
+            // Check start, end, and step expressions. Spec 6.1: the bounds of a
+            // Decimal loop variable are Decimal contexts — 'For d As Decimal =
+            // 0 To 1 Step 0.25' converts each literal from its source text.
             node.Start.Accept(this);
+            TryRetypeLiteralToDecimal(node.Start, loopVarType);
             var startType = GetNodeType(node.Start);
             if (startType != null && !startType.IsNumeric())
             {
@@ -4525,6 +4616,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
 
             node.End.Accept(this);
+            TryRetypeLiteralToDecimal(node.End, loopVarType);
             var endType = GetNodeType(node.End);
             if (endType != null && !endType.IsNumeric())
             {
@@ -4534,6 +4626,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (node.Step != null)
             {
                 node.Step.Accept(this);
+                TryRetypeLiteralToDecimal(node.Step, loopVarType);
                 var stepType = GetNodeType(node.Step);
                 if (stepType != null && !stepType.IsNumeric())
                 {
@@ -4750,6 +4843,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     _lambdaTargetType = functionScope.ReturnType;
 
                 node.Value.Accept(this);
+                // Spec 6.1: Return in a Decimal function is a Decimal context —
+                // 'Return 1.5' converts the literal from its source text.
+                TryRetypeLiteralToDecimal(node.Value, expectedReturnType);
                 var returnType = GetNodeType(node.Value);
 
                 if (expectedReturnType.Equals(_typeManager.VoidType))
@@ -4812,6 +4908,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             node.Value.Accept(this);
 
+            // Spec 6.1: plain and compound assignment to a Decimal target are
+            // Decimal contexts — a numeric literal value converts from its
+            // source text and retypes ('d = 1.5', 'd += 0.5').
+            TryRetypeLiteralToDecimal(node.Value, targetType);
             var valueType = GetNodeType(node.Value);
 
             if (targetType == null || valueType == null)
@@ -4885,6 +4985,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 SetNodeType(node, _typeManager.ObjectType);
                 return;
             }
+
+            // Spec 6.1: operand position is a Decimal context when the OTHER
+            // operand is Decimal — 'd * 1.08' converts the literal from its
+            // source text; 'd * x' (non-literal Double) stays the CType-hinted
+            // error below. Two literals never trigger this (neither is Decimal).
+            if (leftType.Name == "Decimal" && TryRetypeLiteralToDecimal(node.Right, leftType))
+                rightType = GetNodeType(node.Right);
+            else if (rightType.Name == "Decimal" && TryRetypeLiteralToDecimal(node.Left, rightType))
+                leftType = GetNodeType(node.Left);
 
             TypeInfo resultType;
 
@@ -5490,6 +5599,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         ? delegateParamTypes[i]
                         : null;
                     VisitArgumentWithLambdaTarget(node.Arguments[i], targetParamType);
+                    // Spec 6.1: a Decimal delegate parameter is a Decimal
+                    // context for a literal argument, same as the function path.
+                    TryRetypeLiteralToDecimal(node.Arguments[i], targetParamType);
                 }
 
                 // Validate arguments against the delegate's parameter types
@@ -5595,6 +5707,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         }
 
                         VisitArgumentWithLambdaTarget(node.Arguments[i], paramType);
+                        // Spec 6.1: an argument to a Decimal parameter is a
+                        // Decimal context — the literal converts from its text.
+                        TryRetypeLiteralToDecimal(node.Arguments[i], paramType);
                         var argType = GetNodeType(node.Arguments[i]);
 
                         if (paramType == null)

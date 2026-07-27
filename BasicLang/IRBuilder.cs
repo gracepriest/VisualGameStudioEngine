@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
 using System.Linq;
 using BasicLang.Compiler.AST;
 using BasicLang.Compiler.SemanticAnalysis;
@@ -3099,6 +3101,29 @@ namespace BasicLang.Compiler.IR
         public void Visit(LiteralExpressionNode node)
         {
             var type = _semanticAnalyzer.GetNodeType(node);
+
+            // Spec 6.1: the analyzer retyped this literal to Decimal (Decimal
+            // context), so the IR constant carries a System.Decimal built from
+            // the SOURCE TEXT — '1.50' stays 1.50m (scale preserved), never the
+            // double 1.5. The is-double optimizer fold patterns then skip it.
+            if (type?.Name == "Decimal")
+            {
+                if (SemanticAnalyzer.TryConvertDecimalLiteral(node, out var decimalValue))
+                {
+                    _expressionResult = new IRConstant(decimalValue, type);
+                    return;
+                }
+
+                // Should be unreachable: the analyzer only retypes a literal to
+                // Decimal after TryConvertDecimalLiteral succeeded on it.
+                // Last-resort fallback for a synthesized Decimal-typed literal:
+                // convert the parsed value (loses text fidelity for floats).
+                Debug.Assert(false, "Decimal-typed literal with no convertible text/value");
+                _expressionResult = new IRConstant(
+                    Convert.ToDecimal(node.Value, CultureInfo.InvariantCulture), type);
+                return;
+            }
+
             _expressionResult = new IRConstant(node.Value, type);
         }
 

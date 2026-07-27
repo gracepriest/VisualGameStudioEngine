@@ -266,7 +266,18 @@ namespace BasicLang.Compiler.IR.Optimization
         {
             if (!(cmp.Left is IRConstant left) || !(cmp.Right is IRConstant right))
                 return null;
-            
+
+            // System.Decimal constants never fold here (spec 6.1): unlike the
+            // arithmetic Fold* helpers, which return null for unmatched operand
+            // types, this switch folds UNCONDITIONALLY — and CompareLt/CompareGt
+            // blindly report false for type pairs outside int/long/float/double,
+            // while CompareEq's Equals treats a mixed decimal/int pair (0.1m vs
+            // 5) as unequal boxed types. Either path would MISCOMPILE a decimal
+            // comparison (e.g. 0.1m < 0.2m folding to False). Skipping keeps the
+            // exact comparison at runtime.
+            if (left.Value is decimal || right.Value is decimal)
+                return null;
+
             try
             {
                 bool result = cmp.Comparison switch
