@@ -2136,6 +2136,18 @@ extern "C" {
     VrStereoConfig  Framework_LoadVrStereoConfig(VrDeviceInfo device) { return LoadVrStereoConfig(device); }
     void            Framework_UnloadVrStereoConfig(VrStereoConfig config) { UnloadVrStereoConfig(config); }
 
+    // ==== RAW RCORE PARITY — Automation events (raylib 5.5 passthrough, Batch core-C11) ====
+    // 1:1 forwarders. AutomationEventList returned/passed by value; SetAutomationEventList takes the retained pointer;
+    // AutomationEvent passed by value.
+    AutomationEventList Framework_LoadAutomationEventList(const char* fileName) { return LoadAutomationEventList(fileName); }
+    void                Framework_UnloadAutomationEventList(AutomationEventList list) { UnloadAutomationEventList(list); }
+    bool                Framework_ExportAutomationEventList(AutomationEventList list, const char* fileName) { return ExportAutomationEventList(list, fileName); }
+    void                Framework_SetAutomationEventList(AutomationEventList* list) { SetAutomationEventList(list); }
+    void                Framework_SetAutomationEventBaseFrame(int frame) { SetAutomationEventBaseFrame(frame); }
+    void                Framework_StartAutomationEventRecording() { StartAutomationEventRecording(); }
+    void                Framework_StopAutomationEventRecording() { StopAutomationEventRecording(); }
+    void                Framework_PlayAutomationEvent(AutomationEvent event) { PlayAutomationEvent(event); }
+
     void Framework_PauseAllAudio() {
         g_audioPaused = true;
         for (auto& kv : g_sounds) {

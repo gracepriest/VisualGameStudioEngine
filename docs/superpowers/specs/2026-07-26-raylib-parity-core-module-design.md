@@ -51,7 +51,7 @@ To add across the batches: `Matrix` (C5 ✅), `Camera3D` (C5 ✅), `Ray` (C5 ✅
 | **C8** | **File-system path queries** | **15** | — | **headless** | **SHIPPED — see below.** |
 | **C9** | **Directory listing & dropped files** | **7** | **FilePathList ✅** | **headless (partial)** | **SHIPPED — see below.** First by-value struct-with-`char**`-array return. |
 | **C10** | **Compression / Encoding** | **7** | — | **headless** | **SHIPPED — see below.** |
-| C11 | Automation events | 8 | AutomationEvent, AutomationEventList | device-lite | record/play. |
+| **C11** | **Automation events** | **8** | **AutomationEvent, AutomationEventList** | **device-lite** | **SHIPPED — see below** (all 8 new; retained-pointer SetAutomationEventList → IntPtr). |
 | — | Deferred callbacks | +5 | — | — | `SetTraceLogCallback` + 4 file-I/O callbacks; fold into the audio-callback batch. |
 
 Recommended order (front-load headless exact-correctness): **C5 → C10 → C7 → C8 → C1 → C2 → C6 → C9 → C4 → C3 → C11**,
@@ -231,3 +231,24 @@ callbacks last.
   name 3-way for all 16 + raylib.h `BeginMode2D..UnloadVrStereoConfig` range == 16 cross-check + a full-order type-scan of
   both VR structs (every ByValArray SizeConst + field sequence — the headless defense against a struct reorder) + the
   binding types (Camera3D/VrStereoConfig/VrDeviceInfo by value, int params, VrStereoConfig return) + dup-export guard on the 10.
+
+- **C11 — Automation events (8) 🏁 SHIPPED** (counts 2815/2747, both +8). `LoadAutomationEventList`,
+  `UnloadAutomationEventList`, `ExportAutomationEventList`, `SetAutomationEventList`, `SetAutomationEventBaseFrame`,
+  `StartAutomationEventRecording`, `StopAutomationEventRecording`, `PlayAutomationEvent`. All 8 new (zero pre-existing
+  automation bindings). Two new structs: `AutomationEvent` (`{UInteger frame, UInteger type, <ByValArray SizeConst:=4>
+  Integer() params}` = 24 B, **non-blittable**, passed by value to PlayAutomationEvent) and `AutomationEventList`
+  (`{UInteger capacity, UInteger count, IntPtr events}` = 16 B, **blittable** — the `events` pointer is raylib-owned,
+  allocated by Load, freed by Unload; returned/passed by value). ⛔ **The sharpest point: `SetAutomationEventList` takes
+  `AutomationEventList*` and raylib RETAINS the pointer** (writes `list->events[list->count++]` during recording), so the
+  binding is `IntPtr` — a `ByRef`/by-value binding would marshal a temporary copy that dangles the instant the call returns.
+  The caller owns the lifetime: pin the list at a stable address. `params` is a legal VB identifier; `event` (the raylib
+  param name) is a VB keyword so PlayAutomationEvent's param is `evt`. **Split correctness:** HEADLESS fast-subset (list mgmt
+  + export + play are pure CPU/file) — `LoadAutomationEventList(NULL)` returns an allocated empty list by value (capacity>0
+  & <1e6 [rejects a pointer-misread], count==0, events≠NULL → oracle for the 16-B by-value return), `Export` writes a real
+  `.rae` file (+I1), and `PlayAutomationEvent` marshals the 24-B non-blittable event by value using a benign type-0 (no-op)
+  event; + INTEGRATION (window) records under a **pinned unmanaged `AutomationEventList`** (`AllocHGlobal`+`StructureToPtr`),
+  `Set`/`BaseFrame`/`Start`/3 frames/`Stop`, reads the struct back (capacity/events preserved, count==0 empty-run), then
+  detaches with `SetAutomationEventList(IntPtr.Zero)` before freeing — proving the retained-pointer contract. Parity guard
+  (3 headless): genuine 3-way (header + **framework.cpp forwarder** + wrapper) + raylib.h `LoadAutomationEventList..
+  PlayAutomationEvent` range==8 + type-scan of both structs + bindings (IntPtr for Set, I1 Export, by-value list/event,
+  Ansi) + dup-export guard.

@@ -861,6 +861,23 @@ extern "C" {
     __declspec(dllexport) VrStereoConfig  Framework_LoadVrStereoConfig(VrDeviceInfo device);
     __declspec(dllexport) void            Framework_UnloadVrStereoConfig(VrStereoConfig config);
 
+    // ==== RAW RCORE PARITY — Automation events (raylib 5.5 passthrough, Batch core-C11) ====
+    // AutomationEvent { uint frame; uint type; int params[4] } = 24 B, passed BY VALUE to PlayAutomationEvent (the int[4] is
+    // a nested fixed-size array -> <ByValArray SizeConst:=4> in the wrapper). AutomationEventList { uint capacity; uint
+    // count; AutomationEvent* events } = 16 B (blittable), RETURNED BY VALUE by LoadAutomationEventList and passed BY VALUE
+    // to Unload/Export. SetAutomationEventList takes a POINTER — raylib RETAINS it while recording, so the wrapper binds it
+    // as IntPtr and the caller owns the lifetime. LoadAutomationEventList(NULL) allocates an empty list (capacity =
+    // MAX_AUTOMATION_EVENTS), freed by UnloadAutomationEventList. List mgmt + export are CPU-only (headless); the record/
+    // replay cycle interacts with the input/frame system.
+    __declspec(dllexport) AutomationEventList Framework_LoadAutomationEventList(const char* fileName);
+    __declspec(dllexport) void                Framework_UnloadAutomationEventList(AutomationEventList list);
+    __declspec(dllexport) bool                Framework_ExportAutomationEventList(AutomationEventList list, const char* fileName);
+    __declspec(dllexport) void                Framework_SetAutomationEventList(AutomationEventList* list);
+    __declspec(dllexport) void                Framework_SetAutomationEventBaseFrame(int frame);
+    __declspec(dllexport) void                Framework_StartAutomationEventRecording();
+    __declspec(dllexport) void                Framework_StopAutomationEventRecording();
+    __declspec(dllexport) void                Framework_PlayAutomationEvent(AutomationEvent event);
+
     // Sounds (handle-based)
     __declspec(dllexport) int   Framework_LoadSoundH(const char* file);
     __declspec(dllexport) void  Framework_UnloadSoundH(int h);
