@@ -2112,6 +2112,17 @@ extern "C" {
     void         Framework_UnloadDroppedFiles(FilePathList files) { UnloadDroppedFiles(files); }
     long         Framework_GetFileModTime(const char* fileName) { return GetFileModTime(fileName); }
 
+    // ==== RAW RCORE PARITY — Shader management (raylib 5.5 passthrough, Batch core-C4) ====
+    // 1:1 forwarders. GetShaderLocation + UnloadShader already forwarded above. Shader/Matrix/Texture2D pass by value.
+    Shader Framework_LoadShader(const char* vsFileName, const char* fsFileName) { return LoadShader(vsFileName, fsFileName); }
+    Shader Framework_LoadShaderFromMemory(const char* vsCode, const char* fsCode) { return LoadShaderFromMemory(vsCode, fsCode); }
+    bool   Framework_IsShaderValid(Shader shader) { return IsShaderValid(shader); }
+    int    Framework_GetShaderLocationAttrib(Shader shader, const char* attribName) { return GetShaderLocationAttrib(shader, attribName); }
+    void   Framework_SetShaderValue(Shader shader, int locIndex, const void* value, int uniformType) { SetShaderValue(shader, locIndex, value, uniformType); }
+    void   Framework_SetShaderValueV(Shader shader, int locIndex, const void* value, int uniformType, int count) { SetShaderValueV(shader, locIndex, value, uniformType, count); }
+    void   Framework_SetShaderValueMatrix(Shader shader, int locIndex, Matrix mat) { SetShaderValueMatrix(shader, locIndex, mat); }
+    void   Framework_SetShaderValueTexture(Shader shader, int locIndex, Texture2D texture) { SetShaderValueTexture(shader, locIndex, texture); }
+
     void Framework_PauseAllAudio() {
         g_audioPaused = true;
         for (auto& kv : g_sounds) {

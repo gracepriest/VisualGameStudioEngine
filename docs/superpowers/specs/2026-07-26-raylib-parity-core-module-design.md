@@ -44,7 +44,7 @@ To add across the batches: `Matrix` (C5 ✅), `Camera3D` (C5 ✅), `Ray` (C5 ✅
 | **C1** | **Window state & control** | **24** | — | **device+headless** | **SHIPPED — see below** (24 not 23: `GetWindowHandle` was genuinely unbound). |
 | **C2** | **Window/monitor query & clipboard** | **13** | — | **device-lite** | **SHIPPED — see below** (13 not 14: 7 screen/monitor getters were already bound). |
 | C3 | Drawing modes & VR | 10 | Camera3D✅, Matrix✅, VrDeviceInfo, VrStereoConfig | device | hardest marshaling (VR nested arrays). |
-| C4 | Shaders | 8 | Matrix✅ | device | `LoadShader(FromMemory)`, `SetShaderValue*` (`const void*`→IntPtr). |
+| **C4** | **Shaders** | **8** | **Shader✅, Matrix✅, Texture2D✅** | **device** | **SHIPPED — see below** (8 new: `GetShaderLocation`+`UnloadShader` were already bound raw; 10-fn family total). |
 | **C5** | **Screen-space / camera math** | **8** | **Ray✅, Camera3D✅, Matrix✅** | **headless** | **SHIPPED — see below.** |
 | **C6** | **Timing/frame + Random + Misc + 2 input stragglers** | **15** | — | **headless (partial)** | **SHIPPED — see below.** `TraceLog` fixed 2-arg `(int,const char*)`→`TraceLog(lvl,"%s",text)`; ⛔ `WaitTime` needs InitWindow's timer. |
 | **C7** | **File data I/O** | **7** | — | **headless** | **SHIPPED — see below.** |
@@ -187,3 +187,22 @@ callbacks last.
   is exactly the 7, a SECOND cross-check that the ENTIRE file-I/O surface (`LoadFileData..GetFileModTime` = C7+C8+C9) is
   now bound, the type-aware scan (FilePathList by-value, I1, `As Integer` not `Long`, struct field order, helper
   `ReadIntPtr`+`PtrToStringAnsi`+`Unload`-free), and the duplicate-export guard.
+
+- **C4 — Shader management (8) 🏁 SHIPPED** (counts 2797/2729, both +8). `LoadShader`, `LoadShaderFromMemory`,
+  `IsShaderValid`, `GetShaderLocationAttrib`, `SetShaderValue`, `SetShaderValueV`, `SetShaderValueMatrix`,
+  `SetShaderValueTexture`. raylib's shader family is **10** functions, but **`GetShaderLocation` + `UnloadShader` were
+  already exported as raw passthroughs** (the pre-existing `Framework_*` struct-based shader layer), so C4 adds the other
+  **8** — no re-declaration, no collision with the typed convenience wrappers (`SetShaderValue{1..4}f/1i`, `LoadShaderF`)
+  or the handle-based `Framework_Shader_*` layer. All three structs were already correct: `Shader {Integer id, IntPtr locs}`
+  (16 B on x64), `Matrix` (16 `Single` in raylib's scrambled `m0,m4,m8,m12/...` declaration order, from C5), `Texture2D`
+  (from rtextures). Marshaling: `Shader` returned/passed BY VALUE; `IsShaderValid`→I1; `const void* value`→**IntPtr** on
+  `SetShaderValue(V)` (caller pins/marshals the payload + a `ShaderUniformDataType` enum); `Matrix` BY VALUE (64 B);
+  `Texture2D` BY VALUE (20 B); the three `const char*` inputs Ansi. **Split correctness:** the parity guard (3 headless)
+  does name 3-way for all 10, a raylib.h cross-check that the `LoadShader..UnloadShader` RLAPI range is exactly those 10,
+  a type-aware scan (Shader/Matrix structs, by-value returns/params, I1, void*→IntPtr, Matrix/Texture2D by value, Ansi
+  inputs), and a duplicate-export guard on the 8 new names. Correctness is a genuine `[Integration]`+`[NonParallelizable]`
+  end-to-end (needs a live GL context): it compiles a custom GLSL-330 fragment shader via `LoadShaderFromMemory`, asserts
+  `IsShaderValid`, resolves `GetShaderLocation`/`GetShaderLocationAttrib` (`vertexPosition` is the reliable built-in
+  anchor), and drives every setter with real payloads — a float, a vec2, an identity `Matrix` by value, and a **real
+  GPU-loaded** `Texture2D` (`GenImageColor`→`LoadTextureFromImage`, so `SetShaderValueTexture` exercises a non-zero id
+  rather than raylib's early-return-on-0 no-op). A wrong by-value struct ABI would AV under the setters, not silently pass.

@@ -827,6 +827,21 @@ extern "C" {
     __declspec(dllexport) void         Framework_UnloadDroppedFiles(FilePathList files);
     __declspec(dllexport) long         Framework_GetFileModTime(const char* fileName);
 
+    // ==== RAW RCORE PARITY — Shader management (raylib 5.5 passthrough, Batch core-C4) ====
+    // Raw raylib shader API. Shader { unsigned int id; int* locs } is returned/passed BY VALUE (the wrapper's Utiliy.Shader
+    // is {Integer id; IntPtr locs} = 16 bytes on x64). SetShaderValue(V) take a const void* (IntPtr) + a uniformType enum
+    // (ShaderUniformDataType); SetShaderValueMatrix takes Matrix by value, SetShaderValueTexture Texture2D by value.
+    // NOTE: GetShaderLocation + UnloadShader are already exported above (raw passthroughs) — not repeated here.
+    // Loading/using shaders needs an OpenGL context (a window); the wrapper correctness tests run under [Integration].
+    __declspec(dllexport) Shader Framework_LoadShader(const char* vsFileName, const char* fsFileName);
+    __declspec(dllexport) Shader Framework_LoadShaderFromMemory(const char* vsCode, const char* fsCode);
+    __declspec(dllexport) bool   Framework_IsShaderValid(Shader shader);
+    __declspec(dllexport) int    Framework_GetShaderLocationAttrib(Shader shader, const char* attribName);
+    __declspec(dllexport) void   Framework_SetShaderValue(Shader shader, int locIndex, const void* value, int uniformType);
+    __declspec(dllexport) void   Framework_SetShaderValueV(Shader shader, int locIndex, const void* value, int uniformType, int count);
+    __declspec(dllexport) void   Framework_SetShaderValueMatrix(Shader shader, int locIndex, Matrix mat);
+    __declspec(dllexport) void   Framework_SetShaderValueTexture(Shader shader, int locIndex, Texture2D texture);
+
     // Sounds (handle-based)
     __declspec(dllexport) int   Framework_LoadSoundH(const char* file);
     __declspec(dllexport) void  Framework_UnloadSoundH(int h);
