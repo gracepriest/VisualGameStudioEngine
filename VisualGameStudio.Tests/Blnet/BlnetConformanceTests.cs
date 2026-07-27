@@ -130,6 +130,9 @@ public class BlnetConformanceTests
     [TestCase("cross_thread_result_rejected")] // spec test 11
     [TestCase("pump_error_surfacing")]         // spec test 12
     [TestCase("deadlock_guard")]               // spec test 13
+    [TestCase("version_mismatch")]             // spec test 14
+    [TestCase("concurrency_hammer")]           // spec test 15
+    [TestCase("stale_callback_via_release")]   // spec test 16
     public void Conformance(string scenario) =>
         Assert.That(RunScenario(scenario), Does.StartWith("PASS " + scenario));
 }

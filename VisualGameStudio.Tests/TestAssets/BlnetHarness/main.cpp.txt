@@ -3,7 +3,9 @@
  * Native C++ program that LoadLibrary's the Native-AOT published BlnetTestShim.dll,
  * binds the 7 contract exports (by the BLNET_EXPORT_* macro names so a header/shim
  * name drift breaks loudly here) plus the shim's test exports, initializes the
- * boundary (vtable handshake), then runs ONE scenario named by argv[1].
+ * boundary (vtable handshake), then runs ONE scenario named by argv[1]. Exception:
+ * the version_mismatch scenario dispatches BEFORE the shared handshake and performs
+ * its own (mismatched-then-correct) initialize sequence.
  *
  * Exit protocol: 0 = PASS (stdout starts with "PASS <scenario>"),
  *                1 = scenario failure ("FAIL <scenario>: <detail>"),
@@ -18,6 +20,7 @@
 #include "blnet.h"
 #include "blnet_runtime.hpp"
 #include <windows.h>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -193,7 +196,7 @@ static int scenario_inline_native_exception() {
     const bool msg_ok  = contains(msg, "n\xC3\xA4tive boom");
     if (type) g_shim.free_(type);
     if (msg)  g_shim.free_(msg);
-    REQUIRE(type_ok, "inline_native_exception", "last-error type is not BasicLangNativeException");
+    REQUIRE(type_ok, "inline_native_exception", "last-error type does not contain BasicLangNativeException");
     REQUIRE(msg_ok,  "inline_native_exception", "last-error message lacks the native boom UTF-8 bytes");
     printf("PASS inline_native_exception\n");
     return 0;
@@ -327,6 +330,7 @@ static int scenario_cross_thread_result_rejected() {
    lambda (raw function pointer), so its observations go through globals. ---- */
 static bool s12_first_ran = false;
 static int  s12_hook_fires = 0;
+static int  s12_hook_bad_status = 0; /* fires whose status != BLNET_E_NATIVE_EXCEPTION */
 static std::string s12_hook_msgs;
 
 static int scenario_pump_error_surfacing() {
@@ -346,15 +350,18 @@ static int scenario_pump_error_surfacing() {
     REQUIRE(st == BLNET_OK, "pump_error_surfacing", "enqueue #2 failed");
     { BlnetCallScope s; st = test_invoke_from_thread(cb3, nullptr, 0); }
     REQUIRE(st == BLNET_OK, "pump_error_surfacing", "enqueue #3 failed");
-    blnet_set_error_hook([](int32_t, const char* msg) {
+    /* plain counters are fine: the hook runs on the pump thread only (== main) */
+    blnet_set_error_hook([](int32_t hook_st, const char* msg) {
         ++s12_hook_fires;
+        if (hook_st != BLNET_E_NATIVE_EXCEPTION) ++s12_hook_bad_status;
         s12_hook_msgs += msg ? msg : "<null>";
         s12_hook_msgs += ";";
     });
     int32_t pump_st = blnet_pump();
     REQUIRE(pump_st == BLNET_E_NATIVE_EXCEPTION, "pump_error_surfacing", "pump did not return the first failure status");
-    REQUIRE(s12_first_ran, "pump_error_surfacing", "callback #1 did not run (pump stopped at a failure?)");
+    REQUIRE(s12_first_ran, "pump_error_surfacing", "callback #1 did not run");
     REQUIRE(s12_hook_fires == 2, "pump_error_surfacing", "error hook did not fire exactly twice");
+    REQUIRE(s12_hook_bad_status == 0, "pump_error_surfacing", "error hook fired with a status other than BLNET_E_NATIVE_EXCEPTION");
     const size_t p2 = s12_hook_msgs.find("boom2");
     const size_t p3 = s12_hook_msgs.find("boom3");
     REQUIRE(p2 != std::string::npos, "pump_error_surfacing", "hook messages lack boom2");
@@ -390,6 +397,89 @@ static int scenario_deadlock_guard() {
     return 0;
 }
 
+/* ---- scenario 14: version fail-fast (C7). The MISMATCHED initialize must be the
+   FIRST initialize call in this process (main special-cases the dispatch so the
+   shared handshake never ran), and the shim checks the version BEFORE the null
+   guard and the vtable read, so the rejected call leaves no state behind; the
+   correct-version init then succeeds. BLNET_ABI_VERSION is used as a MACRO, never
+   a numeric literal: a BlnetContract.AbiVersion bump mechanically breaks the drift
+   test AND this scenario until both sides regenerate (C7's intent). Each scenario
+   is a fresh process, so the failed init cannot poison other scenarios. ---- */
+static int scenario_version_mismatch() {
+    static BlnetNativeVtable vt{ &blnet_invoke_callback, &blnet_get_native_error };
+    int32_t st = shim_initialize(BLNET_ABI_VERSION + 998, &vt);
+    REQUIRE(st == BLNET_E_VERSION_MISMATCH, "version_mismatch", "mismatched init did not return BLNET_E_VERSION_MISMATCH");
+    st = shim_initialize(BLNET_ABI_VERSION, &vt);
+    REQUIRE(st == BLNET_OK, "version_mismatch", "correct-version init failed after the rejected one");
+    REQUIRE(shim_abi_version() == BLNET_ABI_VERSION, "version_mismatch", "shim_abi_version() != BLNET_ABI_VERSION");
+    printf("PASS version_mismatch\n");
+    return 0;
+}
+
+/* ---- scenario 15: 8 threads x 2000 iterations of create->add->count->release
+   through the shim, concurrently (C1/C2: the handle table under contention). Each
+   thread body opens its OWN BlnetCallScope (the depth counter is thread_local - one
+   scope per thread, never shared). Tallies are std::atomic: the s10-s13 plain-static
+   pattern relies on pump-thread-only writes / Join happens-before, which does NOT
+   hold for 8 concurrent writers. Workers never print (interleaving) and never
+   REQUIRE (return-from-macro would only exit the lambda); they only count. Count
+   correctness is checked per iteration (each iteration's fresh list must count
+   exactly the 1 element added), not just statuses. After joining, a final
+   create/add/count/release round-trip proves the table is still coherent. ---- */
+static int scenario_concurrency_hammer() {
+    constexpr int kThreads = 8;
+    constexpr int kIters = 2000;
+    std::atomic<int> status_failures{0};  /* any non-OK status from any shim call */
+    std::atomic<int> count_mismatches{0}; /* count != adds performed in that iteration */
+    std::thread threads[kThreads];
+    for (int t = 0; t < kThreads; ++t) {
+        threads[t] = std::thread([&status_failures, &count_mismatches]() {
+            BlnetCallScope scope; /* thread_local depth: covers all this thread's shim calls */
+            for (int i = 0; i < kIters; ++i) {
+                uint64_t h = 0;
+                if (test_create_list(&h) != BLNET_OK) { ++status_failures; continue; }
+                if (test_list_add(h, i) != BLNET_OK) ++status_failures;
+                int32_t count = -1;
+                if (test_list_count(h, &count) != BLNET_OK) ++status_failures;
+                else if (count != 1) ++count_mismatches;
+                if (g_shim.release(h) != BLNET_OK) ++status_failures;
+            }
+        });
+    }
+    for (auto& th : threads) th.join();
+    REQUIRE(status_failures.load() == 0, "concurrency_hammer", "non-OK statuses under concurrent create/add/count/release");
+    REQUIRE(count_mismatches.load() == 0, "concurrency_hammer", "per-iteration count != 1 under concurrency (cross-handle interference)");
+    uint64_t h = 0;
+    { BlnetCallScope s; NetCheck(test_create_list(&h)); }
+    int32_t count = -1;
+    { BlnetCallScope s; NetCheck(test_list_add(h, 1)); }
+    { BlnetCallScope s; NetCheck(test_list_count(h, &count)); }
+    REQUIRE(count == 1, "concurrency_hammer", "post-join round-trip count != 1");
+    { BlnetCallScope s; NetCheck(g_shim.release(h)); }
+    printf("PASS concurrency_hammer\n");
+    return 0;
+}
+
+/* ---- scenario 16: releasing a callback makes its handle stale (C5, mirroring the
+   C2 handle rules). blnet_callback_release bumps the slot generation, so a later
+   inline invoke through the universal thunk returns BLNET_E_STALE_CALLBACK without
+   running the body, and a second release is stale too (double-release detection). ---- */
+static bool s16_ran = false;
+
+static int scenario_stale_callback_via_release() {
+    blnet_callback cb = blnet_register_callback(
+        [](const uint64_t*, int32_t, uint64_t*) -> int32_t { s16_ran = true; return BLNET_OK; },
+        nullptr, 0, CallbackFlags{});
+    REQUIRE(blnet_callback_release(cb) == BLNET_OK, "stale_callback_via_release", "first release failed");
+    int32_t st;
+    { BlnetCallScope s; st = test_invoke(cb, nullptr, 0, nullptr); }
+    REQUIRE(st == BLNET_E_STALE_CALLBACK, "stale_callback_via_release", "invoke on a released callback did not return BLNET_E_STALE_CALLBACK");
+    REQUIRE(!s16_ran, "stale_callback_via_release", "released callback body still ran");
+    REQUIRE(blnet_callback_release(cb) == BLNET_E_STALE_CALLBACK, "stale_callback_via_release", "double release did not return BLNET_E_STALE_CALLBACK");
+    printf("PASS stale_callback_via_release\n");
+    return 0;
+}
+
 int main(int argc, char** argv) {
     setvbuf(stdout, nullptr, _IONBF, 0); /* unbuffered: output must survive a timeout kill or AV */
     if (argc < 2) { printf("FAIL usage: harness <scenario>\n"); return 1; }
@@ -419,6 +509,15 @@ int main(int argc, char** argv) {
     bind(m, test_invoke,             "blnet_test_invoke");
     bind(m, test_invoke_from_thread, "blnet_test_invoke_from_thread");
 
+    const char* scenario = argv[1];
+
+    /* Scenario 14 must own the FIRST blnet_initialize call in this process - its
+       whole point is that a MISMATCHED version is rejected before any successful
+       handshake ever happened - so it dispatches BEFORE the shared handshake block
+       and performs its own mismatched-then-correct init sequence. Every other
+       scenario takes the normal handshake path below. */
+    if (strcmp(scenario, "version_mismatch") == 0) return scenario_version_mismatch();
+
     /* C7 handshake: version agreement, then hand the shim the native vtable.
        Handshake failures are ENVIRONMENTAL (exit 2, like bind failures), not
        scenario failures (exit 1). */
@@ -426,7 +525,6 @@ int main(int argc, char** argv) {
     if (shim_abi_version() != BLNET_ABI_VERSION) { printf("FAIL init: shim ABI version != BLNET_ABI_VERSION\n"); return 2; }
     if (shim_initialize(BLNET_ABI_VERSION, &vt) != BLNET_OK) { printf("FAIL init: blnet_initialize failed\n"); return 2; }
 
-    const char* scenario = argv[1];
     try {
         if (strcmp(scenario, "handle_roundtrip") == 0) return scenario_handle_roundtrip();
         if (strcmp(scenario, "stale_handle") == 0) return scenario_stale_handle();
@@ -441,6 +539,9 @@ int main(int argc, char** argv) {
         if (strcmp(scenario, "cross_thread_result_rejected") == 0) return scenario_cross_thread_result_rejected();
         if (strcmp(scenario, "pump_error_surfacing") == 0) return scenario_pump_error_surfacing();
         if (strcmp(scenario, "deadlock_guard") == 0) return scenario_deadlock_guard();
+        /* version_mismatch (scenario 14) dispatches BEFORE the handshake above */
+        if (strcmp(scenario, "concurrency_hammer") == 0) return scenario_concurrency_hammer();
+        if (strcmp(scenario, "stale_callback_via_release") == 0) return scenario_stale_callback_via_release();
     } catch (const std::exception& ex) {
         printf("FAIL %s: unexpected exception: %s\n", scenario, ex.what());
         return 1;
