@@ -13211,5 +13211,89 @@ Public Module FrameworkWrapper
     End Function
 #End Region
 
+#Region "Raylib rmodels — Model loading & drawing (Batch models-model)"
+    ' 5 model-management fns + 10 model/billboard draws. New struct Model (Utiliy.vb): embedded Matrix + int counts +
+    ' raylib-owned pointers as IntPtr, fully blittable (120 B), passed/returned BY VALUE (LoadModel/LoadModelFromMesh return
+    ' it via hidden-sret). Draw fns expand Color -> r,g,b,a Bytes (the models-draw convention); Camera3D/Texture2D/Rectangle/
+    ' Vector3/Vector2 by value. ⚠ IsModelValid derefs model.meshes[i] for meshCount iterations with no null-guard (raylib 5.5),
+    ' so only a zeroed/empty model (meshCount 0 -> False) is headless-safe; a real True needs a GPU-loaded model. The draws +
+    ' LoadModel/LoadModelFromMesh need a live GL context (Integration). LoadModel path -> CharSet.Ansi String.
+
+    ''' <summary>Loads a model from files (meshes and materials); Model returned by value.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadModel(fileName As String) As Model
+    End Function
+
+    ''' <summary>Loads a model from a generated mesh (default material); Model returned by value.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_LoadModelFromMesh(mesh As Mesh) As Model
+    End Function
+
+    ''' <summary>Checks whether a model is valid (meshes/materials loaded).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsModelValid(model As Model) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Unloads a model (including its meshes) from RAM/VRAM.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadModel(model As Model)
+    End Sub
+
+    ''' <summary>Computes a model's bounding box (all meshes); BoundingBox returned by value.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetModelBoundingBox(model As Model) As BoundingBox
+    End Function
+
+    ''' <summary>Draws a model (with texture if set).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawModel(model As Model, position As Vector3, scale As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a model with extended parameters.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawModelEx(model As Model, position As Vector3, rotationAxis As Vector3, rotationAngle As Single, scale As Vector3, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a model as wireframe.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawModelWires(model As Model, position As Vector3, scale As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a model as wireframe with extended parameters.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawModelWiresEx(model As Model, position As Vector3, rotationAxis As Vector3, rotationAngle As Single, scale As Vector3, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a model as points.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawModelPoints(model As Model, position As Vector3, scale As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a model as points with extended parameters.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawModelPointsEx(model As Model, position As Vector3, rotationAxis As Vector3, rotationAngle As Single, scale As Vector3, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a bounding box (wires).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawBoundingBox(box As BoundingBox, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a billboard texture.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawBillboard(camera As Camera3D, texture As Texture2D, position As Vector3, scale As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a billboard texture defined by a source rectangle.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawBillboardRec(camera As Camera3D, texture As Texture2D, source As Rectangle, position As Vector3, size As Vector2, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a billboard texture defined by a source rectangle and rotation.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawBillboardPro(camera As Camera3D, texture As Texture2D, source As Rectangle, position As Vector3, up As Vector3, size As Vector2, origin As Vector2, rotation As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+#End Region
+
 End Module
 

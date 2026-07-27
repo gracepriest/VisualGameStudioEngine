@@ -258,6 +258,26 @@ Public Module Utiliy
         Public vboId As IntPtr          ' unsigned int*  (OpenGL VBO ids)
     End Structure
 
+    ' raylib Model — meshes + materials + skeleton (rmodels model sub-batch). Fully blittable: an embedded Matrix transform,
+    ' two int counts, and the rest raylib-owned native pointers (Mesh* / Material* / int* / BoneInfo* / Transform*) opaque to
+    ' VB -> IntPtr. Passed BY VALUE to IsModelValid / UnloadModel / GetModelBoundingBox / DrawModel*, RETURNED BY VALUE by
+    ' LoadModel / LoadModelFromMesh (hidden-sret on Win64). Field order/widths mirror raylib.h's Model exactly (Matrix
+    ' transform; int meshCount, materialCount; Mesh* meshes; Material* materials; int* meshMaterial; int boneCount;
+    ' BoneInfo* bones; Transform* bindPose). Size = 120 bytes on x64. (BoneInfo/Transform stay behind pointers here — no
+    ' by-value use until the animations sub-batch, so they are not declared yet.)
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure Model
+        Public transform As Matrix
+        Public meshCount As Integer
+        Public materialCount As Integer
+        Public meshes As IntPtr         ' Mesh*
+        Public materials As IntPtr      ' Material*
+        Public meshMaterial As IntPtr   ' int*
+        Public boneCount As Integer
+        Public bones As IntPtr          ' BoneInfo*
+        Public bindPose As IntPtr       ' Transform*
+    End Structure
+
     ' raylib VrDeviceInfo — head-mounted-display parameters passed BY VALUE to LoadVrStereoConfig (Batch core-C3). The two
     ' trailing float[4] arrays are NESTED FIXED-SIZE arrays: <MarshalAs(ByValArray, SizeConst:=4)> inlines 4 floats each
     ' (NOT a pointer). Layout: 2 int + 5 float + 4 float + 4 float = 60 bytes.
