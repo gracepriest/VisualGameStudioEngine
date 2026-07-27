@@ -100,7 +100,8 @@ namespace BasicLang.Compiler.CodeGen
             _typeMap["Char"] = "char";
             _typeMap["Void"] = "void";
             _typeMap["Object"] = "object";
-            _typeMap["Byte"] = "sbyte";
+            _typeMap["Byte"] = "byte";
+            _typeMap["SByte"] = "sbyte";
             _typeMap["Short"] = "short";
             _typeMap["UByte"] = "byte";
             _typeMap["UShort"] = "ushort";

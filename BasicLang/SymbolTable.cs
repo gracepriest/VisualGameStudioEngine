@@ -47,24 +47,28 @@ public class TypeInfo
         public bool IsNumeric()
         {
             return Name == "Integer" || Name == "Long" || Name == "Single" || Name == "Double" ||
-                   Name == "Byte" || Name == "Short" || Name == "UByte" || Name == "UShort" ||
-                   Name == "UInteger" || Name == "ULong";
+                   Name == "Byte" || Name == "SByte" || Name == "Short" || Name == "UByte" ||
+                   Name == "UShort" || Name == "UInteger" || Name == "ULong";
         }
 
         public bool IsIntegral()
         {
-            return Name == "Integer" || Name == "Long" || Name == "Byte" || Name == "Short" ||
-                   Name == "UByte" || Name == "UShort" || Name == "UInteger" || Name == "ULong";
+            return Name == "Integer" || Name == "Long" || Name == "Byte" || Name == "SByte" ||
+                   Name == "Short" || Name == "UByte" || Name == "UShort" || Name == "UInteger" ||
+                   Name == "ULong";
         }
 
+        // Byte is UNSIGNED (.NET semantics — matches the live C# backend's
+        // Byte -> byte mapping); SByte is the signed 8-bit type.
         public bool IsUnsigned()
         {
-            return Name == "UByte" || Name == "UShort" || Name == "UInteger" || Name == "ULong";
+            return Name == "Byte" || Name == "UByte" || Name == "UShort" || Name == "UInteger" ||
+                   Name == "ULong";
         }
 
         public bool IsSigned()
         {
-            return Name == "Byte" || Name == "Short" || Name == "Integer" || Name == "Long";
+            return Name == "SByte" || Name == "Short" || Name == "Integer" || Name == "Long";
         }
         
         public bool IsFloatingPoint()
