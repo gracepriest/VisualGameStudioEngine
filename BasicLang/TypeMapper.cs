@@ -200,6 +200,9 @@ namespace BasicLang.Compiler.CodeGen
     /// </summary>
     public class CppTypeMapper : TypeMapperBase
     {
+        /// <summary>Invariant hook: BlnetContractTests asserts these equal BoundaryTypeRegistry's Bridged set + 'Object'.</summary>
+        internal IEnumerable<string> MappedTypeNamesForInvariantCheck => _typeMap.Keys;
+
         protected override void InitializeTypeMappings()
         {
             _typeMap["Integer"] = "int32_t";

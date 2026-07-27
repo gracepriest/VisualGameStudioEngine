@@ -1074,8 +1074,8 @@ End Sub";
     public void Cpp_DecimalLocal_StillRejected()
     {
         // Decimal is NOT mapped by CppTypeMapper — it must be rejected cleanly. If it
-        // were (wrongly) in MappedTypeNames it would pass the check and then MapType
-        // would emit a bare, UNDEFINED C++ type `Decimal` (silent miscompile).
+        // were (wrongly) categorized Bridged in BoundaryTypeRegistry it would pass the
+        // check and then MapType would emit a bare, UNDEFINED C++ type `Decimal` (silent miscompile).
         var source = @"
 Sub Main()
     Dim x As Decimal

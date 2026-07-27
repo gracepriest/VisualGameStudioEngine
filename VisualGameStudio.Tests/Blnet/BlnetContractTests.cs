@@ -48,6 +48,19 @@ public class BlnetContractTests
         foreach (var (name, value, _) in BlnetContract.StatusCodes)
             Assert.That(cs, Does.Contain($"{name} = {value},"));
     }
+
+    [Test]
+    public void MapperInvariant_TypeMapKeys_Equal_BridgedPlusObject()
+    {
+        var expected = BasicLang.BoundaryTypeRegistry
+            .NamesInCategory(BasicLang.BoundaryTypeCategory.Bridged)
+            .Append("Object")
+            .Select(n => n.ToLowerInvariant()).OrderBy(n => n).ToArray();
+        var actual = new BasicLang.Compiler.CodeGen.CppTypeMapper().MappedTypeNamesForInvariantCheck
+            .Select(n => n.ToLowerInvariant()).OrderBy(n => n).ToArray();
+        Assert.That(actual, Is.EqualTo(expected),
+            "CppTypeMapper._typeMap and BoundaryTypeRegistry drifted — update the registry, not a parallel list");
+    }
 }
 
 [TestFixture]
