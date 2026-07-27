@@ -210,6 +210,48 @@ Public Module Utiliy
         Public direction As Vector3
     End Structure
 
+    ' raylib VrDeviceInfo — head-mounted-display parameters passed BY VALUE to LoadVrStereoConfig (Batch core-C3). The two
+    ' trailing float[4] arrays are NESTED FIXED-SIZE arrays: <MarshalAs(ByValArray, SizeConst:=4)> inlines 4 floats each
+    ' (NOT a pointer). Layout: 2 int + 5 float + 4 float + 4 float = 60 bytes.
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure VrDeviceInfo
+        Public hResolution As Integer
+        Public vResolution As Integer
+        Public hScreenSize As Single
+        Public vScreenSize As Single
+        Public eyeToScreenDistance As Single
+        Public lensSeparationDistance As Single
+        Public interpupillaryDistance As Single
+        <MarshalAs(UnmanagedType.ByValArray, SizeConst:=4)>
+        Public lensDistortionValues As Single()
+        <MarshalAs(UnmanagedType.ByValArray, SizeConst:=4)>
+        Public chromaAbCorrection As Single()
+    End Structure
+
+    ' raylib VrStereoConfig — computed VR stereo-rendering config, RETURNED BY VALUE by LoadVrStereoConfig and passed BY
+    ' VALUE to BeginVrStereoMode/UnloadVrStereoConfig (Batch core-C3). EVERY field is a NESTED FIXED-SIZE array: two
+    ' Matrix[2] (inline arrays of the 64-byte Matrix struct) then six float[2]. Total 2*64 + 2*64 + 6*8 = 304 bytes.
+    ' ByValArray of the Matrix value type inlines SizeConst copies of the struct (Matrix is blittable/Sequential).
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure VrStereoConfig
+        <MarshalAs(UnmanagedType.ByValArray, SizeConst:=2)>
+        Public projection As Matrix()
+        <MarshalAs(UnmanagedType.ByValArray, SizeConst:=2)>
+        Public viewOffset As Matrix()
+        <MarshalAs(UnmanagedType.ByValArray, SizeConst:=2)>
+        Public leftLensCenter As Single()
+        <MarshalAs(UnmanagedType.ByValArray, SizeConst:=2)>
+        Public rightLensCenter As Single()
+        <MarshalAs(UnmanagedType.ByValArray, SizeConst:=2)>
+        Public leftScreenCenter As Single()
+        <MarshalAs(UnmanagedType.ByValArray, SizeConst:=2)>
+        Public rightScreenCenter As Single()
+        <MarshalAs(UnmanagedType.ByValArray, SizeConst:=2)>
+        Public scale As Single()
+        <MarshalAs(UnmanagedType.ByValArray, SizeConst:=2)>
+        Public scaleIn As Single()
+    End Structure
+
     ' raylib Wave — PCM audio data held in RAM (raudio module, Batch audio-A1). Returned/passed BY VALUE;
     ' WaveCrop/WaveFormat mutate it in place (ByRef). `data` is the raw sample buffer pointer.
     <StructLayout(LayoutKind.Sequential)>

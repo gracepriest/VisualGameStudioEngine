@@ -12700,5 +12700,63 @@ Public Module FrameworkWrapper
     End Sub
 #End Region
 
+#Region "Raylib rcore — Drawing modes & VR simulator (Batch core-C3)"
+    ' Raw rcore drawing-mode + VR-simulator functions (BeginMode2D/EndMode2D, BeginTextureMode/EndTextureMode,
+    ' BeginShaderMode/EndShaderMode are already bound above). BeginMode3D takes Camera3D by value; BeginBlendMode/
+    ' BeginScissorMode take ints. The VR half marshals VrDeviceInfo/VrStereoConfig (Utiliy.vb) — structs with NESTED
+    ' fixed-size arrays — BY VALUE. LoadVrStereoConfig RETURNS the non-blittable VrStereoConfig by value (raylib zeroes it
+    ' with no GL context; a live window fills it). Begin*Mode calls need a live context.
+
+    ''' <summary>Begins 3D mode with a custom camera (Camera3D by value)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_BeginMode3D(camera As Camera3D)
+    End Sub
+
+    ''' <summary>Ends 3D mode and returns to default 2D orthographic mode</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_EndMode3D()
+    End Sub
+
+    ''' <summary>Begins a blending mode (alpha, additive, multiplied, subtract, custom)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_BeginBlendMode(mode As Integer)
+    End Sub
+
+    ''' <summary>Ends the blending mode (reset to default alpha blending)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_EndBlendMode()
+    End Sub
+
+    ''' <summary>Begins scissor mode (defines a screen area for following drawing)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_BeginScissorMode(x As Integer, y As Integer, width As Integer, height As Integer)
+    End Sub
+
+    ''' <summary>Ends scissor mode</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_EndScissorMode()
+    End Sub
+
+    ''' <summary>Begins stereo rendering (requires the VR simulator; VrStereoConfig by value)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_BeginVrStereoMode(config As VrStereoConfig)
+    End Sub
+
+    ''' <summary>Ends stereo rendering (requires the VR simulator)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_EndVrStereoMode()
+    End Sub
+
+    ''' <summary>Loads a VR stereo config for VR simulator device parameters (VrDeviceInfo in, VrStereoConfig out, both by value)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_LoadVrStereoConfig(device As VrDeviceInfo) As VrStereoConfig
+    End Function
+
+    ''' <summary>Unloads a VR stereo config (VrStereoConfig by value)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadVrStereoConfig(config As VrStereoConfig)
+    End Sub
+#End Region
+
 End Module
 
