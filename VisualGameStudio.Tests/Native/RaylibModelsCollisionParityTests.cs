@@ -27,7 +27,7 @@ public class RaylibModelsCollisionParityTests
         "GetRayCollisionSphere", "GetRayCollisionBox", "GetRayCollisionTriangle", "GetRayCollisionQuad",
     };
 
-    // The full raylib collision range = the 7 above + the deferred GetRayCollisionMesh.
+    // The full raylib collision range = the 7 above + GetRayCollisionMesh (now bound in the mesh sub-batch, verified there).
     private static readonly string[] AllRaylibCollision =
     {
         "CheckCollisionSpheres", "CheckCollisionBoxes", "CheckCollisionBoxSphere",
@@ -61,10 +61,8 @@ public class RaylibModelsCollisionParityTests
                 Assert.That(wrapper.Contains($"Framework_{name}("), Is.True, $"RaylibWrapper.vb missing import Framework_{name}");
             }
 
-            // GetRayCollisionMesh is intentionally NOT bound yet (needs the Mesh struct).
-            Assert.That(header.Contains("Framework_GetRayCollisionMesh("), Is.False,
-                "GetRayCollisionMesh must stay deferred to the mesh sub-batch; if bound, add it to Names here");
-
+            // GetRayCollisionMesh landed in the mesh sub-batch (it needs the Mesh struct); its 3-way binding is verified by
+            // RaylibModelsMeshParityTests. Here we only confirm raylib's full collision range is accounted for.
             var raylibHeader = File.ReadAllText(Path.Combine(root, "packages", "raylib.5.5.0", "build", "native", "include", "raylib.h"));
             var range = ExtractRlapiRange(raylibHeader, "CheckCollisionSpheres(", "GetRayCollisionQuad(");
             Assert.That(range, Is.EquivalentTo(AllRaylibCollision),
