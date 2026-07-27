@@ -2101,6 +2101,17 @@ extern "C" {
     void    Framework_SetGamepadVibration(int gamepad, float leftMotor, float rightMotor, float duration) { SetGamepadVibration(gamepad, leftMotor, rightMotor, duration); }
     Vector2 Framework_GetTouchPosition(int index) { return GetTouchPosition(index); }
 
+    // ==== RAW RCORE PARITY — Directory listing & dropped files (raylib 5.5 passthrough, Batch core-C9) ====
+    // 1:1 forwarders; FilePathList is returned/passed by value and freed through its matching Unload. GetFileModTime
+    // returns raylib's C `long` unchanged.
+    FilePathList Framework_LoadDirectoryFiles(const char* dirPath) { return LoadDirectoryFiles(dirPath); }
+    FilePathList Framework_LoadDirectoryFilesEx(const char* basePath, const char* filter, bool scanSubdirs) { return LoadDirectoryFilesEx(basePath, filter, scanSubdirs); }
+    void         Framework_UnloadDirectoryFiles(FilePathList files) { UnloadDirectoryFiles(files); }
+    bool         Framework_IsFileDropped(void) { return IsFileDropped(); }
+    FilePathList Framework_LoadDroppedFiles(void) { return LoadDroppedFiles(); }
+    void         Framework_UnloadDroppedFiles(FilePathList files) { UnloadDroppedFiles(files); }
+    long         Framework_GetFileModTime(const char* fileName) { return GetFileModTime(fileName); }
+
     void Framework_PauseAllAudio() {
         g_audioPaused = true;
         for (auto& kv : g_sounds) {

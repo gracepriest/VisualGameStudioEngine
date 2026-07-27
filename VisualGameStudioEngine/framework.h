@@ -814,6 +814,19 @@ extern "C" {
     __declspec(dllexport) void    Framework_SetGamepadVibration(int gamepad, float leftMotor, float rightMotor, float duration);
     __declspec(dllexport) Vector2 Framework_GetTouchPosition(int index);
 
+    // ==== RAW RCORE PARITY — Directory listing & dropped files (raylib 5.5 passthrough, Batch core-C9) ====
+    // FilePathList { unsigned int capacity; unsigned int count; char** paths } is returned BY VALUE and passed BY VALUE to
+    // its matching Unload. LoadDirectoryFiles(Ex) allocate a fresh list (free with UnloadDirectoryFiles); LoadDroppedFiles
+    // aliases the window's internal drop buffer (free/clear with UnloadDroppedFiles). GetFileModTime returns C `long`
+    // (32-bit on Win64) — the wrapper binds it As Integer. Dropped-file queries need a window; directory listing does not.
+    __declspec(dllexport) FilePathList Framework_LoadDirectoryFiles(const char* dirPath);
+    __declspec(dllexport) FilePathList Framework_LoadDirectoryFilesEx(const char* basePath, const char* filter, bool scanSubdirs);
+    __declspec(dllexport) void         Framework_UnloadDirectoryFiles(FilePathList files);
+    __declspec(dllexport) bool         Framework_IsFileDropped(void);
+    __declspec(dllexport) FilePathList Framework_LoadDroppedFiles(void);
+    __declspec(dllexport) void         Framework_UnloadDroppedFiles(FilePathList files);
+    __declspec(dllexport) long         Framework_GetFileModTime(const char* fileName);
+
     // Sounds (handle-based)
     __declspec(dllexport) int   Framework_LoadSoundH(const char* file);
     __declspec(dllexport) void  Framework_UnloadSoundH(int h);

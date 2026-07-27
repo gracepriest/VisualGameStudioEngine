@@ -49,7 +49,7 @@ To add across the batches: `Matrix` (C5 ✅), `Camera3D` (C5 ✅), `Ray` (C5 ✅
 | **C6** | **Timing/frame + Random + Misc + 2 input stragglers** | **15** | — | **headless (partial)** | **SHIPPED — see below.** `TraceLog` fixed 2-arg `(int,const char*)`→`TraceLog(lvl,"%s",text)`; ⛔ `WaitTime` needs InitWindow's timer. |
 | **C7** | **File data I/O** | **7** | — | **headless** | **SHIPPED — see below.** |
 | **C8** | **File-system path queries** | **15** | — | **headless** | **SHIPPED — see below.** |
-| C9 | Directory listing & dropped files | 7 | FilePathList | headless | `char**` list marshaling. |
+| **C9** | **Directory listing & dropped files** | **7** | **FilePathList ✅** | **headless (partial)** | **SHIPPED — see below.** First by-value struct-with-`char**`-array return. |
 | **C10** | **Compression / Encoding** | **7** | — | **headless** | **SHIPPED — see below.** |
 | C11 | Automation events | 8 | AutomationEvent, AutomationEventList | device-lite | record/play. |
 | — | Deferred callbacks | +5 | — | — | `SetTraceLogCallback` + 4 file-I/O callbacks; fold into the audio-callback batch. |
@@ -167,3 +167,23 @@ callbacks last.
   that {13 non-input}∪{6 already-bound} exactly covers raylib's `Timing..MemFree` range, a SECOND cross-check that the
   ENTIRE rcore input section is now bound (proving only these 2 stragglers remained), the type-aware wrapper scan, and
   the duplicate-export guard.
+- **C9 — Directory listing & dropped files (7) 🏁 SHIPPED** (counts 2789/2721, both +7). `LoadDirectoryFiles`,
+  `LoadDirectoryFilesEx`, `UnloadDirectoryFiles`, `IsFileDropped`, `LoadDroppedFiles`, `UnloadDroppedFiles`,
+  `GetFileModTime`. The headline is the module's **FIRST by-value struct-with-pointer-array**: raylib's
+  `FilePathList { unsigned int capacity; unsigned int count; char** paths }` (new struct in `Utiliy.vb`, `<Sequential>`
+  {UInteger, UInteger, IntPtr} = 16 B) is RETURNED by value from the three `Load*` and PASSED by value to the two
+  `Unload*`. Managed `String()` helpers (`LoadDirectoryFiles`/`Ex`/`LoadDroppedFiles`) walk the `char**` with
+  `Marshal.ReadIntPtr(paths, i*IntPtr.Size)` + `PtrToStringAnsi` and copy the strings out BEFORE calling the matching
+  `Unload` (which frees them) inside a `Try/Finally`. `LoadDirectoryFiles(Ex)` allocate a fresh list; `LoadDroppedFiles`
+  aliases the window's internal drop buffer — both freed via their `Unload`. ⛔ **`GetFileModTime` returns C `long`, which
+  is 32-bit on Win64** → bound `As Integer` (a `Long` would misread 8 bytes; a completeness assertion forbids `As Long`).
+  `scanSubdirs`/`IsFileDropped` → I1 bool; path inputs Ansi. Zero collisions (all 7 plain + 3 helpers). **Split
+  correctness:** HEADLESS fast-subset with a REAL oracle — a temp dir with 3 known files listed and compared
+  (`LoadDirectoryFiles` count+names, `LoadDirectoryFilesEx` extension filter), and `GetFileModTime` within 5 s of .NET's
+  `File.GetLastWriteTimeUtc` (proves the 32-bit `long`); the local mirror walks the `char**` itself, so a wrong struct
+  layout or bad pointer surfaces as garbage/AV. PLUS an `[Integration]`+`[NonParallelizable]` fixture that ABI-smokes the
+  `FilePathList` by-value round-trip (`IsFileDropped` false, `LoadDroppedFiles`→empty→`UnloadDroppedFiles`) under a hidden
+  window. Parity guard (3 headless): name 3-way, a cross-check that raylib's `LoadDirectoryFiles..GetFileModTime` sub-range
+  is exactly the 7, a SECOND cross-check that the ENTIRE file-I/O surface (`LoadFileData..GetFileModTime` = C7+C8+C9) is
+  now bound, the type-aware scan (FilePathList by-value, I1, `As Integer` not `Long`, struct field order, helper
+  `ReadIntPtr`+`PtrToStringAnsi`+`Unload`-free), and the duplicate-export guard.
