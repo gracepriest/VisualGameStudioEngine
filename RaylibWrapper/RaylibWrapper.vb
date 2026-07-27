@@ -12940,5 +12940,23 @@ Public Module FrameworkWrapper
     End Function
 #End Region
 
+#Region "Raylib rcamera — Camera system update (Batch rcamera)"
+    ' Raw rcamera functions. raylib's Camera is a typedef of Camera3D, passed as Camera* and MUTATED IN PLACE — so it binds
+    ' ByRef Camera3D (Camera3D is blittable, so the marshaler pins it and the mutation propagates back to the caller).
+    ' UpdateCamera reads input for the built-in modes (headless / CAMERA_CUSTOM = no-op); UpdateCameraPro applies the
+    ' movement/rotation/zoom args directly via raymath (no input, no GL) so it is deterministic headless. movement/rotation
+    ' are Vector3 BY VALUE, mode is an Integer, zoom is a Single. No new struct (Camera3D/Vector3 already defined).
+
+    ''' <summary>Updates the camera position/orientation for the selected mode (Camera3D mutated in place).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UpdateCamera(ByRef camera As Camera3D, mode As Integer)
+    End Sub
+
+    ''' <summary>Updates the camera with explicit movement/rotation/zoom (Camera3D mutated in place; Vector3 args by value).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UpdateCameraPro(ByRef camera As Camera3D, movement As Vector3, rotation As Vector3, zoom As Single)
+    End Sub
+#End Region
+
 End Module
 
