@@ -51,6 +51,21 @@ category; it is `NativeOwned` alongside `DateTime`).
   `CppCodeGenerator.MapTypeName` channel (which already says
   `byte → uint8_t`) and the default-value switches are reconciled in the same
   change.
+- **Three type-name channels, not two.** Besides `CppTypeMapper._typeMap` and
+  `CppCodeGenerator.MapTypeName`, the code generator has its OWN inherited
+  `_typeMap` (`CppCodeGenerator.InitializeTypeMap`, ~lines 1744–1766) — and
+  it is the LIVE channel `MapType` consults. It already contains
+  `"Decimal" → "long double"` (a double-backed approximation that would
+  silently defeat user decision 1) plus `Byte → uint8_t` / `SByte → int8_t`
+  (already correct there). P1 REMOVES the `Decimal` entry, and the new
+  NativeOwned branch in `MapType` is checked STRICTLY BEFORE this map.
+- The C# backend's conversion channel is reconciled too:
+  `CSharpBackend.ConvertMethodForType` maps `Byte → Convert.ToSByte` (the C#
+  backend is internally split on Byte's signedness). It becomes
+  `Byte → Convert.ToByte`, `SByte → Convert.ToSByte`.
+- The parent contract spec's C1 example rows list SByte under
+  NativeOwned-after-P1; those examples are updated to match this spec
+  (SByte = Bridged) in the same change.
 - The registry doc comment ("SByte and Decimal are NOT mapped by CppTypeMapper
   and must stay Rejected") is rewritten to describe the post-P1 invariant.
 - `CppCapabilityChecker.CheckType` gains an explicit
@@ -98,7 +113,7 @@ implemented members — `(Name, MemberKind, Arity/Overloads, ReturnTypeName)`
 with `MemberKind ∈ {InstanceMethod, Property, StaticMethod, StaticProperty,
 Constructor, Operator}`.
 
-**One table, four consumers:**
+**One table, five consumers:**
 
 1. **Member-level capability check** — a new pass in `CppCapabilityChecker`
    walks member calls, property reads, and `New` expressions whose receiver
@@ -109,11 +124,16 @@ Constructor, Operator}`.
    position slipped past the checker and died as raw C++ errors (BL6006).
 2. **Compile-path typing** — the table backs
    `SemanticAnalyzer.LookupNetTypeMember` / `GetCommonMethodReturnType`, so
-   member chains type correctly on the compile path (today every BCL member
-   types as `Object` outside the LSP). The LSP chain-typing inherits this
-   automatically through the existing `ResolveNetMemberType` hook — no LSP
-   fork.
-3. **Codegen dispatch** — the Property entries drive the existing
+   member chains type correctly on the compile path (today DateTime /
+   TimeSpan / Guid / Decimal members degrade to `Object` outside the LSP;
+   String / StringBuilder / collections already have fallback tables). The
+   surface table is consulted FIRST for the seven P1 type names — before the
+   LSP's reflection `TypeRegistry` — so compile-path and LSP answers are
+   identical for P1 types; reflection continues to serve everything else.
+3. **Front-end operator typing** — the table's Operator entries feed binary /
+   unary operator validation and result typing (section 6.1) so P1-type
+   arithmetic passes semantic analysis at all.
+4. **Codegen dispatch** — the Property entries drive the existing
    field-access→method bridge (`.Year` → `.Year()`, generalizing the
    collections' Count/Keys/Values rewrite); the Static entries drive a
    name-keyed static-dispatch table (`DateTime.Now` →
@@ -122,7 +142,7 @@ Constructor, Operator}`.
    for value types, `std::make_shared` for StringBuilder — decided by
    registry category + surface data, **not** by the analyzer's synthetic
    `TypeKind.Class`, which is wrong for these types).
-4. **Drift tests** — every NativeOwned registry entry has a surface entry and
+5. **Drift tests** — every NativeOwned registry entry has a surface entry and
    vice versa (mechanical, like the mapper invariant).
 
 ## 5. v1 member surfaces
@@ -130,21 +150,26 @@ Constructor, Operator}`.
 Curated (~10–15 members per type). Anything outside these lists produces the
 clean member diagnostic — adding a member later is additive.
 
-- **DateTime**: statics `Now`, `UtcNow`, `Today`, `Parse`, `TryParse`,
+- **DateTime**: statics `Now`, `UtcNow`, `Today`, `Parse`,
   `IsLeapYear`, `DaysInMonth`, `MinValue`, `MaxValue`; ctor
   `(y,m,d)` / `(y,m,d,h,mi,s)`; properties `Year Month Day Hour Minute Second
   Millisecond DayOfWeek DayOfYear Ticks Kind Date`; methods
   `AddDays AddHours AddMinutes AddSeconds AddMilliseconds AddMonths AddYears
   AddTicks Add Subtract ToLocalTime ToUniversalTime ToString([format])
   CompareTo`; operators as in section 3.
+  **`DayOfWeek` and `Kind` return `Integer` in v1** (documented divergence:
+  .NET returns the `DayOfWeek`/`DateTimeKind` enums; the numeric values match
+  .NET exactly — Sunday=0…Saturday=6; Unspecified=0, Utc=1, Local=2 — so a
+  later native-enum upgrade is value-compatible). Native BCL enum types are
+  out of P1 scope (section 13).
 - **TimeSpan**: statics `FromDays FromHours FromMinutes FromSeconds
-  FromMilliseconds FromTicks Parse TryParse Zero MinValue MaxValue`; ctor
+  FromMilliseconds FromTicks Parse Zero MinValue MaxValue`; ctor
   `(h,m,s)` / `(d,h,m,s)`; properties `Days Hours Minutes Seconds Milliseconds
   TotalDays TotalHours TotalMinutes TotalSeconds TotalMilliseconds Ticks`;
   methods `Add Subtract Negate Duration ToString CompareTo`; operators.
   The double-based `From*` factories round to the nearest millisecond (the
   documented .NET behavior); `FromTicks` is exact.
-- **Guid**: statics `NewGuid Parse TryParse Empty`; ctor `(String)`; methods
+- **Guid**: statics `NewGuid Parse Empty`; ctor `(String)`; methods
   `ToString([format: D|N|B|P]) ToByteArray CompareTo`; operators `== !=`.
   Default `ToString` = lowercase "D". `ToByteArray` is pinned to .NET's
   mixed-endian layout (`_a,_b,_c` little-endian, `_d.._k` verbatim).
@@ -154,9 +179,15 @@ clean member diagnostic — adding a member later is additive.
   exactly the surface `SemanticAnalyzer.GetCommonMethodReturnType` already
   types.
 - **Decimal**: operators `+ - * / Mod == != < <= > >=`; statics
-  `Round(d[,digits]) Truncate Floor Ceiling Parse TryParse Compare MinValue
+  `Round(d[,digits]) Truncate Floor Ceiling Parse Compare MinValue
   MaxValue Zero One`; methods `ToString CompareTo`; conversions per
   section 10.
+- **`TryParse` is dropped from ALL v1 surfaces** (DateTime, TimeSpan, Guid,
+  Decimal). Its `out` parameter is inexpressible today: the surface-table
+  shape carries no parameter direction, and neither backend's IR marks ByRef
+  on BCL static calls — `DateTime.TryParse(s, d)` fails csc on the C# backend
+  TODAY. `Parse` + `Try/Catch` covers the use case; TryParse returns when a
+  ByRef/out story exists (section 13).
 - **DateTimeOffset**: statics `Now UtcNow FromUnixTimeSeconds
   FromUnixTimeMilliseconds`; ctors `(DateTime)` / `(DateTime, TimeSpan)`;
   properties `DateTime UtcDateTime LocalDateTime Offset Ticks`; methods
@@ -171,6 +202,54 @@ clean member diagnostic — adding a member later is additive.
 
 ## 6. Compiler changes
 
+### 6.1 Front end: operator validation, result typing, conversions, literals
+
+**This subsection exists because the semantic analyzer today HARD-REJECTS the
+entire P1 operator surface on BOTH backends** (verified empirically):
+`Visit(BinaryExpressionNode)` requires `IsNumeric()` operands for arithmetic
+and ordering comparisons, and `TypeInfo.IsNumeric()` is a closed list
+excluding Decimal, SByte, DateTime, and TimeSpan. `Dim c As Decimal = a + b`,
+`d2 - d1`, `ts1 < ts2`, unary minus, and even `Dim a As Decimal = 1`
+(IsAssignableFrom) all fail semantic analysis before any backend runs. The
+front-end work below therefore fixes the C# backend too.
+
+- **SByte becomes a first-class numeric primitive**: added to `IsNumeric()`,
+  `IsIntegral()`, and `IsSigned()`; it participates in the existing integer
+  promotion ladder like the other sized integers.
+- **Decimal joins `IsNumeric()`** with these promotion rules in
+  `GetCommonType`: `Decimal op <any integral>` → Decimal (integrals widen to
+  Decimal implicitly, matching .NET); `Decimal op Single/Double` → **compile
+  error** requiring an explicit conversion (matching C#, which has no
+  implicit double↔decimal in either direction). Assignment follows the same
+  rules (`IsAssignableFrom`: integrals → Decimal yes; floating → Decimal no).
+- **Operator validation consults the surface table's Operator entries** for
+  NativeOwned operand pairs, with this cross-type result table (also used by
+  `GetCommonType`/result typing):
+
+  | Left | Op | Right | Result |
+  |---|---|---|---|
+  | DateTime | `-` | DateTime | TimeSpan |
+  | DateTime | `+`/`-` | TimeSpan | DateTime |
+  | TimeSpan | `+`/`-` | TimeSpan | TimeSpan |
+  | (unary) `-` | | TimeSpan | TimeSpan |
+  | Decimal | `+ - * / Mod` | Decimal (or integral, widened) | Decimal |
+  | any P1 value type | `= <> < <= > >=` | same type | Boolean |
+  | Guid / StringBuilder | `= <>` only | same type | Boolean |
+
+  DateTimeOffset comparisons compare the UTC instant. Ordering operators on
+  Guid/StringBuilder remain errors. All other P1-type operand combinations
+  keep today's clean analyzer error.
+- **Decimal literals**: BasicLang has no `m` suffix. A numeric LITERAL
+  initializing/assigned to a Decimal context converts at COMPILE TIME using
+  the literal's decimal text verbatim (no double round-trip): the C# backend
+  emits the literal with an `m` suffix (`1.5m`); the C++ backend emits an
+  exact Decimal constant (from the digits and scale of the literal text).
+  Non-literal Single/Double values still require an explicit conversion.
+- **Blast radius**: these are shared front-end changes; the full fast subset
+  on the C# backend is the regression gate (section 14.1).
+
+### 6.2 Capability checking and code generation
+
 - **`CppCapabilityChecker`**: NativeOwned accept branch in `CheckType`; the
   new member-surface pass (section 4.1). Keep its hand-mirrored walk in sync
   with `ModuleTypeWalker` per the existing keep-in-sync comment.
@@ -178,7 +257,28 @@ clean member diagnostic — adding a member later is additive.
   `BasicLang::<Name>` as a value type, EXCEPT StringBuilder →
   `std::shared_ptr<BasicLang::StringBuilder>`. Decided by name/category, not
   `TypeKind` (the analyzer's synthetic `Class` kind must not trigger the
-  generic `shared_ptr` wrap).
+  generic `shared_ptr` wrap). The NativeOwned branch is checked BEFORE the
+  generator's own `_typeMap` (whose stale `Decimal → long double` entry is
+  removed — section 2).
+- **Console output lowering**: `Console.WriteLine(x)` lowers to
+  `cout << x`, so the runtime header defines
+  `operator<<(std::ostream&, const T&)` for the five NativeOwned value
+  structs (delegating to `ToString()`), plus an overload for
+  `std::shared_ptr<BasicLang::StringBuilder>` streaming its content
+  (matching .NET's `WriteLine(sb)`). Without these, every WriteLine of a P1
+  value is a raw C++ error — the class of failure this design forbids.
+  String concatenation (`"x" & d`) is NOT extended in P1 (the non-string `&`
+  gap is pre-existing and broader); it fails loudly at C++ compile — write
+  `d.ToString()` — and is listed in section 13.
+- **Hashing**: the runtime header defines `std::hash` specializations for the
+  five NativeOwned value structs, consistent with `operator==`: DateTime
+  hashes ticks only (Kind excluded, matching tick-based equality); Decimal
+  hashes a scale-normalized canonical form (`1.0` and `1.00` must hash
+  equal); Guid/TimeSpan hash their value bits; DateTimeOffset hashes the UTC
+  instant. Without these, `Dictionary(Of Guid, ...)` — accepted by the
+  checker post-P1 — dies as a raw C++ template error (a regression vs
+  today's clean rejection). StringBuilder as a key uses shared_ptr identity
+  (reference equality, .NET-consistent).
 - **`Visit(IRNewObject)`**: NativeOwned value types → value construction
   (`result = BasicLang::DateTime(args);`, the user-`Structure` path);
   StringBuilder → `std::make_shared`.
@@ -196,17 +296,37 @@ clean member diagnostic — adding a member later is additive.
 - **`EmitToStringShim`**: P1 value types route `ToString` to the native
   member; numerics/Boolean/String behavior unchanged.
 - **`MapTypeName` / default-value switches**: entries added for the seven
-  types; the `byte` signedness entry reconciled (section 2).
+  types; the `byte` signedness entry reconciled (section 2). Default values
+  pinned: zero-initialized structs give `DateTime.MinValue`, `TimeSpan.Zero`,
+  `Guid.Empty`, `0D` (all matching .NET defaults); an unassigned StringBuilder
+  is a null `shared_ptr` (= `Nothing`) — calling a member on it is a native
+  null deref where .NET throws NullReferenceException (documented divergence,
+  section 13).
 
 ## 7. VB stdlib on the C++ backend
 
-`CppStdLib` gains the date category mirroring `CSharpStdLib`'s list:
-`Now() Today() Year(d) Month(d) Day(d) Hour(d) Minute(d) Second(d)
-DateAdd(part, n, d) DateDiff(part, a, b) FormatDate(d, fmt)` — each a
-one-line emission onto `BasicLang::DateTime`. `NewGuid()` emits
-`BasicLang::Guid::NewGuid().ToString()` (String return, matching the existing
-analyzer registration). Interval-part strings for `DateAdd`/`DateDiff` match
-the C# backend's accepted set.
+The date category — `Now() Today() Year(d) Month(d) Day(d) Hour(d)
+Minute(d) Second(d) DateAdd(d, interval, n) DateDiff(d1, d2, interval)
+FormatDate(d, fmt)` — comes to the C++ backend. Signatures follow the
+repo's EXISTING C#-side registrations verbatim: `DateAdd(DateTime, String,
+Integer)` = (date, interval, number) and `DateDiff(DateTime, DateTime,
+String)` = (date1, date2, interval) — NOT classic VB argument order.
+`NewGuid()` emits `BasicLang::Guid::NewGuid().ToString()` (String return,
+matching the existing analyzer registration). Interval-part strings match
+the C# backend's accepted set (section 14.3).
+
+**Mechanism (three coordinated pieces — `CppStdLib.cs` alone is dead code):**
+1. The LIVE emission path is the hardcoded switch
+   `CppCodeGenerator.EmitStdLibCall` — the date emissions land THERE
+   (`StdLib/CppStdLib.cs` is consulted only by the CLI `--stdlib`
+   support-matrix; it is updated too, so the matrix stops reporting the date
+   category as unsupported).
+2. The date functions get **analyzer registrations**
+   (`RegisterStdLibFunction`) with real parameter/return types — today NONE
+   of them are registered, so `Dim d = Now()` types as `Object` on BOTH
+   backends (and `Object` maps to `void*` on C++). Registering them fixes
+   typing for the C# backend as well.
+3. C# emissions are unchanged (already live via `CSharpStdLibProvider`).
 
 ## 8. Conversion pairs (contract C1 obligation)
 
@@ -238,6 +358,9 @@ type's definition, pinned here:
 - Local time (`Now`, `ToLocalTime`, `ToUniversalTime`, `Today`) uses the OS
   conversion functions (`localtime_s`/`mktime` family). DST for contemporary
   dates is handled by the OS; historic-date DST fidelity is out of scope.
+  Instants outside the OS conversion range (`mktime` fails pre-1970 on
+  Windows) **throw** (ArgumentOutOfRange-style message) — never clamp or
+  silently apply the current offset. The native tests carry a vector for it.
 
 ## 10. Decimal implementation
 
@@ -250,7 +373,8 @@ type's definition, pinned here:
   (`1.1 + 2.25 = 3.35`); overflow of the 96-bit significand drops excess
   digits with round-half-even, else throws when unrepresentable.
 - **Mul**: 96×96→192-bit product; scale = sum of scales; excess digits
-  rounded away (round-half-even). `12.0 * 10 = 120.00` (scale 2).
+  rounded away (round-half-even). `12.0 * 10.0 = 120.00` (scale 1 + 1 = 2);
+  `12.0 * 10 = 120.0` (scale 1 + 0 = 1, matching real .NET).
 - **Div**: long division to up to 28–29 significant digits, last digit
   rounded; divide-by-zero throws.
 - **Round** defaults to banker's rounding (`MidpointRounding.ToEven`);
@@ -270,10 +394,16 @@ type's definition, pinned here:
 
 Native types throw C++ exceptions carrying .NET-style messages: arithmetic
 overflow, Decimal divide-by-zero, invalid `Parse` input, out-of-range ctor
-args (month 13, offset > 14 h), StringBuilder index out of range. They flow
-through the backend's existing Try/Catch machinery exactly as collection
-errors do today; no new exception plumbing. The backend's known
-Return-inside-Try/Finally limitation is unaffected.
+args (month 13, offset > 14 h), StringBuilder index out of range. **Every P1
+runtime throw is `std::runtime_error` (or a subclass of it)** — never
+`std::invalid_argument`/`std::out_of_range` (logic_error-derived), because
+the backend lowers typed BL catches to `catch (std::runtime_error)`
+(`MapCatchType`) and would miss them. They flow through the existing
+Try/Catch machinery exactly as collection errors do today; no new exception
+plumbing. Pre-existing limitation, unchanged: typed BL catches cannot
+discriminate .NET exception kinds (FormatException vs OverflowException both
+arrive as runtime_error) — the per-kind messages are observable, not
+catch-selectable. The Return-inside-Try/Finally limitation is unaffected.
 
 ## 12. Delivery, emission, and testing
 
@@ -308,6 +438,13 @@ per-mode consistency; correctness must not depend on it.
    DateTime arithmetic/formatting, Decimal money loops, Guid string
    round-trips, StringBuilder chains. Divergence from .NET semantics shows up
    as a diff with no hand-computed expectations.
+   **Parity-program discipline** (the C++ side is pinned to invariant
+   culture per section 9, so undisciplined programs would diff by design):
+   fixed literal dates/guids only — never `Now`/`Today`/`NewGuid` raw output
+   (those are tested structurally: round-trips, ranges, version bits);
+   format strings from the invariant-safe set; and the parity harness runs
+   the C#-side program under forced `CultureInfo.InvariantCulture` (harness
+   concern, not user-program syntax), eliminating machine-culture flakes.
 
 **Known test churn** (updated deliberately, TDD): `BoundaryTypeRegistryTests`
 Rejected pins shrink; `NativeOwnedAndManagedOwned_StartEmpty_PreP1` is
@@ -328,19 +465,37 @@ lowering. The registry doc comment is rewritten.
 - `Regex`, `Uri`, `Stream`, `FileInfo`, `DirectoryInfo` — stay Rejected
   (P2 candidates via the managed boundary).
 - .NET's culture-sensitive formatting/parsing surfaces.
+- `TryParse` and any ByRef/out parameter on BCL static members (no IR ByRef
+  marking exists for them on either backend).
+- Native BCL enum types (`DayOfWeek`, `DateTimeKind` return `Integer` in v1
+  with .NET-matching values).
+- `Nullable` annotations on P1 types (`DateTime?` parses today but the C++
+  backend ignores nullability; unchanged by P1).
+- Extending `&` string concatenation to P1 types (pre-existing non-string
+  concat gap; `"x" & d` fails loudly at C++ compile — use `d.ToString()`).
+- Null-safety for `Nothing` StringBuilder receivers (native null deref;
+  .NET throws NullReferenceException — documented divergence).
 - P2 boundary code generation (the conversion pairs here are its contract).
 
 ## 14. Open items for planning-stage verification
 
-1. How `Dim d As Decimal = 1.5` lowers today on the C# backend (literal
-   suffix? conversion?) — pin the C++ lowering to match observable behavior.
-2. The exact .NET double→Decimal rounding rule (verify against real .NET
-   output; the parity tests enforce whatever it is).
+1. **Front-end blast radius** (section 6.1 changes are shared by both
+   backends): the full fast subset is the regression gate; additionally
+   sweep for tests pinning today's "requires numeric operands" errors on
+   these types. (Note: Decimal literals do NOT compile on the C# backend
+   today — 6.1's literal rule is new behavior on both backends, not a match
+   of existing C# behavior.)
+2. The exact .NET double→Decimal explicit-conversion rounding rule (verify
+   against real .NET output; the parity tests enforce whatever it is).
 3. `DateAdd`/`DateDiff` interval-part string set accepted by the C# backend.
 4. Whether conditional emission (UsesBclTypes scan) is worth it vs
    unconditional splice — measure compile-time impact of the headers.
 5. `Byte → uint8_t` blast radius: grep C++-backend tests for `Byte`
    expectations pinned to `int8_t`.
+6. `cout << int8_t/uint8_t` streams a CHARACTER, not a number. Verify how
+   Byte console output behaves on the C++ backend today, and pin
+   SByte/Byte `Console.WriteLine` to print numerically (`static_cast<int>`
+   in the lowering) matching .NET.
 
 ## 15. Files touched (summary)
 
@@ -349,7 +504,13 @@ Create: `BasicLang/NativeBclSurface.cs`,
 `BasicLang/Compiler/CodeGen/CPlusPlus/CppDecimalRuntime.cs`, new test files
 (`VisualGameStudio.Tests/Blnet/` or `Compiler/` per plan).
 Modify: `BoundaryTypeRegistry.cs`, `CppCapabilityChecker.cs`,
-`TypeMapper.cs` (SByte/Byte), `CppCodeGenerator.cs` (+`.Split.cs`),
-`CppRuntimeSources.cs` (shim removal), `StdLib/CppStdLib.cs`,
-`SemanticAnalyzer.cs` (surface-backed typing + DateTimeOffset),
-`IRBuilder.cs` (KnownNetStaticTypes), enumerated existing tests.
+`TypeMapper.cs` (SByte/Byte), `SymbolTable.cs` (IsNumeric/IsIntegral/
+IsSigned/GetCommonType per 6.1), `CppCodeGenerator.cs` (+`.Split.cs`;
+incl. `EmitStdLibCall` date category, `InitializeTypeMap` Decimal removal),
+`CppRuntimeSources.cs` (shim removal), `StdLib/CppStdLib.cs` (support
+matrix), `CSharpBackend.cs` (Decimal `m`-suffix literal emission;
+`ConvertMethodForType` Byte/SByte), `SemanticAnalyzer.cs` (surface-backed
+typing, operator validation per 6.1, stdlib date-function registrations,
+DateTimeOffset), `IRBuilder.cs` (KnownNetStaticTypes),
+`docs/superpowers/specs/2026-07-26-dotnet-native-boundary-contract-design.md`
+(C1 example rows: SByte → Bridged), enumerated existing tests.
