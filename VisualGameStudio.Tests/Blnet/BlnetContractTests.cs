@@ -70,6 +70,8 @@ public class BlnetContractTests
                 "BlnetStatus.cs drifted — regenerate from BlnetContract.GenerateStatusEnumCs()");
         Assert.That(BlnetTestShim.ShimAbi.AbiVersion, Is.EqualTo(BlnetContract.AbiVersion),
             "ShimAbi.AbiVersion drifted from BlnetContract.AbiVersion");
+        Assert.That(Enum.GetValues<BlnetTestShim.BlnetStatus>().Length, Is.EqualTo(BlnetContract.StatusCodes.Count),
+            "BlnetStatus has extra/missing members vs BlnetContract.StatusCodes — regenerate from GenerateStatusEnumCs()");
     }
 }
 

@@ -23,4 +23,5 @@ public enum BlnetStatus
     BLNET_E_ALLOC = 8,
 }
 
+// ---- hand-appended below this line (NOT generated; keep when regenerating the enum above) ----
 public static class ShimAbi { public const int AbiVersion = 1; } // keep equal to BlnetContract.AbiVersion (drift-tested)

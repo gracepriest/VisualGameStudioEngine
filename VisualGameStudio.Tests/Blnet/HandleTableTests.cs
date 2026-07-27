@@ -69,7 +69,10 @@ public class HandleTableTests
                 var h = t.Create(i);
                 Assert.That(t.TryGet(h, out var v), Is.EqualTo(BlnetStatus.BLNET_OK));
                 Assert.That(v, Is.EqualTo(i));
+                Assert.That(t.AddRef(h), Is.EqualTo(BlnetStatus.BLNET_OK));
                 Assert.That(t.Release(h), Is.EqualTo(BlnetStatus.BLNET_OK));
+                Assert.That(t.Release(h), Is.EqualTo(BlnetStatus.BLNET_OK));
+                Assert.That(t.Release(h), Is.EqualTo(BlnetStatus.BLNET_E_STALE_HANDLE));
             }
         });
         Assert.That(t.AliveCount, Is.Zero);
