@@ -82,6 +82,53 @@ public class CppBclEndToEndTests
             .Generate(irModule);
     }
 
+    /// <summary>
+    /// Compile the generated C++ with a real compiler, run it, return stdout with
+    /// line endings normalized. Ignores when no C++ compiler is available.
+    /// </summary>
+    private static string CompileRun(string cppSource)
+    {
+        var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
+        if (compiler == null) Assert.Ignore("No C++ compiler available on this machine");
+        return VisualGameStudio.Tests.Native.CppCompile
+            .CompileAndRun(cppSource, compiler.Value).Replace("\r\n", "\n");
+    }
+
+    /// <summary>
+    /// The CLI leg (repo law: validate through BOTH entry points). Drives the REAL
+    /// <c>BasicLang.exe &lt;file&gt;.bas --target=cpp</c> — the binary the suite deploys next
+    /// to the tests, so it always carries the compiler under test — then compiles and runs
+    /// the .cpp it wrote. <c>CompileFile</c> runs the standard optimizer passes, so this is
+    /// the same lowering <see cref="CompileToCppOptimized"/> produces, arrived at through
+    /// the shipped executable rather than an in-process helper.
+    /// </summary>
+    private static string CompileRunViaCli(string blSource)
+    {
+        var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
+        if (compiler == null) Assert.Ignore("No C++ compiler available on this machine");
+
+        var dir = Path.Combine(Path.GetTempPath(), "bl-bcl-cli-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var basPath = Path.Combine(dir, "Prog.bas");
+            File.WriteAllText(basPath, blSource);
+
+            var (exit, stdout, stderr) = CliTestHarness.RunProcess(
+                CliTestHarness.CliPath(), new[] { basPath, "--target=cpp" }, dir, timeoutMs: 120_000);
+            Assert.That(exit, Is.EqualTo(0),
+                $"CLI `BasicLang.exe Prog.bas --target=cpp` failed.\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+
+            var cppPath = Path.Combine(dir, "Prog.cpp");
+            Assert.That(File.Exists(cppPath), Is.True,
+                $"CLI reported success but wrote no Prog.cpp.\nSTDOUT:\n{stdout}");
+
+            return VisualGameStudio.Tests.Native.CppCompile
+                .CompileAndRun(File.ReadAllText(cppPath), compiler.Value).Replace("\r\n", "\n");
+        }
+        finally { try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ } }
+    }
+
     /// <summary>Front half mirrors CppSplitEmissionTests.Split: real frontend, then GenerateSplit.</summary>
     private static CppSplitResult Split(bool emitMain, params (string name, string code)[] files)
     {
@@ -186,6 +233,12 @@ public class CppBclEndToEndTests
     /// This is the ONE deliberately LIVE behaviour change of the Byte signedness fix.
     /// ALL cout surfaces are covered — Console.Write/WriteLine AND the VB Print/PrintLine
     /// statements — so the two cannot drift into printing the same value differently.
+    ///
+    /// TASK 11 EXTENSION (spec §12 layer 3, the SByte-on-C++ bullet): the tail of the
+    /// program adds SByte ARITHMETIC — binary +/-, compound +=, ordering, and the explicit
+    /// widening BL requires (`CType(sbyte, Integer)`; implicit SByte→Integer is a front-end
+    /// error, and SByte*Integer yields Integer). Sharing this program's compile keeps the
+    /// arithmetic coverage free rather than paying for a second Integration compile.
     /// </summary>
     [Test, Category("Integration")]
     public void BytePrinting_IsNumeric_NotCharacter_OnEveryPrintSurface()
@@ -200,15 +253,26 @@ Sub Main()
     Dim s As SByte = -3
     Console.WriteLine(s)
     PrintLine s
+    Dim lo As SByte = -3
+    Dim hi As SByte = 10
+    Dim sum As SByte = lo + hi
+    Console.WriteLine(sum)
+    Dim diff As SByte = lo - hi
+    Console.WriteLine(diff)
+    Dim bumped As SByte = lo
+    bumped += 5
+    Console.WriteLine(bumped)
+    If lo < hi Then
+        Console.WriteLine(""ordered"")
+    End If
+    Dim widened As Integer = CType(hi, Integer)
+    Console.WriteLine(widened * 10)
 End Sub");
 
-        var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
-        if (compiler == null) Assert.Ignore("No C++ compiler available on this machine");
-        var stdout = VisualGameStudio.Tests.Native.CppCompile
-            .CompileAndRun(output, compiler.Value).Replace("\r\n", "\n");
-
-        // Console.WriteLine / PrintLine / Print(no newline) + WriteLine("") / …
-        Assert.That(stdout, Is.EqualTo("65\n65\n65\n-3\n-3\n"));
+        // Console.WriteLine / PrintLine / Print(no newline) + WriteLine("") / … then the
+        // SByte arithmetic tail: -3+10, -3-10, -3+=5, ordering, CType-widened 10*10.
+        Assert.That(CompileRun(output),
+            Is.EqualTo("65\n65\n65\n-3\n-3\n7\n-13\n2\nordered\n100\n"));
     }
 
     /// <summary>
@@ -264,6 +328,395 @@ End Sub");
             // ToString, VarR8FromDec ToDouble, and Convert.ToBoolean's `!= 0`.
             "19\n19\n19.99\n19\n19.99\n19.99\n-2\nnonzero\nzero\n"));
     }
+
+    // ==================================================================
+    // Task 11 (spec §12 layers 3–4): the per-type BL end-to-end battery.
+    //
+    // Each program is a const so the SAME source drives BOTH entry points —
+    // the in-process optimizer path (CompileToCppOptimized) and the shipped
+    // CLI (BasicLang.exe … --target=cpp), per the repo's both-entry-points law.
+    //
+    // EVERY expected string below was produced by running the equivalent
+    // program on real .NET (PowerShell as the oracle) BEFORE the C++ leg was
+    // run — never hand-computed.
+    //
+    // Program-writing constraints discovered while building these (all
+    // PRE-EXISTING C++-backend behaviour, none introduced by P1):
+    //  * Locals must not be named `t0`, `t1`, … — those collide with the
+    //    generator's temporary names and emit a redefinition (chip filed;
+    //    reproduces on a plain `Dim t0 As String` program with no P1 type).
+    //  * `Console.WriteLine(aBoolean)` prints 1/0 on C++ vs True/False on .NET,
+    //    so every boolean check branches through an If and prints a word.
+    //  * Narrowing uses `CType(x, Integer)`; `CInt` truncates on C++ and rounds
+    //    on C# (also pre-existing, non-Decimal-specific).
+    //  * `.ToString()` never `CStr(nativeValue)` — Task 10's conversion gate
+    //    correctly rejects the intrinsic form on the five non-Decimal natives.
+    // ==================================================================
+
+    /// <summary>
+    /// DateTime: construction, every component property, the ostream inserter,
+    /// AddDays, the AddMonths day CLAMP, dt−dt → TimeSpan, dt+ts, ordering,
+    /// `ToString(fmt)`, a Parse round-trip, and the headline case the old
+    /// std::time_t shim could never express: <c>Dim stamp = DateTime.Now</c>
+    /// bound to a LOCAL (asserted structurally — a wall clock cannot be pinned).
+    /// </summary>
+    private const string DateTimeProgram = @"
+Sub Main()
+    Dim d As New DateTime(2026, 7, 28, 13, 45, 30)
+    Console.WriteLine(d.Year)
+    Console.WriteLine(d.Month)
+    Console.WriteLine(d.Day)
+    Console.WriteLine(d.Hour)
+    Console.WriteLine(d.Minute)
+    Console.WriteLine(d.Second)
+    Console.WriteLine(d.DayOfWeek)
+    Console.WriteLine(d.DayOfYear)
+    Console.WriteLine(d.ToString(""yyyy-MM-dd""))
+    Console.WriteLine(d)
+    Dim later As DateTime = d.AddDays(5)
+    Console.WriteLine(later.ToString(""yyyy-MM-dd""))
+    Dim jan31 As New DateTime(2026, 1, 31)
+    Dim clamped As DateTime = jan31.AddMonths(1)
+    Console.WriteLine(clamped.ToString(""yyyy-MM-dd""))
+    Dim gap As TimeSpan = later - d
+    Console.WriteLine(gap.Days)
+    Dim two As TimeSpan = TimeSpan.FromHours(2)
+    Dim shifted As DateTime = d + two
+    Console.WriteLine(shifted.ToString(""HH:mm:ss""))
+    If later > d Then
+        Console.WriteLine(""ordered"")
+    End If
+    Dim parsed As DateTime = DateTime.Parse(""2026-07-28"")
+    Console.WriteLine(parsed.ToString(""yyyy-MM-dd""))
+    Dim stamp = DateTime.Now
+    If stamp.Year >= 2026 Then
+        Console.WriteLine(""now-into-local-ok"")
+    End If
+End Sub";
+
+    private const string DateTimeExpected =
+        // 2026-07-28 is a Tuesday (DayOfWeek 2, .NET numbering) and day 209 of the
+        // year; the paren-less WriteLine(d) is the inserter's invariant "G" shape;
+        // Jan 31 + 1 month clamps to Feb 28 (2026 is not a leap year).
+        "2026\n7\n28\n13\n45\n30\n2\n209\n2026-07-28\n07/28/2026 13:45:30\n" +
+        "2026-08-02\n2026-02-28\n5\n15:45:30\nordered\n2026-07-28\nnow-into-local-ok\n";
+
+    /// <summary>
+    /// TimeSpan: the FromX factories, components vs totals (the classic
+    /// Hours=1/TotalHours=1.5 distinction), the 3- and 4-argument constructors,
+    /// Ticks, Zero, unary minus, the compound <c>ts += ts2</c>, `ToString()`'s
+    /// invariant "c" format (including the 7-digit fraction), and the inserter.
+    /// </summary>
+    private const string TimeSpanProgram = @"
+Sub Main()
+    Dim ts As TimeSpan = TimeSpan.FromMinutes(90)
+    Console.WriteLine(ts.Hours)
+    Console.WriteLine(ts.Minutes)
+    Console.WriteLine(ts.TotalHours)
+    Console.WriteLine(ts.TotalMinutes)
+    Console.WriteLine(ts.ToString())
+    Dim ts2 As TimeSpan = TimeSpan.FromSeconds(90)
+    Console.WriteLine(ts2.ToString())
+    ts += ts2
+    Console.WriteLine(ts.ToString())
+    Console.WriteLine(ts)
+    Dim full As New TimeSpan(1, 2, 30, 15)
+    Console.WriteLine(full.Days)
+    Console.WriteLine(full.Hours)
+    Console.WriteLine(full.Minutes)
+    Console.WriteLine(full.Seconds)
+    Console.WriteLine(full.ToString())
+    Dim hm As New TimeSpan(2, 15, 0)
+    Console.WriteLine(hm.ToString())
+    Console.WriteLine(hm.Ticks)
+    Dim zero As TimeSpan = TimeSpan.Zero
+    Console.WriteLine(zero.ToString())
+    Dim couple As TimeSpan = TimeSpan.FromDays(2)
+    Console.WriteLine(couple.TotalHours)
+    Dim negated As TimeSpan = -hm
+    Console.WriteLine(negated.ToString())
+    Dim millis As TimeSpan = TimeSpan.FromMilliseconds(1500)
+    Console.WriteLine(millis.ToString())
+End Sub";
+
+    private const string TimeSpanExpected =
+        "1\n30\n1.5\n90\n01:30:00\n00:01:30\n01:31:30\n01:31:30\n" +
+        "1\n2\n30\n15\n1.02:30:15\n02:15:00\n81000000000\n00:00:00\n48\n" +
+        "-02:15:00\n00:00:01.5000000\n";
+
+    /// <summary>
+    /// Guid: NewGuid asserted STRUCTURALLY (two calls differ; the "D" form is 36
+    /// characters), a fixed Parse round-trip, the <c>New Guid("…")</c> string
+    /// constructor agreeing with Parse, Guid.Empty, the inserter, and — the
+    /// spec §6.2 std::hash story — a <c>Dictionary(Of Guid, String)</c> whose
+    /// lookup by an EQUAL-BUT-DISTINCT Guid instance finds the same entry.
+    /// </summary>
+    private const string GuidProgram = @"
+Sub Main()
+    Dim g1 As Guid = Guid.NewGuid()
+    Dim g2 As Guid = Guid.NewGuid()
+    If g1 <> g2 Then
+        Console.WriteLine(""distinct"")
+    End If
+    Dim text As String = g1.ToString()
+    Console.WriteLine(text.Length)
+    Dim known As Guid = Guid.Parse(""6f9619ff-8b86-d011-b42d-00c04fc964ff"")
+    Console.WriteLine(known.ToString())
+    Console.WriteLine(known)
+    Dim built As New Guid(""6f9619ff-8b86-d011-b42d-00c04fc964ff"")
+    If built = known Then
+        Console.WriteLine(""ctor-eq"")
+    End If
+    Dim empty As Guid = Guid.Empty
+    Console.WriteLine(empty.ToString())
+    Dim map As New Dictionary(Of Guid, String)()
+    map.Add(known, ""hello"")
+    map.Add(empty, ""empty"")
+    Console.WriteLine(map.Count)
+    Console.WriteLine(map(known))
+    Console.WriteLine(map(built))
+End Sub";
+
+    private const string GuidExpected =
+        "distinct\n36\n6f9619ff-8b86-d011-b42d-00c04fc964ff\n" +
+        "6f9619ff-8b86-d011-b42d-00c04fc964ff\nctor-eq\n" +
+        "00000000-0000-0000-0000-000000000000\n2\nhello\nhello\n";
+
+    /// <summary>
+    /// StringBuilder — the ONE reference type. Proves the overload-ambiguity pin
+    /// (<c>Append(anInteger)</c> appends "42", not a promoted double/bool), the
+    /// fluent chain returning the SAME builder, Length in UTF-8 bytes, the
+    /// inserter, AppendLine's '\n', and the ALIASING contract: two BL variables
+    /// naming one builder see each other's mutations (shared_ptr reference
+    /// semantics — a value wrapper would print the pre-mutation text).
+    /// </summary>
+    private const string StringBuilderProgram = @"
+Sub Main()
+    Dim sb As New StringBuilder()
+    sb.Append(""count="")
+    sb.Append(42)
+    sb.Append("" done"")
+    Console.WriteLine(sb.ToString())
+    Console.WriteLine(sb.Length)
+    Dim other As StringBuilder = sb
+    other.Append(""!"")
+    Console.WriteLine(sb.ToString())
+    Console.WriteLine(other.ToString())
+    sb.Clear()
+    sb.Append(""a"")
+    Console.WriteLine(other.ToString())
+    Dim chain As New StringBuilder(""seed:"")
+    chain.Append(""x"").Append(7).Append(""y"")
+    Console.WriteLine(chain.ToString())
+    Console.WriteLine(chain)
+    Dim lines As New StringBuilder()
+    lines.AppendLine(""one"")
+    lines.AppendLine(""two"")
+    Console.WriteLine(lines.ToString())
+End Sub";
+
+    private const string StringBuilderExpected =
+        // "count=42 done" is 13 UTF-8 bytes. After `other.Append("!")` BOTH names
+        // print the '!' text, and after `sb.Clear()/Append("a")` `other` prints "a" —
+        // the aliasing proof. The AppendLine block ends with its own '\n' plus
+        // WriteLine's, hence the blank line.
+        "count=42 done\n13\ncount=42 done!\ncount=42 done!\na\n" +
+        "seed:x7y\nseed:x7y\none\ntwo\n\n";
+
+    /// <summary>
+    /// Decimal — the money program and the exactness battery: 19.99 × 1.08 with
+    /// full scale, Round(…, 2), <c>0.1 + 0.2 = 0.3</c> EXACTLY (the headline
+    /// binary-floating-point contrast), scale-preserving multiplication
+    /// (1.50 × 2.00 → "3.0000"), loop accumulation, exact division, Mod with a
+    /// NEGATIVE dividend, compound <c>+= 1</c>, unary minus, <c>CType(int,
+    /// Decimal)</c>, and both Decimal→Double routes (CType and CDbl).
+    /// </summary>
+    private const string DecimalProgram = @"
+Sub Main()
+    Dim price As Decimal = 19.99
+    Dim rate As Decimal = 1.08
+    Dim total As Decimal = price * rate
+    Console.WriteLine(total.ToString())
+    Dim rounded As Decimal = Decimal.Round(total, 2)
+    Console.WriteLine(rounded.ToString())
+    Dim a As Decimal = 0.1
+    Dim b As Decimal = 0.2
+    Dim c As Decimal = 0.3
+    If a + b = c Then
+        Console.WriteLine(""exact"")
+    End If
+    Dim sum As Decimal = 0
+    For i As Integer = 1 To 10
+        sum += a
+    Next
+    Console.WriteLine(sum.ToString())
+    Dim scaled As Decimal = 1.50
+    Dim scaled2 As Decimal = 2.00
+    Dim prod As Decimal = scaled * scaled2
+    Console.WriteLine(prod.ToString())
+    Dim q As Decimal = 10
+    Dim r As Decimal = 4
+    Dim quot As Decimal = q / r
+    Console.WriteLine(quot.ToString())
+    Dim negDividend As Decimal = -7.5
+    Dim two As Decimal = 2
+    Dim leftover As Decimal = negDividend Mod two
+    Console.WriteLine(leftover.ToString())
+    Dim bumped As Decimal = price
+    bumped += 1
+    Console.WriteLine(bumped.ToString())
+    Dim minus As Decimal = -price
+    Console.WriteLine(minus.ToString())
+    Dim seven As Integer = 7
+    Dim fromInt As Decimal = CType(seven, Decimal)
+    Console.WriteLine(fromInt.ToString())
+    Dim asDouble As Double = CType(price, Double)
+    Console.WriteLine(asDouble)
+    Console.WriteLine(CDbl(price))
+    Console.WriteLine(price)
+End Sub";
+
+    private const string DecimalExpected =
+        // Scale arithmetic is .NET-faithful throughout: 19.99*1.08 keeps scale 4,
+        // ten additions of 0.1 give "1.0" (not "1"), 1.50*2.00 gives "3.0000",
+        // and -7.5 Mod 2 keeps the DIVIDEND's sign (-1.5), unlike a C remainder
+        // on doubles.
+        "21.5892\n21.59\nexact\n1.0\n3.0000\n2.5\n-1.5\n20.99\n-19.99\n7\n" +
+        "19.99\n19.99\n19.99\n";
+
+    /// <summary>
+    /// DateTimeOffset: the two-argument (clock, offset) constructor, the wall-clock
+    /// vs UTC split, Offset, ToUnixTimeSeconds/Milliseconds, the BL <c>Ticks</c>
+    /// property (clock ticks, mapped to the runtime's TicksValue), the inserter,
+    /// FromUnixTimeSeconds, ToOffset, and the UTC-INSTANT equality program: a
+    /// 12:00−05:00 value equals a 17:00+00:00 value even though the wall clocks differ.
+    /// </summary>
+    private const string DateTimeOffsetProgram = @"
+Sub Main()
+    Dim clock As New DateTime(2026, 7, 28, 12, 0, 0)
+    Dim off As TimeSpan = TimeSpan.FromHours(-5)
+    Dim dto As New DateTimeOffset(clock, off)
+    Console.WriteLine(dto.ToString())
+    Console.WriteLine(dto)
+    Dim wall As DateTime = dto.DateTime
+    Console.WriteLine(wall.ToString(""yyyy-MM-dd HH:mm:ss""))
+    Dim utc As DateTime = dto.UtcDateTime
+    Console.WriteLine(utc.ToString(""yyyy-MM-dd HH:mm:ss""))
+    Dim shownOffset As TimeSpan = dto.Offset
+    Console.WriteLine(shownOffset.TotalHours)
+    Console.WriteLine(dto.ToUnixTimeSeconds())
+    Console.WriteLine(dto.ToUnixTimeMilliseconds())
+    Console.WriteLine(dto.Ticks)
+    Dim clock2 As New DateTime(2026, 7, 28, 17, 0, 0)
+    Dim dto2 As New DateTimeOffset(clock2, TimeSpan.Zero)
+    If dto = dto2 Then
+        Console.WriteLine(""same-instant"")
+    End If
+    Dim epoch As DateTimeOffset = DateTimeOffset.FromUnixTimeSeconds(0)
+    Console.WriteLine(epoch.ToString())
+    Dim shifted As DateTimeOffset = dto.ToOffset(TimeSpan.Zero)
+    Console.WriteLine(shifted.ToString())
+End Sub";
+
+    private const string DateTimeOffsetExpected =
+        "07/28/2026 12:00:00 -05:00\n07/28/2026 12:00:00 -05:00\n" +
+        "2026-07-28 12:00:00\n2026-07-28 17:00:00\n-5\n" +
+        "1785258000\n1785258000000\n639208368000000000\nsame-instant\n" +
+        "01/01/1970 00:00:00 +00:00\n07/28/2026 17:00:00 +00:00\n";
+
+    [Test, Category("Integration")]
+    public void DateTime_ConstructComponentsArithmeticFormatAndNowIntoLocal_EndToEnd()
+        => Assert.That(CompileRun(CompileToCppOptimized(DateTimeProgram)),
+            Is.EqualTo(DateTimeExpected));
+
+    [Test, Category("Integration")]
+    public void TimeSpan_FactoriesComponentsTotalsAndCompoundAdd_EndToEnd()
+        => Assert.That(CompileRun(CompileToCppOptimized(TimeSpanProgram)),
+            Is.EqualTo(TimeSpanExpected));
+
+    [Test, Category("Integration")]
+    public void Guid_NewGuidParseStringCtorAndDictionaryKey_EndToEnd()
+        => Assert.That(CompileRun(CompileToCppOptimized(GuidProgram)),
+            Is.EqualTo(GuidExpected));
+
+    [Test, Category("Integration")]
+    public void StringBuilder_ChainingAppendIntegerAndAliasing_EndToEnd()
+        => Assert.That(CompileRun(CompileToCppOptimized(StringBuilderProgram)),
+            Is.EqualTo(StringBuilderExpected));
+
+    [Test, Category("Integration")]
+    public void Decimal_MoneyExactnessScaleAndConversions_EndToEnd()
+        => Assert.That(CompileRun(CompileToCppOptimized(DecimalProgram)),
+            Is.EqualTo(DecimalExpected));
+
+    [Test, Category("Integration")]
+    public void DateTimeOffset_OffsetConstructionUtcInstantEqualityAndUnixTime_EndToEnd()
+        => Assert.That(CompileRun(CompileToCppOptimized(DateTimeOffsetProgram)),
+            Is.EqualTo(DateTimeOffsetExpected));
+
+    /// <summary>
+    /// Spec §11 end-to-end: the native runtimes signal errors with
+    /// <c>std::runtime_error</c>, which is exactly the type the C++ backend's Catch
+    /// lowering binds — so a BL <c>Try/Catch</c> around a Decimal divide-by-zero (and
+    /// around a malformed Guid.Parse) catches it, prints its marker, and the program
+    /// exits 0 instead of terminating. Neither throw is reachable at compile time: the
+    /// IR constant folder deliberately never folds Decimal constants (IROptimizer,
+    /// spec 6.1), so the division survives the optimizer into the emitted program.
+    /// </summary>
+    [Test, Category("Integration")]
+    public void TryCatch_OverNativeRuntimeThrows_ReachesTheBlCatch_EndToEnd()
+    {
+        var output = CompileToCppOptimized(@"
+Sub Main()
+    Dim one As Decimal = 1
+    Dim zero As Decimal = 0
+    Try
+        Dim r As Decimal = one / zero
+        Console.WriteLine(r.ToString())
+    Catch ex As Exception
+        Console.WriteLine(""CAUGHT-DIV0"")
+    End Try
+    Try
+        Dim bad As Guid = Guid.Parse(""not-a-guid"")
+        Console.WriteLine(bad.ToString())
+    Catch ex As Exception
+        Console.WriteLine(""CAUGHT-GUID"")
+    End Try
+    Console.WriteLine(""after"")
+End Sub");
+
+        Assert.That(CompileRun(output), Is.EqualTo("CAUGHT-DIV0\nCAUGHT-GUID\nafter\n"));
+    }
+
+    // ------------------------------------------------------------------
+    // The CLI leg (plan Task 11 step 3 / repo law: BOTH entry points).
+    // Same six programs, driven through the shipped BasicLang.exe instead of
+    // the in-process helper — a lowering that only works via the test helper
+    // (or only via the CLI) is a real defect this catches.
+    // ------------------------------------------------------------------
+
+    [TestCase("DateTime")]
+    [TestCase("TimeSpan")]
+    [TestCase("Guid")]
+    [TestCase("StringBuilder")]
+    [TestCase("Decimal")]
+    [TestCase("DateTimeOffset")]
+    [Category("Integration")]
+    public void Cli_TargetCpp_ProducesTheSameProgramOutput(string family)
+    {
+        var (source, expected) = family switch
+        {
+            "DateTime" => (DateTimeProgram, DateTimeExpected),
+            "TimeSpan" => (TimeSpanProgram, TimeSpanExpected),
+            "Guid" => (GuidProgram, GuidExpected),
+            "StringBuilder" => (StringBuilderProgram, StringBuilderExpected),
+            "Decimal" => (DecimalProgram, DecimalExpected),
+            "DateTimeOffset" => (DateTimeOffsetProgram, DateTimeOffsetExpected),
+            _ => throw new ArgumentOutOfRangeException(nameof(family), family, "unknown program family"),
+        };
+
+        Assert.That(CompileRunViaCli(source), Is.EqualTo(expected));
+    }
 }
 
 /// <summary>
@@ -316,6 +769,32 @@ End Sub");
         Assert.That(ex.Message, Does.Contain("Guid").And.Contain("ToByteArray"));
     }
 
+    /// <summary>
+    /// Task 11: the SAME rejection for EVERY member-bearing native type, not just
+    /// DateTime. Each member below is a REAL .NET member deliberately left off the
+    /// curated v1 surface (spec §5), so this is the honest shape of the diagnostic a
+    /// user meets when they reach past v1 — a named type and member, not a raw C++
+    /// compiler error. Guid.ToByteArray has its own test below (it carries the extra
+    /// "the native header has it, the BL surface does not" story).
+    /// </summary>
+    [TestCase("Dim x As New TimeSpan(1, 0, 0)", "TimeSpan", "x.Multiply(2)")]
+    [TestCase("Dim x As New StringBuilder()", "StringBuilder", "x.EnsureCapacity(64)")]
+    [TestCase("Dim x As Decimal = 1", "Decimal", "x.ToOACurrency()")]
+    [TestCase("Dim x As New DateTimeOffset(New DateTime(2026, 1, 1))", "DateTimeOffset", "x.AddDays(1)")]
+    public void UnknownNativeMember_IsRejectedCleanly_ForEveryNativeType(
+        string declaration, string typeName, string call)
+    {
+        var ex = AssertRejected($@"
+Sub Main()
+    {declaration}
+    Console.WriteLine({call})
+End Sub");
+        var member = call.Substring(call.IndexOf('.') + 1);
+        member = member.Substring(0, member.IndexOf('('));
+        Assert.That(ex.Message, Does.Contain(typeName).And.Contain(member));
+        Assert.That(ex.Message, Does.Contain("has no native member"));
+    }
+
     /// <summary>An arity outside the surface's overload list is named explicitly.</summary>
     [Test]
     public void UnknownConstructorArity_IsRejectedCleanly()
@@ -326,6 +805,62 @@ Sub Main()
     Console.WriteLine(g.ToString())
 End Sub");
         Assert.That(ex.Message, Does.Contain("New Guid").And.Contain("1 argument"));
+    }
+
+    /// <summary>
+    /// Task 11: the NON-zero-arg ctor-arity case. DateTime's v1 surface carries the
+    /// (y,m,d) and (y,m,d,h,mi,s) overloads only, so the .NET 2-argument shape (which
+    /// does not exist there either) must be named with the arities that DO work rather
+    /// than emitting an unresolvable constructor call.
+    /// </summary>
+    [Test]
+    public void UnsupportedConstructorArity_NamesTheAritiesThatWork()
+    {
+        var ex = AssertRejected(@"
+Sub Main()
+    Dim d As New DateTime(2026, 7)
+    Console.WriteLine(d.Year)
+End Sub");
+        Assert.That(ex.Message, Does.Contain("New DateTime"));
+        Assert.That(ex.Message, Does.Contain("3 or 6 argument(s), not 2"));
+    }
+
+    /// <summary>
+    /// Task 11: an arity mismatch on a METHOD (not a constructor). Decimal's v1 surface
+    /// pins ToString to the parameterless overload — .NET's format-string overload
+    /// (`d.ToString("F2")`) is out of scope, and must say so instead of emitting a
+    /// one-argument call the engine has no signature for. DateTime and Guid DO carry
+    /// the (0,1) pair, so this is a per-type fact the surface table owns.
+    /// </summary>
+    [Test]
+    public void UnsupportedMethodArity_IsRejectedCleanly()
+    {
+        var ex = AssertRejected(@"
+Sub Main()
+    Dim d As Decimal = 19.99
+    Console.WriteLine(d.ToString(""F2""))
+End Sub");
+        Assert.That(ex.Message, Does.Contain("Decimal.ToString"));
+        Assert.That(ex.Message, Does.Contain("0 argument(s), not 1"));
+    }
+
+    /// <summary>
+    /// Task 11: the KIND mismatch. `d.Year` is a property on the surface and lowers
+    /// through the property→method bridge; written WITH parentheses it arrives as an
+    /// IRInstanceMethodCall, which the bridge cannot express. The diagnostic tells the
+    /// user the one-word fix. (The dotted STATIC property form — `DateTime.Now()` — is
+    /// deliberately exempt; ParenthesizedStaticProperty_IsAccepted guards that.)
+    /// </summary>
+    [Test]
+    public void InstancePropertyCalledWithParentheses_IsRejectedCleanly()
+    {
+        var ex = AssertRejected(@"
+Sub Main()
+    Dim d As New DateTime(2026, 1, 1)
+    Console.WriteLine(d.Year())
+End Sub");
+        Assert.That(ex.Message, Does.Contain("DateTime.Year"));
+        Assert.That(ex.Message, Does.Contain("drop the parentheses"));
     }
 
     /// <summary>
