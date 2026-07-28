@@ -2166,8 +2166,58 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             return marshaled;
         }
 
+        /// <summary>
+        /// Names of Functions/Subs the user's program defines — both the qualified form the
+        /// IR carries ("M.Run") and its unqualified last segment ("Run"), because a call site
+        /// may use either. Rebuilt whenever <see cref="_module"/> changes rather than at each
+        /// entry point, so <c>Generate</c> and <c>GenerateSplit</c> cannot drift apart (the
+        /// classic both-modes trap).
+        /// </summary>
+        private readonly HashSet<string> _userFunctionNames =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private IRModule _userFunctionNamesSource;
+
+        /// <summary>
+        /// True when the user's program defines a Function/Sub called <paramref name="functionName"/>.
+        /// Such a definition SHADOWS a stdlib builtin of the same name — the rule the C# backend
+        /// has always enforced (<c>CSharpBackend.StdLibCanHandle</c>'s <c>_userFunctionNames</c>
+        /// guard), which this backend was missing entirely: <c>EmitStdLibCall</c> is consulted
+        /// before the user-function path, so a user's <c>Function Year(d As DateTime)</c> was
+        /// EMITTED but never CALLED (silently answering with <c>d.Year()</c> instead), and a
+        /// user's <c>Function Day(n As Integer)</c> lowered to the uncompilable <c>(21).Day()</c>.
+        /// </summary>
+        private bool IsUserDefinedFunctionName(string functionName)
+        {
+            if (string.IsNullOrEmpty(functionName) || _module?.Functions == null) return false;
+
+            if (!ReferenceEquals(_userFunctionNamesSource, _module))
+            {
+                _userFunctionNamesSource = _module;
+                _userFunctionNames.Clear();
+                foreach (var f in _module.Functions)
+                {
+                    if (string.IsNullOrEmpty(f.Name)) continue;
+                    _userFunctionNames.Add(f.Name);
+                    var dot = f.Name.LastIndexOf('.');
+                    if (dot >= 0 && dot < f.Name.Length - 1)
+                        _userFunctionNames.Add(f.Name.Substring(dot + 1));
+                }
+            }
+
+            return _userFunctionNames.Contains(functionName);
+        }
+
         private string EmitStdLibCall(string functionName, List<string> args, IRCall call = null)
         {
+            // A user definition wins over EVERY builtin below — framework exports, the P1
+            // static dispatch, and the plain stdlib arms alike — matching the single guard
+            // the C# backend puts in front of both of its providers. Returning null here
+            // falls through to the regular user-function call in the caller.
+            // NOTE this is deliberately checked against the call name AS WRITTEN: a dotted
+            // `DateTime.Parse(s)` never matches a user `Function Parse(...)` (the set holds
+            // "M.Parse"/"Parse", not "DateTime.Parse"), so static dispatch is unaffected.
+            if (IsUserDefinedFunctionName(functionName)) return null;
+
             // Check game framework functions first (case-insensitive match).
             // Framework exports are extern "C" — none take std::string — so
             // string-typed args are marshaled to const char* via .c_str()
@@ -2304,7 +2354,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// (<c>&lt;cctype&gt;</c> is not in that set).
         /// </summary>
         private const string LowercaseIntervalStmt =
-            "for (char& bl_c : bl_iv) if (bl_c >= 'A' && bl_c <= 'Z') bl_c = (char)(bl_c - 'A' + 'a'); ";
+            "for (char& bl_c : bl_iv) if (bl_c >= 'A' && bl_c <= 'Z') bl_c = static_cast<char>(bl_c - 'A' + 'a'); ";
 
         /// <summary>
         /// <c>DateAdd(date, interval, number)</c> — spec §7 / §14.3. The accepted
@@ -2318,11 +2368,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// "returns the date unchanged". Mirroring that is the whole point of this arm;
         /// diverging into a <c>std::runtime_error</c> would break the Task 13 parity oracle.
         ///
-        /// Emitted as an immediately-invoked NON-capturing lambda so each argument
-        /// expression is evaluated EXACTLY ONCE — the C# emission textually repeats
-        /// <c>{date}</c> in every switch arm, which is safe there only because the arms are
-        /// mutually exclusive; a C++ generator that repeated a call-valued argument across
-        /// branches would still be re-evaluating side effects on the taken branch.
+        /// Emitted as an immediately-invoked NON-capturing lambda, which binds each argument
+        /// to a parameter EXACTLY ONCE. The argument that makes this matter is the INTERVAL,
+        /// not the date: an inlined if-chain would have to place the interval expression in
+        /// up to six conditions and re-run the ASCII-lowercase transform on each, whereas the
+        /// taken branch evaluates the date exactly once either way (the same reason the C#
+        /// emission gets away with textually repeating <c>{date}</c> across its switch arms).
         /// </summary>
         private static string EmitVbDateAdd(string date, string interval, string number) =>
             "([](const BasicLang::DateTime& bl_d, std::string bl_iv, int32_t bl_n) -> BasicLang::DateTime { "

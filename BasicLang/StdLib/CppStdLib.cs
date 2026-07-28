@@ -52,8 +52,10 @@ namespace BasicLang.Compiler.StdLib.Cpp
             ["CBool"] = new StdLibFunction { Name = "CBool", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "Boolean" },
 
             // Date/Time (P1 Task 12, spec §7). SUPPORT-MATRIX ROWS ONLY: this provider is
-            // consulted by StdLibRegistry (the CLI's --stdlib matrix / demo) and by nothing
-            // in the compile path. The LIVE C++ emission for these lives in the hardcoded
+            // consulted by StdLibRegistry — whose only caller is Program.cs's
+            // DemoStdLibAbstraction (the no-argument demo run that prints the support
+            // matrix; there is no --stdlib flag) — and by nothing in the compile path.
+            // The LIVE C++ emission for these lives in the hardcoded
             // CppCodeGenerator.EmitStdLibCall switch — do NOT route codegen through here.
             // Signatures are the C# table's verbatim (StdLib/CSharpStdLib.cs lines 96-106):
             // DateAdd(date, interval, number), DateDiff(date1, date2, interval), and
@@ -123,9 +125,10 @@ namespace BasicLang.Compiler.StdLib.Cpp
                 StdLibCategory.Array => EmitArrayCall(functionName, arguments),
                 StdLibCategory.Conversion => EmitConversionCall(functionName, arguments),
                 StdLibCategory.Collections => EmitCollectionsCall(functionName, arguments),
-                // DateTime / Crypto are declared above for the support matrix only; their
-                // C++ emission lives in CppCodeGenerator.EmitStdLibCall (the live path),
-                // which never consults this provider.
+                // Declared above so CanHandle reports them in the support matrix, but
+                // intentionally NOT emitted here: their live C++ emission is the hardcoded
+                // CppCodeGenerator.EmitStdLibCall switch, which never consults this provider.
+                StdLibCategory.DateTime or StdLibCategory.Crypto => null,
                 _ => null
             };
         }

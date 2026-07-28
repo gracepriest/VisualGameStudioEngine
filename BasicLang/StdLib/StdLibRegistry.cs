@@ -200,9 +200,11 @@ namespace BasicLang.Compiler.StdLib
                 StdLibCategory.Math => new[] { "Abs", "Sqrt", "Pow", "Sin", "Cos", "Tan", "Log", "Exp", "Floor", "Ceiling", "Round", "Min", "Max", "Rnd", "Randomize" },
                 StdLibCategory.Array => new[] { "UBound", "LBound", "Length", "ReDim" },
                 StdLibCategory.Conversion => new[] { "CInt", "CLng", "CDbl", "CSng", "CStr", "CBool", "CChar" },
-                // P1 Task 12: without this arm the matrix printed NO date rows at all, so
-                // the C++ backend's new date support was invisible rather than "Yes".
+                // P1 Task 12: without these arms the matrix printed NO date/crypto rows at
+                // all (GenerateSupportMatrix skips categories with no functions), so the C++
+                // backend's new support would have been invisible rather than "Yes".
                 StdLibCategory.DateTime => new[] { "Now", "Today", "Year", "Month", "Day", "Hour", "Minute", "Second", "DateAdd", "DateDiff", "FormatDate" },
+                StdLibCategory.Crypto => new[] { "NewGuid" },
                 StdLibCategory.System => Array.Empty<string>(),
                 _ => Array.Empty<string>()
             };

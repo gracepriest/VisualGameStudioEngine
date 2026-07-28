@@ -123,8 +123,18 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     diags.Add($"'{name}' conflicts with a native BCL type on the C++ backend — rename the type");
 
             var globalNames = module.GlobalVariables?.Values.Select(g => g.Name) ?? Enumerable.Empty<string>();
+            // Both the qualified name the IR carries ("M.CStr") and its unqualified last
+            // segment ("CStr"), because a call site may use either — the same two forms
+            // CppCodeGenerator.IsUserDefinedFunctionName collects. (The dotted-native
+            // fallback below already tested the segment explicitly; that stays correct.)
             _moduleFunctionNames = new HashSet<string>(
                 module.Functions.Select(f => f.Name), StringComparer.OrdinalIgnoreCase);
+            foreach (var f in module.Functions)
+            {
+                var dot = f.Name?.LastIndexOf('.') ?? -1;
+                if (dot >= 0 && dot < f.Name.Length - 1)
+                    _moduleFunctionNames.Add(f.Name.Substring(dot + 1));
+            }
 
             foreach (var func in module.Functions)
             {
@@ -383,7 +393,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 }
             }
 
-            if (argCount > 0 && ConversionIntrinsicTargets.TryGetValue(name, out var intrinsicTarget))
+            // A user-defined Function of the same name SHADOWS the intrinsic in the generator
+            // (CppCodeGenerator.EmitStdLibCall's leading guard, mirroring the C# backend), so
+            // the call is an ordinary user call and NOT a conversion — gating it here would
+            // reject a program the generator lowers correctly.
+            if (argCount > 0 && !_moduleFunctionNames.Contains(name)
+                && ConversionIntrinsicTargets.TryGetValue(name, out var intrinsicTarget))
                 CheckNativeConversion(call.Arguments[0]?.Type?.Name, intrinsicTarget, funcName, diags);
         }
 

@@ -241,6 +241,39 @@ public class CppBclEndToEndTests
         Assert.That(rt, Does.Contain("struct Decimal"));
     }
 
+    /// <summary>
+    /// A user-defined Function SHADOWS a stdlib builtin of the same name. The C# backend has
+    /// always enforced this (<c>CSharpBackend.StdLibCanHandle</c> early-returns false for a
+    /// name in <c>_userFunctionNames</c>); the C++ backend had NO such guard, and
+    /// <c>EmitStdLibCall</c> runs before the user-function path — so the user's function was
+    /// emitted and then never called. Task 12's date arms widened the blast radius to the
+    /// most collision-prone names in the table (Year/Month/Day/Hour/Minute/Second/Now/Today),
+    /// which is what surfaced it; <c>Abs</c> and <c>Trim</c> below are the PRE-EXISTING half
+    /// of the same bug, fixed by the same guard.
+    ///
+    /// This is an emission pin (no C++ compiler needed), so it stays in the fast subset.
+    /// Verified against real .NET through the C# backend, which prints 1999/7/77/user-trim
+    /// for this exact program; the Integration row "StdlibShadowing" runs it for real.
+    /// Before the fix this program emitted <c>(d).Year()</c>, <c>abs(-3)</c> and the stdlib
+    /// trim lambda instead of the three user calls.
+    /// </summary>
+    [Test]
+    public void UserDefinedFunction_ShadowsStdlibBuiltin_MatchingTheCSharpBackend()
+    {
+        var cpp = CppGeneratedCode.WithoutBclRuntime(CompileToCppOptimized(StdlibShadowingProgram));
+
+        // The three SHADOWED names lower to the user's function …
+        Assert.That(cpp, Does.Contain("Year(d)"), "user Year must win over the builtin:\n" + cpp);
+        Assert.That(cpp, Does.Not.Contain("(d).Year()"), "builtin Year must not be emitted:\n" + cpp);
+        Assert.That(cpp, Does.Contain("Abs(-3)"), "user Abs must win over the builtin:\n" + cpp);
+        Assert.That(cpp, Does.Not.Contain("abs(-3)"), "builtin abs must not be emitted:\n" + cpp);
+        Assert.That(cpp, Does.Contain("Trim(\"  padded  \")"), "user Trim must win:\n" + cpp);
+
+        // … while an UNSHADOWED builtin still lowers to the builtin (the guard is scoped to
+        // names the program actually defines; it does not disable the stdlib wholesale).
+        Assert.That(cpp, Does.Contain("(d).Month()"), "unshadowed Month must stay a builtin:\n" + cpp);
+    }
+
     // ------------------------------------------------------------------
     // Integration splice smokes: the spliced headers must COMPILE (and run)
     // inside a generated program, in both emission modes.
@@ -812,6 +845,42 @@ End Sub";
         // Structural: Now(), Today()'s zeroed clock, NewGuid() round-trip and length.
         "now-ok\ntoday-ok\nnewguid-roundtrip-ok\nnewguid-len-ok\n";
 
+    /// <summary>
+    /// The runnable half of <see cref="UserDefinedFunction_ShadowsStdlibBuiltin_MatchingTheCSharpBackend"/>:
+    /// a user definition wins over the builtin of the same name, on BOTH backends. Cross-checked
+    /// on the C# backend (real .NET) before the C++ leg was run — it prints the same four lines.
+    ///
+    /// SCOPE NOTE: every shadowing function here takes the SAME parameter type as the builtin
+    /// it shadows. A user overload with a DIFFERENT signature (the classic
+    /// <c>Function Day(n As Integer)</c> + <c>Day(21)</c>) never reaches either backend — the
+    /// semantic analyzer resolves the name to the registered stdlib signature and reports
+    /// "cannot convert from 'Integer' to 'DateTime'". That is a separate, pre-existing
+    /// FRONT-END gap (a clean diagnostic, not a silent wrong answer), out of scope here.
+    /// </summary>
+    private const string StdlibShadowingProgram = @"
+Sub Main()
+    Dim d As New DateTime(2026, 7, 28, 13, 45, 30)
+    Console.WriteLine(Year(d))
+    Console.WriteLine(Month(d))
+    Console.WriteLine(Abs(-3))
+    Console.WriteLine(Trim(""  padded  ""))
+End Sub
+
+Function Year(value As DateTime) As Integer
+    Return 1999
+End Function
+
+Function Abs(value As Integer) As Integer
+    Return 77
+End Function
+
+Function Trim(value As String) As String
+    Return ""user-trim""
+End Function";
+
+    // User Year, the real builtin Month, user Abs (pre-existing half), user Trim.
+    private const string StdlibShadowingExpected = "1999\n7\n77\nuser-trim\n";
+
     // ------------------------------------------------------------------
     // THE TABLE. One row per program; both legs are generated from it.
     // ------------------------------------------------------------------
@@ -839,6 +908,7 @@ End Sub";
         new BclProgram("DateTimeOffset", DateTimeOffsetProgram, DateTimeOffsetExpected),
         new BclProgram("TryCatch", TryCatchProgram, TryCatchExpected),
         new BclProgram("Stdlib", StdlibProgram, StdlibExpected),
+        new BclProgram("StdlibShadowing", StdlibShadowingProgram, StdlibShadowingExpected),
     };
 
     public static IEnumerable<TestCaseData> ProgramCases() =>

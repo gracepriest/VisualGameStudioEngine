@@ -758,6 +758,16 @@ Spec §12.5 with the discipline paragraph: fixed literal dates/guids, invariant-
 > 6. **No module-qualified `Sub` calls** (`Helpers.Foo()`) — broken on the
 >    C++ backend generally (pre-existing, chipped). Single `Module M` with
 >    local helpers only.
+> 7. **`FormatDate` (and every DateTime `ToString(fmt)`) is INVARIANT on C++
+>    but CULTURE-SENSITIVE on C#** — recorded during Task 12. The C# backend
+>    emits a bare `.ToString(format)` with no `InvariantCulture` argument, and
+>    in a .NET custom format string `:` is the *time separator specifier*
+>    (replaced by the culture's `TimeSeparator`), not a literal. So
+>    `"yyyy-MM-dd HH:mm:ss"` agrees across backends on an en-US machine and
+>    could diverge elsewhere. **Step 1's forced `CultureInfo.InvariantCulture`
+>    on the C# leg neutralizes this — it is load-bearing for the date programs,
+>    not just belt-and-braces.** Do not "simplify" it away. (Task 12's
+>    `CppBclEndToEndTests` row is unaffected: it runs the C++ leg only.)
 
 - [ ] **Step 3: Iterate.** A diff = a real semantic divergence: fix the C++ side to match .NET unless the spec documents the divergence (§9's list) — in which case the PROGRAM was undisciplined, fix the program (e.g. avoid default `ToString()` only if it proves culture-fragile even under forced invariant — it shouldn't be).
 - [ ] **Step 4: Commit** — `git commit -m "test(p1): cross-backend parity oracle - identical stdout C# vs C++ for the BCL battery"`
