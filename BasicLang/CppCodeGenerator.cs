@@ -630,6 +630,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             && BoundaryTypeRegistry.Categorize(typeName) == BoundaryTypeCategory.NativeOwned;
 
         /// <summary>
+        /// True for the BL integral type names (the family the C++ backend lowers to
+        /// intN_t/uintN_t). Used by the P1 Decimal cast lowering to pick the EXACT
+        /// integer ctor over the lossy 15-digit double route.
+        /// </summary>
+        private static bool IsIntegralTypeName(string typeName) =>
+            typeName != null && typeName.ToLowerInvariant() is
+                "byte" or "ubyte" or "sbyte" or "short" or "ushort"
+                or "integer" or "uinteger" or "long" or "ulong";
+
+        /// <summary>
         /// Canonical C++ spelling of a P1 native BCL type name (BasicLang is
         /// case-insensitive, so `datetime` must emit as `DateTime`). Only called for
         /// names the registry categorizes NativeOwned; passthrough via SanitizeName is
@@ -2194,11 +2204,23 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 }
             }
 
+            // P1 (DEAD until the Task 10 registry flip): the C* conversion intrinsics
+            // (CDbl/CSng) take the stdlib route below, NOT Visit(IRCast) — on a
+            // Decimal-typed argument a static_cast is invalid C++ (the engine deliberately
+            // has no conversion operator), so those arms route through ToDouble() instead.
+            var arg0IsDecimal = call != null && call.Arguments.Count > 0
+                && IsNativeOwnedBclType(call.Arguments[0]?.Type?.Name)
+                && call.Arguments[0].Type.Name.Equals("Decimal", StringComparison.OrdinalIgnoreCase);
+
             return functionName.ToLower() switch
             {
                 "print" => $"cout << {args[0]}",
                 "printline" => $"cout << {args[0]} << endl",
-                // .NET Console surface (console-app template parity)
+                // .NET Console surface (console-app template parity).
+                // Task 10 lands the Byte/SByte numeric-print cast here: int8_t/uint8_t
+                // WriteLine/Write args get wrapped in static_cast<int32_t>(...) so cout
+                // prints numbers, matching .NET (moved out of Task 9 — it changes LIVE
+                // Byte output, which would break Task 9's inertness claim).
                 "console.writeline" => args.Count == 0 ? "cout << endl" : $"cout << {args[0]} << endl",
                 "console.write" => args.Count == 0 ? "cout << \"\"" : $"cout << {args[0]}",
                 "readline" => "([](){ string s; getline(cin, s); return s; })()",
@@ -2226,8 +2248,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 "max" => $"max({args[0]}, {args[1]})",
                 "cint" => $"static_cast<int32_t>({args[0]})",
                 "clng" => $"static_cast<int64_t>({args[0]})",
-                "cdbl" => $"static_cast<double>({args[0]})",
-                "csng" => $"static_cast<float>({args[0]})",
+                "cdbl" => arg0IsDecimal
+                    ? $"({args[0]}).ToDouble()"
+                    : $"static_cast<double>({args[0]})",
+                "csng" => arg0IsDecimal
+                    ? $"static_cast<float>(({args[0]}).ToDouble())"
+                    : $"static_cast<float>({args[0]})",
                 "cstr" => $"to_string({args[0]})",
                 "cbool" => $"static_cast<bool>({args[0]})",
                 "ubound" => $"(static_cast<int32_t>({args[0]}.size()) - 1)",
@@ -2708,11 +2734,19 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 && cast.Value.Type.Name.Equals("Decimal", StringComparison.OrdinalIgnoreCase);
             if (castTargetIsDecimal)
             {
-                // Decimal → Decimal is the identity (never a lossy double round-trip);
-                // numeric → Decimal uses the converting ctor's .NET 15-digit double rule.
-                WriteLine(castSourceIsDecimal
-                    ? $"{result} = {value};"
-                    : $"{result} = BasicLang::Decimal(static_cast<double>({value}));");
+                // Decimal → Decimal is the identity (never a lossy double round-trip).
+                // Integral sources are EXACT via the int64/uint64 ctors (spec §10; the C#
+                // backend's (decimal)x is exact — routing a Long ≥ ~1e15 through the double
+                // ctor's 15-significant-digit rule would silently lose digits). Only
+                // Single/Double sources take the converting double ctor's .NET 15-digit rule.
+                if (castSourceIsDecimal)
+                    WriteLine($"{result} = {value};");
+                else if (IsIntegralTypeName(cast.Value?.Type?.Name))
+                    WriteLine(string.Equals(cast.Value.Type.Name, "ULong", StringComparison.OrdinalIgnoreCase)
+                        ? $"{result} = BasicLang::Decimal(static_cast<uint64_t>({value}));"
+                        : $"{result} = BasicLang::Decimal(static_cast<int64_t>({value}));");
+                else
+                    WriteLine($"{result} = BasicLang::Decimal(static_cast<double>({value}));");
                 return;
             }
             if (castSourceIsDecimal
