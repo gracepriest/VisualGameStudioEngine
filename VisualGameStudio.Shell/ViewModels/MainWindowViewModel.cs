@@ -3243,9 +3243,10 @@ public partial class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Auto-shows debug-related panels when a debug session starts.
-    /// Activates the Variables panel in the debug tool group, switches the Output
-    /// panel to the Debug category, and ensures debug tools are visible.
+    /// When a debug session starts, surfaces the Output panel and switches it to the Debug
+    /// category. The debug tool windows (Variables, Call Stack, Breakpoints, …) are hidden by the
+    /// clean-startup layout and are deliberately NOT auto-opened here — the user opens the ones
+    /// they want from the View ▸ Debug Windows menu (see <see cref="Dock.DockFactory.CreateLayout"/>).
     /// </summary>
     private void ShowDebugPanels()
     {
@@ -3257,17 +3258,15 @@ public partial class MainWindowViewModel : ViewModelBase
         // Switch output panel to Debug category
         OutputPanel.SelectedCategory = OutputCategory.Debug;
 
-        // Activate Output panel in the bottom-left tool group
+        // Output is the only panel surfaced automatically on a debug start; debug tool windows
+        // open on demand from the View ▸ Debug Windows menu.
         _dockFactory.ActivateTool("Output");
-
-        // Activate Variables panel in the bottom-right debug tool group
-        // (this is the most useful panel when paused at a breakpoint)
-        _dockFactory.ActivateTool("Variables");
     }
 
     /// <summary>
-    /// Restores the panel state from before the debug session started.
-    /// Resets the output category and switches the debug tool group back to Breakpoints.
+    /// Restores the panel state from before the debug session started: resets the Output panel's
+    /// category. Debug tool windows are not auto-managed here — they stay hidden unless the user
+    /// opened them from the View ▸ Debug Windows menu.
     /// </summary>
     private void RestorePreDebugPanels()
     {
@@ -3276,9 +3275,6 @@ public partial class MainWindowViewModel : ViewModelBase
 
         // Restore the output category to what it was before debugging
         OutputPanel.SelectedCategory = _preDebugOutputCategory;
-
-        // Switch debug tool group back to Breakpoints (the default non-debug view)
-        _dockFactory.ActivateTool("Breakpoints");
     }
 
     private async void OnDebugStopped(object? sender, StoppedEventArgs e)

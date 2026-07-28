@@ -33,7 +33,13 @@ public class DockLayoutSerializerTests
         Assert.That(toolIds, Does.Contain("Output"));
         Assert.That(toolIds, Does.Contain("ErrorList"));
         Assert.That(toolIds, Does.Contain("Terminal"));
-        Assert.That(toolIds, Does.Contain("Breakpoints"));
+        Assert.That(toolIds, Does.Contain("FindInFiles"));
+
+        // Debug tool windows are intentionally absent from the fresh default layout — they open on
+        // demand from View ▸ Debug Windows (see DockStartupLayoutTests), so a capture of the clean
+        // startup layout must not include them.
+        Assert.That(toolIds, Does.Not.Contain("Breakpoints"));
+        Assert.That(toolIds, Does.Not.Contain("Variables"));
     }
 
     [Test]

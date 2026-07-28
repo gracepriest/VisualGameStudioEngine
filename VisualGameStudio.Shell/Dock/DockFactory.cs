@@ -287,28 +287,11 @@ public class DockFactory : Factory
             IsCollapsable = false
         };
 
-        // Debug tools
-        var callStackTool = new CallStackTool
-        {
-            Id = "CallStack",
-            Title = "Call Stack",
-            ViewModel = _callStack
-        };
-
-        var variablesTool = new VariablesTool
-        {
-            Id = "Variables",
-            Title = "Variables",
-            ViewModel = _variables
-        };
-
-        var breakpointsTool = new BreakpointsTool
-        {
-            Id = "Breakpoints",
-            Title = "Breakpoints",
-            ViewModel = _breakpoints
-        };
-
+        // The seven debug tool windows (Call Stack, Variables, Breakpoints, Watch, Immediate,
+        // Debug Console, Threads) are intentionally NOT seeded into the default layout: a fresh IDE
+        // opens without them so the bottom bar isn't cluttered before you debug. They are created on
+        // demand by ActivateTool (View ▸ Debug Windows menu, via GetToolFactoryMap), which rebuilds
+        // their BottomRightTools group in the bottom region. See DockStartupLayoutTests.
         var findInFilesTool = new FindInFilesTool
         {
             Id = "FindInFiles",
@@ -323,39 +306,11 @@ public class DockFactory : Factory
             ViewModel = _terminal
         };
 
-        var watchTool = new WatchTool
-        {
-            Id = "Watch",
-            Title = "Watch",
-            ViewModel = _watch
-        };
-
-        var immediateWindowTool = new ImmediateWindowTool
-        {
-            Id = "ImmediateWindow",
-            Title = "Immediate",
-            ViewModel = _immediateWindow
-        };
-
         var problemsTool = new ProblemsTool
         {
             Id = "Problems",
             Title = "Problems",
             ViewModel = _problems
-        };
-
-        var debugConsoleTool = new DebugConsoleTool
-        {
-            Id = "DebugConsole",
-            Title = "Debug Console",
-            ViewModel = _debugConsole
-        };
-
-        var threadsTool = new ThreadsTool
-        {
-            Id = "Threads",
-            Title = "Threads",
-            ViewModel = _threads
         };
 
         var callHierarchyTool = new CallHierarchyTool
@@ -365,8 +320,10 @@ public class DockFactory : Factory
             ViewModel = _callHierarchy
         };
 
-        // Bottom tool dock - split into two groups for better tab visibility
-        // Left group: General tools (Output, Error List, Terminal, Find)
+        // Bottom tool dock: the general tool group only (Output, Error List, Problems, Terminal,
+        // Find, Call Hierarchy). The debug tools' BottomRightTools group is no longer seeded here —
+        // it's rebuilt on demand when a debug window is opened (ActivateTool → EnsureBottomRegion),
+        // so a fresh IDE shows a clean bottom bar.
         var bottomLeftTools = new ToolDock
         {
             Id = "BottomLeftTools",
@@ -378,27 +335,15 @@ public class DockFactory : Factory
             GripMode = GripMode.Visible
         };
 
-        // Right group: Debug tools (Call Stack, Variables, Breakpoints, Watch, Immediate, Threads)
-        var bottomRightTools = new ToolDock
-        {
-            Id = "BottomRightTools",
-            Title = "Debug",
-            Proportion = 0.5,
-            VisibleDockables = CreateList<IDockable>(callStackTool, variablesTool, breakpointsTool, watchTool, immediateWindowTool, debugConsoleTool, threadsTool),
-            ActiveDockable = breakpointsTool,
-            Alignment = Alignment.Bottom,
-            GripMode = GripMode.Visible
-        };
-
+        // Single child until a debug window is opened; the ProportionalDock lets the general group
+        // fill the bar, and EnsureBottomRegion adds the BottomRightTools group + splitter on demand.
         _bottomDock = new ProportionalDock
         {
             Id = "BottomDock",
             Proportion = 0.35,
             Orientation = Orientation.Horizontal,
             VisibleDockables = CreateList<IDockable>(
-                bottomLeftTools,
-                new ProportionalDockSplitter(),
-                bottomRightTools
+                bottomLeftTools
             )
         };
         var bottomDock = _bottomDock;
