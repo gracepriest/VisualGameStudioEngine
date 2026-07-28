@@ -1390,6 +1390,12 @@ extern "C" {
         DrawTextEx(font, text, pos, fontSize, spacing, Color{ r, g, b, a });
     }
 
+    // ==== RAW rtext PARITY — low-level font-data construction (raylib 5.5 passthrough, Batch text-fontdata) — raylib.h 100% ====
+    // 1:1 forwarders. GlyphInfo*/Rectangle** array pointers passthrough; Image returned by value. All CPU (no GL).
+    GlyphInfo* Framework_LoadFontData(const unsigned char* fileData, int dataSize, int fontSize, int* codepoints, int codepointCount, int type) { return LoadFontData(fileData, dataSize, fontSize, codepoints, codepointCount, type); }
+    Image Framework_GenImageFontAtlas(const GlyphInfo* glyphs, Rectangle** glyphRecs, int glyphCount, int fontSize, int padding, int packMethod) { return GenImageFontAtlas(glyphs, glyphRecs, glyphCount, fontSize, padding, packMethod); }
+    void Framework_UnloadFontData(GlyphInfo* glyphs, int glyphCount) { UnloadFontData(glyphs, glyphCount); }
+
     Rectangle Framework_SpriteFrame(Rectangle sheetArea, int frameW, int frameH, int index, int columns) {
         Rectangle r{};
         r.x = sheetArea.x + (index % columns) * frameW;
@@ -1992,6 +1998,287 @@ extern "C" {
     unsigned int   Framework_ComputeCRC32(unsigned char* data, int dataSize) { return ComputeCRC32(data, dataSize); }
     unsigned int*  Framework_ComputeMD5(unsigned char* data, int dataSize) { return ComputeMD5(data, dataSize); }
     unsigned int*  Framework_ComputeSHA1(unsigned char* data, int dataSize) { return ComputeSHA1(data, dataSize); }
+
+    // ==== RAW RCORE PARITY — File data I/O (raylib 5.5 passthrough, Batch core-C7) ====
+    unsigned char* Framework_LoadFileData(const char* fileName, int* dataSize) { return LoadFileData(fileName, dataSize); }
+    void           Framework_UnloadFileData(unsigned char* data) { UnloadFileData(data); }
+    bool           Framework_SaveFileData(const char* fileName, void* data, int dataSize) { return SaveFileData(fileName, data, dataSize); }
+    bool           Framework_ExportDataAsCode(const unsigned char* data, int dataSize, const char* fileName) { return ExportDataAsCode(data, dataSize, fileName); }
+    char*          Framework_LoadFileText(const char* fileName) { return LoadFileText(fileName); }
+    void           Framework_UnloadFileText(char* text) { UnloadFileText(text); }
+    bool           Framework_SaveFileText(const char* fileName, char* text) { return SaveFileText(fileName, text); }
+
+    // ==== RAW RCORE PARITY — File-system path queries (raylib 5.5 passthrough, Batch core-C8) ====
+    bool        Framework_FileExists(const char* fileName) { return FileExists(fileName); }
+    bool        Framework_DirectoryExists(const char* dirPath) { return DirectoryExists(dirPath); }
+    bool        Framework_IsFileExtension(const char* fileName, const char* ext) { return IsFileExtension(fileName, ext); }
+    int         Framework_GetFileLength(const char* fileName) { return GetFileLength(fileName); }
+    // ⛔ raylib's GetFileExtension/GetFileName return a pointer INTO the input string (an offset), NOT a static buffer
+    // (unlike GetFileNameWithoutExt/GetDirectoryPath/GetPrevDirectoryPath). Across the P/Invoke boundary the CLR frees
+    // the marshaled input right after the call, so returning that pointer as-is dangles → PtrToStringAnsi reads freed
+    // memory (empty/garbage). Copy raylib's result into an engine-side static buffer WHILE the input is still alive so
+    // the returned pointer stays valid. Value is identical to raylib's; NULL (no extension) is preserved.
+    const char* Framework_GetFileExtension(const char* fileName) {
+        const char* r = GetFileExtension(fileName);
+        if (!r) return nullptr;
+        static char buf[4096];
+        strncpy(buf, r, sizeof(buf) - 1); buf[sizeof(buf) - 1] = '\0';
+        return buf;
+    }
+    const char* Framework_GetFileName(const char* filePath) {
+        const char* r = GetFileName(filePath);
+        static char buf[4096];
+        if (r) { strncpy(buf, r, sizeof(buf) - 1); buf[sizeof(buf) - 1] = '\0'; } else buf[0] = '\0';
+        return buf;
+    }
+    const char* Framework_GetFileNameWithoutExt(const char* filePath) { return GetFileNameWithoutExt(filePath); }
+    const char* Framework_GetDirectoryPath(const char* filePath) { return GetDirectoryPath(filePath); }
+    const char* Framework_GetPrevDirectoryPath(const char* dirPath) { return GetPrevDirectoryPath(dirPath); }
+    const char* Framework_GetWorkingDirectory(void) { return GetWorkingDirectory(); }
+    const char* Framework_GetApplicationDirectory(void) { return GetApplicationDirectory(); }
+    int         Framework_MakeDirectory(const char* dirPath) { return MakeDirectory(dirPath); }
+    bool        Framework_ChangeDirectory(const char* dir) { return ChangeDirectory(dir); }
+    bool        Framework_IsPathFile(const char* path) { return IsPathFile(path); }
+    bool        Framework_IsFileNameValid(const char* fileName) { return IsFileNameValid(fileName); }
+
+    // ==== RAW RCORE PARITY — Window state & control (raylib 5.5 passthrough, Batch core-C1) ====
+    // Thin 1:1 forwarders to raylib's window API. These coexist with the engine's managed lifecycle (Framework_Initialize
+    // wraps InitWindow + camera/timing setup; Framework_Shutdown wraps CloseWindow after tearing systems down). A raw
+    // consumer calls Framework_InitWindow / Framework_CloseWindow directly and owns the window lifecycle itself.
+    void  Framework_InitWindow(int width, int height, const char* title) { InitWindow(width, height, title); }
+    void  Framework_CloseWindow(void) { CloseWindow(); }
+    bool  Framework_WindowShouldClose(void) { return WindowShouldClose(); }
+    bool  Framework_IsWindowReady(void) { return IsWindowReady(); }
+    bool  Framework_IsWindowFullscreen(void) { return IsWindowFullscreen(); }
+    bool  Framework_IsWindowHidden(void) { return IsWindowHidden(); }
+    bool  Framework_IsWindowMinimized(void) { return IsWindowMinimized(); }
+    bool  Framework_IsWindowMaximized(void) { return IsWindowMaximized(); }
+    bool  Framework_IsWindowFocused(void) { return IsWindowFocused(); }
+    bool  Framework_IsWindowResized(void) { return IsWindowResized(); }
+    bool  Framework_IsWindowState(unsigned int flag) { return IsWindowState(flag); }
+    void  Framework_SetWindowState(unsigned int flags) { SetWindowState(flags); }
+    void  Framework_ClearWindowState(unsigned int flags) { ClearWindowState(flags); }
+    void  Framework_MaximizeWindow(void) { MaximizeWindow(); }
+    void  Framework_MinimizeWindow(void) { MinimizeWindow(); }
+    void  Framework_RestoreWindow(void) { RestoreWindow(); }
+    void  Framework_SetWindowIcon(Image image) { SetWindowIcon(image); }
+    void  Framework_SetWindowIcons(Image* images, int count) { SetWindowIcons(images, count); }
+    void  Framework_SetWindowPosition(int x, int y) { SetWindowPosition(x, y); }
+    void  Framework_SetWindowMonitor(int monitor) { SetWindowMonitor(monitor); }
+    void  Framework_SetWindowMaxSize(int width, int height) { SetWindowMaxSize(width, height); }
+    void  Framework_SetWindowOpacity(float opacity) { SetWindowOpacity(opacity); }
+    void  Framework_SetWindowFocused(void) { SetWindowFocused(); }
+    void* Framework_GetWindowHandle(void) { return GetWindowHandle(); }
+
+    // ==== RAW RCORE PARITY — Window/monitor query & clipboard (raylib 5.5 passthrough, Batch core-C2) ====
+    // 1:1 forwarders for the screen/render/monitor query getters and clipboard access. The screen-size / monitor-metric
+    // getters already bound in the managed section (GetScreenWidth/Height, GetMonitor{Width,Height,Count,RefreshRate},
+    // GetCurrentMonitor) are not repeated here.
+    int         Framework_GetRenderWidth(void) { return GetRenderWidth(); }
+    int         Framework_GetRenderHeight(void) { return GetRenderHeight(); }
+    Vector2     Framework_GetMonitorPosition(int monitor) { return GetMonitorPosition(monitor); }
+    int         Framework_GetMonitorPhysicalWidth(int monitor) { return GetMonitorPhysicalWidth(monitor); }
+    int         Framework_GetMonitorPhysicalHeight(int monitor) { return GetMonitorPhysicalHeight(monitor); }
+    Vector2     Framework_GetWindowPosition(void) { return GetWindowPosition(); }
+    Vector2     Framework_GetWindowScaleDPI(void) { return GetWindowScaleDPI(); }
+    const char* Framework_GetMonitorName(int monitor) { return GetMonitorName(monitor); }
+    void        Framework_SetClipboardText(const char* text) { SetClipboardText(text); }
+    const char* Framework_GetClipboardText(void) { return GetClipboardText(); }
+    Image       Framework_GetClipboardImage(void) { return GetClipboardImage(); }
+    void        Framework_EnableEventWaiting(void) { EnableEventWaiting(); }
+    void        Framework_DisableEventWaiting(void) { DisableEventWaiting(); }
+
+    // ==== RAW RCORE PARITY — Timing/frame + Random + Misc + input stragglers (raylib 5.5 passthrough, Batch core-C6) ====
+    // SetTargetFPS/GetFrameTime/GetTime/GetFPS/TakeScreenshot/MemFree already exported elsewhere — not repeated here.
+    void    Framework_SwapScreenBuffer(void) { SwapScreenBuffer(); }
+    void    Framework_PollInputEvents(void) { PollInputEvents(); }
+    void    Framework_WaitTime(double seconds) { WaitTime(seconds); }
+    void    Framework_SetRandomSeed(unsigned int seed) { SetRandomSeed(seed); }
+    int     Framework_GetRandomValue(int min, int max) { return GetRandomValue(min, max); }
+    int*    Framework_LoadRandomSequence(unsigned int count, int min, int max) { return LoadRandomSequence(count, min, max); }
+    void    Framework_UnloadRandomSequence(int* sequence) { UnloadRandomSequence(sequence); }
+    void    Framework_SetConfigFlags(unsigned int flags) { SetConfigFlags(flags); }
+    void    Framework_OpenURL(const char* url) { OpenURL(url); }
+    // TraceLog is variadic; route the caller's text through "%s" to dodge varargs marshaling and format-string injection.
+    void    Framework_TraceLog(int logLevel, const char* text) { TraceLog(logLevel, "%s", text); }
+    void    Framework_SetTraceLogLevel(int logLevel) { SetTraceLogLevel(logLevel); }
+    void*   Framework_MemAlloc(unsigned int size) { return MemAlloc(size); }
+    void*   Framework_MemRealloc(void* ptr, unsigned int size) { return MemRealloc(ptr, size); }
+    void    Framework_SetGamepadVibration(int gamepad, float leftMotor, float rightMotor, float duration) { SetGamepadVibration(gamepad, leftMotor, rightMotor, duration); }
+    Vector2 Framework_GetTouchPosition(int index) { return GetTouchPosition(index); }
+
+    // ==== RAW RCORE PARITY — Directory listing & dropped files (raylib 5.5 passthrough, Batch core-C9) ====
+    // 1:1 forwarders; FilePathList is returned/passed by value and freed through its matching Unload. GetFileModTime
+    // returns raylib's C `long` unchanged.
+    FilePathList Framework_LoadDirectoryFiles(const char* dirPath) { return LoadDirectoryFiles(dirPath); }
+    FilePathList Framework_LoadDirectoryFilesEx(const char* basePath, const char* filter, bool scanSubdirs) { return LoadDirectoryFilesEx(basePath, filter, scanSubdirs); }
+    void         Framework_UnloadDirectoryFiles(FilePathList files) { UnloadDirectoryFiles(files); }
+    bool         Framework_IsFileDropped(void) { return IsFileDropped(); }
+    FilePathList Framework_LoadDroppedFiles(void) { return LoadDroppedFiles(); }
+    void         Framework_UnloadDroppedFiles(FilePathList files) { UnloadDroppedFiles(files); }
+    long         Framework_GetFileModTime(const char* fileName) { return GetFileModTime(fileName); }
+
+    // ==== RAW RCORE PARITY — Shader management (raylib 5.5 passthrough, Batch core-C4) ====
+    // 1:1 forwarders. GetShaderLocation + UnloadShader already forwarded above. Shader/Matrix/Texture2D pass by value.
+    Shader Framework_LoadShader(const char* vsFileName, const char* fsFileName) { return LoadShader(vsFileName, fsFileName); }
+    Shader Framework_LoadShaderFromMemory(const char* vsCode, const char* fsCode) { return LoadShaderFromMemory(vsCode, fsCode); }
+    bool   Framework_IsShaderValid(Shader shader) { return IsShaderValid(shader); }
+    int    Framework_GetShaderLocationAttrib(Shader shader, const char* attribName) { return GetShaderLocationAttrib(shader, attribName); }
+    void   Framework_SetShaderValue(Shader shader, int locIndex, const void* value, int uniformType) { SetShaderValue(shader, locIndex, value, uniformType); }
+    void   Framework_SetShaderValueV(Shader shader, int locIndex, const void* value, int uniformType, int count) { SetShaderValueV(shader, locIndex, value, uniformType, count); }
+    void   Framework_SetShaderValueMatrix(Shader shader, int locIndex, Matrix mat) { SetShaderValueMatrix(shader, locIndex, mat); }
+    void   Framework_SetShaderValueTexture(Shader shader, int locIndex, Texture2D texture) { SetShaderValueTexture(shader, locIndex, texture); }
+
+    // ==== RAW RCORE PARITY — Drawing modes & VR simulator (raylib 5.5 passthrough, Batch core-C3) ====
+    // 1:1 forwarders. Camera3D/VrStereoConfig/VrDeviceInfo pass by value; LoadVrStereoConfig returns VrStereoConfig by value.
+    void            Framework_BeginMode3D(Camera3D camera) { BeginMode3D(camera); }
+    void            Framework_EndMode3D() { EndMode3D(); }
+    void            Framework_BeginBlendMode(int mode) { BeginBlendMode(mode); }
+    void            Framework_EndBlendMode() { EndBlendMode(); }
+    void            Framework_BeginScissorMode(int x, int y, int width, int height) { BeginScissorMode(x, y, width, height); }
+    void            Framework_EndScissorMode() { EndScissorMode(); }
+    void            Framework_BeginVrStereoMode(VrStereoConfig config) { BeginVrStereoMode(config); }
+    void            Framework_EndVrStereoMode() { EndVrStereoMode(); }
+    VrStereoConfig  Framework_LoadVrStereoConfig(VrDeviceInfo device) { return LoadVrStereoConfig(device); }
+    void            Framework_UnloadVrStereoConfig(VrStereoConfig config) { UnloadVrStereoConfig(config); }
+
+    // ==== RAW RCORE PARITY — Automation events (raylib 5.5 passthrough, Batch core-C11) ====
+    // 1:1 forwarders. AutomationEventList returned/passed by value; SetAutomationEventList takes the retained pointer;
+    // AutomationEvent passed by value.
+    AutomationEventList Framework_LoadAutomationEventList(const char* fileName) { return LoadAutomationEventList(fileName); }
+    void                Framework_UnloadAutomationEventList(AutomationEventList list) { UnloadAutomationEventList(list); }
+    bool                Framework_ExportAutomationEventList(AutomationEventList list, const char* fileName) { return ExportAutomationEventList(list, fileName); }
+    void                Framework_SetAutomationEventList(AutomationEventList* list) { SetAutomationEventList(list); }
+    void                Framework_SetAutomationEventBaseFrame(int frame) { SetAutomationEventBaseFrame(frame); }
+    void                Framework_StartAutomationEventRecording() { StartAutomationEventRecording(); }
+    void                Framework_StopAutomationEventRecording() { StopAutomationEventRecording(); }
+    void                Framework_PlayAutomationEvent(AutomationEvent event) { PlayAutomationEvent(event); }
+
+    // ==== RAW rcore/raudio PARITY — Callbacks (deferred fn-pointers, Batch callbacks) ====
+    // 1:1 forwarders. raylib retains each callback pointer; the managed caller owns the delegate lifetime.
+    void Framework_SetTraceLogCallback(TraceLogCallback callback) { SetTraceLogCallback(callback); }
+    void Framework_SetLoadFileDataCallback(LoadFileDataCallback callback) { SetLoadFileDataCallback(callback); }
+    void Framework_SetSaveFileDataCallback(SaveFileDataCallback callback) { SetSaveFileDataCallback(callback); }
+    void Framework_SetLoadFileTextCallback(LoadFileTextCallback callback) { SetLoadFileTextCallback(callback); }
+    void Framework_SetSaveFileTextCallback(SaveFileTextCallback callback) { SetSaveFileTextCallback(callback); }
+    void Framework_SetAudioStreamCallback(AudioStream stream, AudioCallback callback) { SetAudioStreamCallback(stream, callback); }
+    void Framework_AttachAudioStreamProcessor(AudioStream stream, AudioCallback processor) { AttachAudioStreamProcessor(stream, processor); }
+    void Framework_DetachAudioStreamProcessor(AudioStream stream, AudioCallback processor) { DetachAudioStreamProcessor(stream, processor); }
+    void Framework_AttachAudioMixedProcessor(AudioCallback processor) { AttachAudioMixedProcessor(processor); }
+    void Framework_DetachAudioMixedProcessor(AudioCallback processor) { DetachAudioMixedProcessor(processor); }
+
+    // ==== RAW rgestures PARITY — Gestures & touch handling (raylib 5.5 passthrough, Batch rgestures) ====
+    // 1:1 forwarders. Vector2 returned by value.
+    void    Framework_SetGesturesEnabled(unsigned int flags) { SetGesturesEnabled(flags); }
+    bool    Framework_IsGestureDetected(unsigned int gesture) { return IsGestureDetected(gesture); }
+    int     Framework_GetGestureDetected(void) { return GetGestureDetected(); }
+    float   Framework_GetGestureHoldDuration(void) { return GetGestureHoldDuration(); }
+    Vector2 Framework_GetGestureDragVector(void) { return GetGestureDragVector(); }
+    float   Framework_GetGestureDragAngle(void) { return GetGestureDragAngle(); }
+    Vector2 Framework_GetGesturePinchVector(void) { return GetGesturePinchVector(); }
+    float   Framework_GetGesturePinchAngle(void) { return GetGesturePinchAngle(); }
+
+    // ==== RAW rcamera PARITY — Camera system update (raylib 5.5 passthrough, Batch rcamera) ====
+    // 1:1 forwarders. Camera3D* == raylib Camera*; mutated in place. Vector3 args by value.
+    void Framework_UpdateCamera(Camera3D* camera, int mode) { UpdateCamera(camera, mode); }
+    void Framework_UpdateCameraPro(Camera3D* camera, Vector3 movement, Vector3 rotation, float zoom) { UpdateCameraPro(camera, movement, rotation, zoom); }
+
+    // ==== RAW rmodels PARITY — 3D collision detection (raylib 5.5 passthrough, Batch models-collision) ====
+    // 1:1 forwarders. BoundingBox/RayCollision by value; RayCollision returned by value. Pure raymath, no GL.
+    bool         Framework_CheckCollisionSpheres(Vector3 center1, float radius1, Vector3 center2, float radius2) { return CheckCollisionSpheres(center1, radius1, center2, radius2); }
+    bool         Framework_CheckCollisionBoxes(BoundingBox box1, BoundingBox box2) { return CheckCollisionBoxes(box1, box2); }
+    bool         Framework_CheckCollisionBoxSphere(BoundingBox box, Vector3 center, float radius) { return CheckCollisionBoxSphere(box, center, radius); }
+    RayCollision Framework_GetRayCollisionSphere(Ray ray, Vector3 center, float radius) { return GetRayCollisionSphere(ray, center, radius); }
+    RayCollision Framework_GetRayCollisionBox(Ray ray, BoundingBox box) { return GetRayCollisionBox(ray, box); }
+    RayCollision Framework_GetRayCollisionTriangle(Ray ray, Vector3 p1, Vector3 p2, Vector3 p3) { return GetRayCollisionTriangle(ray, p1, p2, p3); }
+    RayCollision Framework_GetRayCollisionQuad(Ray ray, Vector3 p1, Vector3 p2, Vector3 p3, Vector3 p4) { return GetRayCollisionQuad(ray, p1, p2, p3, p4); }
+
+    // ==== RAW rmodels PARITY — Basic 3D shapes drawing (raylib 5.5 passthrough, Batch models-shapes) ====
+    // 1:1 forwarders. Color reconstructed from r,g,b,a bytes; Vector3/Vector2/Ray by value; const Vector3* array passthrough.
+    void Framework_DrawLine3D(Vector3 startPos, Vector3 endPos, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawLine3D(startPos, endPos, Color{r, g, b, a}); }
+    void Framework_DrawPoint3D(Vector3 position, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawPoint3D(position, Color{r, g, b, a}); }
+    void Framework_DrawCircle3D(Vector3 center, float radius, Vector3 rotationAxis, float rotationAngle, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawCircle3D(center, radius, rotationAxis, rotationAngle, Color{r, g, b, a}); }
+    void Framework_DrawTriangle3D(Vector3 v1, Vector3 v2, Vector3 v3, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawTriangle3D(v1, v2, v3, Color{r, g, b, a}); }
+    void Framework_DrawTriangleStrip3D(const Vector3* points, int pointCount, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawTriangleStrip3D(points, pointCount, Color{r, g, b, a}); }
+    void Framework_DrawCube(Vector3 position, float width, float height, float length, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawCube(position, width, height, length, Color{r, g, b, a}); }
+    void Framework_DrawCubeV(Vector3 position, Vector3 size, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawCubeV(position, size, Color{r, g, b, a}); }
+    void Framework_DrawCubeWires(Vector3 position, float width, float height, float length, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawCubeWires(position, width, height, length, Color{r, g, b, a}); }
+    void Framework_DrawCubeWiresV(Vector3 position, Vector3 size, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawCubeWiresV(position, size, Color{r, g, b, a}); }
+    void Framework_DrawSphere(Vector3 centerPos, float radius, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawSphere(centerPos, radius, Color{r, g, b, a}); }
+    void Framework_DrawSphereEx(Vector3 centerPos, float radius, int rings, int slices, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawSphereEx(centerPos, radius, rings, slices, Color{r, g, b, a}); }
+    void Framework_DrawSphereWires(Vector3 centerPos, float radius, int rings, int slices, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawSphereWires(centerPos, radius, rings, slices, Color{r, g, b, a}); }
+    void Framework_DrawCylinder(Vector3 position, float radiusTop, float radiusBottom, float height, int slices, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawCylinder(position, radiusTop, radiusBottom, height, slices, Color{r, g, b, a}); }
+    void Framework_DrawCylinderEx(Vector3 startPos, Vector3 endPos, float startRadius, float endRadius, int sides, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawCylinderEx(startPos, endPos, startRadius, endRadius, sides, Color{r, g, b, a}); }
+    void Framework_DrawCylinderWires(Vector3 position, float radiusTop, float radiusBottom, float height, int slices, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawCylinderWires(position, radiusTop, radiusBottom, height, slices, Color{r, g, b, a}); }
+    void Framework_DrawCylinderWiresEx(Vector3 startPos, Vector3 endPos, float startRadius, float endRadius, int sides, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawCylinderWiresEx(startPos, endPos, startRadius, endRadius, sides, Color{r, g, b, a}); }
+    void Framework_DrawCapsule(Vector3 startPos, Vector3 endPos, float radius, int slices, int rings, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawCapsule(startPos, endPos, radius, slices, rings, Color{r, g, b, a}); }
+    void Framework_DrawCapsuleWires(Vector3 startPos, Vector3 endPos, float radius, int slices, int rings, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawCapsuleWires(startPos, endPos, radius, slices, rings, Color{r, g, b, a}); }
+    void Framework_DrawPlane(Vector3 centerPos, Vector2 size, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawPlane(centerPos, size, Color{r, g, b, a}); }
+    void Framework_DrawRay(Ray ray, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawRay(ray, Color{r, g, b, a}); }
+
+    // ==== RAW rmodels PARITY — Mesh generation & management (raylib 5.5 passthrough, Batch models-mesh) ====
+    // 1:1 forwarders. Mesh/Image/Ray/Matrix by value; Mesh* mutate-in-place for UploadMesh/GenMeshTangents; const void* and
+    // const char* passthrough. GenMesh* upload to GPU internally (need a live GL context). DrawMesh/DrawMeshInstanced are
+    // deferred to the materials batch — they take a Material by value.
+    Mesh Framework_GenMeshPoly(int sides, float radius) { return GenMeshPoly(sides, radius); }
+    Mesh Framework_GenMeshPlane(float width, float length, int resX, int resZ) { return GenMeshPlane(width, length, resX, resZ); }
+    Mesh Framework_GenMeshCube(float width, float height, float length) { return GenMeshCube(width, height, length); }
+    Mesh Framework_GenMeshSphere(float radius, int rings, int slices) { return GenMeshSphere(radius, rings, slices); }
+    Mesh Framework_GenMeshHemiSphere(float radius, int rings, int slices) { return GenMeshHemiSphere(radius, rings, slices); }
+    Mesh Framework_GenMeshCylinder(float radius, float height, int slices) { return GenMeshCylinder(radius, height, slices); }
+    Mesh Framework_GenMeshCone(float radius, float height, int slices) { return GenMeshCone(radius, height, slices); }
+    Mesh Framework_GenMeshTorus(float radius, float size, int radSeg, int sides) { return GenMeshTorus(radius, size, radSeg, sides); }
+    Mesh Framework_GenMeshKnot(float radius, float size, int radSeg, int sides) { return GenMeshKnot(radius, size, radSeg, sides); }
+    Mesh Framework_GenMeshHeightmap(Image heightmap, Vector3 size) { return GenMeshHeightmap(heightmap, size); }
+    Mesh Framework_GenMeshCubicmap(Image cubicmap, Vector3 cubeSize) { return GenMeshCubicmap(cubicmap, cubeSize); }
+    void Framework_UploadMesh(Mesh* mesh, bool dynamic) { UploadMesh(mesh, dynamic); }
+    void Framework_UpdateMeshBuffer(Mesh mesh, int index, const void* data, int dataSize, int offset) { UpdateMeshBuffer(mesh, index, data, dataSize, offset); }
+    void Framework_UnloadMesh(Mesh mesh) { UnloadMesh(mesh); }
+    BoundingBox Framework_GetMeshBoundingBox(Mesh mesh) { return GetMeshBoundingBox(mesh); }
+    void Framework_GenMeshTangents(Mesh* mesh) { GenMeshTangents(mesh); }
+    bool Framework_ExportMesh(Mesh mesh, const char* fileName) { return ExportMesh(mesh, fileName); }
+    bool Framework_ExportMeshAsCode(Mesh mesh, const char* fileName) { return ExportMeshAsCode(mesh, fileName); }
+    RayCollision Framework_GetRayCollisionMesh(Ray ray, Mesh mesh, Matrix transform) { return GetRayCollisionMesh(ray, mesh, transform); }
+
+    // ==== RAW rmodels PARITY — Model loading & drawing (raylib 5.5 passthrough, Batch models-model) ====
+    // 1:1 forwarders. Model/Mesh/Camera/Texture2D/Rectangle/Vector3/Vector2/BoundingBox by value; Color reconstructed from
+    // r,g,b,a bytes; const char* file path passthrough. LoadModel/LoadModelFromMesh + the draws need a live GL context.
+    Model Framework_LoadModel(const char* fileName) { return LoadModel(fileName); }
+    Model Framework_LoadModelFromMesh(Mesh mesh) { return LoadModelFromMesh(mesh); }
+    bool Framework_IsModelValid(Model model) { return IsModelValid(model); }
+    void Framework_UnloadModel(Model model) { UnloadModel(model); }
+    BoundingBox Framework_GetModelBoundingBox(Model model) { return GetModelBoundingBox(model); }
+    void Framework_DrawModel(Model model, Vector3 position, float scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawModel(model, position, scale, Color{r, g, b, a}); }
+    void Framework_DrawModelEx(Model model, Vector3 position, Vector3 rotationAxis, float rotationAngle, Vector3 scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawModelEx(model, position, rotationAxis, rotationAngle, scale, Color{r, g, b, a}); }
+    void Framework_DrawModelWires(Model model, Vector3 position, float scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawModelWires(model, position, scale, Color{r, g, b, a}); }
+    void Framework_DrawModelWiresEx(Model model, Vector3 position, Vector3 rotationAxis, float rotationAngle, Vector3 scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawModelWiresEx(model, position, rotationAxis, rotationAngle, scale, Color{r, g, b, a}); }
+    void Framework_DrawModelPoints(Model model, Vector3 position, float scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawModelPoints(model, position, scale, Color{r, g, b, a}); }
+    void Framework_DrawModelPointsEx(Model model, Vector3 position, Vector3 rotationAxis, float rotationAngle, Vector3 scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawModelPointsEx(model, position, rotationAxis, rotationAngle, scale, Color{r, g, b, a}); }
+    void Framework_DrawBoundingBox(BoundingBox box, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawBoundingBox(box, Color{r, g, b, a}); }
+    void Framework_DrawBillboard(Camera camera, Texture2D texture, Vector3 position, float scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawBillboard(camera, texture, position, scale, Color{r, g, b, a}); }
+    void Framework_DrawBillboardRec(Camera camera, Texture2D texture, Rectangle source, Vector3 position, Vector2 size, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawBillboardRec(camera, texture, source, position, size, Color{r, g, b, a}); }
+    void Framework_DrawBillboardPro(Camera camera, Texture2D texture, Rectangle source, Vector3 position, Vector3 up, Vector2 size, Vector2 origin, float rotation, unsigned char r, unsigned char g, unsigned char b, unsigned char a) { DrawBillboardPro(camera, texture, source, position, up, size, origin, rotation, Color{r, g, b, a}); }
+
+    // ==== RAW rmodels PARITY — Materials + material-drawn meshes (raylib 5.5 passthrough, Batch models-materials) ====
+    // 1:1 forwarders. Material/MaterialMap/Mesh/Texture2D/Matrix by value; Material*/Model* and const Matrix* passthrough.
+    // LoadMaterialDefault + DrawMesh/DrawMeshInstanced need a live GL context.
+    Material* Framework_LoadMaterials(const char* fileName, int* materialCount) { return LoadMaterials(fileName, materialCount); }
+    Material Framework_LoadMaterialDefault(void) { return LoadMaterialDefault(); }
+    bool Framework_IsMaterialValid(Material material) { return IsMaterialValid(material); }
+    void Framework_UnloadMaterial(Material material) { UnloadMaterial(material); }
+    void Framework_SetMaterialTexture(Material* material, int mapType, Texture2D texture) { SetMaterialTexture(material, mapType, texture); }
+    void Framework_SetModelMeshMaterial(Model* model, int meshId, int materialId) { SetModelMeshMaterial(model, meshId, materialId); }
+    void Framework_DrawMesh(Mesh mesh, Material material, Matrix transform) { DrawMesh(mesh, material, transform); }
+    void Framework_DrawMeshInstanced(Mesh mesh, Material material, const Matrix* transforms, int instances) { DrawMeshInstanced(mesh, material, transforms, instances); }
+
+    // ==== RAW rmodels PARITY — Model animations (raylib 5.5 passthrough, Batch models-animations) — CLOSES rmodels ====
+    // 1:1 forwarders. Model/ModelAnimation by value; ModelAnimation* array passthrough. Update* need a real animated model.
+    ModelAnimation* Framework_LoadModelAnimations(const char* fileName, int* animCount) { return LoadModelAnimations(fileName, animCount); }
+    void Framework_UpdateModelAnimation(Model model, ModelAnimation anim, int frame) { UpdateModelAnimation(model, anim, frame); }
+    void Framework_UpdateModelAnimationBones(Model model, ModelAnimation anim, int frame) { UpdateModelAnimationBones(model, anim, frame); }
+    void Framework_UnloadModelAnimation(ModelAnimation anim) { UnloadModelAnimation(anim); }
+    void Framework_UnloadModelAnimations(ModelAnimation* animations, int animCount) { UnloadModelAnimations(animations, animCount); }
+    bool Framework_IsModelAnimationValid(Model model, ModelAnimation anim) { return IsModelAnimationValid(model, anim); }
 
     void Framework_PauseAllAudio() {
         g_audioPaused = true;

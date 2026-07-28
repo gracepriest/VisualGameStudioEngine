@@ -512,6 +512,16 @@ extern "C" {
     __declspec(dllexport) void      Framework_UnloadFont(Font font);
     __declspec(dllexport) void      Framework_DrawTextEx(Font font, const char* text, Vector2 pos, float fontSize, float spacing, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
 
+    // ==== RAW rtext PARITY — low-level font-data construction (raylib 5.5 passthrough, Batch text-fontdata) — raylib.h 100% ====
+    // Closes the last 3 bindable raylib.h public fns (TextFormat stays out — variadic, unbindable). GlyphInfo/Image/Rectangle
+    // already declared. LoadFontData rasterizes font-file bytes into a raylib-owned GlyphInfo* array (-> IntPtr);
+    // GenImageFontAtlas packs those glyphs into a CPU Image and writes the packed Rectangle* array out through glyphRecs
+    // (Rectangle** -> out IntPtr, caller-owned -> free via Framework_MemFree); UnloadFontData frees the GlyphInfo array. All CPU
+    // (no GL) — the real pipeline needs font-file bytes; the empty/null paths are headless-safe.
+    __declspec(dllexport) GlyphInfo* Framework_LoadFontData(const unsigned char* fileData, int dataSize, int fontSize, int* codepoints, int codepointCount, int type);
+    __declspec(dllexport) Image      Framework_GenImageFontAtlas(const GlyphInfo* glyphs, Rectangle** glyphRecs, int glyphCount, int fontSize, int padding, int packMethod);
+    __declspec(dllexport) void       Framework_UnloadFontData(GlyphInfo* glyphs, int glyphCount);
+
     // Helpers & debug
     __declspec(dllexport) Rectangle Framework_SpriteFrame(Rectangle sheetArea, int frameW, int frameH, int index, int columns);
     __declspec(dllexport) void      Framework_DrawFPS(int x, int y);
@@ -704,6 +714,340 @@ extern "C" {
     __declspec(dllexport) unsigned int   Framework_ComputeCRC32(unsigned char* data, int dataSize);
     __declspec(dllexport) unsigned int*  Framework_ComputeMD5(unsigned char* data, int dataSize);
     __declspec(dllexport) unsigned int*  Framework_ComputeSHA1(unsigned char* data, int dataSize);
+
+    // ==== RAW RCORE PARITY — File data I/O (raylib 5.5 passthrough, Batch core-C7) ====
+    // LoadFileData/LoadFileText return a raylib-malloc'd buffer; release it with the MATCHING Framework_UnloadFileData/
+    // Framework_UnloadFileText (raylib frees via its own rmem allocator — the caller must not free it any other way).
+    // SaveFileData/SaveFileText/ExportDataAsCode return bool (success). All headless — plain file I/O, no window or GL.
+    __declspec(dllexport) unsigned char* Framework_LoadFileData(const char* fileName, int* dataSize);
+    __declspec(dllexport) void           Framework_UnloadFileData(unsigned char* data);
+    __declspec(dllexport) bool           Framework_SaveFileData(const char* fileName, void* data, int dataSize);
+    __declspec(dllexport) bool           Framework_ExportDataAsCode(const unsigned char* data, int dataSize, const char* fileName);
+    __declspec(dllexport) char*          Framework_LoadFileText(const char* fileName);
+    __declspec(dllexport) void           Framework_UnloadFileText(char* text);
+    __declspec(dllexport) bool           Framework_SaveFileText(const char* fileName, char* text);
+
+    // ==== RAW RCORE PARITY — File-system path queries (raylib 5.5 passthrough, Batch core-C8) ====
+    // Pure path/existence helpers — all headless. const char* returns: the caller PtrToStringAnsi's immediately and
+    // never frees them. Most point at raylib's OWN static buffer; ⛔ GetFileName/GetFileExtension raylib-return a pointer
+    // INTO the input (dangles across P/Invoke input-marshaling), so the .cpp forwarder copies those into an engine
+    // static buffer to keep them valid (see framework.cpp). bool returns are I1.
+    __declspec(dllexport) bool        Framework_FileExists(const char* fileName);
+    __declspec(dllexport) bool        Framework_DirectoryExists(const char* dirPath);
+    __declspec(dllexport) bool        Framework_IsFileExtension(const char* fileName, const char* ext);
+    __declspec(dllexport) int         Framework_GetFileLength(const char* fileName);
+    __declspec(dllexport) const char* Framework_GetFileExtension(const char* fileName);
+    __declspec(dllexport) const char* Framework_GetFileName(const char* filePath);
+    __declspec(dllexport) const char* Framework_GetFileNameWithoutExt(const char* filePath);
+    __declspec(dllexport) const char* Framework_GetDirectoryPath(const char* filePath);
+    __declspec(dllexport) const char* Framework_GetPrevDirectoryPath(const char* dirPath);
+    __declspec(dllexport) const char* Framework_GetWorkingDirectory(void);
+    __declspec(dllexport) const char* Framework_GetApplicationDirectory(void);
+    __declspec(dllexport) int         Framework_MakeDirectory(const char* dirPath);
+    __declspec(dllexport) bool        Framework_ChangeDirectory(const char* dir);
+    __declspec(dllexport) bool        Framework_IsPathFile(const char* path);
+    __declspec(dllexport) bool        Framework_IsFileNameValid(const char* fileName);
+
+    // ==== RAW RCORE PARITY — Window state & control (raylib 5.5 passthrough, Batch core-C1) ====
+    // Raw raylib window lifecycle + state/flag control, COEXISTING with the engine's own MANAGED lifecycle
+    // (Framework_Initialize/Framework_ShouldClose/Framework_Shutdown, which also wire up the camera/timing/ECS). A raw
+    // consumer that drives raylib directly uses these; ⛔ do NOT mix the two window paths in one process. Device-dependent
+    // (a real GL window must exist for the setters/state to mean anything). Signatures marshal trivially: void/bool/int,
+    // unsigned-int flags, a float opacity. SetWindowIcon takes an Image BY VALUE; SetWindowIcons takes a pointer to an
+    // Image[] plus a count. GetWindowHandle returns the native OS window handle as void* (IntPtr on the managed side).
+    // NOTE: ToggleFullscreen / ToggleBorderlessWindowed / SetWindowSize / SetWindowMinSize / SetWindowTitle are already
+    // exported by the engine's window-utilities block — they are intentionally NOT re-declared here.
+    __declspec(dllexport) void  Framework_InitWindow(int width, int height, const char* title);
+    __declspec(dllexport) void  Framework_CloseWindow(void);
+    __declspec(dllexport) bool  Framework_WindowShouldClose(void);
+    __declspec(dllexport) bool  Framework_IsWindowReady(void);
+    __declspec(dllexport) bool  Framework_IsWindowFullscreen(void);
+    __declspec(dllexport) bool  Framework_IsWindowHidden(void);
+    __declspec(dllexport) bool  Framework_IsWindowMinimized(void);
+    __declspec(dllexport) bool  Framework_IsWindowMaximized(void);
+    __declspec(dllexport) bool  Framework_IsWindowFocused(void);
+    __declspec(dllexport) bool  Framework_IsWindowResized(void);
+    __declspec(dllexport) bool  Framework_IsWindowState(unsigned int flag);
+    __declspec(dllexport) void  Framework_SetWindowState(unsigned int flags);
+    __declspec(dllexport) void  Framework_ClearWindowState(unsigned int flags);
+    __declspec(dllexport) void  Framework_MaximizeWindow(void);
+    __declspec(dllexport) void  Framework_MinimizeWindow(void);
+    __declspec(dllexport) void  Framework_RestoreWindow(void);
+    __declspec(dllexport) void  Framework_SetWindowIcon(Image image);
+    __declspec(dllexport) void  Framework_SetWindowIcons(Image* images, int count);
+    __declspec(dllexport) void  Framework_SetWindowPosition(int x, int y);
+    __declspec(dllexport) void  Framework_SetWindowMonitor(int monitor);
+    __declspec(dllexport) void  Framework_SetWindowMaxSize(int width, int height);
+    __declspec(dllexport) void  Framework_SetWindowOpacity(float opacity);
+    __declspec(dllexport) void  Framework_SetWindowFocused(void);
+    __declspec(dllexport) void* Framework_GetWindowHandle(void);
+
+    // ==== RAW RCORE PARITY — Window/monitor query & clipboard (raylib 5.5 passthrough, Batch core-C2) ====
+    // Thin 1:1 forwarders for raylib's screen/render/monitor query getters and clipboard access. GetScreenWidth/Height,
+    // GetMonitorWidth/Height/Count/RefreshRate and GetCurrentMonitor are already exported (managed monitor section) and
+    // are NOT re-declared here. Vector2/Image returns come back by value; const char* returns are raw pointers into
+    // raylib-owned memory (the wrapper copies via PtrToStringAnsi); SetClipboardText takes a const char* (Ansi).
+    __declspec(dllexport) int         Framework_GetRenderWidth(void);
+    __declspec(dllexport) int         Framework_GetRenderHeight(void);
+    __declspec(dllexport) Vector2     Framework_GetMonitorPosition(int monitor);
+    __declspec(dllexport) int         Framework_GetMonitorPhysicalWidth(int monitor);
+    __declspec(dllexport) int         Framework_GetMonitorPhysicalHeight(int monitor);
+    __declspec(dllexport) Vector2     Framework_GetWindowPosition(void);
+    __declspec(dllexport) Vector2     Framework_GetWindowScaleDPI(void);
+    __declspec(dllexport) const char* Framework_GetMonitorName(int monitor);
+    __declspec(dllexport) void        Framework_SetClipboardText(const char* text);
+    __declspec(dllexport) const char* Framework_GetClipboardText(void);
+    __declspec(dllexport) Image       Framework_GetClipboardImage(void);
+    __declspec(dllexport) void        Framework_EnableEventWaiting(void);
+    __declspec(dllexport) void        Framework_DisableEventWaiting(void);
+
+    // ==== RAW RCORE PARITY — Timing/frame + Random + Misc + input stragglers (raylib 5.5 passthrough, Batch core-C6) ====
+    // Thin 1:1 forwarders. SetTargetFPS/GetFrameTime/GetTime/GetFPS/TakeScreenshot/MemFree are already exported elsewhere
+    // and are NOT re-declared here. TraceLog is variadic in raylib; it is bound as a FIXED 2-arg forwarder that routes the
+    // caller's text through a "%s" format (TraceLog(level,"%s",text)) — dodging cross-P/Invoke varargs AND avoiding
+    // format-string injection from user text. LoadRandomSequence returns a raylib-heap int* that MUST be freed with
+    // UnloadRandomSequence; MemAlloc/MemRealloc return raylib-heap void* freed with MemFree. The 2 input stragglers
+    // (SetGamepadVibration, GetTouchPosition) are the only rcore input-section functions the engine did not already bind.
+    __declspec(dllexport) void    Framework_SwapScreenBuffer(void);
+    __declspec(dllexport) void    Framework_PollInputEvents(void);
+    __declspec(dllexport) void    Framework_WaitTime(double seconds);
+    __declspec(dllexport) void    Framework_SetRandomSeed(unsigned int seed);
+    __declspec(dllexport) int     Framework_GetRandomValue(int min, int max);
+    __declspec(dllexport) int*    Framework_LoadRandomSequence(unsigned int count, int min, int max);
+    __declspec(dllexport) void    Framework_UnloadRandomSequence(int* sequence);
+    __declspec(dllexport) void    Framework_SetConfigFlags(unsigned int flags);
+    __declspec(dllexport) void    Framework_OpenURL(const char* url);
+    __declspec(dllexport) void    Framework_TraceLog(int logLevel, const char* text);
+    __declspec(dllexport) void    Framework_SetTraceLogLevel(int logLevel);
+    __declspec(dllexport) void*   Framework_MemAlloc(unsigned int size);
+    __declspec(dllexport) void*   Framework_MemRealloc(void* ptr, unsigned int size);
+    __declspec(dllexport) void    Framework_SetGamepadVibration(int gamepad, float leftMotor, float rightMotor, float duration);
+    __declspec(dllexport) Vector2 Framework_GetTouchPosition(int index);
+
+    // ==== RAW RCORE PARITY — Directory listing & dropped files (raylib 5.5 passthrough, Batch core-C9) ====
+    // FilePathList { unsigned int capacity; unsigned int count; char** paths } is returned BY VALUE and passed BY VALUE to
+    // its matching Unload. LoadDirectoryFiles(Ex) allocate a fresh list (free with UnloadDirectoryFiles); LoadDroppedFiles
+    // aliases the window's internal drop buffer (free/clear with UnloadDroppedFiles). GetFileModTime returns C `long`
+    // (32-bit on Win64) — the wrapper binds it As Integer. Dropped-file queries need a window; directory listing does not.
+    __declspec(dllexport) FilePathList Framework_LoadDirectoryFiles(const char* dirPath);
+    __declspec(dllexport) FilePathList Framework_LoadDirectoryFilesEx(const char* basePath, const char* filter, bool scanSubdirs);
+    __declspec(dllexport) void         Framework_UnloadDirectoryFiles(FilePathList files);
+    __declspec(dllexport) bool         Framework_IsFileDropped(void);
+    __declspec(dllexport) FilePathList Framework_LoadDroppedFiles(void);
+    __declspec(dllexport) void         Framework_UnloadDroppedFiles(FilePathList files);
+    __declspec(dllexport) long         Framework_GetFileModTime(const char* fileName);
+
+    // ==== RAW RCORE PARITY — Shader management (raylib 5.5 passthrough, Batch core-C4) ====
+    // Raw raylib shader API. Shader { unsigned int id; int* locs } is returned/passed BY VALUE (the wrapper's Utiliy.Shader
+    // is {Integer id; IntPtr locs} = 16 bytes on x64). SetShaderValue(V) take a const void* (IntPtr) + a uniformType enum
+    // (ShaderUniformDataType); SetShaderValueMatrix takes Matrix by value, SetShaderValueTexture Texture2D by value.
+    // NOTE: GetShaderLocation + UnloadShader are already exported above (raw passthroughs) — not repeated here.
+    // Loading/using shaders needs an OpenGL context (a window); the wrapper correctness tests run under [Integration].
+    __declspec(dllexport) Shader Framework_LoadShader(const char* vsFileName, const char* fsFileName);
+    __declspec(dllexport) Shader Framework_LoadShaderFromMemory(const char* vsCode, const char* fsCode);
+    __declspec(dllexport) bool   Framework_IsShaderValid(Shader shader);
+    __declspec(dllexport) int    Framework_GetShaderLocationAttrib(Shader shader, const char* attribName);
+    __declspec(dllexport) void   Framework_SetShaderValue(Shader shader, int locIndex, const void* value, int uniformType);
+    __declspec(dllexport) void   Framework_SetShaderValueV(Shader shader, int locIndex, const void* value, int uniformType, int count);
+    __declspec(dllexport) void   Framework_SetShaderValueMatrix(Shader shader, int locIndex, Matrix mat);
+    __declspec(dllexport) void   Framework_SetShaderValueTexture(Shader shader, int locIndex, Texture2D texture);
+
+    // ==== RAW RCORE PARITY — Drawing modes & VR simulator (raylib 5.5 passthrough, Batch core-C3) ====
+    // The remaining raw drawing-mode + VR functions (BeginMode2D/EndMode2D, BeginTextureMode/EndTextureMode,
+    // BeginShaderMode/EndShaderMode are already exported above). BeginMode3D takes Camera3D BY VALUE; BeginBlendMode/
+    // BeginScissorMode take ints. The VR half uses two structs with NESTED FIXED-SIZE ARRAYS: VrDeviceInfo (2 int + 5 float
+    // + float[4] + float[4] = 60 B) is passed BY VALUE to LoadVrStereoConfig, which RETURNS VrStereoConfig BY VALUE
+    // (Matrix[2] + Matrix[2] + 6x float[2] = 304 B). BeginVrStereoMode + UnloadVrStereoConfig take VrStereoConfig by value.
+    // LoadVrStereoConfig is pure CPU math (raylib zeroes the config when no GL context is active); the Begin*Mode calls
+    // need a live context. Structs mirrored in RaylibWrapper/Utiliy.vb with <MarshalAs(ByValArray, SizeConst)>.
+    __declspec(dllexport) void            Framework_BeginMode3D(Camera3D camera);
+    __declspec(dllexport) void            Framework_EndMode3D();
+    __declspec(dllexport) void            Framework_BeginBlendMode(int mode);
+    __declspec(dllexport) void            Framework_EndBlendMode();
+    __declspec(dllexport) void            Framework_BeginScissorMode(int x, int y, int width, int height);
+    __declspec(dllexport) void            Framework_EndScissorMode();
+    __declspec(dllexport) void            Framework_BeginVrStereoMode(VrStereoConfig config);
+    __declspec(dllexport) void            Framework_EndVrStereoMode();
+    __declspec(dllexport) VrStereoConfig  Framework_LoadVrStereoConfig(VrDeviceInfo device);
+    __declspec(dllexport) void            Framework_UnloadVrStereoConfig(VrStereoConfig config);
+
+    // ==== RAW RCORE PARITY — Automation events (raylib 5.5 passthrough, Batch core-C11) ====
+    // AutomationEvent { uint frame; uint type; int params[4] } = 24 B, passed BY VALUE to PlayAutomationEvent (the int[4] is
+    // a nested fixed-size array -> <ByValArray SizeConst:=4> in the wrapper). AutomationEventList { uint capacity; uint
+    // count; AutomationEvent* events } = 16 B (blittable), RETURNED BY VALUE by LoadAutomationEventList and passed BY VALUE
+    // to Unload/Export. SetAutomationEventList takes a POINTER — raylib RETAINS it while recording, so the wrapper binds it
+    // as IntPtr and the caller owns the lifetime. LoadAutomationEventList(NULL) allocates an empty list (capacity =
+    // MAX_AUTOMATION_EVENTS), freed by UnloadAutomationEventList. List mgmt + export are CPU-only (headless); the record/
+    // replay cycle interacts with the input/frame system.
+    __declspec(dllexport) AutomationEventList Framework_LoadAutomationEventList(const char* fileName);
+    __declspec(dllexport) void                Framework_UnloadAutomationEventList(AutomationEventList list);
+    __declspec(dllexport) bool                Framework_ExportAutomationEventList(AutomationEventList list, const char* fileName);
+    __declspec(dllexport) void                Framework_SetAutomationEventList(AutomationEventList* list);
+    __declspec(dllexport) void                Framework_SetAutomationEventBaseFrame(int frame);
+    __declspec(dllexport) void                Framework_StartAutomationEventRecording();
+    __declspec(dllexport) void                Framework_StopAutomationEventRecording();
+    __declspec(dllexport) void                Framework_PlayAutomationEvent(AutomationEvent event);
+
+    // ==== RAW rcore/raudio PARITY — Callbacks (deferred fn-pointers, Batch callbacks) ====
+    // The 10 raylib function-pointer setters (5 rcore SetXxxCallback + 5 raudio AudioCallback). Each takes a raylib callback
+    // typedef (from raylib.h); the wrapper passes a marshaled managed delegate (<UnmanagedFunctionPointer(Cdecl)>). raylib
+    // RETAINS the callback pointer, so the managed caller must keep the delegate alive (GC-pinning) for as long as raylib may
+    // invoke it — same lifetime discipline as SetAutomationEventList (C11). TraceLogCallback's 3rd arg is a va_list (on Win64
+    // an opaque pointer). The 3 audio-stream fns take AudioStream by value.
+    __declspec(dllexport) void Framework_SetTraceLogCallback(TraceLogCallback callback);
+    __declspec(dllexport) void Framework_SetLoadFileDataCallback(LoadFileDataCallback callback);
+    __declspec(dllexport) void Framework_SetSaveFileDataCallback(SaveFileDataCallback callback);
+    __declspec(dllexport) void Framework_SetLoadFileTextCallback(LoadFileTextCallback callback);
+    __declspec(dllexport) void Framework_SetSaveFileTextCallback(SaveFileTextCallback callback);
+    __declspec(dllexport) void Framework_SetAudioStreamCallback(AudioStream stream, AudioCallback callback);
+    __declspec(dllexport) void Framework_AttachAudioStreamProcessor(AudioStream stream, AudioCallback processor);
+    __declspec(dllexport) void Framework_DetachAudioStreamProcessor(AudioStream stream, AudioCallback processor);
+    __declspec(dllexport) void Framework_AttachAudioMixedProcessor(AudioCallback processor);
+    __declspec(dllexport) void Framework_DetachAudioMixedProcessor(AudioCallback processor);
+
+    // ==== RAW rgestures PARITY — Gestures & touch handling (raylib 5.5 passthrough, Batch rgestures) ====
+    // The 8 rgestures functions. State lives in raylib's static GESTURES struct (updated by PollInputEvents under a window);
+    // the getters are pure reads (no GL), so headless they return zero/default. flags/gesture are bit-flag uints;
+    // GetGestureDragVector/GetGesturePinchVector return Vector2 BY VALUE.
+    __declspec(dllexport) void    Framework_SetGesturesEnabled(unsigned int flags);
+    __declspec(dllexport) bool    Framework_IsGestureDetected(unsigned int gesture);
+    __declspec(dllexport) int     Framework_GetGestureDetected(void);
+    __declspec(dllexport) float   Framework_GetGestureHoldDuration(void);
+    __declspec(dllexport) Vector2 Framework_GetGestureDragVector(void);
+    __declspec(dllexport) float   Framework_GetGestureDragAngle(void);
+    __declspec(dllexport) Vector2 Framework_GetGesturePinchVector(void);
+    __declspec(dllexport) float   Framework_GetGesturePinchAngle(void);
+
+    // ==== RAW rcamera PARITY — Camera system update (raylib 5.5 passthrough, Batch rcamera) ====
+    // raylib's `Camera` is a typedef of Camera3D; both take a Camera* the function MUTATES IN PLACE (bind ByRef Camera3D
+    // on the wrapper side). UpdateCamera reads input for the built-in modes (a no-op headless / in CAMERA_CUSTOM);
+    // UpdateCameraPro applies the movement/rotation/zoom args directly via raymath — no input, no GL — so it is fully
+    // deterministic headless. movement/rotation are Vector3 BY VALUE, zoom is a float.
+    __declspec(dllexport) void Framework_UpdateCamera(Camera3D* camera, int mode);
+    __declspec(dllexport) void Framework_UpdateCameraPro(Camera3D* camera, Vector3 movement, Vector3 rotation, float zoom);
+
+    // ==== RAW rmodels PARITY — 3D collision detection (raylib 5.5 passthrough, Batch models-collision) ====
+    // The geometric collision half of rmodels: pure raymath (no GL, no device, no static state) so every one is
+    // deterministic headless. BoundingBox {Vector3 min, Vector3 max} and RayCollision {bool hit; float distance; Vector3
+    // point; Vector3 normal} are new structs, passed/returned BY VALUE. GetRayCollisionMesh is DEFERRED to the mesh
+    // sub-batch (it needs the big Mesh struct). Everything here uses only Vector3/Ray/BoundingBox/RayCollision.
+    __declspec(dllexport) bool         Framework_CheckCollisionSpheres(Vector3 center1, float radius1, Vector3 center2, float radius2);
+    __declspec(dllexport) bool         Framework_CheckCollisionBoxes(BoundingBox box1, BoundingBox box2);
+    __declspec(dllexport) bool         Framework_CheckCollisionBoxSphere(BoundingBox box, Vector3 center, float radius);
+    __declspec(dllexport) RayCollision Framework_GetRayCollisionSphere(Ray ray, Vector3 center, float radius);
+    __declspec(dllexport) RayCollision Framework_GetRayCollisionBox(Ray ray, BoundingBox box);
+    __declspec(dllexport) RayCollision Framework_GetRayCollisionTriangle(Ray ray, Vector3 p1, Vector3 p2, Vector3 p3);
+    __declspec(dllexport) RayCollision Framework_GetRayCollisionQuad(Ray ray, Vector3 p1, Vector3 p2, Vector3 p3, Vector3 p4);
+
+    // ==== RAW rmodels PARITY — Basic 3D shapes drawing (raylib 5.5 passthrough, Batch models-shapes) ====
+    // The basic-3d-shapes half of rmodels: 20 immediate-mode 3D primitive draws (DrawGrid already exported above).
+    // Color is expanded to r,g,b,a bytes (the 2D-shapes-batch convention) and reconstructed as Color{r,g,b,a} in the
+    // forwarder; Vector3/Vector2/Ray by value; DrawTriangleStrip3D takes a const Vector3* array. These DRAW via rlgl, so
+    // they require a live GL context (correctness = Integration; the parity guard is headless).
+    __declspec(dllexport) void Framework_DrawLine3D(Vector3 startPos, Vector3 endPos, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawPoint3D(Vector3 position, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawCircle3D(Vector3 center, float radius, Vector3 rotationAxis, float rotationAngle, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawTriangle3D(Vector3 v1, Vector3 v2, Vector3 v3, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawTriangleStrip3D(const Vector3* points, int pointCount, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawCube(Vector3 position, float width, float height, float length, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawCubeV(Vector3 position, Vector3 size, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawCubeWires(Vector3 position, float width, float height, float length, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawCubeWiresV(Vector3 position, Vector3 size, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawSphere(Vector3 centerPos, float radius, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawSphereEx(Vector3 centerPos, float radius, int rings, int slices, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawSphereWires(Vector3 centerPos, float radius, int rings, int slices, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawCylinder(Vector3 position, float radiusTop, float radiusBottom, float height, int slices, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawCylinderEx(Vector3 startPos, Vector3 endPos, float startRadius, float endRadius, int sides, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawCylinderWires(Vector3 position, float radiusTop, float radiusBottom, float height, int slices, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawCylinderWiresEx(Vector3 startPos, Vector3 endPos, float startRadius, float endRadius, int sides, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawCapsule(Vector3 startPos, Vector3 endPos, float radius, int slices, int rings, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawCapsuleWires(Vector3 startPos, Vector3 endPos, float radius, int slices, int rings, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawPlane(Vector3 centerPos, Vector2 size, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawRay(Ray ray, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+
+    // ==== RAW rmodels PARITY — Mesh generation & management (raylib 5.5 passthrough, Batch models-mesh) ====
+    // The mesh half of rmodels: 11 GenMesh* generators (return Mesh by value; they call UploadMesh internally, so they need
+    // a live GL context), 7 mesh-management fns, and GetRayCollisionMesh (deferred here from the collision batch — it needs
+    // the Mesh struct). Mesh is a big blittable struct (2 int counts + array pointers + GL ids); passed/returned BY VALUE,
+    // mutated in place via Mesh* for UploadMesh/GenMeshTangents. GetMeshBoundingBox and GetRayCollisionMesh are pure math
+    // (headless). DrawMesh/DrawMeshInstanced are DEFERRED to the materials batch (they take a Material by value — the only
+    // two mesh fns that need it). All 1:1 raylib passthroughs.
+    __declspec(dllexport) Mesh Framework_GenMeshPoly(int sides, float radius);
+    __declspec(dllexport) Mesh Framework_GenMeshPlane(float width, float length, int resX, int resZ);
+    __declspec(dllexport) Mesh Framework_GenMeshCube(float width, float height, float length);
+    __declspec(dllexport) Mesh Framework_GenMeshSphere(float radius, int rings, int slices);
+    __declspec(dllexport) Mesh Framework_GenMeshHemiSphere(float radius, int rings, int slices);
+    __declspec(dllexport) Mesh Framework_GenMeshCylinder(float radius, float height, int slices);
+    __declspec(dllexport) Mesh Framework_GenMeshCone(float radius, float height, int slices);
+    __declspec(dllexport) Mesh Framework_GenMeshTorus(float radius, float size, int radSeg, int sides);
+    __declspec(dllexport) Mesh Framework_GenMeshKnot(float radius, float size, int radSeg, int sides);
+    __declspec(dllexport) Mesh Framework_GenMeshHeightmap(Image heightmap, Vector3 size);
+    __declspec(dllexport) Mesh Framework_GenMeshCubicmap(Image cubicmap, Vector3 cubeSize);
+    __declspec(dllexport) void Framework_UploadMesh(Mesh* mesh, bool dynamic);
+    __declspec(dllexport) void Framework_UpdateMeshBuffer(Mesh mesh, int index, const void* data, int dataSize, int offset);
+    __declspec(dllexport) void Framework_UnloadMesh(Mesh mesh);
+    __declspec(dllexport) BoundingBox Framework_GetMeshBoundingBox(Mesh mesh);
+    __declspec(dllexport) void Framework_GenMeshTangents(Mesh* mesh);
+    __declspec(dllexport) bool Framework_ExportMesh(Mesh mesh, const char* fileName);
+    __declspec(dllexport) bool Framework_ExportMeshAsCode(Mesh mesh, const char* fileName);
+    __declspec(dllexport) RayCollision Framework_GetRayCollisionMesh(Ray ray, Mesh mesh, Matrix transform);
+
+    // ==== RAW rmodels PARITY — Model loading & drawing (raylib 5.5 passthrough, Batch models-model) ====
+    // 5 model-management fns + 10 model/billboard draws. New struct Model (embedded Matrix + int counts + raylib-owned
+    // pointers as IntPtr); passed/returned BY VALUE (LoadModel/LoadModelFromMesh return it via hidden-sret). Color -> r,g,b,a
+    // bytes reconstructed as Color{r,g,b,a} in the forwarder (the models-draw convention); Camera/Texture2D/Rectangle/
+    // Vector3/Vector2 by value. ⚠ IsModelValid derefs model.meshes[i] for meshCount iterations with NO null-guard (raylib 5.5)
+    // → any meshCount>0 with a null/garbage meshes ptr access-violates, so only an empty/zeroed model validates headlessly; a
+    // real check needs a GPU-loaded model. GetModelBoundingBox also walks the meshes; LoadModel/LoadModelFromMesh + the draws
+    // need a live GL context (correctness = Integration).
+    __declspec(dllexport) Model Framework_LoadModel(const char* fileName);
+    __declspec(dllexport) Model Framework_LoadModelFromMesh(Mesh mesh);
+    __declspec(dllexport) bool Framework_IsModelValid(Model model);
+    __declspec(dllexport) void Framework_UnloadModel(Model model);
+    __declspec(dllexport) BoundingBox Framework_GetModelBoundingBox(Model model);
+    __declspec(dllexport) void Framework_DrawModel(Model model, Vector3 position, float scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawModelEx(Model model, Vector3 position, Vector3 rotationAxis, float rotationAngle, Vector3 scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawModelWires(Model model, Vector3 position, float scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawModelWiresEx(Model model, Vector3 position, Vector3 rotationAxis, float rotationAngle, Vector3 scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawModelPoints(Model model, Vector3 position, float scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawModelPointsEx(Model model, Vector3 position, Vector3 rotationAxis, float rotationAngle, Vector3 scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawBoundingBox(BoundingBox box, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawBillboard(Camera camera, Texture2D texture, Vector3 position, float scale, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawBillboardRec(Camera camera, Texture2D texture, Rectangle source, Vector3 position, Vector2 size, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    __declspec(dllexport) void Framework_DrawBillboardPro(Camera camera, Texture2D texture, Rectangle source, Vector3 position, Vector3 up, Vector2 size, Vector2 origin, float rotation, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+
+    // ==== RAW rmodels PARITY — Materials + material-drawn meshes (raylib 5.5 passthrough, Batch models-materials) ====
+    // 6 material fns + DrawMesh/DrawMeshInstanced (relocated from the mesh sub-batch — they take a Material BY VALUE, and
+    // LoadMaterialDefault finally provides a valid one). New structs Material (Shader + MaterialMap* maps + float[4] params,
+    // 40 B) and MaterialMap (Texture2D + Color + float, 28 B); both fully blittable, passed/returned BY VALUE where raylib does.
+    // LoadMaterials returns a raylib-owned Material* array + writes the count through int* (opaque pointer to the caller — kept
+    // as a passthrough, no per-element marshaling here). SetMaterialTexture/SetModelMeshMaterial take Material*/Model* the callee
+    // mutates -> pointer params. DrawMeshInstanced takes a const Matrix* transforms array. IsMaterialValid checks the shader id
+    // and is headless-safe on a zeroed Material (no deref); LoadMaterialDefault + the two draws need a live GL context
+    // (correctness = Integration).
+    __declspec(dllexport) Material* Framework_LoadMaterials(const char* fileName, int* materialCount);
+    __declspec(dllexport) Material Framework_LoadMaterialDefault(void);
+    __declspec(dllexport) bool Framework_IsMaterialValid(Material material);
+    __declspec(dllexport) void Framework_UnloadMaterial(Material material);
+    __declspec(dllexport) void Framework_SetMaterialTexture(Material* material, int mapType, Texture2D texture);
+    __declspec(dllexport) void Framework_SetModelMeshMaterial(Model* model, int meshId, int materialId);
+    __declspec(dllexport) void Framework_DrawMesh(Mesh mesh, Material material, Matrix transform);
+    __declspec(dllexport) void Framework_DrawMeshInstanced(Mesh mesh, Material material, const Matrix* transforms, int instances);
+
+    // ==== RAW rmodels PARITY — Model animations (raylib 5.5 passthrough, Batch models-animations) — CLOSES rmodels ====
+    // 6 fns. New struct ModelAnimation (int boneCount, frameCount; BoneInfo* bones; Transform** framePoses; char name[32]) —
+    // 56 B, passed BY VALUE to UpdateModelAnimation/UpdateModelAnimationBones/UnloadModelAnimation/IsModelAnimationValid; its
+    // bones/framePoses stay raylib-owned pointers (opaque to the wrapper). LoadModelAnimations returns a raylib-owned
+    // ModelAnimation* array + the count through int*; UnloadModelAnimations takes that array pointer back. BoneInfo (char[32]
+    // name + int parent, 36 B) and Transform (Vector3 translation; Quaternion rotation; Vector3 scale, 40 B) are declared for
+    // consumers but appear here only behind pointers. IsModelAnimationValid short-circuits false on a boneCount mismatch (no
+    // deref); UnloadModelAnimation(s) are free()-of-NULL-safe on a zeroed/empty animation. Update* need a real animated model.
+    __declspec(dllexport) ModelAnimation* Framework_LoadModelAnimations(const char* fileName, int* animCount);
+    __declspec(dllexport) void Framework_UpdateModelAnimation(Model model, ModelAnimation anim, int frame);
+    __declspec(dllexport) void Framework_UpdateModelAnimationBones(Model model, ModelAnimation anim, int frame);
+    __declspec(dllexport) void Framework_UnloadModelAnimation(ModelAnimation anim);
+    __declspec(dllexport) void Framework_UnloadModelAnimations(ModelAnimation* animations, int animCount);
+    __declspec(dllexport) bool Framework_IsModelAnimationValid(Model model, ModelAnimation anim);
 
     // Sounds (handle-based)
     __declspec(dllexport) int   Framework_LoadSoundH(const char* file);

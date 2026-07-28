@@ -699,6 +699,27 @@ Public Module FrameworkWrapper
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
     Public Sub Framework_DrawTextEx(font As Font, text As String, pos As Vector2, fontSize As Single, spacing As Single, r As Byte, g As Byte, b As Byte, a As Byte)
     End Sub
+
+    ' --- Low-level font-data construction (Batch text-fontdata — closes raylib.h 100%; TextFormat stays out, variadic). ---
+    ' GlyphInfo/Image/Rectangle already declared. LoadFontData mirrors LoadFontFromMemory's marshaling (Byte() fileData +
+    ' Integer() codepoints, Nothing=NULL=default ASCII) and returns the raylib-owned GlyphInfo* array as IntPtr. GenImageFontAtlas
+    ' takes that array pointer (IntPtr), writes the packed Rectangle* out through ByRef glyphRecs (free via Framework_MemFree),
+    ' and returns the atlas Image by value. UnloadFontData frees the GlyphInfo array. All CPU (no GL).
+
+    ''' <summary>Rasterizes font-file bytes into a raylib-owned GlyphInfo array; returns it as IntPtr (free via Framework_UnloadFontData).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_LoadFontData(fileData As Byte(), dataSize As Integer, fontSize As Integer, codepoints As Integer(), codepointCount As Integer, type As Integer) As IntPtr
+    End Function
+
+    ''' <summary>Packs glyphs (the LoadFontData IntPtr) into an atlas Image; writes the packed Rectangle* out via glyphRecs (free via Framework_MemFree).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenImageFontAtlas(glyphs As IntPtr, ByRef glyphRecs As IntPtr, glyphCount As Integer, fontSize As Integer, padding As Integer, packMethod As Integer) As Image
+    End Function
+
+    ''' <summary>Unloads a GlyphInfo array (the LoadFontData IntPtr) from RAM.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadFontData(glyphs As IntPtr, glyphCount As Integer)
+    End Sub
 #End Region
 
 #Region "Fonts (handle-based)"
@@ -12219,6 +12240,1169 @@ Public Module FrameworkWrapper
     End Function
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
     Public Function Framework_ComputeSHA1(data As Byte(), dataSize As Integer) As IntPtr
+    End Function
+#End Region
+
+#Region "Raylib rcore — File data I/O (Batch core-C7)"
+    ' Raw raylib file byte/text I/O. No wrapper collisions — all 7 bind plain. LoadFileData returns a raylib-malloc'd
+    ' buffer as IntPtr + length via ByRef → Marshal.Copy then release with Framework_UnloadFileData (raylib's own free,
+    ' NOT the caller's allocator). LoadFileText returns a NUL-terminated char* as IntPtr → PtrToStringAnsi then
+    ' Framework_UnloadFileText (return As IntPtr, never As String — a String return would be freed with the wrong
+    ' allocator). Save*/ExportDataAsCode return bool (I1). Path/text string inputs marshal as Ansi.
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadFileData(fileName As String, ByRef dataSize As Integer) As IntPtr
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadFileData(data As IntPtr)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_SaveFileData(fileName As String, data As Byte(), dataSize As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_ExportDataAsCode(data As Byte(), dataSize As Integer, fileName As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadFileText(fileName As String) As IntPtr
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadFileText(text As IntPtr)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_SaveFileText(fileName As String, text As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+#End Region
+
+#Region "Raylib rcore — File-system path queries (Batch core-C8)"
+    ' Raw raylib path/existence helpers. No wrapper collisions — all 15 bind plain. String inputs marshal as Ansi.
+    ' bool returns use I1; int returns map straight. ⛔ All 7 const char* returns come back As IntPtr + PtrToStringAnsi
+    ' at the call site (never As String — a String return would free the buffer with the wrong allocator; the buffer is
+    ' not the caller's to free anyway). Buffer provenance differs: 5 getters return raylib's OWN static buffer, while
+    ' GetFileName/GetFileExtension return an ENGINE static buffer (the .cpp forwarder copies raylib's input-relative
+    ' pointer there so it survives P/Invoke input-marshaling — see framework.cpp). Either way: copy immediately, do not free.
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_FileExists(fileName As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_DirectoryExists(dirPath As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_IsFileExtension(fileName As String, ext As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_GetFileLength(fileName As String) As Integer
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_GetFileExtension(fileName As String) As IntPtr
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_GetFileName(filePath As String) As IntPtr
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_GetFileNameWithoutExt(filePath As String) As IntPtr
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_GetDirectoryPath(filePath As String) As IntPtr
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_GetPrevDirectoryPath(dirPath As String) As IntPtr
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetWorkingDirectory() As IntPtr
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetApplicationDirectory() As IntPtr
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_MakeDirectory(dirPath As String) As Integer
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_ChangeDirectory(dir As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_IsPathFile(path As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_IsFileNameValid(fileName As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+#End Region
+
+#Region "Raylib rcore — Window state & control (Batch core-C1)"
+    ' Raw raylib window lifecycle/state/flag control, coexisting with the engine's MANAGED lifecycle
+    ' (Framework_Initialize/ShouldClose/Shutdown). No wrapper collisions — all 24 bind plain (import name == export name).
+    ' ⛔ Device-dependent: a real GL window must exist for the setters/state queries to be meaningful. bool returns are I1;
+    ' the unsigned-int state flags map to UInteger; SetWindowOpacity takes a Single. SetWindowIcon takes an Image BY VALUE;
+    ' SetWindowIcons takes the address of a pinned Image() (IntPtr) plus a count. GetWindowHandle returns the native OS
+    ' window handle As IntPtr. InitWindow's title marshals as Ansi. ToggleFullscreen/ToggleBorderlessWindowed/SetWindowSize/
+    ' SetWindowMinSize/SetWindowTitle are already bound elsewhere in this file and are intentionally NOT re-declared here.
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_InitWindow(width As Integer, height As Integer, title As String)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_CloseWindow()
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_WindowShouldClose() As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsWindowReady() As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsWindowFullscreen() As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsWindowHidden() As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsWindowMinimized() As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsWindowMaximized() As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsWindowFocused() As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsWindowResized() As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsWindowState(flag As UInteger) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetWindowState(flags As UInteger)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_ClearWindowState(flags As UInteger)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_MaximizeWindow()
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_MinimizeWindow()
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_RestoreWindow()
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetWindowIcon(image As Image)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetWindowIcons(images As IntPtr, count As Integer)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetWindowPosition(x As Integer, y As Integer)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetWindowMonitor(monitor As Integer)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetWindowMaxSize(width As Integer, height As Integer)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetWindowOpacity(opacity As Single)
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetWindowFocused()
+    End Sub
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetWindowHandle() As IntPtr
+    End Function
+#End Region
+
+#Region "Raylib rcore — Window/monitor query & clipboard (Batch core-C2)"
+    ' Raw rcore query getters + clipboard. GetScreenWidth/Height, GetMonitor{Width,Height,Count,RefreshRate} and
+    ' GetCurrentMonitor are already bound above (managed monitor region) and are NOT re-declared here. Vector2/Image
+    ' returns marshal by value; const char* returns come back as IntPtr and are copied with PtrToStringAnsi (never an
+    ' LPStr String return — that would free raylib-owned memory); SetClipboardText marshals its input Ansi.
+
+    ''' <summary>Gets current render width (considers HiDPI)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetRenderWidth() As Integer
+    End Function
+
+    ''' <summary>Gets current render height (considers HiDPI)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetRenderHeight() As Integer
+    End Function
+
+    ''' <summary>Gets the specified monitor's position</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetMonitorPosition(monitor As Integer) As Vector2
+    End Function
+
+    ''' <summary>Gets the specified monitor's physical width in millimetres</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetMonitorPhysicalWidth(monitor As Integer) As Integer
+    End Function
+
+    ''' <summary>Gets the specified monitor's physical height in millimetres</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetMonitorPhysicalHeight(monitor As Integer) As Integer
+    End Function
+
+    ''' <summary>Gets the window position XY on the monitor</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetWindowPosition() As Vector2
+    End Function
+
+    ''' <summary>Gets the window DPI scale factor</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetWindowScaleDPI() As Vector2
+    End Function
+
+    ''' <summary>Raw const char* export for the monitor name (use GetMonitorName for a String)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetMonitorName(monitor As Integer) As IntPtr
+    End Function
+
+    ''' <summary>Gets the human-readable name of the specified monitor</summary>
+    Public Function GetMonitorName(monitor As Integer) As String
+        Dim ptr = Framework_GetMonitorName(monitor)
+        If ptr = IntPtr.Zero Then Return ""
+        Return Marshal.PtrToStringAnsi(ptr)
+    End Function
+
+    ''' <summary>Sets the clipboard text content</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_SetClipboardText(text As String)
+    End Sub
+
+    ''' <summary>Raw const char* export for the clipboard text (use GetClipboardText for a String)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetClipboardText() As IntPtr
+    End Function
+
+    ''' <summary>Gets the clipboard text content</summary>
+    Public Function GetClipboardText() As String
+        Dim ptr = Framework_GetClipboardText()
+        If ptr = IntPtr.Zero Then Return ""
+        Return Marshal.PtrToStringAnsi(ptr)
+    End Function
+
+    ''' <summary>Gets the clipboard image content (Image by value; free with UnloadImage)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetClipboardImage() As Image
+    End Function
+
+    ''' <summary>Enables waiting for events on EndDrawing (no automatic polling)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_EnableEventWaiting()
+    End Sub
+
+    ''' <summary>Disables waiting for events on EndDrawing (automatic polling)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DisableEventWaiting()
+    End Sub
+#End Region
+
+#Region "Raylib rcore — Timing/frame + Random + Misc + input stragglers (Batch core-C6)"
+    ' Raw rcore frame-control, RNG, misc, and the 2 input stragglers. SetTargetFPS/GetFrameTime/GetTime/GetFPS/
+    ' TakeScreenshot/MemFree are already bound elsewhere and are NOT re-declared here. TraceLog is variadic in raylib;
+    ' the engine exports a fixed 2-arg forwarder (routes text through "%s"), so this binds as (Integer, String) + Ansi.
+    ' Random-sequence and Mem* returns are raylib-heap pointers: LoadRandomSequence -> IntPtr freed with
+    ' UnloadRandomSequence (the managed LoadRandomSequence helper copies to Integer() then frees); MemAlloc/MemRealloc ->
+    ' IntPtr freed with Framework_MemFree.
+
+    ''' <summary>Swaps the back and front buffers (advanced manual frame control)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SwapScreenBuffer()
+    End Sub
+
+    ''' <summary>Registers all input events (advanced manual frame control)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_PollInputEvents()
+    End Sub
+
+    ''' <summary>Halts execution for the given number of seconds</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_WaitTime(seconds As Double)
+    End Sub
+
+    ''' <summary>Sets the seed for the random number generator</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetRandomSeed(seed As UInteger)
+    End Sub
+
+    ''' <summary>Gets a random value in [min, max] (both inclusive)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetRandomValue(min As Integer, max As Integer) As Integer
+    End Function
+
+    ''' <summary>Raw int* export for a no-repeat random sequence (use LoadRandomSequence for an Integer())</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_LoadRandomSequence(count As UInteger, min As Integer, max As Integer) As IntPtr
+    End Function
+
+    ''' <summary>Frees a random sequence returned by Framework_LoadRandomSequence</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadRandomSequence(sequence As IntPtr)
+    End Sub
+
+    ''' <summary>Loads a sequence of 'count' non-repeating random values in [min, max]</summary>
+    Public Function LoadRandomSequence(count As UInteger, min As Integer, max As Integer) As Integer()
+        Dim ptr = Framework_LoadRandomSequence(count, min, max)
+        If ptr = IntPtr.Zero Then Return Array.Empty(Of Integer)()
+        Dim n = CInt(count)
+        Dim result As Integer() = If(n > 0, New Integer(n - 1) {}, Array.Empty(Of Integer)())
+        If n > 0 Then Marshal.Copy(ptr, result, 0, n)
+        Framework_UnloadRandomSequence(ptr)
+        Return result
+    End Function
+
+    ''' <summary>Sets the init configuration flags (call before window creation to take effect)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetConfigFlags(flags As UInteger)
+    End Sub
+
+    ''' <summary>Opens a URL in the default system browser</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_OpenURL(url As String)
+    End Sub
+
+    ''' <summary>Writes a trace-log message at the given level (text routed through "%s" engine-side)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Sub Framework_TraceLog(logLevel As Integer, text As String)
+    End Sub
+
+    ''' <summary>Sets the minimum trace-log level threshold</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetTraceLogLevel(logLevel As Integer)
+    End Sub
+
+    ''' <summary>Allocates 'size' bytes from raylib's internal allocator (free with Framework_MemFree)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_MemAlloc(size As UInteger) As IntPtr
+    End Function
+
+    ''' <summary>Reallocates a raylib-heap buffer to 'size' bytes (free with Framework_MemFree)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_MemRealloc(ptr As IntPtr, size As UInteger) As IntPtr
+    End Function
+
+    ''' <summary>Sets gamepad vibration for both motors (duration in seconds)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetGamepadVibration(gamepad As Integer, leftMotor As Single, rightMotor As Single, duration As Single)
+    End Sub
+
+    ''' <summary>Gets the touch position XY for a touch point index</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetTouchPosition(index As Integer) As Vector2
+    End Function
+#End Region
+
+#Region "Raylib rcore — Directory listing & dropped files (Batch core-C9)"
+    ' Raw rcore directory/dropped-file queries. FilePathList (Utiliy.vb) is returned BY VALUE and passed BY VALUE to its
+    ' matching Unload. The managed String() helpers copy the char** paths out (Marshal.ReadIntPtr + PtrToStringAnsi) BEFORE
+    ' calling Unload (which frees the strings), so the copy is taken while the buffer is alive. GetFileModTime returns C
+    ' `long` = 32-bit on Win64 -> Integer. Directory listing is headless; dropped-file queries need a window.
+
+    ''' <summary>Raw FilePathList export for a directory listing (use LoadDirectoryFiles for a String())</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadDirectoryFiles(dirPath As String) As FilePathList
+    End Function
+
+    ''' <summary>Raw FilePathList export for a filtered/recursive directory listing</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadDirectoryFilesEx(basePath As String, filter As String, <MarshalAs(UnmanagedType.I1)> scanSubdirs As Boolean) As FilePathList
+    End Function
+
+    ''' <summary>Frees a FilePathList returned by Framework_LoadDirectoryFiles(Ex)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadDirectoryFiles(files As FilePathList)
+    End Sub
+
+    ''' <summary>Checks whether a file has been dropped onto the window (needs a window)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsFileDropped() As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Raw FilePathList export for the dropped files (use LoadDroppedFiles for a String())</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_LoadDroppedFiles() As FilePathList
+    End Function
+
+    ''' <summary>Frees/clears the dropped-files list</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadDroppedFiles(files As FilePathList)
+    End Sub
+
+    ''' <summary>Gets a file's last-write time (Unix seconds; raylib returns a 32-bit long)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_GetFileModTime(fileName As String) As Integer
+    End Function
+
+    ''' <summary>Copies the char** paths out of a FilePathList into a managed String() (no free)</summary>
+    Private Function MarshalFilePathList(list As FilePathList) As String()
+        Dim n = CInt(list.count)
+        If n <= 0 OrElse list.paths = IntPtr.Zero Then Return Array.Empty(Of String)()
+        Dim result(n - 1) As String
+        For i = 0 To n - 1
+            Dim entry = Marshal.ReadIntPtr(list.paths, i * IntPtr.Size)
+            result(i) = If(entry = IntPtr.Zero, "", Marshal.PtrToStringAnsi(entry))
+        Next
+        Return result
+    End Function
+
+    ''' <summary>Lists the files in a directory as a managed String() (allocates then frees the native list)</summary>
+    Public Function LoadDirectoryFiles(dirPath As String) As String()
+        Dim list = Framework_LoadDirectoryFiles(dirPath)
+        Try
+            Return MarshalFilePathList(list)
+        Finally
+            Framework_UnloadDirectoryFiles(list)
+        End Try
+    End Function
+
+    ''' <summary>Lists directory files with an extension filter and optional recursion as a managed String()</summary>
+    Public Function LoadDirectoryFilesEx(basePath As String, filter As String, scanSubdirs As Boolean) As String()
+        Dim list = Framework_LoadDirectoryFilesEx(basePath, filter, scanSubdirs)
+        Try
+            Return MarshalFilePathList(list)
+        Finally
+            Framework_UnloadDirectoryFiles(list)
+        End Try
+    End Function
+
+    ''' <summary>Returns the dropped file paths as a managed String() (consumes and clears the drop buffer)</summary>
+    Public Function LoadDroppedFiles() As String()
+        Dim list = Framework_LoadDroppedFiles()
+        Try
+            Return MarshalFilePathList(list)
+        Finally
+            Framework_UnloadDroppedFiles(list)
+        End Try
+    End Function
+#End Region
+
+#Region "Raylib rcore — Shader management (Batch core-C4)"
+    ' Raw raylib shader API (parity). Shader (Utiliy.vb) = {Integer id, IntPtr locs} returned/passed BY VALUE. GetShaderLocation
+    ' and UnloadShader are already bound in the "Shaders" region above as raw passthroughs, so C4 adds the remaining 8:
+    ' LoadShader, LoadShaderFromMemory, IsShaderValid, GetShaderLocationAttrib, SetShaderValue(V), SetShaderValueMatrix,
+    ' SetShaderValueTexture. SetShaderValue(V) take a const void* -> IntPtr (the caller pins/marshals the payload) plus a
+    ' uniformType enum (ShaderUniformDataType). Loading/using shaders needs a GL context (a window).
+
+    ''' <summary>Loads a shader from vertex/fragment shader files (Nothing = raylib default stage)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadShader(vsFileName As String, fsFileName As String) As Shader
+    End Function
+
+    ''' <summary>Loads a shader from vertex/fragment shader code strings (Nothing = raylib default stage)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadShaderFromMemory(vsCode As String, fsCode As String) As Shader
+    End Function
+
+    ''' <summary>Checks whether a shader is valid (loaded on GPU)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsShaderValid(shader As Shader) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Gets a shader attribute location by name</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_GetShaderLocationAttrib(shader As Shader, attribName As String) As Integer
+    End Function
+
+    ''' <summary>Sets a shader uniform value; value points to the payload, uniformType is a ShaderUniformDataType</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetShaderValue(shader As Shader, locIndex As Integer, value As IntPtr, uniformType As Integer)
+    End Sub
+
+    ''' <summary>Sets a shader uniform value vector (count elements)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetShaderValueV(shader As Shader, locIndex As Integer, value As IntPtr, uniformType As Integer, count As Integer)
+    End Sub
+
+    ''' <summary>Sets a shader uniform value (4x4 matrix, by value)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetShaderValueMatrix(shader As Shader, locIndex As Integer, mat As Matrix)
+    End Sub
+
+    ''' <summary>Sets a shader uniform value for a texture sampler2d (by value)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetShaderValueTexture(shader As Shader, locIndex As Integer, texture As Texture2D)
+    End Sub
+#End Region
+
+#Region "Raylib rcore — Drawing modes & VR simulator (Batch core-C3)"
+    ' Raw rcore drawing-mode + VR-simulator functions (BeginMode2D/EndMode2D, BeginTextureMode/EndTextureMode,
+    ' BeginShaderMode/EndShaderMode are already bound above). BeginMode3D takes Camera3D by value; BeginBlendMode/
+    ' BeginScissorMode take ints. The VR half marshals VrDeviceInfo/VrStereoConfig (Utiliy.vb) — structs with NESTED
+    ' fixed-size arrays — BY VALUE. LoadVrStereoConfig RETURNS the non-blittable VrStereoConfig by value (raylib zeroes it
+    ' with no GL context; a live window fills it). Begin*Mode calls need a live context.
+
+    ''' <summary>Begins 3D mode with a custom camera (Camera3D by value)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_BeginMode3D(camera As Camera3D)
+    End Sub
+
+    ''' <summary>Ends 3D mode and returns to default 2D orthographic mode</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_EndMode3D()
+    End Sub
+
+    ''' <summary>Begins a blending mode (alpha, additive, multiplied, subtract, custom)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_BeginBlendMode(mode As Integer)
+    End Sub
+
+    ''' <summary>Ends the blending mode (reset to default alpha blending)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_EndBlendMode()
+    End Sub
+
+    ''' <summary>Begins scissor mode (defines a screen area for following drawing)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_BeginScissorMode(x As Integer, y As Integer, width As Integer, height As Integer)
+    End Sub
+
+    ''' <summary>Ends scissor mode</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_EndScissorMode()
+    End Sub
+
+    ''' <summary>Begins stereo rendering (requires the VR simulator; VrStereoConfig by value)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_BeginVrStereoMode(config As VrStereoConfig)
+    End Sub
+
+    ''' <summary>Ends stereo rendering (requires the VR simulator)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_EndVrStereoMode()
+    End Sub
+
+    ''' <summary>Loads a VR stereo config for VR simulator device parameters (VrDeviceInfo in, VrStereoConfig out, both by value)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_LoadVrStereoConfig(device As VrDeviceInfo) As VrStereoConfig
+    End Function
+
+    ''' <summary>Unloads a VR stereo config (VrStereoConfig by value)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadVrStereoConfig(config As VrStereoConfig)
+    End Sub
+#End Region
+
+#Region "Raylib rcore — Automation events (Batch core-C11)"
+    ' Raw rcore automation-event functions. AutomationEventList (Utiliy.vb) = {UInteger,UInteger,IntPtr} blittable, returned
+    ' BY VALUE by Load and passed BY VALUE to Unload/Export. AutomationEvent = {UInteger,UInteger, ByValArray SizeConst:=4
+    ' Integer()} passed BY VALUE to PlayAutomationEvent. ⛔ SetAutomationEventList takes a POINTER that raylib RETAINS while
+    ' recording, so it binds As IntPtr — the caller must pin/allocate the AutomationEventList at a stable address and keep it
+    ' alive for the whole recording session. List management + export are headless; recording/replay need the input/frame system.
+
+    ''' <summary>Loads an automation event list from a file (Nothing = new empty list, capacity = MAX_AUTOMATION_EVENTS)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadAutomationEventList(fileName As String) As AutomationEventList
+    End Function
+
+    ''' <summary>Unloads an automation event list (frees the raylib-owned events array)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadAutomationEventList(list As AutomationEventList)
+    End Sub
+
+    ''' <summary>Exports an automation event list as a text file</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_ExportAutomationEventList(list As AutomationEventList, fileName As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Sets the automation event list to record into. raylib RETAINS this pointer while recording — pass a pinned/
+    ''' unmanaged AutomationEventList address and keep it alive until StopAutomationEventRecording.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetAutomationEventList(list As IntPtr)
+    End Sub
+
+    ''' <summary>Sets the automation event internal base frame to start recording</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetAutomationEventBaseFrame(frame As Integer)
+    End Sub
+
+    ''' <summary>Starts recording automation events (an event list must be set first)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_StartAutomationEventRecording()
+    End Sub
+
+    ''' <summary>Stops recording automation events</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_StopAutomationEventRecording()
+    End Sub
+
+    ''' <summary>Plays a recorded automation event (AutomationEvent by value; 'evt' avoids the VB Event keyword)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_PlayAutomationEvent(evt As AutomationEvent)
+    End Sub
+#End Region
+
+#Region "Raylib rcore/raudio — Callbacks (deferred fn-pointers, Batch callbacks)"
+    ' Raw raylib callback setters (5 rcore + 5 raudio). Each binding takes an <UnmanagedFunctionPointer(Cdecl)> delegate,
+    ' which the marshaler converts to a native function pointer. ⛔ raylib RETAINS the pointer, so the CALLER must keep the
+    ' delegate object alive (GC.KeepAlive / a field) for as long as raylib may invoke it — a collected delegate frees the
+    ' thunk and the next callback crashes (same lifetime rule as SetAutomationEventList). Pass Nothing to reset a callback
+    ' to raylib's default. All const char*/char*/void* callback args are IntPtr (use PtrToStringAnsi for text); C bool
+    ' returns are <MarshalAs(I1)> Boolean. TraceLogCallback's args is a va_list (opaque IntPtr on Win64; when the logged
+    ' message has no format specifiers, text is the literal message).
+
+    ''' <summary>Custom trace-log callback. text is a const char* (format string); args is a va_list (opaque on Win64).</summary>
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Sub TraceLogCallback(logLevel As Integer, text As IntPtr, args As IntPtr)
+
+    ''' <summary>Custom binary-file loader. Returns an unsigned char* buffer and writes the size via dataSize. ⛔ raylib later
+    ''' frees the buffer with RL_FREE, so a managed callback must return RL_MALLOC-compatible memory (e.g. via Framework_MemAlloc),
+    ''' NOT Marshal.AllocHGlobal — a heap mismatch corrupts the heap.</summary>
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Function LoadFileDataCallback(fileName As IntPtr, ByRef dataSize As Integer) As IntPtr
+
+    ''' <summary>Custom binary-file saver. data is a void* of dataSize bytes; returns success.</summary>
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Function SaveFileDataCallback(fileName As IntPtr, data As IntPtr, dataSize As Integer) As <MarshalAs(UnmanagedType.I1)> Boolean
+
+    ''' <summary>Custom text-file loader. Returns a char* string. ⛔ raylib later frees it with RL_FREE, so return
+    ''' RL_MALLOC-compatible memory (e.g. via Framework_MemAlloc), NOT Marshal.AllocHGlobal — a heap mismatch corrupts the heap.</summary>
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Function LoadFileTextCallback(fileName As IntPtr) As IntPtr
+
+    ''' <summary>Custom text-file saver. text is a char*; returns success.</summary>
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Function SaveFileTextCallback(fileName As IntPtr, text As IntPtr) As <MarshalAs(UnmanagedType.I1)> Boolean
+
+    ''' <summary>Audio thread callback / processor. bufferData points to 'frames' samples (float for processors).</summary>
+    <UnmanagedFunctionPointer(CallingConvention.Cdecl)>
+    Public Delegate Sub AudioCallback(bufferData As IntPtr, frames As UInteger)
+
+    ''' <summary>Sets a custom trace-log message callback (Nothing = raylib default). Keep the delegate alive.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetTraceLogCallback(callback As TraceLogCallback)
+    End Sub
+
+    ''' <summary>Sets a custom binary-file data loader (Nothing = raylib default). Keep the delegate alive.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetLoadFileDataCallback(callback As LoadFileDataCallback)
+    End Sub
+
+    ''' <summary>Sets a custom binary-file data saver (Nothing = raylib default). Keep the delegate alive.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetSaveFileDataCallback(callback As SaveFileDataCallback)
+    End Sub
+
+    ''' <summary>Sets a custom text-file loader (Nothing = raylib default). Keep the delegate alive.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetLoadFileTextCallback(callback As LoadFileTextCallback)
+    End Sub
+
+    ''' <summary>Sets a custom text-file saver (Nothing = raylib default). Keep the delegate alive.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetSaveFileTextCallback(callback As SaveFileTextCallback)
+    End Sub
+
+    ''' <summary>Sets the audio-thread callback for a stream (AudioStream by value). Keep the delegate alive.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetAudioStreamCallback(stream As AudioStream, callback As AudioCallback)
+    End Sub
+
+    ''' <summary>Attaches an audio-stream processor (receives samples as float). Keep the delegate alive.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AttachAudioStreamProcessor(stream As AudioStream, processor As AudioCallback)
+    End Sub
+
+    ''' <summary>Detaches an audio-stream processor (pass the same delegate used to attach).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DetachAudioStreamProcessor(stream As AudioStream, processor As AudioCallback)
+    End Sub
+
+    ''' <summary>Attaches a processor to the whole audio pipeline (receives mixed samples as float). Keep the delegate alive.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_AttachAudioMixedProcessor(processor As AudioCallback)
+    End Sub
+
+    ''' <summary>Detaches a whole-pipeline processor (pass the same delegate used to attach).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DetachAudioMixedProcessor(processor As AudioCallback)
+    End Sub
+#End Region
+
+#Region "Raylib rgestures — Gestures & touch handling (Batch rgestures)"
+    ' Raw rgestures functions. flags/gesture are bit-flag UIntegers (GESTURE_TAP=1, GESTURE_DRAG=8, ...). Gesture state is
+    ' updated by PollInputEvents under a window; the getters are pure reads so they return zero/default headless.
+    ' GetGestureDragVector/GetGesturePinchVector return Vector2 BY VALUE (the raw-Vector2-return idiom from Batch C2).
+
+    ''' <summary>Enables a set of gestures using bit flags (GESTURE_* values OR'd together)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetGesturesEnabled(flags As UInteger)
+    End Sub
+
+    ''' <summary>Checks whether a specific gesture has been detected</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsGestureDetected(gesture As UInteger) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Gets the latest detected gesture (GESTURE_* value; GESTURE_NONE = 0)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetGestureDetected() As Integer
+    End Function
+
+    ''' <summary>Gets the gesture hold time in seconds</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetGestureHoldDuration() As Single
+    End Function
+
+    ''' <summary>Gets the gesture drag vector (Vector2 by value)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetGestureDragVector() As Vector2
+    End Function
+
+    ''' <summary>Gets the gesture drag angle</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetGestureDragAngle() As Single
+    End Function
+
+    ''' <summary>Gets the gesture pinch delta (Vector2 by value)</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetGesturePinchVector() As Vector2
+    End Function
+
+    ''' <summary>Gets the gesture pinch angle</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetGesturePinchAngle() As Single
+    End Function
+#End Region
+
+#Region "Raylib rcamera — Camera system update (Batch rcamera)"
+    ' Raw rcamera functions. raylib's Camera is a typedef of Camera3D, passed as Camera* and MUTATED IN PLACE — so it binds
+    ' ByRef Camera3D (Camera3D is blittable, so the marshaler pins it and the mutation propagates back to the caller).
+    ' UpdateCamera reads input for the built-in modes (headless / CAMERA_CUSTOM = no-op); UpdateCameraPro applies the
+    ' movement/rotation/zoom args directly via raymath (no input, no GL) so it is deterministic headless. movement/rotation
+    ' are Vector3 BY VALUE, mode is an Integer, zoom is a Single. No new struct (Camera3D/Vector3 already defined).
+
+    ''' <summary>Updates the camera position/orientation for the selected mode (Camera3D mutated in place).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UpdateCamera(ByRef camera As Camera3D, mode As Integer)
+    End Sub
+
+    ''' <summary>Updates the camera with explicit movement/rotation/zoom (Camera3D mutated in place; Vector3 args by value).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UpdateCameraPro(ByRef camera As Camera3D, movement As Vector3, rotation As Vector3, zoom As Single)
+    End Sub
+#End Region
+
+#Region "Raylib rmodels — 3D collision detection (Batch models-collision)"
+    ' The geometric-collision half of rmodels: pure raymath, no GL/device — deterministic headless. New structs BoundingBox
+    ' (2 Vector3) and RayCollision (I1 hit + Single distance + 2 Vector3) live in Utiliy.vb, passed/returned BY VALUE.
+    ' The Check* predicates return C bool -> <MarshalAs(I1)> Boolean. GetRayCollisionMesh is deferred to the mesh sub-batch
+    ' (it needs the Mesh struct); everything here uses only Vector3/Ray/BoundingBox/RayCollision.
+
+    ''' <summary>Checks collision between two spheres.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_CheckCollisionSpheres(center1 As Vector3, radius1 As Single, center2 As Vector3, radius2 As Single) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Checks collision between two bounding boxes.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_CheckCollisionBoxes(box1 As BoundingBox, box2 As BoundingBox) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Checks collision between a bounding box and a sphere.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_CheckCollisionBoxSphere(box As BoundingBox, center As Vector3, radius As Single) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Gets collision info between a ray and a sphere (RayCollision returned by value).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetRayCollisionSphere(ray As Ray, center As Vector3, radius As Single) As RayCollision
+    End Function
+
+    ''' <summary>Gets collision info between a ray and a bounding box (RayCollision returned by value).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetRayCollisionBox(ray As Ray, box As BoundingBox) As RayCollision
+    End Function
+
+    ''' <summary>Gets collision info between a ray and a triangle (RayCollision returned by value).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetRayCollisionTriangle(ray As Ray, p1 As Vector3, p2 As Vector3, p3 As Vector3) As RayCollision
+    End Function
+
+    ''' <summary>Gets collision info between a ray and a quad (RayCollision returned by value).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetRayCollisionQuad(ray As Ray, p1 As Vector3, p2 As Vector3, p3 As Vector3, p4 As Vector3) As RayCollision
+    End Function
+#End Region
+
+#Region "Raylib rmodels — Basic 3D shapes drawing (Batch models-shapes)"
+    ' The 20 basic-3d-shapes draws (DrawGrid already bound elsewhere). Color is expanded to r,g,b,a Bytes (the 2D-shapes
+    ' convention, matching Framework_DrawLineStrip/ClearBackground); Vector3/Vector2/Ray by value; DrawTriangleStrip3D takes
+    ' a Vector3() array (const Vector3* passthrough). All Subs (void). These DRAW via rlgl -> a live GL context is required,
+    ' so correctness lives in an [Integration] test; the parity guard is headless.
+
+    ''' <summary>Draws a line in 3D world space.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawLine3D(startPos As Vector3, endPos As Vector3, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a point in 3D space (a small line).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawPoint3D(position As Vector3, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a circle in 3D world space.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawCircle3D(center As Vector3, radius As Single, rotationAxis As Vector3, rotationAngle As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a color-filled triangle (counter-clockwise winding).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawTriangle3D(v1 As Vector3, v2 As Vector3, v3 As Vector3, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a triangle strip defined by an array of points (const Vector3*).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawTriangleStrip3D(points As Vector3(), pointCount As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a cube.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawCube(position As Vector3, width As Single, height As Single, length As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a cube (Vector3 size version).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawCubeV(position As Vector3, size As Vector3, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws cube wires.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawCubeWires(position As Vector3, width As Single, height As Single, length As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws cube wires (Vector3 size version).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawCubeWiresV(position As Vector3, size As Vector3, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a sphere.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawSphere(centerPos As Vector3, radius As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a sphere with extended parameters (rings/slices).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawSphereEx(centerPos As Vector3, radius As Single, rings As Integer, slices As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws sphere wires (rings/slices).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawSphereWires(centerPos As Vector3, radius As Single, rings As Integer, slices As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a cylinder/cone.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawCylinder(position As Vector3, radiusTop As Single, radiusBottom As Single, height As Single, slices As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a cylinder with base at startPos and top at endPos.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawCylinderEx(startPos As Vector3, endPos As Vector3, startRadius As Single, endRadius As Single, sides As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws cylinder/cone wires.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawCylinderWires(position As Vector3, radiusTop As Single, radiusBottom As Single, height As Single, slices As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws cylinder wires with base at startPos and top at endPos.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawCylinderWiresEx(startPos As Vector3, endPos As Vector3, startRadius As Single, endRadius As Single, sides As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a capsule with the centers of its sphere caps at startPos and endPos.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawCapsule(startPos As Vector3, endPos As Vector3, radius As Single, slices As Integer, rings As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws capsule wireframe with the centers of its sphere caps at startPos and endPos.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawCapsuleWires(startPos As Vector3, endPos As Vector3, radius As Single, slices As Integer, rings As Integer, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a plane in the XZ axis.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawPlane(centerPos As Vector3, size As Vector2, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a ray line.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawRay(ray As Ray, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+#End Region
+
+#Region "Raylib rmodels — Mesh generation & management (Batch models-mesh)"
+    ' The mesh half of rmodels: 11 GenMesh* generators + 7 mesh-management fns + GetRayCollisionMesh (deferred here from the
+    ' collision batch — it needs Mesh). New struct Mesh (Utiliy.vb) is a big blittable struct (int counts + raylib-owned
+    ' array pointers as IntPtr + GL ids); passed/returned BY VALUE, mutated in place via ByRef for UploadMesh/GenMeshTangents.
+    ' GenMesh* upload to GPU internally (live GL context required → correctness = Integration); GetMeshBoundingBox and
+    ' GetRayCollisionMesh are pure math (headless oracles on a hand-built Mesh). C bool -> <MarshalAs(I1)> Boolean; file-path
+    ' char* -> CharSet.Ansi String. DrawMesh/DrawMeshInstanced are deferred to the materials batch (they take a Material).
+
+    ''' <summary>Generates a polygonal mesh.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenMeshPoly(sides As Integer, radius As Single) As Mesh
+    End Function
+
+    ''' <summary>Generates a plane mesh (with subdivisions).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenMeshPlane(width As Single, length As Single, resX As Integer, resZ As Integer) As Mesh
+    End Function
+
+    ''' <summary>Generates a cuboid mesh.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenMeshCube(width As Single, height As Single, length As Single) As Mesh
+    End Function
+
+    ''' <summary>Generates a standard sphere mesh.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenMeshSphere(radius As Single, rings As Integer, slices As Integer) As Mesh
+    End Function
+
+    ''' <summary>Generates a half-sphere mesh (no bottom cap).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenMeshHemiSphere(radius As Single, rings As Integer, slices As Integer) As Mesh
+    End Function
+
+    ''' <summary>Generates a cylinder mesh.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenMeshCylinder(radius As Single, height As Single, slices As Integer) As Mesh
+    End Function
+
+    ''' <summary>Generates a cone/pyramid mesh.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenMeshCone(radius As Single, height As Single, slices As Integer) As Mesh
+    End Function
+
+    ''' <summary>Generates a torus mesh.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenMeshTorus(radius As Single, size As Single, radSeg As Integer, sides As Integer) As Mesh
+    End Function
+
+    ''' <summary>Generates a trefoil-knot mesh.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenMeshKnot(radius As Single, size As Single, radSeg As Integer, sides As Integer) As Mesh
+    End Function
+
+    ''' <summary>Generates a heightmap mesh from image data.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenMeshHeightmap(heightmap As Image, size As Vector3) As Mesh
+    End Function
+
+    ''' <summary>Generates a cubes-based map mesh from image data.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenMeshCubicmap(cubicmap As Image, cubeSize As Vector3) As Mesh
+    End Function
+
+    ''' <summary>Uploads mesh vertex data to the GPU and fills in VAO/VBO ids (mutates the mesh in place).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UploadMesh(ByRef mesh As Mesh, <MarshalAs(UnmanagedType.I1)> dynamic As Boolean)
+    End Sub
+
+    ''' <summary>Updates mesh vertex data in the GPU for a specific buffer index.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UpdateMeshBuffer(mesh As Mesh, index As Integer, data As IntPtr, dataSize As Integer, offset As Integer)
+    End Sub
+
+    ''' <summary>Unloads mesh data from CPU and GPU.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadMesh(mesh As Mesh)
+    End Sub
+
+    ''' <summary>Computes mesh bounding-box limits (BoundingBox returned by value).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetMeshBoundingBox(mesh As Mesh) As BoundingBox
+    End Function
+
+    ''' <summary>Computes mesh tangents (mutates the mesh in place, allocating the tangents array).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_GenMeshTangents(ByRef mesh As Mesh)
+    End Sub
+
+    ''' <summary>Exports mesh data to a file; returns True on success.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_ExportMesh(mesh As Mesh, fileName As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Exports mesh as a code file (.h) of vertex-attribute arrays; returns True on success.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_ExportMeshAsCode(mesh As Mesh, fileName As String) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Gets collision info between a ray and a mesh under a transform (RayCollision returned by value).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetRayCollisionMesh(ray As Ray, mesh As Mesh, transform As Matrix) As RayCollision
+    End Function
+#End Region
+
+#Region "Raylib rmodels — Model loading & drawing (Batch models-model)"
+    ' 5 model-management fns + 10 model/billboard draws. New struct Model (Utiliy.vb): embedded Matrix + int counts +
+    ' raylib-owned pointers as IntPtr, fully blittable (120 B), passed/returned BY VALUE (LoadModel/LoadModelFromMesh return
+    ' it via hidden-sret). Draw fns expand Color -> r,g,b,a Bytes (the models-draw convention); Camera3D/Texture2D/Rectangle/
+    ' Vector3/Vector2 by value. ⚠ IsModelValid derefs model.meshes[i] for meshCount iterations with no null-guard (raylib 5.5),
+    ' so only a zeroed/empty model (meshCount 0 -> False) is headless-safe; a real True needs a GPU-loaded model. The draws +
+    ' LoadModel/LoadModelFromMesh need a live GL context (Integration). LoadModel path -> CharSet.Ansi String.
+
+    ''' <summary>Loads a model from files (meshes and materials); Model returned by value.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadModel(fileName As String) As Model
+    End Function
+
+    ''' <summary>Loads a model from a generated mesh (default material); Model returned by value.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_LoadModelFromMesh(mesh As Mesh) As Model
+    End Function
+
+    ''' <summary>Checks whether a model is valid (meshes/materials loaded).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsModelValid(model As Model) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Unloads a model (including its meshes) from RAM/VRAM.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadModel(model As Model)
+    End Sub
+
+    ''' <summary>Computes a model's bounding box (all meshes); BoundingBox returned by value.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GetModelBoundingBox(model As Model) As BoundingBox
+    End Function
+
+    ''' <summary>Draws a model (with texture if set).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawModel(model As Model, position As Vector3, scale As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a model with extended parameters.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawModelEx(model As Model, position As Vector3, rotationAxis As Vector3, rotationAngle As Single, scale As Vector3, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a model as wireframe.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawModelWires(model As Model, position As Vector3, scale As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a model as wireframe with extended parameters.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawModelWiresEx(model As Model, position As Vector3, rotationAxis As Vector3, rotationAngle As Single, scale As Vector3, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a model as points.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawModelPoints(model As Model, position As Vector3, scale As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a model as points with extended parameters.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawModelPointsEx(model As Model, position As Vector3, rotationAxis As Vector3, rotationAngle As Single, scale As Vector3, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a bounding box (wires).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawBoundingBox(box As BoundingBox, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a billboard texture.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawBillboard(camera As Camera3D, texture As Texture2D, position As Vector3, scale As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a billboard texture defined by a source rectangle.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawBillboardRec(camera As Camera3D, texture As Texture2D, source As Rectangle, position As Vector3, size As Vector2, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+
+    ''' <summary>Draws a billboard texture defined by a source rectangle and rotation.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawBillboardPro(camera As Camera3D, texture As Texture2D, source As Rectangle, position As Vector3, up As Vector3, size As Vector2, origin As Vector2, rotation As Single, r As Byte, g As Byte, b As Byte, a As Byte)
+    End Sub
+#End Region
+
+#Region "Raylib rmodels — Materials + material-drawn meshes (Batch models-materials)"
+    ' 6 material fns + DrawMesh/DrawMeshInstanced (relocated from the mesh sub-batch — they take a Material BY VALUE, and
+    ' LoadMaterialDefault finally provides a valid one to draw with). New structs Material (40 B) + MaterialMap (28 B) in
+    ' Utiliy.vb, both blittable and passed/returned BY VALUE where raylib does. LoadMaterials returns the raylib-owned
+    ' Material* array as IntPtr and writes the element count through ByRef materialCount (no per-element marshaling — the array
+    ' stays engine-owned). SetMaterialTexture/SetModelMeshMaterial mutate a Material/Model through a ByRef pointer.
+    ' DrawMeshInstanced takes a const Matrix* transforms array -> Matrix() LPArray. IsMaterialValid is headless-safe on a
+    ' zeroed Material (checks the shader id, no deref); LoadMaterialDefault + the two draws need a live GL context (Integration).
+    ' LoadMaterials path -> CharSet.Ansi String.
+
+    ''' <summary>Loads materials from a model file; returns the raylib-owned Material* array as IntPtr and the count via ByRef.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadMaterials(fileName As String, ByRef materialCount As Integer) As IntPtr
+    End Function
+
+    ''' <summary>Loads the default material (DIFFUSE/SPECULAR/NORMAL maps); Material returned by value.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_LoadMaterialDefault() As Material
+    End Function
+
+    ''' <summary>Checks whether a material is valid (shader assigned, map textures loaded).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsMaterialValid(material As Material) As <MarshalAs(UnmanagedType.I1)> Boolean
+    End Function
+
+    ''' <summary>Unloads a material from GPU memory (VRAM).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadMaterial(material As Material)
+    End Sub
+
+    ''' <summary>Sets the texture for a material map type (MATERIAL_MAP_DIFFUSE, ...); mutates the material in place.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetMaterialTexture(ByRef material As Material, mapType As Integer, texture As Texture2D)
+    End Sub
+
+    ''' <summary>Sets the material index used by a model's mesh; mutates the model in place.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_SetModelMeshMaterial(ByRef model As Model, meshId As Integer, materialId As Integer)
+    End Sub
+
+    ''' <summary>Draws a 3D mesh with a material and transform.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawMesh(mesh As Mesh, material As Material, transform As Matrix)
+    End Sub
+
+    ''' <summary>Draws multiple mesh instances with a material and per-instance transforms.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_DrawMeshInstanced(mesh As Mesh, material As Material, transforms As Matrix(), instances As Integer)
+    End Sub
+#End Region
+
+#Region "Raylib rmodels — Model animations (Batch models-animations, CLOSES rmodels)"
+    ' 6 fns closing the rmodels module. New struct ModelAnimation (56 B) in Utiliy.vb, passed BY VALUE to Update*/Unload
+    ' (single)/IsValid; its bones/framePoses stay raylib-owned pointers (IntPtr). LoadModelAnimations returns the raylib-owned
+    ' ModelAnimation* array as IntPtr + writes the count through ByRef animCount (CharSet.Ansi path); UnloadModelAnimations
+    ' takes that array pointer + count back. Model by value on Update*/IsValid; IsModelAnimationValid -> <MarshalAs(I1)>
+    ' Boolean. BoneInfo/Transform (also new in Utiliy.vb) appear only behind ModelAnimation's/Model's pointers. Update* need a
+    ' real animated model asset; the load/unload/validate paths have deref-free empty cases (see the tests).
+
+    ''' <summary>Loads model animations from a file; returns the raylib-owned ModelAnimation* array as IntPtr and the count via ByRef.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
+    Public Function Framework_LoadModelAnimations(fileName As String, ByRef animCount As Integer) As IntPtr
+    End Function
+
+    ''' <summary>Updates a model's animation pose on the CPU for the given frame.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UpdateModelAnimation(model As Model, anim As ModelAnimation, frame As Integer)
+    End Sub
+
+    ''' <summary>Updates a model's animation bone matrices for the given frame (GPU skinning).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UpdateModelAnimationBones(model As Model, anim As ModelAnimation, frame As Integer)
+    End Sub
+
+    ''' <summary>Unloads a single animation's data.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadModelAnimation(anim As ModelAnimation)
+    End Sub
+
+    ''' <summary>Unloads a raylib-owned ModelAnimation array (pass the IntPtr + count from LoadModelAnimations).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadModelAnimations(animations As IntPtr, animCount As Integer)
+    End Sub
+
+    ''' <summary>Checks whether an animation's skeleton matches a model's.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_IsModelAnimationValid(model As Model, anim As ModelAnimation) As <MarshalAs(UnmanagedType.I1)> Boolean
     End Function
 #End Region
 

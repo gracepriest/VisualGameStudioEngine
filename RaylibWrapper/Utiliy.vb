@@ -94,6 +94,17 @@ Public Module Utiliy
         Public format As Integer
     End Structure
 
+    ' raylib FilePathList — a heap-owned list of file paths. Returned BY VALUE from LoadDirectoryFiles(Ex)/LoadDroppedFiles
+    ' and freed BY VALUE via UnloadDirectoryFiles/UnloadDroppedFiles. 'paths' is a char** (pointer to an array of 'count'
+    ' char* entries); walk it with Marshal.ReadIntPtr(paths, i * IntPtr.Size) + PtrToStringAnsi, copying the strings out
+    ' BEFORE the matching Unload frees them. Layout matches C { unsigned int; unsigned int; char** } = 16 bytes on x64.
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure FilePathList
+        Public capacity As UInteger
+        Public count As UInteger
+        Public paths As IntPtr   ' char** — array of 'count' char* entries
+    End Structure
+
     <StructLayout(LayoutKind.Sequential)>
     Public Structure RenderTexture2D
         Public id As UInteger
@@ -197,6 +208,200 @@ Public Module Utiliy
     Public Structure Ray
         Public position As Vector3
         Public direction As Vector3
+    End Structure
+
+    ' raylib BoundingBox — axis-aligned min/max corners. Passed BY VALUE to the rmodels collision helpers (Batch
+    ' models-collision). 2 * Vector3 = 24 bytes, blittable.
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure BoundingBox
+        Public min As Vector3
+        Public max As Vector3
+    End Structure
+
+    ' raylib RayCollision — ray/geometry hit result. RETURNED BY VALUE by the rmodels GetRayCollision* helpers (Batch
+    ' models-collision). C `bool hit` -> <MarshalAs(I1)> Boolean (1 byte + 3 pad); then Single distance @ offset 4, Vector3
+    ' point @ 8, Vector3 normal @ 20 = 32 bytes, matching the C layout. (A 32-byte struct returns via hidden-sret on Win64;
+    ' .NET 8 handles the marshalable-but-not-blittable by-value return — the same mechanism proven for VrStereoConfig in C3.)
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure RayCollision
+        <MarshalAs(UnmanagedType.I1)> Public hit As Boolean
+        Public distance As Single
+        Public point As Vector3
+        Public normal As Vector3
+    End Structure
+
+    ' raylib Mesh — CPU + GPU vertex data (rmodels mesh sub-batch). Every array field is a raylib-owned native pointer
+    ' (float* / unsigned short* / unsigned char* / Matrix*), opaque to VB -> IntPtr. Passed BY VALUE to UnloadMesh /
+    ' UpdateMeshBuffer / GetMeshBoundingBox / ExportMesh(AsCode) / GetRayCollisionMesh, RETURNED BY VALUE by the 11 GenMesh*
+    ' generators, and mutated in place (ByRef) by UploadMesh / GenMeshTangents. FULLY BLITTABLE (ints + pointers only), so
+    ' the by-value return uses the ordinary hidden-sret path on Win64 — no non-blittable marshaling. Field order and widths
+    ' mirror raylib.h's Mesh exactly (2 int counts; 5 float* + uchar* colors + ushort* indices vertex attrs; 2 float* anim +
+    ' uchar* boneIds + float* boneWeights + Matrix* boneMatrices + int boneCount; then the GL ids). Size = 120 bytes on x64.
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure Mesh
+        Public vertexCount As Integer
+        Public triangleCount As Integer
+        Public vertices As IntPtr       ' float*  (XYZ per vertex)
+        Public texcoords As IntPtr      ' float*  (UV)
+        Public texcoords2 As IntPtr     ' float*  (UV, second set)
+        Public normals As IntPtr        ' float*  (XYZ)
+        Public tangents As IntPtr       ' float*  (XYZW)
+        Public colors As IntPtr         ' unsigned char*  (RGBA)
+        Public indices As IntPtr        ' unsigned short*
+        Public animVertices As IntPtr   ' float*
+        Public animNormals As IntPtr    ' float*
+        Public boneIds As IntPtr        ' unsigned char*
+        Public boneWeights As IntPtr    ' float*
+        Public boneMatrices As IntPtr   ' Matrix*
+        Public boneCount As Integer
+        Public vaoId As UInteger        ' OpenGL VAO id
+        Public vboId As IntPtr          ' unsigned int*  (OpenGL VBO ids)
+    End Structure
+
+    ' raylib Model — meshes + materials + skeleton (rmodels model sub-batch). Fully blittable: an embedded Matrix transform,
+    ' two int counts, and the rest raylib-owned native pointers (Mesh* / Material* / int* / BoneInfo* / Transform*) opaque to
+    ' VB -> IntPtr. Passed BY VALUE to IsModelValid / UnloadModel / GetModelBoundingBox / DrawModel*, RETURNED BY VALUE by
+    ' LoadModel / LoadModelFromMesh (hidden-sret on Win64). Field order/widths mirror raylib.h's Model exactly (Matrix
+    ' transform; int meshCount, materialCount; Mesh* meshes; Material* materials; int* meshMaterial; int boneCount;
+    ' BoneInfo* bones; Transform* bindPose). Size = 120 bytes on x64. (BoneInfo/Transform stay behind pointers here — no
+    ' by-value use until the animations sub-batch, so they are not declared yet.)
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure Model
+        Public transform As Matrix
+        Public meshCount As Integer
+        Public materialCount As Integer
+        Public meshes As IntPtr         ' Mesh*
+        Public materials As IntPtr      ' Material*
+        Public meshMaterial As IntPtr   ' int*
+        Public boneCount As Integer
+        Public bones As IntPtr          ' BoneInfo*
+        Public bindPose As IntPtr       ' Transform*
+    End Structure
+
+    ' raylib MaterialMap — one texture slot of a Material (rmodels materials sub-batch). Fully blittable: an embedded Texture2D
+    ' (20 B), a Color (4 B) and a float value (4 B) = 28 bytes, all 4-byte-aligned (no padding). Nested BY VALUE inside the
+    ' raylib-owned MaterialMap[] array that Material.maps points at (MAX_MATERIAL_MAPS entries); we don't expose the array
+    ' directly here — SetMaterialTexture mutates it through the engine. Field order/widths mirror raylib.h exactly
+    ' (Texture2D texture; Color color; float value).
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure MaterialMap
+        Public texture As Texture2D
+        Public color As Color
+        Public value As Single
+    End Structure
+
+    ' raylib Material — a Shader plus its texture maps (rmodels materials sub-batch). Fully blittable and passed/RETURNED BY
+    ' VALUE (LoadMaterialDefault returns it via hidden-sret; IsMaterialValid/UnloadMaterial/DrawMesh/DrawMeshInstanced take it
+    ' by value). Layout mirrors raylib.h: Shader shader (16 B: uint id@0, then int* locs@8 after 4 B pad); MaterialMap* maps
+    ' (raylib-owned array pointer -> IntPtr) @16; float params[4] (a NESTED FIXED-SIZE inline array, ByValArray SizeConst:=4,
+    ' 16 B) @24. Size = 40 bytes on x64. The maps array itself stays engine-owned — the wrapper never walks it.
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure Material
+        Public shader As Shader
+        Public maps As IntPtr           ' MaterialMap* (raylib-owned, MAX_MATERIAL_MAPS entries)
+        <MarshalAs(UnmanagedType.ByValArray, SizeConst:=4)>
+        Public params As Single()
+    End Structure
+
+    ' raylib Transform — a bone/vertex TRS (rmodels animations sub-batch). Fully blittable: Vector3 translation (12 B) +
+    ' Quaternion rotation (raylib typedefs Quaternion = Vector4, 16 B) + Vector3 scale (12 B) = 40 bytes. Appears only behind
+    ' pointers this batch (Model.bindPose = Transform*, ModelAnimation.framePoses = Transform**), declared for consumers that
+    ' walk those arrays via Marshal.PtrToStructure.
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure Transform
+        Public translation As Vector3
+        Public rotation As Vector4      ' Quaternion
+        Public scale As Vector3
+    End Structure
+
+    ' raylib BoneInfo — one skeleton bone (rmodels animations sub-batch). char[32] name + int parent = 36 bytes. The name is an
+    ' inline fixed 32-byte array (ByValArray of Byte — the proven pattern here, matching Material.params / VrStereoConfig, and
+    ' robust for by-value marshaling regardless of content; decode via Encoding.ASCII if needed). Appears only behind pointers
+    ' this batch (Model.bones / ModelAnimation.bones = BoneInfo*); declared for consumers.
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure BoneInfo
+        <MarshalAs(UnmanagedType.ByValArray, SizeConst:=32)>
+        Public name As Byte()
+        Public parent As Integer
+    End Structure
+
+    ' raylib ModelAnimation — a skeletal animation (rmodels animations sub-batch, CLOSES rmodels). Passed BY VALUE to
+    ' UpdateModelAnimation/UpdateModelAnimationBones/UnloadModelAnimation/IsModelAnimationValid; RETURNED as a raylib-owned
+    ' ModelAnimation* array (IntPtr) by LoadModelAnimations. Layout mirrors raylib.h: int boneCount@0; int frameCount@4;
+    ' BoneInfo* bones@8 (raylib-owned -> IntPtr); Transform** framePoses@16 (raylib-owned -> IntPtr); char[32] name@24 (inline
+    ' ByValArray Byte). Size = 56 bytes on x64. The bones/framePoses arrays stay engine-owned — the wrapper never walks them.
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure ModelAnimation
+        Public boneCount As Integer
+        Public frameCount As Integer
+        Public bones As IntPtr          ' BoneInfo*
+        Public framePoses As IntPtr     ' Transform**
+        <MarshalAs(UnmanagedType.ByValArray, SizeConst:=32)>
+        Public name As Byte()
+    End Structure
+
+    ' raylib VrDeviceInfo — head-mounted-display parameters passed BY VALUE to LoadVrStereoConfig (Batch core-C3). The two
+    ' trailing float[4] arrays are NESTED FIXED-SIZE arrays: <MarshalAs(ByValArray, SizeConst:=4)> inlines 4 floats each
+    ' (NOT a pointer). Layout: 2 int + 5 float + 4 float + 4 float = 60 bytes.
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure VrDeviceInfo
+        Public hResolution As Integer
+        Public vResolution As Integer
+        Public hScreenSize As Single
+        Public vScreenSize As Single
+        Public eyeToScreenDistance As Single
+        Public lensSeparationDistance As Single
+        Public interpupillaryDistance As Single
+        <MarshalAs(UnmanagedType.ByValArray, SizeConst:=4)>
+        Public lensDistortionValues As Single()
+        <MarshalAs(UnmanagedType.ByValArray, SizeConst:=4)>
+        Public chromaAbCorrection As Single()
+    End Structure
+
+    ' raylib VrStereoConfig — computed VR stereo-rendering config, RETURNED BY VALUE by LoadVrStereoConfig and passed BY
+    ' VALUE to BeginVrStereoMode/UnloadVrStereoConfig (Batch core-C3). EVERY field is a NESTED FIXED-SIZE array: two
+    ' Matrix[2] (inline arrays of the 64-byte Matrix struct) then six float[2]. Total 2*64 + 2*64 + 6*8 = 304 bytes.
+    ' ByValArray of the Matrix value type inlines SizeConst copies of the struct (Matrix is blittable/Sequential).
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure VrStereoConfig
+        <MarshalAs(UnmanagedType.ByValArray, SizeConst:=2)>
+        Public projection As Matrix()
+        <MarshalAs(UnmanagedType.ByValArray, SizeConst:=2)>
+        Public viewOffset As Matrix()
+        <MarshalAs(UnmanagedType.ByValArray, SizeConst:=2)>
+        Public leftLensCenter As Single()
+        <MarshalAs(UnmanagedType.ByValArray, SizeConst:=2)>
+        Public rightLensCenter As Single()
+        <MarshalAs(UnmanagedType.ByValArray, SizeConst:=2)>
+        Public leftScreenCenter As Single()
+        <MarshalAs(UnmanagedType.ByValArray, SizeConst:=2)>
+        Public rightScreenCenter As Single()
+        <MarshalAs(UnmanagedType.ByValArray, SizeConst:=2)>
+        Public scale As Single()
+        <MarshalAs(UnmanagedType.ByValArray, SizeConst:=2)>
+        Public scaleIn As Single()
+    End Structure
+
+    ' raylib AutomationEvent — one recorded input event, passed BY VALUE to PlayAutomationEvent (Batch core-C11). The
+    ' trailing int[4] params is a NESTED FIXED-SIZE array: <MarshalAs(ByValArray, SizeConst:=4)> (inline, not a pointer).
+    ' Layout: uint frame + uint type + int[4] = 24 bytes; non-blittable.
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure AutomationEvent
+        Public frame As UInteger
+        Public type As UInteger
+        <MarshalAs(UnmanagedType.ByValArray, SizeConst:=4)>
+        Public params As Integer()
+    End Structure
+
+    ' raylib AutomationEventList — a recorded event list. {UInteger capacity, UInteger count, IntPtr events} = 16 bytes,
+    ' blittable. The events pointer is raylib-owned (allocated by LoadAutomationEventList, freed by UnloadAutomationEventList).
+    ' Returned BY VALUE by Load and passed BY VALUE to Unload/Export. ⛔ SetAutomationEventList takes a POINTER to this and
+    ' raylib RETAINS it while recording, so that binding takes an IntPtr and the caller must keep the list at a stable address.
+    <StructLayout(LayoutKind.Sequential)>
+    Public Structure AutomationEventList
+        Public capacity As UInteger
+        Public count As UInteger
+        Public events As IntPtr   ' AutomationEvent* — raylib-owned
     End Structure
 
     ' raylib Wave — PCM audio data held in RAM (raudio module, Batch audio-A1). Returned/passed BY VALUE;
