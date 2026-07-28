@@ -699,6 +699,27 @@ Public Module FrameworkWrapper
     <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl, CharSet:=CharSet.Ansi)>
     Public Sub Framework_DrawTextEx(font As Font, text As String, pos As Vector2, fontSize As Single, spacing As Single, r As Byte, g As Byte, b As Byte, a As Byte)
     End Sub
+
+    ' --- Low-level font-data construction (Batch text-fontdata — closes raylib.h 100%; TextFormat stays out, variadic). ---
+    ' GlyphInfo/Image/Rectangle already declared. LoadFontData mirrors LoadFontFromMemory's marshaling (Byte() fileData +
+    ' Integer() codepoints, Nothing=NULL=default ASCII) and returns the raylib-owned GlyphInfo* array as IntPtr. GenImageFontAtlas
+    ' takes that array pointer (IntPtr), writes the packed Rectangle* out through ByRef glyphRecs (free via Framework_MemFree),
+    ' and returns the atlas Image by value. UnloadFontData frees the GlyphInfo array. All CPU (no GL).
+
+    ''' <summary>Rasterizes font-file bytes into a raylib-owned GlyphInfo array; returns it as IntPtr (free via Framework_UnloadFontData).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_LoadFontData(fileData As Byte(), dataSize As Integer, fontSize As Integer, codepoints As Integer(), codepointCount As Integer, type As Integer) As IntPtr
+    End Function
+
+    ''' <summary>Packs glyphs (the LoadFontData IntPtr) into an atlas Image; writes the packed Rectangle* out via glyphRecs (free via Framework_MemFree).</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Function Framework_GenImageFontAtlas(glyphs As IntPtr, ByRef glyphRecs As IntPtr, glyphCount As Integer, fontSize As Integer, padding As Integer, packMethod As Integer) As Image
+    End Function
+
+    ''' <summary>Unloads a GlyphInfo array (the LoadFontData IntPtr) from RAM.</summary>
+    <DllImport(ENGINE_DLL, CallingConvention:=CallingConvention.Cdecl)>
+    Public Sub Framework_UnloadFontData(glyphs As IntPtr, glyphCount As Integer)
+    End Sub
 #End Region
 
 #Region "Fonts (handle-based)"
