@@ -35,8 +35,14 @@ internal static class CliTestHarness
     /// the drain forever. Timeout failures include whatever partial output was
     /// captured.
     /// </summary>
+    /// <param name="environment">
+    /// Extra environment variables for the child (added on top of the inherited
+    /// block). Used by <see cref="CompileRunCSharp"/>'s culture forcing — see the
+    /// header of <c>BclBackendParityTests</c>.
+    /// </param>
     public static (int ExitCode, string StdOut, string StdErr) RunProcess(
-        string fileName, string[] args, string workingDir, int timeoutMs)
+        string fileName, string[] args, string workingDir, int timeoutMs,
+        IReadOnlyDictionary<string, string>? environment = null)
     {
         using var process = new System.Diagnostics.Process
         {
@@ -51,6 +57,8 @@ internal static class CliTestHarness
             }
         };
         foreach (var a in args) process.StartInfo.ArgumentList.Add(a);
+        if (environment != null)
+            foreach (var kv in environment) process.StartInfo.Environment[kv.Key] = kv.Value;
         process.Start();
         var stdoutTask = process.StandardOutput.ReadToEndAsync();
         var stderrTask = process.StandardError.ReadToEndAsync();
@@ -69,6 +77,83 @@ internal static class CliTestHarness
         // can keep ReadToEndAsync alive indefinitely — bound the drain.
         BoundedDrain(stdoutTask, stderrTask);
         return (process.ExitCode, DrainedOrNote(stdoutTask), DrainedOrNote(stderrTask));
+    }
+
+    /// <summary>
+    /// The C#-backend end-to-end leg: compiles <paramref name="src"/> through the real
+    /// CLI (<c>BasicLang.exe build App.blproj</c> with
+    /// <c>&lt;TargetBackend&gt;CSharp&lt;/TargetBackend&gt;</c> — the same binary the suite
+    /// deploys next to the tests, so it always carries the compiler changes under test),
+    /// runs the produced executable, and returns its stdout with line endings normalized
+    /// to '\n' (NOT trimmed — callers that want the old trimmed shape trim themselves).
+    /// Callers must be tagged [Category("Integration")].
+    ///
+    /// Extracted from <c>NativeBclFrontEndTests</c> (which still wraps it) so the
+    /// cross-backend parity oracle can share the exact same leg rather than reinventing
+    /// it; <paramref name="runEnvironment"/> is the only addition, and it applies to the
+    /// RUN only — never to the build.
+    /// </summary>
+    public static string CompileRunCSharp(
+        string src, IReadOnlyDictionary<string, string>? runEnvironment = null)
+    {
+        if (!DotnetOnPath())
+        {
+            Assert.Ignore("dotnet SDK not found on PATH — the CLI's C# backend cannot build the generated project.");
+        }
+
+        var rootDir = Path.Combine(Path.GetTempPath(), "bl-nativebcl-e2e-" + Guid.NewGuid().ToString("N"));
+        var projectDir = Path.Combine(rootDir, "App");
+        Directory.CreateDirectory(projectDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(projectDir, "Main.bas"), src);
+            File.WriteAllText(Path.Combine(projectDir, "App.blproj"),
+@"<?xml version=""1.0"" encoding=""utf-8""?>
+<BasicLangProject Version=""1.0"">
+  <PropertyGroup>
+    <ProjectName>App</ProjectName>
+    <OutputType>Exe</OutputType>
+    <TargetBackend>CSharp</TargetBackend>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include=""Main.bas"" />
+  </ItemGroup>
+</BasicLangProject>
+");
+
+            // Build via the CLI. 120s: a first dotnet build in a fresh temp dir
+            // includes restore, which can exceed 60s on a cold cache.
+            var (buildExit, buildOut, buildErr) = RunProcess(
+                CliPath(),
+                new[] { "build", Path.Combine(projectDir, "App.blproj") },
+                projectDir,
+                timeoutMs: 120_000);
+            Assert.That(buildExit, Is.EqualTo(0),
+                $"CLI C# build failed.\nSTDOUT:\n{buildOut}\nSTDERR:\n{buildErr}");
+
+            var exes = Directory.GetFiles(projectDir, "App.exe", SearchOption.AllDirectories);
+            Assert.That(exes, Is.Not.Empty,
+                $"CLI build claimed success but produced no App.exe.\nSTDOUT:\n{buildOut}");
+
+            var (runExit, runOut, runErr) = RunProcess(
+                exes[0], Array.Empty<string>(), Path.GetDirectoryName(exes[0])!, timeoutMs: 60_000,
+                environment: runEnvironment);
+            Assert.That(runExit, Is.EqualTo(0),
+                $"compiled program exited nonzero ({runExit}).\nSTDOUT:\n{runOut}\nSTDERR:\n{runErr}");
+
+            return runOut.Replace("\r\n", "\n");
+        }
+        finally
+        {
+            try { Directory.Delete(rootDir, recursive: true); } catch { /* best-effort temp cleanup */ }
+        }
+    }
+
+    public static bool DotnetOnPath()
+    {
+        var paths = (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator);
+        return paths.Any(p => !string.IsNullOrWhiteSpace(p) &&
+            (File.Exists(Path.Combine(p.Trim(), "dotnet.exe")) || File.Exists(Path.Combine(p.Trim(), "dotnet"))));
     }
 
     private static void BoundedDrain(params Task[] reads)

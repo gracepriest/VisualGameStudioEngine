@@ -33,6 +33,95 @@ internal static class CppGeneratedCode
 }
 
 /// <summary>
+/// The BL→C++ compile-and-run leg, shared by <see cref="CppBclEndToEndTests"/> (Task 11)
+/// and <see cref="BclBackendParityTests"/> (Task 13) so the parity oracle drives the
+/// EXACT same C++ leg the end-to-end battery does rather than a look-alike copy.
+/// </summary>
+internal static class BclE2E
+{
+    /// <summary>
+    /// Compile BL source to combined-mode C++ THROUGH the standard optimizer passes —
+    /// the CLI-equivalent path (repo law: validate codegen via the optimizer, not only
+    /// the non-optimizing helper).
+    /// </summary>
+    internal static string CompileToCppOptimized(string source)
+    {
+        var tokens = new Lexer(source).Tokenize();
+        var ast = new Parser(tokens).Parse();
+        var analyzer = new SemanticAnalyzer();
+        Assert.That(analyzer.Analyze(ast), Is.True,
+            string.Join("; ", analyzer.Errors.Select(e => e.Message)));
+        var irModule = new IRBuilder(analyzer).Build(ast, "TestModule");
+
+        var pipeline = new BasicLang.Compiler.IR.Optimization.OptimizationPipeline();
+        pipeline.AddStandardPasses();
+        pipeline.Run(irModule);
+
+        return new CppCodeGenerator(new CppCodeGenOptions { GenerateComments = false })
+            .Generate(irModule);
+    }
+
+    /// <summary>
+    /// Compile the generated C++ with a real compiler, run it, return stdout with
+    /// line endings normalized. Ignores when no C++ compiler is available.
+    /// </summary>
+    internal static string CompileRun(string cppSource)
+    {
+        var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
+        if (compiler == null) Assert.Ignore("No C++ compiler available on this machine");
+        return WithoutRuntimeInFailures(() => VisualGameStudio.Tests.Native.CppCompile
+            .CompileAndRun(cppSource, compiler.Value)).Replace("\r\n", "\n");
+    }
+
+    /// <summary>
+    /// Run <paramref name="compileAndRun"/>, and on a compile/run assertion failure re-raise
+    /// it with the spliced BCL runtime bodies stripped from the message. CppCompile puts the
+    /// whole translation unit in its failure context, which since Task 9 means ~1,460 lines
+    /// of verbatim runtime header would bury the ~40 lines of user-code lowering that
+    /// actually failed. Only AssertionException is intercepted — Assert.Ignore's
+    /// IgnoreException (and every real exception) propagates untouched.
+    /// </summary>
+    internal static string WithoutRuntimeInFailures(Func<string> compileAndRun)
+    {
+        try
+        {
+            return compileAndRun();
+        }
+        catch (AssertionException ex)
+        {
+            throw new AssertionException(CppGeneratedCode.WithoutBclRuntime(ex.Message), ex);
+        }
+    }
+
+    /// <summary>
+    /// Locate the first differing LINE of two multi-line stdouts and describe it by number.
+    /// NUnit reports a character index, and mapping an offset back to the BL statement that
+    /// produced it means counting '\n's by hand. <paramref name="expectedLabel"/> /
+    /// <paramref name="actualLabel"/> name the two sides (the parity oracle has no
+    /// "expected" side — it has two backends).
+    /// </summary>
+    internal static string DescribeFirstDifference(
+        string expected, string actual, string expectedLabel = "expected", string actualLabel = "actual")
+    {
+        var e = expected.Split('\n');
+        var a = actual.Split('\n');
+        // Every expectation ends with a trailing newline, so Split leaves an empty tail
+        // entry; report the human line COUNT rather than the array length.
+        var total = e.Length > 0 && e[^1].Length == 0 ? e.Length - 1 : e.Length;
+        var context = $"\n--- {expectedLabel} ---\n{expected}--- {actualLabel} ---\n{actual}";
+
+        for (int i = 0; i < Math.Min(e.Length, a.Length); i++)
+        {
+            if (e[i] != a[i])
+                return $"stdout line {i + 1} of {total}: {expectedLabel} '{e[i]}' but {actualLabel} was '{a[i]}'{context}";
+        }
+        var actualTotal = a.Length > 0 && a[^1].Length == 0 ? a.Length - 1 : a.Length;
+        return $"stdout LINE COUNT differs: {expectedLabel} {total} lines, {actualLabel} {actualTotal} " +
+               $"(first {Math.Min(e.Length, a.Length)} match){context}";
+    }
+}
+
+/// <summary>
 /// P1 Task 9 (spec §12 layer 1 + splice smokes): the native BCL runtime
 /// (bl_bcltypes + bl_decimal bodies) is spliced UNCONDITIONALLY into BOTH emission
 /// modes — the fast pins below guard presence without a compiler (the classic
@@ -64,59 +153,13 @@ public class CppBclEndToEndTests
             .Generate(irModule);
     }
 
-    /// <summary>
-    /// Compile BL source to combined-mode C++ THROUGH the standard optimizer passes —
-    /// the CLI-equivalent path (repo law: validate codegen via the optimizer, not only
-    /// the non-optimizing helper).
-    /// </summary>
-    private static string CompileToCppOptimized(string source)
-    {
-        var tokens = new Lexer(source).Tokenize();
-        var ast = new Parser(tokens).Parse();
-        var analyzer = new SemanticAnalyzer();
-        Assert.That(analyzer.Analyze(ast), Is.True,
-            string.Join("; ", analyzer.Errors.Select(e => e.Message)));
-        var irModule = new IRBuilder(analyzer).Build(ast, "TestModule");
+    /// <summary>Task 13 extracted these to <see cref="BclE2E"/>; the parity oracle shares them.</summary>
+    private static string CompileToCppOptimized(string source) => BclE2E.CompileToCppOptimized(source);
 
-        var pipeline = new BasicLang.Compiler.IR.Optimization.OptimizationPipeline();
-        pipeline.AddStandardPasses();
-        pipeline.Run(irModule);
+    private static string CompileRun(string cppSource) => BclE2E.CompileRun(cppSource);
 
-        return new CppCodeGenerator(new CppCodeGenOptions { GenerateComments = false })
-            .Generate(irModule);
-    }
-
-    /// <summary>
-    /// Compile the generated C++ with a real compiler, run it, return stdout with
-    /// line endings normalized. Ignores when no C++ compiler is available.
-    /// </summary>
-    private static string CompileRun(string cppSource)
-    {
-        var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
-        if (compiler == null) Assert.Ignore("No C++ compiler available on this machine");
-        return WithoutRuntimeInFailures(() => VisualGameStudio.Tests.Native.CppCompile
-            .CompileAndRun(cppSource, compiler.Value)).Replace("\r\n", "\n");
-    }
-
-    /// <summary>
-    /// Run <paramref name="compileAndRun"/>, and on a compile/run assertion failure re-raise
-    /// it with the spliced BCL runtime bodies stripped from the message. CppCompile puts the
-    /// whole translation unit in its failure context, which since Task 9 means ~1,460 lines
-    /// of verbatim runtime header would bury the ~40 lines of user-code lowering that
-    /// actually failed. Only AssertionException is intercepted — Assert.Ignore's
-    /// IgnoreException (and every real exception) propagates untouched.
-    /// </summary>
     private static string WithoutRuntimeInFailures(Func<string> compileAndRun)
-    {
-        try
-        {
-            return compileAndRun();
-        }
-        catch (AssertionException ex)
-        {
-            throw new AssertionException(CppGeneratedCode.WithoutBclRuntime(ex.Message), ex);
-        }
-    }
+        => BclE2E.WithoutRuntimeInFailures(compileAndRun);
 
     /// <summary>
     /// The CLI leg (repo law: validate through BOTH entry points). Drives the REAL
@@ -173,26 +216,7 @@ public class CppBclEndToEndTests
     {
         var e = expected.Replace("\r\n", "\n");
         var a = actual.Replace("\r\n", "\n");
-        Assert.That(a, Is.EqualTo(e), e == a ? "" : DescribeFirstDifference(e, a));
-    }
-
-    private static string DescribeFirstDifference(string expected, string actual)
-    {
-        var e = expected.Split('\n');
-        var a = actual.Split('\n');
-        // Every expectation ends with a trailing newline, so Split leaves an empty tail
-        // entry; report the human line COUNT rather than the array length.
-        var total = e.Length > 0 && e[^1].Length == 0 ? e.Length - 1 : e.Length;
-        var context = $"\n--- expected ---\n{expected}--- actual ---\n{actual}";
-
-        for (int i = 0; i < Math.Min(e.Length, a.Length); i++)
-        {
-            if (e[i] != a[i])
-                return $"stdout line {i + 1} of {total}: expected '{e[i]}' but was '{a[i]}'{context}";
-        }
-        var actualTotal = a.Length > 0 && a[^1].Length == 0 ? a.Length - 1 : a.Length;
-        return $"stdout LINE COUNT differs: expected {total} lines, got {actualTotal} " +
-               $"(first {Math.Min(e.Length, a.Length)} match){context}";
+        Assert.That(a, Is.EqualTo(e), e == a ? "" : BclE2E.DescribeFirstDifference(e, a));
     }
 
     /// <summary>Front half mirrors CppSplitEmissionTests.Split: real frontend, then GenerateSplit.</summary>
