@@ -51,6 +51,29 @@ namespace BasicLang.Compiler.StdLib.Cpp
             ["CStr"] = new StdLibFunction { Name = "CStr", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "String" },
             ["CBool"] = new StdLibFunction { Name = "CBool", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "Boolean" },
 
+            // Date/Time (P1 Task 12, spec §7). SUPPORT-MATRIX ROWS ONLY: this provider is
+            // consulted by StdLibRegistry (the CLI's --stdlib matrix / demo) and by nothing
+            // in the compile path. The LIVE C++ emission for these lives in the hardcoded
+            // CppCodeGenerator.EmitStdLibCall switch — do NOT route codegen through here.
+            // Signatures are the C# table's verbatim (StdLib/CSharpStdLib.cs lines 96-106):
+            // DateAdd(date, interval, number), DateDiff(date1, date2, interval), and
+            // DateDiff returns Integer.
+            ["Now"] = new StdLibFunction { Name = "Now", Category = StdLibCategory.DateTime, ParameterTypes = Array.Empty<string>(), ReturnType = "DateTime" },
+            ["Today"] = new StdLibFunction { Name = "Today", Category = StdLibCategory.DateTime, ParameterTypes = Array.Empty<string>(), ReturnType = "DateTime" },
+            ["Year"] = new StdLibFunction { Name = "Year", Category = StdLibCategory.DateTime, ParameterTypes = new[] { "DateTime" }, ReturnType = "Integer" },
+            ["Month"] = new StdLibFunction { Name = "Month", Category = StdLibCategory.DateTime, ParameterTypes = new[] { "DateTime" }, ReturnType = "Integer" },
+            ["Day"] = new StdLibFunction { Name = "Day", Category = StdLibCategory.DateTime, ParameterTypes = new[] { "DateTime" }, ReturnType = "Integer" },
+            ["Hour"] = new StdLibFunction { Name = "Hour", Category = StdLibCategory.DateTime, ParameterTypes = new[] { "DateTime" }, ReturnType = "Integer" },
+            ["Minute"] = new StdLibFunction { Name = "Minute", Category = StdLibCategory.DateTime, ParameterTypes = new[] { "DateTime" }, ReturnType = "Integer" },
+            ["Second"] = new StdLibFunction { Name = "Second", Category = StdLibCategory.DateTime, ParameterTypes = new[] { "DateTime" }, ReturnType = "Integer" },
+            ["DateAdd"] = new StdLibFunction { Name = "DateAdd", Category = StdLibCategory.DateTime, ParameterTypes = new[] { "DateTime", "String", "Integer" }, ReturnType = "DateTime" },
+            ["DateDiff"] = new StdLibFunction { Name = "DateDiff", Category = StdLibCategory.DateTime, ParameterTypes = new[] { "DateTime", "DateTime", "String" }, ReturnType = "Integer" },
+            ["FormatDate"] = new StdLibFunction { Name = "FormatDate", Category = StdLibCategory.DateTime, ParameterTypes = new[] { "DateTime", "String" }, ReturnType = "String" },
+
+            // Crypto: only NewGuid is on the C++ backend (BasicLang::Guid::NewGuid().ToString()).
+            // The rest of the C# Crypto category has no C++ emission, so it stays absent here.
+            ["NewGuid"] = new StdLibFunction { Name = "NewGuid", Category = StdLibCategory.Crypto, ParameterTypes = Array.Empty<string>(), ReturnType = "String" },
+
             // Collections - List operations (std::vector)
             ["CreateList"] = new StdLibFunction { Name = "CreateList", Category = StdLibCategory.Collections, ParameterTypes = Array.Empty<string>(), ReturnType = "List" },
             ["ListAdd"] = new StdLibFunction { Name = "ListAdd", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List", "Object" }, ReturnType = "Void" },
@@ -100,6 +123,9 @@ namespace BasicLang.Compiler.StdLib.Cpp
                 StdLibCategory.Array => EmitArrayCall(functionName, arguments),
                 StdLibCategory.Conversion => EmitConversionCall(functionName, arguments),
                 StdLibCategory.Collections => EmitCollectionsCall(functionName, arguments),
+                // DateTime / Crypto are declared above for the support matrix only; their
+                // C++ emission lives in CppCodeGenerator.EmitStdLibCall (the live path),
+                // which never consults this provider.
                 _ => null
             };
         }

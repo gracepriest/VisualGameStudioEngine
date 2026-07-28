@@ -720,6 +720,98 @@ End Sub";
 
     private const string TryCatchExpected = "CAUGHT-DIV0\nCAUGHT-GUID\nafter\n";
 
+    /// <summary>
+    /// Task 12 (spec §7): the VB date stdlib — <c>Now/Today/Year/Month/Day/Hour/
+    /// Minute/Second/DateAdd/DateDiff/FormatDate</c> — plus <c>NewGuid</c>, on the C++
+    /// backend. Argument order is the REPO's C# StdLib table, not classic VB's:
+    /// <c>DateAdd(date, interval, number)</c> and <c>DateDiff(date1, date2, interval)</c>,
+    /// with DateDiff returning Integer.
+    ///
+    /// The interval-part set is exactly <c>CSharpStdLib.EmitDateAdd/EmitDateDiff</c>'s
+    /// (spec §14.3): d, m, y, h, n, s — matched case-INSENSITIVELY (the C# emission calls
+    /// <c>.ToLower()</c>), which the <c>"D"</c> and <c>"S"</c> cases pin. An UNRECOGNIZED
+    /// interval is not an error on either backend: DateAdd returns the date unchanged and
+    /// DateDiff returns 0 (the C# switch's <c>_ =&gt; date</c> / <c>_ =&gt; 0</c> defaults),
+    /// which the <c>"zz"</c> cases pin. The reversed <c>DateDiff(later, d, "d")</c> pins
+    /// the negative direction's truncation toward zero (-429, not -430).
+    ///
+    /// <c>Now()</c>/<c>Today()</c>/<c>NewGuid()</c> are nondeterministic, so they are
+    /// asserted STRUCTURALLY: the wall clock's year, Today()'s zeroed clock components,
+    /// and a Guid.Parse round-trip of the generated string.
+    /// </summary>
+    private const string StdlibProgram = @"
+Sub Main()
+    Dim d As New DateTime(2026, 7, 28, 13, 45, 30)
+    Console.WriteLine(Year(d))
+    Console.WriteLine(Month(d))
+    Console.WriteLine(Day(d))
+    Console.WriteLine(Hour(d))
+    Console.WriteLine(Minute(d))
+    Console.WriteLine(Second(d))
+    Console.WriteLine(FormatDate(d, ""yyyy-MM-dd""))
+    Console.WriteLine(FormatDate(d, ""yyyy-MM-dd HH:mm:ss""))
+    Dim byDays As DateTime = DateAdd(d, ""d"", 5)
+    Console.WriteLine(FormatDate(byDays, ""yyyy-MM-dd""))
+    Dim byMonths As DateTime = DateAdd(d, ""m"", 5)
+    Console.WriteLine(FormatDate(byMonths, ""yyyy-MM-dd""))
+    Dim byYears As DateTime = DateAdd(d, ""y"", 5)
+    Console.WriteLine(FormatDate(byYears, ""yyyy-MM-dd""))
+    Dim byHours As DateTime = DateAdd(d, ""h"", 5)
+    Console.WriteLine(FormatDate(byHours, ""HH:mm:ss""))
+    Dim byMinutes As DateTime = DateAdd(d, ""n"", 5)
+    Console.WriteLine(FormatDate(byMinutes, ""HH:mm:ss""))
+    Dim bySeconds As DateTime = DateAdd(d, ""s"", 5)
+    Console.WriteLine(FormatDate(bySeconds, ""HH:mm:ss""))
+    Dim clamped As New DateTime(2026, 1, 31)
+    Dim clampedNext As DateTime = DateAdd(clamped, ""m"", 1)
+    Console.WriteLine(FormatDate(clampedNext, ""yyyy-MM-dd""))
+    Dim upperInterval As DateTime = DateAdd(d, ""D"", 5)
+    Console.WriteLine(FormatDate(upperInterval, ""yyyy-MM-dd""))
+    Dim unknownInterval As DateTime = DateAdd(d, ""zz"", 5)
+    Console.WriteLine(FormatDate(unknownInterval, ""yyyy-MM-dd HH:mm:ss""))
+    Dim later As New DateTime(2027, 9, 30, 20, 15, 45)
+    Console.WriteLine(DateDiff(d, later, ""d""))
+    Console.WriteLine(DateDiff(d, later, ""m""))
+    Console.WriteLine(DateDiff(d, later, ""y""))
+    Console.WriteLine(DateDiff(d, later, ""h""))
+    Console.WriteLine(DateDiff(d, later, ""n""))
+    Console.WriteLine(DateDiff(d, later, ""s""))
+    Console.WriteLine(DateDiff(d, later, ""S""))
+    Console.WriteLine(DateDiff(d, later, ""zz""))
+    Console.WriteLine(DateDiff(later, d, ""d""))
+    Dim stamp As DateTime = Now()
+    If Year(stamp) >= 2026 Then
+        Console.WriteLine(""now-ok"")
+    End If
+    Dim midnight As DateTime = Today()
+    Dim clockParts As Integer = Hour(midnight) + Minute(midnight) + Second(midnight)
+    If clockParts = 0 Then
+        Console.WriteLine(""today-ok"")
+    End If
+    Dim id As String = NewGuid()
+    Dim roundTripped As Guid = Guid.Parse(id)
+    If roundTripped.ToString() = id Then
+        Console.WriteLine(""newguid-roundtrip-ok"")
+    End If
+    If Len(id) = 36 Then
+        Console.WriteLine(""newguid-len-ok"")
+    End If
+End Sub";
+
+    private const string StdlibExpected =
+        // Components, then the two FormatDate shapes.
+        "2026\n7\n28\n13\n45\n30\n2026-07-28\n2026-07-28 13:45:30\n" +
+        // DateAdd d/m/y/h/n/s = +5 of each part …
+        "2026-08-02\n2026-12-28\n2031-07-28\n18:45:30\n13:50:30\n13:45:35\n" +
+        // … then Jan 31 +1 month CLAMPS to Feb 28, "D" == "d", and "zz" is a no-op.
+        "2026-02-28\n2026-08-02\n2026-07-28 13:45:30\n" +
+        // DateDiff over 429d 06:30:15: days, calendar months (12+2), calendar years,
+        // hours/minutes/seconds, the case-insensitive "S", the unknown-interval 0, and
+        // the reversed pair truncating toward zero.
+        "429\n14\n1\n10302\n618150\n37089015\n37089015\n0\n-429\n" +
+        // Structural: Now(), Today()'s zeroed clock, NewGuid() round-trip and length.
+        "now-ok\ntoday-ok\nnewguid-roundtrip-ok\nnewguid-len-ok\n";
+
     // ------------------------------------------------------------------
     // THE TABLE. One row per program; both legs are generated from it.
     // ------------------------------------------------------------------
@@ -746,6 +838,7 @@ End Sub";
         new BclProgram("Decimal", DecimalProgram, DecimalExpected),
         new BclProgram("DateTimeOffset", DateTimeOffsetProgram, DateTimeOffsetExpected),
         new BclProgram("TryCatch", TryCatchProgram, TryCatchExpected),
+        new BclProgram("Stdlib", StdlibProgram, StdlibExpected),
     };
 
     public static IEnumerable<TestCaseData> ProgramCases() =>

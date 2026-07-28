@@ -2266,6 +2266,28 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 "cbool" => arg0IsDecimal
                     ? $"(!({args[0]}).IsZeroMag())"
                     : $"static_cast<bool>({args[0]})",
+                // ---- VB date/time stdlib (spec §7, P1 Task 12). The analyzer
+                // registrations (Task 5) copied the repo's C# StdLib function table
+                // VERBATIM, and these emissions mirror StdLib/CSharpStdLib.cs's
+                // EmitDateTimeCall arm-for-arm so the two backends agree:
+                //   DateAdd(date, interval, number) / DateDiff(date1, date2, interval)
+                //   — the repo table's argument order, NOT classic VB's.
+                //   DateDiff returns Integer (the repo table again), so every branch
+                //   narrows exactly where the C# emission's `(int)` does.
+                "now" => "BasicLang::DateTime::Now()",
+                "today" => "BasicLang::DateTime::Today()",
+                "year" => $"({args[0]}).Year()",
+                "month" => $"({args[0]}).Month()",
+                "day" => $"({args[0]}).Day()",
+                "hour" => $"({args[0]}).Hour()",
+                "minute" => $"({args[0]}).Minute()",
+                "second" => $"({args[0]}).Second()",
+                "dateadd" => EmitVbDateAdd(args[0], args[1], args[2]),
+                "datediff" => EmitVbDateDiff(args[0], args[1], args[2]),
+                "formatdate" => $"({args[0]}).ToString({args[1]})",
+                // String return, matching the analyzer registration and the C#
+                // backend's `Guid.NewGuid().ToString()`.
+                "newguid" => "BasicLang::Guid::NewGuid().ToString()",
                 "ubound" => $"(static_cast<int32_t>({args[0]}.size()) - 1)",
                 "lbound" => "0",
                 "rnd" => "(static_cast<double>(rand()) / RAND_MAX)",
@@ -2273,6 +2295,66 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 _ => null
             };
         }
+
+        /// <summary>
+        /// Lowercase an interval-part string IN PLACE, ASCII-only — the C++ counterpart of
+        /// the C# emission's <c>interval.ToLower()</c>. Written as an explicit range-for
+        /// rather than <c>std::transform(..., ::tolower)</c> so the emitted lambda depends
+        /// on no header the generator does not already emit unconditionally
+        /// (<c>&lt;cctype&gt;</c> is not in that set).
+        /// </summary>
+        private const string LowercaseIntervalStmt =
+            "for (char& bl_c : bl_iv) if (bl_c >= 'A' && bl_c <= 'Z') bl_c = (char)(bl_c - 'A' + 'a'); ";
+
+        /// <summary>
+        /// <c>DateAdd(date, interval, number)</c> — spec §7 / §14.3. The accepted
+        /// interval-part set is EXACTLY the one <c>CSharpStdLib.EmitDateAdd</c> accepts,
+        /// compared case-insensitively as its <c>.ToLower()</c> does:
+        /// <c>d</c> days, <c>m</c> months, <c>y</c> years, <c>h</c> hours,
+        /// <c>n</c> minutes, <c>s</c> seconds.
+        ///
+        /// An UNRECOGNIZED interval is deliberately NOT a runtime throw: the C# emission's
+        /// switch has a <c>_ =&gt; date</c> default, so the repo's cross-backend contract is
+        /// "returns the date unchanged". Mirroring that is the whole point of this arm;
+        /// diverging into a <c>std::runtime_error</c> would break the Task 13 parity oracle.
+        ///
+        /// Emitted as an immediately-invoked NON-capturing lambda so each argument
+        /// expression is evaluated EXACTLY ONCE — the C# emission textually repeats
+        /// <c>{date}</c> in every switch arm, which is safe there only because the arms are
+        /// mutually exclusive; a C++ generator that repeated a call-valued argument across
+        /// branches would still be re-evaluating side effects on the taken branch.
+        /// </summary>
+        private static string EmitVbDateAdd(string date, string interval, string number) =>
+            "([](const BasicLang::DateTime& bl_d, std::string bl_iv, int32_t bl_n) -> BasicLang::DateTime { "
+            + LowercaseIntervalStmt
+            + "if (bl_iv == \"d\") return bl_d.AddDays(bl_n); "
+            + "if (bl_iv == \"m\") return bl_d.AddMonths(bl_n); "
+            + "if (bl_iv == \"y\") return bl_d.AddYears(bl_n); "
+            + "if (bl_iv == \"h\") return bl_d.AddHours(bl_n); "
+            + "if (bl_iv == \"n\") return bl_d.AddMinutes(bl_n); "
+            + "if (bl_iv == \"s\") return bl_d.AddSeconds(bl_n); "
+            + "return bl_d; })"
+            + $"({date}, {interval}, {number})";
+
+        /// <summary>
+        /// <c>DateDiff(date1, date2, interval)</c> — the repo's argument order (date1 is the
+        /// EARLIER operand; the result is date2 − date1). Same interval-part set as
+        /// <see cref="EmitVbDateAdd"/>, and the same non-throwing default: an unrecognized
+        /// interval yields 0, exactly as <c>CSharpStdLib.EmitDateDiff</c>'s <c>_ =&gt; 0</c>.
+        /// The month/year arms are calendar differences (not elapsed time), matching the C#
+        /// emission's <c>(y2−y1)*12 + m2 − m1</c> and <c>y2 − y1</c>.
+        /// </summary>
+        private static string EmitVbDateDiff(string date1, string date2, string interval) =>
+            "([](const BasicLang::DateTime& bl_d1, const BasicLang::DateTime& bl_d2, std::string bl_iv) -> int32_t { "
+            + LowercaseIntervalStmt
+            + "if (bl_iv == \"d\") return static_cast<int32_t>((bl_d2 - bl_d1).TotalDays()); "
+            + "if (bl_iv == \"m\") return (bl_d2.Year() - bl_d1.Year()) * 12 + bl_d2.Month() - bl_d1.Month(); "
+            + "if (bl_iv == \"y\") return bl_d2.Year() - bl_d1.Year(); "
+            + "if (bl_iv == \"h\") return static_cast<int32_t>((bl_d2 - bl_d1).TotalHours()); "
+            + "if (bl_iv == \"n\") return static_cast<int32_t>((bl_d2 - bl_d1).TotalMinutes()); "
+            + "if (bl_iv == \"s\") return static_cast<int32_t>((bl_d2 - bl_d1).TotalSeconds()); "
+            + "return 0; })"
+            + $"({date1}, {date2}, {interval})";
 
         /// <summary>
         /// Emit calls to the VisualGameStudioEngine C DLL functions.
