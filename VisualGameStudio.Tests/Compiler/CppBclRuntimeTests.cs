@@ -713,3 +713,395 @@ int main() {
             "bound_pos", "bound_neg", "over_throws");
     }
 }
+
+/// <summary>
+/// Tests for the faithful 96-bit Decimal engine <c>bl_decimal.hpp</c>
+/// (<see cref="CppDecimalRuntime"/>, spec 2026-07-27-p1-native-bcl-types §10/§11/§12,
+/// plan Task 8). Sibling fixture to <see cref="CppBclRuntimeTests"/> in the same file;
+/// <c>bl_decimal.hpp</c> is INDEPENDENT of <c>bl_bcltypes.hpp</c> (Task 9 splices both).
+///
+/// FAST section: content pins (banner, struct, hash, ostream inserter, include-free Body,
+/// runtime_error-only throw discipline — spec §11: logic_error-derived types would slip
+/// past the backend's <c>catch (std::runtime_error)</c> lowering).
+///
+/// INTEGRATION section: the plan's LOCKED vector battery, one native program per vector
+/// group, marker-style (<c>name=1</c>). EVERY expected value verified against real .NET
+/// (PowerShell <c>[decimal]</c> oracle, Parse-based expressions — PS 5.1 constant-folds
+/// literal-only decimal arithmetic through a normalizing path, so literal readings lie).
+/// Oracle-driven vector corrections vs the plan draft: none — all plan vectors held; the
+/// battery ADDS oracle-pinned cases the plan left open (exact division keeps scale
+/// <c>sa-sb</c>: 10.00/4 = "2.50"; an INEXACT quotient rounding to zero is plain "0"
+/// while exact zero keeps scale: 0.0/3 = "0.0"; Decimal(double) is .NET's
+/// 15-significant-digit rule, NOT shortest-round-trip — (decimal)(1.0/3.0) has 15 threes).
+/// </summary>
+[TestFixture]
+public class CppDecimalRuntimeTests
+{
+    // ---------------- FAST: content pins (spec §12 layer 1) ----------------
+
+    [Test]
+    public void DecimalHeader_ContainsSourceOfTruthBanner() =>
+        Assert.That(CppDecimalRuntime.DecimalHeader,
+            Does.Contain("SOURCE OF TRUTH: BasicLang CppDecimalRuntime.cs"));
+
+    [Test]
+    public void DecimalHeader_DefinesDecimalStruct() =>
+        Assert.That(CppDecimalRuntime.DecimalHeader, Does.Contain("struct Decimal"));
+
+    [Test]
+    public void DecimalHeader_DefinesHashSpecialization() =>
+        Assert.That(CppDecimalRuntime.DecimalHeader, Does.Contain("std::hash<BasicLang::Decimal>"));
+
+    [Test]
+    public void DecimalHeader_DefinesOstreamInserter() =>
+        Assert.That(CppDecimalRuntime.DecimalHeader,
+            Does.Contain("operator<<(std::ostream& os, const Decimal& v)"));
+
+    /// <summary>
+    /// Spec §11: every P1 runtime throw must be <c>std::runtime_error</c> — never a
+    /// logic_error-derived type, which the backend's Try/Catch lowering would miss.
+    /// </summary>
+    [Test]
+    public void DecimalHeader_ThrowsOnlyRuntimeError()
+    {
+        Assert.That(CppDecimalRuntime.DecimalHeader, Does.Contain("std::runtime_error"));
+        Assert.That(CppDecimalRuntime.DecimalHeader, Does.Not.Contain("std::logic_error"));
+        Assert.That(CppDecimalRuntime.DecimalHeader, Does.Not.Contain("std::invalid_argument"));
+        Assert.That(CppDecimalRuntime.DecimalHeader, Does.Not.Contain("std::out_of_range"));
+    }
+
+    /// <summary>bl_decimal.hpp stands alone — Task 9 splices it NEXT TO bl_bcltypes.hpp, not through it.</summary>
+    [Test]
+    public void DecimalHeader_DoesNotIncludeBclTypesHeader() =>
+        Assert.That(CppDecimalRuntime.DecimalHeader, Does.Not.Contain("bl_bcltypes"));
+
+    /// <summary>
+    /// Task 9 splice preconditions, mirroring <c>BclBody_IsIncludeFreeAndOpensNamespace</c>:
+    /// include-free Body opening its own namespace; whole-file == Includes + Body.
+    /// </summary>
+    [Test]
+    public void DecimalBody_IsIncludeFreeAndOpensNamespace()
+    {
+        Assert.That(CppDecimalRuntime.DecimalBody, Does.Not.Contain("#include"));
+        Assert.That(CppDecimalRuntime.DecimalBody, Does.Not.Contain("#pragma once"));
+        Assert.That(CppDecimalRuntime.DecimalBody.TrimStart(), Does.StartWith("namespace BasicLang {"));
+        Assert.That(CppDecimalRuntime.DecimalHeader,
+            Is.EqualTo(CppDecimalRuntime.DecimalIncludes + CppDecimalRuntime.DecimalBody));
+    }
+
+    // ---------------- INTEGRATION: the locked vector battery ----------------
+
+    private (string exe, string argsTemplate)? _compiler;
+
+    [OneTimeSetUp]
+    public void FindCompiler() => _compiler = Native.CppCompile.FindRunCompiler();
+
+    /// <summary>
+    /// Shared program prelude: parse/format/throw helpers so each vector group reads as
+    /// one line per oracle-verified case.
+    /// </summary>
+    private const string Prelude = @"
+#include <functional>
+#include <sstream>
+using namespace BasicLang;
+static bool thr(const std::function<void()>& f) { try { f(); } catch (const std::runtime_error&) { return true; } return false; }
+static std::string S(const Decimal& d) { return d.ToString(); }
+static Decimal P(const char* s) { return Decimal::Parse(s); }
+";
+
+    private string Run(string mainBody)
+    {
+        if (_compiler is null) Assert.Ignore("No C++ compiler available");
+        var src = "#include \"bl_decimal.hpp\"\n#include <cstdio>\n" + Prelude + mainBody;
+        return Native.CppCompile.CompileAndRun(src, _compiler!.Value, new Dictionary<string, string>
+        {
+            ["bl_decimal.hpp"] = CppDecimalRuntime.DecimalHeader,
+        });
+    }
+
+    private static void AssertMarkers(string output, params string[] markers)
+    {
+        foreach (var m in markers)
+            Assert.That(output, Does.Contain(m + "=1"), $"marker '{m}' not 1; full output:\n{output}");
+    }
+
+    [Test, Category("Integration")]
+    public void HeaderCompilesStandalone() =>
+        Assert.That(Run("int main(){ printf(\"ok\"); return 0; }"), Does.Contain("ok"));
+
+    /// <summary>
+    /// Construction, scale-preserving ToString, Parse round-trips incl. 28-frac-digit values
+    /// and MaxValue, >28-digit round-half-even (ties both ways), overflow/format throws.
+    /// </summary>
+    [Test, Category("Integration")]
+    public void Construction_ToString_Parse_RoundTrips()
+    {
+        var output = Run(@"
+int main() {
+    printf(""fromparts_150=%d\n"", S(Decimal::FromParts(150, 0, 0, false, 2)) == ""1.50"");
+    printf(""int_5=%d\n"", S(Decimal(5)) == ""5"");
+    printf(""max_str=%d\n"", S(Decimal::MaxValue()) == ""79228162514264337593543950335"");
+    printf(""min_str=%d\n"", S(Decimal::MinValue()) == ""-79228162514264337593543950335"");
+    printf(""zero_one=%d\n"", S(Decimal::Zero()) == ""0"" && S(Decimal::One()) == ""1"");
+    printf(""neg_int=%d\n"", S(Decimal(-42)) == ""-42"");
+    printf(""i64=%d\n"", S(Decimal((int64_t)-9223372036854775807LL)) == ""-9223372036854775807"");
+    printf(""parse_150=%d\n"", P(""1.50"") == Decimal::FromParts(150, 0, 0, false, 2) && S(P(""1.50"")) == ""1.50"");
+    printf(""parse_forms=%d\n"", S(P("" 1.5 "")) == ""1.5"" && S(P(""+1.5"")) == ""1.5"" && S(P(""-0.5"")) == ""-0.5"" && S(P(""1."")) == ""1"" && S(P("".5"")) == ""0.5"");
+    printf(""parse_28frac=%d\n"", S(P(""0.0000000000000000000000000001"")) == ""0.0000000000000000000000000001"");
+    printf(""parse_max_rt=%d\n"", S(P(""79228162514264337593543950335"")) == ""79228162514264337593543950335"");
+    printf(""parse_29frac=%d\n"", S(P(""0.12345678901234567890123456789"")) == ""0.1234567890123456789012345679"");
+    printf(""parse_tie_even=%d\n"", S(P(""0.000000000000000000000000000250"")) == ""0.0000000000000000000000000002"");
+    printf(""parse_tie_odd=%d\n"", S(P(""0.000000000000000000000000000150"")) == ""0.0000000000000000000000000002"");
+    printf(""parse_intfrac=%d\n"", S(P(""12345678901234567890123456789.123"")) == ""12345678901234567890123456789"");
+    printf(""parse_over_throws=%d\n"", thr([] { P(""99999999999999999999999999999""); }));
+    printf(""parse_bad_throws=%d\n"", thr([] { P(""abc""); }) && thr([] { P(""""); }) && thr([] { P(""1.2.3""); }) && thr([] { P("".""); }) && thr([] { P(""-""); }));
+    printf(""rt_pi=%d\n"", S(P(""3.14159265358979323846264338"")) == ""3.14159265358979323846264338"");
+    return 0;
+}
+");
+        AssertMarkers(output,
+            "fromparts_150", "int_5", "max_str", "min_str", "zero_one", "neg_int", "i64",
+            "parse_150", "parse_forms", "parse_28frac", "parse_max_rt", "parse_29frac",
+            "parse_tie_even", "parse_tie_odd", "parse_intfrac",
+            "parse_over_throws", "parse_bad_throws", "rt_pi");
+    }
+
+    /// <summary>
+    /// Add/sub: max-scale rule (1.0+1.00 = "2.00"), 0.1+0.2 == 0.3 EXACTLY, the
+    /// thousand-iteration 0.10 accumulation == "100.00", overflow reduction with a single
+    /// round-half-even decision (Max+0.45 == Max, Max+0.5 tie rounds up on the odd last
+    /// digit and throws), unary minus, ++/-- preserving scale (1.50 -> 2.50).
+    /// </summary>
+    [Test, Category("Integration")]
+    public void AddSub_ScaleRules_MoneyLoop_UnaryIncrement()
+    {
+        var output = Run(@"
+int main() {
+    printf(""add_335=%d\n"", S(P(""1.1"") + P(""2.25"")) == ""3.35"" && (P(""1.1"") + P(""2.25"")) == P(""3.35""));
+    printf(""add_point3=%d\n"", (P(""0.1"") + P(""0.2"")) == P(""0.3""));
+    printf(""add_200=%d\n"", S(P(""1.0"") + P(""1.00"")) == ""2.00"");
+    printf(""add_250=%d\n"", S(P(""1.50"") + Decimal(1)) == ""2.50"");
+    printf(""sub_zero_scale=%d\n"", S(P(""1.5"") - P(""1.5"")) == ""0.0"" && S(P(""1.50"") - P(""1.50"")) == ""0.00"");
+    printf(""max_p045=%d\n"", (Decimal::MaxValue() + P(""0.45"")) == Decimal::MaxValue());
+    printf(""max_p05_throws=%d\n"", thr([] { Decimal x = Decimal::MaxValue() + P(""0.5""); (void)x; }));
+    printf(""max_p06_throws=%d\n"", thr([] { Decimal x = Decimal::MaxValue() + P(""0.6""); (void)x; }));
+    printf(""max_p1_throws=%d\n"", thr([] { Decimal x = Decimal::MaxValue() + Decimal(1); (void)x; }));
+    printf(""min_m1_throws=%d\n"", thr([] { Decimal x = Decimal::MinValue() - Decimal(1); (void)x; }));
+    Decimal sum;
+    Decimal dime = P(""0.10"");
+    for (int i = 0; i < 1000; ++i) sum += dime;
+    printf(""money_loop=%d\n"", sum == Decimal(100) && S(sum) == ""100.00"");
+    printf(""unary_neg=%d\n"", S(-P(""1.5"")) == ""-1.5"");
+    printf(""unary_neg_zero=%d\n"", S(-P(""0.00"")) == ""0.00"");
+    Decimal d = P(""1.50"");
+    ++d;
+    printf(""preinc=%d\n"", S(d) == ""2.50"");
+    Decimal old = d++;
+    printf(""postinc=%d\n"", S(old) == ""2.50"" && S(d) == ""3.50"");
+    --d;
+    printf(""predec=%d\n"", S(d) == ""2.50"");
+    old = d--;
+    printf(""postdec=%d\n"", S(old) == ""2.50"" && S(d) == ""1.50"");
+    return 0;
+}
+");
+        AssertMarkers(output,
+            "add_335", "add_point3", "add_200", "add_250", "sub_zero_scale",
+            "max_p045", "max_p05_throws", "max_p06_throws", "max_p1_throws", "min_m1_throws",
+            "money_loop", "unary_neg", "unary_neg_zero",
+            "preinc", "postinc", "predec", "postdec");
+    }
+
+    /// <summary>
+    /// Mul: scale = s1+s2 (12.0*10.0 = "120.00", 12.0*10 = "120.0", 19.99*100 = "1999.00"),
+    /// 192-bit product reduction with round-half-even, zero keeps min(s1+s2, 28), overflow.
+    /// </summary>
+    [Test, Category("Integration")]
+    public void Multiplication_ScaleAndRounding_Overflow()
+    {
+        var output = Run(@"
+int main() {
+    printf(""mul_12000=%d\n"", S(P(""12.0"") * P(""10.0"")) == ""120.00"");
+    printf(""mul_1200=%d\n"", S(P(""12.0"") * Decimal(10)) == ""120.0"");
+    printf(""mul_1999=%d\n"", S(P(""19.99"") * Decimal(100)) == ""1999.00"");
+    printf(""mul_tiny=%d\n"", S(P(""0.5000000000000000000000000001"") * P(""0.5000000000000000000000000001"")) == ""0.2500000000000000000000000001"");
+    printf(""mul_zero_scale=%d\n"", S(P(""1.5"") * Decimal(0)) == ""0.0"");
+    printf(""mul_zero_scale5=%d\n"", S(P(""0.00"") * P(""0.000"")) == ""0.00000"");
+    printf(""mul_max10_throws=%d\n"", thr([] { Decimal x = Decimal::MaxValue() * Decimal(10); (void)x; }));
+    printf(""mul_1e19sq_throws=%d\n"", thr([] { Decimal x = P(""10000000000000000000"") * P(""10000000000000000000""); (void)x; }));
+    printf(""mul_neg=%d\n"", S(P(""-1.5"") * Decimal(2)) == ""-3.0"");
+    return 0;
+}
+");
+        AssertMarkers(output,
+            "mul_12000", "mul_1200", "mul_1999", "mul_tiny",
+            "mul_zero_scale", "mul_zero_scale5",
+            "mul_max10_throws", "mul_1e19sq_throws", "mul_neg");
+    }
+
+    /// <summary>
+    /// Div: 1/3 is 28 threes, 2/3 rounds the last digit up, EXACT division keeps scale
+    /// sa-sb (10/4 = "2.5" but 10.00/4 = "2.50"), negative initial scale pre-scales the
+    /// dividend (2/0.5 = "4"), 29-significant-digit capacity (8/0.9), an inexact quotient
+    /// rounding to zero is plain "0" (1/2e28 — .NET bits {0,0,0,0}) while an exact zero
+    /// keeps its scale (0.0/3 = "0.0"), divide-by-zero and quotient overflow throw.
+    /// </summary>
+    [Test, Category("Integration")]
+    public void Division_DigitExtension_Rounding_Throws()
+    {
+        var output = Run(@"
+int main() {
+    printf(""div_third=%d\n"", S(Decimal(1) / Decimal(3)) == ""0.3333333333333333333333333333"");
+    printf(""div_two_thirds=%d\n"", S(Decimal(2) / Decimal(3)) == ""0.6666666666666666666666666667"");
+    printf(""div_25=%d\n"", S(Decimal(10) / Decimal(4)) == ""2.5"");
+    printf(""div_250=%d\n"", S(P(""10.00"") / Decimal(4)) == ""2.50"");
+    printf(""div_12=%d\n"", S(P(""12.0"") / Decimal(10)) == ""1.2"");
+    printf(""div_eighth=%d\n"", S(Decimal(1) / Decimal(8)) == ""0.125"");
+    printf(""div_4=%d\n"", S(Decimal(2) / P(""0.5"")) == ""4"");
+    printf(""div_8=%d\n"", S(Decimal(1) / P(""0.125"")) == ""8"");
+    printf(""div_20=%d\n"", S(Decimal(10) / P(""0.5"")) == ""20"");
+    printf(""div_keep=%d\n"", S(P(""3.0"") / Decimal(3)) == ""1.0"" && S(P(""1.00"") / Decimal(1)) == ""1.00"" && S(Decimal(100) / Decimal(10)) == ""10"");
+    printf(""div_zero_q=%d\n"", S(Decimal(1) / P(""20000000000000000000000000000"")) == ""0"");
+    printf(""div_one_ulp=%d\n"", S(P(""1.5"") / P(""20000000000000000000000000000"")) == ""0.0000000000000000000000000001"");
+    printf(""div_zero_exact=%d\n"", S(P(""0.0"") / Decimal(3)) == ""0.0"");
+    printf(""div_889=%d\n"", S(Decimal(8) / P(""0.9"")) == ""8.888888888888888888888888889"");
+    printf(""div_778=%d\n"", S(Decimal(7) / P(""0.9"")) == ""7.7777777777777777777777777778"");
+    printf(""div_byzero_throws=%d\n"", thr([] { Decimal x = Decimal(1) / Decimal(0); (void)x; }));
+    printf(""div_over_throws=%d\n"", thr([] { Decimal x = Decimal::MaxValue() / P(""0.1""); (void)x; }));
+    printf(""div_negsign=%d\n"", S(Decimal(-1) / Decimal(4)) == ""-0.25"");
+    return 0;
+}
+");
+        AssertMarkers(output,
+            "div_third", "div_two_thirds", "div_25", "div_250", "div_12", "div_eighth",
+            "div_4", "div_8", "div_20", "div_keep", "div_zero_q", "div_one_ulp",
+            "div_zero_exact", "div_889", "div_778",
+            "div_byzero_throws", "div_over_throws", "div_negsign");
+    }
+
+    /// <summary>
+    /// Mod: dividend sign (3.5 Mod 1 = 0.5, -3.5 Mod 1 = -0.5), max-scale rule
+    /// (3.50 Mod 1 = "0.50", 7.26 Mod 2.1 = "0.96"), exact remainder, by-zero throws.
+    /// </summary>
+    [Test, Category("Integration")]
+    public void Mod_DividendSign_MaxScale()
+    {
+        var output = Run(@"
+int main() {
+    printf(""mod_05=%d\n"", S(P(""3.5"") % Decimal(1)) == ""0.5"");
+    printf(""mod_neg05=%d\n"", S(P(""-3.5"") % Decimal(1)) == ""-0.5"");
+    printf(""mod_050=%d\n"", S(P(""3.50"") % Decimal(1)) == ""0.50"");
+    printf(""mod_ints=%d\n"", S(Decimal(7) % Decimal(3)) == ""1"" && S(Decimal(-7) % Decimal(3)) == ""-1"");
+    printf(""mod_096=%d\n"", S(P(""7.26"") % P(""2.1"")) == ""0.96"");
+    printf(""mod_zero_scale=%d\n"", S(P(""2.0"") % Decimal(1)) == ""0.0"");
+    printf(""mod_byzero_throws=%d\n"", thr([] { Decimal x = Decimal(1) % Decimal(0); (void)x; }));
+    return 0;
+}
+");
+        AssertMarkers(output,
+            "mod_05", "mod_neg05", "mod_050", "mod_ints", "mod_096",
+            "mod_zero_scale", "mod_byzero_throws");
+    }
+
+    /// <summary>
+    /// Value equality across scales (1.0 == 1.00), static Compare returning -1/0/1,
+    /// CompareTo, full relational set, and the scale-NORMALIZED std::hash (1.0 and 1.00
+    /// hash equal; zero is canonical for any scale).
+    /// </summary>
+    [Test, Category("Integration")]
+    public void Equality_Compare_Hash_AcrossScales()
+    {
+        var output = Run(@"
+int main() {
+    printf(""eq_scales=%d\n"", P(""1.0"") == P(""1.00""));
+    printf(""cmp_scales=%d\n"", Decimal::Compare(P(""1.0""), P(""1.00"")) == 0);
+    printf(""cmp_12=%d\n"", Decimal::Compare(Decimal(1), Decimal(2)) == -1);
+    printf(""cmp_21=%d\n"", Decimal::Compare(Decimal(2), Decimal(1)) == 1);
+    printf(""cmpto=%d\n"", P(""1.0"").CompareTo(P(""1.00"")) == 0 && Decimal(1).CompareTo(Decimal(2)) == -1);
+    printf(""cmp_151=%d\n"", Decimal::Compare(P(""1.5""), P(""1.51"")) == -1);
+    printf(""order_neg=%d\n"", Decimal(-2) < Decimal(-1) && Decimal(-1) < Decimal(0) && Decimal(0) < Decimal(1));
+    printf(""relops=%d\n"", P(""1.5"") <= P(""1.50"") && P(""1.5"") >= P(""1.50"") && P(""1.4"") < P(""1.5"") && P(""1.6"") > P(""1.5"") && P(""1.5"") != P(""1.6""));
+    std::hash<Decimal> h;
+    printf(""hash_scales=%d\n"", h(P(""1.0"")) == h(P(""1.00"")));
+    printf(""hash_zero=%d\n"", h(P(""0.00"")) == h(Decimal(0)));
+    printf(""hash_diff=%d\n"", h(P(""1.5"")) != h(P(""1.51"")));
+    printf(""hash_sign=%d\n"", h(P(""1.5"")) != h(P(""-1.5"")));
+    return 0;
+}
+");
+        AssertMarkers(output,
+            "eq_scales", "cmp_scales", "cmp_12", "cmp_21", "cmpto", "cmp_151",
+            "order_neg", "relops",
+            "hash_scales", "hash_zero", "hash_diff", "hash_sign");
+    }
+
+    /// <summary>
+    /// Banker's Round (2.5 -> 2, 3.5 -> 4, 2.675@2 -> "2.68" — exact decimal, unlike
+    /// double), Round result drops to the requested scale only, Truncate/Floor/Ceiling
+    /// per .NET on negatives.
+    /// </summary>
+    [Test, Category("Integration")]
+    public void Round_Truncate_Floor_Ceiling_Bankers()
+    {
+        var output = Run(@"
+int main() {
+    printf(""round_25=%d\n"", S(Decimal::Round(P(""2.5""))) == ""2"");
+    printf(""round_35=%d\n"", S(Decimal::Round(P(""3.5""))) == ""4"");
+    printf(""round_neg25=%d\n"", S(Decimal::Round(P(""-2.5""))) == ""-2"");
+    printf(""round_2675=%d\n"", S(Decimal::Round(P(""2.675""), 2)) == ""2.68"");
+    printf(""round_neg2675=%d\n"", S(Decimal::Round(P(""-2.675""), 2)) == ""-2.68"");
+    printf(""round_25_1=%d\n"", S(Decimal::Round(P(""2.5""), 1)) == ""2.5"");
+    printf(""round_1100_2=%d\n"", S(Decimal::Round(P(""1.100""), 2)) == ""1.10"");
+    printf(""round_digits_throws=%d\n"", thr([] { Decimal x = Decimal::Round(P(""1.5""), 29); (void)x; }));
+    printf(""trunc_neg37=%d\n"", S(Decimal::Truncate(P(""-3.7""))) == ""-3"");
+    printf(""trunc_300=%d\n"", S(Decimal::Truncate(P(""3.00""))) == ""3"");
+    printf(""floor_neg37=%d\n"", S(Decimal::Floor(P(""-3.7""))) == ""-4"");
+    printf(""floor_37=%d\n"", S(Decimal::Floor(P(""3.7""))) == ""3"");
+    printf(""ceil_neg37=%d\n"", S(Decimal::Ceiling(P(""-3.7""))) == ""-3"");
+    printf(""ceil_37=%d\n"", S(Decimal::Ceiling(P(""3.7""))) == ""4"");
+    return 0;
+}
+");
+        AssertMarkers(output,
+            "round_25", "round_35", "round_neg25", "round_2675", "round_neg2675",
+            "round_25_1", "round_1100_2", "round_digits_throws",
+            "trunc_neg37", "trunc_300", "floor_neg37", "floor_37", "ceil_neg37", "ceil_37");
+    }
+
+    /// <summary>
+    /// Decimal(double) (.NET's 15-significant-digit VarDecFromR8 rule: (decimal)0.1 == 0.1m,
+    /// (decimal)(1.0/3.0) = 15 threes, trailing zeros stripped) and ToDouble (.NET's exact
+    /// VarR8FromDec formula — pinned by ToDouble(1e-28m) == 1.0/1e28 in double space, which
+    /// is NOT the same double as the 1e-28 literal). Plus the ostream inserter.
+    /// </summary>
+    [Test, Category("Integration")]
+    public void DoubleConversions_BothDirections()
+    {
+        var output = Run(@"
+int main() {
+    printf(""dbl_15=%d\n"", S(Decimal(1.5)) == ""1.5"" && Decimal(1.5).ToDouble() == 1.5);
+    printf(""dbl_01=%d\n"", Decimal(0.1) == P(""0.1"") && S(Decimal(0.1)) == ""0.1"");
+    printf(""dbl_01_rt=%d\n"", Decimal(P(""0.1"").ToDouble()) == P(""0.1""));
+    printf(""dbl_third=%d\n"", S(Decimal(1.0 / 3.0)) == ""0.333333333333333"");
+    printf(""dbl_15sig=%d\n"", S(Decimal(123456789.123456789)) == ""123456789.123457"");
+    printf(""dbl_1em20=%d\n"", S(Decimal(1e-20)) == ""0.00000000000000000001"");
+    printf(""dbl_1e28=%d\n"", S(Decimal(1e28)) == ""10000000000000000000000000000"");
+    printf(""dbl_big=%d\n"", S(Decimal(12345678901234567890.0)) == ""12345678901234600000"");
+    printf(""dbl_8e28_throws=%d\n"", thr([] { Decimal x(8e28); (void)x; }));
+    printf(""dbl_nan_throws=%d\n"", thr([] { double z = 0.0; Decimal x(z / z); (void)x; }));
+    printf(""dbl_negzero=%d\n"", S(Decimal(-0.0)) == ""0"");
+    printf(""todbl_max=%d\n"", Decimal::MaxValue().ToDouble() == 79228162514264337593543950336.0);
+    printf(""todbl_1em28=%d\n"", P(""0.0000000000000000000000000001"").ToDouble() == 1.0 / 1e28);
+    printf(""todbl_neg25=%d\n"", P(""-2.5"").ToDouble() == -2.5);
+    std::ostringstream oss;
+    oss << P(""-1.50"");
+    printf(""ostream=%d\n"", oss.str() == ""-1.50"");
+    return 0;
+}
+");
+        AssertMarkers(output,
+            "dbl_15", "dbl_01", "dbl_01_rt", "dbl_third", "dbl_15sig", "dbl_1em20",
+            "dbl_1e28", "dbl_big", "dbl_8e28_throws", "dbl_nan_throws", "dbl_negzero",
+            "todbl_max", "todbl_1em28", "todbl_neg25", "ostream");
+    }
+}
