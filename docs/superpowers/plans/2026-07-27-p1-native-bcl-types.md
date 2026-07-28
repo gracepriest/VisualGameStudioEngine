@@ -737,6 +737,28 @@ Spec §12.5 with the discipline paragraph: fixed literal dates/guids, invariant-
 - [ ] **Step 1: The harness.** `RunBothBackends(blSource) → (csOut, cppOut)`: compile+run via the C# path and the C++ path (reuse Task 2's `CompileRunCSharp` + Task 11's C++ helper). Culture forcing: the C# leg must run under invariant culture — inject `System.Globalization.CultureInfo.DefaultThreadCurrentCulture = System.Globalization.CultureInfo.InvariantCulture;` as the first emitted statement of Main FOR THE PARITY HARNESS ONLY (mechanism: check whether the C# backend has a Main-preamble hook; if not, wrap: the harness compiles the generated .cs with a tiny wrapper Main that sets culture then calls the generated entry — pick the least invasive mechanism and document it in the fixture header; do NOT change production emission).
   Normalize `\r\n`→`\n`; assert `csOut == cppOut` with both outputs in the failure message.
 - [ ] **Step 2: Parity programs** (one test each; ~12 programs): the Decimal money battery as BL (arithmetic, loop accumulation, Round/Mod, scale prints); `CType(d, Double)` and `CType(x, Decimal)` round-trips; DateTime literal-date arithmetic + `ToString("yyyy-MM-dd HH:mm:ss")` + DayOfWeek-as-number + `WriteLine(d.Kind)`; an UNINITIALIZED `Dim d As DateTime` printed (default-value parity: `01/01/0001 00:00:00`); TimeSpan components/totals; Guid `Parse(fixed).ToString()` round-trip; StringBuilder chain incl. `Append(Integer)` and `Append(Boolean)`; DateTimeOffset fixed-offset equality prints; SByte/Byte arithmetic + WriteLine (numeric print parity); stdlib `DateAdd/DateDiff/FormatDate` on fixed dates.
+> **MANDATORY program constraints (discovered in Tasks 10–11; each is a
+> guaranteed parity diff or compile break if ignored — they live in
+> `CppBclEndToEndTests`'s header, which this NEW fixture does not inherit):**
+> 1. **Never print a raw Boolean.** `Console.WriteLine(aBoolean)` emits `1`/`0`
+>    on C++ vs `True`/`False` on .NET (pre-existing, non-P1, out of scope).
+>    Branch through an `If` and print a word.
+> 2. **Never name a BL local `t0`/`t1`/any `t<N>`** — it collides with
+>    `CppCodeGenerator`'s temp names and emits a C++ redefinition
+>    (pre-existing, chipped, non-P1).
+> 3. **Use `CType(x, Integer)`, never `CInt(x)`, for narrowing** — `CInt`
+>    truncates on C++ but emits `Convert.ToInt32` (rounds) on C#
+>    (pre-existing, not Decimal-specific).
+> 4. **Use `.ToString()`, never `CStr(nativeValue)`** — the Task 10 conversion
+>    gate correctly rejects the intrinsic form for the five non-Decimal
+>    native types.
+> 5. **Decimal→integral operands must stay ≤15 significant digits and in
+>    range** (narrowing goes through `ToDouble()`; out-of-range is UB where
+>    .NET throws) — see Task 14 Step 4b.
+> 6. **No module-qualified `Sub` calls** (`Helpers.Foo()`) — broken on the
+>    C++ backend generally (pre-existing, chipped). Single `Module M` with
+>    local helpers only.
+
 - [ ] **Step 3: Iterate.** A diff = a real semantic divergence: fix the C++ side to match .NET unless the spec documents the divergence (§9's list) — in which case the PROGRAM was undisciplined, fix the program (e.g. avoid default `ToString()` only if it proves culture-fragile even under forced invariant — it shouldn't be).
 - [ ] **Step 4: Commit** — `git commit -m "test(p1): cross-backend parity oracle - identical stdout C# vs C++ for the BCL battery"`
 
