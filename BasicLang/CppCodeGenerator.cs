@@ -29,10 +29,6 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private readonly List<string> _headerIncludes;
         private readonly HashSet<string> _declaredIdentifiers;
         private IRClass _emittingClass;
-        // Values produced by DateTime.Now (BasicLangRt::Now() → std::time_t).
-        // The IR types them as Object, so the generator tracks them itself to
-        // declare the temps correctly and route ToString to FormatTime.
-        private readonly HashSet<IRValue> _dateTimeValues = new HashSet<IRValue>();
         // Foreign ::-qualified instance method calls that are the RECEIVER of another
         // member access (e.g. the inner m.foo() in m.foo().bar()). These are rendered
         // inline as expressions by GetValueName and must NOT also emit a standalone
@@ -310,8 +306,6 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine("using namespace std;");
             WriteLine();
 
-            EmitDotNetSurfaceHelpers();
-
             if (hasAsync || hasIterators || usesCollections)
                 EmitRuntimePreamble(hasAsync, hasIterators, usesCollections);
 
@@ -364,16 +358,6 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                             return true;
 
             return false;
-        }
-
-        /// <summary>
-        /// Minimal .NET-surface runtime helpers (DateTime.Now / ToString(fmt)).
-        /// Always emitted — a handful of inline functions with zero cost when
-        /// unused, which avoids a pre-scan pass to detect usage.
-        /// </summary>
-        private void EmitDotNetSurfaceHelpers()
-        {
-            SpliceRuntimeSource(CppRuntimeSources.DotNetSurfaceHelpers);
         }
 
         /// <summary>
@@ -816,13 +800,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 "short" => "int16_t",
                 "object" => "void*",
                 "void" => "void",
-                // .NET DateTime values are produced by BasicLangRt::Now() and
-                // consumed by BasicLangRt::FormatTime (see the runtime preamble).
-                // Task 10 dismantles this shim and re-points datetime at
-                // BasicLang::DateTime alongside the P1 entries below.
-                "datetime" => "std::time_t",
-                // P1 native BCL types (unreachable in green programs until the Task 10
-                // registry flip — the capability checker still rejects them).
+                "sbyte" => "int8_t",
+                // P1 native BCL types (spec §6.2). `datetime` said std::time_t before the
+                // Task 10 flip — that shim (BasicLangRt::Now/FormatTime) is gone.
+                "datetime" => "BasicLang::DateTime",
                 "timespan" => "BasicLang::TimeSpan",
                 "guid" => "BasicLang::Guid",
                 "decimal" => "BasicLang::Decimal",
@@ -1389,17 +1370,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var entryBlock = function.EntryBlock;
 
             // Collect temporaries (values that aren't named destinations)
-            _dateTimeValues.Clear();
             _inlinedForeignCalls.Clear();
             foreach (var block in function.Blocks)
             {
                 foreach (var instruction in block.Instructions)
                 {
-                    // DateTime.Now results need std::time_t declarations and
-                    // ToString → FormatTime routing (IR types them as Object).
-                    if (instruction is IRFieldAccess fa && IsDateTimeNowAccess(fa))
-                        _dateTimeValues.Add(fa);
-
                     // A write to a foreign local is its initializer — declare-at-first-write,
                     // but ONLY when that first write is in the entry block. A deferred
                     // `type n = expr;` inside a branch/loop body could be jumped over by a goto
@@ -1458,11 +1433,6 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             _ => null
         };
 
-        private static bool IsDateTimeNowAccess(IRFieldAccess fieldAccess) =>
-            fieldAccess.Object is IRVariable staticReceiver &&
-            string.Equals(staticReceiver.Name, "DateTime", StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(fieldAccess.FieldName, "Now", StringComparison.OrdinalIgnoreCase);
-
         private void DeclareLocalsAndTemporaries(IRFunction function)
         {
             // Declare local variables
@@ -1506,7 +1476,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 .Where(t => t.Type?.Name != "Void" && MapType(t.Type) != "void")
                 .Where(t => t.Type?.Kind != TypeKind.Foreign)
                 .Where(t => !CppExceptionTypes.IsNetException(t.Type?.Name))
-                .GroupBy(t => _dateTimeValues.Contains(t) ? "std::time_t" : MapType(t.Type))
+                .GroupBy(t => MapType(t.Type))
                 .ToList();
 
             foreach (var group in tempsByType)
@@ -2141,6 +2111,24 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private string GetArg(List<string> args, int index) => index < args.Count ? args[index] : "0";
 
         /// <summary>
+        /// Widen a Byte/SByte console argument for printing (spec §14.6). <c>cout</c>
+        /// streams <c>int8_t</c>/<c>uint8_t</c> as a CHARACTER — <c>Console.WriteLine(b)</c>
+        /// with b = 65 printed 'A' — while .NET (and the C# backend) print the NUMBER.
+        /// Wrapping the arg in <c>static_cast&lt;int32_t&gt;</c> restores parity. Char is
+        /// deliberately NOT wrapped: .NET prints a Char as its character too.
+        /// </summary>
+        private static string NumericPrintArg(string rendered, IRCall call, int index)
+        {
+            var typeName = call != null && index < call.Arguments.Count
+                ? call.Arguments[index]?.Type?.Name
+                : null;
+            if (typeName == null) return rendered;
+            return typeName.ToLowerInvariant() is "byte" or "sbyte" or "ubyte"
+                ? $"static_cast<int32_t>({rendered})"
+                : rendered;
+        }
+
+        /// <summary>
         /// Stdlib mappings that are statements, not value expressions — their
         /// rendered form (cout chains, srand) must never be assigned to the
         /// destination temp even when the IR types the call as value-returning.
@@ -2204,10 +2192,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 }
             }
 
-            // P1 (DEAD until the Task 10 registry flip): the C* conversion intrinsics
-            // (CDbl/CSng) take the stdlib route below, NOT Visit(IRCast) — on a
-            // Decimal-typed argument a static_cast is invalid C++ (the engine deliberately
-            // has no conversion operator), so those arms route through ToDouble() instead.
+            // The C* conversion intrinsics (CInt/CLng/CDbl/CSng/CStr/CBool) take the
+            // stdlib route below, NOT Visit(IRCast) — on a Decimal-typed argument a
+            // static_cast / std::to_string is invalid C++ (the engine deliberately has no
+            // conversion operator), so those arms route through the engine instead.
             var arg0IsDecimal = call != null && call.Arguments.Count > 0
                 && IsNativeOwnedBclType(call.Arguments[0]?.Type?.Name)
                 && call.Arguments[0].Type.Name.Equals("Decimal", StringComparison.OrdinalIgnoreCase);
@@ -2216,13 +2204,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             {
                 "print" => $"cout << {args[0]}",
                 "printline" => $"cout << {args[0]} << endl",
-                // .NET Console surface (console-app template parity).
-                // Task 10 lands the Byte/SByte numeric-print cast here: int8_t/uint8_t
-                // WriteLine/Write args get wrapped in static_cast<int32_t>(...) so cout
-                // prints numbers, matching .NET (moved out of Task 9 — it changes LIVE
-                // Byte output, which would break Task 9's inertness claim).
-                "console.writeline" => args.Count == 0 ? "cout << endl" : $"cout << {args[0]} << endl",
-                "console.write" => args.Count == 0 ? "cout << \"\"" : $"cout << {args[0]}",
+                // .NET Console surface (console-app template parity). Byte/SByte args are
+                // widened for printing — see NumericPrintArg (spec §14.6).
+                "console.writeline" => args.Count == 0 ? "cout << endl" : $"cout << {NumericPrintArg(args[0], call, 0)} << endl",
+                "console.write" => args.Count == 0 ? "cout << \"\"" : $"cout << {NumericPrintArg(args[0], call, 0)}",
                 "readline" => "([](){ string s; getline(cin, s); return s; })()",
                 "len" => $"static_cast<int32_t>({args[0]}.length())",
                 "left" => $"{args[0]}.substr(0, {args[1]})",
@@ -2246,16 +2231,36 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 "round" => $"round({args[0]})",
                 "min" => $"min({args[0]}, {args[1]})",
                 "max" => $"max({args[0]}, {args[1]})",
-                "cint" => $"static_cast<int32_t>({args[0]})",
-                "clng" => $"static_cast<int64_t>({args[0]})",
+                // Decimal → integral goes through ToDouble() and then the C++ cast, which
+                // truncates toward zero — the SAME convention every other C* arm here has
+                // always used (this backend's `cint` on a Double truncates too).
+                // PRE-EXISTING cross-backend divergence, NOT introduced by P1 and not
+                // Decimal-specific: the C# backend emits Convert.ToInt32, which ROUNDS.
+                // Use CType(x, Integer) — truncating on both backends — when parity matters.
+                // Precision note: ToDouble is exact to 15 significant digits, so a
+                // >15-digit Decimal narrows approximately.
+                "cint" => arg0IsDecimal
+                    ? $"static_cast<int32_t>(({args[0]}).ToDouble())"
+                    : $"static_cast<int32_t>({args[0]})",
+                "clng" => arg0IsDecimal
+                    ? $"static_cast<int64_t>(({args[0]}).ToDouble())"
+                    : $"static_cast<int64_t>({args[0]})",
                 "cdbl" => arg0IsDecimal
                     ? $"({args[0]}).ToDouble()"
                     : $"static_cast<double>({args[0]})",
                 "csng" => arg0IsDecimal
                     ? $"static_cast<float>(({args[0]}).ToDouble())"
                     : $"static_cast<float>({args[0]})",
-                "cstr" => $"to_string({args[0]})",
-                "cbool" => $"static_cast<bool>({args[0]})",
+                // std::to_string has no Decimal overload; the engine's scale-preserving
+                // ToString() is the .NET-faithful rendering.
+                "cstr" => arg0IsDecimal
+                    ? $"({args[0]}).ToString()"
+                    : $"to_string({args[0]})",
+                // .NET Convert.ToBoolean(decimal) is `value != 0`; IsZeroMag() is the exact
+                // magnitude test (and treats a canonicalized -0 as zero, like .NET).
+                "cbool" => arg0IsDecimal
+                    ? $"(!({args[0]}).IsZeroMag())"
+                    : $"static_cast<bool>({args[0]})",
                 "ubound" => $"(static_cast<int32_t>({args[0]}.size()) - 1)",
                 "lbound" => "0",
                 "rnd" => "(static_cast<double>(rand()) / RAND_MAX)",
@@ -2725,9 +2730,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var value = GetValueName(cast.Value);
             var result = GetValueName(cast);
 
-            // P1 Decimal conversions (DEAD until the Task 10 registry flip): a raw
-            // static_cast to/from the BasicLang::Decimal struct is invalid C++, so both
-            // CType directions route through the engine (spec §6.2).
+            // P1 Decimal conversions: a raw static_cast to/from the BasicLang::Decimal
+            // struct is invalid C++ (the engine deliberately defines no conversion
+            // operator), so EVERY CType direction routes through the engine (spec §6.2).
+            // Anything not lowered here is rejected by CppCapabilityChecker.CheckNativeBclCast
+            // with a clean diagnostic — never as a raw C++ error.
             var castTargetIsDecimal = IsNativeOwnedBclType(cast.Type?.Name)
                 && cast.Type.Name.Equals("Decimal", StringComparison.OrdinalIgnoreCase);
             var castSourceIsDecimal = IsNativeOwnedBclType(cast.Value?.Type?.Name)
@@ -2749,13 +2756,42 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     WriteLine($"{result} = BasicLang::Decimal(static_cast<double>({value}));");
                 return;
             }
-            if (castSourceIsDecimal
-                && (string.Equals(cast.Type?.Name, "Double", StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(cast.Type?.Name, "Single", StringComparison.OrdinalIgnoreCase)))
+            if (castSourceIsDecimal)
             {
-                // .NET's explicit operator double (VarR8FromDec); Single narrows on assignment.
-                WriteLine($"{result} = ({value}).ToDouble();");
-                return;
+                var castTargetName = cast.Type?.Name;
+                if (string.Equals(castTargetName, "Double", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(castTargetName, "Single", StringComparison.OrdinalIgnoreCase))
+                {
+                    // .NET's explicit operator double (VarR8FromDec); Single narrows on assignment.
+                    WriteLine($"{result} = ({value}).ToDouble();");
+                    return;
+                }
+                if (IsIntegralTypeName(castTargetName))
+                {
+                    // .NET's explicit operator int/long/… TRUNCATES TOWARD ZERO (it does not
+                    // round): (int)2.9m == 2, (int)(-2.9m) == -2. A C++ floating→integral
+                    // static_cast has exactly that rule, so ToDouble() + the cast matches.
+                    // Precision caveat: ToDouble is the .NET VarR8FromDec formula, exact to
+                    // 15 significant digits — a Decimal with more digits narrows approximately.
+                    WriteLine($"{result} = static_cast<{MapType(cast.Type)}>(({value}).ToDouble());");
+                    return;
+                }
+                if (string.Equals(castTargetName, "String", StringComparison.OrdinalIgnoreCase))
+                {
+                    // std::to_string has no Decimal overload; the engine's scale-preserving
+                    // ToString() is the .NET-faithful rendering (invariant, trailing zeros kept).
+                    WriteLine($"{result} = ({value}).ToString();");
+                    return;
+                }
+                if (string.Equals(castTargetName, "Boolean", StringComparison.OrdinalIgnoreCase))
+                {
+                    // .NET has no (bool)decimal operator at all — Convert.ToBoolean(decimal)
+                    // is `value != 0`, and that is the only sane reading of CType(d, Boolean).
+                    // (The C# backend emits `(bool)(d)` here, which csc rejects — a
+                    // pre-existing C#-backend gap, tracked outside P1.)
+                    WriteLine($"{result} = !({value}).IsZeroMag();");
+                    return;
+                }
             }
 
             var targetType = MapType(cast.Type);
@@ -3017,10 +3053,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// </summary>
         private string EmitToStringShim(IRInstanceMethodCall methodCall, string obj)
         {
-            // P1 native BCL receivers (DEAD until the Task 10 registry flip): the native
-            // types implement ToString(...) themselves — emit a direct member call
-            // (`d.ToString(fmt)`, `sb->ToString()`). Routed BEFORE the legacy datetime
-            // case so the flip takes over DateTime receivers (Task 10 removes that case).
+            // P1 native BCL receivers: the native types implement ToString(...) themselves —
+            // emit a direct member call (`d.ToString(fmt)`, `sb->ToString()`). This replaced
+            // the std::time_t `BasicLangRt::FormatTime` shim at the Task 10 flip.
             if (IsNativeOwnedBclType(methodCall.Object?.Type?.Name))
             {
                 var bclOp = MemberAccessOp(methodCall.Object);
@@ -3031,17 +3066,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             var receiverTypeName = methodCall.Object?.Type?.Name?.ToLowerInvariant();
 
-            // DateTime.Now results are typed Object in the IR — the generator
-            // tracks them explicitly (see _dateTimeValues).
-            if (methodCall.Object != null && _dateTimeValues.Contains(methodCall.Object))
-                receiverTypeName = "datetime";
-
             switch (receiverTypeName)
             {
-                case "datetime":
-                    return methodCall.Arguments.Count > 0
-                        ? $"BasicLangRt::FormatTime({obj}, {GetValueName(methodCall.Arguments[0])})"
-                        : $"BasicLangRt::FormatTime({obj})";
                 case "integer":
                 case "long":
                 case "short":
@@ -3106,12 +3132,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // Result temps are pre-declared by DeclareLocalsAndTemporaries: assign, don't redeclare.
             var result = GetValueName(fieldAccess);
 
-            // P1 static dispatch (DEAD until the Task 10 registry flip): a NativeOwned
-            // TYPE-NAME receiver (`DateTime.MinValue`, `Decimal.One`, `TimeSpan.Zero`)
-            // with a surface StaticProperty/StaticMethod lowers to the runtime's static
-            // member FUNCTION: `BasicLang::X::Member()`. Deliberately placed BEFORE the
-            // IsDateTimeNowAccess shim so the flip routes `DateTime.Now` here (Task 10
-            // then removes the shim). A declared local shadowing the type name wins.
+            // P1 static dispatch: a NativeOwned TYPE-NAME receiver (`DateTime.Now`,
+            // `DateTime.MinValue`, `Decimal.One`, `TimeSpan.Zero`) with a surface
+            // StaticProperty/StaticMethod lowers to the runtime's static member FUNCTION:
+            // `BasicLang::X::Member()`. This is what `DateTime.Now` flows through since
+            // the Task 10 flip removed the one-off IsDateTimeNowAccess/BasicLangRt::Now
+            // shim. A declared local shadowing the type name wins.
             if (fieldAccess.Object is IRVariable staticRecv
                 && IsNativeOwnedBclType(staticRecv.Name)
                 && !_declaredIdentifiers.Contains(staticRecv.Name)
@@ -3123,16 +3149,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return;
             }
 
-            // .NET-surface shims — the raw emission below would produce
-            // uncompilable member accesses for these (`DateTime->Now`,
-            // `.Length` on std::string).
-            if (IsDateTimeNowAccess(fieldAccess))
-            {
-                _dateTimeValues.Add(fieldAccess);
-                WriteLine($"{result} = BasicLangRt::Now();");
-                return;
-            }
-
+            // .NET-surface shim — the raw emission below would produce an
+            // uncompilable `.Length` member access on std::string / std::vector.
             if (string.Equals(fieldAccess.FieldName, "Length", StringComparison.OrdinalIgnoreCase) &&
                 fieldAccess.Object != null)
             {

@@ -284,11 +284,12 @@ End Module";
     [Test]
     public void Cpp_InterfaceReturn_FuncOfUnmappedArg_ThrowsCapabilityError()
     {
-        // Func itself maps to std::function, but its DateTime generic argument is
-        // unmapped and must be recursed into and rejected.
+        // Func itself maps to std::function, but its Regex generic argument is
+        // unmapped and must be recursed into and rejected. (Re-pinned from DateTime
+        // to Regex by the P1 Task 10 flip — DateTime is NativeOwned now.)
         var source = @"
 Interface IFoo
-    Function GetVal() As Func(Of DateTime)
+    Function GetVal() As Func(Of Regex)
 End Interface
 Module Test
     Sub Main()
@@ -300,7 +301,7 @@ End Module";
             var output = CompileToCpp(source, out var errors);
             Assert.That(errors, Is.Empty, "expected capability exception, got pipeline errors: " + string.Join("; ", errors));
         });
-        Assert.That(ex.Message, Does.Contain("DateTime"));
+        Assert.That(ex.Message, Does.Contain("Regex"));
     }
 
     [Test]
@@ -637,7 +638,11 @@ End Sub
         // .ToString(fmt), String.Length and New String(c, n) emitted garbage —
         // `DateTime->Now` on nothing, calls to a nonexistent ConsoleWriteLine,
         // .NET properties on std::string. The template surface must lower to
-        // real C++ (cout, BasicLangRt time helpers, .length(), std::string(n,c)).
+        // real C++ (cout, .length(), std::string(n,c)).
+        // P1 Task 10 re-pin: DateTime is NativeOwned now, so the std::time_t
+        // `BasicLangRt::Now`/`FormatTime` shim is GONE — DateTime.Now lowers
+        // through the surface static dispatch to BasicLang::DateTime::Now() and
+        // ToString(fmt) to the native member.
         var source = @"
 Using System
 
@@ -670,12 +675,18 @@ End Module";
         Assert.That(userCode, Does.Not.Contain("DateTime->"), "DateTime.Now emitted as member access on nothing:\n" + output);
         Assert.That(userCode, Does.Not.Contain("ConsoleWriteLine"), "Console.WriteLine emitted as a phantom function:\n" + output);
         Assert.That(userCode, Does.Not.Contain(".Length"), ".NET Length property leaked into C++:\n" + output);
-        Assert.That(userCode, Does.Not.Contain(".ToString"), ".NET ToString leaked into C++:\n" + output);
 
         // ...replaced by real C++.
         Assert.That(output, Does.Contain("cout"), "Console.WriteLine must lower to cout:\n" + output);
-        Assert.That(output, Does.Contain("BasicLangRt::Now()"), "DateTime.Now must lower to the runtime helper:\n" + output);
-        Assert.That(output, Does.Contain("BasicLangRt::FormatTime"), "DateTime ToString must lower to the runtime helper:\n" + output);
+        Assert.That(userCode, Does.Contain("BasicLang::DateTime::Now()"),
+            "DateTime.Now must lower to the native static (surface dispatch):\n" + output);
+        Assert.That(userCode, Does.Match(@"\.ToString\(""HH:mm:ss""\)"),
+            "DateTime.ToString(fmt) must lower to the native member:\n" + output);
+        Assert.That(output, Does.Not.Contain("BasicLangRt"),
+            "the std::time_t DateTime shim (BasicLangRt::Now/FormatTime) must be fully dismantled:\n" + output);
+        Assert.That(userCode, Does.Not.Contain("std::time_t"),
+            "no std::time_t DateTime temps survive the P1 flip (the native runtime's own "
+            + "internal std::time_t use is stripped with the spliced bodies):\n" + output);
         Assert.That(output, Does.Match(@"std::string\(\s*t\d+,\s*'='\)"), "New String(c, n) must lower to std::string(n, c):\n" + output);
         Assert.That(output, Does.Contain(".length()"), "String.Length must lower to .length():\n" + output);
     }

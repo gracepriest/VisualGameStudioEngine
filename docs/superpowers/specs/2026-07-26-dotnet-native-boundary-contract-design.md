@@ -22,8 +22,10 @@ The work is decomposed into three sub-projects, built in this order:
    in the contract assumes AOT, so a hosted-CLR transport (hostfxr) can be
    added later for reflection-heavy libraries without changing the contract.
 2. **P1 — native BCL types** (separate spec, next): pure-C++ implementations of
-   `DateTime`, `TimeSpan`, `Guid`, `StringBuilder`, `Decimal`, `SByte`;
-   removes them from the reject list. No managed runtime involved.
+   `DateTime`, `TimeSpan`, `Guid`, `StringBuilder`, `Decimal`, `DateTimeOffset`;
+   removes them from the reject list. `SByte` leaves the reject list too, but as
+   an ordinary `Bridged` primitive (`int8_t`), not a native BCL type. No managed
+   runtime involved.
 3. **P2 — .NET library access** (separate spec, last): the AOT shim, generated
    C++ proxies, build/`.blproj` integration, and hand-written C++ access to
    the same proxies.
@@ -71,9 +73,9 @@ Every type name resolvable in a native project belongs to exactly one category:
 
 | Category | Meaning | Examples |
 |---|---|---|
-| `NativeOwned` | Pure C++ implementation; never crosses as a handle | After P1: `DateTime`, `TimeSpan`, `Guid`, `StringBuilder`, `Decimal`, `SByte` |
+| `NativeOwned` | Pure C++ implementation; never crosses as a handle | After P1: `DateTime`, `TimeSpan`, `Guid`, `StringBuilder`, `Decimal`, `DateTimeOffset` |
 | `ManagedOwned` | Lives in the GC heap; crosses only as a handle | `Regex`, `Stream`, `Uri`, `FileInfo`, `DirectoryInfo`, all user-assembly / NuGet types |
-| `Bridged` | Value-converted at the edge; both sides have a native representation | `String`, numeric primitives, blittable structs |
+| `Bridged` | Value-converted at the edge; both sides have a native representation | `String`, numeric primitives (incl. `SByte` after P1 — a plain `int8_t`, not a native BCL type), blittable structs |
 | `Rejected` | Known to the registry, no permitted use in native projects; category-aware diagnostic | `Object` (has a legacy `void*` mapping, but erasure is unsound) |
 
 **Single source of truth.** One registry class in `BasicLang` replaces the three

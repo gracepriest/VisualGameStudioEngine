@@ -9,37 +9,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
     /// </summary>
     public static class CppRuntimeSources
     {
-        /// <summary>
-        /// Minimal .NET-surface runtime helpers (DateTime.Now / ToString(fmt)) in
-        /// <c>namespace BasicLangRt</c>. Ends with a blank line (the separator the
-        /// combined-output emission always wrote).
-        /// </summary>
-        public const string DotNetSurfaceHelpers = @"// Minimal .NET-surface runtime (DateTime helpers)
-namespace BasicLangRt {
-    inline std::time_t Now() { return std::time(nullptr); }
-    inline std::string FormatTime(std::time_t t, const std::string& netFormat = """") {
-        std::string fmt = netFormat.empty() ? std::string(""%Y-%m-%d %H:%M:%S"") : netFormat;
-        if (!netFormat.empty()) {
-            auto replaceAll = [&fmt](const std::string& from, const std::string& to) {
-                size_t pos = 0;
-                while ((pos = fmt.find(from, pos)) != std::string::npos) { fmt.replace(pos, from.size(), to); pos += to.size(); }
-            };
-            // lowercase tokens first so mm/MM cannot interfere
-            replaceAll(""yyyy"", ""%Y""); replaceAll(""ss"", ""%S""); replaceAll(""mm"", ""%M"");
-            replaceAll(""dd"", ""%d""); replaceAll(""HH"", ""%H""); replaceAll(""MM"", ""%m"");
-        }
-        std::tm tmv{};
-        #ifdef _WIN32
-        localtime_s(&tmv, &t);
-        #else
-        localtime_r(&t, &tmv);
-        #endif
-        char buf[128];
-        std::strftime(buf, sizeof(buf), fmt.c_str(), &tmv);
-        return std::string(buf);
-    }
-}
-";
+        // REMOVED at the P1 Task 10 flip: `DotNetSurfaceHelpers` (namespace BasicLangRt —
+        // `Now()` returning std::time_t and `FormatTime(t, netFormat)` converting .NET
+        // format tokens to strftime). DateTime is a NativeOwned type now: BasicLang::DateTime
+        // in bl_bcltypes.hpp owns both `Now()` and the format-token handling inside
+        // `ToString(fmt)`, and the header is spliced unconditionally into both emission
+        // modes. The const became empty, so the two EmitDotNetSurfaceHelpers /
+        // SpliceRuntimeSource call sites went with it.
 
         /// <summary>
         /// Synchronous <c>Task&lt;T&gt;</c> emulation body. Emitted INSIDE an already-open

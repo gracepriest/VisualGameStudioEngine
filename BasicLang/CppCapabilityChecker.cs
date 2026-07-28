@@ -42,10 +42,38 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
     /// Feature checks (async/yield/finally/lambda/generics) are deleted as each feature lands
     /// (see docs/superpowers/plans/2026-07-05-cpp-backend-overhaul.md tasks 2-6).
     /// The unmapped-.NET-type and Object checks are permanent until a .NET-surface design exists.
+    /// <para>
+    /// TWO passes, deliberately separate:
+    /// </para>
+    /// <list type="number">
+    ///   <item><description>
+    ///     <b>Type positions</b> (<see cref="CheckType"/>): every declared type in the
+    ///     module — return types, parameters, locals, globals, class fields, pure
+    ///     interface/abstract signatures — gated by <see cref="BoundaryTypeRegistry"/>.
+    ///   </description></item>
+    ///   <item><description>
+    ///     <b>Member surface</b> (P1 spec §4.1, <c>CheckNativeBclSurfaceUse</c>): member
+    ///     calls, property reads, <c>New</c> expressions and conversions involving the
+    ///     NativeOwned BCL types, gated by <see cref="NativeBclSurface"/>. This pass also
+    ///     reaches EXPRESSION-position uses of Rejected types, which pass 1 structurally
+    ///     cannot see (no declared type slot exists for <c>New Regex("x")</c> as an
+    ///     argument).
+    ///   </description></item>
+    /// </list>
+    /// The type-position walk is hand-mirrored against ModuleTypeWalker.AllTypes — keep it
+    /// in sync with ForeignFeatureChecker / CppCodeGenerator.ModuleUsesCollections.
     /// </summary>
     public class CppCapabilityChecker
     {
         private HashSet<string> _userDefinedNames;
+        /// <summary>
+        /// Names that resolve to a VALUE in the current function (locals + parameters)
+        /// plus module globals. Mirrors CppCodeGenerator._declaredIdentifiers: a static
+        /// member access arrives as an IRFieldAccess whose receiver is an IRVariable
+        /// literally NAMED after the type ("DateTime"), so a declared identifier of that
+        /// name means the access is an ordinary instance access, not a static one.
+        /// </summary>
+        private HashSet<string> _valueNamesInScope;
 
         public List<string> Check(IRModule module)
         {
@@ -57,8 +85,24 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             foreach (var name in module.Enums.Keys) _userDefinedNames.Add(name);
             foreach (var name in module.Delegates.Keys) _userDefinedNames.Add(name);
 
+            // P1 Task 10 rider: a user-defined type that shadows one of the NativeOwned
+            // BCL names is a hard conflict on the C++ backend. Before the flip these were
+            // name-rejected as "unmapped .NET types"; after it, MapType would SILENTLY
+            // remap the user's `Class Guid` to BasicLang::Guid (constructing the runtime
+            // type, losing every user member). BasicLang has no namespaces to disambiguate
+            // with, so the only honest answer is a rename request.
+            foreach (var name in _userDefinedNames)
+                if (BoundaryTypeRegistry.Categorize(name) == BoundaryTypeCategory.NativeOwned)
+                    diags.Add($"'{name}' conflicts with a native BCL type on the C++ backend — rename the type");
+
+            var globalNames = module.GlobalVariables?.Values.Select(g => g.Name) ?? Enumerable.Empty<string>();
+
             foreach (var func in module.Functions)
             {
+                _valueNamesInScope = new HashSet<string>(globalNames, StringComparer.OrdinalIgnoreCase);
+                foreach (var p in func.Parameters) _valueNamesInScope.Add(p.Name);
+                foreach (var lv in func.LocalVariables) _valueNamesInScope.Add(lv.Name);
+
                 // Iterator return types (IEnumerable(Of T)) lower to BasicLang::Generator<T>
                 if (!func.IsIterator)
                     CheckType(func.ReturnType, $"return type of '{func.Name}'", diags);
@@ -136,6 +180,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         private void CheckInstruction(IRInstruction inst, string funcName, List<string> diags)
         {
+            // P1 spec §4.1: the member-surface pass. Runs on EVERY instruction kind
+            // (including the ones with their own cases below) before the switch.
+            CheckNativeBclSurfaceUse(inst, funcName, diags);
+
             switch (inst)
             {
                 case IRTryCatch tc:
@@ -181,6 +229,191 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                         CheckSwitchPattern(pc, funcName, diags);
                     break;
             }
+        }
+
+        // ====================================================================
+        // P1 member-surface pass (spec §4.1). NativeBclSurface is the single
+        // source of truth for what the native BCL types implement; anything off
+        // that table gets a clean BasicLang diagnostic here instead of dying as
+        // a raw C++ compiler error at the end of the pipeline. The pass also
+        // closes the PRE-EXISTING leak where a Rejected type used only in
+        // EXPRESSION position (never in a declared type) slipped past CheckType.
+        // ====================================================================
+
+        /// <summary>
+        /// True when <paramref name="typeName"/> is one of the P1 native BCL types AND
+        /// is not shadowed by a user-defined type of the same name (that collision has
+        /// its own diagnostic, emitted once in <see cref="Check"/> — the member pass
+        /// must not pile a second, misleading "no native member" message on top).
+        /// </summary>
+        private bool IsNativeBcl(string typeName) =>
+            typeName != null
+            && BoundaryTypeRegistry.Categorize(typeName) == BoundaryTypeCategory.NativeOwned
+            && !_userDefinedNames.Contains(typeName);
+
+        private void CheckNativeBclSurfaceUse(IRInstruction inst, string funcName, List<string> diags)
+        {
+            switch (inst)
+            {
+                case IRInstanceMethodCall mc:
+                    if (IsNativeBcl(mc.Object?.Type?.Name))
+                        CheckSurfaceMember(mc.Object.Type.Name, mc.MethodName, mc.Arguments?.Count ?? 0,
+                            isCallSyntax: true, funcName, diags);
+                    break;
+
+                case IRFieldAccess fa:
+                    // Static form: the receiver is an IRVariable literally NAMED after the
+                    // type ("DateTime.Now"), unless a value of that name is in scope.
+                    if (fa.Object is IRVariable staticRecv
+                        && IsNativeBcl(staticRecv.Name)
+                        && !_valueNamesInScope.Contains(staticRecv.Name))
+                    {
+                        CheckSurfaceMember(staticRecv.Name, fa.FieldName, argCount: 0,
+                            isCallSyntax: false, funcName, diags);
+                    }
+                    else if (IsNativeBcl(fa.Object?.Type?.Name))
+                    {
+                        // Instance form: only Property entries survive the codegen bridge
+                        // (`d.Year` → `.Year()`); anything else emits a raw member access.
+                        CheckSurfaceMember(fa.Object.Type.Name, fa.FieldName, argCount: 0,
+                            isCallSyntax: false, funcName, diags);
+                    }
+                    break;
+
+                case IRNewObject no:
+                    var newCategory = BoundaryTypeRegistry.Categorize(no.ClassName);
+                    if (newCategory == BoundaryTypeCategory.Rejected)
+                    {
+                        // LEAK CLOSURE (spec §4.1): `Console.WriteLine(New Regex("x"))` never
+                        // declares a Regex-typed position, so CheckType never saw it and the
+                        // construction reached codegen as an undefined C++ type.
+                        diags.Add($".NET type '{no.ClassName}' (New expression in '{funcName}') — " +
+                                  "no C++ mapping exists for this type");
+                    }
+                    else if (IsNativeBcl(no.ClassName))
+                    {
+                        CheckSurfaceCtor(no.ClassName, no.Arguments?.Count ?? 0, funcName, diags);
+                    }
+                    break;
+
+                case IRCast cast:
+                    CheckNativeBclCast(cast, funcName, diags);
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Validate one member use against <see cref="NativeBclSurface"/>. Unknown name,
+        /// wrong member KIND for the syntax used, or an unsupported arity all produce a
+        /// clean diagnostic naming the type and the member.
+        /// </summary>
+        private void CheckSurfaceMember(string typeName, string memberName, int argCount,
+            bool isCallSyntax, string funcName, List<string> diags)
+        {
+            if (memberName == null) return;
+
+            if (!NativeBclSurface.TryGetMember(typeName, memberName, out var member)
+                || member.Kind == NativeBclMemberKind.Constructor)
+            {
+                diags.Add($"'{typeName}' has no native member '{memberName}' on the C++ backend " +
+                          $"(in '{funcName}')");
+                return;
+            }
+
+            // Paren-less access (IRFieldAccess) is only valid for the property kinds; call
+            // syntax (IRInstanceMethodCall) only for the method kinds. A mismatch would
+            // slip past the codegen bridges and emit an uncompilable member access.
+            var isPropertyKind = member.Kind == NativeBclMemberKind.Property
+                || member.Kind == NativeBclMemberKind.StaticProperty;
+            if (isCallSyntax == isPropertyKind)
+            {
+                diags.Add($"'{typeName}.{memberName}' is a " +
+                          (isPropertyKind ? "property" : "method") +
+                          $" on the C++ backend's native surface and cannot be used as a " +
+                          (isCallSyntax ? "method call" : "property") + $" (in '{funcName}')");
+                return;
+            }
+
+            if (isPropertyKind) return;
+
+            // ParamCounts lists the supported arities; EMPTY means the member takes none
+            // (the zero-arg instance methods share NoParams with the property rows).
+            var accepted = member.ParamCounts != null && member.ParamCounts.Length > 0
+                ? member.ParamCounts
+                : new[] { 0 };
+            if (!accepted.Contains(argCount))
+            {
+                diags.Add($"'{typeName}.{memberName}' on the C++ backend takes " +
+                          string.Join(" or ", accepted) + $" argument(s), not {argCount} (in '{funcName}')");
+            }
+        }
+
+        /// <summary>Validate a <c>New</c> against the surface's ctor arities (spec §5).</summary>
+        private void CheckSurfaceCtor(string typeName, int argCount, string funcName, List<string> diags)
+        {
+            if (!NativeBclSurface.TryGetMember(typeName, ".ctor", out var ctor))
+            {
+                diags.Add($"'{typeName}' has no native constructor on the C++ backend (in '{funcName}')");
+                return;
+            }
+            if (!ctor.ParamCounts.Contains(argCount))
+            {
+                diags.Add($"'New {typeName}' on the C++ backend takes " +
+                          string.Join(" or ", ctor.ParamCounts) +
+                          $" argument(s), not {argCount} (in '{funcName}')");
+            }
+        }
+
+        /// <summary>
+        /// BL type names the C++ backend lowers to intN_t/uintN_t. Mirrors
+        /// CppCodeGenerator.IsIntegralTypeName — keep the two in sync.
+        /// </summary>
+        private static bool IsIntegralName(string name) =>
+            name != null && name.ToLowerInvariant() is
+                "byte" or "ubyte" or "sbyte" or "short" or "ushort"
+                or "integer" or "uinteger" or "long" or "ulong";
+
+        private static bool IsDecimalName(string name) =>
+            name != null && name.Equals("Decimal", StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsFloatingName(string name) =>
+            name != null && (name.Equals("Double", StringComparison.OrdinalIgnoreCase)
+                          || name.Equals("Single", StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>
+        /// Gate the conversion pairs the C++ backend actually lowers for the native BCL
+        /// types (spec §6.2 + the Task 10 Decimal-conversion rider). Decimal has explicit
+        /// lowerings in both directions; every OTHER NativeOwned conversion would emit a
+        /// <c>static_cast</c> on a struct with no conversion operator — invalid C++, which
+        /// this design forbids reaching the C++ compiler.
+        /// </summary>
+        private void CheckNativeBclCast(IRCast cast, string funcName, List<string> diags)
+        {
+            var target = cast.Type?.Name;
+            var source = cast.Value?.Type?.Name;
+            var targetNative = IsNativeBcl(target);
+            var sourceNative = IsNativeBcl(source);
+            if (!targetNative && !sourceNative) return;
+
+            // Decimal ← Decimal / integral / Single / Double  (spec §10: integral is exact).
+            if (IsDecimalName(target) && targetNative
+                && (IsDecimalName(source) || IsIntegralName(source) || IsFloatingName(source)))
+                return;
+
+            // Decimal → Decimal / Single / Double / integral / String / Boolean.
+            if (IsDecimalName(source) && sourceNative
+                && (IsDecimalName(target) || IsFloatingName(target) || IsIntegralName(target)
+                    || string.Equals(target, "String", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(target, "Boolean", StringComparison.OrdinalIgnoreCase)))
+                return;
+
+            // Identity on any native type (CType(d, DateTime) where d is already a DateTime).
+            if (targetNative && sourceNative
+                && string.Equals(target, source, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            diags.Add($"converting '{source ?? "?"}' to '{target ?? "?"}' (in '{funcName}') is not " +
+                      "supported on the C++ backend; the native BCL types define no such conversion");
         }
 
         /// <summary>
@@ -239,6 +472,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var name = type.Name;
             var category = BoundaryTypeRegistry.Categorize(name);
             if (string.IsNullOrEmpty(name) || category == BoundaryTypeCategory.Bridged) return;
+            // P1 (spec §2/§6.2): the six native BCL types are real C++ implementations
+            // (BasicLang::DateTime/TimeSpan/Guid/Decimal/DateTimeOffset + the shared_ptr
+            // StringBuilder) and MapType lowers them BY CATEGORY. The registry flip alone
+            // is NOT sufficient: without this branch a NativeOwned class-kind type falls
+            // through to the unknown-class rejection at the bottom of this method, and a
+            // primitive-kind one silently miscompiles. A user-defined type SHADOWING one
+            // of these names is caught by the conflict diagnostic in Check().
+            if (category == BoundaryTypeCategory.NativeOwned) return;
             if (CppExceptionTypes.IsNetException(name)) return; // mapped to std::runtime_error
             if (name.Equals("Task", StringComparison.OrdinalIgnoreCase)) return; // BasicLang::Task<T>
             if (name.Equals("IEnumerable", StringComparison.OrdinalIgnoreCase)

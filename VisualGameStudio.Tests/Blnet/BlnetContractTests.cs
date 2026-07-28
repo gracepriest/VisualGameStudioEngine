@@ -103,18 +103,54 @@ public class BoundaryTypeRegistryTests
         Assert.That(BasicLang.BoundaryTypeRegistry.Categorize(name),
             Is.EqualTo(BasicLang.BoundaryTypeCategory.Bridged));
 
-    [TestCase("Object")] [TestCase("Decimal")] [TestCase("SByte")]
-    [TestCase("DateTime")] [TestCase("DateTimeOffset")] [TestCase("TimeSpan")]
-    [TestCase("Guid")] [TestCase("StringBuilder")] [TestCase("Regex")]
+    /// <summary>
+    /// The POST-P1 reject list: the six native BCL types and SByte moved out
+    /// (P1 Task 10 flip); what remains is P2 territory (Object's void* erasure
+    /// is unsound; Regex/Uri/Stream/FileInfo/DirectoryInfo need the managed shim).
+    /// </summary>
+    [TestCase("Object")] [TestCase("Regex")]
     [TestCase("Uri")] [TestCase("Stream")] [TestCase("FileInfo")] [TestCase("DirectoryInfo")]
     public void TodaysRejectList_IsRejected(string name) =>
         Assert.That(BasicLang.BoundaryTypeRegistry.Categorize(name),
             Is.EqualTo(BasicLang.BoundaryTypeCategory.Rejected));
 
+    /// <summary>Spec §2: the six P1 types are NativeOwned (pure C++, never a handle).</summary>
+    [TestCase("DateTime")] [TestCase("TimeSpan")] [TestCase("Guid")]
+    [TestCase("StringBuilder")] [TestCase("Decimal")] [TestCase("DateTimeOffset")]
+    public void P1Types_AreNativeOwned(string name) =>
+        Assert.That(BasicLang.BoundaryTypeRegistry.Categorize(name),
+            Is.EqualTo(BasicLang.BoundaryTypeCategory.NativeOwned));
+
+    /// <summary>
+    /// Spec §2: SByte is a plain primitive, NOT a native BCL type — it joins
+    /// CppTypeMapper._typeMap as int8_t and therefore Bridged (MapperInvariant
+    /// above holds the two in lockstep).
+    /// </summary>
+    [Test]
+    public void SByte_IsBridged() =>
+        Assert.That(BasicLang.BoundaryTypeRegistry.Categorize("SByte"),
+            Is.EqualTo(BasicLang.BoundaryTypeCategory.Bridged));
+
     [Test]
     public void CategorizeIsCaseInsensitive() =>
-        Assert.That(BasicLang.BoundaryTypeRegistry.Categorize("datetime"),
+        Assert.That(BasicLang.BoundaryTypeRegistry.Categorize("regex"),
             Is.EqualTo(BasicLang.BoundaryTypeCategory.Rejected));
+
+    /// <summary>
+    /// Task 10 rider (b): a leading `System.` qualifier normalizes away, mirroring
+    /// NativeBclSurface.Normalize. Without this, `System.DateTime` categorized
+    /// Unknown — a hole in the reject net pre-P1, and post-flip it would bypass
+    /// EVERY piece of NativeOwned codegen machinery (all of which keys off
+    /// Categorize) and silently emit a bare, undefined C++ type name.
+    /// </summary>
+    [TestCase("System.DateTime", BasicLang.BoundaryTypeCategory.NativeOwned)]
+    [TestCase("System.Text.StringBuilder", BasicLang.BoundaryTypeCategory.NativeOwned)]
+    [TestCase("System.Object", BasicLang.BoundaryTypeCategory.Rejected)]
+    [TestCase("System.Text.RegularExpressions.Regex", BasicLang.BoundaryTypeCategory.Rejected)]
+    [TestCase("System.Int32", BasicLang.BoundaryTypeCategory.Unknown)] // .NET CLR spelling is not a BL name
+    public void QualifiedSystemName_NormalizesToTheSameCategory(
+        string name, BasicLang.BoundaryTypeCategory expected) =>
+        Assert.That(BasicLang.BoundaryTypeRegistry.Categorize(name), Is.EqualTo(expected));
 
     [Test]
     public void UnknownName_IsUnknown() =>
@@ -122,11 +158,17 @@ public class BoundaryTypeRegistryTests
             Is.EqualTo(BasicLang.BoundaryTypeCategory.Unknown));
 
     [Test]
-    public void NativeOwnedAndManagedOwned_StartEmpty_PreP1()
-    {
+    public void NativeOwned_ContainsExactlyTheP1Six() =>
         Assert.That(BasicLang.BoundaryTypeRegistry.NamesInCategory(
-            BasicLang.BoundaryTypeCategory.NativeOwned), Is.Empty);
+                BasicLang.BoundaryTypeCategory.NativeOwned),
+            Is.EquivalentTo(new[]
+            {
+                "DateTime", "TimeSpan", "Guid", "StringBuilder", "Decimal", "DateTimeOffset"
+            }));
+
+    /// <summary>ManagedOwned is P2 territory — still empty after the P1 flip.</summary>
+    [Test]
+    public void ManagedOwned_StillEmpty() =>
         Assert.That(BasicLang.BoundaryTypeRegistry.NamesInCategory(
             BasicLang.BoundaryTypeCategory.ManagedOwned), Is.Empty);
-    }
 }

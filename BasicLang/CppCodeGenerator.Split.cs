@@ -380,8 +380,6 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine("using namespace std;");
             WriteLine();
 
-            SpliceRuntimeSource(CppRuntimeSources.DotNetSurfaceHelpers);
-
             WriteLine("namespace BasicLang {");
             SpliceRuntimeSource(CppRuntimeSources.TaskEmulation);
             SpliceRuntimeSource(CppRuntimeSources.GeneratorCoroutine);

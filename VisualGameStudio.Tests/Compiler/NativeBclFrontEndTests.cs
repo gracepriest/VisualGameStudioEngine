@@ -721,19 +721,25 @@ End Module"), Is.EqualTo("0\n1"));
             new[] { "not defined" });
 
     /// <summary>
-    /// Surface/registry coherence, Task-5 edition: the surface's declared type
-    /// list is exactly the six member-bearing P1 types (SByte is Bridged — a
-    /// plain primitive with NO surface entries), and every listed type has at
-    /// least one member row.
-    /// TODO(Task 10): once the registry flip lands, re-point the expected set
-    /// at BoundaryTypeRegistry.NamesInCategory(NativeOwned) so this becomes a
-    /// mechanical drift test like the mapper invariant.
+    /// Surface/registry coherence, Task-10 edition: now that the registry flip
+    /// has landed, this is a MECHANICAL drift test (like the mapper invariant) —
+    /// the surface's declared type list must equal
+    /// BoundaryTypeRegistry.NamesInCategory(NativeOwned) in BOTH directions, and
+    /// every listed type must carry at least one member row. Adding a NativeOwned
+    /// registry entry without a surface table (or vice versa) fails here rather
+    /// than silently producing a type the member pass cannot check.
+    /// SByte is Bridged — a plain primitive with NO surface entries.
     /// </summary>
     [Test]
     public void SurfaceCoherence_AllSevenTypesHaveEntries()
     {
-        var expected = new[] { "DateTime", "TimeSpan", "Guid", "StringBuilder", "Decimal", "DateTimeOffset" };
-        Assert.That(NativeBclSurface.TypeNames, Is.EquivalentTo(expected));
+        var expected = BoundaryTypeRegistry
+            .NamesInCategory(BoundaryTypeCategory.NativeOwned).ToArray();
+        Assert.That(expected, Is.EquivalentTo(
+                new[] { "DateTime", "TimeSpan", "Guid", "StringBuilder", "Decimal", "DateTimeOffset" }),
+            "the NativeOwned registry set changed — update the surface table too");
+        Assert.That(NativeBclSurface.TypeNames, Is.EquivalentTo(expected),
+            "NativeBclSurface and BoundaryTypeRegistry.NativeOwned drifted");
         foreach (var typeName in expected)
         {
             Assert.That(NativeBclSurface.Members.Any(m => m.TypeName == typeName), Is.True,

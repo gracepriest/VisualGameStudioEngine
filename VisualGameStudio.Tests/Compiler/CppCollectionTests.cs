@@ -193,10 +193,13 @@ End Sub";
     [Test]
     public void Cpp_ListOfUnmappedType_StillRejected()
     {
-        // Generic args are still capability-checked: DateTime has no C++ mapping.
+        // Generic args are still capability-checked. Re-pinned to Regex by the P1
+        // Task 10 flip: DateTime is NativeOwned now, so the REMAINING reject list
+        // (Object/Regex/Uri/Stream/FileInfo/DirectoryInfo — P2 territory) carries
+        // this scenario shape.
         var source = @"
 Sub Main()
-    Dim d As New List(Of DateTime)()
+    Dim d As New List(Of Regex)()
 End Sub";
         Assert.Throws<CppCapabilityException>(() => CompileToCpp(source, out _));
     }
@@ -1046,11 +1049,12 @@ End Sub";
     [Test]
     public void Cpp_ModuleGlobalUnmappedType_StillRejected()
     {
-        // A file-scope `Dim g As DateTime` global (unmapped .NET type) must still
+        // A file-scope `Dim g As Regex` global (unmapped .NET type) must still
         // trip the C++ capability checker — the globals position was previously
-        // unchecked and would have bypassed the rejection.
+        // unchecked and would have bypassed the rejection. (Re-pinned from
+        // DateTime to Regex by the P1 Task 10 flip.)
         var source = @"
-Dim g As DateTime
+Dim g As Regex
 Sub Main()
 End Sub";
         Assert.Throws<CppCapabilityException>(() => CompileToCpp(source, out _));
@@ -1061,11 +1065,12 @@ End Sub";
     {
         // A pure interface method signature carries no impl body, so nothing lowers
         // into module.Functions — the capability checker must walk interface method
-        // signatures directly, or a `Function Foo() As DateTime` on an interface
+        // signatures directly, or a `Function Foo() As Regex` on an interface
         // degrades to a raw C++ compiler error instead of a clean BasicLang diagnostic.
+        // (Re-pinned from DateTime to Regex by the P1 Task 10 flip.)
         var source = @"
 Interface IThing
-    Function Foo() As DateTime
+    Function Foo() As Regex
 End Interface
 Sub Main()
 End Sub";
@@ -1073,26 +1078,29 @@ End Sub";
     }
 
     [Test]
-    public void Cpp_DecimalLocal_StillRejected()
+    public void Cpp_RejectedLocal_StillRejected()
     {
-        // Decimal is NOT mapped by CppTypeMapper — it must be rejected cleanly. If it
+        // Stream is NOT mapped by CppTypeMapper — it must be rejected cleanly. If it
         // were (wrongly) categorized Bridged in BoundaryTypeRegistry it would pass the
-        // check and then MapType would emit a bare, UNDEFINED C++ type `Decimal` (silent miscompile).
+        // check and then MapType would emit a bare, UNDEFINED C++ type `Stream` (silent
+        // miscompile). Re-pinned from Decimal to Stream by the P1 Task 10 flip —
+        // Decimal is NativeOwned now and lowers to BasicLang::Decimal.
         var source = @"
 Sub Main()
-    Dim x As Decimal
+    Dim x As Stream
 End Sub";
         Assert.Throws<CppCapabilityException>(() => CompileToCpp(source, out _));
     }
 
     [Test]
-    public void Cpp_InterfaceMethodDecimalReturnType_StillRejected()
+    public void Cpp_InterfaceMethodRejectedReturnType_StillRejected()
     {
-        // Same, in an interface signature position (M1 context): Decimal has no C++
-        // mapping, so a `Function Foo() As Decimal` on an interface must reject cleanly.
+        // Same, in an interface signature position (M1 context): Stream has no C++
+        // mapping, so a `Function Balance() As Stream` on an interface must reject
+        // cleanly. (Re-pinned from Decimal to Stream by the P1 Task 10 flip.)
         var source = @"
 Interface IMoney
-    Function Balance() As Decimal
+    Function Balance() As Stream
 End Interface
 Sub Main()
 End Sub";

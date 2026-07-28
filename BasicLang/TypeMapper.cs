@@ -215,7 +215,13 @@ namespace BasicLang.Compiler.CodeGen
             _typeMap["Char"] = "char";
             _typeMap["Void"] = "void";
             _typeMap["Object"] = "void*";
-            _typeMap["Byte"] = "int8_t";
+            // P1 spec §2: Byte is UNSIGNED (.NET semantics, matching the C# backend's
+            // `byte`); SByte is the signed one and joins the map as a Bridged primitive.
+            // Before P1 this said int8_t — a live cross-backend divergence.
+            // §14.5 sweep (recorded for Task 14): NO test pinned a C++ Byte expectation
+            // to int8_t, so the fix carries no test churn.
+            _typeMap["Byte"] = "uint8_t";
+            _typeMap["SByte"] = "int8_t";
             _typeMap["Short"] = "int16_t";
             _typeMap["UByte"] = "uint8_t";
             _typeMap["UShort"] = "uint16_t";

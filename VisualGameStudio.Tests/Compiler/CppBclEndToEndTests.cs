@@ -173,4 +173,206 @@ public class CppBclEndToEndTests
 
         Assert.That(stdout.Trim(), Is.EqualTo("7"));
     }
+
+    // ------------------------------------------------------------------
+    // Task 10: the flip. Behaviour that only became reachable when the six
+    // types moved to NativeOwned and SByte to Bridged.
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Spec §14.6: <c>cout &lt;&lt; uint8_t/int8_t</c> streams a CHARACTER — before this
+    /// commit <c>Console.WriteLine(byteValued65)</c> printed 'A'. .NET (and the C#
+    /// backend) print the NUMBER, so the console lowering widens Byte/SByte args.
+    /// This is the ONE deliberately LIVE behaviour change of the Byte signedness fix.
+    /// </summary>
+    [Test, Category("Integration")]
+    public void BytePrinting_IsNumeric_NotCharacter()
+    {
+        var output = CompileToCppOptimized(@"
+Sub Main()
+    Dim b As Byte = 65
+    Console.WriteLine(b)
+    Dim s As SByte = -3
+    Console.WriteLine(s)
+End Sub");
+
+        var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
+        if (compiler == null) Assert.Ignore("No C++ compiler available on this machine");
+        var stdout = VisualGameStudio.Tests.Native.CppCompile
+            .CompileAndRun(output, compiler.Value).Replace("\r\n", "\n");
+
+        Assert.That(stdout, Is.EqualTo("65\n-3\n"));
+    }
+
+    /// <summary>
+    /// The Task 10 rider: EVERY Decimal→non-floating conversion on BOTH lowering
+    /// routes (CType via IRCast, C* intrinsics via EmitStdLibCall). A raw
+    /// <c>static_cast</c>/<c>std::to_string</c> on the BasicLang::Decimal struct is
+    /// invalid C++, so each target has an explicit engine-backed lowering.
+    /// NOTE — the <c>CInt</c> value pinned here (19, truncating) is the C++ backend's
+    /// LONG-STANDING C*-intrinsic convention, shared with Double/Single; the C#
+    /// backend emits Convert.ToInt32 (which rounds → 20). That divergence is
+    /// PRE-EXISTING and not Decimal-specific; the cross-backend parity oracle
+    /// (Task 13) must use CType, not CInt, for integral narrowing.
+    /// </summary>
+    [Test, Category("Integration")]
+    public void DecimalConversions_ToIntegralStringAndBoolean_LowerThroughTheEngine()
+    {
+        var output = CompileToCppOptimized(@"
+Sub Main()
+    Dim d As Decimal = 19.99
+    Console.WriteLine(CType(d, Integer))
+    Console.WriteLine(CType(d, Long))
+    Console.WriteLine(CType(d, String))
+    Console.WriteLine(CInt(d))
+    Console.WriteLine(CStr(d))
+    Console.WriteLine(CDbl(d))
+    Dim neg As Decimal = -2.9
+    Console.WriteLine(CType(neg, Integer))
+    Dim zero As Decimal = 0
+    If CType(d, Boolean) Then
+        Console.WriteLine(""nonzero"")
+    End If
+    If Not CBool(zero) Then
+        Console.WriteLine(""zero"")
+    End If
+End Sub");
+
+        // Every Decimal source goes through an engine member, never a raw cast.
+        var userCode = CppGeneratedCode.WithoutBclRuntime(output);
+        Assert.That(userCode, Does.Contain(").ToDouble()"),
+            "Decimal→integral/Double must route through ToDouble():\n" + output);
+        Assert.That(userCode, Does.Contain(").ToString()"),
+            "Decimal→String must route through the engine's ToString():\n" + output);
+        Assert.That(userCode, Does.Contain("IsZeroMag()"),
+            "Decimal→Boolean must route through the engine's zero test:\n" + output);
+
+        var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
+        if (compiler == null) Assert.Ignore("No C++ compiler available on this machine");
+        var stdout = VisualGameStudio.Tests.Native.CppCompile
+            .CompileAndRun(output, compiler.Value).Replace("\r\n", "\n");
+
+        Assert.That(stdout, Is.EqualTo(
+            // truncate-toward-zero (matching .NET's (int)decimal), scale-preserving
+            // ToString, VarR8FromDec ToDouble, and Convert.ToBoolean's `!= 0`.
+            "19\n19\n19.99\n19\n19.99\n19.99\n-2\nnonzero\nzero\n"));
+    }
+}
+
+/// <summary>
+/// P1 Task 10, spec §4.1: the member-surface capability pass. These run the
+/// CHECKER only (no C++ compiler), so they are fast, not Integration. Task 11
+/// extends the set; this fixture pins the classes of diagnostic the flip
+/// introduced plus the two riders it resolved.
+/// </summary>
+[TestFixture]
+public class CppNativeBclDiagnosticTests
+{
+    private static CppCapabilityException AssertRejected(string source)
+    {
+        var tokens = new Lexer(source).Tokenize();
+        var ast = new Parser(tokens).Parse();
+        var analyzer = new SemanticAnalyzer();
+        Assert.That(analyzer.Analyze(ast), Is.True,
+            "expected a C++ CAPABILITY rejection, but semantic analysis failed first: "
+            + string.Join("; ", analyzer.Errors.Select(e => e.Message)));
+        var irModule = new IRBuilder(analyzer).Build(ast, "TestModule");
+        return Assert.Throws<CppCapabilityException>(() =>
+            new CppCodeGenerator(new CppCodeGenOptions { GenerateComments = false }).Generate(irModule));
+    }
+
+    /// <summary>A member outside the curated v1 surface names the type AND the member.</summary>
+    [Test]
+    public void UnknownNativeMember_IsRejectedCleanly()
+    {
+        var ex = AssertRejected(@"
+Sub Main()
+    Dim d As New DateTime(2026, 1, 1)
+    Console.WriteLine(d.ToBinary())
+End Sub");
+        Assert.That(ex.Message, Does.Contain("DateTime").And.Contain("ToBinary"));
+    }
+
+    /// <summary>
+    /// Guid.ToByteArray is deliberately NOT on the BL v1 surface (spec §5: its Byte()
+    /// return has no pinned C++ mapping) — it must reject, not silently emit the
+    /// native out-param overload.
+    /// </summary>
+    [Test]
+    public void GuidToByteArray_IsNotOnTheBlSurface()
+    {
+        var ex = AssertRejected(@"
+Sub Main()
+    Dim g As Guid = Guid.NewGuid()
+    Console.WriteLine(g.ToByteArray())
+End Sub");
+        Assert.That(ex.Message, Does.Contain("Guid").And.Contain("ToByteArray"));
+    }
+
+    /// <summary>An arity outside the surface's overload list is named explicitly.</summary>
+    [Test]
+    public void UnknownConstructorArity_IsRejectedCleanly()
+    {
+        var ex = AssertRejected(@"
+Sub Main()
+    Dim g As New Guid()
+    Console.WriteLine(g.ToString())
+End Sub");
+        Assert.That(ex.Message, Does.Contain("New Guid").And.Contain("1 argument"));
+    }
+
+    /// <summary>
+    /// LEAK CLOSURE (spec §4.1): a Rejected type used ONLY in expression position never
+    /// declares a typed slot, so CheckType never saw it and the construction reached
+    /// codegen as an undefined C++ type name (BL6006-class raw failure).
+    /// </summary>
+    [Test]
+    public void RejectedTypeInExpressionPosition_IsRejectedCleanly()
+    {
+        var ex = AssertRejected(@"
+Sub Main()
+    Console.WriteLine(New Regex(""x""))
+End Sub");
+        Assert.That(ex.Message, Does.Contain("Regex").And.Contain("no C++ mapping"));
+    }
+
+    /// <summary>
+    /// Task 10 rider (c): before the flip a user-defined `Class Guid` was name-rejected
+    /// as an unmapped .NET type; after it, MapType would SILENTLY remap it to
+    /// BasicLang::Guid. BasicLang has no namespace to disambiguate with, so the honest
+    /// answer is an explicit rename request.
+    /// </summary>
+    [Test]
+    public void UserTypeShadowingNativeBcl_IsRejectedCleanly()
+    {
+        var ex = AssertRejected(@"
+Class Guid
+    Public X As Integer
+End Class
+
+Sub Main()
+    Dim g As New Guid()
+    g.X = 5
+    Console.WriteLine(g.X)
+End Sub");
+        Assert.That(ex.Message, Does.Contain("'Guid' conflicts with a native BCL type"));
+        Assert.That(ex.Message, Does.Contain("rename"));
+    }
+
+    /// <summary>
+    /// Task 10 rider (a), rejection half: a conversion the engine does NOT define must
+    /// fail here, never as a raw static_cast on a struct at the C++ compiler.
+    /// </summary>
+    [Test]
+    public void UnsupportedNativeConversion_IsRejectedCleanly()
+    {
+        var ex = AssertRejected(@"
+Sub Main()
+    Dim d As New DateTime(2026, 1, 1)
+    Dim n As Integer = CType(d, Integer)
+    Console.WriteLine(n)
+End Sub");
+        Assert.That(ex.Message, Does.Contain("DateTime").And.Contain("Integer"));
+        Assert.That(ex.Message, Does.Contain("not supported on the C++ backend"));
+    }
 }
