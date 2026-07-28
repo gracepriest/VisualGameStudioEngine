@@ -3264,9 +3264,9 @@ public partial class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Restores the panel state from before the debug session started: resets the Output panel's
-    /// category. Debug tool windows are not auto-managed here — they stay hidden unless the user
-    /// opened them from the View ▸ Debug Windows menu.
+    /// Restores the pre-debug workbench when a debug session ends: resets the Output panel's category
+    /// and dismisses any debug tool windows the user opened during the session (Breakpoints,
+    /// Variables, …) so the IDE returns to its clean, no-debug-windows state.
     /// </summary>
     private void RestorePreDebugPanels()
     {
@@ -3275,6 +3275,10 @@ public partial class MainWindowViewModel : ViewModelBase
 
         // Restore the output category to what it was before debugging
         OutputPanel.SelectedCategory = _preDebugOutputCategory;
+
+        // Debug windows exist only during an active session — close any the user opened so they
+        // disappear when debugging ends (mirrors their absence at startup).
+        _dockFactory.CloseDebugPanels();
     }
 
     private async void OnDebugStopped(object? sender, StoppedEventArgs e)
