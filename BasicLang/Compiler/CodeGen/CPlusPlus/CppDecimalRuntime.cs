@@ -200,7 +200,9 @@ inline void u_reduce(U256& m, int32_t& scale) {
 /* ================= Decimal =================
    .NET System.Decimal layout: 96-bit unsigned magnitude {lo_, mid_, hi_}; flags_ holds
    the scale (0-28) in bits 16-23 and the sign in bit 31; all other flag bits are zero.
-   GetBits order == {lo_, mid_, hi_, flags_}. Negative zero is canonicalized to +0. */
+   GetBits order == {lo_, mid_, hi_, flags_}. Negative zero is canonicalized to +0 —
+   DOCUMENTED DIVERGENCE: real .NET PRESERVES a -0 sign flag through GetBits, so Task 9
+   must not round-trip .NET -0 bits via FromParts expecting the sign to survive. */
 struct Decimal {
     uint32_t lo_, mid_, hi_, flags_;
 
@@ -277,8 +279,11 @@ inline Decimal dec_addsub(const Decimal& a, const Decimal& b, bool negateB) {
     }
     int c = u_cmp(A, B);
     if (c == 0) return make_decimal(U256{}, s, false);
-    if (c > 0) { u_sub(A, B); return make_decimal(A, s, sa); }
+    /* the scale-ALIGNED difference can still exceed 96 bits (MaxValue - 0.5 aligns the
+       larger side x10) — reduce on BOTH paths too (no-op when it already fits) */
+    if (c > 0) { u_sub(A, B); u_reduce(A, s); return make_decimal(A, s, sa); }
     u_sub(B, A);
+    u_reduce(B, s);
     return make_decimal(B, s, sb);
 }
 
