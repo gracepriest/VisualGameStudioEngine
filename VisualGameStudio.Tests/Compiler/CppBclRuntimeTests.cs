@@ -36,10 +36,44 @@ public class CppBclRuntimeTests
         Assert.That(CppBclRuntime.BclHeader, Does.Contain("struct DateTime"));
 
     [Test]
+    public void BclHeader_DefinesGuidStruct() =>
+        Assert.That(CppBclRuntime.BclHeader, Does.Contain("struct Guid"));
+
+    [Test]
+    public void BclHeader_DefinesDateTimeOffsetStruct() =>
+        Assert.That(CppBclRuntime.BclHeader, Does.Contain("struct DateTimeOffset"));
+
+    /// <summary>StringBuilder is the ONE reference type (spec §3): shared_ptr + enable_shared_from_this.</summary>
+    [Test]
+    public void BclHeader_DefinesStringBuilderReferenceType() =>
+        Assert.That(CppBclRuntime.BclHeader,
+            Does.Contain("class StringBuilder : public std::enable_shared_from_this<StringBuilder>"));
+
+    /// <summary>
+    /// Spec §3: NewGuid entropy comes from the OS CSPRNG — never rand()/mt19937.
+    /// (Comments may NAME the banned APIs; the pins reject their usable spellings.)
+    /// </summary>
+    [Test]
+    public void BclHeader_NewGuidUsesOsCsprng()
+    {
+        Assert.That(CppBclRuntime.BclHeader, Does.Contain("BCryptGenRandom"));
+        Assert.That(CppBclRuntime.BclHeader, Does.Not.Contain("std::mt19937"));
+        Assert.That(CppBclRuntime.BclHeader, Does.Not.Contain("std::rand"));
+        Assert.That(CppBclRuntime.BclHeader, Does.Not.Contain("random_device"));
+    }
+
+    /// <summary>Task 7 rider (3): the unused &lt;chrono&gt; include is gone.</summary>
+    [Test]
+    public void BclHeader_DoesNotIncludeChrono() =>
+        Assert.That(CppBclRuntime.BclHeader, Does.Not.Contain("<chrono>"));
+
+    [Test]
     public void BclHeader_DefinesHashSpecializations()
     {
         Assert.That(CppBclRuntime.BclHeader, Does.Contain("std::hash<BasicLang::DateTime>"));
         Assert.That(CppBclRuntime.BclHeader, Does.Contain("std::hash<BasicLang::TimeSpan>"));
+        Assert.That(CppBclRuntime.BclHeader, Does.Contain("std::hash<BasicLang::Guid>"));
+        Assert.That(CppBclRuntime.BclHeader, Does.Contain("std::hash<BasicLang::DateTimeOffset>"));
     }
 
     [Test]
@@ -49,6 +83,12 @@ public class CppBclRuntimeTests
             Does.Contain("operator<<(std::ostream& os, const TimeSpan& v)"));
         Assert.That(CppBclRuntime.BclHeader,
             Does.Contain("operator<<(std::ostream& os, const DateTime& v)"));
+        Assert.That(CppBclRuntime.BclHeader,
+            Does.Contain("operator<<(std::ostream& os, const Guid& v)"));
+        Assert.That(CppBclRuntime.BclHeader,
+            Does.Contain("operator<<(std::ostream& os, const DateTimeOffset& v)"));
+        Assert.That(CppBclRuntime.BclHeader,
+            Does.Contain("operator<<(std::ostream& os, const std::shared_ptr<StringBuilder>& sb)"));
     }
 
     /// <summary>
@@ -383,5 +423,293 @@ int main() {
             "now_kind", "utcnow_kind", "today_kind", "today_midnight",
             "loc_kind", "rt_stable", "rt_kind", "loc_idem", "utc_idem",
             "pre1970_throws", "msg_range");
+    }
+
+    /// <summary>
+    /// Guid battery (spec §3/§5/§8): CSPRNG v4 NewGuid (version/variant nibbles), D/N/B/P
+    /// Parse+ToString round-trips, the §8 mixed-endian ToByteArray pin, Empty, field-order
+    /// CompareTo (NOT byte-array order), stream inserter, hash. All pinned values verified
+    /// against real .NET ([Guid] oracle).
+    /// </summary>
+    [Test, Category("Integration")]
+    public void Guid_NewGuid_ParseFormats_ByteOrder_CompareTo()
+    {
+        var output = Run(@"
+#include <sstream>
+using namespace BasicLang;
+int main() {
+    Guid g1 = Guid::NewGuid(), g2 = Guid::NewGuid();
+    printf(""unique=%d\n"", !(g1 == g2));
+    std::string s1 = g1.ToString();
+    printf(""shape=%d\n"", s1.size() == 36 && s1[8] == '-' && s1[13] == '-' && s1[18] == '-' && s1[23] == '-');
+    int lower = 1;
+    for (size_t i = 0; i < s1.size(); ++i) {
+        if (i == 8 || i == 13 || i == 18 || i == 23) continue;
+        char c = s1[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) lower = 0;
+    }
+    printf(""lowerhex=%d\n"", lower);
+    printf(""version4=%d\n"", s1[14] == '4' && g2.ToString()[14] == '4');
+    char v1 = s1[19], v2 = g2.ToString()[19];
+    printf(""variant=%d\n"", (v1=='8'||v1=='9'||v1=='a'||v1=='b') && (v2=='8'||v2=='9'||v2=='a'||v2=='b'));
+    printf(""rt=%d\n"", Guid::Parse(s1) == g1);
+    /* String ctor (spec 5) == Parse */
+    printf(""ctor=%d\n"", Guid(""00112233-4455-6677-8899-aabbccddeeff"") == Guid::Parse(""00112233-4455-6677-8899-aabbccddeeff""));
+    Guid p = Guid::Parse(""00112233-4455-6677-8899-aabbccddeeff"");
+    printf(""d_fmt=%d\n"", p.ToString() == ""00112233-4455-6677-8899-aabbccddeeff"");
+    printf(""n_fmt=%d\n"", p.ToString(""N"") == ""00112233445566778899aabbccddeeff"");
+    printf(""b_fmt=%d\n"", p.ToString(""B"") == ""{00112233-4455-6677-8899-aabbccddeeff}"");
+    printf(""p_fmt=%d\n"", p.ToString(""P"") == ""(00112233-4455-6677-8899-aabbccddeeff)"");
+    printf(""parse_n=%d\n"", Guid::Parse(""00112233445566778899aabbccddeeff"") == p);
+    printf(""parse_b=%d\n"", Guid::Parse(""{00112233-4455-6677-8899-aabbccddeeff}"") == p);
+    printf(""parse_p=%d\n"", Guid::Parse(""(00112233-4455-6677-8899-aabbccddeeff)"") == p);
+    printf(""parse_upper=%d\n"", Guid::Parse(""00112233-4455-6677-8899-AABBCCDDEEFF"") == p);
+    /* spec 8 pin: .NET mixed-endian ToByteArray — a,b,c little-endian, d verbatim */
+    uint8_t b[16];
+    p.ToByteArray(b);
+    const uint8_t want[16] = {0x33,0x22,0x11,0x00,0x55,0x44,0x77,0x66,0x88,0x99,0xaa,0xbb,0xcc,0xdd,0xee,0xff};
+    printf(""bytes=%d\n"", std::memcmp(b, want, 16) == 0);
+    printf(""empty=%d\n"", Guid::Empty().ToString() == ""00000000-0000-0000-0000-000000000000"");
+    /* FIELD-order CompareTo (verified .NET: -1 here; memcmp of ToByteArray would say +1) */
+    printf(""cmp_a=%d\n"", Guid::Parse(""00000001-0000-0000-0000-000000000000"")
+                              .CompareTo(Guid::Parse(""00000100-0000-0000-0000-000000000000"")) == -1);
+    printf(""cmp_d=%d\n"", Guid::Parse(""00000000-0000-0000-0100-000000000000"")
+                              .CompareTo(Guid::Parse(""00000000-0000-0000-0002-000000000000"")) == 1);
+    printf(""cmp_eq=%d\n"", p.CompareTo(Guid(""00112233-4455-6677-8899-aabbccddeeff"")) == 0);
+    std::ostringstream oss;
+    oss << p;
+    printf(""stream=%d\n"", oss.str() == p.ToString());
+    printf(""hash_eq=%d\n"", std::hash<Guid>{}(p) == std::hash<Guid>{}(Guid(""00112233-4455-6677-8899-aabbccddeeff"")));
+    int threw = 0;
+    try { Guid::Parse(""garbage""); } catch (const std::runtime_error&) { threw = 1; }
+    printf(""bad_throws=%d\n"", threw);
+    threw = 0;
+    try { Guid::Parse(""00112233-4455-6677-8899-aabbccddeef""); } catch (const std::runtime_error&) { threw = 1; }
+    printf(""short_throws=%d\n"", threw);
+    threw = 0;
+    try { Guid::Parse(""0011223-34455-6677-8899-aabbccddeeff""); } catch (const std::runtime_error&) { threw = 1; }
+    printf(""dashpos_throws=%d\n"", threw);
+    return 0;
+}
+");
+        AssertMarkers(output,
+            "unique", "shape", "lowerhex", "version4", "variant", "rt", "ctor",
+            "d_fmt", "n_fmt", "b_fmt", "p_fmt",
+            "parse_n", "parse_b", "parse_p", "parse_upper",
+            "bytes", "empty", "cmp_a", "cmp_d", "cmp_eq", "stream", "hash_eq",
+            "bad_throws", "short_throws", "dashpos_throws");
+    }
+
+    /// <summary>
+    /// DateTimeOffset battery (spec §3): UTC-instant equality (the spec's own 10:00+02:00 ==
+    /// 09:00+01:00 example), Unix epoch conversions, offset validation throws, instant-preserving
+    /// ToOffset, invariant ToString with the zzz suffix, stream inserter, UTC-instant hash across
+    /// offsets, and the OS local seam. Pinned values verified against real .NET.
+    /// </summary>
+    [Test, Category("Integration")]
+    public void DateTimeOffset_InstantEquality_UnixTime_ToOffset_OsSeam()
+    {
+        var output = Run(@"
+#include <sstream>
+using namespace BasicLang;
+int main() {
+    /* spec 3's example: equality compares the UTC instant */
+    DateTimeOffset a(DateTime(2026, 1, 1, 10, 0, 0), TimeSpan::FromHours(2.0));
+    DateTimeOffset b(DateTime(2026, 1, 1, 9, 0, 0), TimeSpan::FromHours(1.0));
+    printf(""instant_eq=%d\n"", a == b);
+    printf(""cmp0=%d\n"", a.CompareTo(b) == 0);
+    printf(""utcdt=%d\n"", a.UtcDateTime() == DateTime(2026, 1, 1, 8, 0, 0));
+    printf(""utcdt_kind=%d\n"", a.UtcDateTime().Kind() == DateTime::KindUtc);
+    printf(""clockdt=%d\n"", a.ClockDateTime() == DateTime(2026, 1, 1, 10, 0, 0));
+    printf(""clock_kind=%d\n"", a.ClockDateTime().Kind() == DateTime::KindUnspecified);
+    printf(""ticks_clock=%d\n"", a.TicksValue() == DateTime(2026, 1, 1, 10, 0, 0).Ticks());
+    printf(""offset=%d\n"", a.Offset() == TimeSpan::FromHours(2.0));
+    /* Unix conversions (verified .NET: 2026-01-01T00:00:00Z == 1767225600) */
+    printf(""unix0=%d\n"", DateTimeOffset::FromUnixTimeSeconds(0).UtcDateTime() == DateTime(1970, 1, 1));
+    printf(""unix0_off=%d\n"", DateTimeOffset::FromUnixTimeSeconds(0).Offset() == TimeSpan::Zero());
+    DateTimeOffset u = DateTimeOffset::FromUnixTimeSeconds(1767225600LL);
+    printf(""unix2026=%d\n"", u.UtcDateTime() == DateTime(2026, 1, 1));
+    printf(""unix_rt=%d\n"", u.ToUnixTimeSeconds() == 1767225600LL);
+    printf(""unixms_rt=%d\n"", u.ToUnixTimeMilliseconds() == 1767225600000LL);
+    printf(""unixms_from=%d\n"", DateTimeOffset::FromUnixTimeMilliseconds(1767225600000LL) == u);
+    printf(""unix_neg=%d\n"", DateTimeOffset::FromUnixTimeSeconds(-1).ToUnixTimeSeconds() == -1);
+    /* offset validation (spec 11): >14h, sub-minute, Utc-kind clock + nonzero offset */
+    int threw = 0;
+    try { DateTimeOffset bad(DateTime(2026, 1, 1), TimeSpan::FromHours(15.0)); (void)bad; } catch (const std::runtime_error&) { threw = 1; }
+    printf(""h15_throws=%d\n"", threw);
+    threw = 0;
+    try { DateTimeOffset bad(DateTime(2026, 1, 1), TimeSpan::FromTicks(5)); (void)bad; } catch (const std::runtime_error&) { threw = 1; }
+    printf(""subminute_throws=%d\n"", threw);
+    threw = 0;
+    try {
+        DateTimeOffset bad(DateTime::FromTicksAndKind(DateTime(2026, 1, 1).Ticks(), DateTime::KindUtc),
+                           TimeSpan::FromHours(2.0));
+        (void)bad;
+    } catch (const std::runtime_error&) { threw = 1; }
+    printf(""utc_nonzero_throws=%d\n"", threw);
+    /* Utc-kind one-arg ctor -> offset 0, same instant */
+    DateTimeOffset uk(DateTime::FromTicksAndKind(DateTime(2026, 1, 1, 8, 0, 0).Ticks(), DateTime::KindUtc));
+    printf(""utc_ctor=%d\n"", uk == a && uk.Offset() == TimeSpan::Zero());
+    /* ToOffset preserves the instant, shifts the clock (verified .NET: 13:00 +05:00) */
+    DateTimeOffset t = a.ToOffset(TimeSpan::FromHours(5.0));
+    printf(""tooffset_eq=%d\n"", t == a);
+    printf(""tooffset_clock=%d\n"", t.ClockDateTime() == DateTime(2026, 1, 1, 13, 0, 0));
+    printf(""tooffset_off=%d\n"", t.Offset() == TimeSpan::FromHours(5.0));
+    printf(""touniv=%d\n"", a.ToUniversalTime().Offset() == TimeSpan::Zero() && a.ToUniversalTime() == a);
+    /* ordering across offsets is instant-based */
+    DateTimeOffset later(DateTime(2026, 1, 1, 11, 0, 0), TimeSpan::FromHours(2.0));
+    printf(""lt=%d\n"", a < later && later > a && a.CompareTo(later) == -1);
+    /* invariant ToString ""MM/dd/yyyy HH:mm:ss zzz"" (verified .NET, both signs) */
+    printf(""str=%d\n"", a.ToString() == ""01/01/2026 10:00:00 +02:00"");
+    DateTimeOffset neg(DateTime(2026, 1, 1, 10, 0, 0), TimeSpan::FromHours(-5.0));
+    printf(""str_neg=%d\n"", neg.ToString() == ""01/01/2026 10:00:00 -05:00"");
+    std::ostringstream oss;
+    oss << a;
+    printf(""stream=%d\n"", oss.str() == a.ToString());
+    /* hash = UTC instant, equal across offsets — matches equality (spec 6.2) */
+    printf(""hash=%d\n"", std::hash<DateTimeOffset>{}(a) == std::hash<DateTimeOffset>{}(b));
+    /* OS local seam: Now/UtcNow same instant modulo the call gap; local round-trip */
+    DateTimeOffset now = DateTimeOffset::Now(), un = DateTimeOffset::UtcNow();
+    printf(""now_close=%d\n"", (un.UtcDateTime() - now.UtcDateTime()).Duration() < TimeSpan(0, 2, 0));
+    printf(""utcnow_off0=%d\n"", un.Offset() == TimeSpan::Zero());
+    printf(""now_off_range=%d\n"", now.Offset().Duration() <= TimeSpan(14, 0, 0));
+    DateTime loc = u.LocalDateTime();
+    printf(""local_kind=%d\n"", loc.Kind() == DateTime::KindLocal);
+    DateTimeOffset back(loc);
+    printf(""local_rt=%d\n"", back == u);
+    printf(""tolocal_eq=%d\n"", u.ToLocalTime() == u);
+    return 0;
+}
+");
+        AssertMarkers(output,
+            "instant_eq", "cmp0", "utcdt", "utcdt_kind", "clockdt", "clock_kind", "ticks_clock", "offset",
+            "unix0", "unix0_off", "unix2026", "unix_rt", "unixms_rt", "unixms_from", "unix_neg",
+            "h15_throws", "subminute_throws", "utc_nonzero_throws", "utc_ctor",
+            "tooffset_eq", "tooffset_clock", "tooffset_off", "touniv", "lt",
+            "str", "str_neg", "stream", "hash",
+            "now_close", "utcnow_off0", "now_off_range", "local_kind", "local_rt", "tolocal_eq");
+    }
+
+    /// <summary>
+    /// StringBuilder battery (spec §3/§9/§11): shared_ptr chaining (make_shared ALWAYS —
+    /// enable_shared_from_this), typed Append overloads (int/bool per the plan), the ALIASING
+    /// reference-semantics proof, byte-index Insert/Remove with range-checked throws, Replace-all,
+    /// AppendFormat {0}, and UTF-8 BYTE Length for a 2-byte char (documented divergence from
+    /// .NET's UTF-16 count of 1).
+    /// </summary>
+    [Test, Category("Integration")]
+    public void StringBuilder_Chaining_Aliasing_ByteIndices_Throws()
+    {
+        var output = Run(@"
+#include <sstream>
+using namespace BasicLang;
+static void appendVia(std::shared_ptr<StringBuilder> sb) { sb->Append(""!""); }
+int main() {
+    /* NB: always make_shared — enable_shared_from_this is UB on a bare object */
+    auto sb = std::make_shared<StringBuilder>();
+    auto r = sb->Append(""a"")->Append(""b"")->AppendLine(""c"");
+    printf(""chain=%d\n"", sb->ToString() == ""abc\n"");
+    printf(""chain_same=%d\n"", r.get() == sb.get());
+    /* typed Appends (verified .NET: True427; bool must NOT print 1/0) */
+    auto t = std::make_shared<StringBuilder>();
+    t->Append(true)->Append((int32_t)42)->Append((int64_t)7);
+    printf(""typed=%d\n"", t->ToString() == ""True427"");
+    auto f = std::make_shared<StringBuilder>();
+    f->Append(false);
+    printf(""false=%d\n"", f->ToString() == ""False"");
+    /* Append(double) matches the backend's std::to_string style */
+    auto dbl = std::make_shared<StringBuilder>();
+    dbl->Append(1.5);
+    printf(""dbl=%d\n"", dbl->ToString() == std::to_string(1.5));
+    /* ALIASING: two shared_ptr, ONE builder — reference semantics (spec 3) */
+    auto p1 = std::make_shared<StringBuilder>(std::string(""x""));
+    auto p2 = p1;
+    p2->Append(""y"");
+    appendVia(p1);
+    printf(""alias=%d\n"", p1->ToString() == ""xy!"" && p2->ToString() == ""xy!"");
+    /* byte-index Insert/Remove (verified .NET: h..ello / hello) */
+    auto ins = std::make_shared<StringBuilder>(std::string(""hello""));
+    ins->Insert(1, "".."");
+    printf(""insert=%d\n"", ins->ToString() == ""h..ello"");
+    ins->Remove(1, 2);
+    printf(""remove=%d\n"", ins->ToString() == ""hello"");
+    /* range checks throw std::runtime_error (spec 11) */
+    int threw = 0;
+    try { std::make_shared<StringBuilder>(std::string(""ab""))->Insert(3, ""x""); } catch (const std::runtime_error&) { threw = 1; }
+    printf(""insert_oor=%d\n"", threw);
+    threw = 0;
+    try { std::make_shared<StringBuilder>(std::string(""ab""))->Insert(-1, ""x""); } catch (const std::runtime_error&) { threw = 1; }
+    printf(""insert_neg=%d\n"", threw);
+    threw = 0;
+    try { std::make_shared<StringBuilder>(std::string(""ab""))->Remove(1, 5); } catch (const std::runtime_error&) { threw = 1; }
+    printf(""remove_oor=%d\n"", threw);
+    /* Replace hits every occurrence (verified .NET: aYYbYYc) */
+    auto rep = std::make_shared<StringBuilder>(std::string(""aXbXc""));
+    rep->Replace(""X"", ""YY"");
+    printf(""replace=%d\n"", rep->ToString() == ""aYYbYYc"");
+    /* AppendFormat {0}-only v1 (verified .NET: aZbZ) */
+    auto fmt = std::make_shared<StringBuilder>();
+    fmt->AppendFormat(""a{0}b{0}"", ""Z"");
+    printf(""fmt=%d\n"", fmt->ToString() == ""aZbZ"");
+    /* Length counts UTF-8 BYTES: 2 for a 2-byte char (spec 9 documented divergence; .NET says 1) */
+    auto u8 = std::make_shared<StringBuilder>(std::string(""\xC3\xA9""));
+    printf(""len_bytes=%d\n"", u8->Length() == 2);
+    u8->Insert(0, ""a"");
+    printf(""len_bytes3=%d\n"", u8->Length() == 3);
+    auto c = std::make_shared<StringBuilder>(std::string(""abc""));
+    c->Clear();
+    printf(""clear=%d\n"", c->Length() == 0 && c->ToString() == """");
+    printf(""cap=%d\n"", std::make_shared<StringBuilder>(std::string(""abc""))->Capacity() >= 3);
+    /* shared_ptr stream inserter */
+    std::ostringstream oss;
+    oss << p1;
+    printf(""stream=%d\n"", oss.str() == p1->ToString());
+    return 0;
+}
+");
+        AssertMarkers(output,
+            "chain", "chain_same", "typed", "false", "dbl", "alias",
+            "insert", "remove", "insert_oor", "insert_neg", "remove_oor",
+            "replace", "fmt", "len_bytes", "len_bytes3", "clear", "cap", "stream");
+    }
+
+    /// <summary>
+    /// Task 7 riders on the Task 6 code: (1) TimeSpan::Parse 8-digit day counts throw cleanly
+    /// (previously UB int64 overflow) and MinValue round-trips through Parse (its magnitude is
+    /// INT64_MAX+1 — one tick past what a positive accumulation can hold); (2) the Interval
+    /// bound is INCLUSIVE like .NET's. All values verified against real .NET.
+    /// </summary>
+    [Test, Category("Integration")]
+    public void Riders_ParseDayGuard_MinValueRoundTrip_IntervalInclusiveBound()
+    {
+        var output = Run(@"
+using namespace BasicLang;
+int main() {
+    int threw = 0;
+    try { TimeSpan::Parse(""99999999.00:00:00""); } catch (const std::runtime_error&) { threw = 1; }
+    printf(""daymag_throws=%d\n"", threw);
+    threw = 0;
+    try { TimeSpan::Parse(""10675200.00:00:00""); } catch (const std::runtime_error&) { threw = 1; }
+    printf(""dayedge_throws=%d\n"", threw);
+    threw = 0;
+    try { TimeSpan::Parse(""10675199.23:00:00""); } catch (const std::runtime_error&) { threw = 1; }
+    printf(""inrange_days_overflow_throws=%d\n"", threw);
+    printf(""min_str=%d\n"", TimeSpan::MinValue().ToString() == ""-10675199.02:48:05.4775808"");
+    printf(""min_rt=%d\n"", TimeSpan::Parse(TimeSpan::MinValue().ToString()) == TimeSpan::MinValue());
+    printf(""max_str=%d\n"", TimeSpan::MaxValue().ToString() == ""10675199.02:48:05.4775807"");
+    printf(""max_rt=%d\n"", TimeSpan::Parse(TimeSpan::MaxValue().ToString()) == TimeSpan::MaxValue());
+    /* inclusive Interval bound (verified .NET: accepted, ticks 9223372036854770000) */
+    printf(""bound_pos=%d\n"", TimeSpan::FromMilliseconds(922337203685476.5).Ticks() == 9223372036854770000LL);
+    printf(""bound_neg=%d\n"", TimeSpan::FromMilliseconds(-922337203685476.5).Ticks() == -9223372036854770000LL);
+    threw = 0;
+    try { TimeSpan::FromMilliseconds(922337203685477.0); } catch (const std::runtime_error&) { threw = 1; }
+    printf(""over_throws=%d\n"", threw);
+    return 0;
+}
+");
+        AssertMarkers(output,
+            "daymag_throws", "dayedge_throws", "inrange_days_overflow_throws",
+            "min_str", "min_rt", "max_str", "max_rt",
+            "bound_pos", "bound_neg", "over_throws");
     }
 }

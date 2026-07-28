@@ -3,8 +3,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
     /// <summary>
     /// Single source of truth for the native BCL value-type runtime header
     /// <c>bl_bcltypes.hpp</c> (spec: docs/superpowers/specs/2026-07-27-p1-native-bcl-types-design.md
-    /// §3/§9): DateTime + TimeSpan (P1 Task 6; Guid/DateTimeOffset/StringBuilder extend the
-    /// same file in Task 7).
+    /// §3/§9): DateTime + TimeSpan (P1 Task 6) plus Guid, DateTimeOffset and StringBuilder
+    /// (P1 Task 7) in one file.
     ///
     /// Structured as (Includes, Body) so Task 9 can splice the include-free
     /// <see cref="BclBody"/> into the generated runtime in BOTH emission modes (std headers
@@ -36,7 +36,6 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 #include <cstdio>
 #include <cstring>
 #include <ctime>
-#include <chrono>
 #include <functional>
 #include <memory>
 #include <ostream>
@@ -116,6 +115,53 @@ inline bool parse_digits(const std::string& s, size_t& pos, int minD, int maxD, 
 inline bool expect_char(const std::string& s, size_t& pos, char c) {
     if (pos < s.size() && s[pos] == c) { ++pos; return true; }
     return false;
+}
+
+/* ---- OS CSPRNG seam for Guid::NewGuid (spec §3: BCryptGenRandom on Windows;
+   NEVER rand()/mt19937). Exact-signature extern declarations keep this header
+   include-free AND conflict-free when a TU also includes <windows.h>/<bcrypt.h>.
+   - MSVC (incl. clang targeting MSVC): direct BCryptGenRandom, linked via
+     #pragma comment(lib, ""bcrypt"") — its signature uses only plain C++ types.
+   - MinGW g++/clang++: #pragma comment(lib) is a no-op there and the test
+     harness's fixed compile line cannot add -lbcrypt, so we call RtlGenRandom
+     (SystemFunction036, advapi32 — in MinGW's DEFAULT link set). Same kernel
+     CSPRNG as BCryptGenRandom, and its signature needs no Win32 struct tags —
+     LoadLibraryA/GetProcAddress declarations would drag in HMODULE
+     (struct HINSTANCE__*), which an include-free body opening its own namespace
+     cannot forward-declare at global scope without closing the namespace.
+   - POSIX: /dev/urandom (getrandom-backed on modern kernels). */
+#if defined(_MSC_VER)
+extern ""C"" long __stdcall BCryptGenRandom(void* hAlgorithm, unsigned char* pbBuffer,
+                                          unsigned long cbBuffer, unsigned long dwFlags);
+#pragma comment(lib, ""bcrypt"")
+#elif defined(_WIN32)
+extern ""C"" unsigned char __stdcall SystemFunction036(void* buffer, unsigned long length); /* RtlGenRandom */
+#endif
+
+inline void os_random_bytes(uint8_t* buf, uint32_t len) {
+#if defined(_MSC_VER)
+    if (BCryptGenRandom(nullptr, buf, len, 0x00000002UL /* BCRYPT_USE_SYSTEM_PREFERRED_RNG */) < 0)
+        throw std::runtime_error(""Guid: OS CSPRNG failure (BCryptGenRandom)"");
+#elif defined(_WIN32)
+    if (!SystemFunction036(buf, len))
+        throw std::runtime_error(""Guid: OS CSPRNG failure (RtlGenRandom)"");
+#else
+    std::FILE* f = std::fopen(""/dev/urandom"", ""rb"");
+    if (!f) throw std::runtime_error(""Guid: OS CSPRNG unavailable (/dev/urandom)"");
+    size_t got = std::fread(buf, 1, len, f);
+    std::fclose(f);
+    if (got != len) throw std::runtime_error(""Guid: OS CSPRNG short read (/dev/urandom)"");
+#endif
+}
+
+/* DateTimeOffset offset validation (spec §3/§11): whole minutes, |offset| <= 14:00.
+   Literal tick constants because TimeSpan is declared after bcl_detail. */
+inline int16_t dto_validate_offset(int64_t offsetTicks) {
+    if (offsetTicks % 600000000LL != 0)   /* TicksPerMinute */
+        throw std::runtime_error(""DateTimeOffset offset must be specified in whole minutes"");
+    if (offsetTicks < -504000000000LL || offsetTicks > 504000000000LL)   /* 14 hours */
+        throw std::runtime_error(""DateTimeOffset offset out of range (+/-14:00)"");
+    return (int16_t)(offsetTicks / 600000000LL);
 }
 
 } /* namespace bcl_detail */
@@ -259,14 +305,91 @@ private:
     void GetDateParts(int32_t& y, int32_t& mo, int32_t& d) const;
 };
 
+/* ---- Guid: 16 bytes, .NET field layout. Spec §3. ---- */
+struct Guid {
+    int32_t a_ = 0; int16_t b_ = 0, c_ = 0; uint8_t d_[8] = {};
+    Guid() = default;
+    explicit Guid(const std::string& s) { *this = Parse(s); }  /* spec §5 ctor (String); New Guid(""..."") lowers here */
+    static Guid NewGuid();                    /* v4 from OS CSPRNG: BCryptGenRandom (Windows) /
+                                                 /dev/urandom (else). NEVER rand()/mt19937.
+                                                 version nibble := 4, variant := 10xx (RFC 4122). */
+    static Guid Empty() { return Guid(); }
+    static Guid Parse(const std::string& s);  /* accepts D/N/B/P; throws on bad input */
+    std::string ToString() const;             /* ""D"": lowercase 8-4-4-4-12 */
+    std::string ToString(const std::string& fmt) const;   /* D N B P */
+    /* NATIVE-ONLY (not on the BL surface, spec §5): tests + the §8 conversion pair use it */
+    void ToByteArray(uint8_t out[16]) const;  /* .NET order: a,b,c little-endian then d_ verbatim (spec §8) */
+    int32_t CompareTo(const Guid& o) const;   /* field-by-field a,b,c then bytes — NOT memcmp of ToByteArray */
+    bool operator==(const Guid& o) const = default;
+};
+
+/* ---- DateTimeOffset: UTC DateTime + offset minutes. Spec §3. ---- */
+struct DateTimeOffset {
+    DateTime utc_;               /* stores the UTC instant, KindUnspecified */
+    int16_t offsetMinutes_ = 0;  /* ±14h, whole minutes; ctor validates */
+    DateTimeOffset() = default;
+    explicit DateTimeOffset(const DateTime& dt);                 /* .NET Kind rules: Utc→offset 0; Local/Unspecified→local zone offset */
+    DateTimeOffset(const DateTime& clockTime, const TimeSpan& offset);  /* validates offset; Kind rules per spec §3 sources (.NET: Utc+nonzero throws) */
+    static DateTimeOffset Now();  static DateTimeOffset UtcNow();
+    static DateTimeOffset FromUnixTimeSeconds(int64_t s);
+    static DateTimeOffset FromUnixTimeMilliseconds(int64_t ms);
+    DateTime UtcDateTime() const;             /* KindUtc, matching .NET (equality is ticks-only anyway) */
+    DateTime LocalDateTime() const;
+    DateTime ClockDateTime() const;           /* surfaced to BL as the 'DateTime' property */
+    TimeSpan Offset() const { return TimeSpan((int64_t)offsetMinutes_ * TimeSpan::TicksPerMinute); }
+    int64_t TicksValue() const { return ClockDateTime().Ticks(); }  /* BL 'Ticks' property = clock ticks (.NET) */
+    DateTimeOffset ToOffset(const TimeSpan& o) const;
+    DateTimeOffset ToUniversalTime() const { return DateTimeOffset(utc_, TimeSpan::Zero()); }
+    DateTimeOffset ToLocalTime() const;
+    int64_t ToUnixTimeSeconds() const;  int64_t ToUnixTimeMilliseconds() const;
+    std::string ToString() const;             /* invariant: MM/dd/yyyy HH:mm:ss zzz (+HH:mm) */
+    int32_t CompareTo(const DateTimeOffset& o) const { return utc_.CompareTo(o.utc_); }
+    /* equality/ordering compare the UTC instant (spec §3) */
+    bool operator==(const DateTimeOffset& o) const { return utc_ == o.utc_; }
+    bool operator!=(const DateTimeOffset& o) const { return !(*this == o); }
+    bool operator<(const DateTimeOffset& o) const  { return utc_ < o.utc_; }
+    bool operator<=(const DateTimeOffset& o) const { return utc_ <= o.utc_; }
+    bool operator>(const DateTimeOffset& o) const  { return utc_ > o.utc_; }
+    bool operator>=(const DateTimeOffset& o) const { return utc_ >= o.utc_; }
+};
+
+/* ---- StringBuilder: the ONE reference type. Spec §3. UTF-8 byte semantics (spec §9). ---- */
+class StringBuilder : public std::enable_shared_from_this<StringBuilder> {
+    std::string buf_;
+public:
+    StringBuilder() = default;
+    explicit StringBuilder(const std::string& s) : buf_(s) {}
+    /* Append family returns shared_from_this() so chains emit uniformly with -> (spec §3).
+       NB: requires the object to be OWNED by a shared_ptr — codegen always constructs via
+       make_shared (Task 9), and the runtime tests must too. */
+    std::shared_ptr<StringBuilder> Append(const std::string& s) { buf_ += s; return shared_from_this(); }
+    /* REQUIRED: without it a literal Append(""..."") picks the BOOL overload — array-to-pointer
+       + pointer->bool are STANDARD conversions and beat the user-defined one to std::string */
+    std::shared_ptr<StringBuilder> Append(const char* s) { buf_ += s; return shared_from_this(); }
+    std::shared_ptr<StringBuilder> Append(int32_t v) { buf_ += std::to_string(v); return shared_from_this(); }  /* REQUIRED: without it, Append(Integer) is ambiguous (int32->int64 and int32->double are both rank Conversion) */
+    std::shared_ptr<StringBuilder> Append(int64_t v) { buf_ += std::to_string(v); return shared_from_this(); }
+    std::shared_ptr<StringBuilder> Append(bool v) { buf_ += (v ? ""True"" : ""False""); return shared_from_this(); } /* else bool promotes to int and prints 1/0 vs .NET True/False */
+    std::shared_ptr<StringBuilder> Append(double v);   /* invariant formatting, matches the backend's existing double->string style */
+    std::shared_ptr<StringBuilder> AppendLine(const std::string& s = """") { buf_ += s; buf_ += ""\n""; return shared_from_this(); }
+    std::shared_ptr<StringBuilder> AppendFormat(const std::string& fmt, const std::string& a0); /* {0} only, v1 */
+    std::shared_ptr<StringBuilder> Insert(int32_t index, const std::string& s);   /* byte index; range-checked throw */
+    std::shared_ptr<StringBuilder> Remove(int32_t start, int32_t len);            /* range-checked */
+    std::shared_ptr<StringBuilder> Replace(const std::string& oldV, const std::string& newV);
+    std::shared_ptr<StringBuilder> Clear() { buf_.clear(); return shared_from_this(); }
+    std::string ToString() const { return buf_; }
+    int32_t Length() const { return (int32_t)buf_.size(); }   /* UTF-8 BYTES, documented divergence */
+    int32_t Capacity() const { return (int32_t)buf_.capacity(); }
+};
+
 /* ================= TimeSpan bodies ================= */
 
 inline TimeSpan TimeSpan::Interval(double v, int64_t scaleTicks) {
     if (v != v) throw std::runtime_error(""TimeSpan interval: value is NaN"");
     const double millisPerUnit = (double)(scaleTicks / TicksPerMillisecond);
     double millis = v * millisPerUnit + (v >= 0 ? 0.5 : -0.5);
-    /* .NET bound: |millis| <= Int64.MaxValue / TicksPerMillisecond */
-    if (!(millis > -922337203685477.0 && millis < 922337203685477.0))
+    /* .NET bound, INCLUSIVE: |millis| <= Int64.MaxValue / TicksPerMillisecond
+       (.NET throws only on millis > Max || millis < Min, so the bound itself is legal) */
+    if (!(millis >= -922337203685477.0 && millis <= 922337203685477.0))
         throw std::runtime_error(""TimeSpan overflow: interval out of range"");
     return TimeSpan((int64_t)millis * TicksPerMillisecond);
 }
@@ -320,8 +443,21 @@ inline TimeSpan TimeSpan::Parse(const std::string& s) {
         for (size_t k = pos - start; k < 7; ++k) frac *= 10;
     }
     if (pos != s.size() || hh > 23 || mm > 59 || ss > 59) fail();
-    int64_t t = days * TicksPerDay + hh * TicksPerHour + mm * TicksPerMinute + ss * TicksPerSecond + frac;
-    return TimeSpan(neg ? -t : t);
+    /* Day-magnitude guard: up to 8 day digits parse, so days * TicksPerDay could
+       overflow int64 (UB) before any check — cap at the largest representable day
+       count first. Components then accumulate SIGNED through CheckedAdd, which both
+       turns in-range-days overflow into the §11 runtime_error and lets
+       MinValue().ToString() round-trip (its magnitude is INT64_MAX + 1 — one tick
+       more than a positive accumulation could ever hold). */
+    if (days > 10675199) throw std::runtime_error(""TimeSpan overflow: '"" + s + ""' out of range"");
+    const int64_t sign = neg ? -1 : 1;
+    TimeSpan acc(0);
+    acc = CheckedAdd(acc.ticks_, sign * (days * TicksPerDay));
+    acc = CheckedAdd(acc.ticks_, sign * (hh * TicksPerHour));
+    acc = CheckedAdd(acc.ticks_, sign * (mm * TicksPerMinute));
+    acc = CheckedAdd(acc.ticks_, sign * (ss * TicksPerSecond));
+    acc = CheckedAdd(acc.ticks_, sign * frac);
+    return acc;
 }
 
 /* ================= DateTime bodies ================= */
@@ -515,8 +651,251 @@ inline DateTime DateTime::Parse(const std::string& s) {
     return FromTicksAndKind(r.Ticks() + frac, KindUnspecified);
 }
 
+/* ================= Guid bodies ================= */
+
+inline Guid Guid::NewGuid() {
+    uint8_t b[16];
+    bcl_detail::os_random_bytes(b, 16);
+    Guid g;
+    std::memcpy(&g.a_, b, 4);       /* random bytes — per-field endianness is irrelevant */
+    std::memcpy(&g.b_, b + 4, 2);
+    std::memcpy(&g.c_, b + 6, 2);
+    std::memcpy(g.d_, b + 8, 8);
+    g.c_ = (int16_t)((g.c_ & 0x0FFF) | 0x4000);    /* version nibble := 4 */
+    g.d_[0] = (uint8_t)((g.d_[0] & 0x3F) | 0x80);  /* variant := 10xx (RFC 4122) */
+    return g;
+}
+
+inline Guid Guid::Parse(const std::string& s) {
+    auto fail = [&s]() { throw std::runtime_error(""Invalid Guid format: '"" + s + ""'""); };
+    auto hexVal = [](char ch) -> int {
+        if (ch >= '0' && ch <= '9') return ch - '0';
+        if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+        if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+        return -1;
+    };
+    size_t off = 0, len = s.size();
+    if (len == 38) {                               /* ""B""/""P"" wrappers */
+        if (!((s[0] == '{' && s[37] == '}') || (s[0] == '(' && s[37] == ')'))) fail();
+        off = 1; len = 36;
+    }
+    bool dashed = false;
+    if (len == 36) dashed = true;                  /* ""D"" */
+    else if (len != 32) fail();                    /* else ""N"" */
+    uint8_t nib[32];
+    size_t n = 0;
+    for (size_t i = 0; i < len; ++i) {
+        char ch = s[off + i];
+        if (dashed && (i == 8 || i == 13 || i == 18 || i == 23)) {
+            if (ch != '-') fail();
+            continue;
+        }
+        int v = hexVal(ch);
+        if (v < 0) fail();
+        nib[n++] = (uint8_t)v;
+    }
+    /* n == 32 by the length/dash checks */
+    uint32_t a = 0, b = 0, c = 0;
+    for (int i = 0; i < 8; ++i)   a = (a << 4) | nib[i];
+    for (int i = 8; i < 12; ++i)  b = (b << 4) | nib[i];
+    for (int i = 12; i < 16; ++i) c = (c << 4) | nib[i];
+    Guid g;
+    g.a_ = (int32_t)a; g.b_ = (int16_t)b; g.c_ = (int16_t)c;
+    for (int i = 0; i < 8; ++i) g.d_[i] = (uint8_t)((nib[16 + 2 * i] << 4) | nib[17 + 2 * i]);
+    return g;
+}
+
+inline std::string Guid::ToString() const { return ToString(""D""); }
+
+inline std::string Guid::ToString(const std::string& fmt) const {
+    char d[40];
+    std::snprintf(d, sizeof d, ""%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x"",
+        (unsigned)(uint32_t)a_, (unsigned)(uint16_t)b_, (unsigned)(uint16_t)c_,
+        (unsigned)d_[0], (unsigned)d_[1], (unsigned)d_[2], (unsigned)d_[3],
+        (unsigned)d_[4], (unsigned)d_[5], (unsigned)d_[6], (unsigned)d_[7]);
+    if (fmt.empty() || fmt == ""D"" || fmt == ""d"") return d;   /* .NET: empty == ""D"" */
+    if (fmt == ""N"" || fmt == ""n"") {
+        std::string out;
+        for (const char* p = d; *p; ++p) if (*p != '-') out += *p;
+        return out;
+    }
+    if (fmt == ""B"" || fmt == ""b"") return ""{"" + std::string(d) + ""}"";
+    if (fmt == ""P"" || fmt == ""p"") return ""("" + std::string(d) + "")"";
+    throw std::runtime_error(""Invalid Guid format specifier: '"" + fmt + ""'"");
+}
+
+inline void Guid::ToByteArray(uint8_t out[16]) const {
+    const uint32_t a = (uint32_t)a_;
+    const uint16_t b = (uint16_t)b_, c = (uint16_t)c_;
+    out[0] = (uint8_t)a; out[1] = (uint8_t)(a >> 8); out[2] = (uint8_t)(a >> 16); out[3] = (uint8_t)(a >> 24);
+    out[4] = (uint8_t)b; out[5] = (uint8_t)(b >> 8);
+    out[6] = (uint8_t)c; out[7] = (uint8_t)(c >> 8);
+    std::memcpy(out + 8, d_, 8);
+}
+
+inline int32_t Guid::CompareTo(const Guid& o) const {
+    /* .NET order: _a,_b,_c compared as UNSIGNED field VALUES, then _d.._k bytes.
+       NOT memcmp of ToByteArray (a/b/c are little-endian there) — verified vs real .NET. */
+    const uint32_t a1 = (uint32_t)a_, a2 = (uint32_t)o.a_;
+    if (a1 != a2) return a1 < a2 ? -1 : 1;
+    const uint16_t b1 = (uint16_t)b_, b2 = (uint16_t)o.b_;
+    if (b1 != b2) return b1 < b2 ? -1 : 1;
+    const uint16_t c1 = (uint16_t)c_, c2 = (uint16_t)o.c_;
+    if (c1 != c2) return c1 < c2 ? -1 : 1;
+    for (int i = 0; i < 8; ++i)
+        if (d_[i] != o.d_[i]) return d_[i] < o.d_[i] ? -1 : 1;
+    return 0;
+}
+
+/* ================= DateTimeOffset bodies ================= */
+
+inline DateTimeOffset::DateTimeOffset(const DateTime& dt) {
+    if (dt.Kind() == DateTime::KindUtc) {
+        offsetMinutes_ = 0;
+        utc_ = DateTime::FromTicksAndKind(dt.Ticks(), DateTime::KindUnspecified);
+    } else {
+        /* Local, or Unspecified assumed local (.NET rule): offset = the local zone's offset
+           at dt, via the OS seam (ToUniversalTime -> mktime; the >=1970 pin applies) */
+        DateTime utc = dt.ToUniversalTime();
+        offsetMinutes_ = bcl_detail::dto_validate_offset(dt.Ticks() - utc.Ticks());
+        utc_ = DateTime::FromTicksAndKind(utc.Ticks(), DateTime::KindUnspecified);
+    }
+}
+
+inline DateTimeOffset::DateTimeOffset(const DateTime& clockTime, const TimeSpan& offset) {
+    offsetMinutes_ = bcl_detail::dto_validate_offset(offset.Ticks());
+    /* .NET Kind rules: a Utc clock demands offset 0; a Local clock demands the zone's offset */
+    if (clockTime.Kind() == DateTime::KindUtc && offsetMinutes_ != 0)
+        throw std::runtime_error(""DateTimeOffset: offset must be zero for a Utc DateTime"");
+    if (clockTime.Kind() == DateTime::KindLocal) {
+        int64_t localOffset = clockTime.Ticks() - clockTime.ToUniversalTime().Ticks();
+        if (localOffset != (int64_t)offsetMinutes_ * TimeSpan::TicksPerMinute)
+            throw std::runtime_error(""DateTimeOffset: offset does not match the local time zone"");
+    }
+    utc_ = DateTime::FromTicksAndKind(
+        clockTime.Ticks() - (int64_t)offsetMinutes_ * TimeSpan::TicksPerMinute,
+        DateTime::KindUnspecified);   /* range-checks the UTC instant, like .NET's ValidateDate */
+}
+
+inline DateTimeOffset DateTimeOffset::Now() { return DateTimeOffset(DateTime::Now()); }
+inline DateTimeOffset DateTimeOffset::UtcNow() { return DateTimeOffset(DateTime::UtcNow()); }
+
+inline DateTimeOffset DateTimeOffset::FromUnixTimeSeconds(int64_t s) {
+    /* .NET bounds: 0001-01-01..9999-12-31T23:59:59Z as Unix seconds, inclusive */
+    if (s < -62135596800LL || s > 253402300799LL)
+        throw std::runtime_error(""DateTimeOffset: Unix seconds out of range"");
+    return DateTimeOffset(
+        DateTime::FromTicksAndKind(bcl_detail::UnixEpochTicks + s * TimeSpan::TicksPerSecond,
+                                   DateTime::KindUnspecified),
+        TimeSpan::Zero());
+}
+
+inline DateTimeOffset DateTimeOffset::FromUnixTimeMilliseconds(int64_t ms) {
+    if (ms < -62135596800000LL || ms > 253402300799999LL)
+        throw std::runtime_error(""DateTimeOffset: Unix milliseconds out of range"");
+    return DateTimeOffset(
+        DateTime::FromTicksAndKind(bcl_detail::UnixEpochTicks + ms * TimeSpan::TicksPerMillisecond,
+                                   DateTime::KindUnspecified),
+        TimeSpan::Zero());
+}
+
+inline DateTime DateTimeOffset::UtcDateTime() const {
+    return DateTime::FromTicksAndKind(utc_.Ticks(), DateTime::KindUtc);
+}
+
+inline DateTime DateTimeOffset::LocalDateTime() const {
+    return UtcDateTime().ToLocalTime();   /* OS seam; KindLocal result */
+}
+
+inline DateTime DateTimeOffset::ClockDateTime() const {
+    return DateTime::FromTicksAndKind(
+        utc_.Ticks() + (int64_t)offsetMinutes_ * TimeSpan::TicksPerMinute,
+        DateTime::KindUnspecified);
+}
+
+inline DateTimeOffset DateTimeOffset::ToOffset(const TimeSpan& o) const {
+    DateTimeOffset r;
+    r.utc_ = utc_;
+    r.offsetMinutes_ = bcl_detail::dto_validate_offset(o.Ticks());
+    (void)r.ClockDateTime();   /* range-check the shifted clock time (.NET throws here too) */
+    return r;
+}
+
+inline DateTimeOffset DateTimeOffset::ToLocalTime() const {
+    return DateTimeOffset(LocalDateTime());   /* KindLocal -> the local zone's offset */
+}
+
+inline int64_t DateTimeOffset::ToUnixTimeSeconds() const {
+    /* .NET formula: divide the (nonnegative) UTC ticks, THEN shift by the epoch —
+       this floors pre-1970 instants instead of truncating toward zero */
+    return utc_.Ticks() / TimeSpan::TicksPerSecond - 62135596800LL;
+}
+
+inline int64_t DateTimeOffset::ToUnixTimeMilliseconds() const {
+    return utc_.Ticks() / TimeSpan::TicksPerMillisecond - 62135596800000LL;
+}
+
+inline std::string DateTimeOffset::ToString() const {
+    /* invariant ""MM/dd/yyyy HH:mm:ss zzz"" — verified vs real .NET */
+    char buf[16];
+    int32_t om = offsetMinutes_;
+    const char sign = om < 0 ? '-' : '+';
+    if (om < 0) om = -om;
+    std::snprintf(buf, sizeof buf, "" %c%02d:%02d"", sign, om / 60, om % 60);
+    return ClockDateTime().ToString() + buf;
+}
+
+/* ================= StringBuilder bodies ================= */
+
+inline std::shared_ptr<StringBuilder> StringBuilder::Append(double v) {
+    buf_ += std::to_string(v);   /* the backend's existing double->string style (CppCodeGenerator) */
+    return shared_from_this();
+}
+
+inline std::shared_ptr<StringBuilder> StringBuilder::AppendFormat(const std::string& fmt, const std::string& a0) {
+    size_t prev = 0, pos;
+    while ((pos = fmt.find(""{0}"", prev)) != std::string::npos) {
+        buf_.append(fmt, prev, pos - prev);
+        buf_ += a0;
+        prev = pos + 3;
+    }
+    buf_.append(fmt, prev, std::string::npos);
+    return shared_from_this();
+}
+
+inline std::shared_ptr<StringBuilder> StringBuilder::Insert(int32_t index, const std::string& s) {
+    if (index < 0 || (size_t)index > buf_.size())
+        throw std::runtime_error(""StringBuilder: index out of range"");
+    buf_.insert((size_t)index, s);
+    return shared_from_this();
+}
+
+inline std::shared_ptr<StringBuilder> StringBuilder::Remove(int32_t start, int32_t len) {
+    if (start < 0 || len < 0 || (size_t)start + (size_t)len > buf_.size())
+        throw std::runtime_error(""StringBuilder: index out of range"");
+    buf_.erase((size_t)start, (size_t)len);
+    return shared_from_this();
+}
+
+inline std::shared_ptr<StringBuilder> StringBuilder::Replace(const std::string& oldV, const std::string& newV) {
+    if (oldV.empty())
+        throw std::runtime_error(""StringBuilder: Replace search string must not be empty"");
+    size_t pos = 0;
+    while ((pos = buf_.find(oldV, pos)) != std::string::npos) {
+        buf_.replace(pos, oldV.size(), newV);
+        pos += newV.size();
+    }
+    return shared_from_this();
+}
+
 inline std::ostream& operator<<(std::ostream& os, const TimeSpan& v) { return os << v.ToString(); }
 inline std::ostream& operator<<(std::ostream& os, const DateTime& v) { return os << v.ToString(); }
+/* spec §6.2 requires inserters for ALL FIVE value structs — Guid and DateTimeOffset too: */
+inline std::ostream& operator<<(std::ostream& os, const Guid& v) { return os << v.ToString(); }
+inline std::ostream& operator<<(std::ostream& os, const DateTimeOffset& v) { return os << v.ToString(); }
+inline std::ostream& operator<<(std::ostream& os, const std::shared_ptr<StringBuilder>& sb) {
+    return os << (sb ? sb->ToString() : std::string());
+}
 
 } /* namespace BasicLang */
 
@@ -525,6 +904,19 @@ template<> struct std::hash<BasicLang::TimeSpan> {
 };
 template<> struct std::hash<BasicLang::DateTime> {   /* ticks only — Kind excluded, matches equality (spec §6.2) */
     size_t operator()(const BasicLang::DateTime& v) const noexcept { return std::hash<int64_t>{}(v.Ticks()); }
+};
+template<> struct std::hash<BasicLang::Guid> {
+    size_t operator()(const BasicLang::Guid& v) const noexcept {
+        uint8_t b[16]; v.ToByteArray(b);
+        size_t h = 1469598103934665603ULL;                    /* FNV-1a over all 16 bytes */
+        for (uint8_t x : b) { h ^= x; h *= 1099511628211ULL; }
+        return h;
+    }
+};
+template<> struct std::hash<BasicLang::DateTimeOffset> {      /* UTC instant — matches equality (spec §6.2) */
+    size_t operator()(const BasicLang::DateTimeOffset& v) const noexcept {
+        return std::hash<int64_t>{}(v.UtcDateTime().Ticks());
+    }
 };
 ";
     }
