@@ -645,6 +645,31 @@ public class DockFactory : Factory
         ["Threads"] = "BottomRightTools",
     };
 
+    /// <summary>
+    /// The debug tool windows — every tool whose home group is <c>BottomRightTools</c>. Derived from
+    /// <see cref="_toolHomeDockId"/> so a debug tool added there is automatically included here.
+    /// </summary>
+    private static readonly IReadOnlyList<string> _debugToolIds =
+        _toolHomeDockId.Where(kv => kv.Value == "BottomRightTools").Select(kv => kv.Key).ToArray();
+
+    /// <summary>
+    /// Closes any of the debug tool windows (Call Stack, Variables, Breakpoints, Watch, Immediate,
+    /// Debug Console, Threads) that are currently open, returning the workbench to its clean,
+    /// no-debug-windows state. Called when a debug session ends — the symmetric counterpart to their
+    /// absence at startup (see <see cref="CreateLayout"/>). Windows the user never opened are absent
+    /// and skipped; safe to call when none are open (no-op).
+    /// </summary>
+    public void CloseDebugPanels()
+    {
+        if (_rootDock == null) return;
+        foreach (var id in _debugToolIds)
+        {
+            var (tool, _) = FindDockableWithParent(_rootDock, id, null);
+            if (tool != null)
+                CloseDockable(tool);
+        }
+    }
+
     public void ActivateTool(string toolId)
     {
         if (_rootDock == null) return;
