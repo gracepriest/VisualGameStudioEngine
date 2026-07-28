@@ -121,6 +121,7 @@ End Module";
     [TestCase("Dim c As Decimal = -a")]         // unary minus
     [TestCase("a += 1")]                        // compound with integral
     [TestCase("Dim c = a + 0.5")]               // operand position IS a Decimal context (spec 6.1, Task 4)
+    [TestCase("Dim ok As Boolean = a < 0.5")]   // comparison branch of the literal rule
     [TestCase("a += 0.5")]                      // compound with a floating literal — Decimal context too
     public void Decimal_OperatorGates_Analyze(string stmt)
         => AssertAnalyzesClean(Wrap("Dim a As Decimal = 1\nDim b As Decimal = 2\n" + stmt));
@@ -304,6 +305,48 @@ End Module"), Is.EqualTo("21.5892"));
   Console.WriteLine(total)
  End Sub
 End Module"), Is.EqualTo("2.25\n1.5\n5\n2.50"));
+
+    /// <summary>
+    /// Constructor arguments are a Decimal context too (spec 6.1 "argument to
+    /// a Decimal parameter"): Visit(NewExpressionNode) validates ctor
+    /// arguments on its own path, separate from the call-expression path, so
+    /// it needs its own literal retype — without it 'New Money(19.99)' errors
+    /// while 'Show(19.99)' compiles.
+    /// </summary>
+    [Test]
+    public void DecimalLiteral_ConstructorArgument_Analyzes()
+        => AssertAnalyzesClean(@"Class Money
+ Public Amount As Decimal
+ Sub New(d As Decimal)
+  Amount = d
+ End Sub
+End Class
+Module M
+ Sub Main()
+  Dim m As Money = New Money(19.99)
+ End Sub
+End Module");
+
+    /// <summary>
+    /// End-to-end proof for the ctor context: the literal arrives as 19.99m
+    /// and the stored field prints with its scale. Verified real .NET:
+    /// 19.99m.ToString() = "19.99".
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    public void DecimalLiteral_ConstructorArgument_OnCSharp()
+        => Assert.That(CompileRunCSharp(@"Class Money
+ Public Amount As Decimal
+ Sub New(d As Decimal)
+  Amount = d
+ End Sub
+End Class
+Module M
+ Sub Main()
+  Dim m As Money = New Money(19.99)
+  Console.WriteLine(m.Amount)
+ End Sub
+End Module"), Is.EqualTo("19.99"));
 
     /// <summary>
     /// CType is the named escape for genuine non-literal Double↔Decimal

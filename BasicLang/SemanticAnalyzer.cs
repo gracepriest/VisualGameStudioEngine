@@ -1418,7 +1418,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// The single source of truth for converting a numeric literal to
         /// System.Decimal (spec 6.1): parse the SOURCE TEXT with
         /// InvariantCulture (stripping a trailing F/f/L/l type suffix;
-        /// NumberStyles.Float admits exponent forms like 1.5E2). Integral
+        /// NumberStyles.Float admits exponent forms like 1.5E2). The greedy
+        /// TrimEnd assumes at most one lexer suffix — true for every real
+        /// lexeme; a synthesized "1FL" would parse as 1. Integral
         /// literals whose lexeme is not decimal-parseable (hex '&amp;HFF')
         /// convert exactly from the boxed value instead — integers are exact in
         /// decimal. A floating literal with no usable text does NOT convert
@@ -4954,9 +4956,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
                 else if (IsDecimalFloatingMix(targetType, valueType))
                 {
-                    // 'd += 0.5' is Decimal += Double until Task 4's
-                    // Decimal-context literal conversion — same spec 6.1 rule
-                    // as the binary path.
+                    // A non-literal Single/Double value mixing with a Decimal
+                    // target - a literal was already retyped by the
+                    // Decimal-context rule above (spec 6.1).
                     Error($"Operator '{node.Operator}' cannot mix Decimal and floating-point operands. Use CType(value, Decimal) for explicit conversion",
                           node.Line, node.Column);
                 }
@@ -5941,6 +5943,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         for (int i = 0; i < Math.Min(argTypes.Count, ctorSymbol.Parameters.Count); i++)
                         {
                             var expectedType = ctorSymbol.Parameters[i].Type;
+                            // Spec 6.1: a constructor argument to a Decimal
+                            // parameter is a Decimal context — same rule as the
+                            // function-call path.
+                            if (TryRetypeLiteralToDecimal(node.Arguments[i], expectedType))
+                                argTypes[i] = GetNodeType(node.Arguments[i]);
                             var actualType = argTypes[i];
                             if (expectedType != null && actualType != null && !expectedType.IsAssignableFrom(actualType))
                             {
