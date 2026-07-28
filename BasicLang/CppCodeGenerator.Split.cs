@@ -351,11 +351,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             // "iterator": Generator<T> uses std::default_sentinel_t (declared in <iterator>);
             // split mode compiles the runtime in every build, so don't rely on transitive includes.
+            // cstdio/cstring/ostream: needed by the always-spliced P1 BCL runtime bodies
+            // (bl_bcltypes/bl_decimal below) — the spliced consts are include-free by contract,
+            // so the generator owns their std headers (combined-mode counterpart: GenerateHeader).
             var includes = new HashSet<string>
             {
                 "iostream", "vector", "string", "cstdint", "cmath", "algorithm", "cstdlib",
                 "ctime", "functional", "coroutine", "exception", "iterator",
-                "unordered_map", "unordered_set", "stdexcept"
+                "unordered_map", "unordered_set", "stdexcept", "cstdio", "cstring", "ostream"
             };
             foreach (var inc in _headerIncludes)
             {
@@ -386,6 +389,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine();
 
             SpliceRuntimeSource(CppCollectionsRuntime.Source);
+
+            // P1 native BCL runtime (spec §12): spliced UNCONDITIONALLY, mirroring the
+            // combined mode (GenerateHeader in CppCodeGenerator.cs — keep them in sync).
+            // Each body opens its OWN `namespace BasicLang { … }` (sibling re-open, like the
+            // collections runtime above); every out-of-class definition inside is `inline`,
+            // so the header is ODR-safe across the per-module translation units.
+            SpliceRuntimeSource(CppBclRuntime.BclBody);
+            SpliceRuntimeSource(CppDecimalRuntime.DecimalBody);
 
             EmitFrameworkCatalog();
         }

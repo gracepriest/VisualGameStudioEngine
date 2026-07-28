@@ -360,8 +360,9 @@ public:
     StringBuilder() = default;
     explicit StringBuilder(const std::string& s) : buf_(s) {}
     /* Append family returns shared_from_this() so chains emit uniformly with -> (spec §3).
-       NB: requires the object to be OWNED by a shared_ptr — codegen always constructs via
-       make_shared (Task 9), and the runtime tests must too. */
+       NB: shared_from_this() throws std::bad_weak_ptr (since C++17) on an object not owned
+       by a shared_ptr — codegen always constructs via make_shared (Task 9), and the runtime
+       tests must too. */
     std::shared_ptr<StringBuilder> Append(const std::string& s) { buf_ += s; return shared_from_this(); }
     /* REQUIRED: without it a literal Append(""..."") picks the BOOL overload — array-to-pointer
        + pointer->bool are STANDARD conversions and beat the user-defined one to std::string */

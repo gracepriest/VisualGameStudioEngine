@@ -273,8 +273,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (hasIterators)
                 WriteLine("// requires -std=c++20 (coroutines)");
 
-            // Collect unique includes
-            var includes = new HashSet<string> { "iostream", "vector", "string", "cstdint", "cmath", "algorithm", "cstdlib", "ctime", "functional" };
+            // Collect unique includes. cstdio/cstring/ostream/stdexcept are unconditional
+            // because the always-spliced P1 BCL runtime bodies (bl_bcltypes/bl_decimal,
+            // see below) need them — the spliced consts are include-free by contract
+            // (CppBclRuntimeTests pins that), so the generator owns their std headers.
+            var includes = new HashSet<string> { "iostream", "vector", "string", "cstdint", "cmath", "algorithm", "cstdlib", "ctime", "functional", "cstdio", "cstring", "ostream", "stdexcept" };
             if (hasIterators)
             {
                 includes.Add("coroutine");
@@ -284,7 +287,6 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             {
                 includes.Add("unordered_map");
                 includes.Add("unordered_set");
-                includes.Add("stdexcept");
             }
             foreach (var inc in _headerIncludes)
             {
@@ -312,6 +314,15 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             if (hasAsync || hasIterators || usesCollections)
                 EmitRuntimePreamble(hasAsync, hasIterators, usesCollections);
+
+            // P1 native BCL runtime (spec §12): spliced UNCONDITIONALLY in both emission
+            // modes (split-mode counterpart: EmitRuntimeHeader in CppCodeGenerator.Split.cs —
+            // keep them in sync). Like the collections runtime, each body opens its OWN
+            // `namespace BasicLang { … }` (a sibling re-open at file scope, indent 0) and its
+            // std::hash specializations follow the namespace close. The bodies are
+            // include-free; their std headers live in the unconditional include set above.
+            SpliceRuntimeSource(CppBclRuntime.BclBody);
+            SpliceRuntimeSource(CppDecimalRuntime.DecimalBody);
         }
 
         /// <summary>
@@ -535,6 +546,18 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return $"std::function<void({actionParams})>";
             }
 
+            // P1 native BCL types (spec §6.2): DEAD until the Task 10 registry flip —
+            // Categorize() still returns Rejected for the six, so no green program reaches
+            // this. Keyed off the REGISTRY (not a name list) so the flip activates it
+            // atomically. Five are value structs; StringBuilder is the ONE reference type
+            // (shared_ptr, matching .NET reference semantics).
+            if (IsNativeOwnedBclType(type.Name))
+            {
+                return type.Name.Equals("StringBuilder", StringComparison.OrdinalIgnoreCase)
+                    ? "std::shared_ptr<BasicLang::StringBuilder>"
+                    : "BasicLang::" + BclCanonicalName(type.Name);
+            }
+
             string bare;
             if (type.GenericArguments != null && type.GenericArguments.Count > 0)
             {
@@ -594,6 +617,34 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     || string.Equals(n, "Dictionary", StringComparison.OrdinalIgnoreCase)
                     || string.Equals(n, "HashSet", StringComparison.OrdinalIgnoreCase));
         }
+
+        /// <summary>
+        /// True when <paramref name="typeName"/> is a NativeOwned P1 BCL type per the
+        /// boundary registry (spec §6.2). DEAD until the Task 10 flip: the registry still
+        /// categorizes all six as Rejected, so every branch keyed on this is inert today.
+        /// Keyed off the registry (never a local name list) so the flip activates all the
+        /// staged codegen machinery atomically.
+        /// </summary>
+        private static bool IsNativeOwnedBclType(string typeName) =>
+            typeName != null
+            && BoundaryTypeRegistry.Categorize(typeName) == BoundaryTypeCategory.NativeOwned;
+
+        /// <summary>
+        /// Canonical C++ spelling of a P1 native BCL type name (BasicLang is
+        /// case-insensitive, so `datetime` must emit as `DateTime`). Only called for
+        /// names the registry categorizes NativeOwned; passthrough via SanitizeName is
+        /// the defensive fallback for any future registry addition.
+        /// </summary>
+        private string BclCanonicalName(string typeName) => typeName.ToLowerInvariant() switch
+        {
+            "datetime" => "DateTime",
+            "timespan" => "TimeSpan",
+            "guid" => "Guid",
+            "decimal" => "Decimal",
+            "datetimeoffset" => "DateTimeOffset",
+            "stringbuilder" => "StringBuilder",
+            _ => SanitizeName(typeName)
+        };
 
         /// <summary>
         /// References to __lambda_N functions render as inline C++ lambda expressions
@@ -728,6 +779,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (tn != null && tn.Contains("::"))
                 return ".";
 
+            // P1 native BCL types (DEAD until the Task 10 registry flip): the five value
+            // structs use `.`; StringBuilder is the one reference type (shared_ptr) → `->`.
+            if (IsNativeOwnedBclType(tn))
+                return tn.Equals("StringBuilder", StringComparison.OrdinalIgnoreCase) ? "->" : ".";
+
             var kind = obj?.Type?.Kind;
             if ((kind == TypeKind.Class || kind == TypeKind.Interface)
                 && (obj.Type.Name == null || !_typeMap.ContainsKey(obj.Type.Name)))
@@ -752,7 +808,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 "void" => "void",
                 // .NET DateTime values are produced by BasicLangRt::Now() and
                 // consumed by BasicLangRt::FormatTime (see the runtime preamble).
+                // Task 10 dismantles this shim and re-points datetime at
+                // BasicLang::DateTime alongside the P1 entries below.
                 "datetime" => "std::time_t",
+                // P1 native BCL types (unreachable in green programs until the Task 10
+                // registry flip — the capability checker still rejects them).
+                "timespan" => "BasicLang::TimeSpan",
+                "guid" => "BasicLang::Guid",
+                "decimal" => "BasicLang::Decimal",
+                "datetimeoffset" => "BasicLang::DateTimeOffset",
+                "stringbuilder" => "std::shared_ptr<BasicLang::StringBuilder>",
                 _ => SanitizeName(typeName)
             };
         }
@@ -1762,7 +1827,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             _typeMap["UShort"] = "uint16_t";
             _typeMap["UInteger"] = "uint32_t";
             _typeMap["ULong"] = "uint64_t";
-            _typeMap["Decimal"] = "long double";
+            // No "Decimal" entry: P1 lowers Decimal as the native BasicLang::Decimal value
+            // struct via the NativeOwned branch in MapType (the old `long double` mapping
+            // was a lossy stand-in with no reachable green path — Decimal is registry-gated).
         }
         
         #region Visitor Methods
@@ -2106,6 +2173,26 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // (string literals already render as const char* and stay as-is).
             var frameworkCall = EmitFrameworkCall(functionName, MarshalFrameworkArgs(args, call));
             if (frameworkCall != null) return frameworkCall;
+
+            // P1 static dispatch, call form (DEAD until the Task 10 registry flip): a
+            // dotted call on a NativeOwned type name (`DateTime.Parse(s)`,
+            // `Guid.NewGuid()`, `TimeSpan.FromDays(n)`) lowers to the runtime's static
+            // member function `BasicLang::X::Member(args)`. StaticProperty covers the
+            // parenthesized access form (`DateTime.Now()`); the paren-less property form
+            // arrives as an IRFieldAccess and is handled in Visit(IRFieldAccess).
+            var bclDot = functionName.LastIndexOf('.');
+            if (bclDot > 0 && bclDot < functionName.Length - 1)
+            {
+                var bclTypeName = functionName.Substring(0, bclDot);
+                var bclMemberName = functionName.Substring(bclDot + 1);
+                if (IsNativeOwnedBclType(bclTypeName)
+                    && NativeBclSurface.TryGetMember(bclTypeName, bclMemberName, out var bclStatic)
+                    && (bclStatic.Kind == NativeBclMemberKind.StaticMethod
+                        || bclStatic.Kind == NativeBclMemberKind.StaticProperty))
+                {
+                    return $"BasicLang::{BclCanonicalName(bclTypeName)}::{bclStatic.CppName ?? bclStatic.MemberName}({string.Join(", ", args)})";
+                }
+            }
 
             return functionName.ToLower() switch
             {
@@ -2610,9 +2697,34 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         public override void Visit(IRCast cast)
         {
             var value = GetValueName(cast.Value);
-            var targetType = MapType(cast.Type);
             var result = GetValueName(cast);
-            
+
+            // P1 Decimal conversions (DEAD until the Task 10 registry flip): a raw
+            // static_cast to/from the BasicLang::Decimal struct is invalid C++, so both
+            // CType directions route through the engine (spec §6.2).
+            var castTargetIsDecimal = IsNativeOwnedBclType(cast.Type?.Name)
+                && cast.Type.Name.Equals("Decimal", StringComparison.OrdinalIgnoreCase);
+            var castSourceIsDecimal = IsNativeOwnedBclType(cast.Value?.Type?.Name)
+                && cast.Value.Type.Name.Equals("Decimal", StringComparison.OrdinalIgnoreCase);
+            if (castTargetIsDecimal)
+            {
+                // Decimal → Decimal is the identity (never a lossy double round-trip);
+                // numeric → Decimal uses the converting ctor's .NET 15-digit double rule.
+                WriteLine(castSourceIsDecimal
+                    ? $"{result} = {value};"
+                    : $"{result} = BasicLang::Decimal(static_cast<double>({value}));");
+                return;
+            }
+            if (castSourceIsDecimal
+                && (string.Equals(cast.Type?.Name, "Double", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(cast.Type?.Name, "Single", StringComparison.OrdinalIgnoreCase)))
+            {
+                // .NET's explicit operator double (VarR8FromDec); Single narrows on assignment.
+                WriteLine($"{result} = ({value}).ToDouble();");
+                return;
+            }
+
+            var targetType = MapType(cast.Type);
             WriteLine($"{result} = static_cast<{targetType}>({value});");
         }
         
@@ -2737,6 +2849,21 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 }
             }
 
+            // P1 native BCL types (DEAD until the Task 10 registry flip). The five value
+            // structs construct by value; StringBuilder MUST go through make_shared — its
+            // Append chain returns shared_from_this(), which throws std::bad_weak_ptr
+            // (since C++17) when the object is not owned by a shared_ptr.
+            if (IsNativeOwnedBclType(newObj.ClassName))
+            {
+                var bclArgs = string.Join(", ", newObj.Arguments.Select(a => GetValueName(a)));
+                var bclResult = GetValueName(newObj);
+                if (newObj.ClassName.Equals("StringBuilder", StringComparison.OrdinalIgnoreCase))
+                    WriteLine($"{bclResult} = std::make_shared<BasicLang::StringBuilder>({bclArgs});");
+                else
+                    WriteLine($"{bclResult} = BasicLang::{BclCanonicalName(newObj.ClassName)}({bclArgs});");
+                return;
+            }
+
             // Result temps are pre-declared by DeclareLocalsAndTemporaries: assign, don't redeclare.
             // Generic instantiations need template arguments on the constructor: Pair<int32_t>(...)
             string bareName;
@@ -2856,6 +2983,18 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// </summary>
         private string EmitToStringShim(IRInstanceMethodCall methodCall, string obj)
         {
+            // P1 native BCL receivers (DEAD until the Task 10 registry flip): the native
+            // types implement ToString(...) themselves — emit a direct member call
+            // (`d.ToString(fmt)`, `sb->ToString()`). Routed BEFORE the legacy datetime
+            // case so the flip takes over DateTime receivers (Task 10 removes that case).
+            if (IsNativeOwnedBclType(methodCall.Object?.Type?.Name))
+            {
+                var bclOp = MemberAccessOp(methodCall.Object);
+                return methodCall.Arguments.Count > 0
+                    ? $"{obj}{bclOp}ToString({GetValueName(methodCall.Arguments[0])})"
+                    : $"{obj}{bclOp}ToString()";
+            }
+
             var receiverTypeName = methodCall.Object?.Type?.Name?.ToLowerInvariant();
 
             // DateTime.Now results are typed Object in the IR — the generator
@@ -2933,6 +3072,23 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // Result temps are pre-declared by DeclareLocalsAndTemporaries: assign, don't redeclare.
             var result = GetValueName(fieldAccess);
 
+            // P1 static dispatch (DEAD until the Task 10 registry flip): a NativeOwned
+            // TYPE-NAME receiver (`DateTime.MinValue`, `Decimal.One`, `TimeSpan.Zero`)
+            // with a surface StaticProperty/StaticMethod lowers to the runtime's static
+            // member FUNCTION: `BasicLang::X::Member()`. Deliberately placed BEFORE the
+            // IsDateTimeNowAccess shim so the flip routes `DateTime.Now` here (Task 10
+            // then removes the shim). A declared local shadowing the type name wins.
+            if (fieldAccess.Object is IRVariable staticRecv
+                && IsNativeOwnedBclType(staticRecv.Name)
+                && !_declaredIdentifiers.Contains(staticRecv.Name)
+                && NativeBclSurface.TryGetMember(staticRecv.Name, fieldAccess.FieldName, out var staticMember)
+                && (staticMember.Kind == NativeBclMemberKind.StaticProperty
+                    || staticMember.Kind == NativeBclMemberKind.StaticMethod))
+            {
+                WriteLine($"{result} = BasicLang::{BclCanonicalName(staticRecv.Name)}::{staticMember.CppName ?? staticMember.MemberName}();");
+                return;
+            }
+
             // .NET-surface shims — the raw emission below would produce
             // uncompilable member accesses for these (`DateTime->Now`,
             // `.Length` on std::string).
@@ -2969,6 +3125,22 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 var recv = GetValueName(fieldAccess.Object);
                 var accessOp = MemberAccessOp(fieldAccess.Object);
                 WriteLine($"{result} = {recv}{accessOp}{SanitizeName(fieldAccess.FieldName)}();");
+                return;
+            }
+
+            // P1 property bridge (DEAD until the Task 10 registry flip): a property access
+            // on a NativeOwned receiver (`d.Year`, `sb.Length`) arrives as an IRFieldAccess,
+            // but the native runtime exposes these as METHODS — rewrite to a zero-arg call
+            // via the surface table (`.Year()`; `sb->Length()`). CppName carries the two
+            // pinned renames: DateTimeOffset's BL `DateTime` → ClockDateTime(), `Ticks` →
+            // TicksValue() (a C++ member can't share its enclosing type's name).
+            if (IsNativeOwnedBclType(fieldAccess.Object?.Type?.Name)
+                && NativeBclSurface.TryGetMember(fieldAccess.Object.Type.Name, fieldAccess.FieldName, out var bclProp)
+                && bclProp.Kind == NativeBclMemberKind.Property)
+            {
+                var recv = GetValueName(fieldAccess.Object);
+                var accessOp = MemberAccessOp(fieldAccess.Object);
+                WriteLine($"{result} = {recv}{accessOp}{bclProp.CppName ?? bclProp.MemberName}();");
                 return;
             }
 
@@ -3407,6 +3579,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 _ when IsCollectionType(type) => "nullptr",
                 _ when type.Kind == TypeKind.Array => "{}",
                 _ when type.Kind == TypeKind.Pointer => "nullptr",
+                // P1 relies on this `{}` fallback: it zero-inits the five NativeOwned value
+                // structs to exactly their spec §6.2 pinned defaults (DateTime.MinValue /
+                // TimeSpan.Zero / Guid.Empty / 0D / DateTimeOffset MinValue+00:00) and gives
+                // StringBuilder (a shared_ptr) null, matching .NET — no per-type entry needed.
                 _ => "{}"
             };
         }
@@ -3430,6 +3606,25 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             if (constant.Value is long l)
                 return $"{l}LL";
+
+            // P1 Decimal literal (DEAD until the Task 10 registry flip — Decimal-typed
+            // expressions are still capability-rejected): emit the exact .NET bit pattern
+            // through the engine, never a lossy double literal. GetBits: [0..2] = 96-bit
+            // magnitude (lo/mid/hi), [3] = flags (scale in bits 16-23, sign in bit 31).
+            if (constant.Value is decimal dec)
+            {
+                var bits = decimal.GetBits(dec);
+                var lo = unchecked((uint)bits[0]);
+                var mid = unchecked((uint)bits[1]);
+                var hi = unchecked((uint)bits[2]);
+                var neg = (bits[3] & int.MinValue) != 0;
+                var scale = (bits[3] >> 16) & 0xFF;
+                // The engine canonicalizes -0 to +0 (documented divergence, unobservable
+                // through ToString) — emit a signed zero as unsigned so FromParts round-trips.
+                if (lo == 0 && mid == 0 && hi == 0)
+                    neg = false;
+                return $"BasicLang::Decimal::FromParts({lo}u, {mid}u, {hi}u, {(neg ? "true" : "false")}, {scale})";
+            }
 
             return constant.Value.ToString();
         }

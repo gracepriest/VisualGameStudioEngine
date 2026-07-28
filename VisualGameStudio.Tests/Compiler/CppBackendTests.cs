@@ -663,11 +663,14 @@ End Module";
 
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
 
-        // The known-garbage forms must be gone...
-        Assert.That(output, Does.Not.Contain("DateTime->"), "DateTime.Now emitted as member access on nothing:\n" + output);
-        Assert.That(output, Does.Not.Contain("ConsoleWriteLine"), "Console.WriteLine emitted as a phantom function:\n" + output);
-        Assert.That(output, Does.Not.Contain(".Length"), ".NET Length property leaked into C++:\n" + output);
-        Assert.That(output, Does.Not.Contain(".ToString"), ".NET ToString leaked into C++:\n" + output);
+        // The known-garbage forms must be gone from the USER-code lowering. Scan with the
+        // always-spliced P1 BCL runtime stripped out — its legitimate C++ (e.g. the ostream
+        // inserters' `v.ToString()`) would otherwise trip these leak checks (Task 9).
+        var userCode = CppGeneratedCode.WithoutBclRuntime(output);
+        Assert.That(userCode, Does.Not.Contain("DateTime->"), "DateTime.Now emitted as member access on nothing:\n" + output);
+        Assert.That(userCode, Does.Not.Contain("ConsoleWriteLine"), "Console.WriteLine emitted as a phantom function:\n" + output);
+        Assert.That(userCode, Does.Not.Contain(".Length"), ".NET Length property leaked into C++:\n" + output);
+        Assert.That(userCode, Does.Not.Contain(".ToString"), ".NET ToString leaked into C++:\n" + output);
 
         // ...replaced by real C++.
         Assert.That(output, Does.Contain("cout"), "Console.WriteLine must lower to cout:\n" + output);

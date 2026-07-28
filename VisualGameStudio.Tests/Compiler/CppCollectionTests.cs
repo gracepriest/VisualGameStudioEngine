@@ -416,7 +416,9 @@ End Sub";
         var output = CompileToCpp(source, out var errors);
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
         Assert.That(output, Does.Contain("int32_t"));
-        Assert.That(output, Does.Not.Contain("Integer"));
+        // Scan with the always-spliced P1 BCL runtime stripped: a body comment mentions
+        // "Append(Integer)", which would false-trip this user-code leak check (Task 9).
+        Assert.That(CppGeneratedCode.WithoutBclRuntime(output), Does.Not.Contain("Integer"));
     }
 
     [Test]

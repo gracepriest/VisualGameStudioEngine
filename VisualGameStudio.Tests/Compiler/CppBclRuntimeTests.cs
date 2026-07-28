@@ -605,7 +605,8 @@ int main() {
 using namespace BasicLang;
 static void appendVia(std::shared_ptr<StringBuilder> sb) { sb->Append(""!""); }
 int main() {
-    /* NB: always make_shared — enable_shared_from_this is UB on a bare object */
+    /* NB: always make_shared — shared_from_this() throws std::bad_weak_ptr (since C++17)
+       on an object not owned by a shared_ptr */
     auto sb = std::make_shared<StringBuilder>();
     auto r = sb->Append(""a"")->Append(""b"")->AppendLine(""c"");
     printf(""chain=%d\n"", sb->ToString() == ""abc\n"");
