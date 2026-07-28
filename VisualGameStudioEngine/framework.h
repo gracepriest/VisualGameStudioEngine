@@ -512,6 +512,16 @@ extern "C" {
     __declspec(dllexport) void      Framework_UnloadFont(Font font);
     __declspec(dllexport) void      Framework_DrawTextEx(Font font, const char* text, Vector2 pos, float fontSize, float spacing, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
 
+    // ==== RAW rtext PARITY — low-level font-data construction (raylib 5.5 passthrough, Batch text-fontdata) — raylib.h 100% ====
+    // Closes the last 3 bindable raylib.h public fns (TextFormat stays out — variadic, unbindable). GlyphInfo/Image/Rectangle
+    // already declared. LoadFontData rasterizes font-file bytes into a raylib-owned GlyphInfo* array (-> IntPtr);
+    // GenImageFontAtlas packs those glyphs into a CPU Image and writes the packed Rectangle* array out through glyphRecs
+    // (Rectangle** -> out IntPtr, caller-owned -> free via Framework_MemFree); UnloadFontData frees the GlyphInfo array. All CPU
+    // (no GL) — the real pipeline needs font-file bytes; the empty/null paths are headless-safe.
+    __declspec(dllexport) GlyphInfo* Framework_LoadFontData(const unsigned char* fileData, int dataSize, int fontSize, int* codepoints, int codepointCount, int type);
+    __declspec(dllexport) Image      Framework_GenImageFontAtlas(const GlyphInfo* glyphs, Rectangle** glyphRecs, int glyphCount, int fontSize, int padding, int packMethod);
+    __declspec(dllexport) void       Framework_UnloadFontData(GlyphInfo* glyphs, int glyphCount);
+
     // Helpers & debug
     __declspec(dllexport) Rectangle Framework_SpriteFrame(Rectangle sheetArea, int frameW, int frameH, int index, int columns);
     __declspec(dllexport) void      Framework_DrawFPS(int x, int y);

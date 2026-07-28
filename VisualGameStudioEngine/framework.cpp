@@ -1390,6 +1390,12 @@ extern "C" {
         DrawTextEx(font, text, pos, fontSize, spacing, Color{ r, g, b, a });
     }
 
+    // ==== RAW rtext PARITY — low-level font-data construction (raylib 5.5 passthrough, Batch text-fontdata) — raylib.h 100% ====
+    // 1:1 forwarders. GlyphInfo*/Rectangle** array pointers passthrough; Image returned by value. All CPU (no GL).
+    GlyphInfo* Framework_LoadFontData(const unsigned char* fileData, int dataSize, int fontSize, int* codepoints, int codepointCount, int type) { return LoadFontData(fileData, dataSize, fontSize, codepoints, codepointCount, type); }
+    Image Framework_GenImageFontAtlas(const GlyphInfo* glyphs, Rectangle** glyphRecs, int glyphCount, int fontSize, int padding, int packMethod) { return GenImageFontAtlas(glyphs, glyphRecs, glyphCount, fontSize, padding, packMethod); }
+    void Framework_UnloadFontData(GlyphInfo* glyphs, int glyphCount) { UnloadFontData(glyphs, glyphCount); }
+
     Rectangle Framework_SpriteFrame(Rectangle sheetArea, int frameW, int frameH, int index, int columns) {
         Rectangle r{};
         r.x = sheetArea.x + (index % columns) * frameW;
