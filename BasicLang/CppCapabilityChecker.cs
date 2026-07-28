@@ -67,13 +67,40 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
     {
         private HashSet<string> _userDefinedNames;
         /// <summary>
-        /// Names that resolve to a VALUE in the current function (locals + parameters)
-        /// plus module globals. Mirrors CppCodeGenerator._declaredIdentifiers: a static
-        /// member access arrives as an IRFieldAccess whose receiver is an IRVariable
-        /// literally NAMED after the type ("DateTime"), so a declared identifier of that
-        /// name means the access is an ordinary instance access, not a static one.
+        /// The current function's locals and parameters plus the module globals — the
+        /// subset of CppCodeGenerator._declaredIdentifiers that can shadow a TYPE NAME in
+        /// receiver position. (The generator's set is wider: it also carries class fields
+        /// while emitting a member body and foreign <c>::</c> locals. Neither can appear as
+        /// the bare IRVariable receiver of a static access, so they are irrelevant here.)
+        /// A static member access arrives as an IRFieldAccess whose receiver is an
+        /// IRVariable literally NAMED after the type ("DateTime"); a value of that name
+        /// being in scope means the access is an ordinary instance access instead.
         /// </summary>
         private HashSet<string> _valueNamesInScope;
+        /// <summary>
+        /// Every function name the module defines. Used ONLY to mirror the generator's
+        /// fallback for a dotted call whose prefix is a native BCL type name but whose
+        /// member is not on the surface: CppCodeGenerator flattens such a call to a plain
+        /// function name, which is legitimate when the module actually defines it.
+        /// </summary>
+        private HashSet<string> _moduleFunctionNames;
+
+        /// <summary>
+        /// The VB conversion intrinsics, keyed to the BL type each converts TO. They lower
+        /// through CppCodeGenerator.EmitStdLibCall, NOT Visit(IRCast), so they need the
+        /// same native-conversion gate applied on their own path (spec §6.2 + the Task 10
+        /// Decimal-conversion rider) — keep this table in sync with that switch.
+        /// </summary>
+        private static readonly Dictionary<string, string> ConversionIntrinsicTargets =
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["CInt"] = "Integer",
+                ["CLng"] = "Long",
+                ["CDbl"] = "Double",
+                ["CSng"] = "Single",
+                ["CStr"] = "String",
+                ["CBool"] = "Boolean",
+            };
 
         public List<string> Check(IRModule module)
         {
@@ -96,6 +123,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     diags.Add($"'{name}' conflicts with a native BCL type on the C++ backend — rename the type");
 
             var globalNames = module.GlobalVariables?.Values.Select(g => g.Name) ?? Enumerable.Empty<string>();
+            _moduleFunctionNames = new HashSet<string>(
+                module.Functions.Select(f => f.Name), StringComparer.OrdinalIgnoreCase);
 
             foreach (var func in module.Functions)
             {
@@ -297,9 +326,65 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     break;
 
                 case IRCast cast:
-                    CheckNativeBclCast(cast, funcName, diags);
+                    CheckNativeConversion(cast.Value?.Type?.Name, cast.Type?.Name, funcName, diags);
+                    break;
+
+                case IRCall irCall when irCall.CalleeValue == null
+                                        && !string.IsNullOrEmpty(irCall.FunctionName):
+                    CheckNativeBclCall(irCall, funcName, diags);
                     break;
             }
+        }
+
+        /// <summary>
+        /// The two IRCall shapes that reach native BCL types. Neither goes through
+        /// <c>IRCast</c> or <c>IRInstanceMethodCall</c>, so without this arm both leaked
+        /// past the checker and died as raw C++:
+        /// <list type="number">
+        ///   <item><description>
+        ///     A dotted STATIC call (<c>DateTime.FromBinary(5)</c>): the generator's static
+        ///     dispatch only fires for members on the surface, so an unknown one fell
+        ///     through to a flattened phantom function (<c>DateTimeFromBinary(5)</c>).
+        ///   </description></item>
+        ///   <item><description>
+        ///     A C* conversion INTRINSIC (<c>CStr(dt)</c> → <c>to_string(dt)</c>,
+        ///     <c>CDbl(dt)</c> → <c>static_cast&lt;double&gt;(dt)</c>): the lowering's own
+        ///     guard covers Decimal only, so the other five native types emitted a
+        ///     std::to_string / static_cast against a struct with no such conversion.
+        ///   </description></item>
+        /// </list>
+        /// </summary>
+        private void CheckNativeBclCall(IRCall call, string funcName, List<string> diags)
+        {
+            var name = call.FunctionName;
+            var argCount = call.Arguments?.Count ?? 0;
+
+            var dot = name.LastIndexOf('.');
+            if (dot > 0 && dot < name.Length - 1)
+            {
+                var typeName = name.Substring(0, dot);
+                var memberName = name.Substring(dot + 1);
+                if (IsNativeBcl(typeName))
+                {
+                    // Mirror the generator's fallback: when the member is NOT on the
+                    // surface it flattens the call to a plain name, which is legitimate if
+                    // the module really defines it (a user module that happens to share a
+                    // native type's name). Only a genuinely undefined target is a leak.
+                    if (!NativeBclSurface.TryGetMember(typeName, memberName, out _)
+                        && (_moduleFunctionNames.Contains(name) || _moduleFunctionNames.Contains(memberName)))
+                        return;
+
+                    // CAVEAT: the generator DELIBERATELY accepts the parenthesized
+                    // static-property form (`DateTime.Now()` → BasicLang::DateTime::Now()),
+                    // so call syntax on a StaticProperty must NOT be rejected here.
+                    CheckSurfaceMember(typeName, memberName, argCount,
+                        isCallSyntax: true, funcName, diags, allowParenthesizedProperty: true);
+                    return;
+                }
+            }
+
+            if (argCount > 0 && ConversionIntrinsicTargets.TryGetValue(name, out var intrinsicTarget))
+                CheckNativeConversion(call.Arguments[0]?.Type?.Name, intrinsicTarget, funcName, diags);
         }
 
         /// <summary>
@@ -308,7 +393,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// clean diagnostic naming the type and the member.
         /// </summary>
         private void CheckSurfaceMember(string typeName, string memberName, int argCount,
-            bool isCallSyntax, string funcName, List<string> diags)
+            bool isCallSyntax, string funcName, List<string> diags,
+            bool allowParenthesizedProperty = false)
         {
             if (memberName == null) return;
 
@@ -325,28 +411,52 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // slip past the codegen bridges and emit an uncompilable member access.
             var isPropertyKind = member.Kind == NativeBclMemberKind.Property
                 || member.Kind == NativeBclMemberKind.StaticProperty;
-            if (isCallSyntax == isPropertyKind)
+
+            if (isCallSyntax && isPropertyKind)
             {
-                diags.Add($"'{typeName}.{memberName}' is a " +
-                          (isPropertyKind ? "property" : "method") +
-                          $" on the C++ backend's native surface and cannot be used as a " +
-                          (isCallSyntax ? "method call" : "property") + $" (in '{funcName}')");
+                // The dotted static-call path passes allowParenthesizedProperty: the
+                // generator deliberately lowers `DateTime.Now()` through the same static
+                // dispatch as the paren-less form. Everywhere else, calling a property is
+                // an error the codegen bridges cannot express.
+                if (!allowParenthesizedProperty)
+                {
+                    diags.Add($"'{typeName}.{memberName}' is a property on the C++ backend's native " +
+                              $"surface and cannot be used as a method call (in '{funcName}') — " +
+                              "drop the parentheses");
+                    return;
+                }
+                if (argCount != 0)
+                {
+                    diags.Add($"'{typeName}.{memberName}' is a property on the C++ backend's native " +
+                              $"surface and takes no arguments, not {argCount} (in '{funcName}')");
+                }
+                return;
+            }
+
+            if (!isCallSyntax && !isPropertyKind)
+            {
+                diags.Add($"'{typeName}.{memberName}' is a method on the C++ backend's native " +
+                          $"surface and cannot be used as a property (in '{funcName}') — " +
+                          "call it with parentheses");
                 return;
             }
 
             if (isPropertyKind) return;
 
-            // ParamCounts lists the supported arities; EMPTY means the member takes none
-            // (the zero-arg instance methods share NoParams with the property rows).
-            var accepted = member.ParamCounts != null && member.ParamCounts.Length > 0
-                ? member.ParamCounts
-                : new[] { 0 };
-            if (!accepted.Contains(argCount))
+            if (!AcceptedArities(member.ParamCounts).Contains(argCount))
             {
                 diags.Add($"'{typeName}.{memberName}' on the C++ backend takes " +
-                          string.Join(" or ", accepted) + $" argument(s), not {argCount} (in '{funcName}')");
+                          string.Join(" or ", AcceptedArities(member.ParamCounts)) +
+                          $" argument(s), not {argCount} (in '{funcName}')");
             }
         }
+
+        /// <summary>
+        /// The arities a surface row accepts. An EMPTY/null ParamCounts means "takes none"
+        /// — the zero-arg methods share the NoParams sentinel with the property rows.
+        /// </summary>
+        private static int[] AcceptedArities(int[] paramCounts) =>
+            paramCounts != null && paramCounts.Length > 0 ? paramCounts : new[] { 0 };
 
         /// <summary>Validate a <c>New</c> against the surface's ctor arities (spec §5).</summary>
         private void CheckSurfaceCtor(string typeName, int argCount, string funcName, List<string> diags)
@@ -356,22 +466,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 diags.Add($"'{typeName}' has no native constructor on the C++ backend (in '{funcName}')");
                 return;
             }
-            if (!ctor.ParamCounts.Contains(argCount))
+            if (!AcceptedArities(ctor.ParamCounts).Contains(argCount))
             {
                 diags.Add($"'New {typeName}' on the C++ backend takes " +
-                          string.Join(" or ", ctor.ParamCounts) +
+                          string.Join(" or ", AcceptedArities(ctor.ParamCounts)) +
                           $" argument(s), not {argCount} (in '{funcName}')");
             }
         }
-
-        /// <summary>
-        /// BL type names the C++ backend lowers to intN_t/uintN_t. Mirrors
-        /// CppCodeGenerator.IsIntegralTypeName — keep the two in sync.
-        /// </summary>
-        private static bool IsIntegralName(string name) =>
-            name != null && name.ToLowerInvariant() is
-                "byte" or "ubyte" or "sbyte" or "short" or "ushort"
-                or "integer" or "uinteger" or "long" or "ulong";
 
         private static bool IsDecimalName(string name) =>
             name != null && name.Equals("Decimal", StringComparison.OrdinalIgnoreCase);
@@ -384,25 +485,25 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// Gate the conversion pairs the C++ backend actually lowers for the native BCL
         /// types (spec §6.2 + the Task 10 Decimal-conversion rider). Decimal has explicit
         /// lowerings in both directions; every OTHER NativeOwned conversion would emit a
-        /// <c>static_cast</c> on a struct with no conversion operator — invalid C++, which
-        /// this design forbids reaching the C++ compiler.
+        /// <c>static_cast</c> / <c>std::to_string</c> on a struct with no such conversion —
+        /// invalid C++, which this design forbids reaching the C++ compiler.
+        /// Shared by BOTH lowering routes: <c>CType</c> (IRCast) and the C* intrinsics
+        /// (IRCall through EmitStdLibCall).
         /// </summary>
-        private void CheckNativeBclCast(IRCast cast, string funcName, List<string> diags)
+        private void CheckNativeConversion(string source, string target, string funcName, List<string> diags)
         {
-            var target = cast.Type?.Name;
-            var source = cast.Value?.Type?.Name;
             var targetNative = IsNativeBcl(target);
             var sourceNative = IsNativeBcl(source);
             if (!targetNative && !sourceNative) return;
 
             // Decimal ← Decimal / integral / Single / Double  (spec §10: integral is exact).
             if (IsDecimalName(target) && targetNative
-                && (IsDecimalName(source) || IsIntegralName(source) || IsFloatingName(source)))
+                && (IsDecimalName(source) || CppCodeGenerator.IsIntegralTypeName(source) || IsFloatingName(source)))
                 return;
 
             // Decimal → Decimal / Single / Double / integral / String / Boolean.
             if (IsDecimalName(source) && sourceNative
-                && (IsDecimalName(target) || IsFloatingName(target) || IsIntegralName(target)
+                && (IsDecimalName(target) || IsFloatingName(target) || CppCodeGenerator.IsIntegralTypeName(target)
                     || string.Equals(target, "String", StringComparison.OrdinalIgnoreCase)
                     || string.Equals(target, "Boolean", StringComparison.OrdinalIgnoreCase)))
                 return;

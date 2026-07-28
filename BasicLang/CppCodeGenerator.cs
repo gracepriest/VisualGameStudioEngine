@@ -530,11 +530,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return $"std::function<void({actionParams})>";
             }
 
-            // P1 native BCL types (spec §6.2): DEAD until the Task 10 registry flip —
-            // Categorize() still returns Rejected for the six, so no green program reaches
-            // this. Keyed off the REGISTRY (not a name list) so the flip activates it
-            // atomically. Five are value structs; StringBuilder is the ONE reference type
-            // (shared_ptr, matching .NET reference semantics).
+            // P1 native BCL types (spec §6.2). Keyed off the REGISTRY (not a name list),
+            // and checked BEFORE the generator's own _typeMap. Five are value structs;
+            // StringBuilder is the ONE reference type (shared_ptr, matching .NET
+            // reference semantics).
             if (IsNativeOwnedBclType(type.Name))
             {
                 return type.Name.Equals("StringBuilder", StringComparison.OrdinalIgnoreCase)
@@ -604,10 +603,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         /// <summary>
         /// True when <paramref name="typeName"/> is a NativeOwned P1 BCL type per the
-        /// boundary registry (spec §6.2). DEAD until the Task 10 flip: the registry still
-        /// categorizes all six as Rejected, so every branch keyed on this is inert today.
-        /// Keyed off the registry (never a local name list) so the flip activates all the
-        /// staged codegen machinery atomically.
+        /// boundary registry (spec §6.2) — DateTime, TimeSpan, Guid, StringBuilder,
+        /// Decimal, DateTimeOffset. Keyed off the registry (never a local name list) so
+        /// the registry stays the single source of truth for every branch below;
+        /// CppCapabilityChecker gates the same set, member by member, against
+        /// <see cref="NativeBclSurface"/>.
         /// </summary>
         private static bool IsNativeOwnedBclType(string typeName) =>
             typeName != null
@@ -616,9 +616,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// <summary>
         /// True for the BL integral type names (the family the C++ backend lowers to
         /// intN_t/uintN_t). Used by the P1 Decimal cast lowering to pick the EXACT
-        /// integer ctor over the lossy 15-digit double route.
+        /// integer ctor over the lossy 15-digit double route — and by
+        /// <see cref="CppCapabilityChecker"/>'s conversion gate, which must accept
+        /// EXACTLY the set this lowering handles. Shared deliberately: two copies could
+        /// drift into a gate that admits a conversion the generator cannot emit.
         /// </summary>
-        private static bool IsIntegralTypeName(string typeName) =>
+        internal static bool IsIntegralTypeName(string typeName) =>
             typeName != null && typeName.ToLowerInvariant() is
                 "byte" or "ubyte" or "sbyte" or "short" or "ushort"
                 or "integer" or "uinteger" or "long" or "ulong";
@@ -773,8 +776,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (tn != null && tn.Contains("::"))
                 return ".";
 
-            // P1 native BCL types (DEAD until the Task 10 registry flip): the five value
-            // structs use `.`; StringBuilder is the one reference type (shared_ptr) → `->`.
+            // P1 native BCL types: the five value structs use `.`; StringBuilder is the
+            // one reference type (shared_ptr) → `->`.
             if (IsNativeOwnedBclType(tn))
                 return tn.Equals("StringBuilder", StringComparison.OrdinalIgnoreCase) ? "->" : ".";
 
@@ -2172,7 +2175,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var frameworkCall = EmitFrameworkCall(functionName, MarshalFrameworkArgs(args, call));
             if (frameworkCall != null) return frameworkCall;
 
-            // P1 static dispatch, call form (DEAD until the Task 10 registry flip): a
+            // P1 static dispatch, call form: a
             // dotted call on a NativeOwned type name (`DateTime.Parse(s)`,
             // `Guid.NewGuid()`, `TimeSpan.FromDays(n)`) lowers to the runtime's static
             // member function `BasicLang::X::Member(args)`. StaticProperty covers the
@@ -2202,10 +2205,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             return functionName.ToLower() switch
             {
-                "print" => $"cout << {args[0]}",
-                "printline" => $"cout << {args[0]} << endl",
-                // .NET Console surface (console-app template parity). Byte/SByte args are
-                // widened for printing — see NumericPrintArg (spec §14.6).
+                // EVERY cout surface widens Byte/SByte the same way (see NumericPrintArg,
+                // spec §14.6) — a split where PrintLine printed 'A' and Console.WriteLine
+                // printed 65 would be a fresh internal inconsistency.
+                "print" => $"cout << {NumericPrintArg(args[0], call, 0)}",
+                "printline" => $"cout << {NumericPrintArg(args[0], call, 0)} << endl",
+                // .NET Console surface (console-app template parity).
                 "console.writeline" => args.Count == 0 ? "cout << endl" : $"cout << {NumericPrintArg(args[0], call, 0)} << endl",
                 "console.write" => args.Count == 0 ? "cout << \"\"" : $"cout << {NumericPrintArg(args[0], call, 0)}",
                 "readline" => "([](){ string s; getline(cin, s); return s; })()",
@@ -2919,8 +2924,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 }
             }
 
-            // P1 native BCL types (DEAD until the Task 10 registry flip). The five value
-            // structs construct by value; StringBuilder MUST go through make_shared — its
+            // P1 native BCL types. The five value structs construct by value;
+            // StringBuilder MUST go through make_shared — its
             // Append chain returns shared_from_this(), which throws std::bad_weak_ptr
             // (since C++17) when the object is not owned by a shared_ptr.
             if (IsNativeOwnedBclType(newObj.ClassName))
@@ -3180,7 +3185,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return;
             }
 
-            // P1 property bridge (DEAD until the Task 10 registry flip): a property access
+            // P1 property bridge: a property access
             // on a NativeOwned receiver (`d.Year`, `sb.Length`) arrives as an IRFieldAccess,
             // but the native runtime exposes these as METHODS — rewrite to a zero-arg call
             // via the surface table (`.Year()`; `sb->Length()`). CppName carries the two
@@ -3659,8 +3664,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (constant.Value is long l)
                 return $"{l}LL";
 
-            // P1 Decimal literal (DEAD until the Task 10 registry flip — Decimal-typed
-            // expressions are still capability-rejected): emit the exact .NET bit pattern
+            // P1 Decimal literal: emit the exact .NET bit pattern
             // through the engine, never a lossy double literal. GetBits: [0..2] = 96-bit
             // magnitude (lo/mid/hi), [3] = flags (scale in bits 16-23, sign in bit 31).
             if (constant.Value is decimal dec)

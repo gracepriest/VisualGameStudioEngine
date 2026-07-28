@@ -184,16 +184,22 @@ public class CppBclEndToEndTests
     /// commit <c>Console.WriteLine(byteValued65)</c> printed 'A'. .NET (and the C#
     /// backend) print the NUMBER, so the console lowering widens Byte/SByte args.
     /// This is the ONE deliberately LIVE behaviour change of the Byte signedness fix.
+    /// ALL cout surfaces are covered — Console.Write/WriteLine AND the VB Print/PrintLine
+    /// statements — so the two cannot drift into printing the same value differently.
     /// </summary>
     [Test, Category("Integration")]
-    public void BytePrinting_IsNumeric_NotCharacter()
+    public void BytePrinting_IsNumeric_NotCharacter_OnEveryPrintSurface()
     {
         var output = CompileToCppOptimized(@"
 Sub Main()
     Dim b As Byte = 65
     Console.WriteLine(b)
+    PrintLine b
+    Print b
+    Console.WriteLine("""")
     Dim s As SByte = -3
     Console.WriteLine(s)
+    PrintLine s
 End Sub");
 
         var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
@@ -201,7 +207,8 @@ End Sub");
         var stdout = VisualGameStudio.Tests.Native.CppCompile
             .CompileAndRun(output, compiler.Value).Replace("\r\n", "\n");
 
-        Assert.That(stdout, Is.EqualTo("65\n-3\n"));
+        // Console.WriteLine / PrintLine / Print(no newline) + WriteLine("") / …
+        Assert.That(stdout, Is.EqualTo("65\n65\n65\n-3\n-3\n"));
     }
 
     /// <summary>
@@ -374,5 +381,73 @@ Sub Main()
 End Sub");
         Assert.That(ex.Message, Does.Contain("DateTime").And.Contain("Integer"));
         Assert.That(ex.Message, Does.Contain("not supported on the C++ backend"));
+    }
+
+    /// <summary>
+    /// The C* intrinsics lower through EmitStdLibCall, NOT Visit(IRCast), so the IRCast
+    /// gate above never saw them: <c>CStr(dt)</c> emitted <c>to_string(dt)</c> and
+    /// <c>CDbl(dt)</c> emitted <c>static_cast&lt;double&gt;(dt)</c> — both clean through
+    /// the BasicLang pipeline, both MSVC errors. Only Decimal was guarded (it has
+    /// lowerings); the other five native types must reject.
+    /// </summary>
+    [TestCase("CStr", "String")]
+    [TestCase("CDbl", "Double")]
+    [TestCase("CInt", "Integer")]
+    [TestCase("CBool", "Boolean")]
+    public void ConversionIntrinsicOnNonDecimalNativeType_IsRejectedCleanly(
+        string intrinsic, string targetName)
+    {
+        var ex = AssertRejected($@"
+Sub Main()
+    Dim d As New DateTime(2026, 1, 1)
+    Console.WriteLine({intrinsic}(d))
+End Sub");
+        Assert.That(ex.Message, Does.Contain("DateTime").And.Contain(targetName));
+        Assert.That(ex.Message, Does.Contain("not supported on the C++ backend"));
+    }
+
+    /// <summary>
+    /// A static call arrives as an IRCall with a DOTTED FunctionName — neither the
+    /// IRInstanceMethodCall nor the IRFieldAccess arm saw it. An unknown static fell
+    /// through the generator's surface dispatch to a flattened phantom function
+    /// (<c>t0 = DateTimeFromBinary(5);</c> against a <c>void*</c> temp).
+    /// </summary>
+    [Test]
+    public void UnknownStaticMethod_IsRejectedCleanly()
+    {
+        var ex = AssertRejected(@"
+Sub Main()
+    Console.WriteLine(DateTime.FromBinary(5))
+End Sub");
+        Assert.That(ex.Message, Does.Contain("DateTime").And.Contain("FromBinary"));
+        Assert.That(ex.Message, Does.Contain("has no native member"));
+    }
+
+    /// <summary>
+    /// GUARD for the caveat in the new IRCall arm: the generator DELIBERATELY lowers the
+    /// parenthesized static-PROPERTY form through the same static dispatch as the
+    /// paren-less one, so the member pass must not reject call syntax on a
+    /// StaticProperty. Zero-arg static METHODS (Guid.NewGuid) ride the same path.
+    /// </summary>
+    [Test]
+    public void ParenthesizedStaticProperty_IsAccepted()
+    {
+        var source = @"
+Sub Main()
+    Dim d As DateTime = DateTime.Now()
+    Dim g As Guid = Guid.NewGuid()
+    Console.WriteLine(d.Year)
+    Console.WriteLine(g.ToString())
+End Sub";
+        var tokens = new Lexer(source).Tokenize();
+        var ast = new Parser(tokens).Parse();
+        var analyzer = new SemanticAnalyzer();
+        Assert.That(analyzer.Analyze(ast), Is.True,
+            string.Join("; ", analyzer.Errors.Select(e => e.Message)));
+        var irModule = new IRBuilder(analyzer).Build(ast, "TestModule");
+        var output = new CppCodeGenerator(new CppCodeGenOptions { GenerateComments = false })
+            .Generate(irModule);
+        Assert.That(output, Does.Contain("BasicLang::DateTime::Now()"));
+        Assert.That(output, Does.Contain("BasicLang::Guid::NewGuid()"));
     }
 }
