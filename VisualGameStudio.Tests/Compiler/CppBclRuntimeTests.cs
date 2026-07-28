@@ -870,9 +870,11 @@ int main() {
     /// Add/sub: max-scale rule (1.0+1.00 = "2.00"), 0.1+0.2 == 0.3 EXACTLY, the
     /// thousand-iteration 0.10 accumulation == "100.00", overflow reduction with a single
     /// round-half-even decision (Max+0.45 == Max, Max+0.5 tie rounds up on the odd last
-    /// digit and throws), DIFFERENT-SIGN reduction of a >96-bit aligned difference
-    /// (Max-0.5 = "...334" half-even, Max-0.1 == Max — oracle-verified), unary minus,
-    /// ++/-- preserving scale (1.50 -> 2.50).
+    /// digit and throws), DIFFERENT-SIGN reduction of a >96-bit aligned difference on
+    /// BOTH comparison branches (c>0: Max-0.5 = "...334" half-even, Max-0.1 == Max;
+    /// c&lt;0 smaller-minus-larger: 0.5-Max = "-...334" reduced, 1-3 = "-2" plain sign
+    /// selection — all oracle-verified), unary minus, ++/-- preserving scale
+    /// (1.50 -> 2.50).
     /// </summary>
     [Test, Category("Integration")]
     public void AddSub_ScaleRules_MoneyLoop_UnaryIncrement()
@@ -891,6 +893,8 @@ int main() {
     printf(""min_m1_throws=%d\n"", thr([] { Decimal x = Decimal::MinValue() - Decimal(1); (void)x; }));
     printf(""max_m05=%d\n"", S(Decimal::MaxValue() - P(""0.5"")) == ""79228162514264337593543950334"");
     printf(""max_m01=%d\n"", (Decimal::MaxValue() - P(""0.1"")) == Decimal::MaxValue());
+    printf(""neg_max_m05=%d\n"", S(P(""0.5"") - Decimal::MaxValue()) == ""-79228162514264337593543950334"");
+    printf(""one_minus_three=%d\n"", S(Decimal(1) - Decimal(3)) == ""-2"");
     Decimal sum;
     Decimal dime = P(""0.10"");
     for (int i = 0; i < 1000; ++i) sum += dime;
@@ -912,7 +916,7 @@ int main() {
         AssertMarkers(output,
             "add_335", "add_point3", "add_200", "add_250", "sub_zero_scale",
             "max_p045", "max_p05_throws", "max_p06_throws", "max_p1_throws", "min_m1_throws",
-            "max_m05", "max_m01",
+            "max_m05", "max_m01", "neg_max_m05", "one_minus_three",
             "money_loop", "unary_neg", "unary_neg_zero",
             "preinc", "postinc", "predec", "postdec");
     }
