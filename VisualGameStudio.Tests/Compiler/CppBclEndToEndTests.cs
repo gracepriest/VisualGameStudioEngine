@@ -252,19 +252,21 @@ public class CppBclEndToEndTests
     /// of the same bug, fixed by the same guard.
     ///
     /// This is an emission pin (no C++ compiler needed), so it stays in the fast subset.
-    /// Verified against real .NET through the C# backend, which prints 1999/7/77/user-trim
+    /// Verified against real .NET through the C# backend, which prints 1999/7/42/77/user-trim
     /// for this exact program; the Integration row "StdlibShadowing" runs it for real.
-    /// Before the fix this program emitted <c>(d).Year()</c>, <c>abs(-3)</c> and the stdlib
-    /// trim lambda instead of the three user calls.
+    /// Before the fix this program emitted <c>(d).Year()</c>, <c>(21).Day()</c>, <c>abs(-3)</c>
+    /// and the stdlib trim lambda instead of the four user calls.
     /// </summary>
     [Test]
     public void UserDefinedFunction_ShadowsStdlibBuiltin_MatchingTheCSharpBackend()
     {
         var cpp = CppGeneratedCode.WithoutBclRuntime(CompileToCppOptimized(StdlibShadowingProgram));
 
-        // The three SHADOWED names lower to the user's function …
+        // The four SHADOWED names lower to the user's function …
         Assert.That(cpp, Does.Contain("Year(d)"), "user Year must win over the builtin:\n" + cpp);
         Assert.That(cpp, Does.Not.Contain("(d).Year()"), "builtin Year must not be emitted:\n" + cpp);
+        Assert.That(cpp, Does.Contain("Day(21)"), "user Day must win over the builtin:\n" + cpp);
+        Assert.That(cpp, Does.Not.Contain("(21).Day()"), "builtin Day must not be emitted:\n" + cpp);
         Assert.That(cpp, Does.Contain("Abs(-3)"), "user Abs must win over the builtin:\n" + cpp);
         Assert.That(cpp, Does.Not.Contain("abs(-3)"), "builtin abs must not be emitted:\n" + cpp);
         Assert.That(cpp, Does.Contain("Trim(\"  padded  \")"), "user Trim must win:\n" + cpp);
@@ -850,24 +852,29 @@ End Sub";
     /// a user definition wins over the builtin of the same name, on BOTH backends. Cross-checked
     /// on the C# backend (real .NET) before the C++ leg was run — it prints the same four lines.
     ///
-    /// SCOPE NOTE: every shadowing function here takes the SAME parameter type as the builtin
-    /// it shadows. A user overload with a DIFFERENT signature (the classic
-    /// <c>Function Day(n As Integer)</c> + <c>Day(21)</c>) never reaches either backend — the
-    /// semantic analyzer resolves the name to the registered stdlib signature and reports
-    /// "cannot convert from 'Integer' to 'DateTime'". That is a separate, pre-existing
-    /// FRONT-END gap (a clean diagnostic, not a silent wrong answer), out of scope here.
+    /// <c>Day</c> covers the loudest form: a user overload whose SIGNATURE DIFFERS from the
+    /// builtin's (<c>Day(Integer)</c> vs the registered <c>Day(DateTime)</c>). It resolves
+    /// because <c>RegisterStdLibFunction</c> ends in <c>GlobalScope.Define</c>
+    /// (SemanticAnalyzer.cs), so the user's declaration REPLACES the stdlib symbol outright —
+    /// no overload set is ever formed. That replacement is source-ordered, which is why every
+    /// helper here is declared BEFORE <c>Main</c>: a differing-signature definition placed
+    /// AFTER its call site is still resolved against the stale stdlib symbol and reports
+    /// "cannot convert from 'Integer' to 'DateTime'". Same-signature shadows (Year/Abs/Trim)
+    /// are order-insensitive because the stale symbol type-checks identically.
+    ///
+    /// <c>Day</c> returns <c>n + n</c>, not <c>n * 2</c>: `Return n * 2` trips an UNRELATED
+    /// pre-existing optimizer bug (strength reduction emits <c>t0 = n &lt;&lt; 1; return t1;</c> —
+    /// an undeclared identifier) that has nothing to do with shadowing and would fail this
+    /// test for the wrong reason. Reproduces on any plain function, e.g.
+    /// <c>Function Doubled(n As Integer) As Integer : Return n * 2</c>.
     /// </summary>
     private const string StdlibShadowingProgram = @"
-Sub Main()
-    Dim d As New DateTime(2026, 7, 28, 13, 45, 30)
-    Console.WriteLine(Year(d))
-    Console.WriteLine(Month(d))
-    Console.WriteLine(Abs(-3))
-    Console.WriteLine(Trim(""  padded  ""))
-End Sub
-
 Function Year(value As DateTime) As Integer
     Return 1999
+End Function
+
+Function Day(n As Integer) As Integer
+    Return n + n
 End Function
 
 Function Abs(value As Integer) As Integer
@@ -876,10 +883,20 @@ End Function
 
 Function Trim(value As String) As String
     Return ""user-trim""
-End Function";
+End Function
 
-    // User Year, the real builtin Month, user Abs (pre-existing half), user Trim.
-    private const string StdlibShadowingExpected = "1999\n7\n77\nuser-trim\n";
+Sub Main()
+    Dim d As New DateTime(2026, 7, 28, 13, 45, 30)
+    Console.WriteLine(Year(d))
+    Console.WriteLine(Month(d))
+    Console.WriteLine(Day(21))
+    Console.WriteLine(Abs(-3))
+    Console.WriteLine(Trim(""  padded  ""))
+End Sub";
+
+    // User Year, the real builtin Month, user Day (differing signature), user Abs and Trim
+    // (the pre-existing half of the bug). Verified on the C# backend first — same 5 lines.
+    private const string StdlibShadowingExpected = "1999\n7\n42\n77\nuser-trim\n";
 
     // ------------------------------------------------------------------
     // THE TABLE. One row per program; both legs are generated from it.
