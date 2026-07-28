@@ -39,8 +39,12 @@ internal static class CppGeneratedCode
 /// both-modes drift trap), and the Integration smokes prove the spliced headers
 /// actually compile and run inside a generated program in each mode. Task 11
 /// extends this fixture with the per-type BL end-to-end battery.
+///
+/// NonParallelizable, matching the other CLI-spawning fixtures: the cases here
+/// spawn BasicLang.exe and a C++ toolchain, and each one already saturates a core.
 /// </summary>
 [TestFixture]
+[NonParallelizable]
 public class CppBclEndToEndTests
 {
     // ------------------------------------------------------------------
@@ -90,17 +94,42 @@ public class CppBclEndToEndTests
     {
         var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
         if (compiler == null) Assert.Ignore("No C++ compiler available on this machine");
-        return VisualGameStudio.Tests.Native.CppCompile
-            .CompileAndRun(cppSource, compiler.Value).Replace("\r\n", "\n");
+        return WithoutRuntimeInFailures(() => VisualGameStudio.Tests.Native.CppCompile
+            .CompileAndRun(cppSource, compiler.Value)).Replace("\r\n", "\n");
+    }
+
+    /// <summary>
+    /// Run <paramref name="compileAndRun"/>, and on a compile/run assertion failure re-raise
+    /// it with the spliced BCL runtime bodies stripped from the message. CppCompile puts the
+    /// whole translation unit in its failure context, which since Task 9 means ~1,460 lines
+    /// of verbatim runtime header would bury the ~40 lines of user-code lowering that
+    /// actually failed. Only AssertionException is intercepted — Assert.Ignore's
+    /// IgnoreException (and every real exception) propagates untouched.
+    /// </summary>
+    private static string WithoutRuntimeInFailures(Func<string> compileAndRun)
+    {
+        try
+        {
+            return compileAndRun();
+        }
+        catch (AssertionException ex)
+        {
+            throw new AssertionException(CppGeneratedCode.WithoutBclRuntime(ex.Message), ex);
+        }
     }
 
     /// <summary>
     /// The CLI leg (repo law: validate through BOTH entry points). Drives the REAL
     /// <c>BasicLang.exe &lt;file&gt;.bas --target=cpp</c> — the binary the suite deploys next
     /// to the tests, so it always carries the compiler under test — then compiles and runs
-    /// the .cpp it wrote. <c>CompileFile</c> runs the standard optimizer passes, so this is
-    /// the same lowering <see cref="CompileToCppOptimized"/> produces, arrived at through
-    /// the shipped executable rather than an in-process helper.
+    /// the .cpp it wrote.
+    ///
+    /// This is NOT merely "<see cref="CompileToCppOptimized"/> in another process". The CLI
+    /// goes through <c>BasicCompiler.CompileFile</c>: the module registry, preprocessing,
+    /// <c>CombineIRModules</c>, and a <c>CppCodeGenerator</c> built with DEFAULT options
+    /// (the in-process helper suppresses comments and hand-builds a single-unit IRModule).
+    /// The optimizer passes match — <c>CompileFile</c> runs <c>AddStandardPasses</c> — but
+    /// everything around them differs, which is exactly why this leg earns its runtime.
     /// </summary>
     private static string CompileRunViaCli(string blSource)
     {
@@ -123,10 +152,47 @@ public class CppBclEndToEndTests
             Assert.That(File.Exists(cppPath), Is.True,
                 $"CLI reported success but wrote no Prog.cpp.\nSTDOUT:\n{stdout}");
 
-            return VisualGameStudio.Tests.Native.CppCompile
-                .CompileAndRun(File.ReadAllText(cppPath), compiler.Value).Replace("\r\n", "\n");
+            var generated = File.ReadAllText(cppPath);
+            return WithoutRuntimeInFailures(() => VisualGameStudio.Tests.Native.CppCompile
+                .CompileAndRun(generated, compiler.Value)).Replace("\r\n", "\n");
         }
         finally { try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ } }
+    }
+
+    /// <summary>
+    /// Exact-stdout assertion that reports the FIRST DIFFERING LINE by number instead of
+    /// NUnit's character index. These programs print 13–19 lines, and mapping a character
+    /// offset back to the BL statement that produced it means counting '\n's by hand.
+    ///
+    /// Deliberately NOT solved by labelling output from inside the BL sources
+    /// (<c>"Year=" &amp; d.Year</c>): string concatenation over native-typed operands is the
+    /// documented spec §13 gap, out of scope for P1, and using it would change what these
+    /// programs test. The diagnosis belongs in the harness, not in the fixtures under test.
+    /// </summary>
+    private static void AssertLines(string expected, string actual)
+    {
+        var e = expected.Replace("\r\n", "\n");
+        var a = actual.Replace("\r\n", "\n");
+        Assert.That(a, Is.EqualTo(e), e == a ? "" : DescribeFirstDifference(e, a));
+    }
+
+    private static string DescribeFirstDifference(string expected, string actual)
+    {
+        var e = expected.Split('\n');
+        var a = actual.Split('\n');
+        // Every expectation ends with a trailing newline, so Split leaves an empty tail
+        // entry; report the human line COUNT rather than the array length.
+        var total = e.Length > 0 && e[^1].Length == 0 ? e.Length - 1 : e.Length;
+        var context = $"\n--- expected ---\n{expected}--- actual ---\n{actual}";
+
+        for (int i = 0; i < Math.Min(e.Length, a.Length); i++)
+        {
+            if (e[i] != a[i])
+                return $"stdout line {i + 1} of {total}: expected '{e[i]}' but was '{a[i]}'{context}";
+        }
+        var actualTotal = a.Length > 0 && a[^1].Length == 0 ? a.Length - 1 : a.Length;
+        return $"stdout LINE COUNT differs: expected {total} lines, got {actualTotal} " +
+               $"(first {Math.Min(e.Length, a.Length)} match){context}";
     }
 
     /// <summary>Front half mirrors CppSplitEmissionTests.Split: real frontend, then GenerateSplit.</summary>
@@ -191,12 +257,7 @@ public class CppBclEndToEndTests
     {
         var output = CompileToCppOptimized("Sub Main()\n    Console.WriteLine(\"bcl-splice-ok\")\nEnd Sub");
 
-        var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
-        if (compiler == null) Assert.Ignore("No C++ compiler available on this machine");
-        var stdout = VisualGameStudio.Tests.Native.CppCompile
-            .CompileAndRun(output, compiler.Value).Replace("\r\n", "\n");
-
-        Assert.That(stdout, Is.EqualTo("bcl-splice-ok\n"));
+        Assert.That(CompileRun(output), Is.EqualTo("bcl-splice-ok\n"));
     }
 
     /// <summary>
@@ -271,8 +332,7 @@ End Sub");
 
         // Console.WriteLine / PrintLine / Print(no newline) + WriteLine("") / … then the
         // SByte arithmetic tail: -3+10, -3-10, -3+=5, ordering, CType-widened 10*10.
-        Assert.That(CompileRun(output),
-            Is.EqualTo("65\n65\n65\n-3\n-3\n7\n-13\n2\nordered\n100\n"));
+        AssertLines("65\n65\n65\n-3\n-3\n7\n-13\n2\nordered\n100\n", CompileRun(output));
     }
 
     /// <summary>
@@ -318,30 +378,30 @@ End Sub");
         Assert.That(userCode, Does.Contain("IsZeroMag()"),
             "Decimal→Boolean must route through the engine's zero test:\n" + output);
 
-        var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
-        if (compiler == null) Assert.Ignore("No C++ compiler available on this machine");
-        var stdout = VisualGameStudio.Tests.Native.CppCompile
-            .CompileAndRun(output, compiler.Value).Replace("\r\n", "\n");
-
-        Assert.That(stdout, Is.EqualTo(
+        AssertLines(
             // truncate-toward-zero (matching .NET's (int)decimal), scale-preserving
             // ToString, VarR8FromDec ToDouble, and Convert.ToBoolean's `!= 0`.
-            "19\n19\n19.99\n19\n19.99\n19.99\n-2\nnonzero\nzero\n"));
+            "19\n19\n19.99\n19\n19.99\n19.99\n-2\nnonzero\nzero\n",
+            CompileRun(output));
     }
 
     // ==================================================================
     // Task 11 (spec §12 layers 3–4): the per-type BL end-to-end battery.
     //
-    // Each program is a const so the SAME source drives BOTH entry points —
-    // the in-process optimizer path (CompileToCppOptimized) and the shipped
-    // CLI (BasicLang.exe … --target=cpp), per the repo's both-entry-points law.
+    // The (program, expected-output) pairing lives in exactly ONE place — the
+    // `Programs` table below — and BOTH legs are TestCaseSource-driven from it:
+    // the in-process optimizer path (CompileToCppOptimized) and the shipped CLI
+    // (BasicLang.exe … --target=cpp), per the repo's both-entry-points law.
+    // Adding a row therefore adds BOTH legs; there is no hand-maintained second
+    // list that a new program can be silently omitted from. (Task 12 appends its
+    // stdlib-date programs to this table.)
     //
     // EVERY expected string below was produced by running the equivalent
     // program on real .NET (PowerShell as the oracle) BEFORE the C++ leg was
     // run — never hand-computed.
     //
     // Program-writing constraints discovered while building these (all
-    // PRE-EXISTING C++-backend behaviour, none introduced by P1):
+    // PRE-EXISTING backend behaviour, none introduced by P1):
     //  * Locals must not be named `t0`, `t1`, … — those collide with the
     //    generator's temporary names and emit a redefinition (chip filed;
     //    reproduces on a plain `Dim t0 As String` program with no P1 type).
@@ -351,6 +411,12 @@ End Sub");
     //    on C# (also pre-existing, non-Decimal-specific).
     //  * `.ToString()` never `CStr(nativeValue)` — Task 10's conversion gate
     //    correctly rejects the intrinsic form on the five non-Decimal natives.
+    //  * The plan's Decimal bullet lists `++`; it is deliberately NOT covered.
+    //    `n++` is silently DROPPED on BOTH backends — pre-existing and
+    //    backend-agnostic, so not a P1 concern (chip task_810dc83e): on a plain
+    //    Integer `n = 5 : n++` prints 5 rather than 6, and on a Decimal it
+    //    increments an unrelated generator temp. Pinning it here would pin the
+    //    BUG. `d += 1` is the correct substitute and IS covered.
     // ==================================================================
 
     /// <summary>
@@ -624,36 +690,6 @@ End Sub";
         "1785258000\n1785258000000\n639208368000000000\nsame-instant\n" +
         "01/01/1970 00:00:00 +00:00\n07/28/2026 17:00:00 +00:00\n";
 
-    [Test, Category("Integration")]
-    public void DateTime_ConstructComponentsArithmeticFormatAndNowIntoLocal_EndToEnd()
-        => Assert.That(CompileRun(CompileToCppOptimized(DateTimeProgram)),
-            Is.EqualTo(DateTimeExpected));
-
-    [Test, Category("Integration")]
-    public void TimeSpan_FactoriesComponentsTotalsAndCompoundAdd_EndToEnd()
-        => Assert.That(CompileRun(CompileToCppOptimized(TimeSpanProgram)),
-            Is.EqualTo(TimeSpanExpected));
-
-    [Test, Category("Integration")]
-    public void Guid_NewGuidParseStringCtorAndDictionaryKey_EndToEnd()
-        => Assert.That(CompileRun(CompileToCppOptimized(GuidProgram)),
-            Is.EqualTo(GuidExpected));
-
-    [Test, Category("Integration")]
-    public void StringBuilder_ChainingAppendIntegerAndAliasing_EndToEnd()
-        => Assert.That(CompileRun(CompileToCppOptimized(StringBuilderProgram)),
-            Is.EqualTo(StringBuilderExpected));
-
-    [Test, Category("Integration")]
-    public void Decimal_MoneyExactnessScaleAndConversions_EndToEnd()
-        => Assert.That(CompileRun(CompileToCppOptimized(DecimalProgram)),
-            Is.EqualTo(DecimalExpected));
-
-    [Test, Category("Integration")]
-    public void DateTimeOffset_OffsetConstructionUtcInstantEqualityAndUnixTime_EndToEnd()
-        => Assert.That(CompileRun(CompileToCppOptimized(DateTimeOffsetProgram)),
-            Is.EqualTo(DateTimeOffsetExpected));
-
     /// <summary>
     /// Spec §11 end-to-end: the native runtimes signal errors with
     /// <c>std::runtime_error</c>, which is exactly the type the C++ backend's Catch
@@ -663,10 +699,7 @@ End Sub";
     /// IR constant folder deliberately never folds Decimal constants (IROptimizer,
     /// spec 6.1), so the division survives the optimizer into the emitted program.
     /// </summary>
-    [Test, Category("Integration")]
-    public void TryCatch_OverNativeRuntimeThrows_ReachesTheBlCatch_EndToEnd()
-    {
-        var output = CompileToCppOptimized(@"
+    private const string TryCatchProgram = @"
 Sub Main()
     Dim one As Decimal = 1
     Dim zero As Decimal = 0
@@ -683,40 +716,57 @@ Sub Main()
         Console.WriteLine(""CAUGHT-GUID"")
     End Try
     Console.WriteLine(""after"")
-End Sub");
+End Sub";
 
-        Assert.That(CompileRun(output), Is.EqualTo("CAUGHT-DIV0\nCAUGHT-GUID\nafter\n"));
-    }
+    private const string TryCatchExpected = "CAUGHT-DIV0\nCAUGHT-GUID\nafter\n";
 
     // ------------------------------------------------------------------
-    // The CLI leg (plan Task 11 step 3 / repo law: BOTH entry points).
-    // Same six programs, driven through the shipped BasicLang.exe instead of
-    // the in-process helper — a lowering that only works via the test helper
-    // (or only via the CLI) is a real defect this catches.
+    // THE TABLE. One row per program; both legs are generated from it.
     // ------------------------------------------------------------------
 
-    [TestCase("DateTime")]
-    [TestCase("TimeSpan")]
-    [TestCase("Guid")]
-    [TestCase("StringBuilder")]
-    [TestCase("Decimal")]
-    [TestCase("DateTimeOffset")]
-    [Category("Integration")]
-    public void Cli_TargetCpp_ProducesTheSameProgramOutput(string family)
+    /// <summary>
+    /// One end-to-end program and the exact stdout it must produce. Public because
+    /// NUnit test methods (which must be public) take it as a parameter.
+    /// </summary>
+    public sealed record BclProgram(string Name, string Source, string Expected);
+
+    /// <summary>
+    /// The single source of truth for the end-to-end battery. Every row is run
+    /// TWICE — once through the in-process optimizer path and once through the
+    /// shipped CLI — because both leg methods below share this one TestCaseSource.
+    /// A new program is therefore covered by BOTH entry points the moment it is
+    /// added here, and there is no second list to forget.
+    /// </summary>
+    private static readonly BclProgram[] Programs =
     {
-        var (source, expected) = family switch
-        {
-            "DateTime" => (DateTimeProgram, DateTimeExpected),
-            "TimeSpan" => (TimeSpanProgram, TimeSpanExpected),
-            "Guid" => (GuidProgram, GuidExpected),
-            "StringBuilder" => (StringBuilderProgram, StringBuilderExpected),
-            "Decimal" => (DecimalProgram, DecimalExpected),
-            "DateTimeOffset" => (DateTimeOffsetProgram, DateTimeOffsetExpected),
-            _ => throw new ArgumentOutOfRangeException(nameof(family), family, "unknown program family"),
-        };
+        new BclProgram("DateTime", DateTimeProgram, DateTimeExpected),
+        new BclProgram("TimeSpan", TimeSpanProgram, TimeSpanExpected),
+        new BclProgram("Guid", GuidProgram, GuidExpected),
+        new BclProgram("StringBuilder", StringBuilderProgram, StringBuilderExpected),
+        new BclProgram("Decimal", DecimalProgram, DecimalExpected),
+        new BclProgram("DateTimeOffset", DateTimeOffsetProgram, DateTimeOffsetExpected),
+        new BclProgram("TryCatch", TryCatchProgram, TryCatchExpected),
+    };
 
-        Assert.That(CompileRunViaCli(source), Is.EqualTo(expected));
-    }
+    public static IEnumerable<TestCaseData> ProgramCases() =>
+        Programs.Select(p => new TestCaseData(p).SetArgDisplayNames(p.Name));
+
+    /// <summary>
+    /// Leg 1 — the in-process optimizer path (repo law: validate codegen through the
+    /// optimizer, not only the non-optimizing helper).
+    /// </summary>
+    [TestCaseSource(nameof(ProgramCases)), Category("Integration")]
+    public void Optimizer_TargetCpp_ProducesTheExpectedOutput(BclProgram program)
+        => AssertLines(program.Expected, CompileRun(CompileToCppOptimized(program.Source)));
+
+    /// <summary>
+    /// Leg 2 — the shipped <c>BasicLang.exe … --target=cpp</c> (plan Task 11 step 3 /
+    /// repo law: BOTH entry points). A lowering that only works via the test helper —
+    /// or only via the CLI — is a real defect this catches.
+    /// </summary>
+    [TestCaseSource(nameof(ProgramCases)), Category("Integration")]
+    public void Cli_TargetCpp_ProducesTheSameProgramOutput(BclProgram program)
+        => AssertLines(program.Expected, CompileRunViaCli(program.Source));
 }
 
 /// <summary>
@@ -771,27 +821,29 @@ End Sub");
 
     /// <summary>
     /// Task 11: the SAME rejection for EVERY member-bearing native type, not just
-    /// DateTime. Each member below is a REAL .NET member deliberately left off the
-    /// curated v1 surface (spec §5), so this is the honest shape of the diagnostic a
-    /// user meets when they reach past v1 — a named type and member, not a raw C++
-    /// compiler error. Guid.ToByteArray has its own test below (it carries the extra
-    /// "the native header has it, the BL surface does not" story).
+    /// DateTime. Each member below EXISTS in .NET but is deliberately left off the
+    /// curated v1 surface (spec §5) — three are instance members; Decimal.ToOACurrency
+    /// is a .NET STATIC, included precisely because reaching for it with instance
+    /// syntax is a plausible user error that must still land on a clean diagnostic
+    /// rather than a raw C++ compiler error. Guid.ToByteArray has its own test below
+    /// (it carries the extra "the native header has it, the BL surface does not" story).
+    /// The member name is passed explicitly rather than parsed out of the call
+    /// expression, so a future paren-less case can be added without the helper
+    /// throwing while it hunts for a '('.
     /// </summary>
-    [TestCase("Dim x As New TimeSpan(1, 0, 0)", "TimeSpan", "x.Multiply(2)")]
-    [TestCase("Dim x As New StringBuilder()", "StringBuilder", "x.EnsureCapacity(64)")]
-    [TestCase("Dim x As Decimal = 1", "Decimal", "x.ToOACurrency()")]
-    [TestCase("Dim x As New DateTimeOffset(New DateTime(2026, 1, 1))", "DateTimeOffset", "x.AddDays(1)")]
+    [TestCase("Dim x As New TimeSpan(1, 0, 0)", "TimeSpan", "x.Multiply(2)", "Multiply")]
+    [TestCase("Dim x As New StringBuilder()", "StringBuilder", "x.EnsureCapacity(64)", "EnsureCapacity")]
+    [TestCase("Dim x As Decimal = 1", "Decimal", "x.ToOACurrency()", "ToOACurrency")]
+    [TestCase("Dim x As New DateTimeOffset(New DateTime(2026, 1, 1))", "DateTimeOffset", "x.AddDays(1)", "AddDays")]
     public void UnknownNativeMember_IsRejectedCleanly_ForEveryNativeType(
-        string declaration, string typeName, string call)
+        string declaration, string typeName, string call, string memberName)
     {
         var ex = AssertRejected($@"
 Sub Main()
     {declaration}
     Console.WriteLine({call})
 End Sub");
-        var member = call.Substring(call.IndexOf('.') + 1);
-        member = member.Substring(0, member.IndexOf('('));
-        Assert.That(ex.Message, Does.Contain(typeName).And.Contain(member));
+        Assert.That(ex.Message, Does.Contain(typeName).And.Contain(memberName));
         Assert.That(ex.Message, Does.Contain("has no native member"));
     }
 
