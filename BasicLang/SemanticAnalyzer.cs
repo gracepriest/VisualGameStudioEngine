@@ -68,7 +68,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
         private static readonly HashSet<string> CommonNetTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             // System types
-            "Console", "Math", "Environment", "DateTime", "TimeSpan", "Guid", "Random",
+            "Console", "Math", "Environment", "DateTime", "DateTimeOffset", "TimeSpan", "Guid", "Random",
             "Convert", "BitConverter", "Buffer", "Array", "Enum", "Type", "Activator",
             "Object", "String", "Int32", "Int64", "Double", "Single", "Boolean", "Char", "Byte",
             "Int16", "UInt16", "UInt32", "UInt64", "Decimal", "SByte",
@@ -1010,6 +1010,36 @@ namespace BasicLang.Compiler.SemanticAnalysis
             RegisterStdLibFunction("CStr", SymbolKind.Function, _typeManager.GetType("String"),
                 new[] { ("value", _typeManager.GetType("Object")) });
 
+            // Date/time functions (P1 Task 5, spec §7): TYPING ONLY — the C#
+            // emissions already exist (CSharpStdLibProvider); the C++ backend
+            // emissions arrive with Task 12. Signatures mirror the repo's
+            // StdLib/CSharpStdLib.cs function table VERBATIM (the repo table
+            // wins over classic VB: DateDiff returns Integer here, not Long,
+            // and DateAdd/DateDiff use the table's argument order).
+            var dateTimeType = new TypeInfo("DateTime", TypeKind.Class);
+            RegisterStdLibFunction("Now", SymbolKind.Function, dateTimeType,
+                Array.Empty<(string, TypeInfo)>());
+            RegisterStdLibFunction("Today", SymbolKind.Function, dateTimeType,
+                Array.Empty<(string, TypeInfo)>());
+            RegisterStdLibFunction("Year", SymbolKind.Function, _typeManager.GetType("Integer"),
+                new[] { ("date", dateTimeType) });
+            RegisterStdLibFunction("Month", SymbolKind.Function, _typeManager.GetType("Integer"),
+                new[] { ("date", dateTimeType) });
+            RegisterStdLibFunction("Day", SymbolKind.Function, _typeManager.GetType("Integer"),
+                new[] { ("date", dateTimeType) });
+            RegisterStdLibFunction("Hour", SymbolKind.Function, _typeManager.GetType("Integer"),
+                new[] { ("date", dateTimeType) });
+            RegisterStdLibFunction("Minute", SymbolKind.Function, _typeManager.GetType("Integer"),
+                new[] { ("date", dateTimeType) });
+            RegisterStdLibFunction("Second", SymbolKind.Function, _typeManager.GetType("Integer"),
+                new[] { ("date", dateTimeType) });
+            RegisterStdLibFunction("DateAdd", SymbolKind.Function, dateTimeType,
+                new[] { ("date", dateTimeType), ("interval", _typeManager.GetType("String")), ("number", _typeManager.GetType("Integer")) });
+            RegisterStdLibFunction("DateDiff", SymbolKind.Function, _typeManager.GetType("Integer"),
+                new[] { ("date1", dateTimeType), ("date2", dateTimeType), ("interval", _typeManager.GetType("String")) });
+            RegisterStdLibFunction("FormatDate", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("date", dateTimeType), ("format", _typeManager.GetType("String")) });
+
             RegisterStdLibFunction("CBool", SymbolKind.Function, _typeManager.GetType("Boolean"),
                 new[] { ("value", _typeManager.GetType("Object")) });
 
@@ -1458,8 +1488,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// <summary>
         /// True when one operand is Decimal and the other is Single/Double —
         /// the pair with no implicit conversion in either direction (spec 6.1).
-        /// Used by the comparison and compound-assignment gates; the arithmetic
-        /// gate reaches the same error via GetCommonType's null sentinel.
+        /// Used by the ordering, EQUALITY, and compound-assignment gates; the
+        /// arithmetic gate reaches the same error via GetCommonType's null
+        /// sentinel.
         /// </summary>
         private static bool IsDecimalFloatingMix(TypeInfo left, TypeInfo right)
         {
@@ -2028,6 +2059,19 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// </summary>
         private TypeInfo LookupNetTypeMember(string typeName, string memberName)
         {
+            // P1 native-BCL surface (spec §4): the single-source member table
+            // is consulted FIRST for the P1 type names — BEFORE the LSP's
+            // reflection TypeRegistry — so compile-path and LSP answers are
+            // identical for P1 types (e.g. DateTime.DayOfWeek is the surface's
+            // Integer, not reflection's DayOfWeek enum). Misses fall through
+            // to the existing permissive behavior: the C# backend stays
+            // permissive on unknown members; clean-diagnostic enforcement is
+            // C++-only and arrives with Task 10's checker pass.
+            if (NativeBclSurface.TryGetMemberReturnType(typeName, memberName, out var surfaceReturnType))
+            {
+                return ResolveNetTypeName(surfaceReturnType);
+            }
+
             // First try the TypeRegistry for loaded .NET assemblies
             if (_typeRegistry != null)
             {
@@ -2192,7 +2236,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
             var lowerTypeName = typeName.ToLowerInvariant();
             var lowerMethodName = methodName.ToLowerInvariant();
 
-            // StringBuilder methods
+            // StringBuilder methods. NOTE: NativeBclSurface's StringBuilder
+            // rows were copied IDENTICALLY from this table (spec §5) and the
+            // surface is consulted FIRST in LookupNetTypeMember — keep the two
+            // in agreement if either ever changes. This fallback stays for
+            // callers that reach it without going through the surface.
             if (lowerTypeName == "stringbuilder" || lowerTypeName == "system.text.stringbuilder")
             {
                 switch (lowerMethodName)
@@ -4948,8 +4996,29 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
             else // Compound assignment
             {
+                // P1 surface gate (spec 6.1): when a non-numeric P1 type is
+                // involved, 'x op= y' is legal iff 'x op y' has a table row
+                // AND the row's result type equals the target's type
+                // (dt += ts and ts -= ts2 work; dt += dt has no row and
+                // d1 -= d2 yields TimeSpan, not DateTime — both error).
+                // Decimal compound assignment stays on the numeric path below.
+                if ((NativeBclSurface.IsNonNumericSurfaceType(targetType.Name) ||
+                     NativeBclSurface.IsNonNumericSurfaceType(valueType.Name)) &&
+                    targetType.Kind != TypeKind.TypeParameter && valueType.Kind != TypeKind.TypeParameter)
+                {
+                    var baseOp = node.Operator.EndsWith("=")
+                        ? node.Operator.Substring(0, node.Operator.Length - 1)
+                        : node.Operator;
+                    if (!(NativeBclSurface.TryGetBinaryOperatorResult(targetType.Name, baseOp, valueType.Name,
+                              out var compoundResult) &&
+                          compoundResult.Equals(targetType.Name, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        Error($"The operator '{node.Operator}' is not defined for operand types '{targetType.Name}' and '{valueType.Name}'",
+                              node.Line, node.Column);
+                    }
+                }
                 // Operators like +=, -= require numeric types (allow type parameters)
-                if (!targetType.IsNumeric() && !valueType.IsNumeric() &&
+                else if (!targetType.IsNumeric() && !valueType.IsNumeric() &&
                     targetType.Kind != TypeKind.TypeParameter && valueType.Kind != TypeKind.TypeParameter)
                 {
                     Error($"Operator '{node.Operator}' requires numeric operands", node.Line, node.Column);
@@ -5007,8 +5076,30 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 case "/":
                 case "%":
                 case "Mod":
-                    // Arithmetic operators
-                    if (!leftType.IsNumeric() || !rightType.IsNumeric())
+                    // P1 surface operator rows (spec 6.1) come BEFORE the
+                    // numeric gate: DateTime/TimeSpan cross-type arithmetic is
+                    // legal per the table even though neither operand
+                    // IsNumeric() (dt - dt -> TimeSpan, dt ± ts -> DateTime,
+                    // ts ± ts -> TimeSpan). Decimal-Decimal rows also hit here;
+                    // Decimal-integral widening stays on the GetCommonType path.
+                    if (NativeBclSurface.TryGetBinaryOperatorResult(leftType.Name, node.Operator, rightType.Name,
+                            out var surfaceArithResult))
+                    {
+                        resultType = ResolveNetTypeName(surfaceArithResult);
+                    }
+                    else if (NativeBclSurface.IsNonNumericSurfaceType(leftType.Name) ||
+                             NativeBclSurface.IsNonNumericSurfaceType(rightType.Name))
+                    {
+                        // A P1 operand pair with no table row (dt + dt,
+                        // ts * ts, dt + Integer): a clean targeted error
+                        // instead of the misleading numeric-operands message.
+                        Error($"The operator '{node.Operator}' is not defined for operand types '{leftType.Name}' and '{rightType.Name}'",
+                              node.Line, node.Column);
+                        // Type the node as the surface-typed side so downstream
+                        // checks don't cascade a second, misleading error.
+                        resultType = NativeBclSurface.IsNonNumericSurfaceType(leftType.Name) ? leftType : rightType;
+                    }
+                    else if (!leftType.IsNumeric() || !rightType.IsNumeric())
                     {
                         Error($"Arithmetic operator '{node.Operator}' requires numeric operands",
                               node.Line, node.Column);
@@ -5057,8 +5148,25 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 case "<=":
                 case ">":
                 case ">=":
+                    // P1 surface ordering rows (spec 6.1): same-type ordering
+                    // on DateTime/TimeSpan/Decimal/DateTimeOffset -> Boolean.
+                    // (DateTimeOffset ordering compares the UTC instant at
+                    // runtime; the front end just types Boolean.)
+                    if (NativeBclSurface.TryGetBinaryOperatorResult(leftType.Name, node.Operator, rightType.Name, out _))
+                    {
+                        // Legal per the table — Boolean below.
+                    }
+                    else if ((NativeBclSurface.IsNonNumericSurfaceType(leftType.Name) ||
+                              NativeBclSurface.IsNonNumericSurfaceType(rightType.Name)) &&
+                             leftType.Kind != TypeKind.TypeParameter && rightType.Kind != TypeKind.TypeParameter)
+                    {
+                        // No row: ordering on Guid/StringBuilder, or a mixed
+                        // pair (dt < ts, dt < 5) — a clean targeted error.
+                        Error($"The comparison operator '{node.Operator}' is not defined for operand types '{leftType.Name}' and '{rightType.Name}'",
+                              node.Line, node.Column);
+                    }
                     // Comparison operators - allow type parameters (generics)
-                    if (!leftType.IsNumeric() && !rightType.IsNumeric() &&
+                    else if (!leftType.IsNumeric() && !rightType.IsNumeric() &&
                         leftType.Kind != TypeKind.TypeParameter && rightType.Kind != TypeKind.TypeParameter)
                     {
                         Error($"Comparison operator '{node.Operator}' requires numeric operands",
@@ -5079,8 +5187,36 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 case "!=":
                 case "==":
                 case "IsEqual":
-                    // Equality operators
-                    if (!_typeManager.AreCompatible(leftType, rightType) &&
+                    // Equality operators. P1 surface equality rows (spec 6.1)
+                    // first: same-type equality on the five value types plus
+                    // Guid/StringBuilder ('=' '<>' only; reference equality
+                    // for StringBuilder) -> Boolean.
+                    if (NativeBclSurface.TryGetBinaryOperatorResult(leftType.Name, node.Operator, rightType.Name, out _))
+                    {
+                        // Legal per the table — Boolean below.
+                    }
+                    else if (IsDecimalFloatingMix(leftType, rightType))
+                    {
+                        // Carried Task-3 item: Decimal vs Single/Double
+                        // EQUALITY is the same hard mixing error as ordering
+                        // and arithmetic (C# hard-errors on decimal == double),
+                        // not the generic incompatible-comparison warning.
+                        Error($"Equality operator '{node.Operator}' cannot mix Decimal and floating-point operands. Use CType(value, Decimal) for explicit conversion",
+                              node.Line, node.Column);
+                    }
+                    else if (NativeBclSurface.IsSurfaceType(leftType.Name) &&
+                             NativeBclSurface.IsSurfaceType(rightType.Name) &&
+                             leftType.Kind != TypeKind.TypeParameter && rightType.Kind != TypeKind.TypeParameter)
+                    {
+                        // A MIXED P1 pair (DateTime = TimeSpan): a clean error,
+                        // not a warning — no table row exists and neither
+                        // backend can compare them. Surface-vs-other pairs
+                        // (DateTime = Nothing, Decimal = Integer) keep the
+                        // pre-existing permissive/warning behavior below.
+                        Error($"The equality operator '{node.Operator}' is not defined for operand types '{leftType.Name}' and '{rightType.Name}'",
+                              node.Line, node.Column);
+                    }
+                    else if (!_typeManager.AreCompatible(leftType, rightType) &&
                         !_typeManager.AreCompatible(rightType, leftType))
                     {
                         Warning($"Comparing incompatible types '{leftType}' and '{rightType}'",
@@ -5129,6 +5265,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 case "-":
                 case "+":
+                    // P1 surface unary rows (spec 6.1): '-' on TimeSpan (and
+                    // Decimal, which also passes IsNumeric) is legal and keeps
+                    // the operand's type. Unary '+' has no table row.
+                    if (NativeBclSurface.TryGetUnaryOperatorResult(node.Operator, operandType.Name, out var surfaceUnaryResult))
+                    {
+                        resultType = ResolveNetTypeName(surfaceUnaryResult);
+                        break;
+                    }
                     if (!operandType.IsNumeric())
                     {
                         Error($"Unary '{node.Operator}' requires numeric operand", node.Line, node.Column);

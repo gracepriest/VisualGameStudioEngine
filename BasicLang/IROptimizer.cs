@@ -618,12 +618,12 @@ namespace BasicLang.Compiler.IR.Optimization
         private void PropagateCopies(BasicBlock block)
         {
             var copies = new Dictionary<IRVariable, IRValue>();
-            
+
             foreach (var inst in block.Instructions)
             {
                 // Replace uses
                 ReplaceUses(inst, copies);
-                
+
                 // Track copy assignments
                 // Never propagate awaits - duplicating them would re-execute the awaited task
                 if (inst is IRAssignment assignment &&
@@ -631,8 +631,93 @@ namespace BasicLang.Compiler.IR.Optimization
                     assignment.Value is IRValue value &&
                     value is not IRAwait)
                 {
-                    copies[target] = value;
+                    // The assignment redefines the target: kill every stale
+                    // fact about it (including other entries whose recorded
+                    // value MENTIONS it) before recording the new one.
+                    InvalidateRedefined(copies, target.Name);
+                    if (!Mentions(value, target.Name))
+                        copies[target] = value;
                 }
+                else if (inst is IRStore store && store.Address is IRVariable storedVar)
+                {
+                    InvalidateRedefined(copies, storedVar.Name);
+                }
+                else if (inst is IRValue defined && !string.IsNullOrEmpty(defined.Name))
+                {
+                    // A NAMED non-assignment instruction redefines that name.
+                    // The live case is the compound-assignment lowering:
+                    // `d1 += ts` emits an IRBinaryOp RENAMED "d1" with no
+                    // IRAssignment (IRBuilder's rename optimization), so
+                    // without this kill the pre-compound copy fact
+                    // (d1 -> its initializer value) survives and a later
+                    // `d1 < d2` in the same block propagates the STALE
+                    // initializer — a miscompile (caught by
+                    // NativeBclFrontEndTests.DateTime_CrossTypeOperators_TypeAndRun).
+                    // SSA temps are defined exactly once and are never copy
+                    // keys, so this only fires for renamed real variables.
+                    InvalidateRedefined(copies, defined.Name);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Removes every copy fact made stale by a (re)definition of
+        /// <paramref name="definedName"/>: entries keyed by that variable and
+        /// entries whose recorded value mentions it (propagating those later
+        /// would read the NEW value at the use site).
+        /// </summary>
+        private static void InvalidateRedefined(Dictionary<IRVariable, IRValue> copies, string definedName)
+        {
+            if (string.IsNullOrEmpty(definedName) || copies.Count == 0) return;
+
+            List<IRVariable> stale = null;
+            foreach (var kvp in copies)
+            {
+                if (string.Equals(kvp.Key.Name, definedName, StringComparison.OrdinalIgnoreCase) ||
+                    Mentions(kvp.Value, definedName))
+                {
+                    (stale ??= new List<IRVariable>()).Add(kvp.Key);
+                }
+            }
+            if (stale != null)
+            {
+                foreach (var key in stale)
+                    copies.Remove(key);
+            }
+        }
+
+        /// <summary>
+        /// Whether a recorded copy value reads the named variable anywhere in
+        /// its operand tree. Unknown value shapes conservatively answer TRUE
+        /// (killing a copy fact is always safe; keeping a stale one is not).
+        /// </summary>
+        private static bool Mentions(IRValue value, string name)
+        {
+            switch (value)
+            {
+                case null:
+                case IRConstant:
+                    return false;
+                case IRVariable v:
+                    return string.Equals(v.Name, name, StringComparison.OrdinalIgnoreCase);
+                case IRNewObject n:
+                    return n.Arguments.Any(a => Mentions(a, name));
+                case IRBinaryOp b:
+                    return Mentions(b.Left, name) || Mentions(b.Right, name);
+                case IRUnaryOp u:
+                    return Mentions(u.Operand, name);
+                case IRCompare c:
+                    return Mentions(c.Left, name) || Mentions(c.Right, name);
+                case IRCast cast:
+                    return Mentions(cast.Value, name);
+                case IRFieldAccess f:
+                    return Mentions(f.Object, name);
+                case IRInstanceMethodCall m:
+                    return Mentions(m.Object, name) || m.Arguments.Any(a => Mentions(a, name));
+                case IRCall call:
+                    return call.Arguments.Any(a => Mentions(a, name));
+                default:
+                    return true;
             }
         }
         

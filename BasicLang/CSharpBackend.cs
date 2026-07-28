@@ -2854,7 +2854,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     {
                         var obj = EmitExpression(fieldAccess.Object, stack, false);
                         var fieldName = SanitizeName(fieldAccess.FieldName);
-                        return $"{obj}.{fieldName}";
+                        return RequiresNativeBclIntCast(fieldAccess)
+                            ? $"(int)({obj}.{fieldName})"
+                            : $"{obj}.{fieldName}";
                     }
 
                     case IRTupleElement tupleElem:
@@ -3467,7 +3469,29 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var obj = EmitExpression(fieldAccess.Object);
             var fieldName = SanitizeName(fieldAccess.FieldName);
             var type = MapType(fieldAccess.Type);
-            WriteLine($"{type} {fieldAccess.Name} = {obj}.{fieldName};");
+            var access = RequiresNativeBclIntCast(fieldAccess)
+                ? $"(int)({obj}.{fieldName})"
+                : $"{obj}.{fieldName}";
+            WriteLine($"{type} {fieldAccess.Name} = {access};");
+        }
+
+        /// <summary>
+        /// True for P1 native-BCL surface members whose v1 BL type diverges
+        /// from the real .NET member type (exactly DateTime.DayOfWeek and
+        /// DateTime.Kind, flagged RequiresCSharpIntCast in NativeBclSurface):
+        /// the analyzer types them Integer, so the raw enum access must be
+        /// wrapped in an explicit (int) cast — otherwise csc fails CS0266 on
+        /// the typed temp, and an inlined WriteLine would print the enum name
+        /// ("Sunday"), a parity diff vs the C++ backend's numeric value.
+        /// Keyed by the RECEIVER's type name plus the flag — never by member
+        /// name matching — so a user field that happens to be called
+        /// DayOfWeek on a non-DateTime receiver is untouched.
+        /// </summary>
+        private static bool RequiresNativeBclIntCast(IRFieldAccess fieldAccess)
+        {
+            var receiverTypeName = fieldAccess.Object?.Type?.Name;
+            return receiverTypeName != null &&
+                   NativeBclSurface.RequiresCSharpIntCast(receiverTypeName, fieldAccess.FieldName);
         }
 
         public void Visit(IRFieldStore fieldStore)

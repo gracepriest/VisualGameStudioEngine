@@ -3647,7 +3647,7 @@ namespace BasicLang.Compiler.IR
             "Console", "Math", "Environment", "Convert", "BitConverter",
             "String", "Char", "Int32", "Int64", "Double", "Single", "Boolean", "Byte",
             "Int16", "UInt16", "UInt32", "UInt64", "Decimal", "SByte",
-            "Object", "DateTime", "TimeSpan", "Guid", "Random",
+            "Object", "DateTime", "DateTimeOffset", "TimeSpan", "Guid", "Random",
             "Activator", "Type", "Enum", "Array", "Buffer",
             "GC", "AppDomain", "Assembly",
             // System enums (for static member access like ConsoleColor.Green)

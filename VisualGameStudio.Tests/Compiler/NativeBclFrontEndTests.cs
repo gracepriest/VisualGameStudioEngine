@@ -1,4 +1,5 @@
 using System.Collections;
+using BasicLang;
 using BasicLang.Compiler;
 using BasicLang.Compiler.AST;
 using BasicLang.Compiler.IR;
@@ -328,9 +329,12 @@ Module M
 End Module");
 
     /// <summary>
-    /// End-to-end proof for the ctor context: the literal arrives as 19.99m
-    /// and the stored field prints with its scale. Verified real .NET:
-    /// 19.99m.ToString() = "19.99".
+    /// End-to-end proof for the ctor context: the literal arrives as 19.90m
+    /// and the stored field prints with its scale. The trailing zero is the
+    /// point — 19.90 only prints as "19.90" when the constant was parsed from
+    /// the SOURCE TEXT (double space would collapse it to 19.9), so this pins
+    /// scale preservation through the ctor path. Verified real .NET:
+    /// decimal.Parse("19.90", InvariantCulture).ToString() = "19.90".
     /// </summary>
     [Test]
     [Category("Integration")]
@@ -343,10 +347,10 @@ End Module");
 End Class
 Module M
  Sub Main()
-  Dim m As Money = New Money(19.99)
+  Dim m As Money = New Money(19.90)
   Console.WriteLine(m.Amount)
  End Sub
-End Module"), Is.EqualTo("19.99"));
+End Module"), Is.EqualTo("19.90"));
 
     /// <summary>
     /// CType is the named escape for genuine non-literal Double↔Decimal
@@ -504,6 +508,164 @@ End Module"), Is.EqualTo("1.5\n1.5"));
   Console.WriteLine(a < b)
  End Sub
 End Module"), Is.EqualTo("13\n7\nFalse"));
+
+    // ====================================================================
+    // NativeBclSurface + DateTime/TimeSpan operator rows + surface-backed
+    // member typing + stdlib date typing (P1 Task 5, spec 4 / 5 / 6.1).
+    // Every runtime expectation below was verified against real .NET first.
+    // ====================================================================
+
+    /// <summary>
+    /// The plan's flagship cross-type program: dt - dt -> TimeSpan,
+    /// dt + ts -> DateTime, dt += ts via the compound gate, dt &lt; dt ordering.
+    /// Verified real .NET: (2026-01-31 - 2026-01-01).Days = 30;
+    /// (d1 + ts).Day = 31; after d1 += ts, d1 == d2 so d1 &lt; d2 is False.
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    public void DateTime_CrossTypeOperators_TypeAndRun()
+        => Assert.That(CompileRunCSharp(@"Module M
+ Sub Main()
+  Dim d1 As New DateTime(2026, 1, 1)
+  Dim d2 As New DateTime(2026, 1, 31)
+  Dim ts As TimeSpan = d2 - d1
+  Console.WriteLine(ts.Days)
+  Dim d3 As DateTime = d1 + ts
+  Console.WriteLine(d3.Day)
+  d1 += ts
+  Console.WriteLine(d1.Day)
+  Console.WriteLine(d1 < d2)
+ End Sub
+End Module"), Is.EqualTo("30\n31\n31\nFalse"));
+
+    /// <summary>
+    /// Surface-backed member typing on the COMPILE path (no LSP TypeRegistry):
+    /// d.AddDays(1) types DateTime (so the chain continues) and .Year types
+    /// Integer (so the typed assignment passes). Today the chain degrades to
+    /// Object and the Integer assignment errors.
+    /// </summary>
+    [Test]
+    public void MemberChain_TypesOnCompilePath()
+        => AssertAnalyzesClean(Wrap("Dim d As New DateTime(2026,1,1)\nDim y As Integer = d.AddDays(1).Year"));
+
+    /// <summary>
+    /// A member OUTSIDE the v1 surface falls through to the existing
+    /// permissive behavior on the C# path (clean-diagnostic enforcement is
+    /// C++-only and arrives with Task 10's checker pass).
+    /// </summary>
+    [Test]
+    public void UnknownMember_StillPermissive_OnCSharp()
+        => AssertAnalyzesClean(Wrap("Dim d As New DateTime(2026,1,1)\nDim x = d.ToBinary()"));
+
+    /// <summary>
+    /// DayOfWeek and Kind are the two divergent-typed surface members (BL
+    /// Integer vs .NET enums): the C# backend must wrap them in (int) casts —
+    /// without the cast csc fails CS0266 on the typed temp, or an inlined
+    /// WriteLine prints "Sunday" (a parity diff vs C++'s numeric value).
+    /// Verified real .NET: 2026-07-26 is a Sunday, (int)DayOfWeek = 0;
+    /// (int)DateTime.UtcNow.Kind = 1 (Utc).
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    public void DayOfWeek_And_Kind_TypeInteger_PrintNumbers()
+        => Assert.That(CompileRunCSharp(@"Module M
+ Sub Main()
+  Dim d As New DateTime(2026, 7, 26)
+  Console.WriteLine(d.DayOfWeek)
+  Console.WriteLine(DateTime.UtcNow.Kind)
+ End Sub
+End Module"), Is.EqualTo("0\n1"));
+
+    /// <summary>
+    /// Guid and StringBuilder carry '=' and '&lt;&gt;' ONLY (spec 6.1): same-type
+    /// equality types Boolean; ordering operators stay clean analyzer errors.
+    /// </summary>
+    [Test]
+    public void GuidStringBuilder_EqualityTypes_OrderingStaysError()
+    {
+        AssertAnalyzesClean(Wrap("Dim g1 As Guid = Guid.NewGuid()\nDim g2 As Guid = g1\nDim eq As Boolean = g1 = g2"));
+        AssertAnalysisError(Wrap("Dim g1 As Guid = Guid.NewGuid()\nDim g2 As Guid = g1\nDim x = g1 < g2"), new[] { "operator" });
+        AssertAnalyzesClean(Wrap("Dim sb1 As New StringBuilder()\nDim sb2 As StringBuilder = sb1\nDim eq As Boolean = sb1 = sb2"));
+        AssertAnalysisError(Wrap("Dim sb1 As New StringBuilder()\nDim sb2 As StringBuilder = sb1\nDim x = sb1 < sb2"), new[] { "operator" });
+    }
+
+    /// <summary>
+    /// The carried Task-3 item: Decimal vs non-literal Double EQUALITY now
+    /// hard-errors with the CType hint (C# hard-errors on decimal == double;
+    /// ordering and arithmetic already errored) instead of falling to the
+    /// generic "Comparing incompatible types" warning.
+    /// </summary>
+    [Test]
+    public void DecimalDouble_Equality_NowHardErrors()
+        => AssertAnalysisError(Wrap("Dim a As Decimal = 1\nDim x As Double = 0.5\nDim e = a = x"), new[] { "Decimal", "CType" });
+
+    /// <summary>
+    /// Spec 7 stdlib registrations (typing only; C# emissions already exist):
+    /// Now() types DateTime and Year(d) types Integer instead of Object.
+    /// </summary>
+    [Test]
+    public void StdlibDateFunctions_TypeAsDateTime()
+        => AssertAnalyzesClean(Wrap("Dim d As DateTime = Now()\nDim y As Integer = Year(d)"));
+
+    /// <summary>
+    /// Legal cross-type/compound/unary operator combinations from the spec 6.1
+    /// table, driven end-to-end through the analyzer.
+    /// </summary>
+    [TestCase("Dim r As TimeSpan = d2 - d1")]      // dt - dt -> TimeSpan
+    [TestCase("Dim r As DateTime = d1 + ts")]      // dt + ts -> DateTime
+    [TestCase("Dim r As DateTime = d1 - ts")]      // dt - ts -> DateTime
+    [TestCase("Dim r As TimeSpan = ts + ts")]      // ts + ts -> TimeSpan
+    [TestCase("Dim r As TimeSpan = ts - ts")]      // ts - ts -> TimeSpan
+    [TestCase("Dim r As TimeSpan = -ts")]          // unary minus on TimeSpan
+    [TestCase("Dim ok As Boolean = ts < ts")]      // same-type ordering
+    [TestCase("Dim ok As Boolean = d1 <= d2")]
+    [TestCase("Dim ok As Boolean = d1 = d2")]      // same-type equality
+    [TestCase("d1 += ts")]                         // compound: dt + ts -> DateTime == target
+    [TestCase("d1 -= ts")]                         // compound: dt - ts -> DateTime == target
+    [TestCase("ts += ts")]                         // compound: ts + ts -> TimeSpan == target
+    public void P1CrossType_OperatorGates_Analyze(string stmt)
+        => AssertAnalyzesClean(Wrap(
+            "Dim d1 As New DateTime(2026, 1, 1)\nDim d2 As New DateTime(2026, 1, 31)\nDim ts As TimeSpan = d2 - d1\n" + stmt));
+
+    /// <summary>
+    /// Illegal combinations keep (or gain) clean analyzer errors: pairs with
+    /// no table row, compound assignments whose result type is not the
+    /// target's type (d1 -= d2 yields TimeSpan), and mixed P1 equality.
+    /// </summary>
+    [TestCase("Dim x = d1 + d2")]                  // dt + dt: no row
+    [TestCase("d1 += d2")]                         // compound: dt + dt: no row
+    [TestCase("d1 -= d2")]                         // compound: dt - dt -> TimeSpan != DateTime
+    [TestCase("ts += d1")]                         // directional: ts + dt has no row
+    [TestCase("Dim x = ts * ts")]                  // no multiplication on TimeSpan
+    [TestCase("Dim e = d1 = ts")]                  // mixed P1 equality: error, not warning
+    public void P1CrossType_IllegalOperators_Error(string stmt)
+        => AssertAnalysisError(Wrap(
+            "Dim d1 As New DateTime(2026, 1, 1)\nDim d2 As New DateTime(2026, 1, 31)\nDim ts As TimeSpan = d2 - d1\n" + stmt),
+            new[] { "operator" });
+
+    /// <summary>
+    /// Surface/registry coherence, Task-5 edition: the surface's declared type
+    /// list is exactly the six member-bearing P1 types (SByte is Bridged — a
+    /// plain primitive with NO surface entries), and every listed type has at
+    /// least one member row.
+    /// TODO(Task 10): once the registry flip lands, re-point the expected set
+    /// at BoundaryTypeRegistry.NamesInCategory(NativeOwned) so this becomes a
+    /// mechanical drift test like the mapper invariant.
+    /// </summary>
+    [Test]
+    public void SurfaceCoherence_AllSevenTypesHaveEntries()
+    {
+        var expected = new[] { "DateTime", "TimeSpan", "Guid", "StringBuilder", "Decimal", "DateTimeOffset" };
+        Assert.That(NativeBclSurface.TypeNames, Is.EquivalentTo(expected));
+        foreach (var typeName in expected)
+        {
+            Assert.That(NativeBclSurface.Members.Any(m => m.TypeName == typeName), Is.True,
+                $"surface has no member entries for '{typeName}'");
+        }
+        Assert.That(NativeBclSurface.Members.Any(
+                m => m.TypeName.Equals("SByte", StringComparison.OrdinalIgnoreCase)), Is.False,
+            "SByte is a Bridged primitive and must have NO surface entries");
+    }
 
     // ====================================================================
     // C# end-to-end helper (reused by later native-BCL tasks)
