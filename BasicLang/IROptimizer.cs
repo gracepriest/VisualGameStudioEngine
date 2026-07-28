@@ -624,19 +624,25 @@ namespace BasicLang.Compiler.IR.Optimization
                 // Replace uses
                 ReplaceUses(inst, copies);
 
-                // Track copy assignments
-                // Never propagate awaits - duplicating them would re-execute the awaited task
-                if (inst is IRAssignment assignment &&
-                    assignment.Target is IRVariable target &&
-                    assignment.Value is IRValue value &&
-                    value is not IRAwait)
+                // Track copy assignments. ANY assignment to a variable
+                // redefines it — invalidation must run unconditionally
+                // (an await-valued assignment `x = Await F()` records no
+                // fact, but must still kill a stale earlier `x -> 5`);
+                // recording is restricted to the safe subset.
+                if (inst is IRAssignment assignment && assignment.Target is IRVariable target)
                 {
-                    // The assignment redefines the target: kill every stale
-                    // fact about it (including other entries whose recorded
-                    // value MENTIONS it) before recording the new one.
+                    // Kill every stale fact about the target (including other
+                    // entries whose recorded value MENTIONS it) before
+                    // recording the new one.
                     InvalidateRedefined(copies, target.Name);
-                    if (!Mentions(value, target.Name))
+                    // Never propagate awaits - duplicating them would
+                    // re-execute the awaited task.
+                    if (assignment.Value is IRValue value &&
+                        value is not IRAwait &&
+                        !Mentions(value, target.Name))
+                    {
                         copies[target] = value;
+                    }
                 }
                 else if (inst is IRStore store && store.Address is IRVariable storedVar)
                 {

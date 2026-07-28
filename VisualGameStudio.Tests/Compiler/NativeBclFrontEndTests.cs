@@ -439,6 +439,77 @@ End Module"), Is.EqualTo("1.5\n1.5"));
     }
 
     /// <summary>
+    /// Fast-lane pin for the CopyPropagation staleness fix (found by the
+    /// flagship DateTime program, but generic): a copy fact recorded by an
+    /// assignment must be KILLED when the variable is redefined by a RENAMED
+    /// instruction — the compound-assignment lowering emits an IRBinaryOp
+    /// named after the target with NO IRAssignment ('x += 1'), so without the
+    /// kill a later use of x propagates the stale initial value (here the
+    /// compare would fold in the stale 5). Hand-built IR so the pin is
+    /// deterministic and Integration-free.
+    /// </summary>
+    [Test]
+    public void CopyPropagation_RenamedRedefinition_KillsStaleFact()
+    {
+        var intType = new TypeInfo("Integer", TypeKind.Primitive);
+        var boolType = new TypeInfo("Boolean", TypeKind.Primitive);
+
+        var fn = new IRFunction("f", boolType);
+        var block = fn.CreateBlock("entry");
+
+        var x = new IRVariable("x", intType);
+        // x = 5 (records the copy fact x -> 5)
+        block.Instructions.Add(new IRAssignment(x, new IRConstant(5, intType)));
+        // x += 1 in the IRBuilder's lowering shape: an IRBinaryOp RENAMED "x",
+        // no IRAssignment. (Its own operand legitimately propagates to 5+1.)
+        block.Instructions.Add(new IRBinaryOp("x", BinaryOpKind.Add, x, new IRConstant(1, intType), intType));
+        // A later use of x must NOT see the stale 5.
+        var cmp = new IRCompare("t0", CompareKind.Lt, x, new IRConstant(10, intType), boolType);
+        block.Instructions.Add(cmp);
+
+        var module = new IRModule("m");
+        module.Functions.Add(fn);
+        new CopyPropagationPass().Run(module);
+
+        Assert.That(cmp.Left, Is.SameAs(x),
+            "the compare's left operand was substituted with the STALE pre-redefinition value " +
+            $"(got {cmp.Left}) — the renamed redefinition did not kill the copy fact");
+    }
+
+    /// <summary>
+    /// The await-shaped hole: 'x = Await F()' records no copy fact (awaits
+    /// must never be duplicated) but it still REDEFINES x, so it must
+    /// invalidate a stale earlier fact — otherwise a later use of x
+    /// propagates the pre-await value.
+    /// </summary>
+    [Test]
+    public void CopyPropagation_AwaitValuedAssignment_StillInvalidates()
+    {
+        var intType = new TypeInfo("Integer", TypeKind.Primitive);
+        var boolType = new TypeInfo("Boolean", TypeKind.Primitive);
+
+        var fn = new IRFunction("f", boolType);
+        var block = fn.CreateBlock("entry");
+
+        var x = new IRVariable("x", intType);
+        // x = 5 (records the copy fact x -> 5)
+        block.Instructions.Add(new IRAssignment(x, new IRConstant(5, intType)));
+        // x = Await pending — never recorded, but must invalidate x -> 5.
+        block.Instructions.Add(new IRAssignment(x,
+            new IRAwait("t1", new IRVariable("pending", intType), intType)));
+        var cmp = new IRCompare("t0", CompareKind.Lt, x, new IRConstant(10, intType), boolType);
+        block.Instructions.Add(cmp);
+
+        var module = new IRModule("m");
+        module.Functions.Add(fn);
+        new CopyPropagationPass().Run(module);
+
+        Assert.That(cmp.Left, Is.SameAs(x),
+            "the compare's left operand was substituted with the STALE pre-await value " +
+            $"(got {cmp.Left}) — the await-valued assignment did not invalidate the copy fact");
+    }
+
+    /// <summary>
     /// Full front-end pipeline through the standard optimizer passes (the same
     /// pipeline the CLI runs at -O1; cf. CppSelectCaseTests.CompileToCppOptimized).
     /// </summary>
@@ -583,10 +654,13 @@ End Module"), Is.EqualTo("0\n1"));
     [Test]
     public void GuidStringBuilder_EqualityTypes_OrderingStaysError()
     {
+        // "not defined" pins the SURFACE-gate error specifically — the legacy
+        // generic messages also contain "operator", so a looser assertion
+        // could not detect a regression back to the generic path.
         AssertAnalyzesClean(Wrap("Dim g1 As Guid = Guid.NewGuid()\nDim g2 As Guid = g1\nDim eq As Boolean = g1 = g2"));
-        AssertAnalysisError(Wrap("Dim g1 As Guid = Guid.NewGuid()\nDim g2 As Guid = g1\nDim x = g1 < g2"), new[] { "operator" });
+        AssertAnalysisError(Wrap("Dim g1 As Guid = Guid.NewGuid()\nDim g2 As Guid = g1\nDim x = g1 < g2"), new[] { "not defined" });
         AssertAnalyzesClean(Wrap("Dim sb1 As New StringBuilder()\nDim sb2 As StringBuilder = sb1\nDim eq As Boolean = sb1 = sb2"));
-        AssertAnalysisError(Wrap("Dim sb1 As New StringBuilder()\nDim sb2 As StringBuilder = sb1\nDim x = sb1 < sb2"), new[] { "operator" });
+        AssertAnalysisError(Wrap("Dim sb1 As New StringBuilder()\nDim sb2 As StringBuilder = sb1\nDim x = sb1 < sb2"), new[] { "not defined" });
     }
 
     /// <summary>
@@ -639,9 +713,12 @@ End Module"), Is.EqualTo("0\n1"));
     [TestCase("Dim x = ts * ts")]                  // no multiplication on TimeSpan
     [TestCase("Dim e = d1 = ts")]                  // mixed P1 equality: error, not warning
     public void P1CrossType_IllegalOperators_Error(string stmt)
+        // "not defined" pins the surface-gate error specifically (the legacy
+        // generic messages also contain "operator" and would slip through a
+        // looser assertion).
         => AssertAnalysisError(Wrap(
             "Dim d1 As New DateTime(2026, 1, 1)\nDim d2 As New DateTime(2026, 1, 31)\nDim ts As TimeSpan = d2 - d1\n" + stmt),
-            new[] { "operator" });
+            new[] { "not defined" });
 
     /// <summary>
     /// Surface/registry coherence, Task-5 edition: the surface's declared type
@@ -665,6 +742,10 @@ End Module"), Is.EqualTo("0\n1"));
         Assert.That(NativeBclSurface.Members.Any(
                 m => m.TypeName.Equals("SByte", StringComparison.OrdinalIgnoreCase)), Is.False,
             "SByte is a Bridged primitive and must have NO surface entries");
+        // Operator semantics live in the Operators/UnaryOperators row tables,
+        // keyed (Left, Op, Right) — member rows must never use the Operator kind.
+        Assert.That(NativeBclSurface.Members.Any(m => m.Kind == NativeBclMemberKind.Operator), Is.False,
+            "a member row carries NativeBclMemberKind.Operator — operator rows belong in the Operators tables");
     }
 
     // ====================================================================
