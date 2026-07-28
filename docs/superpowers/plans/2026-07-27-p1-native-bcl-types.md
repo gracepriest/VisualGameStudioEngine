@@ -499,6 +499,16 @@ Method bodies not shown inline above (`Init`, `Year/Month/Day/DayOfYear` via civ
 
 Extend `bl_bcltypes.hpp` (same file/constant) per spec §3/§5.
 
+> **Riders from Task 6's reviews (same file, do here):** (1) `TimeSpan::Parse`
+> day-magnitude guard — 8 day digits can overflow `days * TicksPerDay` (UB, not
+> the §11 runtime_error): guard `days <= 10675199` and route the accumulation
+> through `CheckedAdd`; ALSO make `TimeSpan::MinValue().ToString()` round-trip
+> through Parse (the positive accumulation overflows by one tick before
+> negation) — add both as vectors. (2) `Interval`'s upper bound is exclusive
+> where .NET's is inclusive (`millis == 922337203685477` must be accepted) —
+> one-value fix + vector. (3) Drop `<chrono>`/`<memory>` from the includes if
+> Task 7 doesn't consume them.
+
 **Design (write exactly this, bodies per vectors):**
 
 ```cpp
