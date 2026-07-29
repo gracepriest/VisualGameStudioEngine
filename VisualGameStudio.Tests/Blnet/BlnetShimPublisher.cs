@@ -1,14 +1,15 @@
-using System.Diagnostics;
-using System.Text;
+using BasicLang.Compiler.CodeGen.Net;
 using NUnit.Framework;
 
 namespace VisualGameStudio.Tests.Blnet;
 
 /// <summary>
-/// Publishes the BlnetTestShim project with Native AOT (NativeLib=Shared) exactly once per
-/// test run and hands out the resulting native DLL path. Multiple fixtures share the single
-/// publish via <see cref="PublishOnce"/>; the captured publish output is exposed for
-/// warning-scan assertions.
+/// Thin test-only wrapper over <see cref="NetShimPublisher"/>: publishes the BlnetTestShim
+/// project with Native AOT (NativeLib=Shared) exactly once per test run and hands out the
+/// resulting native DLL path. Multiple fixtures share the single publish via
+/// <see cref="PublishOnce"/>; the captured publish output is exposed for warning-scan
+/// assertions. Preserves the pre-move throwing behavior (rather than the product's
+/// <c>NetShimPublishResult</c>) since existing fixtures assert on catching these exceptions.
 /// </summary>
 public static class BlnetShimPublisher
 {
@@ -25,74 +26,24 @@ public static class BlnetShimPublisher
     {
         var repoRoot = FindRepoRoot();
         var csproj = Path.Combine(repoRoot, "VisualGameStudio.Tests", "TestAssets", "BlnetTestShim", "BlnetTestShim.csproj");
-        if (!File.Exists(csproj))
-            throw new FileNotFoundException($"Shim project not found: {csproj}");
 
         // Per-run scratch dir: the Lazy dedupes within this test host; the pid keeps
         // concurrent test runs from clobbering each other's publish output.
         var scratch = Path.Combine(Path.GetTempPath(), $"blnet_shim_{Environment.ProcessId}");
-        Directory.CreateDirectory(scratch);
 
-        var psi = new ProcessStartInfo
+        var result = NetShimPublisher.Publish(csproj, scratch, workingDirectory: repoRoot);
+
+        if (!result.Success)
         {
-            FileName = "dotnet",
-            WorkingDirectory = repoRoot,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        psi.ArgumentList.Add("publish");
-        psi.ArgumentList.Add(csproj);
-        psi.ArgumentList.Add("-c");
-        psi.ArgumentList.Add("Release");
-        psi.ArgumentList.Add("-r");
-        psi.ArgumentList.Add("win-x64");
-        psi.ArgumentList.Add("-p:PublishAot=true");
-        psi.ArgumentList.Add("-p:NativeLib=Shared");
-        psi.ArgumentList.Add("-o");
-        psi.ArgumentList.Add(scratch);
+            if (result.ExitCode != 0)
+                throw new InvalidOperationException($"dotnet publish of BlnetTestShim failed (exit {result.ExitCode}).\n{result.Output}");
 
-        // The ILCompiler targets locate MSVC via findvcvarsall.bat -> VS's VsDevCmd.bat, which
-        // pushd's into the VS Installer directory and invokes a bare `vswhere.exe`, relying on
-        // cmd resolving executables from the current directory. Under a shell that sets
-        // NoDefaultCurrentDirectoryInExePath (hardened environments do), that probe fails and
-        // writes "'vswhere.exe' is not recognized" to stderr — which Exec's ConsoleToMSBuild
-        // captures and the targets Split('#') into the linker path, corrupting CppLinker.
-        // Appending the Installer dir to the child PATH lets the probe resolve via PATH instead.
-        var vsInstaller = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
-            "Microsoft Visual Studio", "Installer");
-        if (Directory.Exists(vsInstaller))
-            psi.Environment["PATH"] = $"{psi.Environment["PATH"]};{vsInstaller}";
-
-        var output = new StringBuilder();
-        using var proc = new Process { StartInfo = psi };
-        proc.OutputDataReceived += (_, e) => { if (e.Data != null) lock (output) output.AppendLine(e.Data); };
-        proc.ErrorDataReceived += (_, e) => { if (e.Data != null) lock (output) output.AppendLine(e.Data); };
-        proc.Start();
-        proc.BeginOutputReadLine();
-        proc.BeginErrorReadLine();
-
-        // First publish downloads ILCompiler packages then runs the native linker — allow 10 minutes.
-        if (!proc.WaitForExit(600_000))
-        {
-            try { proc.Kill(entireProcessTree: true); } catch { /* already gone */ }
-            throw new TimeoutException($"dotnet publish of BlnetTestShim timed out after 10 minutes.\n{Snapshot(output)}");
+            var expectedDll = Path.Combine(scratch, "BlnetTestShim.dll");
+            throw new FileNotFoundException($"Publish succeeded but the native library is missing: {expectedDll}\n{result.Output}");
         }
-        proc.WaitForExit(); // drain async output handlers
 
-        var text = Snapshot(output);
-        if (proc.ExitCode != 0)
-            throw new InvalidOperationException($"dotnet publish of BlnetTestShim failed (exit {proc.ExitCode}).\n{text}");
-
-        var dll = Path.Combine(scratch, "BlnetTestShim.dll");
-        if (!File.Exists(dll))
-            throw new FileNotFoundException($"Publish succeeded but the native library is missing: {dll}\n{text}");
-        return (dll, text);
+        return (result.DllPath, result.Output);
     }
-
-    private static string Snapshot(StringBuilder output) { lock (output) return output.ToString(); }
 
     private static string FindRepoRoot()
     {
