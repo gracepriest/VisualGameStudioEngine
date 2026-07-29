@@ -396,11 +396,27 @@ drift apart exactly where parity is being claimed.
 handling** iff it appears in one of exactly three sources, and a claimed name is **never** routed
 through the shim:
 
-| # | Source |
-|---|---|
-| a | `BoundaryTypeRegistry.Categorize != Unknown` |
-| b | `CppCapabilityChecker`'s early returns (`:598-625`): `NativeOwned`, .NET exception names, `Task`, generic `IEnumerable`, `Func`, `Action`, `List`/`Dictionary`/`HashSet`, `::`-qualified names |
-| c | the stdlib table `IRBuilder.KnownNetStaticTypes` (`:3644-3664`) plus `EmitStdLibCall`'s arms |
+| # | Source | Granularity |
+|---|---|---|
+| a | `BoundaryTypeRegistry.Categorize ∈ { NativeOwned, Bridged }` | per type name |
+| b | `CppCapabilityChecker`'s early returns (`:598-625`): `NativeOwned`, .NET exception names, `Task`, generic `IEnumerable`, `Func`, `Action`, `List`/`Dictionary`/`HashSet`, `::`-qualified names | per type name |
+| c | a call routed by `IRBuilder.KnownNetStaticTypes` (`:3644-3664`) **for which `EmitStdLibCall` (`CppCodeGenerator.cs:2210-2347`) returns non-null** — via `EmitFrameworkCall` (`:2225`), the `NativeBclSurface` static-dispatch branch (`:2234-2246`), or an arm of the `functionName.ToLower()` switch (`:2256-2346`, whose default is `_ => null`) | **per call** (type + member) |
+
+> **Row (a) is `{NativeOwned, Bridged}`, not `!= Unknown`.** `ManagedOwned` is the *shim-routed*
+> category — §11.4's flip populates it with `Regex`/`Uri`/`Stream`/`FileInfo`/`DirectoryInfo`, and
+> §12.4 requires those to map to `NetRef`. Writing the predicate as `!= Unknown` would claim them
+> for native handling and make §4.2's `Regex_Match__string` slot and §7.2's `Regex` example
+> ungeneratable. `Rejected` is diagnosed (BL6019), never claimed. Written this way the predicate
+> is **flip-stable**: it gives the same answer before and after §11.4's registry move.
+>
+> **Row (c) is per call, not per type.** `KnownNetStaticTypes` is a call-*shape* classifier — its
+> consumer is `IRBuilder.cs:3331` — not an inventory of native implementations. `File`,
+> `Directory`, `Path`, `Encoding`, `Environment`, `Convert`, `BitConverter`, `Random`,
+> `Stopwatch`, `Thread`, `Process`, `Type`, `Activator`, `Array`, `Enum`, `Buffer`, `GC`,
+> `Assembly`, `Monitor`, `Interlocked`, `Debug` and `Trace` appear in that table with **no**
+> `EmitStdLibCall` arm and no `NativeBclSurface` row. Claiming them by table membership would
+> strand exactly the surface §1.1 exists to deliver. `Console.WriteLine` is claimed (`:2264`);
+> `Console.ReadKey` is not.
 
 Source (c) is the one a prose rule would miss. **`Console` is not in `CppCapabilityChecker`** —
 it is claimed by `KnownNetStaticTypes` (`IRBuilder.cs:3647`). A builder who reads "claimed" as
@@ -942,20 +958,47 @@ P2a therefore specifies exception-type matching as real work:
    substring of `MyArgumentException`.
 2. `NetCheck` throws a `BasicLang::NetException`, **derived from `std::runtime_error`**, carrying
    that chain plus the message.
+
+> **Where `NetException` is declared — unconditionally.** It lives in the **always-emitted**
+> BasicLang C++ runtime, spliced in both emission modes exactly as P1's BCL bodies are
+> (`CppCodeGenerator.cs:318-319` combined; `EmitRuntimeHeader` in `CppCodeGenerator.Split.cs`).
+> It is deliberately **not** part of the surface-keyed `obj/gen` set (§9.1, §9.3).
+>
+> This matters because §11.1's trigger is *source-level*, not surface-level: a "**.NET-typed
+> clause**" is any `Catch` whose type name is a .NET exception name — which is essentially every
+> typed `Catch` written today, `Catch ex As Exception` included. So the leading handler is
+> emitted **even when the project's .NET surface is empty**, where it is valid dead code. §17
+> also schedules §11.1 *first* in P2a-2, before the flip, when every surface is empty. Four
+> existing test files already carry typed `Catch` with no .NET surface —
+> `CppBclEndToEndTests.cs`, `CppBackendTests.cs`, `CppCollectionTests.cs`,
+> `BclBackendParityTests.cs` — and a surface-gated declaration would leave all four referencing
+> an undeclared type.
 3. **Lowering is per-`Try`, not per-clause.** A `Try` containing at least one .NET-typed clause
    emits **one leading** `catch (const BasicLang::NetException& __n)` holding an if/else-if
    ladder over *all* clauses in source order — each arm in its own braces with its own catch
    variable — ending in a bare `throw;` reached only when no clause matched. The existing
    `MapCatchType`-derived per-clause handlers follow unchanged, for the locally-thrown shape.
 
-> **Why per-`Try`.** `EmitTryCatch` emits one C++ handler per clause
-> (`CppCodeGenerator.cs:3375-3387`), and a `throw;` inside a handler resumes the search at the
-> **enclosing** try — sibling handlers of the same try are never reconsidered. A per-clause
-> rethrow design would make
-> `Try / Catch ex As InvalidOperationException / Catch ex As Exception` around a .NET call
-> throwing `ArgumentNullException` escape the whole `Try`, with clause 2 never running — which is
-> precisely the parity program §12.1 mandates. Bodies are emitted once each, so the
-> `_regionLabelSuffix` machinery (`:3391-3402`) is not needed.
+> **Why per-`Try`.** `Visit(IRTryCatch)` (`CppCodeGenerator.cs:3360`) emits one C++ handler per
+> clause (`:3375-3387`), and a `throw;` inside a handler resumes the search at the **enclosing**
+> try — sibling handlers of the same try are never reconsidered. A per-clause rethrow design
+> would make `Try / Catch ex As InvalidOperationException / Catch ex As Exception` around a .NET
+> call throwing `ArgumentNullException` escape the whole `Try`, with clause 2 never running —
+> precisely the parity program §12.1 mandates.
+
+**Each clause body is emitted twice** — once as a ladder arm, once in its `MapCatchType`-derived
+handler — and **C++ labels are function-scoped**, so the arms' braces do not scope them. A
+`Catch` body containing control flow has interior region blocks that `EmitInlineRegion` labels
+through `LabelName` (`:3490`, `:1586`); two copies at the same suffix redefine them (clang
+"redefinition of label", MSVC C2045). The ladder's copies are therefore emitted under a distinct
+`_regionLabelSuffix` (`_nex`), set before and reset after the whole ladder, exactly as the
+`Finally` path already does with `_fex`/`_fnorm` (`:3400-3402`, `:3412-3414`). One suffix for the
+entire ladder suffices — block names are already unique per statement across clauses. The
+per-clause handlers keep the empty suffix and so stay distinct from both.
+
+> §12.1's multi-`Catch` parity program must therefore contain **at least one `Catch` body with
+> control flow** (e.g. `If ex.Message.Length > 0 Then …`). A straight-line body emits no interior
+> label and would hide this defect behind a green gate.
 
 **Ordering is load-bearing.** The combined `NetException` handler must precede both the
 `MapCatchType`-derived handlers and the `catch (...)` finally handler (`:3395`). Because
@@ -1139,6 +1182,10 @@ present:
   `List<T>` and on a user type; `For Each` over a .NET array and over an `IEnumerable<T>`; and
   the managed-vs-native `List` disambiguation case, which is the one that currently produces a
   wild pointer rather than an error.
+- **A `Try`/`Catch ex As Exception` program with an empty .NET surface** still compiles and runs
+  natively — the guard for §11.1's unconditional `NetException` declaration (pin the existing
+  `CppBclEndToEndTests.cs` shape).
+- **A `<NetProxy>` type with an omitted member** emits BL6026 and still builds.
 
 One inversion to encode: `ShimPublishHasNoAotAnalysisWarnings` asserts
 `Does.Not.Contain("warning IL")`. That assertion **scopes to the hand shim only**. For generated
@@ -1162,6 +1209,9 @@ In P1's style — cheap tests that fail loudly when two things drift apart:
 - `ManagedOwned ∩ Rejected = ∅` — `Categorize` checks `ManagedOwned` first, so an overlap would
   resolve silently
 - the ambient namespace set (§6.5) used by `NetTypeResolver` ≡ the one used by `CSharpBackend`
+- **the resolver's exclusion set ≡ the backend's claim set** (§6.5), asserted at both
+  granularities: name-granular for sources (a) and (b); **per-call** for source (c), pinning
+  `Console.WriteLine` as native and `File.ReadAllText` / `Console.ReadKey` as shim-routed
 - the generated shim's `HandleTable` ≡ `BlnetShimSources`' copy ≡ the hand shim the frozen P0
   suite validates
 - `BlnetStatus.cs` in the generated shim ≡ `BlnetContract.GenerateStatusEnumCs()`
@@ -1180,6 +1230,8 @@ Integration:
   `obj/gen` is populated, `blnet_startup.g.cpp` is compiled and linked, and the shim initializes.
   The mixed case above does not cover this — it is the path §9.5's four gates block
 - a delegate round-trip
+- **a `Console.WriteLine`-only program**, asserting an **empty** surface, no `obj/gen` blnet
+  artifacts, and phase 5 skipped entirely — the regression guard for §6.5's claim predicate
 - a cold-cache then warm-cache build proving phase 5 is skipped
 
 ---
