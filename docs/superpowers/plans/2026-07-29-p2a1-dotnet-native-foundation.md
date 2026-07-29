@@ -82,7 +82,7 @@ The spec cites some files by bare name. The real paths:
 
 | Path | Responsibility |
 |---|---|
-| `BasicLang/Net/NetReferenceResolver.cs` | `.blproj` → assembly closure; BL6021/BL6022 |
+| `BasicLang/Net/NetReferenceResolver.cs` | `.blproj` → assembly closure; BL6021 |
 | `BasicLang/Net/NetTypeResolver.cs` | Roslyn `Compilation` wrapper: type existence, members, overload resolution |
 | `BasicLang/Net/NetAmbientNamespaces.cs` | the single ambient-namespace constant shared with `CSharpBackend` |
 | `BasicLang/Net/NetClaimPredicate.cs` | §6.5's three-source "claimed by native handling" predicate |
@@ -100,10 +100,11 @@ The spec cites some files by bare name. The real paths:
 | Path | Change |
 |---|---|
 | `BasicLang/BasicLang.csproj` | + Roslyn 4.9.2, + `SatelliteResourceLanguages` |
-| `BasicLang/Program.cs:436` | resolve references before the native early-return |
-| `VisualGameStudio.ProjectSystem/Services/BuildService.cs:449` | same on the IDE path |
-| `BasicLang/ProjectSystem/CppProjectBuilder.cs` | phase model, gate merge, `CancellationToken` |
-| `BasicLang/SemanticAnalyzer.cs` | resolver wired warning-only; `ConfigureTypeRegistry` into `CompileUnit` |
+| `BasicLang/Program.cs:466-467` | delete the false "C++ projects have no NuGet dependencies" comment |
+| `BasicLang/ProjectSystem/CppProjectBuilder.cs` | reference resolution in `EmitCore`, phase model, gate merge, `CancellationToken`, BL6025 |
+| `BasicLang/Compiler/CodeGen/CPlusPlus/BlnetRuntimeSources.cs` | `blnet_load_module`, `blnet_bind_core`, `g_native_vtable` (Task 12) |
+| `BasicLang/SemanticAnalyzer.cs` | resolver wired **warning-only** (no `ConfigureTypeRegistry` — deferred to P2a-2) |
+| `VisualGameStudio.ProjectSystem/Services/BuildService.cs:307` | `CleanAsync` drops the shim cache (Task 15) |
 | `BasicLang/TypeRegistry.cs` | `Assembly.LoadFrom` → `NetTypeResolver` |
 | `BasicLang/CSharpBackend.cs` | ambient namespaces read from the shared constant |
 | `BasicLang/IRNodes.cs`, `BasicLang/IRBuilder.cs` | resolved-target + category-marker carriage |
@@ -295,9 +296,24 @@ git commit -m "feat(p2a1): move the AOT shim publisher and its VS-Installer PATH
 Today `<Reference>` and `<PackageReference>` are **silently discarded** for native projects. This
 task makes them resolve, and makes an unresolvable one a real diagnostic.
 
+> **Resolution lives in `CppProjectBuilder.EmitCore`, not the entry points.** This is spec §10.1
+> phase 1 ("IntelliSense runs it? yes"). Both callers already handle diagnostics —
+> `Program.cs:443-448` prints `cppResult.Diagnostics` and gates on `Success` at `:449`, and
+> `BuildService.BuildCppProject` maps both at `:1190-1208` — so neither needs new plumbing. The
+> only entry-point change in this task is **deleting a false comment**.
+>
+> ⚠ **`<ProjectReference>` is a WARNING in P2a-1, not an error.** The IDE writes that element into
+> native projects itself: "Add Project Reference" is gated only on
+> `HasSolution && IsProject && Projects.Count >= 2` (`SolutionExplorerViewModel.cs:625-627`) with
+> **no backend filter**, and `:689` calls `BlprojReferenceWriter.AddReference`. Since
+> `CppProjectBuilder` reads no reference item today, such a project builds fine on `master`.
+> Making it an error here would break projects the IDE creates and falsify this plan's defining
+> property. It is promoted to an error at P2a-2's flip.
+
 **Files:**
 - Create: `BasicLang/Net/NetReferenceResolver.cs`
-- Modify: `BasicLang/Program.cs:436`, `VisualGameStudio.ProjectSystem/Services/BuildService.cs:449`
+- Modify: `BasicLang/ProjectSystem/CppProjectBuilder.cs` (resolve in `EmitCore`, ahead of the
+  source partition at `:187`), `BasicLang/Program.cs:466-467` (delete the false comment)
 - Test: `VisualGameStudio.Tests/Blnet/NetReferenceResolverTests.cs`, and add cases to
   `VisualGameStudio.Tests/Compiler/CppProjectCliBuildTests.cs`
 
@@ -306,7 +322,7 @@ task makes them resolve, and makes an unresolvable one a real diagnostic.
 ```csharp
 using NUnit.Framework;
 using BasicLang.Net;
-using BasicLang.ProjectSystem;
+using BasicLang.Compiler.ProjectSystem;   // NOT BasicLang.ProjectSystem — see ProjectFile.cs:8
 
 namespace VisualGameStudio.Tests.Blnet;
 
@@ -314,7 +330,8 @@ namespace VisualGameStudio.Tests.Blnet;
 /// Reference resolution for native projects. Before P2a-1 every reference element was parsed
 /// into the model and then silently dropped (Program.cs:436 returned before restore), so a
 /// typo'd HintPath produced no output at all. These tests pin that references now resolve and
-/// that failures are BL6021/BL6022 rather than silence.
+/// that failures are BL6021 rather than silence. (BL6022 is reserved by spec §11.4 for
+/// &lt;NetProxy&gt; naming an unknown type — a P2a-2 concern.)
 /// </summary>
 [TestFixture]
 public class NetReferenceResolverTests
@@ -370,21 +387,27 @@ public class NetReferenceResolverTests
     }
 
     [Test]
-    public void ProjectReference_IsBL6021_WithTheDocumentedWorkaround()
+    public void ProjectReference_IsABL6021_WARNING_WithTheDocumentedWorkaround()
     {
         var project = new ProjectFile { Backend = "cpp" };
         project.ProjectReferences.Add("..\\Sibling\\Sibling.blproj");
 
         var result = NetReferenceResolver.Resolve(project, Path.Combine(_dir, "App.blproj"));
 
-        Assert.That(result.Diagnostics.Select(d => d.Code), Does.Contain("BL6021"));
-        Assert.That(result.Diagnostics.Single().Message, Does.Contain("HintPath"),
-            "BL6021 for a ProjectReference must name the <Reference>+<HintPath> workaround " +
-            "(spec §5, §14.9) — cross-project compilation does not exist on any build path.");
+        var diag = result.Diagnostics.Single();
+        Assert.That(diag.Code, Is.EqualTo("BL6021"));
+        Assert.That(diag.IsWarning, Is.True,
+            "MUST be a warning in P2a-1. The IDE writes <ProjectReference> into native projects " +
+            "itself — 'Add Project Reference' has NO backend filter " +
+            "(SolutionExplorerViewModel.cs:625-627 -> :689). An error here breaks projects the " +
+            "IDE creates and falsifies this plan's inertness claim. P2a-2 promotes it.");
+        Assert.That(diag.Message, Does.Contain("HintPath"),
+            "The message must name the <Reference>+<HintPath> workaround (spec §5, §14.9) — " +
+            "cross-project compilation does not exist on any build path.");
     }
 
     [Test]
-    public void NoReferences_ProducesNoDiagnosticsAndAnEmptyClosure()
+    public void NoReferences_ProducesNoDiagnosticsAndNoDeclaredAssemblies()
     {
         var project = new ProjectFile { Backend = "cpp" };
 
@@ -392,8 +415,12 @@ public class NetReferenceResolverTests
 
         Assert.That(result.Diagnostics, Is.Empty);
         Assert.That(result.AssemblyPaths, Is.Empty,
-            "A project with no references must cost nothing — this is what keeps every existing " +
-            "native project unaffected by P2a-1.");
+            "AssemblyPaths holds only what the project DECLARED — a project with no references " +
+            "must cost nothing, which is what keeps existing native projects unaffected.");
+        Assert.That(result.FrameworkPaths, Is.Not.Empty,
+            "FrameworkPaths is always populated and is SEPARATE from AssemblyPaths. Spec §6.5 " +
+            "step 2 requires `Dim r As New Regex(\"a\")` to resolve with no <Reference> at all, " +
+            "so the framework set cannot be conditional on the project declaring something.");
     }
 }
 ```
@@ -416,17 +443,24 @@ namespace BasicLang.Net
     internal sealed record NetReferenceDiagnostic(string Code, string Message, bool IsWarning);
 
     internal sealed record NetReferenceClosure(
-        IReadOnlyList<string> AssemblyPaths,
-        IReadOnlyList<NetReferenceDiagnostic> Diagnostics);
+        IReadOnlyList<string> AssemblyPaths,     // what the project DECLARED
+        IReadOnlyList<string> FrameworkPaths,    // always populated, independent of declarations
+        IReadOnlyList<NetReferenceDiagnostic> Diagnostics)
+    {
+        /// <summary>Everything Roslyn should see. Order-stable and de-duplicated by full path.</summary>
+        public IReadOnlyList<string> All { get; } =
+            FrameworkPaths.Concat(AssemblyPaths).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
 
     internal static class NetReferenceResolver
     {
-        public static NetReferenceClosure Resolve(ProjectSystem.ProjectFile project, string projectFilePath)
+        public static NetReferenceClosure Resolve(
+            Compiler.ProjectSystem.ProjectFile project, string projectFilePath)
         {
             // 1. <Reference> + <HintPath>, HintPath relative to Path.GetDirectoryName(projectFilePath)
-            // 2. <PackageReference> via PackageManager (Task 3 step 4)
-            // 3. <ProjectReference> -> BL6021 naming the <Reference>+<HintPath> workaround
-            // 4. framework assemblies from the net8.0 targeting pack
+            // 2. <PackageReference> via PackageManager (step 4)
+            // 3. <ProjectReference> -> BL6021 WARNING naming the <Reference>+<HintPath> workaround
+            // 4. framework assemblies -> FrameworkPaths (see the sourcing rule below)
         }
     }
 }
@@ -434,15 +468,32 @@ namespace BasicLang.Net
 
 Rules:
 - Resolve `HintPath` against the **project file's** directory.
-- A `<Reference>` with no `HintPath` resolves against the targeting pack by simple name; failing
-  that, **BL6021**.
-- `<ProjectReference>` is always **BL6021** with the workaround in the message (§5, §14.9).
-- The closure is **deduplicated by full path** and order-stable (it feeds the Task 15 cache key).
+- A `<Reference>` with no `HintPath` resolves against the framework set by simple name; failing
+  that, **BL6021** (error).
+- `<ProjectReference>` is **BL6021 with `IsWarning = true`** (§5, §14.9). Error at the P2a-2 flip.
+- An unrestorable `<PackageReference>` is **BL6021** (error) — *not* BL6022, which §11.4 reserves
+  for `<NetProxy>` naming an unknown type.
+- `AssemblyPaths` and `FrameworkPaths` are separately **de-duplicated by full path** and
+  **order-stable** — Task 15's cache key hashes them.
+
+> **Where `FrameworkPaths` comes from, and what if it is absent.** Use
+> `AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")` — the compiler is itself a net8.0 process, so
+> this needs **no SDK or targeting pack on the machine**. This matters: today the native path
+> requires only a C++ toolchain (`CppProjectBuilder.cs:354-375`), and depending on a targeting pack
+> would introduce a brand-new environment failure mode for projects that use no .NET at all. If the
+> TPA list is somehow empty, `FrameworkPaths` is empty and resolution proceeds — a project with no
+> .NET usage is unaffected either way. The same helper backs Task 4's test fixture
+> (`CSharpRun.cs:28-33` is the in-repo precedent).
 
 - [ ] **Step 4: Wire `<PackageReference>` through `PackageManager`**
 
 `BasicLang/ProjectSystem/PackageManager.cs` already restores and knows package paths. Call it for
-native projects too. An unrestorable package is **BL6022**.
+native projects too. An unrestorable package is **BL6021**.
+
+> `PackageManager.RestoreAsync` is **async** while `Resolve` is synchronous. Do not block on it
+> inside `Resolve`. Restore packages in `EmitCore` *before* calling `Resolve`, and pass the
+> resolved package assembly paths in as a parameter — this keeps `NetReferenceResolver` a pure,
+> synchronously-testable function, which is what the Step 1 tests assume.
 
 - [ ] **Step 5: Run the unit test — expect PASS**
 
@@ -450,48 +501,77 @@ native projects too. An unrestorable package is **BL6022**.
 dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --filter "FullyQualifiedName~NetReferenceResolverTests" > test-run.txt 2>&1
 ```
 
-- [ ] **Step 6: Wire it into both build entry points**
+- [ ] **Step 6: Call the resolver from `EmitCore`, and delete the false comment**
 
-In `BasicLang/Program.cs`, inside the `if (project.IsNativeProject)` block at `:436`, resolve
-references **before** `CppProjectBuilder.Build` and merge the diagnostics into `cppResult.Diagnostics`
-so they print through the existing loop at `:443-448`. Delete the now-false comment at `:466-467`
-("C++ projects have no NuGet dependencies and skip restore entirely").
+In `BasicLang/ProjectSystem/CppProjectBuilder.cs`, call `NetReferenceResolver.Resolve` inside
+`EmitCore` (`:161`), **ahead of the source partition at `:187`** — spec §10.1 phase 1. Append its
+diagnostics to `result.Diagnostics`; for the error-severity ones use the existing
+`Fail(result, code, message, project.FilePath)` idiom (precedent at `:212`). Expose the resulting
+`NetReferenceClosure` on `CppEmitOutcome` (`:26-44`) so Tasks 8, 12, 14 and 15 can consume it.
 
-Mirror the change in `VisualGameStudio.ProjectSystem/Services/BuildService.cs:449`.
+Neither entry point needs plumbing — `Program.cs:443-448` already prints `cppResult.Diagnostics`
+and gates on `Success` at `:449`, and `BuildService.BuildCppProject` already maps both at
+`:1190-1208`. The **only** entry-point change is deleting the now-false comment at
+`Program.cs:466-467` ("C++ projects have no NuGet dependencies and skip restore entirely").
 
 - [ ] **Step 7: Add end-to-end diagnostic cases**
 
-Add to `VisualGameStudio.Tests/Compiler/CppProjectCliBuildTests.cs`, following its existing
-idiom at `:104-111`:
+Add to `VisualGameStudio.Tests/Compiler/CppProjectCliBuildTests.cs`, following its `:104-111`
+idiom. **Note its helper's real signature:** `MakeCppProject` takes
+`params (string Name, string Content)[]` and already returns a `ProjectFile` — there is no
+`ProjectFile.Load` wrapper and no `referenceInclude:`/`hintPath:` parameters. Write the
+`<Reference>` into the `.blproj` XML the fixture generates, or add an overload.
+
+Three cases:
 
 ```csharp
 [Test]
-public void NativeProject_WithMissingAssemblyReference_ReportsBL6021()
+public void NativeProject_WithMissingAssemblyReference_ReportsBL6021AndFails()
 {
-    var proj = MakeCppProject(referenceInclude: "Ghost", hintPath: "lib\\Ghost.dll");
+    var project = MakeCppProjectWithReference("Ghost", "lib\\Ghost.dll");
 
-    var result = CppProjectBuilder.Build(ProjectFile.Load(proj), "Release");
+    var result = CppProjectBuilder.Build(project, "Release");
 
     Assert.That(result.Diagnostics.Select(d => d.Code), Does.Contain("BL6021"));
     Assert.That(result.Success, Is.False);
 }
+
+[Test]
+public void NativeProject_WithProjectReference_StillBuilds()
+{
+    var project = MakeCppProjectWithProjectReference("..\\Sibling\\Sibling.blproj");
+
+    var result = CppProjectBuilder.Build(project, "Release");
+
+    Assert.That(result.Success, Is.True,
+        "INERTNESS GATE. The IDE writes <ProjectReference> into native projects with no backend " +
+        "filter, and such projects build on master. If this fails, P2a-1 is not inert.");
+    Assert.That(result.Diagnostics.Single(d => d.Code == "BL6021").IsWarning, Is.True);
+}
 ```
 
-Add the matching CLI-leg case via `CliTestHarness.RunCli` — **both entry points**, per repo law.
+Plus the CLI leg via `CliTestHarness.RunCli` — **both entry points**, per repo law.
 
-- [ ] **Step 8: Full fast subset**
+- [ ] **Step 8: Run — fast subset AND the Integration fixture**
 
 ```bash
 dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --filter "TestCategory!=Integration" > test-run.txt 2>&1
 ```
+```bash
+dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --filter "FullyQualifiedName~CppProjectCliBuildTests|FullyQualifiedName~NetReferenceResolverTests" > test-run.txt 2>&1
+```
 
-Expected: 3608 + new fast tests, **0 failed**.
+> **Two runs are required.** `CppProjectCliBuildTests` carries class-level
+> `[Category("Integration")]` (`:6`), so Step 7's new cases **never execute** in the fast subset.
+> Running only the first command would give a false green.
+
+Expected: 3608 + new fast tests, 0 failed; and the Integration fixture green.
 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add BasicLang/Net/NetReferenceResolver.cs BasicLang/Program.cs VisualGameStudio.ProjectSystem/Services/BuildService.cs VisualGameStudio.Tests/
-git commit -m "feat(p2a1): resolve .blproj references on the native path; BL6021/BL6022 replace silent drops"
+git add BasicLang/Net/NetReferenceResolver.cs BasicLang/ProjectSystem/CppProjectBuilder.cs BasicLang/Program.cs VisualGameStudio.Tests/
+git commit -m "feat(p2a1): resolve .blproj references in EmitCore; BL6021 replaces silent drops"
 ```
 
 ---
@@ -753,7 +833,11 @@ public void ResolvingFromAnAssemblyDoesNotLockTheFile()
 }
 ```
 
-- [ ] **Step 2: Run and verify it fails** (it fails today against the `TypeRegistry` path).
+- [ ] **Step 2: Run and verify it fails**
+
+> The test must go through **`TypeRegistry`**, not `NetTypeResolver` directly — the latter was
+> built in Task 4 and already passes, so a test written against it is green before Step 3 and
+> proves nothing. Drive the assertion through the `TypeRegistry` API the LSP actually calls.
 - [ ] **Step 3: Route `TypeRegistry`'s three call sites through `NetTypeResolver`.** Replace the
   bare `catch {}` blocks with logged failures — a swallowed error here is why nobody noticed the
   LSP silently degrading.
@@ -853,13 +937,24 @@ public class NetClaimPredicateTests
   call, so they cannot drift.
 
 - [ ] **Step 4: Run — expect PASS**
-- [ ] **Step 5: Wire the resolver into `SemanticAnalyzer`, warning-only**
+- [ ] **Step 5: Wire the resolver in, warning-only — WITHOUT touching `ConfigureTypeRegistry`**
 
-- Call `ConfigureTypeRegistry` from `CompileUnit` construction so the compile path is configured
-  identically to the LSP path (`LSP/DocumentManager.cs:571` is currently its only caller).
 - On an unresolved .NET type or member, emit a **warning** on **both** backends (BL6016 / BL6017 /
   BL6018 / BL6023). §6.3's native-error behavior lands in **P2a-2**, not here.
-- A **claimed** name never reaches the resolver at all.
+- A **claimed** name (Step 3's predicate) never reaches the resolver at all.
+- The resolver is constructed from the `NetReferenceClosure` that Task 3 put on `CppEmitOutcome`,
+  threaded through `CompilerOptions` to `new BasicCompiler(...)` (`CppProjectBuilder.cs:222`).
+
+> ⛔ **Do NOT call `ConfigureTypeRegistry` from `CompileUnit` in P2a-1.** It is at
+> `BasicLang/Compiler.cs:524/529` with the analyzer configured at `:543-544` — and activating it on
+> the compile path **un-deadens `SemanticAnalyzer.cs:2075-2088`, which shadows the String/common
+> fallbacks at `:2090-2102`.** Concrete divergence: `TypeRegistry.GetTypeName` returns `String()`
+> for arrays (`TypeRegistry.cs:565`) while `ResolveNetTypeName` only unwraps `[]` (`:2153`),
+> yielding `TypeInfo("String()", Class)` instead of the array `TypeInfo`. That is a behavior change
+> to existing programs, which this plan forbids. **Moved to P2a-2** and recorded in the exclusions
+> list; when it lands there it needs a pinning test over `LookupNetTypeMember` for the non-P1
+> fallback set (`String.Split`, `String.Length`, `Stopwatch.ElapsedMilliseconds`,
+> `FileStream.Length`).
 
 - [ ] **Step 6: Prove inertness — the whole point of this task**
 
@@ -867,14 +962,29 @@ public class NetClaimPredicateTests
 dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --filter "TestCategory!=Integration" > test-run.txt 2>&1
 ```
 
-Expected: **0 failed.** Then the P1 batteries, which are the real proof that `Console` and friends
-still route natively:
+Expected: **0 failed.** Then the P1 batteries, which prove `Console` and friends still route
+natively:
 
 ```bash
 dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --filter "FullyQualifiedName~BclBackendParityTests" > test-run.txt 2>&1
 ```
 
 Expected: all 13 parity programs still byte-identical.
+
+- [ ] **Step 7: Add the diagnostics-level inertness gate**
+
+Neither "0 failed" nor byte-identical stdout can observe a **new warning emitted on every existing
+program** — and that is exactly what this task introduces. Add a fast fixture
+`VisualGameStudio.Tests/Blnet/NetInertnessTests.cs` that compiles the `IDE/` console and game
+templates plus the 13 P1 parity sources and asserts:
+
+```csharp
+Assert.That(result.Diagnostics.Select(d => d.Code).Where(c => c.StartsWith("BL60")), Is.Empty,
+    "P2a-1 must emit NO new BL60xx diagnostic on a program that compiled clean at dfee728. " +
+    "A warning is still new output: it changes CLI stdout, the IDE error list, and LSP squiggles.");
+```
+
+Keep this fixture through Tasks 9–16 — it is the standing guard on the plan's central claim.
 
 - [ ] **Step 7: Commit**
 
@@ -922,18 +1032,29 @@ Adds the resolved-target and category-marker fields. Nothing consumes them until
 public void OptimizerPreservesTheResolvedNetTargetAndCategoryMarker()
 {
     var module = BuildModuleWithAResolvedNetCall();
-    var before = FindCall(module);
 
-    new IROptimizer().Run(module);   // match the real pipeline entry used by BclE2E
+    // Capture VALUES, not the node. The pipeline may mutate in place, in which case a
+    // captured node reference makes both sides the same object and the assertion is vacuous.
+    var expectedTarget   = FindCall(module).ResolvedNetTarget;
+    var expectedCategory = FindCall(module).NetCategory;
+    Assert.That(expectedTarget, Is.Not.Null, "guard: the fixture must build a RESOLVED call");
+
+    var pipeline = new OptimizationPipeline();   // BasicLang/IROptimizer.cs:1123
+    pipeline.AddStandardPasses();                // :1139 — matches BclE2E.CompileToCppOptimized
+    pipeline.Run(module);
 
     var after = FindCall(module);
-    Assert.That(after.ResolvedNetTarget, Is.EqualTo(before.ResolvedNetTarget),
+    Assert.That(after.ResolvedNetTarget, Is.EqualTo(expectedTarget),
         "The optimizer dropped the resolved .NET target. Every IR node copy/clone path must " +
         "carry it, or P2a-2's lowering silently falls back to name-based dispatch — which is " +
         "the wild-pointer class spec §8.5 exists to prevent.");
-    Assert.That(after.NetCategory, Is.EqualTo(before.NetCategory));
+    Assert.That(after.NetCategory, Is.EqualTo(expectedCategory));
 }
 ```
+
+> **There is no class named `IROptimizer`.** The entry point is `OptimizationPipeline`
+> (`BasicLang/IROptimizer.cs:1123`) with `AddStandardPasses()` (`:1139`) — the same pair
+> `BclE2E.CompileToCppOptimized` uses at `CppBclEndToEndTests.cs:56-58`.
 
 - [ ] **Step 2: Run and verify it fails**
 - [ ] **Step 3: Add the fields** to `IRCall` (and the IR type descriptor for the category marker),
@@ -980,13 +1101,30 @@ public void HandleTableMatchesTheHandWrittenShimTheFrozenSuiteValidates()
 public void StatusEnumComesFromTheContract() =>
     Assert.That(BlnetShimSources.BlnetStatusCs, Is.EqualTo(BlnetContract.GenerateStatusEnumCs()),
         "The shim's status enum must be generated from BlnetContract — never hand-copied.");
+
+[Test]
+public void ShimAbiConstantComesFromTheContract() =>
+    Assert.That(BlnetShimSources.ShimAbiCs, Does.Contain($"= {BlnetContract.AbiVersion};"),
+        "The generated shim's ABI constant must be interpolated from BlnetContract.AbiVersion. " +
+        "The existing pin (BlnetContractTests.cs:71) covers the HAND shim only, whose ShimAbi is " +
+        "hand-appended to BlnetStatus.cs:26-27 — unusable by a generated shim.");
 ```
+
+> **The ABI constant needs its own file.** It cannot be appended to the status enum, because the
+> first test asserts `BlnetStatusCs` is **byte-equal** to `GenerateStatusEnumCs()`. Emit a separate
+> `ShimAbi.g.cs`. This is the third of the three §12.4 shim drift invariants §17 assigns to P2a-1.
 
 - [ ] **Step 2: Run and verify it fails**
 - [ ] **Step 3: Implement** `BlnetShimSources` mirroring `BlnetRuntimeSources.cs` exactly: a
   `public static class`, verbatim-string constants, and an XML `<summary>` naming both the spec
   section (§8.1) and the drift fixture that pins it — the convention every source-of-truth class in
-  this repo follows.
+  this repo follows. Expose `HandleTable`, `BlnetStatusCs` and `ShimAbiCs`.
+
+> **Namespace decision, needed here and consumed by Task 14:** the byte-equality test pins
+> `namespace BlnetTestShim;` from `HandleTable.cs:3`. Either keep that namespace in the generated
+> shim (simplest — the name is arbitrary and never crosses the ABI), or parameterize it and relax
+> the test to compare modulo the namespace line. Pick one **now** and write it down; Task 14's
+> `Exports.g.cs` must agree.
 - [ ] **Step 4: Run — expect PASS**
 - [ ] **Step 5: Commit**
 
@@ -1015,11 +1153,44 @@ headers as `extraFiles`. Mark that test `[Category("Integration")]`; keep the st
 - [ ] **Step 3: Implement.** `NetSurface` is a record with the member list and the `<NetProxy>`
   declared types. `NetProxyEmitter` produces the artifact set keyed on the surface being non-empty
   — **independent of BasicLang sources**, which is what Task 13 then wires up.
+
+- [ ] **Step 3b: Emit `blnet_startup.g.cpp` — the §9.3 startup contract**
+
+The spec explicitly delegates the details here ("the plan fixes the exact text", §9.3), and Task
+13's own test requires this file in `request.SourceFiles`. Three symbols are **new** — verified
+absent from `BlnetRuntimeSources.cs`, which declares only the `BlnetNativeVtable` *type* (`:59-62`),
+the seven export-name macros (`:65-71`), and `inline ShimApi g_shim` (`:100`) with the comment
+*"filled by the host: harness now, generated startup in P2"*:
+
+| Symbol | Job |
+|---|---|
+| `blnet_load_module(const char*)` | `LoadLibrary`/`dlopen`, returns an opaque handle |
+| `blnet_bind_core(void*)` | binds P0's seven exports into `g_shim` |
+| `g_native_vtable` | the native side of P0's 2-slot positional vtable |
+
+Put these in `BlnetRuntimeSources.cs` (add it to this task's Files list, and note
+`BlnetRuntimeSourcesTests` will pin them) — they are transport-neutral and P2b reuses two of three.
+
+The handshake is **two-argument**: `g_shim.initialize(BLNET_ABI_VERSION, &g_native_vtable)`
+(`BlnetRuntimeSources.cs:66, 93`). Failure text is normative so Task 14's tests can assert on it:
+
+| Failure | Message | Stream | Exit |
+|---|---|---|---|
+| module not found | `blnet: failed to load '<name>' (<oserr>)` | stderr | 3 |
+| a core export missing | `blnet: shim is missing export '<name>'` | stderr | 3 |
+| ABI mismatch | `blnet: shim ABI <got>, expected <want>` | stderr | 3 |
+| `initialize` non-OK | `blnet: initialize failed (status <n>)` | stderr | 3 |
+
+Ownership per §9.5: a **static-initializer object** in this TU calls `blnet_startup()` in its
+constructor and `blnet_shutdown()` in its destructor, covering both `emitMain == true` and a
+user-written `main()`. Document the static-init-order constraint; §9.2's null-slot guard turns any
+violation into a clear error rather than a crash.
+
 - [ ] **Step 4: Run — expect PASS**
 - [ ] **Step 5: Commit**
 
 ```bash
-git commit -m "feat(p2a1): NetSurface model and NetProxyEmitter; empty surface emits nothing"
+git commit -m "feat(p2a1): NetSurface, NetProxyEmitter and the blnet startup contract; empty surface emits nothing"
 ```
 
 ---
@@ -1053,6 +1224,31 @@ relaxing the `if` to `surface.IsNonEmpty || blSources.Count > 0` **null-derefere
 
 Thread a `CancellationToken` through `Build` and honor it between phases.
 
+- [ ] **Step 3b: Make the phase model explicit, and give tests a surface seam**
+
+Name §10.1's seven phases in code (an enum or explicit method-per-phase) and record which run
+under `forIntelliSense: true`:
+
+| # | Phase | IntelliSense? |
+|---|---|---|
+| 1 | Resolve references (Task 3) | yes |
+| 2 | BL → IR | yes |
+| 3 | Collect .NET surface | yes |
+| 4 | Emit native (incl. proxy artifacts) | yes |
+| 5 | Generate + publish shim | **no** |
+| 6 | Compile + link | no |
+| 7 | Deploy | no |
+
+Phase 3 has no collector in P2a-1 — it returns an **empty** `NetSurface`. Two of this task's three
+acceptance tests need a *non-empty* one, so add an **internal seam**: an optional
+`NetSurface? surfaceOverride` parameter on `EmitCore` (or a settable internal property on the
+options), used only by tests. Without it those tests are unwritable.
+
+Add **BL6025** here: a **library output** (`emitMain == false` *and* not an executable —
+`emitMain` is `isExe && basicLangMainCount == 1`, `CppProjectBuilder.cs:262`) with a non-empty
+surface is rejected, per §9.5 and §14.12. With an empty surface it builds exactly as today, so
+this is inert.
+
 - [ ] **Step 4: Run — expect PASS**
 - [ ] **Step 5: Prove byte-identical output — the acceptance criterion for this task**
 
@@ -1082,6 +1278,36 @@ git commit -m "refactor(p2a1): CppProjectBuilder phase model, surface/source gat
   **`TrimmerSingleWarn=false`**); an export body guards handle `0` without consulting the table and
   encodes a null return as `0` (§8.2); a value-type receiver uses `Unsafe.Unbox<T>` (§8.5); and an
   Integration test that the generated shim **publishes successfully** via `NetShimPublisher`.
+
+  Two more the spec requires and that are writable only here, since both producers now exist:
+
+```csharp
+[Test]
+public void ExportsIncludeP0sSevenCoreNames()
+{
+    var cs = NetShimGenerator.EmitExports(OneMemberSurface());
+
+    foreach (var name in BlnetContract.CoreExportNames)
+        Assert.That(cs, Does.Contain($"EntryPoint = \"{name}\""),
+            "A generated shim must export P0's seven core names too, not only surface-derived " +
+            "wrappers — blnet_bind_core (Task 12) binds them at startup. blnet_abi_version must " +
+            "return BlnetContract.AbiVersion and blnet_initialize must return " +
+            "BLNET_E_VERSION_MISMATCH when the caller's ABI differs.");
+}
+
+[Test]
+public void ProxyTableSlotsMatchTheSurfaceDerivedExports()
+{
+    var surface = OneMemberSurface();
+    var slots   = NetProxyEmitter.EmitBindings(surface).SlotNames;
+    var exports = NetShimGenerator.SurfaceDerivedExportNames(surface);
+
+    Assert.That(slots, Is.EquivalentTo(exports),
+        "Spec §12.4. Scoped to SURFACE-DERIVED exports deliberately — the shim also exports P0's " +
+        "seven core names and §8.6's array copy helpers, which are not BlnetProxyTable slots, so " +
+        "an unscoped equality is false by construction.");
+}
+```
 - [ ] **Step 2: Run and verify it fails**
 - [ ] **Step 3: Implement**, emitting the pattern `Exports.cs:82-93` proves, with §8.2's null
   handling. `TrimmerSingleWarn=false` is load-bearing for Task 16 — without it ILC collapses
@@ -1118,8 +1344,10 @@ public void KeyUsesMvidNotTimestampAndSize()
 ```
 
 - [ ] **Step 2: Run and verify it fails**
-- [ ] **Step 3: Implement.** Also make `Clean` drop the shim cache — today it deletes `bin/<config>`
-  but not `obj/`.
+- [ ] **Step 3: Implement.** Also make clean drop the shim cache: `BuildService.CleanAsync`
+  (`VisualGameStudio.ProjectSystem/Services/BuildService.cs:307`) today deletes only
+  `config.OutputPath`, never `obj/`. Add the shim cache directory. (Add that file to this task's
+  Files list.)
 - [ ] **Step 4: Run — expect PASS**
 - [ ] **Step 5: Commit**
 
@@ -1180,12 +1408,21 @@ titled `chore: refresh prebuilt IDE binaries with <what>`, and it must include:
 
 - `IDE/BasicLang.dll`, `IDE/BasicLang.exe`
 - `IDE/Microsoft.CodeAnalysis.dll`, `IDE/Microsoft.CodeAnalysis.CSharp.dll`
-- **`IDE/BasicLang.deps.json`** — tracked, and a dependency-set change invalidates it. The host will
-  not resolve the new DLLs without it. Ordinary code-only refreshes don't touch it, which is exactly
-  why this one is easy to forget.
+- **`IDE/BasicLang.deps.json`** — tracked, and a dependency-set change invalidates it.
+- **`IDE/VisualGameStudio.deps.json`** and `IDE/VisualGameStudio.ProjectSystem.dll` — the IDE host's
+  deps file **duplicates BasicLang's dependency closure** (today only
+  `Microsoft.Extensions.Logging.Console` + `OmniSharp.Extensions.LanguageServer`), and the IDE loads
+  BasicLang **in-process** (`BuildService.cs:1169`). Refreshing only `IDE/BasicLang.deps.json`
+  leaves the prebuilt IDE throwing `FileNotFoundException` for `Microsoft.CodeAnalysis` on the first
+  compile — **invisible to every `dotnet test` run**, because the tests build from source.
 
-With `SatelliteResourceLanguages=en` (Task 4) the 26 locale DLLs do not appear. Verify with
-`git status` that no `cs/`, `de/`, `fr/`… folders showed up under `IDE/`.
+Verify the `"BasicLang/1.0.0"` dependencies block in `IDE/VisualGameStudio.deps.json` now names
+`Microsoft.CodeAnalysis.CSharp`. With `SatelliteResourceLanguages=en` (Task 4) the 26 locale DLLs do
+not appear — confirm with `git status` that no `cs/`, `de/`, `fr/`… folders showed up under `IDE/`.
+
+Then extend Step 6's verification to compile a project **through the prebuilt
+`IDE/VisualGameStudio.exe`**, not just from source. That is the only thing that exercises the
+shipped deps files.
 
 - [ ] **Step 8: Commit and close out**
 
@@ -1204,7 +1441,14 @@ publish cost from Task 1, and anything learned that would be expensive to redisc
 Stated so a reviewer can tell "missing" from "deferred" (all of this is P2a-2, spec §17):
 
 - No .NET type is accepted by `CppCapabilityChecker` — the registry flip has not happened.
-- No `NetSurfaceCollector` — surfaces are hand-fed in tests only.
+- No `NetSurfaceCollector` — surfaces are hand-fed via Task 13's internal seam, in tests only.
 - No typed-catch lowering, no collection consumption, no outbound array copy, no delegates.
-- The resolver **warns**; it never fails a build.
+- The resolver **warns**; it never fails a build. §6.3's native-error behavior is P2a-2.
+- **`ConfigureTypeRegistry` is NOT wired into `CompileUnit`** (`BasicLang/Compiler.cs:524/529`,
+  analyzer configured at `:543-544`). Doing so un-deadens `SemanticAnalyzer.cs:2075-2088`, which
+  shadows the String/common fallbacks at `:2090-2102` — a behavior change to existing programs.
+  P2a-2 takes it, with a pinning test over `LookupNetTypeMember` for the non-P1 fallback set.
+- `<ProjectReference>` is a **warning** here; P2a-2 promotes it to an error.
+- `BasicLang/ExternalLibraryLoader.cs:169`'s `Assembly.LoadFrom` channel (reachable via
+  `Import … From`) is untouched.
 - No parity programs and no generated-shim conformance suite.
