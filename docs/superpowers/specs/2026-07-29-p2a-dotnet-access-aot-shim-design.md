@@ -148,9 +148,14 @@ run natively with no .NET involved. `BoundaryTypeRegistry` categorizes **exactly
 `NativeOwned` (`BoundaryTypeRegistry.cs:67-70`).
 
 `String`, `Console`, `List(Of T)` and `Dictionary` were already native *before* P1, but they are
-categorized differently and P2a must not conflate the two ideas: `String` is **`Bridged`**
-(`BoundaryTypeRegistry.cs:50`), while `Console`, `List` and `Dictionary` are **absent from the
-registry entirely** (`Unknown`) and are accepted by name at `CppCapabilityChecker.cs:620-623`.
+categorized differently and by **three different mechanisms** — P2a must not conflate them
+(§6.5 turns this into an enumerable predicate):
+
+| Type | Claimed by |
+|---|---|
+| `String` | `BoundaryTypeRegistry` — **`Bridged`** (`:50`) |
+| `List`, `Dictionary`, `HashSet` | absent from the registry (`Unknown`); accepted by name at `CppCapabilityChecker.cs:620-623` |
+| **`Console`** | neither of the above — `IRBuilder.KnownNetStaticTypes` (`:3644-3664`, `"Console"` at `:3647`) feeding `CppCodeGenerator.EmitStdLibCall` |
 
 > "Runs natively" and "`NativeOwned`" are not the same set. §6.4's conversion-pair rule keys on
 > the `NativeOwned` six; anything keyed on "is it native" instead would silently mishandle
@@ -368,26 +373,55 @@ from §6.1 alone, and getting the first one wrong silently breaks working progra
 
 1. The source file's `Using` directives, including aliases — `IRModule.NetUsings`
    (`IRNodes.cs:1166`), populated at `IRBuilder.cs:208-211`.
-2. **The same ambient set the C# backend auto-imports.** `CSharpBackend.cs:184` unconditionally
-   seeds `System.Text.RegularExpressions`, and a substring-triggered table at `:490` maps `Regex`
-   to that namespace. Without this step §6.3's "valid programs behave identically on both
-   backends" is **false**: `Dim r As New Regex("a")` with no `Using` compiles on the C# backend
-   today and would become BL6016 natively.
+2. **The same ambient set the C# backend auto-imports** — **17 namespaces**
+   (`CSharpBackend.cs:171-187`), including `System`, `System.Text`,
+   `System.Text.RegularExpressions`, `System.IO`, `System.Threading`,
+   `System.Collections.Generic` and `System.Diagnostics`; a substring-triggered table at `:490`
+   additionally maps bare names like `Regex` to their namespace. Without this step §6.3's "valid
+   programs behave identically on both backends" is **false**: `Dim r As New Regex("a")` with no
+   `Using` compiles on the C# backend today and would become BL6016 natively.
+
+   > **This set is larger than it looks, and the precedence rule below is what contains it.**
+   > With `System` ambient and the lexical heuristics gone, unqualified `Console`, `Math`,
+   > `Convert`, `File`, `Path`, `Encoding`, `Thread`, `Random` and `Stopwatch` all become
+   > resolvable .NET types. Only the claim predicate keeps the ones with native handling out of
+   > the shim.
 3. Fully-qualified names, which bypass both.
 
 The ambient set becomes **one shared constant** consumed by both `NetTypeResolver` and
 `CSharpBackend`, with a §12.4 invariant asserting the two are equal — otherwise the backends
 drift apart exactly where parity is being claimed.
 
-**Precedence.** `String` (`Bridged`) and `List`/`Dictionary`/`HashSet` (accepted by name at
-`CppCapabilityChecker.cs:620-623`) must **never** be captured by closure-wide resolution and
-routed through the shim. Native handling wins; the resolver is consulted only for names native
-handling does not claim.
+**Precedence — an enumerable predicate, not a principle.** A name is **claimed by native
+handling** iff it appears in one of exactly three sources, and a claimed name is **never** routed
+through the shim:
+
+| # | Source |
+|---|---|
+| a | `BoundaryTypeRegistry.Categorize != Unknown` |
+| b | `CppCapabilityChecker`'s early returns (`:598-625`): `NativeOwned`, .NET exception names, `Task`, generic `IEnumerable`, `Func`, `Action`, `List`/`Dictionary`/`HashSet`, `::`-qualified names |
+| c | the stdlib table `IRBuilder.KnownNetStaticTypes` (`:3644-3664`) plus `EmitStdLibCall`'s arms |
+
+Source (c) is the one a prose rule would miss. **`Console` is not in `CppCapabilityChecker`** —
+it is claimed by `KnownNetStaticTypes` (`IRBuilder.cs:3647`). A builder who reads "claimed" as
+"registry + capability checker" routes `Console.WriteLine` through the shim, which would rewrite
+the behavior of **every existing program**, including P1's parity battery.
+
+`Task`, `Func`, `Action` and generic `IEnumerable` are equally claimed — `CppCapabilityChecker.cs:599-604`
+with dedicated `MapType` branches at `CppCodeGenerator.cs:506-531`.
+
+**Direction rule.** A **source-declared** claimed name never reaches the resolver — `Dim a As Action`
+stays `std::function`. A claimed name appearing in a **.NET member signature** is governed by
+§8.3/§8.4/§8.5 instead.
+
+§12.4 asserts the resolver's exclusion set ≡ the backend's claim set, and §12.5 includes a
+`Console.WriteLine`-only program that must yield an **empty** surface and skip phase 5 entirely.
 
 **Superseded lexical mechanisms.** Three existing heuristics are replaced on the native path and
 retained (warning-only) on the C# path, per §6.3: `IsNetType`'s PascalCase catch-all
-(`SemanticAnalyzer.cs:2047-2052`), `CommonNetTypes` (`:68-87`), and the `_netNamespaces.Count > 0`
-unresolved-base gate (`:2522`).
+(`SemanticAnalyzer.cs:2047-2052`), `CommonNetTypes` (`:68-97` — the full range; a shorter one
+truncates the `System.Threading`/`Net`/`Linq`/`Diagnostics` rows), and the
+`_netNamespaces.Count > 0` unresolved-base gate (`:2522`).
 
 **Argument side.** The admissible BasicLang static types for overload resolution are exactly
 §8.3's rows plus §6.4's conversion pairs, projected through `TypeMapper`. `Nothing` participates
@@ -429,10 +463,22 @@ declared on the type **and on its base types**, static and instance — **exclud
 `System.Object`'s members unless overridden and marshalable. `[Obsolete]` members are included
 (omitting them would silently diverge from what the C# backend can call).
 
-**Unmarshalable and AOT-hostile members are omitted, not errors.** A member whose signature
-contains a type §8.3 cannot carry, or which ILC reports as AOT-incompatible, is skipped with an
-informational note naming type, member and offending type. It is **not** BL6019 and **not**
-BL6020. Two consequences worth stating plainly:
+**Unmarshalable and AOT-hostile members are omitted, not errors.** A member is skipped with a
+**BL6026 warning** naming type, member and offending type when either:
+
+- its signature contains a type §8.3 cannot carry, or
+- it, its accessors, or its declaring type carries `[RequiresDynamicCode]` or
+  `[RequiresUnreferencedCode]` — **read via Roslyn at phase 3.**
+
+> **The signal must be readable at phase 3.** ILC does not run until phase 5 (§10.1), but the
+> omission set determines the phase-3 surface *and* the phase-4 proxy header — so keying omission
+> on ILC output is circular and unimplementable. It would also break §12.4's
+> "proxy table slots ≡ shim exports" invariant by construction and leave `blnet_bind_all` failing
+> on missing slots. **The omission set is final before any proxy header is emitted; ILC output is
+> never consulted for it.**
+
+BL6026 is a warning with a diagnostic identity and §12.3 coverage — not an unlabelled note that
+would ship unverified. Two consequences worth stating plainly:
 
 - The generated proxy overload set is a **subset** of the .NET overload set.
 - Without this rule the feature is unusable: one `RequiresDynamicCode` member would make an
@@ -606,17 +652,35 @@ just because the transport is.
 |---|---|
 | `T[]` | .NET arrays expose **no indexer in metadata**, so the collector emits **synthetic** exports per element type: `bl_net_Array_Get__<T>__int32`, `_Set`, `_Length`. `Array.GetValue(int)` is not a fallback — it returns `Object`, which is permanently `Rejected` (`BoundaryTypeRegistry.cs:58`) |
 | indexer property | an `ArrayAccessExpressionNode` on a resolved .NET type lowers to `get_Item`/`set_Item`, which the collector must collect **even though the source never names it** |
-| `For Each` | the collector must synthesize `GetEnumerator`/`MoveNext`/`get_Current`/`Dispose` |
+| `For Each` | the enumerator is obtained and driven **through `IEnumerable<T>`/`IEnumerator<T>`** — never through the concrete struct-returning `GetEnumerator()` overload Roslyn would otherwise select. A type with only a struct enumerator and no `IEnumerable` is BL6019 |
 
-**Managed vs native `List` must not be decided by name.** `CppCodeGenerator.cs:3676-3678` and
-`:3698-3700` key on the bare string `"List"`, and `MapType` sends `TypeKind.Array` to
-`std::vector<T>` (`:479-480`). A managed `List<T>` handle reaching those paths would be
-dereferenced as a `shared_ptr` — a wild pointer, not a diagnostic. Codegen therefore branches on
-a **category marker carried on the IR type**, never on a type name.
+> **Why not the concrete `GetEnumerator()`.** For `List<T>`, `Dictionary<K,V>`, `HashSet<T>` and
+> `ImmutableArray<T>` the enumerator is a **mutable struct**. Boxed into a handle (§8.3), a
+> generated `((List<int>.Enumerator)o!).MoveNext()` mutates the *temporary* produced by the
+> unboxing conversion; the box is untouched, `MoveNext` returns true forever and `get_Current`
+> yields element 0 — an infinite loop, not a diagnostic. Note that §12.3's two obvious test cases
+> (a .NET array, an `IEnumerable<T>` from a compiler-generated iterator — a class) **both pass
+> with this bug present**, which is why §12.3 also requires iterating a concrete `List<T>`.
 
-Lowering sites needing a handle branch: `Visit(IRIndexerAccess)` (`CppCodeGenerator.cs:3662-3681`),
-`Visit(IRIndexerStore)` (`:3683-3703`), `Visit(IRForEach)` (`:3634-3660`), and the `MapType`
-array branch (`:479-480`).
+**Value-type receivers must use `Unsafe.Unbox<T>`.** Wherever an export's receiver is a boxed
+value type, the body uses `Unsafe.Unbox<T>(o!)` rather than `((T)o!)` (`AllowUnsafeBlocks` is
+already set, §8.1). Besides the mutation problem above, `((T)o!).Prop = v` is a raw **CS0445**
+("cannot modify the result of an unboxing conversion") — the generated shim would not compile.
+This is why §8.3's "other non-`ref` value types" row does **not** describe blittable-by-value as
+merely a later optimization: for mutable structs it is a correctness precondition.
+
+**Managed vs native `List` must not be decided by name.** Codegen branches on a **category
+marker carried on the IR type**, never on a type name. The sites that need it:
+
+| Site | Why |
+|---|---|
+| `MapType` collection branch (`CppCodeGenerator.cs:500-504`) + `BareCollectionType` (`:577-587`) + `IsCollectionType` (`:595-602`) | **this is where the wild pointer originates** — it declares a variable holding a managed `List<T>` as `std::shared_ptr<BasicLang::List<…>>`. `MapType` must test the managed marker and return `NetRef` **before** `:500-504` runs, and both helpers must return null/false for a managed-marked type |
+| `MapType` array branch (`:479-480`) | sends `TypeKind.Array` to `std::vector<T>` |
+| `Visit(IRIndexerAccess)` (`:3662-3681`), `Visit(IRIndexerStore)` (`:3683-3703`) | key on the bare string `"List"` at `:3676-3678` / `:3698-3700` — but they merely *consume* an already-wrong declaration |
+| `Visit(IRForEach)` (`:3634-3660`) | includes an `IsCollectionType` call at `:3644` |
+
+Implementing only the consumer sites and not `MapType`/`BareCollectionType` ships the exact bug
+this section exists to prevent.
 
 ### 8.6 Native BasicLang collections crossing outbound
 
@@ -624,20 +688,31 @@ The reverse direction of §8.5, and a different problem: a BasicLang array is a 
 and `List`/`Dictionary`/`HashSet` are `shared_ptr<BasicLang::…>`. There is no `GCHandle`, no
 handle, and `BoundaryTypeRegistry.Categorize` returns `Unknown` for all of them.
 
-**v1 rule — materialize by copy, one-way, for simple element types:**
+**Representation — stated once here so §8.5 and §8.6 cannot disagree.** A .NET `T[]` *value* is
+always a **handle**; §8.5 governs consuming it. Copying happens only when a native array is on
+the other side of an assignment or a parameter:
 
-- `T[]` where `T` is a by-value row of §8.3 or `String` → copied into a fresh managed array by
-  generated shim helpers (`bl_net_array_new_int32(int32_t count, const int32_t* src, uint64_t* out)`
-  and a `String` variant per element wire form). A `T[]` **return** or `ref`/`out` array slot is
-  read back by the mirrored helper.
-- Everything else — `List`/`Dictionary`/`HashSet`, nested element types such as
+| Expression | Result |
+|---|---|
+| `Dim a = obj.GetValues()` (inferred) | keeps the **handle**; indexing/iteration via §8.5's synthetic exports — no copy |
+| `Dim a() As Integer = obj.GetValues()` (declared native array) | **materializes by copy** — a one-way snapshot into `std::vector<T>` |
+| passing a native array to a .NET parameter | **copies in** |
+| a `ref`/`out` array slot | copies in **and reads back** |
+
+**v1 rule — copy is available only for simple element types:**
+
+- `T[]` where `T` is a by-value row of §8.3 or `String` → generated shim helpers per element wire
+  form (`bl_net_array_new_int32(int32_t count, const int32_t* src, uint64_t* out)`, a `String`
+  variant, and the mirrored readback).
+- Everything else — `List`/`Dictionary`/`HashSet` outbound, nested element types such as
   `List(Of List(Of Integer))`, element types that are themselves handles — is **BL6019** naming
   the parameter and the offending type.
 
-> **Divergence (§14.11):** the copy is **one-way**. Mutations a .NET callee makes to the array
-> are not visible in the caller's native `std::vector`, where the C# backend would see them.
-> §12.1 gets a parity program that mutates an array inside a .NET call, precisely so this
-> divergence is pinned rather than discovered.
+> **Divergence (§14.11), precisely scoped:** the copy is one-way **for by-value array arguments
+> only**. Mutations a .NET callee makes to such an array are not visible in the caller's
+> `std::vector`, where the C# backend would see them. `ref`/`out` array slots are **exempt** —
+> they are read back. §12.1's parity program targets the by-value case specifically; without this
+> scoping the program has two different correct expected outputs and cannot be authored.
 
 Generalizing §6.4's principle: **any type with a native C++ representation and no handle cannot
 cross as a handle.** That is not limited to the `NativeOwned` six — arrays and the collection
@@ -749,7 +824,17 @@ sit inside `if (blSources.Count > 0)` in `CppProjectBuilder.EmitCore` (`:267-341
 | `:338-340`, `:414` | `generatedTus` population feeding `request.SourceFiles` — so `blnet_startup.g.cpp` would be emitted but **never compiled or linked** |
 | `:419-420` | the include path |
 
-All four change to `surface.IsNonEmpty || blSources.Count > 0`.
+These become a **merge**, not a widened condition. `split` is declared null at
+`CppProjectBuilder.cs:265` and assigned only inside the gate, so simply relaxing the `if` to
+`surface.IsNonEmpty || blSources.Count > 0` would null-dereference `split.Files` (`:326-327`) and
+`split.TranslationUnitFileNames` (`:338-340`). The correct shape:
+
+- `NetProxyEmitter` produces its artifact set whenever `surface.IsNonEmpty`, independent of `split`.
+- `EmitCore` creates/cleans `obj/gen` and writes the **merged** file set: the proxy artifacts,
+  plus `split.Files` only when `split != null`.
+- `generatedTus` unions the proxy TUs (incl. `blnet_startup.g.cpp`) with
+  `split.TranslationUnitFileNames` when non-null.
+- The include path is gated on the **union** being non-empty.
 
 `NetProxyEmitter` **owns** the six `obj/gen` artifacts (§9.1) and produces them keyed on the
 discovered surface, not on the presence of BasicLang sources; `EmitCore` merges that set with
@@ -757,8 +842,16 @@ discovered surface, not on the presence of BasicLang sources; `EmitCore` merges 
 not to the gating — neither `GenerateSplit` nor `EmitRuntimeHeader` runs at all with zero `.bas`
 files.
 
-**Who calls `blnet_startup()`.** Two entry-point owners exist: generated `main` when
-`emitMain == true` (`CppProjectBuilder.cs:262`), and a user-written C++ `main()` when it is false.
+**Who calls `blnet_startup()`.** `emitMain` is `isExe && basicLangMainCount == 1`
+(`CppProjectBuilder.cs:262`), so `false` covers **two** different cases: a user-written C++
+`main()`, and a **library output with no `main` at all**.
+
+For v1, a non-executable project with a non-empty .NET surface is rejected with **BL6025**.
+Making the static-initializer object survive being pulled from a static archive is a linker
+problem — a TU no other symbol references may simply be dropped — and solving it is not worth
+P2a's budget. Recorded as §14.12 and §15.13.
+
+For the two executable cases:
 A static-initializer object in `blnet_startup.g.cpp` covers both without the user having to
 remember anything, at the cost of a static-initialization-order constraint: it must not be
 touched by another translation unit's static initializer. That constraint is documented, the
@@ -842,26 +935,45 @@ which a string equality test cannot do.
 
 P2a therefore specifies exception-type matching as real work:
 
-1. The shim reports the thrown exception's **full inheritance chain**, most-derived first, as a
-   `;`-separated string — `ArgumentNullException;ArgumentException;SystemException;Exception` —
-   through P0's existing error channel.
-2. `NetCheck` throws a `BasicLang::NetException` carrying that chain plus the message.
-3. A BasicLang `Catch ex As T` where `T` resolves to a .NET type lowers to a handler that
-   catches `NetException` and **rethrows unless `T`'s full name appears in the chain**. Catch
-   clauses naming non-.NET types keep today's behavior unchanged.
+1. **Wire format.** The shim reports the thrown exception's inheritance chain, most-derived
+   first, as a `;`-separated string of **fully-qualified** names:
+   `System.ArgumentNullException;System.ArgumentException;System.SystemException;System.Exception`.
+   Matching is `;`-delimited **element equality**, never substring — `ArgumentException` is a
+   substring of `MyArgumentException`.
+2. `NetCheck` throws a `BasicLang::NetException`, **derived from `std::runtime_error`**, carrying
+   that chain plus the message.
+3. **Lowering is per-`Try`, not per-clause.** A `Try` containing at least one .NET-typed clause
+   emits **one leading** `catch (const BasicLang::NetException& __n)` holding an if/else-if
+   ladder over *all* clauses in source order — each arm in its own braces with its own catch
+   variable — ending in a bare `throw;` reached only when no clause matched. The existing
+   `MapCatchType`-derived per-clause handlers follow unchanged, for the locally-thrown shape.
+
+> **Why per-`Try`.** `EmitTryCatch` emits one C++ handler per clause
+> (`CppCodeGenerator.cs:3375-3387`), and a `throw;` inside a handler resumes the search at the
+> **enclosing** try — sibling handlers of the same try are never reconsidered. A per-clause
+> rethrow design would make
+> `Try / Catch ex As InvalidOperationException / Catch ex As Exception` around a .NET call
+> throwing `ArgumentNullException` escape the whole `Try`, with clause 2 never running — which is
+> precisely the parity program §12.1 mandates. Bodies are emitted once each, so the
+> `_regionLabelSuffix` machinery (`:3391-3402`) is not needed.
+
+**Ordering is load-bearing.** The combined `NetException` handler must precede both the
+`MapCatchType`-derived handlers and the `catch (...)` finally handler (`:3395`). Because
+`NetException` derives from `std::runtime_error`, and `MapCatchType` emits
+`catch (const std::runtime_error&)` for *every* named non-`Exception` type (`:3589-3593`), a
+later-positioned handler would otherwise swallow it.
 
 **A BasicLang-thrown exception of a .NET-named type is *not* a `NetException`.**
 `Throw New ArgumentException(...)` written in BasicLang lowers to `std::runtime_error`
-(`CppCodeGenerator.cs:3596-3612`), never to a `NetException` carrying a chain. So a
-`Catch ex As ArgumentException` handler must match **both** shapes: a `NetException` whose chain
-contains `ArgumentException`, *and* a locally-thrown BasicLang exception of that name. The
-generated handler tests the chain first and falls through to the existing behavior — otherwise
-adding .NET interop to a file would silently stop its own `Throw`s being caught.
+(`CppCodeGenerator.cs:3596-3612`). The leading combined handler does not match it, so control
+falls through to the existing per-clause handler — which is exactly the desired behavior, and the
+reason `NetException` derives from `std::runtime_error` rather than from `std::exception`.
 
-**This costs no ABI change.** It alters the *content* of an existing field, not any signature,
-and it is backward compatible: the hand-written shim keeps sending a bare type name, which is a
-valid one-element chain. §12.2's frozen P0 suite — which asserts on
-`BasicLangNativeException` — therefore stays green untouched.
+**This costs no ABI change.** It alters the *content* of an existing field, not any signature.
+The hand-written shim already sends `ex.GetType().FullName`
+(`VisualGameStudio.Tests/TestAssets/BlnetTestShim/Exports.cs:17`), which is a valid one-element
+chain — so §12.2's frozen P0 suite, which catches `const std::runtime_error&` and asserts on
+`what()` (`main.cpp.txt:170-173`), stays green untouched.
 
 Unchanged known limitation: a `Return` inside a `Try` still bypasses its `Finally` on the C++
 backend.
@@ -928,6 +1040,9 @@ Next free code is BL6016 (grep-verified).
 | BL6021 | reference could not be resolved, or `<ProjectReference>` used (§5) |
 | BL6022 | `<NetProxy>` names an unknown type |
 | BL6023 | ambiguous .NET **type** reference (§6.5) |
+| BL6024 | .NET call inside a BasicLang **generic body** (§15.5 decision) |
+| BL6025 | **library output** with a non-empty .NET surface (§9.5) |
+| BL6026 | *warning* — `<NetProxy>` member omitted as unmarshalable or AOT-hostile (§7.2) |
 
 **Un-rejection takes three sites, and the catch-all is not the blocking one.** `CheckType`
 returns at `CppCapabilityChecker.cs:614-618` before ever reaching the `:627-631` catch-all, and
@@ -1036,7 +1151,10 @@ In P1's style — cheap tests that fail loudly when two things drift apart:
 
 - mangling is deterministic and collision-free over an overload set **and over fully-qualified
   declaring types** (§7.3)
-- the generated proxy table's slot list ≡ the generated shim's export list
+- the generated proxy table's slot list ≡ the **surface-derived** subset of the shim's export
+  list. *(Scoped deliberately: the shim also exports P0's seven core names and §8.6's array copy
+  helpers, none of which are `BlnetProxyTable` slots — an unscoped equality is false by
+  construction. §8.1's inventory names all three groups.)*
 - for every name in `ManagedOwned`, codegen's type mapping yields the handle representation
   (`NetRef`), and no other registry name does. *(Scoped to registry names deliberately —
   arbitrary resolved .NET types are handle-represented by §8.3's rule and are `Unknown` to the
@@ -1109,6 +1227,12 @@ proved the type — so it is not worth the version.
     are not visible to the caller, where the C# backend would show them. Native `List`,
     `Dictionary` and `HashSet` cannot cross outbound at all (BL6019).
 
+12. **A library output cannot use .NET** — BL6025 (§9.5). Executables only in v1.
+13. **A .NET call inside a BasicLang generic body is rejected** — BL6024 (§15.5). .NET generics
+    called from non-generic BasicLang code work normally.
+14. **`<NetProxy>` members may be silently absent** — omitted members produce a BL6026 warning,
+    so a declared type's proxy surface is a subset of its .NET surface (§7.2).
+
 > Limitations 10 and 11 are *divergences from the C# backend*, not merely missing features. They
 > are the reason §12.1 requires a parity program for each — a divergence that is pinned is a
 > documented behavior; one that is not is a bug waiting to be found by a user.
@@ -1123,22 +1247,28 @@ proved the type — so it is not worth the version.
 | 15.2 | Roslyn version alignment: 4.9.2 matches the test project, but the compiler is shipped in `IDE/`. Confirm no conflict with `OmniSharp.Extensions.LanguageServer` 0.19.9 and measure the size delta to `BasicLang.exe`. |
 | 15.3 | Whether tightening `IsNetType` breaks an existing test — recon could not determine whether any test pins the analyzer's permissiveness. |
 | 15.4 | `blnet_initialize` is `const BlnetNativeVtable*` in the header but `void*` in the shim (`Exports.cs:36`). Deliberate for AOT blittability, or drift? Untested either way. |
-| 15.5 | **Generic instantiation is a decision, not a confirmation.** `MakeGenericType` throws for non-pregenerated instantiations, so every instantiation the program uses must appear statically in the shim — but BasicLang generics emit **real C++ templates** and are never monomorphized in the front end, so instantiations do not exist at phase 3 to be collected. Choose one and record it in §14: (a) an instantiation-enumeration pass over generic bodies (its own plan task), or (b) a diagnostic rejecting .NET calls inside BasicLang generic bodies. |
+| 15.5 | **DECIDED — option (b).** BasicLang generics emit real C++ templates and are never monomorphized in the front end, so .NET instantiations cannot be enumerated at phase 3, and `MakeGenericType` throws for anything not pre-generated. v1 therefore **rejects a .NET call inside a BasicLang generic body with BL6024** rather than building an instantiation-enumeration pass, which would be its own subsystem. §12.3's generics row covers .NET generics called from non-generic BasicLang code, which works normally. Recorded as §14.13. |
 | 15.6 | `[ThreadStatic]` last-error is never cleared on `BLNET_OK`, so a caller reading it after success gets a stale unrelated error. Pre-existing; decide whether P2a tightens it. |
 | 15.7 | Whether a capability rejection also breaks IntelliSense emission (codegen still runs at `CppProjectBuilder.cs:293-296` with `forIntelliSense: true`) — inferred by recon, not verified. |
 | 15.8 | Latent bug spotted in passing: `WorkspaceManager.cs:186` builds the package path without lowercasing the version while `PackageManager.GetPackagePath` lowercases both — LSP package-type loading may silently miss. Out of scope; chip it. |
 | 15.9 | Whether `<ProjectReference>` (§5, §14.9) should be promoted into P2a after all, or stay a separate cross-project-compilation feature. It is the single largest deferred item and the workaround (`<Reference>` + `<HintPath>`) is workable but manual. |
-| 15.10 | **Error-vs-warning policy per ILC diagnostic class.** Promoting every trim/AOT diagnostic to a hard BL6020 over-rejects — Microsoft documents that some runtime-library warnings are not actionable by end developers, and an assembly-level IL2104/IL3053 does not prove the program breaks. Currently ambiguous enough to be built two different ways. |
+| 15.10 | **DECIDED — severity by diagnostic class.** `RequiresDynamicCode` (IL3050 and friends) → BL6020 **error**: the call throws at runtime, so building would ship a known crash. Trim-analysis warnings (IL2026 and friends) → BL6020 **warning**: Microsoft documents that many are conservative and not actionable by end developers. Assembly-level aggregates (IL2104/IL3053) → BL6020 **warning**: they do not prove the program's own paths break. This is `AotDiagnosticMapper`'s acceptance criterion. |
 | 15.11 | Shim TFM vs user assemblies: a `net8.0` shim cannot reference a `net9.0+` user assembly, which collides with D1's "any assembly". Decide whether the shim TFM floats to the highest referenced TFM or stays pinned with a BL6021-class diagnostic. |
-| 15.12 | Who calls `blnet_pump()` in a generated program, if anyone. §9.3 emits a pump call nowhere; with §8.4's `immediate = false` registration, any callback that *does* get queued would never run. Either emit a pump point or record it as a limitation. |
+| 15.12 | **DECIDED — pump at outermost return.** A generated proxy calls `blnet_pump()` after `NetCheck` when the call depth has returned to 0, i.e. only at the outermost boundary call. This drains anything a foreign thread queued during the call without adding a pump to every nested proxy, and requires **no change to P0's frozen `BlnetCallScope`** — the check lives in generated code. Callbacks raised on the calling thread still run inline via the scope (§9.2) and never reach the queue. |
+| 15.13 | Whether a **library output** with a non-empty .NET surface should eventually be supported rather than rejected with BL6025 (§9.5, §14.12). Requires solving static-initializer survival when the TU is pulled from a static archive and nothing references its symbols. |
 
 ---
 
 ## 16. What P2b inherits
 
 **Reused unchanged:** §5–§8.6 (reference closure, resolution, surface discovery, marshaling,
-collections), §9.1–§9.2 and §9.4–§9.5 (artifacts, proxy API, lifetime, consumers), §11.1–§11.2
-and §11.4 (exceptions, diagnostics), and §12.1 (the parity oracle).
+collections), §9.2 and §9.4–§9.5 (proxy API, lifetime, consumers), §11.1–§11.2 (exceptions), and
+§12.1 (the parity oracle).
+
+**Partly reused:** §9.1 — the artifact list stands except `blnet_startup.g.cpp` (rewritten for
+`hostfxr`) and `shim/` (no AOT publish). §11.4 — the diagnostic table stands except the **BL6020
+row**, which disappears along with `AotDiagnosticMapper`, and BL6024/BL6025, which may relax
+under hosting.
 
 **Replaced by P2b:**
 
@@ -1166,3 +1296,41 @@ diagnostic, and `.runtimeconfig.json` deployment via `<EnableDynamicLoading>`.
 
 If P2b requires a change to anything in the "reused unchanged" list, the seam was in the wrong
 place.
+
+---
+
+## 17. Implementation decomposition
+
+P2a spans **19 distinct subsystems** and is estimated at **25–30 tasks** — roughly double P1,
+which was 14 tasks over a materially narrower scope. It therefore ships as two plans, split **at
+the flip**, mirroring the phase ordering that made P1 land green at every commit.
+
+### P2a-1 — foundation, inert at every commit (~14–16 tasks)
+
+`.blproj` reference resolution with real BL6021/BL6022 on the native path (unblocking
+`Program.cs:436` and `BuildService.cs:449`) · `NetTypeResolver` replacing the LSP's
+`Assembly.LoadFrom` · the shared ambient-namespace constant + its drift invariant · the resolver
+wired **warning-only on both backends** (§6.3 is the mechanism that keeps this inert) ·
+deterministic mangler · IR carriage read by nobody, plus an optimizer round-trip test ·
+`BlnetShimSources` + the three shim drift invariants · `NetProxyEmitter` keyed on an always-empty
+surface · §9.5's gate rework + §10.1's phase model + cancellation + the §10.5 PATH move into the
+product · `NetShimGenerator`/`NetShimPublisher`/cache driven by a hand-fed surface ·
+`AotDiagnosticMapper` over captured ILC output.
+
+**Observable value, zero behavior change to existing programs, independently mergeable.**
+
+### P2a-2 — the flip and the hard lowerings (~10–14 tasks)
+
+In order: §11.1 typed catch **first** (transport-independent, and it shrinks the flip) → the flip
+(registry move + `CppCapabilityChecker.cs:322-331`/`:614-618`/`:627-631` + the §11.4 test churn)
+→ §8.5 collection consumption → §8.6 outbound copy → §8.4 delegates + §11.2 → §12.1 parity
+oracle + §12.3 conformance + §12.5 integration.
+
+### Ordering constraints that are not obvious
+
+- §8.5's lowering branches cannot land before the IR category marker exists (a P2a-1 task).
+- §9.5's gate rework must precede §12.5's zero-`.bas` integration test, and **both** must precede
+  the flip, or that test is unwritable.
+- §10.5's PATH move must precede `NetShimPublisher`'s first integration test on this machine.
+- §15.1 (measuring AOT publish wall-clock) belongs in P2a-1 task 1 — the number decides whether
+  §10.2's cache is sufficient or a background pre-warm is needed sooner.
