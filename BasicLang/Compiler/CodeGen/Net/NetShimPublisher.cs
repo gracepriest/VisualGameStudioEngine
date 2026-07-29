@@ -44,24 +44,65 @@ namespace BasicLang.Compiler.CodeGen.Net
         /// writes "'vswhere.exe' is not recognized" to stderr — which Exec's ConsoleToMSBuild
         /// captures and the targets Split('#') into the linker path, corrupting CppLinker.
         /// Appending the Installer dir to the child PATH lets the probe resolve via PATH instead.
+        /// Looks up "PATH" via <see cref="IDictionary{TKey,TValue}.TryGetValue"/> rather than the
+        /// indexer so a dictionary without a PATH entry is a no-op instead of a
+        /// <see cref="KeyNotFoundException"/> — <c>ProcessStartInfo.Environment</c> is
+        /// case-insensitive on Windows and always has one, but callers/tests may not.
         /// </summary>
         internal static void HardenChildPath(IDictionary<string, string?> env, string vsInstallerDir, bool installerExists)
         {
-            if (installerExists)
-                env["PATH"] = $"{env["PATH"]};{vsInstallerDir}";
+            if (!installerExists) return;
+            if (env.TryGetValue("PATH", out var existing))
+                env["PATH"] = $"{existing};{vsInstallerDir}";
+        }
+
+        /// <summary>
+        /// The expected native DLL path for a shim published from <paramref name="csprojPath"/>
+        /// into <paramref name="outputDir"/> — <c>dotnet publish -p:NativeLib=Shared</c> names the
+        /// output after the project. Pure so <see cref="BuildResult"/> and callers can share it
+        /// without re-deriving the naming rule.
+        /// </summary>
+        internal static string ExpectedDllPath(string csprojPath, string outputDir) =>
+            Path.Combine(outputDir, Path.GetFileNameWithoutExtension(csprojPath) + ".dll");
+
+        /// <summary>
+        /// Turns a completed `dotnet publish` invocation's raw outcome into a
+        /// <see cref="NetShimPublishResult"/>. Pure (no I/O) so the result-shape logic —
+        /// including the two distinct ways a publish can fail — is unit-testable without
+        /// spawning a process. <paramref name="dllExists"/> is the caller's
+        /// <c>File.Exists(ExpectedDllPath(...))</c> probe, passed in rather than done here.
+        /// </summary>
+        internal static NetShimPublishResult BuildResult(
+            string csprojPath, string outputDir, int exitCode, string output, bool dllExists)
+        {
+            var dllPath = ExpectedDllPath(csprojPath, outputDir);
+            var success = exitCode == 0 && dllExists;
+            return new NetShimPublishResult(success, dllPath, output, exitCode);
         }
 
         /// <summary>
         /// Publishes <paramref name="csprojPath"/> as a Native AOT shared native library into
         /// <paramref name="outputDir"/> for <paramref name="runtimeIdentifier"/>, running with
-        /// <paramref name="workingDirectory"/> as the child process's working directory. Returns
-        /// a result rather than throwing for a non-zero exit or a missing output DLL; a timeout
-        /// still throws <see cref="TimeoutException"/> since a hung publish is not a diagnosable
-        /// build error.
+        /// <paramref name="workingDirectory"/> as the child process's working directory.
+        /// <paramref name="csprojPath"/> and <paramref name="outputDir"/> may be relative; they
+        /// are resolved against <paramref name="workingDirectory"/> (not this process's own
+        /// current directory) so that the host-side <c>File.Exists</c>/<c>Directory.CreateDirectory</c>
+        /// probes agree with how the <c>dotnet</c> child — whose cwd IS
+        /// <paramref name="workingDirectory"/> — resolves the same arguments.
+        /// <para/>
+        /// Returns a result (<see cref="NetShimPublishResult.Success"/> = false) rather than
+        /// throwing for a non-zero exit or a missing output DLL, and rather than throwing when
+        /// <c>dotnet</c> itself cannot be started (not on PATH — a supported failure mode per
+        /// spec §10.5). The two throw paths that remain: <see cref="FileNotFoundException"/> if
+        /// <paramref name="csprojPath"/> does not exist, and <see cref="TimeoutException"/> if
+        /// the publish exceeds 10 minutes — a hung publish is not a diagnosable build error.
         /// </summary>
         internal static NetShimPublishResult Publish(
             string csprojPath, string outputDir, string workingDirectory, string runtimeIdentifier = "win-x64")
         {
+            csprojPath = Path.GetFullPath(csprojPath, workingDirectory);
+            outputDir = Path.GetFullPath(outputDir, workingDirectory);
+
             if (!File.Exists(csprojPath))
                 throw new FileNotFoundException($"Shim project not found: {csprojPath}");
 
@@ -79,13 +120,7 @@ namespace BasicLang.Compiler.CodeGen.Net
             foreach (var arg in BuildPublishArguments(csprojPath, outputDir, runtimeIdentifier))
                 psi.ArgumentList.Add(arg);
 
-            // The ILCompiler targets locate MSVC via findvcvarsall.bat -> VS's VsDevCmd.bat, which
-            // pushd's into the VS Installer directory and invokes a bare `vswhere.exe`, relying on
-            // cmd resolving executables from the current directory. Under a shell that sets
-            // NoDefaultCurrentDirectoryInExePath (hardened environments do), that probe fails and
-            // writes "'vswhere.exe' is not recognized" to stderr — which Exec's ConsoleToMSBuild
-            // captures and the targets Split('#') into the linker path, corrupting CppLinker.
-            // Appending the Installer dir to the child PATH lets the probe resolve via PATH instead.
+            // PATH workaround — see HardenChildPath above (spec §10.5) for the full explanation.
             var vsInstaller = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
                 "Microsoft Visual Studio", "Installer");
@@ -95,7 +130,19 @@ namespace BasicLang.Compiler.CodeGen.Net
             using var proc = new Process { StartInfo = psi };
             proc.OutputDataReceived += (_, e) => { if (e.Data != null) lock (output) output.AppendLine(e.Data); };
             proc.ErrorDataReceived += (_, e) => { if (e.Data != null) lock (output) output.AppendLine(e.Data); };
-            proc.Start();
+
+            try
+            {
+                proc.Start();
+            }
+            catch (Exception ex)
+            {
+                // dotnet not on PATH, or otherwise unlaunchable — a supported failure (spec §10.5
+                // requires the SDK on PATH), not an exceptional one; surface it the same way a
+                // failed publish would be, not as an unhandled exception out of the compiler.
+                return new NetShimPublishResult(false, ExpectedDllPath(csprojPath, outputDir), $"Failed to start dotnet: {ex.Message}", ExitCode: -1);
+            }
+
             proc.BeginOutputReadLine();
             proc.BeginErrorReadLine();
 
@@ -103,20 +150,16 @@ namespace BasicLang.Compiler.CodeGen.Net
             if (!proc.WaitForExit(600_000))
             {
                 try { proc.Kill(entireProcessTree: true); } catch { /* already gone */ }
+                try { proc.WaitForExit(5_000); } catch { /* best effort */ }
                 throw new TimeoutException($"dotnet publish of {Path.GetFileName(csprojPath)} timed out after 10 minutes.\n{Snapshot(output)}");
             }
-            proc.WaitForExit(); // drain async output handlers
+            // Bounded, not unbounded: this waits for stdout/stderr EOF (not just process exit),
+            // which can be delayed by a grandchild still holding the inherited pipe write handle.
+            // An unbounded wait here would quietly disarm the 600s hang detector above.
+            proc.WaitForExit(30_000);
 
             var text = Snapshot(output);
-            if (proc.ExitCode != 0)
-                return new NetShimPublishResult(false, DllPath: string.Empty, text, proc.ExitCode);
-
-            var dllName = Path.GetFileNameWithoutExtension(csprojPath) + ".dll";
-            var dll = Path.Combine(outputDir, dllName);
-            if (!File.Exists(dll))
-                return new NetShimPublishResult(false, DllPath: string.Empty, text, proc.ExitCode);
-
-            return new NetShimPublishResult(true, dll, text, proc.ExitCode);
+            return BuildResult(csprojPath, outputDir, proc.ExitCode, text, File.Exists(ExpectedDllPath(csprojPath, outputDir)));
         }
 
         private static string Snapshot(StringBuilder output) { lock (output) return output.ToString(); }

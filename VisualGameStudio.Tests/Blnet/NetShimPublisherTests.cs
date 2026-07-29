@@ -47,4 +47,70 @@ public class NetShimPublisherTests
 
         Assert.That(env["PATH"], Is.EqualTo("C:\\existing"));
     }
+
+    /// <summary>
+    /// ProcessStartInfo.Environment (the real caller) is a case-insensitive dictionary on
+    /// Windows, so a "Path" entry must still be found and updated when looked up as "PATH".
+    /// A plain case-sensitive Dictionary in the two tests above would not catch a regression
+    /// back to the `env["PATH"]` indexer form, which happens to work there only by coincidence
+    /// of the test's own key casing.
+    /// </summary>
+    [Test]
+    public void HardenChildPath_IsCaseInsensitiveLikeProcessEnvironment()
+    {
+        var env = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase) { ["Path"] = "C:\\existing" };
+
+        NetShimPublisher.HardenChildPath(env, vsInstallerDir: "C:\\VS\\Installer", installerExists: true);
+
+        Assert.That(env["Path"], Is.EqualTo("C:\\existing;C:\\VS\\Installer"));
+    }
+
+    [Test]
+    public void HardenChildPath_DoesNotThrowWhenPathKeyMissing()
+    {
+        var env = new Dictionary<string, string?>();
+
+        Assert.DoesNotThrow(() => NetShimPublisher.HardenChildPath(env, vsInstallerDir: "C:\\VS\\Installer", installerExists: true));
+        Assert.That(env.ContainsKey("PATH"), Is.False);
+    }
+
+    [Test]
+    public void ExpectedDllPath_NamesTheDllAfterTheProject()
+    {
+        var dll = NetShimPublisher.ExpectedDllPath("C:\\proj\\BlnetTestShim.csproj", "C:\\out");
+
+        Assert.That(dll, Is.EqualTo(Path.Combine("C:\\out", "BlnetTestShim.dll")));
+    }
+
+    [Test]
+    public void BuildResult_SucceedsWhenExitZeroAndDllPresent()
+    {
+        var result = NetShimPublisher.BuildResult("C:\\proj\\Shim.csproj", "C:\\out", exitCode: 0, output: "ok", dllExists: true);
+
+        Assert.That(result.Success, Is.True);
+        Assert.That(result.DllPath, Is.EqualTo(Path.Combine("C:\\out", "Shim.dll")));
+        Assert.That(result.Output, Is.EqualTo("ok"));
+        Assert.That(result.ExitCode, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void BuildResult_FailsOnNonZeroExit_ButStillReportsExpectedDllPath()
+    {
+        var result = NetShimPublisher.BuildResult("C:\\proj\\Shim.csproj", "C:\\out", exitCode: 1, output: "MSB3073", dllExists: false);
+
+        Assert.That(result.Success, Is.False);
+        Assert.That(result.ExitCode, Is.EqualTo(1));
+        Assert.That(result.DllPath, Is.EqualTo(Path.Combine("C:\\out", "Shim.dll")),
+            "even on failure, DllPath should say where the shim was expected — callers (and the wrapper) rely on this instead of re-deriving the naming rule");
+    }
+
+    [Test]
+    public void BuildResult_FailsWhenExitZeroButDllMissing_DistinguishableFromABuildFailureByExitCode()
+    {
+        var result = NetShimPublisher.BuildResult("C:\\proj\\Shim.csproj", "C:\\out", exitCode: 0, output: "clean build log", dllExists: false);
+
+        Assert.That(result.Success, Is.False);
+        Assert.That(result.ExitCode, Is.EqualTo(0), "the confusing case: a clean exit with no DLL — ExitCode==0 is what distinguishes it from a build failure");
+        Assert.That(result.DllPath, Is.EqualTo(Path.Combine("C:\\out", "Shim.dll")));
+    }
 }

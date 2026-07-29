@@ -38,8 +38,7 @@ public static class BlnetShimPublisher
             if (result.ExitCode != 0)
                 throw new InvalidOperationException($"dotnet publish of BlnetTestShim failed (exit {result.ExitCode}).\n{result.Output}");
 
-            var expectedDll = Path.Combine(scratch, "BlnetTestShim.dll");
-            throw new FileNotFoundException($"Publish succeeded but the native library is missing: {expectedDll}\n{result.Output}");
+            throw new FileNotFoundException($"Publish succeeded but the native library is missing: {result.DllPath}\n{result.Output}");
         }
 
         return (result.DllPath, result.Output);
