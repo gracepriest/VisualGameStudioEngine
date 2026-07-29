@@ -113,10 +113,10 @@ internal static class BclE2E
         for (int i = 0; i < Math.Min(e.Length, a.Length); i++)
         {
             if (e[i] != a[i])
-                return $"stdout line {i + 1} of {total}: {expectedLabel} '{e[i]}' but {actualLabel} was '{a[i]}'{context}";
+                return $"stdout line {i + 1} of {total}: {expectedLabel} said '{e[i]}' but {actualLabel} said '{a[i]}'{context}";
         }
         var actualTotal = a.Length > 0 && a[^1].Length == 0 ? a.Length - 1 : a.Length;
-        return $"stdout LINE COUNT differs: {expectedLabel} {total} lines, {actualLabel} {actualTotal} " +
+        return $"stdout LINE COUNT differs: {expectedLabel} had {total} lines, {actualLabel} had {actualTotal} " +
                $"(first {Math.Min(e.Length, a.Length)} match){context}";
     }
 }

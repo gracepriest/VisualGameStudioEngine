@@ -35,10 +35,10 @@ namespace VisualGameStudio.Tests.Compiler;
 ///   without → CurrentCulture 'en-US' | "7/28/2026 1:45:30 PM"  | default DateTime "1/1/0001 12:00:00 AM"
 ///   with    → CurrentCulture ''      | "07/28/2026 13:45:30"   | default DateTime "01/01/0001 00:00:00"
 /// The second row is exactly what the C++ invariant "G" inserter prints. The mechanism is
-/// therefore also self-checking IN THIS FIXTURE: <c>DefaultValues</c> and
-/// <c>DateTimeArithmetic</c> print default/parameterless <c>ToString()</c> forms, so if the
-/// env var ever stops taking effect those cases fail immediately with a visible AM/PM diff
-/// rather than silently degrading.
+/// therefore also self-checking IN THIS FIXTURE: <c>DefaultValues</c>,
+/// <c>DateTimeArithmetic</c> and <c>DateTimeOffset</c> print default/parameterless
+/// <c>ToString()</c> forms, so if the env var ever stops taking effect those cases fail
+/// immediately with a visible AM/PM diff rather than silently degrading.
 ///
 /// ── MANDATORY PROGRAM CONSTRAINTS (each is a guaranteed diff or compile break) ─────
 /// All are PRE-EXISTING backend behaviour, none introduced by P1; they were paid for the
@@ -64,6 +64,30 @@ namespace VisualGameStudio.Tests.Compiler;
 ///     anywhere. The two legs are two separate runs, so a wall clock would diff against
 ///     ITSELF. Fixed literal dates and guids only (those APIs are covered structurally by
 ///     <see cref="CppBclEndToEndTests"/>).
+///  9. No culture-sensitive string operations and no LOCAL-TIME conversions. The culture
+///     forcing above is not a scalpel: <c>DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1</c>
+///     disables ICU WHOLESALE, which also makes string comparison/sorting ORDINAL, makes
+///     <c>ToUpper</c>/<c>ToLower</c> ASCII-only, and collapses <c>TimeZoneInfo</c> to a
+///     single UTC zone. Those areas are therefore NOT stock .NET on the C# leg, so a
+///     program exercising them would be comparing the native runtime against a crippled
+///     oracle. Keep to formatting/parsing (which invariant culture pins exactly) and to
+///     explicit-offset time (<c>DateTimeOffset</c> with a literal <c>TimeSpan</c>).
+/// 10. ASCII-only output. Neither leg pins <c>StandardOutputEncoding</c>, and the two
+///     decode stdout through different paths: the native program writes raw UTF-8 bytes
+///     while .NET's Console encodes through the console/ANSI code page. Non-ASCII output
+///     would therefore diff on ENCODING alone — a false failure that says nothing about
+///     the runtime. (This is also why <c>StringBuilder</c>'s byte-vs-UTF-16 <c>Length</c>
+///     divergence in spec §9 is not exercised here: ASCII makes the two counts equal.)
+///
+/// ── WHAT THIS ORACLE CANNOT SEE (read before trusting a green run) ────────────────
+/// A differential oracle only catches bugs that behave DIFFERENTLY on the two backends.
+/// It is structurally blind to a bug that behaves IDENTICALLY on both — and "identically
+/// wrong" is a real shape here, not a hypothetical: a statement the FRONT END silently
+/// drops (chip task_810dc83e — a bare <c>n++</c> statement is parsed and discarded)
+/// disappears from BOTH emissions, so both legs print the same wrong thing and this
+/// fixture passes. Green here means "the native runtime agrees with real .NET", never
+/// "the compiler is semantically correct". Bugs of that shape need the hand-written
+/// expectations in <see cref="CppBclEndToEndTests"/> and the native vector fixtures.
 ///
 /// NonParallelizable and Integration: every case runs TWO full toolchains (a
 /// <c>BasicLang.exe build</c> + <c>dotnet build</c> + run, and a BL→C++ compile + native
@@ -80,6 +104,21 @@ public class BclBackendParityTests
     /// </summary>
     private static readonly IReadOnlyDictionary<string, string> InvariantCultureEnv =
         new Dictionary<string, string> { ["DOTNET_SYSTEM_GLOBALIZATION_INVARIANT"] = "1" };
+
+    /// <summary>
+    /// Probe for the C++ compiler ONCE, before any case runs. The C# leg runs FIRST inside
+    /// <see cref="RunBothBackends"/>, so without this every case would pay a full
+    /// <c>BasicLang.exe build</c> + <c>dotnet build</c> + run (minutes across the table)
+    /// only to hit <see cref="BclE2E.CompileRun"/>'s ignore on a machine that was never
+    /// going to run the C++ leg. Same probe the C++ leg itself uses, so the two cannot
+    /// disagree about availability.
+    /// </summary>
+    [OneTimeSetUp]
+    public void RequireCppCompiler()
+    {
+        if (VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler() is null)
+            Assert.Ignore("No C++ compiler available on this machine — the parity oracle needs both legs.");
+    }
 
     /// <summary>
     /// Compile and run <paramref name="blSource"/> through both backends and return the two
@@ -104,7 +143,7 @@ public class BclBackendParityTests
     public sealed record ParityProgram(string Name, string Source);
 
     // ==================================================================
-    // THE PROGRAMS. Every one obeys the eight constraints above.
+    // THE PROGRAMS. Every one obeys the ten constraints above.
     // ==================================================================
 
     /// <summary>
@@ -772,6 +811,16 @@ End Module";
     public void Backends_PrintIdenticalOutput(ParityProgram program)
     {
         var (csharp, cpp) = RunBothBackends(program.Source);
+
+        // Vacuity guard: two identically-EMPTY stdouts satisfy the equality assert while
+        // proving nothing. Every program prints, so an empty oracle side means the C# leg
+        // silently produced no output (a swallowed build/run failure), not parity. This is
+        // a liveness check on the harness, NOT a hand-written expectation — asserting the
+        // CONTENT here would reintroduce the expected column this fixture exists to avoid.
+        Assert.That(csharp, Is.Not.Empty,
+            $"'{program.Name}': the C# (oracle) leg produced NO stdout — the parity comparison " +
+            $"would be vacuous. Suspect a silently-failed build or run in CliTestHarness.");
+
         Assert.That(cpp, Is.EqualTo(csharp),
             csharp == cpp ? "" :
             $"BACKEND PARITY DIVERGENCE in '{program.Name}' — real .NET is the oracle, so this is a " +

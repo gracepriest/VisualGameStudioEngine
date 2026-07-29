@@ -1,7 +1,7 @@
 # P1: Native BCL Types for the C++ Backend — Design
 
 **Date:** 2026-07-27
-**Status:** Draft, pre-review
+**Status:** Implemented — see VisualGameStudio.Tests/Compiler/{CppBclRuntimeTests,CppBclEndToEndTests,BclBackendParityTests}.cs
 **Phase:** P1 of the contract → P1 → P2 sequence
 (contract: `2026-07-26-dotnet-native-boundary-contract-design.md`, implemented `9d805ca`→`18af614`)
 
@@ -539,7 +539,61 @@ lowering. The registry doc comment is rewritten.
   .NET throws NullReferenceException — documented divergence).
 - P2 boundary code generation (the conversion pairs here are its contract).
 
+### 13.1 Documented divergences from .NET (discovered during implementation)
+
+Every row below is BEHAVIOUR the tests already pin, not an unimplemented
+intention. They are the honest list of ways a program that compiles on both
+backends can still observe a difference; the cross-backend parity oracle
+(`BclBackendParityTests`) deliberately steers around each one, which is why
+its programs carry the constraint list in that fixture's header.
+
+- **0-argument `New` is rejected for every P1 value type.** The v1 surface
+  ctor arities are DateTime `(3,6)`, TimeSpan `(3,4)`, DateTimeOffset `(1,2)`,
+  Guid `(1)`, and Decimal has NO ctor row at all — so `New DateTime()`,
+  `New Guid()` and `New Decimal()` all produce the clean arity diagnostic
+  where .NET has a parameterless ctor returning the zero value. The BL
+  equivalents are the zero-init default (`Dim d As DateTime`, whose `{}`
+  fallback gives exactly `DateTime.MinValue` / `TimeSpan.Zero` /
+  `Guid.Empty` / `0D`) or the `X.Empty` / `X.Zero` / `X.MinValue` statics.
+  Adding parameterless ctor rows later is purely additive.
+- **Decimal → integral narrows through `ToDouble()`**, inheriting the .NET
+  VarR8FromDec 15-significant-digit rule: a Decimal carrying more than 15
+  significant digits converts APPROXIMATELY (the C# backend's `(int)d` is
+  exact), and a value outside the target integral's range is UNDEFINED
+  BEHAVIOUR in C++ where .NET throws OverflowException. Truncation direction
+  itself is faithful — both `(int)decimal` and the C++ floating→integral cast
+  truncate toward zero.
+- **`StringBuilder.AppendLine` appends `"\n"`, not `Environment.NewLine`.**
+  On Windows .NET appends `"\r\n"`, so the CONTENT differs by the carriage
+  return and `Length` / subsequent `Insert`/`Remove` indices differ by one per
+  appended line. Console output normalizes away in a line-ending-normalizing
+  harness; the byte count does not.
+- **DateTime "O" (round-trip) emits no `Z` / offset suffix**, and `Parse`
+  accepts none. .NET's "O" for an Unspecified-kind DateTime also omits the
+  suffix, but for Utc/Local kinds it appends `Z` / `±hh:mm`; P1 has no
+  DateTimeKind tracking on the value, so the suffix is uniformly absent and a
+  suffixed string will not parse. Explicit-offset instants are
+  `DateTimeOffset`'s job.
+- **Local-time conversions are pinned to ≥ 1970 on every platform.** `Now`,
+  `Today`, `ToLocalTime` and `ToUniversalTime` throw for earlier instants
+  rather than clamping or applying the current offset (§9). The floor comes
+  from `mktime` failing pre-1970 on Windows and is applied UNIFORMLY so the
+  same program behaves the same on Linux/macOS, where the platform would
+  otherwise accept the conversion. .NET converts pre-1970 instants fine.
+- **StringBuilder `Length` and all indices count UTF-8 BYTES**, matching the
+  backend's `std::string`-based String, where .NET counts UTF-16 code units.
+  Identical for ASCII; divergent for any non-ASCII content (§9).
+- **Negative-zero Decimal is canonicalized to +0.** The native engine
+  normalizes a zero mantissa to a cleared sign bit, so `-0.0D` and `0.0D` are
+  indistinguishable. Real .NET preserves the sign flag in the representation
+  and surfaces it through `Decimal.GetBits` (and in `ToString` for some
+  scaled forms), while still comparing equal to +0. Arithmetic results are
+  unaffected; only bit-level inspection and sign-preserving formatting differ.
+
 ## 14. Open items for planning-stage verification
+
+**All six are RESOLVED.** Each answer below is what execution actually found;
+the resolution is recorded here so the spec stops asking a settled question.
 
 1. **Front-end blast radius** (section 6.1 changes are shared by both
    backends): the full fast subset is the regression gate; additionally
@@ -547,17 +601,69 @@ lowering. The registry doc comment is rewritten.
    these types. (Note: Decimal literals do NOT compile on the C# backend
    today — 6.1's literal rule is new behavior on both backends, not a match
    of existing C# behavior.)
+   **RESOLVED — the blast radius was containable and is now fully green.**
+   No test anywhere pinned the old "requires numeric operands" errors for
+   these types, so nothing had to be deliberately un-pinned. The widest
+   ripple was Task 5's member-typing change (surface members typed concretely
+   instead of `Object`), which surfaced in the C#-backend tests exactly where
+   predicted and was absorbed within that task. Standing gate: the fast
+   subset at **3608 passed / 0 failed / 1 skipped**.
 2. The exact .NET double→Decimal explicit-conversion rounding rule (verify
    against real .NET output; the parity tests enforce whatever it is).
+   **RESOLVED — pinned by the parity oracle, not by a hand-written rule.**
+   `BclBackendParityTests`' `DecimalConversions` / `DecimalPrecision`
+   programs run the same conversions through real .NET and the native engine
+   and require byte-identical stdout, so whatever .NET does IS the
+   specification and a future drift fails the oracle. Verified in the
+   opposite direction too: Decimal→integral narrows through `ToDouble()`,
+   which carries the VarR8FromDec 15-significant-digit and out-of-range
+   caveats now recorded in §13.1.
 3. `DateAdd`/`DateDiff` interval-part string set accepted by the C# backend.
+   **RESOLVED — the set is `{d, m, y, h, n, s}`, matched
+   CASE-INSENSITIVELY (the emitted C# switches on `interval.ToLower()`),
+   with a NON-THROWING default:** an unrecognized interval string is a no-op
+   for `DateAdd` (returns the input date unchanged) and yields `0` for
+   `DateDiff` — neither validates, so a typo'd interval fails silently
+   rather than loudly, on both backends alike. The C++
+   backend was implemented to that behaviour in Task 12 and it is pinned
+   cross-backend by the `StdlibDates` parity program, which exercises every
+   part, both cases (`"d"` and `"D"`, `"s"` and `"S"`), the month-clamp, a
+   negative delta, and the unrecognized-interval fallback on both sides.
+   Note the repo's argument order — `DateAdd(date, interval, number)`,
+   `DateDiff(date1, date2, interval)` — is not classic VB's.
 4. Whether conditional emission (UsesBclTypes scan) is worth it vs
    unconditional splice — measure compile-time impact of the headers.
+   **RESOLVED — UNCONDITIONAL splice was chosen.** The scan was not worth
+   its cost: it would have to be exactly right in BOTH emission modes
+   (combined and split) and a false negative is a hard compile break rather
+   than a slow build, which is the classic both-modes drift trap. The
+   headers are header-only C++20 with no heavy standard-library includes,
+   and no compile-time complaint surfaced across the Integration battery
+   (which compiles them natively on every case), so the cost was never
+   measured in isolation — the scan was dropped on risk, not on a
+   measurement. The visible consequence is that generated C++
+   always contains the runtime bodies, which is why `CppGeneratedCode
+   .WithoutBclRuntime` exists to keep whole-output negative assertions at
+   full strength. Revisit only if native compile time becomes a complaint.
 5. `Byte → uint8_t` blast radius: grep C++-backend tests for `Byte`
    expectations pinned to `int8_t`.
+   **RESOLVED — the sweep found NO pins.** Not one C++-backend test
+   expected `int8_t` for `Byte`, so the signedness correction landed without
+   a single expectation rewrite. The blast radius was zero.
 6. `cout << int8_t/uint8_t` streams a CHARACTER, not a number. Verify how
    Byte console output behaves on the C++ backend today, and pin
    SByte/Byte `Console.WriteLine` to print numerically (`static_cast<int>`
    in the lowering) matching .NET.
+   **RESOLVED — confirmed real (`Console.WriteLine(b)` with b = 65 printed
+   'A') and fixed in Task 10 across EVERY `cout` surface**, not just the one
+   that was noticed first: `Print`, `PrintLine`, `Console.Write` and
+   `Console.WriteLine` all route their first argument through
+   `CppCodeGenerator.NumericPrintArg`, which wraps a Byte/SByte/UByte operand
+   in `static_cast<int32_t>`. `Char` is deliberately NOT wrapped — .NET
+   prints a Char as its character too. Pinned cross-backend by the
+   `SByteByte` parity program,
+   which covers both range endpoints, arithmetic, compound assignment and
+   the explicit widening BL requires.
 
 ## 15. Files touched (summary)
 
