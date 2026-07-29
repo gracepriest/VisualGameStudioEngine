@@ -5,6 +5,7 @@ using System.Linq;
 using BasicLang.Compiler.CodeGen.CPlusPlus;
 using BasicLang.Compiler.IR;
 using BasicLang.Compiler.SemanticAnalysis;
+using BasicLang.Net;
 
 namespace BasicLang.Compiler.ProjectSystem
 {
@@ -41,6 +42,15 @@ namespace BasicLang.Compiler.ProjectSystem
         public string EngineLib { get; set; }
         public string OutputDir { get; set; }
         public bool IsExe { get; set; }
+        /// <summary>
+        /// The .NET assembly closure resolved in phase 1 (spec §10.1) — the declared
+        /// <c>&lt;Reference&gt;</c>/<c>&lt;PackageReference&gt;</c> assemblies, the framework set,
+        /// and every reference diagnostic regardless of which path recorded it on
+        /// <see cref="CppProjectBuildResult.Diagnostics"/>. Non-null whenever EmitCore got past
+        /// phase 1, which is before every other phase; null only if it never ran at all.
+        /// Tasks 8, 12, 14 and 15 consume this.
+        /// </summary>
+        public NetReferenceClosure NetReferences { get; set; }
     }
 
     /// <summary>
@@ -183,6 +193,56 @@ namespace BasicLang.Compiler.ProjectSystem
             outcome.OutputDir = outputDir;
 
             var objGenDir = Path.Combine(projectDir, "obj", "gen");
+
+            // ---- 0. Resolve .NET references (spec §10.1 phase 1 — before everything else) ----
+            // Runs on BOTH paths. Until P2a-1 every reference element was parsed into the project
+            // model and then silently discarded on the native path (Program.cs returned before
+            // restore, and this builder read no reference item at all), so a typo'd <HintPath>
+            // produced no output whatsoever. BL6021 replaces that silence.
+            //
+            // INERTNESS: a project that declares no <Reference>/<PackageReference>/
+            // <ProjectReference> — which is every native project that exists today — produces
+            // zero diagnostics, an empty declared set, and touches neither the network nor the
+            // project directory here. Nothing in this block requires a toolchain, so it is safe
+            // on the toolchain-free IntelliSense path.
+            var (packageAssemblies, packageErrors) =
+                RestorePackagesForClosure(project, configuration, forIntelliSense);
+            var netReferences = NetReferenceResolver.Resolve(
+                project, project.FilePath, packageAssemblies, packageErrors);
+            outcome.NetReferences = netReferences;
+
+            // Diagnostics reach result ONLY on a build. IntelliSense stays byte-for-byte as it
+            // was: it bypasses the BUILD-rule gates (BL6007/BL6005/BL6009) for the same reason —
+            // an unresolvable reference must not cost the user their generated headers — and
+            // IntelliSenseEmitter derives Success from outcome.Completed, so an error here would
+            // otherwise turn a perfectly good header regeneration into an Output-panel failure
+            // line. outcome.NetReferences.Diagnostics is the complete record on both paths.
+            if (!forIntelliSense)
+            {
+                var referenceErrors = 0;
+                foreach (var diag in netReferences.Diagnostics)
+                {
+                    if (diag.IsWarning)
+                    {
+                        result.Diagnostics.Add(new CppDiagnostic
+                        {
+                            FilePath = project.FilePath,
+                            Line = 0,
+                            Column = 0,
+                            IsWarning = true,
+                            Code = diag.Code,
+                            Message = diag.Message
+                        });
+                        continue;
+                    }
+                    // Report ALL of them before stopping: one BL6021 per broken reference is far
+                    // more useful than the first one alone.
+                    Fail(result, diag.Code, diag.Message, project.FilePath);
+                    referenceErrors++;
+                }
+                if (referenceErrors > 0)
+                    return outcome;   // Completed stays false — the caller returns the result as-is.
+            }
 
             // ---- 1. Partition sources ----
             // BasicLang sources are transpiled to C++; C++ translation units compile
@@ -535,6 +595,54 @@ namespace BasicLang.Compiler.ProjectSystem
                 return;
             }
             result.Success = true;
+        }
+
+        /// <summary>
+        /// Produces the <c>&lt;PackageReference&gt;</c> half of the .NET reference closure, so
+        /// <see cref="NetReferenceResolver.Resolve"/> can stay a pure synchronous function.
+        ///
+        /// <para><b>A project with no packages does nothing at all</b> — no PackageManager is
+        /// constructed, no <c>obj/</c> is created, no console line is written, no network call is
+        /// made. That guard is load-bearing: <see cref="PackageManager.RestoreAsync"/> writes
+        /// <c>obj/project.assets.json</c> and prints progress unconditionally, so calling it
+        /// blindly would change what every existing native project does on disk and on stdout.</para>
+        ///
+        /// <para><b>Build path.</b> Blocks on the async restore. Safe because no caller runs on a
+        /// UI thread: the IDE wraps <see cref="Build"/> in <c>Task.Run</c>
+        /// (BuildService.BuildInternalAsync) and the CLI is a console app with no
+        /// SynchronizationContext, so there is no continuation to deadlock against.</para>
+        ///
+        /// <para><b>IntelliSense path.</b> Cache-only, and never blocks: it reads assemblies out
+        /// of the already-restored package folder and makes no network call. Opening a project
+        /// must not hang on nuget.org, and a package that has never been restored simply
+        /// contributes nothing and reports nothing — the next build restores it and reports for
+        /// real. A floating version ("*", a range) cannot be pinned without the network, so it is
+        /// skipped here rather than guessed at.</para>
+        /// </summary>
+        private static (IReadOnlyList<string> Assemblies, IReadOnlyList<string> Errors)
+            RestorePackagesForClosure(ProjectFile project, string configuration, bool forIntelliSense)
+        {
+            if (project.PackageReferences.Count == 0)
+                return (Array.Empty<string>(), Array.Empty<string>());
+
+            var manager = new PackageManager();
+
+            if (!forIntelliSense)
+            {
+                var restore = manager.RestoreAsync(project, configuration).GetAwaiter().GetResult();
+                return (restore.ResolvedAssemblies, restore.Errors);
+            }
+
+            var cached = new List<string>();
+            foreach (var package in project.PackageReferences)
+            {
+                var version = package.Version;
+                if (string.IsNullOrEmpty(version) || version == "*"
+                    || version.StartsWith("[") || version.StartsWith("("))
+                    continue;
+                cached.AddRange(manager.GetPackageAssemblies(package.Name, version, project.TargetFramework));
+            }
+            return (cached, Array.Empty<string>());
         }
 
         private static void Fail(CppProjectBuildResult result, string code, string message, string filePath)

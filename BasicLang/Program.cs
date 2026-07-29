@@ -463,8 +463,8 @@ namespace BasicLang.Compiler.Driver
                 }
             }
 
-            // Restore packages first (BasicLang projects only — C++ projects
-            // have no NuGet dependencies and skip restore entirely).
+            // Restore packages first. Native projects never reach here — they returned above,
+            // and they restore + resolve their own references inside CppProjectBuilder.EmitCore.
             var packageManager = new PackageManager();
             var restoreResult = await packageManager.RestoreAsync(project);
 

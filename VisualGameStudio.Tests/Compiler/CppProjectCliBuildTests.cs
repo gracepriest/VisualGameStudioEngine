@@ -401,4 +401,122 @@ public class CppProjectCliBuildTests
         Assert.That(exitRun, Is.EqualTo(0), $"run failed:\nSTDOUT:\n{runOut}\nSTDERR:\n{runErr}");
         Assert.That(runOut, Does.Contain("rel-ok"));
     }
+
+    // ------------------------------------------------------------------
+    // .NET reference resolution on the native path (P2a-1 Task 3, spec §5).
+    // Before this, every reference element was parsed into the project model
+    // and then silently dropped, so a typo'd <HintPath> produced no output at
+    // all. These pin the end-to-end behavior through BOTH entry points.
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Same fixed PropertyGroup as <see cref="MakeCppProject"/> plus a raw ItemGroup body, and a
+    /// compilable main.cpp so a reference diagnostic is never confused with BL6007. Written with
+    /// File.WriteAllText, never ProjectFile.Save — XDocument.Save injects a BOM.
+    /// </summary>
+    private ProjectFile MakeCppProjectWithItems(string itemGroupBody)
+    {
+        File.WriteAllText(Path.Combine(_dir, "main.cpp"), "int main() { return 0; }\n");
+        var blproj = Path.Combine(_dir, "App.blproj");
+        File.WriteAllText(blproj, $"""
+            <BasicLangProject Version="1.0">
+              <PropertyGroup>
+                <ProjectName>App</ProjectName>
+                <OutputType>Exe</OutputType>
+                <Language>Cpp</Language>
+                <TargetBackend>Cpp</TargetBackend>
+              </PropertyGroup>
+              <ItemGroup>
+            {itemGroupBody}
+              </ItemGroup>
+            </BasicLangProject>
+            """);
+        return ProjectFile.Load(blproj);
+    }
+
+    private ProjectFile MakeCppProjectWithReference(string name, string hintPath) =>
+        MakeCppProjectWithItems(
+            $"""    <Reference Include="{name}"><HintPath>{hintPath}</HintPath></Reference>""");
+
+    private ProjectFile MakeCppProjectWithProjectReference(string include) =>
+        MakeCppProjectWithItems($"""    <ProjectReference Include="{include}" />""");
+
+    [Test]
+    public void NativeProject_WithMissingAssemblyReference_ReportsBL6021AndFails()
+    {
+        // No toolchain guard: reference resolution is phase 1 and returns long before the
+        // BL6005 gate, so this is deterministic on every machine.
+        var project = MakeCppProjectWithReference("Ghost", "lib\\Ghost.dll");
+
+        var result = CppProjectBuilder.Build(project, "Release");
+
+        Assert.That(result.Diagnostics.Select(d => d.Code), Does.Contain("BL6021"));
+        Assert.That(result.Success, Is.False);
+        Assert.That(result.Diagnostics.First(d => d.Code == "BL6021").Message,
+            Does.Contain("Ghost"));
+    }
+
+    [Test]
+    public void NativeProject_WithProjectReference_StillBuilds()
+    {
+        var project = MakeCppProjectWithProjectReference("..\\Sibling\\Sibling.blproj");
+
+        var result = CppProjectBuilder.Build(project, "Release");
+
+        // Machine-independent half — the severity, which is the part that matters.
+        Assert.That(result.Diagnostics.Single(d => d.Code == "BL6021").IsWarning, Is.True,
+            "MUST stay a warning in P2a-1. The IDE writes <ProjectReference> into native "
+            + "projects with no backend filter (SolutionExplorerViewModel 'Add Project "
+            + "Reference'), and such projects build on master. Fix NetReferenceResolver, not "
+            + "this test — P2a-2 is where it is promoted to an error.");
+
+        if (CppToolchain.Find() == null)
+            Assert.Ignore("No C++ toolchain available; the severity assertion above still ran");
+
+        Assert.That(result.Success, Is.True,
+            "INERTNESS GATE. The IDE writes <ProjectReference> into native projects with no "
+            + "backend filter, and such projects build on master. If this fails, P2a-1 is not "
+            + "inert.\n" + result.RawToolchainOutput + "\n"
+            + string.Join("\n", result.Diagnostics.Select(CppDiagnosticsParser.FormatNormalized)));
+    }
+
+    [Test]
+    public void NativeProject_WithNoReferenceElements_EmitsNoReferenceDiagnostics()
+    {
+        // THE inertness guarantee: every native project that exists today declares nothing,
+        // and must therefore pay nothing and see nothing new.
+        var project = MakeCppProject(("main.cpp", "int main() { return 0; }\n"));
+
+        var result = CppProjectBuilder.Build(project, "Release");
+
+        Assert.That(result.Diagnostics.Select(d => d.Code), Does.Not.Contain("BL6021"),
+            "A project with no <Reference>/<PackageReference>/<ProjectReference> must produce "
+            + "no reference diagnostics at all.");
+    }
+
+    [Test]
+    public async Task Cli_Build_CppProject_MissingAssemblyReference_PrintsBL6021()
+    {
+        var project = MakeCppProjectWithReference("Ghost", "lib\\Ghost.dll");
+
+        var (exit, stdout, stderr) = await RunCli(_dir, "build", project.FilePath);
+
+        Assert.That(exit, Is.Not.EqualTo(0), $"STDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+        Assert.That(stdout + stderr, Does.Contain("BL6021").And.Contain("Ghost"),
+            $"STDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+    }
+
+    [Test]
+    public async Task Cli_Build_CppProject_ProjectReference_WarnsAndStillSucceeds()
+    {
+        if (CppToolchain.Find() == null) Assert.Ignore("No C++ toolchain available");
+        var project = MakeCppProjectWithProjectReference("..\\Sibling\\Sibling.blproj");
+
+        var (exit, stdout, stderr) = await RunCli(_dir, "build", project.FilePath);
+
+        Assert.That(exit, Is.EqualTo(0),
+            $"INERTNESS GATE (CLI leg).\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+        Assert.That(stdout, Does.Contain("warning BL6021"),
+            $"the CLI prints warnings to stdout.\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+    }
 }
