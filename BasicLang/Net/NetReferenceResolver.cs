@@ -125,10 +125,19 @@ namespace BasicLang.Net
         /// <para>Intersecting the two is what makes this both host-independent and safe to hand to
         /// Roslyn. TPA alone is host-dependent (see <see cref="SharedFrameworkDirectory"/>);
         /// enumerating the directory alone would pick up the NATIVE DLLs that live there
-        /// (<c>coreclr.dll</c>, <c>clrjit.dll</c>, <c>mscordbi.dll</c>, …), and
-        /// <c>MetadataReference.CreateFromFile</c> throws <c>BadImageFormatException</c> on those.
-        /// TPA contributes "managed and trusted"; the directory filter contributes "framework, not
-        /// the host's own dependencies".</para>
+        /// (<c>coreclr.dll</c>, <c>clrjit.dll</c>, <c>mscordbi.dll</c>, …), which Roslyn cannot read
+        /// as metadata. TPA contributes "managed and trusted"; the directory filter contributes
+        /// "framework, not the host's own dependencies".</para>
+        ///
+        /// <para><b>The native-DLL failure is DEFERRED, not thrown</b> — measured while building
+        /// <see cref="NetTypeResolver"/>. <c>MetadataReference.CreateFromFile</c> succeeds on
+        /// <c>coreclr.dll</c> and on a truncated file; the badness only shows up later, as
+        /// <c>Compilation.GetAssemblyOrModuleSymbol</c> returning null for that reference. (It does
+        /// throw <c>FileNotFoundException</c> for a path that does not exist.) So the hazard this
+        /// filter removes is a SILENT one: unfiltered, a native DLL would sit in the closure looking
+        /// fine and simply contribute no types. <see cref="NetTypeResolver"/> now detects that
+        /// residual case and reports BL6021 — but keeping it out of the framework set in the first
+        /// place is what stops every build from carrying a handful of bogus warnings.</para>
         ///
         /// <para>If either input is unavailable this is empty and resolution proceeds — a project
         /// with no .NET usage is unaffected either way.</para>

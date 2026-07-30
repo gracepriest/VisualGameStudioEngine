@@ -99,7 +99,7 @@ public class NetTypeResolverTests
 
         Assert.That(t, Is.Not.Null);
         Assert.That(t!.FullName, Is.EqualTo("System.Text.RegularExpressions.Regex"));
-        Assert.That(t.Kind, Is.EqualTo(NetTypeKind.Class));
+        Assert.That(t.Kind, Is.EqualTo(NetTypeCategory.Class));
         Assert.That(t.IsPublic, Is.True);
     }
 
@@ -223,8 +223,10 @@ public class NetTypeResolverTests
         // with no base walk at all. This proves the walk, on a base type that cannot be confused
         // with an override, and pins the System.Object boundary spec §7.2 draws.
         var probe = EmitProbeAssembly("BlnetInherit",
-            "namespace Contoso { public class Base { public void FromBase() { } } " +
-            "public class Derived : Base { public void FromDerived() { } } }");
+            "namespace Contoso { public class Base { public void FromBase() { } " +
+            "public virtual string Describe() => \"base\"; } " +
+            "public class Derived : Base { public void FromDerived() { } " +
+            "public override string Describe() => \"derived\"; } }");
         var resolver = NetTypeResolver.Create(NetTypeResolverTestRefs.FrameworkPaths.Concat(new[] { probe }));
 
         var members = resolver.GetMembers("Contoso.Derived");
@@ -244,15 +246,100 @@ public class NetTypeResolverTests
             "an inherited member reports the type that DECLARES it — §7.3 requires the mangler " +
             "to be collision-free over the fully-qualified declaring type, so reporting the " +
             "queried type here would collapse Base.FromBase and Derived.FromBase.");
+
+        // Derived.Describe OVERRIDES Base.Describe, so a base walk without dedup reports it twice.
+        // Single() is the assertion: it throws on two matches as loudly as on none.
+        Assert.That(members.Single(m => m.Name == "Describe").DeclaringTypeFullName,
+            Is.EqualTo("Contoso.Derived"),
+            "an override must appear ONCE, under its MOST-DERIVED declaration — that is the one " +
+            "that actually runs. Two entries here mean GetMembers lost its duplicate collapsing; " +
+            "Task 5 would then see two identical candidates and answer Ambiguous for an ordinary " +
+            "call. Fix NetTypeResolver.GetMembers, not the test.");
+    }
+
+    [Test]
+    [TestCase("System.IO.FileStream")]
+    [TestCase("System.IO.MemoryStream")]
+    [TestCase("System.DayOfWeek")]
+    [TestCase("System.Decimal")]
+    [TestCase("System.Text.RegularExpressions.Regex")]
+    [TestCase("System.Collections.Specialized.NameValueCollection")]
+    public void NoTwoMembersSharePresentationIdentity(string typeName)
+    {
+        // §7.3 requires the mangler to be total over an overload set: "two overloads never
+        // collide". That is unsatisfiable however the mangler is written if GetMembers itself
+        // hands out two members with the same (kind, name, static-ness, parameter types).
+        //
+        // The cases are chosen so the BASE WALK ACTUALLY CONTRIBUTES. Asserting this on Regex
+        // alone is VACUOUS — Regex's base is System.Object, which the walk excludes, so no
+        // inherited member can collide with anything and the assertion holds trivially. FileStream
+        // (26 colliding identities before the fix), MemoryStream (21) and any enum or struct
+        // (3, Equals/GetHashCode/ToString from Enum/ValueType) are the cases with teeth.
+        var members = FrameworkOnly().GetMembers(typeName);
+        Assert.That(members, Is.Not.Empty, "guard: the fixture must have found a real type");
+
+        var collisions = members
+            .GroupBy(m => (m.Kind, m.Name, m.IsStatic, Params: string.Join(",", m.ParameterTypeFullNames)))
+            .Where(g => g.Count() > 1)
+            .Select(g => $"{g.Key.Kind} {g.Key.Name}({g.Key.Params}) declared by "
+                         + string.Join(" AND ", g.Select(m => m.DeclaringTypeFullName)))
+            .ToList();
+
+        Assert.That(collisions, Is.Empty,
+            "two members of " + typeName + " present the same identity. This is what an " +
+            "un-deduplicated base walk produces: the override AND the member it overrides. " +
+            "Consequences: Task 5 matches by name and parameter types, gets two candidates and " +
+            "reports Ambiguous -> a spurious BL6018 on an ordinary call; Task 12 emits two proxy " +
+            "slots for one member. Fix the collapsing in NetTypeResolver.GetMembers.\n"
+            + string.Join("\n", collisions));
+    }
+
+    [Test]
+    public void AnOverrideIsReportedOnceUnderItsMostDerivedDeclaration()
+    {
+        // The concrete, named case behind the invariant above: Stream declares
+        // Read(Byte[], Int32, Int32) and FileStream overrides it.
+        var read = FrameworkOnly().GetMembers("System.IO.FileStream")
+            .Where(m => m.Kind == NetMemberCategory.Method && m.Name == "Read"
+                        && string.Join(",", m.ParameterTypeFullNames)
+                           == "System.Byte[],System.Int32,System.Int32")
+            .ToList();
+
+        Assert.That(read.Count, Is.EqualTo(1),
+            "FileStream.Read(Byte[], Int32, Int32) must appear exactly once, not once per " +
+            "declaring type in the chain.");
+        Assert.That(read[0].DeclaringTypeFullName, Is.EqualTo("System.IO.FileStream"),
+            "the MOST-DERIVED declaration must win — it is the implementation that actually " +
+            "runs, and the one a caller means. Reporting System.IO.Stream here would send Task " +
+            "12's proxy at the base slot.");
+    }
+
+    [Test]
+    public void TwoIndexersBothSurviveTheDuplicateCollapse()
+    {
+        // The regression the duplicate collapse could have introduced. An indexer is a
+        // PARAMETERIZED property, so recording property parameters is what keeps its identity
+        // distinct. NameValueCollection declares this[int] and this[string]; treating property
+        // parameters as always-empty makes those one identity and silently drops one.
+        var indexers = FrameworkOnly()
+            .GetMembers("System.Collections.Specialized.NameValueCollection")
+            .Where(m => m.Kind == NetMemberCategory.Property && m.Name == "Item")
+            .ToList();
+
+        Assert.That(indexers.Select(m => string.Join(",", m.ParameterTypeFullNames)),
+            Is.EquivalentTo(new[] { "System.String", "System.Int32" }),
+            "both indexers must survive, each carrying its own parameter type. If one is " +
+            "missing, NetTypeResolver stopped recording IPropertySymbol.Parameters and the " +
+            "duplicate collapse ate it — an overload silently vanishing from the surface.");
     }
 
     [Test]
     public void MemberCarriesTheThreeInputsTheManglerNeeds()
     {
         // §7.3: NetNameMangler produces its identifier from (declaring type, member name,
-        // parameter types). All three must be readable off a NetMemberInfo.
+        // parameter types). All three must be readable off a NetMemberDescriptor.
         var overloads = FrameworkOnly().GetMembers("System.Text.RegularExpressions.Regex")
-            .Where(m => m.Name == "IsMatch" && m.Kind == NetMemberKind.Method)
+            .Where(m => m.Name == "IsMatch" && m.Kind == NetMemberCategory.Method)
             .ToList();
 
         var instanceOneArg = overloads.Single(m =>
@@ -266,19 +353,18 @@ public class NetTypeResolverTests
             "'bool' and 'System.Boolean' would mangle to different identifiers for one method.");
         Assert.That(overloads.Any(m => m.IsStatic), Is.True,
             "the static overload set must be present too; Regex.IsMatch(String, String) is static.");
-        Assert.That(
-            overloads.Select(m => string.Join(",", m.ParameterTypeFullNames)).Distinct().Count(),
-            Is.EqualTo(overloads.Count),
-            "no two overloads may present identical parameter-type lists, or §7.3's " +
-            "'two overloads never collide' requirement is unsatisfiable however the mangler is " +
-            "written. Fix the parameter-type formatting in NetTypeResolver.");
+
+        // §7.3's "two overloads never collide" is asserted by NoTwoMembersSharePresentationIdentity
+        // across types whose base walk actually contributes. Asserting it HERE, on Regex, would be
+        // vacuous: Regex derives directly from System.Object, which the walk excludes, so no
+        // inherited member can collide and the assertion would hold no matter what GetMembers did.
     }
 
     [Test]
     public void ConstructorsAreEnumeratedUnderTheirMetadataName()
     {
         var ctors = FrameworkOnly().GetMembers("System.Text.RegularExpressions.Regex")
-            .Where(m => m.Kind == NetMemberKind.Constructor).ToList();
+            .Where(m => m.Kind == NetMemberCategory.Constructor).ToList();
 
         Assert.That(ctors, Is.Not.Empty,
             "spec §7.2 includes public constructors — without them `New Regex(\"a\")` has no " +
@@ -294,7 +380,7 @@ public class NetTypeResolverTests
         var members = FrameworkOnly().GetMembers("System.Text.StringBuilder");
 
         Assert.That(members.Select(m => m.Name), Does.Contain("Length"));
-        Assert.That(members.Single(m => m.Name == "Length").Kind, Is.EqualTo(NetMemberKind.Property));
+        Assert.That(members.Single(m => m.Name == "Length").Kind, Is.EqualTo(NetMemberCategory.Property));
         Assert.That(members.Select(m => m.Name), Does.Not.Contain("get_Length"),
             "a property is ONE member, not a property plus two synthesized accessor methods — " +
             "otherwise every property produces three shim exports and three proxy slots.");
