@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
+using BasicLang.Net;
 using BasicLang.Compiler.AST;
 using BasicLang.Compiler.IR;
 using BasicLang.Compiler.SemanticAnalysis;
@@ -61,6 +62,17 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         private string _lastEmittedSourceFile = null;
 
         public string GeneratedCode => _output.ToString();
+
+        /// <summary>
+        /// Test-only mirror of the candidate ambient set <see cref="Generate"/> seeds
+        /// <c>_usings</c> with. Exists so
+        /// <c>NetAmbientNamespaceTests.CSharpBackendAndResolverShareOneAmbientSet</c> can assert
+        /// this backend and <see cref="NetAmbientNamespaces"/> never drift apart without
+        /// reimplementing <see cref="Generate"/>'s setup. NOTE: despite the file name
+        /// (<c>CSharpBackend.cs</c>), the class is <c>ImprovedCSharpCodeGenerator</c> — there is no
+        /// type literally named <c>CSharpBackend</c> anywhere in the codebase.
+        /// </summary>
+        internal static IReadOnlyList<string> AmbientNamespacesForTest => NetAmbientNamespaces.All;
 
         // Names of functions/subs defined by the user program. A user definition
         // shadows a stdlib builtin of the same name (e.g. a user "Run" must call
@@ -167,24 +179,11 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             CollectUserFunctionNames(module);
 
-            // Build the candidate usings set
-            _usings.Add("System");
-            _usings.Add("System.Collections.Generic");
-            _usings.Add("System.Threading.Tasks");
-            _usings.Add("System.Collections");
-            _usings.Add("System.Runtime.InteropServices");
-            _usings.Add("System.Text");
-            _usings.Add("System.IO");
-            _usings.Add("System.Linq");
-            _usings.Add("System.Net");
-            _usings.Add("System.Net.Http");
-            _usings.Add("System.Net.Sockets");
-            _usings.Add("System.Text.Json");
-            _usings.Add("System.Text.Json.Nodes");
-            _usings.Add("System.Text.RegularExpressions");
-            _usings.Add("System.Security.Cryptography");
-            _usings.Add("System.Diagnostics");
-            _usings.Add("System.Threading");
+            // Build the candidate usings set. Shared with NetTypeResolver via
+            // NetAmbientNamespaces (spec §6.5) so the C# backend and the native resolver cannot
+            // drift apart — see NetAmbientNamespaceTests.CSharpBackendAndResolverShareOneAmbientSet.
+            foreach (var ambientNamespace in NetAmbientNamespaces.All)
+                _usings.Add(ambientNamespace);
 
             // Add .NET usings from the source code
             foreach (var netUsing in module.NetUsings)
