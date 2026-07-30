@@ -55,6 +55,48 @@ namespace BasicLang.Net
     internal enum NetTypeLookupOutcome { Resolved, NotFound, Ambiguous }
 
     /// <summary>
+    /// How the call site names its receiver, which C# — and therefore
+    /// <see cref="NetTypeResolver.ResolveOverload"/> — cannot infer from the argument types.
+    ///
+    /// <para><b>Why the caller must say.</b> <c>Regex.IsMatch(s)</c> and <c>r.IsMatch(s)</c> select
+    /// different members: the first names the type and can only reach <c>Shared</c> members, the
+    /// second has a receiver and reaches both. Guessing would silently resolve the instance
+    /// <c>IsMatch(String)</c> for a static call site that VB rejects, and Task 12 would emit the
+    /// wrong export. Task 8 knows which it has — it is the difference between an identifier that
+    /// resolved to a type and one that resolved to a variable.</para>
+    ///
+    /// <para><see cref="Instance"/> also covers VB's leniency about calling a <c>Shared</c> member
+    /// through an instance, which C# forbids (CS0176); see
+    /// <see cref="NetTypeResolver.ResolveOverload"/>.</para>
+    /// </summary>
+    internal enum NetCallForm { Instance, Static, Constructor }
+
+    /// <summary>
+    /// Why overload resolution answered the way it did.
+    ///
+    /// <para><b>The three cases must stay distinct, for the same reason
+    /// <see cref="NetTypeLookupOutcome"/>'s three do.</b> Spec §11.4 gives BL6017 ".NET member not
+    /// found / no matching overload" and BL6018 "ambiguous overload" different codes, and §6.5
+    /// pins the split down further: "BL6018 covers ambiguous <i>overloads</i> only". Reporting "no
+    /// such overload" for a call the user can see two candidates for is the least actionable
+    /// message available, so the distinction has to survive to Task 8 rather than being recovered
+    /// there.</para>
+    /// </summary>
+    internal enum NetOverloadOutcome { Resolved, NoMatch, Ambiguous }
+
+    /// <summary>
+    /// The winning member, or why there is none. <see cref="Member"/> is non-null only for
+    /// <see cref="NetOverloadOutcome.Resolved"/> — an ambiguous call has no winner, and naming one
+    /// would send Task 12's proxy at whichever candidate happened to be enumerated first.
+    ///
+    /// <para>Note the equality caveat <see cref="NetMemberDescriptor"/> documents: that type is
+    /// deliberately not a record, so this record's synthesized <c>==</c> compares
+    /// <see cref="Outcome"/> by value and <see cref="Member"/> by REFERENCE. Compare
+    /// <c>Member.ToString()</c> when content equality is what is wanted.</para>
+    /// </summary>
+    internal sealed record NetOverloadResult(NetOverloadOutcome Outcome, NetMemberDescriptor Member);
+
+    /// <summary>
     /// A resolved .NET type. A record is safe here — every member is a string, enum or bool, so
     /// value equality means what it appears to mean (contrast <see cref="NetMemberDescriptor"/>).
     /// </summary>

@@ -669,6 +669,515 @@ public class NetTypeResolverTests
             Does.Contain("Junk.dll").And.Contain("NeverExisted.dll"));
     }
 
+    // ------------------------------------------------------------------
+    // Overload resolution — spec §6.1's THIRD question, "given this call site with these
+    // argument types, which overload wins?", and the whole reason §6.1 chose Roslyn over
+    // hand-rolled metadata reading.
+    //
+    // HOW IT WORKS, because the tests only make sense against the mechanism: there is no public
+    // Roslyn API that resolves an overload from a bag of type symbols. So NetTypeResolver
+    // SYNTHESIZES a C# fragment that makes the call and asks the SemanticModel who won. That is
+    // not an approximation of C# overload resolution — it IS C# overload resolution, which is why
+    // widening, params, optional parameters and generic inference below are pinned as *facts about
+    // C#* rather than as behavior anyone implemented here.
+    //
+    // ORACLE INDEPENDENCE: every expected value below is what a C# compiler does with the same
+    // call — checkable by writing the C# — and none of it is derived from NetTypeResolver's own
+    // logic. That distinction is why these tests can fail; see TheDuplicateCollapseLosesNoMember
+    // for what happens when a test's oracle is the implementation's own key.
+    // ------------------------------------------------------------------
+
+    private static NetOverloadResult Overload(
+        NetTypeResolver resolver, string type, NetCallForm form, string member, params string[] args) =>
+        resolver.ResolveOverload(type, form, member, args);
+
+    [Test]
+    public void ResolveOverload_SelectsByArity()
+    {
+        var r = FrameworkOnly();
+
+        var one = Overload(r, "System.Text.RegularExpressions.Regex", NetCallForm.Instance, "IsMatch",
+                           "System.String");
+        var two = Overload(r, "System.Text.RegularExpressions.Regex", NetCallForm.Static, "IsMatch",
+                           "System.String", "System.String");
+
+        Assert.That(one.Outcome, Is.EqualTo(NetOverloadOutcome.Resolved),
+            "spec §6.1 question 3: Regex.IsMatch(String) is an overload that exists and must be " +
+            "selected. Fix NetTypeResolver.ResolveOverload.");
+        Assert.That(string.Join(",", one.Member!.ParameterTypeFullNames), Is.EqualTo("System.String"));
+        Assert.That(one.Member.IsStatic, Is.False);
+
+        Assert.That(two.Outcome, Is.EqualTo(NetOverloadOutcome.Resolved));
+        Assert.That(string.Join(",", two.Member!.ParameterTypeFullNames),
+            Is.EqualTo("System.String,System.String"),
+            "spec §6.1: two overloads of the same name differing in ARITY must be told apart by " +
+            "the argument count, not by first-match.");
+        Assert.That(two.Member.IsStatic, Is.True);
+    }
+
+    [Test]
+    public void ResolveOverload_SelectsBetweenSameArityOverloadsByParameterType()
+    {
+        // Regex declares INSTANCE IsMatch(String, Int32) and IsMatch(ReadOnlySpan<Char>, Int32).
+        // Same name, same arity — only the first parameter's type separates them, which is
+        // exactly the discrimination spec §6.1 says cannot be approximated.
+        var m = Overload(FrameworkOnly(), "System.Text.RegularExpressions.Regex",
+                         NetCallForm.Instance, "IsMatch", "System.String", "System.Int32");
+
+        Assert.That(m.Outcome, Is.EqualTo(NetOverloadOutcome.Resolved));
+        Assert.That(string.Join(",", m.Member!.ParameterTypeFullNames),
+            Is.EqualTo("System.String,System.Int32"),
+            "spec §6.1 question 3: with a String first argument the String overload wins, not the " +
+            "ReadOnlySpan<Char> one. If this picked the Span overload, §8.3 would then report " +
+            "BL6019 'not marshalable' for a call that is perfectly marshalable.");
+    }
+
+    [Test]
+    public void ResolveOverload_ResolvesAnInheritedOverload()
+    {
+        // CopyTo(Stream) is declared on System.IO.Stream and NOT overridden by FileStream, so it
+        // can only be found through spec §7.2's base walk. Resolution must see the whole chain.
+        var m = Overload(FrameworkOnly(), "System.IO.FileStream", NetCallForm.Instance, "CopyTo",
+                         "System.IO.Stream");
+
+        Assert.That(m.Outcome, Is.EqualTo(NetOverloadOutcome.Resolved),
+            "spec §7.2: members come from the type AND its base types, so an inherited overload " +
+            "must resolve. Fix NetTypeResolver.ResolveOverload's candidate source.");
+        Assert.That(m.Member!.DeclaringTypeFullName, Is.EqualTo("System.IO.Stream"),
+            "spec §7.3 mangles from the DECLARING type — reporting FileStream here would name an " +
+            "export for a method FileStream does not declare.");
+    }
+
+    [Test]
+    public void ResolveOverload_ResolvesAGenericMethodByInference()
+    {
+        // Task.FromResult<TResult>(TResult) has no non-generic sibling, so this can only resolve
+        // if TResult is INFERRED from the argument. Task.FromException is the opposite case and is
+        // covered by GenericAndNonGenericOverloadsBothSurvive.
+        var m = Overload(FrameworkOnly(), "System.Threading.Tasks.Task", NetCallForm.Static,
+                         "FromResult", "System.Int32");
+
+        Assert.That(m.Outcome, Is.EqualTo(NetOverloadOutcome.Resolved),
+            "spec §6.1: overload resolution 'with generics' is named explicitly. A matcher that " +
+            "compares parameter type SPELLINGS cannot resolve this — the parameter spells 'TResult' " +
+            "and the argument spells 'System.Int32'. Fix NetTypeResolver.ResolveOverload.");
+        Assert.That(m.Member!.Arity, Is.EqualTo(1),
+            "the GENERIC definition must be the reported member; arity 0 would mean a different " +
+            "method was selected.");
+        Assert.That(m.Member.Name, Is.EqualTo("FromResult"));
+    }
+
+    [Test]
+    public void ResolveOverload_AmbiguityIsADistinctOutcome_NotNullAndNotNoMatch()
+    {
+        // A GENUINE C# ambiguity, built rather than borrowed so it cannot drift with the
+        // framework: F(int,long) and F(long,int) called with (int,int) — neither is better, which
+        // is CS0121. The oracle is the C# specification's betterness rule, not this resolver.
+        var probe = EmitProbeAssembly("BlnetAmbOverload",
+            "namespace Contoso { public class Amb { " +
+            "public void F(int a, long b) { } public void F(long a, int b) { } } }");
+        var r = NetTypeResolver.Create(NetTypeResolverTestRefs.FrameworkPaths.Concat(new[] { probe }));
+
+        var m = Overload(r, "Contoso.Amb", NetCallForm.Instance, "F", "System.Int32", "System.Int32");
+
+        Assert.That(m.Outcome, Is.EqualTo(NetOverloadOutcome.Ambiguous),
+            "spec §11.4 gives ambiguity its own code — BL6018 'ambiguous overload' — separate " +
+            "from BL6017 'no matching overload'. Collapsing the two here makes one of those " +
+            "diagnostics a lie in Task 8: 'no such overload' for a call the user can see two " +
+            "candidates for is the least actionable message the compiler could produce. Fix " +
+            "NetTypeResolver, not the test.");
+        Assert.That(m.Member, Is.Null,
+            "an ambiguous call has no winner; naming one would send Task 12's proxy at whichever " +
+            "candidate happened to be enumerated first.");
+    }
+
+    [Test]
+    public void ResolveOverload_NoMatchIsADistinctOutcome()
+    {
+        var m = Overload(FrameworkOnly(), "System.Text.RegularExpressions.Regex",
+                         NetCallForm.Constructor, ".ctor",
+                         "System.Int32", "System.Int32", "System.Int32");
+
+        Assert.That(m.Outcome, Is.EqualTo(NetOverloadOutcome.NoMatch),
+            "`New Regex(1, 2, 3)` is the exact program spec §6.1 opens with: before P2a-1 it " +
+            "type-checked clean and failed inside csc. NoMatch is what becomes BL6017 (§11.4).");
+        Assert.That(m.Member, Is.Null);
+    }
+
+    [Test]
+    public void ResolveOverload_WideningResolvesRatherThanReportingNoMatch()
+    {
+        // THE test that decides whether Task 8 warns on VALID programs. `Console.WriteLine(s)`
+        // with a Short, and `Math.Abs(b)` with a Byte, are ordinary BasicLang. An exact-match
+        // matcher answers NoMatch for both -> BL6017 on code that compiles fine today, which
+        // spec §6.3's "valid programs behave identically on both backends" forbids.
+        //
+        // The expected WINNERS are C# facts, independently checkable: Short widens to Int32 and
+        // Console has no Int16 overload; Byte widens to Int16 and Math.Abs(Int16) is BETTER than
+        // Math.Abs(Int32) because Int16 is the closer target. Note the second one is not
+        // "whatever's closest by hand" — it is C# §12.6.4 betterness, which is the reason this
+        // resolver delegates to Roslyn instead of ranking candidates itself.
+        var r = FrameworkOnly();
+
+        var writeLine = Overload(r, "System.Console", NetCallForm.Static, "WriteLine", "System.Int16");
+        Assert.That(writeLine.Outcome, Is.EqualTo(NetOverloadOutcome.Resolved),
+            "spec §6.3: an implicit widening conversion must RESOLVE. NoMatch here is a BL6017 " +
+            "warning on a program that compiles clean on the C# backend today.");
+        Assert.That(string.Join(",", writeLine.Member!.ParameterTypeFullNames),
+            Is.EqualTo("System.Int32"),
+            "Console has no Int16 overload, so C# widens to Int32.");
+
+        var abs = Overload(r, "System.Math", NetCallForm.Static, "Abs", "System.Byte");
+        Assert.That(abs.Outcome, Is.EqualTo(NetOverloadOutcome.Resolved));
+        Assert.That(string.Join(",", abs.Member!.ParameterTypeFullNames), Is.EqualTo("System.Int16"),
+            "C# betterness picks Abs(Int16) over Abs(Int32)/Abs(Int64) for a Byte argument. Any " +
+            "hand-rolled candidate ranking that gets this wrong selects a different member and " +
+            "Task 12 emits the wrong export — which is worse than a warning.");
+    }
+
+    [Test]
+    public void ResolveOverload_ParamsExpansionResolves()
+    {
+        // String.Concat has fixed 2-, 3- and 4-argument overloads and then `params String[]`.
+        // Five arguments can only bind through the params expansion, which spec §6.1 names.
+        var m = Overload(FrameworkOnly(), "System.String", NetCallForm.Static, "Concat",
+                         "System.String", "System.String", "System.String", "System.String",
+                         "System.String");
+
+        Assert.That(m.Outcome, Is.EqualTo(NetOverloadOutcome.Resolved),
+            "spec §6.1 lists `params` among the things resolution must handle. Fix " +
+            "NetTypeResolver.ResolveOverload.");
+        Assert.That(string.Join(",", m.Member!.ParameterTypeFullNames), Is.EqualTo("System.String[]"),
+            "the params array overload is the winner, so the reported member has ONE parameter of " +
+            "array type — not five.");
+    }
+
+    [Test]
+    public void ResolveOverload_OptionalParametersResolve()
+    {
+        var probe = EmitProbeAssembly("BlnetOptional",
+            "namespace Contoso { public class Opt { public void F(int a, int b = 5, string c = null) { } } }");
+        var r = NetTypeResolver.Create(NetTypeResolverTestRefs.FrameworkPaths.Concat(new[] { probe }));
+
+        var m = Overload(r, "Contoso.Opt", NetCallForm.Instance, "F", "System.Int32");
+
+        Assert.That(m.Outcome, Is.EqualTo(NetOverloadOutcome.Resolved),
+            "spec §6.1 lists optional parameters among the things resolution must handle. A " +
+            "strict arity comparison answers NoMatch and Task 8 warns on a valid call.");
+        Assert.That(m.Member!.Parameters.Count, Is.EqualTo(3),
+            "the member's real signature is reported, not the trimmed call-site shape — Task 12 " +
+            "has to emit a proxy over the DECLARED parameters.");
+    }
+
+    [Test]
+    public void ResolveOverload_ByRefParameterResolvesWithoutACallSiteKeyword()
+    {
+        // BasicLang has no call-site ByRef keyword — `Integer.TryParse(s, n)` is how the language
+        // spells it — but C# REQUIRES `out` at the call site (CS1620). The synthesized probe must
+        // therefore supply the keyword the candidate declares, taken from
+        // NetParameterDescriptor.RefKind. Without that, every ref/out member in the framework is
+        // unresolvable, and spec §8.3's `ref`/`out` pointer-slot row has nothing to emit for.
+        var m = Overload(FrameworkOnly(), "System.Int32", NetCallForm.Static, "TryParse",
+                         "System.String", "System.Int32");
+
+        Assert.That(m.Outcome, Is.EqualTo(NetOverloadOutcome.Resolved),
+            "Int32.TryParse(String, ByRef Integer) must resolve. If this is NoMatch, " +
+            "ResolveOverload stopped deriving call-site ref/out keywords from the candidates' " +
+            "NetParameterDescriptor.RefKind — see spec §8.3's last row.");
+        Assert.That(m.Member!.Parameters.Select(p => p.RefKind),
+            Is.EqualTo(new[] { NetRefKind.None, NetRefKind.Out }),
+            "the winner is TryParse(String, out Int32) — the ref-kinds are part of what Task 12 " +
+            "needs to emit a pointer slot.");
+    }
+
+    [Test]
+    public void ResolveOverload_SelectsAConstructor()
+    {
+        var m = Overload(FrameworkOnly(), "System.Text.RegularExpressions.Regex",
+                         NetCallForm.Constructor, ".ctor",
+                         "System.String", "System.Text.RegularExpressions.RegexOptions");
+
+        Assert.That(m.Outcome, Is.EqualTo(NetOverloadOutcome.Resolved),
+            "spec §7.2 admits public constructors, and `New Regex(p, opts)` needs one selected.");
+        Assert.That(m.Member!.Kind, Is.EqualTo(NetMemberCategory.Constructor));
+        Assert.That(m.Member.Name, Is.EqualTo(".ctor"));
+        Assert.That(string.Join(",", m.Member.ParameterTypeFullNames),
+            Is.EqualTo("System.String,System.Text.RegularExpressions.RegexOptions"));
+    }
+
+    [Test]
+    public void ResolveOverload_OnAGenericTypeRequiresItsTypeArguments()
+    {
+        // Queue(Of Integer) is an UNCLAIMED generic (spec §6.5 row (b) claims List/Dictionary/
+        // HashSet/Task/Func/Action, not Queue), so it really does reach the resolver. Its
+        // Enqueue(T) parameter spells 'T', so the type arguments are what make the call
+        // resolvable at all — and consistent with ResolveType, they are REQUIRED, never guessed.
+        var r = FrameworkOnly();
+
+        var withArgs = r.ResolveOverload("System.Collections.Generic.Queue`1", NetCallForm.Instance,
+            "Enqueue", new[] { "System.Int32" }, new[] { "System.Int32" });
+        Assert.That(withArgs.Outcome, Is.EqualTo(NetOverloadOutcome.Resolved),
+            "Queue(Of Integer).Enqueue(1) must resolve. Its parameter is the type parameter T, " +
+            "so a spelling comparison against 'System.Int32' can never match — the receiver has " +
+            "to be CONSTRUCTED before resolution. Fix NetTypeResolver.ResolveOverload.");
+        Assert.That(withArgs.Member!.Name, Is.EqualTo("Enqueue"));
+
+        var withoutArgs = Overload(r, "System.Collections.Generic.Queue`1", NetCallForm.Instance,
+            "Enqueue", "System.Int32");
+        Assert.That(withoutArgs.Outcome, Is.EqualTo(NetOverloadOutcome.NoMatch),
+            "A DOCUMENTED decision, pinned so it cannot become an accident: type arguments are " +
+            "required and never guessed, exactly as generic ARITY is for ResolveType. Guessing " +
+            "'Object' would fabricate a binding, which is the failure P2a-1 exists to remove. " +
+            "Task 8 has the arguments — it parsed `Queue(Of Integer)`.");
+    }
+
+    [Test]
+    public void ResolveOverload_AnOverriddenMemberIsResolved_NotReportedAmbiguous()
+    {
+        // The plan's named hazard. Stream declares Read(Byte[], Int32, Int32) and FileStream
+        // overrides it, so an un-deduplicated candidate walk offers TWO identical candidates and
+        // reports Ambiguous — a spurious BL6018 on an ordinary `fs.Read(buf, 0, n)`. The dedup
+        // lives in exactly one place (CandidateMembers); this proves resolution consumes it.
+        var m = Overload(FrameworkOnly(), "System.IO.FileStream", NetCallForm.Instance, "Read",
+                         "System.Byte[]", "System.Int32", "System.Int32");
+
+        Assert.That(m.Outcome, Is.EqualTo(NetOverloadOutcome.Resolved),
+            "an override plus the member it overrides is ONE member, not an ambiguity. Ambiguous " +
+            "here means ResolveOverload re-walked derived->base itself instead of consuming " +
+            "CandidateMembers, and Task 8 would emit BL6018 on `fs.Read(buf, 0, n)`.");
+        Assert.That(m.Member!.DeclaringTypeFullName, Is.EqualTo("System.IO.FileStream"),
+            "the MOST-DERIVED declaration wins — it is the implementation that runs.");
+    }
+
+    [Test]
+    public void ResolveOverload_ASharedMemberCalledThroughAnInstanceResolves()
+    {
+        // VB, and therefore BasicLang, permits `obj.SharedMethod()`; C# does not (CS0176). The
+        // resolver must not inherit C#'s stricter rule, or `r.IsMatch(input, pattern)` on a Regex
+        // variable becomes a BL6017 on a valid program.
+        var m = Overload(FrameworkOnly(), "System.Text.RegularExpressions.Regex",
+                         NetCallForm.Instance, "IsMatch", "System.String", "System.String");
+
+        Assert.That(m.Outcome, Is.EqualTo(NetOverloadOutcome.Resolved),
+            "a Shared member reached through an instance receiver must resolve — VB allows it, so " +
+            "spec §6.3's equal-behavior claim requires it. If this is NoMatch, ResolveOverload " +
+            "lost its CS0176 fallback from the instance form to the static form.");
+        Assert.That(m.Member!.IsStatic, Is.True);
+    }
+
+    [Test]
+    public void ResolveOverload_OnAStaticClassResolvesFromEitherCallForm()
+    {
+        var r = FrameworkOnly();
+
+        Assert.That(Overload(r, "System.Console", NetCallForm.Static, "WriteLine", "System.String")
+                    .Outcome, Is.EqualTo(NetOverloadOutcome.Resolved),
+            "Console.WriteLine is the single most common .NET call in the corpus. (It is CLAIMED " +
+            "by spec §6.5 row (c) and so never reaches the resolver in practice — but a resolver " +
+            "that cannot answer for a static class is broken for Math, Convert and Path too.)");
+
+        Assert.That(Overload(r, "System.Console", NetCallForm.Instance, "WriteLine", "System.String")
+                    .Outcome, Is.EqualTo(NetOverloadOutcome.Resolved),
+            "a static class cannot be spelled as a parameter type in C# (CS0721), so the instance " +
+            "call form has to fall back to the static one rather than answering NoMatch.");
+    }
+
+    [Test]
+    public void ResolveOverload_AMemberOutsideTheSection72SurfaceIsNoMatch()
+    {
+        // Regex does not override Equals, so the only Equals(Object) in scope is System.Object's —
+        // which spec §7.2 EXCLUDES from the surface, and whose Object parameter §8.3 calls
+        // permanently Rejected anyway. A DOCUMENTED consequence: the resolved member must come
+        // from the surface, so this is NoMatch even though C# binds it happily.
+        var r = FrameworkOnly();
+
+        Assert.That(Overload(r, "System.Text.RegularExpressions.Regex", NetCallForm.Instance,
+                             "Equals", "System.Object").Outcome,
+            Is.EqualTo(NetOverloadOutcome.NoMatch),
+            "the winner must be a member of the §7.2 surface. Answering Resolved here would hand " +
+            "Task 12 System.Object.Equals to emit an export for, undoing §7.2's exclusion of " +
+            "System.Object's members. Known consequence, recorded for Task 8: this is the one " +
+            "shape where a valid program draws a BL6017.");
+
+        Assert.That(Overload(r, "System.Text.StringBuilder", NetCallForm.Instance, "ToString")
+                    .Outcome, Is.EqualTo(NetOverloadOutcome.Resolved),
+            "the boundary is 'declared by System.Object', not 'named like an Object member': " +
+            "StringBuilder OVERRIDES ToString, so it is a member of the surface and resolves.");
+    }
+
+    [Test]
+    public void ResolveOverload_ValueTypeParameterlessConstructionHasNoMemberToResolve()
+    {
+        // Pins the consequence Task 4 predicted in GetMembers' remarks. Roslyn synthesizes a
+        // public parameterless .ctor for every metadata value type; it is implicitly declared, so
+        // it is not in the surface. `New Guid()` is default(Guid) — there is no metadata token to
+        // call and therefore nothing for Task 12 to emit.
+        Assert.That(Overload(FrameworkOnly(), "System.Guid", NetCallForm.Constructor, ".ctor")
+                    .Outcome, Is.EqualTo(NetOverloadOutcome.NoMatch),
+            "a zero-argument value-type construction is not a call. If this becomes Resolved, " +
+            "NetTypeResolver started admitting implicitly-declared members and Task 12 will emit " +
+            "a proxy slot for a constructor that has no metadata token.");
+    }
+
+    [Test]
+    public void ResolveOverload_NarrowingDoesNotResolve()
+    {
+        Assert.That(Overload(FrameworkOnly(), "System.Math", NetCallForm.Static, "Abs",
+                             "System.String").Outcome,
+            Is.EqualTo(NetOverloadOutcome.NoMatch),
+            "there is no implicit conversion from String to any Math.Abs parameter, so this is a " +
+            "genuine BL6017. Resolving it would mean the matcher ignores parameter types.");
+    }
+
+    [Test]
+    public void ResolveOverload_AnArgumentTypeThatDoesNotResolveIsNoMatch()
+    {
+        Assert.That(Overload(FrameworkOnly(), "System.Text.RegularExpressions.Regex",
+                             NetCallForm.Instance, "IsMatch", "Contoso.NoSuchType").Outcome,
+            Is.EqualTo(NetOverloadOutcome.NoMatch),
+            "an argument whose type does not resolve cannot select an overload. DOCUMENTED " +
+            "CONTRACT: there is no spelling for 'I do not know this argument's type' — a caller " +
+            "that cannot type every argument must not ask, because a wildcard would either " +
+            "fabricate a binding or turn a valid call into a spurious BL6018.");
+    }
+
+    [Test]
+    public void ResolveOverload_MalformedSpellingsAreNoMatch_NotInjectedIntoTheProbe()
+    {
+        // Type and member names reach here from BasicLang source, and the implementation puts
+        // them into synthesized C#. Every spelling is therefore validated as a single well-formed
+        // type-name / identifier before it can be emitted.
+        var r = FrameworkOnly();
+
+        Assert.That(Overload(r, "System.Text.RegularExpressions.Regex", NetCallForm.Instance,
+                             "IsMatch", "System.Int32) ; static void Boom(System.Int32 x").Outcome,
+            Is.EqualTo(NetOverloadOutcome.NoMatch),
+            "an argument spelling that is not exactly one type name must be rejected before it " +
+            "reaches the synthesized probe source.");
+
+        Assert.That(Overload(r, "System.Text.RegularExpressions.Regex", NetCallForm.Instance,
+                             "IsMatch(\"\") ; //", "System.String").Outcome,
+            Is.EqualTo(NetOverloadOutcome.NoMatch),
+            "a member name that is not a C# identifier must be rejected the same way.");
+
+        Assert.That(Overload(r, "System.Text.RegularExpressions.Regex", NetCallForm.Instance,
+                             "IsMatch", (string)null!).Outcome,
+            Is.EqualTo(NetOverloadOutcome.NoMatch),
+            "a null argument spelling must answer NoMatch, never throw — this runs on the " +
+            "analyzer and IntelliSense paths.");
+    }
+
+    [Test]
+    public void ResolveOverload_OnAnUnknownOrAmbiguousTypeIsNoMatch()
+    {
+        Assert.That(Overload(FrameworkOnly(), "System.Text.Rejex", NetCallForm.Instance, "IsMatch",
+                             "System.String").Outcome,
+            Is.EqualTo(NetOverloadOutcome.NoMatch),
+            "spec §11.4: a missing TYPE is BL6016, reported from ResolveTypeDetailed. This method " +
+            "answers only the overload question, so the caller must ask about the type first — " +
+            "same contract GetMembers documents.");
+
+        const string source = "namespace Contoso { public class Dup2 { public void F(int i) { } } }";
+        var a = EmitProbeAssembly("BlnetDupOverloadA", source);
+        var b = EmitProbeAssembly("BlnetDupOverloadB", source);
+        var r = NetTypeResolver.Create(NetTypeResolverTestRefs.FrameworkPaths.Concat(new[] { a, b }));
+
+        Assert.That(Overload(r, "Contoso.Dup2", NetCallForm.Instance, "F", "System.Int32").Outcome,
+            Is.EqualTo(NetOverloadOutcome.NoMatch),
+            "an AMBIGUOUS TYPE is BL6023, not BL6018 — spec §6.5 says so explicitly ('BL6018 " +
+            "covers ambiguous overloads only'). Returning Ambiguous here would mislabel it.");
+    }
+
+    [Test]
+    public void ResolveOverload_TheResolvedMemberIsOneOfTheTypesSurfaceMembers()
+    {
+        // The invariant that keeps ResolveOverload and GetMembers from drifting into two
+        // different notions of "member of this type". Task 12 emits proxies from the surface and
+        // resolves call sites through this method; if they can disagree, a resolved call has no
+        // proxy slot.
+        var r = FrameworkOnly();
+        var m = Overload(r, "System.Text.RegularExpressions.Regex", NetCallForm.Instance, "IsMatch",
+                         "System.String");
+        Assert.That(m.Outcome, Is.EqualTo(NetOverloadOutcome.Resolved), "guard");
+
+        Assert.That(r.GetMembers("System.Text.RegularExpressions.Regex").Select(x => x.ToString()),
+            Does.Contain(m.Member!.ToString()),
+            "the resolved member must be one GetMembers reports. If ResolveOverload can return a " +
+            "member outside the surface, Task 12 emits no export for a call it resolved.");
+    }
+
+    [Test]
+    public void ResolveOverload_AcceptsTheArgumentSpellingsTheResolverItselfProduces()
+    {
+        // Round-trip: NetMemberDescriptor's parameter spellings are the grammar ResolveOverload
+        // accepts. Without this the two halves of the API speak different dialects and Task 8 has
+        // to translate — which is where a `nint` vs System.IntPtr mismatch would come back.
+        var r = FrameworkOnly();
+        var declared = r.GetMembers("System.Text.RegularExpressions.Regex")
+            .Single(x => x.Kind == NetMemberCategory.Method && x.Name == "IsMatch" && !x.IsStatic
+                         && x.Parameters.Count == 2
+                         && x.ParameterTypeFullNames.First() == "System.String");
+
+        var m = r.ResolveOverload("System.Text.RegularExpressions.Regex", NetCallForm.Instance,
+            declared.Name, declared.ParameterTypeFullNames.ToList());
+
+        Assert.That(m.Outcome, Is.EqualTo(NetOverloadOutcome.Resolved),
+            "a parameter spelling GetMembers produced must be an acceptable ARGUMENT spelling. If " +
+            "this fails the two sides of NetTypeResolver disagree on how a type is written.");
+        Assert.That(m.Member!.ToString(), Is.EqualTo(declared.ToString()));
+    }
+
+    [Test]
+    public void ResolveOverload_DistinctRequestsDoNotShareOneCacheEntry()
+    {
+        // The cache key joins the request's fields with control characters, which are INVISIBLE in
+        // an editor -- the separator string literals look empty. If one is ever dropped, the key
+        // degenerates to plain concatenation and these two requests become the same entry:
+        //
+        //   member "Abs"             + argument "System.Int32"  -> "...MathAbsSystem.Int32"
+        //   member "AbsSystem.Int32" + no arguments             -> "...MathAbsSystem.Int32"
+        //
+        // whereupon whichever ran first would answer for both. The oracle is independent of the
+        // key's construction: the two calls simply have different correct answers.
+        var r = FrameworkOnly();
+
+        var real = Overload(r, "System.Math", NetCallForm.Static, "Abs", "System.Int32");
+        var spliced = Overload(r, "System.Math", NetCallForm.Static, "AbsSystem.Int32");
+
+        Assert.That(real.Outcome, Is.EqualTo(NetOverloadOutcome.Resolved), "Math.Abs(Integer) exists");
+        Assert.That(spliced.Outcome, Is.EqualTo(NetOverloadOutcome.NoMatch),
+            "there is no member named 'AbsSystem.Int32'. Resolved here means the cache key lost a " +
+            "field separator and this request read the previous one's answer. The separators are " +
+            "literal U+0001/U+0002/U+0003 — see the note in NetTypeResolver.ResolveOverload.");
+
+        // ...and in the other order, against a fresh resolver, so neither ordering can hide it.
+        var fresh = FrameworkOnly();
+        Assert.That(Overload(fresh, "System.Math", NetCallForm.Static, "AbsSystem.Int32").Outcome,
+            Is.EqualTo(NetOverloadOutcome.NoMatch));
+        Assert.That(Overload(fresh, "System.Math", NetCallForm.Static, "Abs", "System.Int32").Outcome,
+            Is.EqualTo(NetOverloadOutcome.Resolved),
+            "order must not matter — a poisoned entry shows up in exactly one direction.");
+    }
+
+    [Test]
+    public void ResolveOverload_IsCachedAndDoesNotAppendToDiagnostics()
+    {
+        // Diagnostics is fixed at construction (an ImmutableArray) precisely so a lookup path
+        // cannot grow it. Overload resolution binds synthesized C# whose errors are the ANSWER,
+        // not the resolver's diagnostics — leaking them would put CS1503 in a BasicLang build log.
+        var r = FrameworkOnly();
+        Assert.That(r.Diagnostics, Is.Empty, "guard: the framework closure is clean");
+
+        for (var i = 0; i < 3; i++)
+            Assert.That(Overload(r, "System.Text.RegularExpressions.Regex", NetCallForm.Constructor,
+                                 ".ctor", "System.Int32").Outcome,
+                Is.EqualTo(NetOverloadOutcome.NoMatch), "repeated lookups must be stable");
+
+        Assert.That(r.Diagnostics, Is.Empty,
+            "a failed overload lookup must not append to Diagnostics — that list is the BL6021 " +
+            "reference-readability record and nothing else.");
+    }
+
     [Test]
     public void AProjectWithNoReferencesStillResolvesFrameworkTypes()
     {
