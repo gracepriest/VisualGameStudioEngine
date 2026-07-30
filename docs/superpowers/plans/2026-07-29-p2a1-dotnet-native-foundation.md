@@ -906,6 +906,33 @@ public void ResolvingFromAnAssemblyDoesNotLockTheFile()
 - [ ] **Step 3: Route `TypeRegistry`'s three call sites through `NetTypeResolver`.** Replace the
   bare `catch {}` blocks with logged failures — a swallowed error here is why nobody noticed the
   LSP silently degrading.
+
+> ⛔ **Three things Task 5 measured that this task must handle.** The LSP is the first *concurrent,
+> long-lived* consumer of the resolver, which is a different workload from a batch compile.
+>
+> **(a) Cap `_overloadCache` — it is unbounded and grows worse than `_cache`.** Three reasons,
+> measured: the key is a whole *request* (call form + type + member + type-args + args), so entry
+> count is **combinatorial** in half-typed identifiers rather than linear in names; entries are
+> created **before validation**, so every malformed spelling buys a permanent `NoMatch` entry — i.e.
+> *rejecting* a spelling costs a cache slot; and entries hold a `NetMemberDescriptor` with its own
+> `Parameters` list, so they are larger than `_cache`'s outcome+symbol pairs. On the IntelliSense
+> path, typing `Regex.IsMatch(` one character at a time yields a distinct entry **per keystroke**,
+> and the resolver's lifetime is the closure's. ⚠ Note the naive fix (validate before keying) moves
+> the invalid-input path from cached to recomputed at **~2 ms per probe** — so bound the cache
+> rather than reordering the key.
+>
+> **(b) Resolver ownership is now load-bearing.** Construction costs 209 ms cold and a stable
+> **46–49 ms** for each subsequent fresh construction over the same 168 assemblies *in the same
+> process*, and a fresh instance discards the lookup cache (so the ~17 ms miss path recurs). Build
+> **one per closure and keep it** — do not construct per LSP request or per debounced pass.
+>
+> **(c) `DoesNotLoadAssembliesIntoTheProcess` is sensitive to bind volume, not just to
+> `Assembly.LoadFrom`.** Task 5 hit this: a mutation that merely *reduced cache hits* caused one
+> extra Roslyn bind, which lazily loaded a Roslyn assembly and tripped that test's before/after
+> `AppDomain` assembly count — confirmed by reverting and re-running clean twice. So if this task
+> changes how often the resolver binds or probes, that test can fail for a reason unrelated to the
+> defect it exists to catch. Read its failure carefully before concluding you reintroduced
+> `Assembly.LoadFrom`.
 - [ ] **Step 4: Run the LSP fixtures**
 
 ```bash

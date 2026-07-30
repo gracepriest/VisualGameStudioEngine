@@ -1174,6 +1174,7 @@ silent wrong answer rather than a crash:
 | an array mutated inside a .NET call | §8.6's one-way-copy divergence (§14.11) |
 | a `Char` round-trip, including a value above `U+00FF` | §8.3's narrowing divergence (§14.10) |
 | `Nothing` passed and returned across the boundary | §8.2's handle-`0` rule |
+| `ToString()` on a .NET type that does **not** override it (`System.IO.Stream`, **not** `StringBuilder`) | §14.15's §6.3 divergence. ⚠ This row cannot be satisfied while the divergence stands: the program compiles on the C# backend and fails BL6017 natively, so there is no byte-identical stdout to compare. It is listed deliberately — **the parity program is what forces §14.15 to be decided rather than quietly shipped.** Until then it is a *pinned expected failure*, not a passing row. |
 
 > **Documented blind spot, carried forward from P1:** a differential oracle cannot catch a bug
 > that is identical on both backends. Green ≠ correct.
@@ -1318,10 +1319,32 @@ proved the type — so it is not worth the version.
     called from non-generic BasicLang code work normally.
 14. **`<NetProxy>` members may be silently absent** — omitted members produce a BL6026 warning,
     so a declared type's proxy surface is a subset of its .NET surface (§7.2).
+15. **`ToString()` and `GetHashCode()` are unavailable on a type that does not override them.**
+    Added after plan Task 5, which surfaced it; the spec previously did not mention either member
+    anywhere. §7.2 excludes `System.Object`'s members "unless overridden", so on e.g.
+    `System.IO.Stream` these fall outside the candidate set and overload resolution answers
+    `NoMatch` → **BL6017**, while the same call compiles clean on the C# backend.
 
-> Limitations 10 and 11 are *divergences from the C# backend*, not merely missing features. They
+    ⚠ **This one is not covered by §8.3's `Object`-is-`Rejected` rule, and that distinction is the
+    whole point.** `Equals(Object)` fails for a *marshaling* reason — `Object` appears in its
+    signature — and §8.3 already sanctions that outcome explicitly. But `ToString()` takes **zero
+    arguments and returns `String`**, and `GetHashCode()` returns `Int32`: no `Object` appears
+    anywhere, both are fully marshalable under §8.3's table, and neither §6.5's argument-side rule
+    nor §8.3's objection applies. The member is excluded purely by §7.2's inheritance rule, which
+    makes this a genuine **§6.3 equal-behavior divergence** rather than a marshaling limit.
+
+    Two candidate fixes for P2a-2, neither chosen here: admit nullary `Object` members whose
+    signatures are marshalable, or keep the exclusion and special-case `ToString`/`GetHashCode` as
+    native calls. **Deciding this needs a §12.1 parity program** (see the row added there).
+
+> Limitations 10, 11 and 15 are *divergences from the C# backend*, not merely missing features. They
 > are the reason §12.1 requires a parity program for each — a divergence that is pinned is a
 > documented behavior; one that is not is a bug waiting to be found by a user.
+>
+> ⚠ A trap worth stating, because plan Task 5 fell into it: a test probing the §7.2 `Object`
+> boundary must use a type that does **not** override the member. `StringBuilder.ToString()` and
+> `Regex.ToString()` both **do** override, so they resolve normally and exercise nothing.
+> `System.IO.Stream` is the clean non-overriding case.
 
 ---
 
