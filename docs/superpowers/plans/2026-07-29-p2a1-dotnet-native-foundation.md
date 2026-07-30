@@ -1247,7 +1247,50 @@ public void OptimizerPreservesTheResolvedNetTargetAndCategoryMarker()
 
 > **There is no class named `IROptimizer`.** The entry point is `OptimizationPipeline`
 > (`BasicLang/IROptimizer.cs:1123`) with `AddStandardPasses()` (`:1139`) — the same pair
-> `BclE2E.CompileToCppOptimized` uses at `CppBclEndToEndTests.cs:56-58`.
+> `BclE2E.CompileToCppOptimized` uses at `CppBclEndToEndTests.cs:56-58` (in
+> `VisualGameStudio.Tests/Compiler/`, not `Blnet/`). All four citations verified correct.
+>
+> ⛔ **The test above is TAUTOLOGICAL and cannot fail — proven by mutation.** Step 3's premise
+> ("update **every** copy/clone/visit path in `IROptimizer` that reconstructs these nodes") is
+> **false: there are none.** All **20** `new IRCall(...)` sites are in `IRBuilder.cs`, building fresh
+> nodes from the AST; `IROptimizer.cs` has **zero**. Both clone helpers —
+> `FunctionInliningPass.CloneAndRemap` (`:1381`) and `LoopUnrollingPass.CloneInstruction` (`:2245`) —
+> fall through to `default: return inst;` for a call, returning the **same object**. Every other pass
+> mutates in place (`ConstantFolding:167`, `ConstantPropagation:1569`, `TailCall:1461`) or refuses to
+> move calls (`LICM:968`, `LoopUnrolling:2044`, `LoopFusion:2564`); CSE and Peephole never mention
+> `IRCall`; DCE removes only BinaryOp/UnaryOp/Compare/Load. **The fields survive by aliasing, not by
+> copy logic.**
+>
+> Demonstrated: adding a dropping `case IRCall` to `CloneAndRemap` left the test above **GREEN**,
+> while an aggressive-pipeline test went **RED**. The reason is that **`FunctionInliningPass` is in
+> `AddAggressivePasses`, NOT `AddStandardPasses`** — so a standard-pipeline round trip never reaches
+> the only clone path an `IRCall` can take. `AddStandardPasses` adds ConstantFolding,
+> CopyPropagation, DCE, CSE, StrengthReduction and Peephole (ConstantPropagation is commented out).
+>
+> **Keep the standard-pipeline test as a future regression guard, but the load-bearing test must run
+> the AGGRESSIVE pipeline.** Both clone `default` arms now carry a note that any `IRCall` case added
+> there must copy both fields.
+>
+> ⚠ **`BoundaryTypeCategory.NativeOwned` is `0`.** A bare auto-property therefore defaults **every
+> call in every program** to "natively handled" — the most dangerous possible wrong answer.
+> Initialize explicitly to `Unknown` and pin it.
+>
+> ⚠ **`NetCategory` belongs on the CALL, not on the IR type descriptor.** The plan floated
+> `TypeInfo`; that is wrong. The marker answers "how must *this* dispatch lower" — a call-site
+> property — and `TypeInfo` is a mutable descriptor shared across the front end whose identity feeds
+> codegen, so widening it is exactly the behavior-changing risk P2a-1 forbids. It would also be
+> ambiguous when receiver and return types differ in category.
+>
+> ⚠ **`ResolvedNetTarget` stays null through all of P2a-1.** `IRBuilder` has no `NetTypeResolver`
+> (the warning-only one runs in `CppProjectBuilder`), so Step 3's "populate them in IRBuilder" is only
+> half-achievable. `NetCategory` *is* populated there via `BoundaryTypeRegistry.Categorize`, a pure
+> static lookup with no Roslyn, references or I/O.
+>
+> ⛔ **P2a-2 GAP — instance .NET calls have NO carriage.** `obj.Method()` lowers to
+> `IRInstanceMethodCall` (`IRBuilder.cs:3355`), which is a **sibling** of `IRCall` under `IRValue`,
+> **not a subclass**, so it inherits neither field. `Regex.IsMatch(s)` is covered; `someRegex.Match(s)`
+> is not — and instance calls are the majority of real .NET usage. P2a-2 must add the same two fields
+> to `IRInstanceMethodCall`.
 
 - [ ] **Step 2: Run and verify it fails**
 - [ ] **Step 3: Add the fields** to `IRCall` (and the IR type descriptor for the category marker),
