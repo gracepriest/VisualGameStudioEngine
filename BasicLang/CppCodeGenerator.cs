@@ -2207,7 +2207,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             return _userFunctionNames.Contains(functionName);
         }
 
-        private string EmitStdLibCall(string functionName, List<string> args, IRCall call = null)
+        /// <remarks>
+        /// <c>internal</c> only so <c>NetClaimPredicateTests</c> can assert the claim predicate
+        /// against THIS method rather than against a re-inlined copy of its body. Comparing the
+        /// predicate to <see cref="HasStdLibEmission"/> alone is circular — both read the same
+        /// three helpers — and would stay green if an arm were added here without going through
+        /// <see cref="StdLibArm"/>.
+        /// </remarks>
+        internal string EmitStdLibCall(string functionName, List<string> args, IRCall call = null)
         {
             // A user definition wins over EVERY builtin below — framework exports, the P1
             // static dispatch, and the plain stdlib arms alike — matching the single guard
@@ -2614,9 +2621,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// pure function of the name, which is what lets the analyzer call it before any module
         /// exists.</para>
         ///
-        /// <para>Arguments are placeholders: no arm's EXISTENCE depends on argument values, and
-        /// eight of them is past the highest index any arm reads (args[2], in
-        /// <c>mid</c>/<c>replace</c>/<c>dateadd</c>/<c>datediff</c>). <c>call</c> is null, which
+        /// <para>Arguments are placeholders: no arm's EXISTENCE depends on argument values. Eight
+        /// is exactly the highest count any arm reads — <see cref="FrameworkCallExpression"/>'s
+        /// <c>DrawRectangle</c>/<c>DrawLine</c>/<c>DrawText</c>/<c>DrawRectangleLines</c> read
+        /// <c>GetArg(args, 7)</c>, well past <see cref="StdLibArm"/>'s highest direct index
+        /// (<c>args[2]</c>, in <c>mid</c>/<c>replace</c>/<c>dateadd</c>/<c>datediff</c>). Do NOT
+        /// shrink this array below 8: <see cref="StdLibArm"/> indexes <c>args</c> DIRECTLY and
+        /// would throw, and <c>GetArg</c>'s tolerance does not cover it. <c>call</c> is null, which
         /// only makes the Decimal-aware C* arms pick their non-Decimal shape — still non-null.</para>
         /// </summary>
         internal static bool HasStdLibEmission(string functionName)

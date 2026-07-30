@@ -152,29 +152,62 @@ public class NetClaimPredicateTests
             .ToList();
 
     /// <summary>
-    /// Row (c)'s non-drift guard. The predicate and <c>EmitStdLibCall</c> must consult ONE arm
-    /// table, not two parallel switch statements — a second copy is how <c>Console.WriteLine</c>
-    /// silently stops being claimed. Asserts the predicate's answer IS the generator's shared
-    /// arm-existence helper for every dotted probe, so a future edit that reintroduces a private
-    /// copy in either place fails here.
+    /// Row (c)'s non-drift guard, asserted against <b><c>EmitStdLibCall</c> ITSELF</b> — the real
+    /// generator method the spec's row (c) names — not against
+    /// <see cref="CppCodeGenerator.HasStdLibEmission"/>.
+    ///
+    /// <para><b>Comparing to HasStdLibEmission would be circular.</b> The predicate already calls
+    /// it, so the two agree by construction and the test could never fail; an earlier draft did
+    /// exactly that and would have stayed green if an arm were re-inlined directly into
+    /// <c>EmitStdLibCall</c> without going through <see cref="CppCodeGenerator.StdLibArm"/>. Only
+    /// invoking the generator can detect that, which is why <c>EmitStdLibCall</c> is
+    /// <c>internal</c>.</para>
     /// </summary>
     [Test]
-    public void RowCUsesTheGeneratorsOwnArmCheckAndCannotDrift()
+    public void RowCAgreesWithEmitStdLibCallItself()
     {
+        // A throwaway generator: EmitStdLibCall's only instance dependencies are the
+        // user-shadowing guard (reads a null _module -> false) and EmitFrameworkCall's
+        // used-function bookkeeping, neither of which affects whether an arm exists.
+        var generator = new CppCodeGenerator();
+        var args = new List<string> { "a", "a", "a", "a", "a", "a", "a", "a" };
+
         foreach (var type in IRBuilder.KnownNetStaticTypeNames)
         {
             foreach (var member in ProbeMembers)
             {
                 var predicate = NetClaimPredicate.IsClaimedCall(type, member);
-                var generator = NetClaimPredicate.IsClaimedTypeName(type)
-                                || CppCodeGenerator.HasStdLibEmission(type + "." + member);
+                var emitted = NetClaimPredicate.IsClaimedTypeName(type)
+                              || generator.EmitStdLibCall(type + "." + member, args) != null;
 
-                Assert.That(predicate, Is.EqualTo(generator),
-                    $"NetClaimPredicate.IsClaimedCall(\"{type}\", \"{member}\") disagrees with "
-                    + "CppCodeGenerator.HasStdLibEmission. Row (c) must call the generator's own "
-                    + "arm-existence helper. Fix NetClaimPredicate — never add a parallel switch.");
+                Assert.That(predicate, Is.EqualTo(emitted),
+                    $"NetClaimPredicate.IsClaimedCall(\"{type}\", \"{member}\") disagrees with what "
+                    + "CppCodeGenerator.EmitStdLibCall actually emits. Row (c) must reduce to that "
+                    + "one method. If an arm was added straight to EmitStdLibCall, move it into "
+                    + "StdLibArm (or one of the other two shared providers) so HasStdLibEmission "
+                    + "can see it — never add a parallel switch to the predicate.");
             }
         }
+    }
+
+    /// <summary>
+    /// The OTHER half of row (c): table membership. A name with a real emit arm that is NOT in
+    /// <c>KnownNetStaticTypes</c> must still be unclaimed, because the IR never routes such a call
+    /// through the static-dispatch shape in the first place. <c>Print</c>/<c>Len</c>/<c>Abs</c> are
+    /// real <c>StdLibArm</c> arms whose owning "type" is nothing at all.
+    /// </summary>
+    [TestCase("Math", "Abs")]
+    [TestCase("NotATableEntry", "Print")]
+    [TestCase("NotATableEntry", "WriteLine")]
+    public void MembershipIsRequiredNotJustAnArm(string type, string member)
+    {
+        Assume.That(IRBuilder.IsKnownNetStaticTypeName(type) && type != "Math", Is.False);
+
+        Assert.That(NetClaimPredicate.IsClaimedCall(type, member), Is.False,
+            $"'{type}.{member}' was claimed. Row (c) is membership in KnownNetStaticTypes AND a "
+            + "non-null EmitStdLibCall — dropping the membership half would claim calls the IR "
+            + "never routes here. (Math IS in the table but has no dotted arm: EmitStdLibCall sees "
+            + "\"math.abs\", and the bare \"abs\" arm does not match it.)");
     }
 
     /// <summary>

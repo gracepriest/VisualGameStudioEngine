@@ -2242,7 +2242,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
             fullName = null;
             if (string.IsNullOrEmpty(name)) return NetTypeLookupOutcome.NotFound;
 
-            var cacheKey = name + "`" + genericArgumentCount.ToString(CultureInfo.InvariantCulture);
+            // The Using count is PART OF THE KEY. NetCandidateNames enumerates _netNamespaces,
+            // which Visit(UsingDirectiveNode) grows as analysis proceeds — so a name probed before
+            // its `Using` was visited would otherwise cache a NEGATIVE answer permanently and
+            // report BL6016 for a type the program legitimately imports. Unreachable while only
+            // System.-rooted names are probed (those resolve independently of _netNamespaces), but
+            // live the moment Tasks 9-16 widen the evidence bar — at which point a stale null here
+            // would be a spurious warning that no test in this plan would catch.
+            var cacheKey = name + "`" + genericArgumentCount.ToString(CultureInfo.InvariantCulture)
+                           + "@" + _netNamespaces.Count.ToString(CultureInfo.InvariantCulture);
             if (_netTypeNameCache.TryGetValue(cacheKey, out var cached))
             {
                 fullName = cached;
