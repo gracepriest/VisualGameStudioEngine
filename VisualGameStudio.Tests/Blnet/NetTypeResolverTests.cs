@@ -1399,6 +1399,22 @@ public class TypeRegistryMetadataTests
 
     private static string FreshName(string prefix) => prefix + Guid.NewGuid().ToString("N");
 
+    /// <summary>
+    /// A registry whose namespace-index cache lives in THIS test's temp directory.
+    ///
+    /// <para><b>Never call <c>new TypeRegistry()</c> here.</b> The parameterless constructor points at
+    /// one user-scope file, <c>%LOCALAPPDATA%\BasicLang\namespace_index.json</c>, and
+    /// <see cref="TypeRegistry.BuildIndex"/> CLEARS the index and then REPLACES that file. A fixture
+    /// that builds an index over a temp directory therefore overwrites the developer's real LSP cache
+    /// with entries naming assemblies that are deleted in TearDown — and because
+    /// <c>LoadIndexFromCache</c> accepts any parseable file, the shipped language server then skips
+    /// its own <c>BuildIndex</c> and runs on a one-namespace index of dead paths. That is exactly the
+    /// empty-index failure this class was fixed to remove, reintroduced by the test suite. Measured:
+    /// it happened.</para>
+    /// </summary>
+    private TypeRegistry NewRegistry() =>
+        new TypeRegistry(Path.Combine(_dir, "namespace_index.json"));
+
     // ------------------------------------------------------------------
     // The two properties that made Assembly.LoadFrom a defect.
     // ------------------------------------------------------------------
@@ -1409,7 +1425,7 @@ public class TypeRegistryMetadataTests
         var name = FreshName("TypeRegLockProbe");
         var probe = EmitFreshAssembly(name, "namespace Contoso { public class Gadget { public int Spin() { return 1; } } }");
 
-        var registry = new TypeRegistry();
+        var registry = NewRegistry();
         var types = registry.LoadTypesFromAssembly(probe);
         Assert.That(types.Select(t => t.FullName), Does.Contain("Contoso.Gadget"),
             "guard: the registry must actually have read this assembly, or the delete below is vacuous");
@@ -1426,7 +1442,7 @@ public class TypeRegistryMetadataTests
         var name = FreshName("TypeRegLoadProbe");
         var probe = EmitFreshAssembly(name, "namespace Contoso { public class Gizmo { } }");
 
-        var registry = new TypeRegistry();
+        var registry = NewRegistry();
         Assert.That(registry.LoadTypesFromAssembly(probe).Select(t => t.FullName),
             Does.Contain("Contoso.Gizmo"), "guard: the registry must actually have read the probe");
 
@@ -1442,7 +1458,7 @@ public class TypeRegistryMetadataTests
         var name = FreshName("TypeRegScanProbe");
         EmitFreshAssembly(name, "namespace Contoso.Scanned { public class Seen { } }");
 
-        var registry = new TypeRegistry();
+        var registry = NewRegistry();
         registry.AddSearchPath(_dir);
         registry.BuildIndex();
 
@@ -1482,7 +1498,7 @@ public class TypeRegistryMetadataTests
         var systemRuntime = Path.Combine(refDir, "System.Runtime.dll");
         Assert.That(File.Exists(systemRuntime), Is.True, "guard: the ref pack must contain System.Runtime.dll");
 
-        var registry = new TypeRegistry();
+        var registry = NewRegistry();
         var types = registry.LoadTypesFromAssembly(systemRuntime);
 
         Assert.That(types, Is.Not.Empty,
@@ -1502,7 +1518,7 @@ public class TypeRegistryMetadataTests
         var junk = Path.Combine(_dir, "Junk.dll");
         File.WriteAllBytes(junk, new byte[] { 0x4D, 0x5A });        // "MZ" and nothing else
 
-        var registry = new TypeRegistry();
+        var registry = NewRegistry();
         List<NetTypeInfo> types = null!;
         Assert.That(() => types = registry.LoadTypesFromAssembly(junk), Throws.Nothing,
             "every path here is user-reachable — a <Reference> can name a native DLL or a truncated " +
@@ -1521,7 +1537,7 @@ public class TypeRegistryMetadataTests
     {
         var missing = Path.Combine(_dir, "NeverExisted.dll");
 
-        var registry = new TypeRegistry();
+        var registry = NewRegistry();
         Assert.That(() => registry.LoadTypesFromAssembly(missing), Throws.Nothing);
         Assert.That(registry.Diagnostics.Any(d => d.Contains("BL6021") && d.Contains("NeverExisted.dll")),
             Is.True,
@@ -1554,7 +1570,7 @@ namespace Contoso
     public static class Helpers { public static int Twice(int n) { return n * 2; } }
 }");
 
-        var registry = new TypeRegistry();
+        var registry = NewRegistry();
         registry.LoadTypesFromAssembly(probe);
 
         var widget = registry.GetType("Contoso.Widget");
@@ -1629,11 +1645,16 @@ namespace Contoso
         var name = FreshName("TypeRegEnumProbe");
         var probe = EmitFreshAssembly(name, "namespace Contoso { public enum Gear { Low, High } }");
 
-        var registry = new TypeRegistry();
+        var registry = NewRegistry();
         registry.LoadTypesFromAssembly(probe);
 
-        Assert.That(registry.GetType("Contoso.Gear")!.Members.Select(m => m.Name),
-            Does.Not.Contain("value__"),
+        var members = registry.GetType("Contoso.Gear")!.Members.Select(m => m.Name).ToList();
+
+        // Does.Not.Contain passes on an empty list, so the positive guard is what stops this test
+        // from certifying a registry that produced no members at all.
+        Assert.That(members, Does.Contain("Low"), "guard: the enum's members must have been read");
+        Assert.That(members, Does.Contain("High"));
+        Assert.That(members, Does.Not.Contain("value__"),
             "value__ is a compiler-generated backing field, not something a user can write. If " +
             "this starts failing, TypeRegistry has gone back to reflection over a loaded assembly.");
     }
@@ -1653,12 +1674,12 @@ namespace Contoso
         // ordinary readable framework assembly and is in PreloadCoreTypes' curated list.
         const string name = "System.Text.RegularExpressions.Regex";
 
-        var registry = new TypeRegistry();
+        var registry = NewRegistry();
         registry.PreloadCoreTypes();
         var preloaded = registry.GetType(name);
         Assert.That(preloaded, Is.Not.Null, "guard: PreloadCoreTypes must register Regex");
 
-        var fromMetadata = new TypeRegistry();
+        var fromMetadata = NewRegistry();
         fromMetadata.LoadTypesFromAssembly(typeof(System.Text.RegularExpressions.Regex).Assembly.Location);
         var metadata = fromMetadata.GetType(name);
         Assert.That(metadata, Is.Not.Null,
@@ -1672,11 +1693,61 @@ namespace Contoso
         Assert.That(metadata.IsStruct, Is.EqualTo(preloaded.IsStruct));
         Assert.That(metadata.IsEnum, Is.EqualTo(preloaded.IsEnum));
         Assert.That(metadata.IsStatic, Is.EqualTo(preloaded.IsStatic));
+        Assert.That(metadata.IsGeneric, Is.EqualTo(preloaded.IsGeneric));
+        Assert.That(metadata.BaseType, Is.EqualTo(preloaded.BaseType));
+        Assert.That(metadata.GenericParameters, Is.EqualTo(preloaded.GenericParameters));
+        Assert.That(metadata.Interfaces, Is.EquivalentTo(preloaded.Interfaces));
+
+        // Guard first: an empty list on both sides would make every set comparison below vacuous.
         Assert.That(metadata.Members.Select(m => m.Name), Does.Contain("IsMatch"));
-        Assert.That(metadata.Members.Select(m => m.Name), Does.Contain("Match"));
         Assert.That(metadata.Members.Select(m => m.Name), Does.Contain("Options"),
             "a property the reflection producer reported too");
         Assert.That(metadata.Constructors, Is.Not.Empty);
+
+        // FULL SIGNATURE comparison, not a handful of scalars. Comparing only names and flags is how
+        // a spelling divergence in PARAMETER types slipped through review once already: the
+        // reflection ladder never matched its primitive arms for a by-ref parameter and fell through
+        // to Type.Name, so Int32.TryParse read "Int32&" from one producer and "Integer&" from the
+        // other. Both producers are live in one registry, so that put two spellings of the same
+        // signature into two completion lists.
+        Assert.That(metadata.Members.Select(m => m.GetSignature()).OrderBy(s => s, StringComparer.Ordinal),
+            Is.EqualTo(preloaded.Members.Select(m => m.GetSignature()).OrderBy(s => s, StringComparer.Ordinal)),
+            "the reflection and metadata producers must describe the same type identically, down to " +
+            "every parameter's spelling — they both feed the same completion lists. Fix whichever " +
+            "producer is wrong in TypeRegistry, not this test.");
+        Assert.That(metadata.Constructors.Select(m => m.GetSignature()).OrderBy(s => s, StringComparer.Ordinal),
+            Is.EqualTo(preloaded.Constructors.Select(m => m.GetSignature()).OrderBy(s => s, StringComparer.Ordinal)));
+    }
+
+    /// <summary>
+    /// The by-ref spelling both producers must agree on, pinned directly rather than only through
+    /// the whole-type comparison above — this is the exact shape that diverged.
+    /// </summary>
+    [Test]
+    public void ByRefParametersUseTheVbSpellingInBothProducers()
+    {
+        var reflection = NewRegistry();
+        reflection.PreloadCoreTypes();
+        var tryParse = reflection.GetType("System.Int32")!.Members
+            .First(m => m.Name == "TryParse" && m.Parameters.Count == 2);
+
+        Assert.That(tryParse.Parameters[1].Type, Is.EqualTo("Integer&"),
+            "the by-ref suffix goes on the VB name. typeof(int).MakeByRefType() is not typeof(int), " +
+            "so the reflection ladder's primitive arms never matched and it used to report the CLR " +
+            "spelling 'Int32&' — while the metadata producer reported 'Integer&'. Every other name " +
+            "this class produces is VB, so VB wins.");
+
+        var name = FreshName("TypeRegByRefProbe");
+        var probe = EmitFreshAssembly(name,
+            "namespace Contoso { public static class Parsers { " +
+            "public static bool Try(string s, out int value) { value = 0; return true; } } }");
+        var metadata = NewRegistry();
+        metadata.LoadTypesFromAssembly(probe);
+
+        Assert.That(metadata.GetType("Contoso.Parsers")!.Members.First(m => m.Name == "Try")
+                .Parameters[1].Type,
+            Is.EqualTo("Integer&"),
+            "…and the metadata producer must spell it the same way.");
     }
 
     // ------------------------------------------------------------------
@@ -1695,7 +1766,7 @@ namespace Contoso
         var probe = EmitFreshAssembly(name,
             "namespace Contoso { public class Solo { } public enum Lonely { One } }");
 
-        var registry = new TypeRegistry();
+        var registry = NewRegistry();
         registry.LoadTypesFromAssembly(probe);
 
         Assert.That(registry.GetType("Contoso.Solo")!.BaseType, Is.EqualTo("Object"),
@@ -1723,7 +1794,7 @@ namespace Contoso
         if (string.IsNullOrEmpty(sdkPath))
             Assert.Ignore("no Microsoft.NETCore.App.Ref pack installed.");
 
-        var registry = new TypeRegistry();
+        var registry = NewRegistry();
         registry.AddSearchPath(sdkPath!);
         registry.BuildIndex();
 
@@ -1757,7 +1828,7 @@ namespace Contoso
         var probe = EmitFreshAssembly(name,
             "namespace Contoso { public class Outer { public enum Inner { A, B } } }");
 
-        var registry = new TypeRegistry();
+        var registry = NewRegistry();
         registry.LoadTypesFromAssembly(probe);
 
         var inner = registry.GetType("Contoso.Outer+Inner");
@@ -1782,7 +1853,7 @@ namespace Contoso
         var probe = EmitFreshAssembly(name,
             "namespace Contoso { public class Box<T> { public T Item; } }");
 
-        var registry = new TypeRegistry();
+        var registry = NewRegistry();
         registry.LoadTypesFromAssembly(probe);
 
         var box = registry.GetType("Contoso.Box`1");
@@ -1805,15 +1876,24 @@ namespace Contoso
         EmitFreshAssembly(a, "namespace Contoso { public class Alpha { } }");
         EmitFreshAssembly(b, "namespace Contoso { public class Beta { } }");
 
-        var registry = new TypeRegistry();
+        var registry = NewRegistry();
         registry.AddSearchPath(_dir);
         registry.BuildIndex();
         var afterIndex = registry.ResolverBuildCount;
+
+        // The guard has to be that the index actually WORKED, not merely that a resolver was built.
+        // ResolverFor runs before any assembly is read, so `afterIndex > 0` is satisfied by a .dll
+        // merely existing in the search path — and if the metadata walk returned nothing,
+        // LoadNamespace would return false without ever calling ResolverFor again and the equality
+        // below would hold trivially. That version of this test passes against a broken registry.
+        Assert.That(registry.LoadNamespace("Contoso"), Is.True,
+            "guard: BuildIndex must have indexed the probes' namespace, or the count below is vacuous");
+        Assert.That(registry.GetType("Contoso.Alpha"), Is.Not.Null, "guard: and actually read them");
+        Assert.That(registry.GetType("Contoso.Beta"), Is.Not.Null);
         Assert.That(afterIndex, Is.GreaterThan(0), "guard: BuildIndex must have built one");
 
         registry.LoadNamespace("Contoso");
         registry.GetType("Contoso.Alpha");
-        registry.LoadNamespace("Contoso");
 
         Assert.That(registry.ResolverBuildCount, Is.EqualTo(afterIndex),
             "construction costs 209 ms cold and 46-49 ms per fresh instance over a framework " +
@@ -1826,7 +1906,7 @@ namespace Contoso
     {
         var a = FreshName("TypeRegAddA");
         EmitFreshAssembly(a, "namespace Contoso { public class Alpha { } }");
-        var registry = new TypeRegistry();
+        var registry = NewRegistry();
         registry.AddSearchPath(_dir);
         registry.BuildIndex();
         var afterIndex = registry.ResolverBuildCount;

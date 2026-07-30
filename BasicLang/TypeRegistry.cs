@@ -70,6 +70,40 @@ namespace BasicLang.Compiler.SemanticAnalysis
         // Track which namespaces have been loaded
         private readonly HashSet<string> _loadedNamespaces;
 
+        /// <summary>
+        /// Guards the five collections above. One lock, not five: they are mutated together (loading
+        /// a namespace writes <see cref="_loadedTypes"/>, <see cref="_typesByName"/> and
+        /// <see cref="_loadedNamespaces"/> in one pass) and a reader wants a consistent view across
+        /// them.
+        ///
+        /// <para><b>Why this is needed even though LSP requests are normally serialized.</b> One
+        /// registry is shared by every open document (<c>DocumentManager</c> is a DI singleton and
+        /// hands the same instance to each <c>DocumentState</c>). OmniSharp schedules didOpen /
+        /// didChange / didSave as <c>Serial</c> and completion / hover / definition / signature-help
+        /// as <c>Parallel</c>, with an outer concat over groups, so mutation and reads do not
+        /// normally overlap — which is why this was never observed. The hatch is the TIMEOUT path:
+        /// <c>DefaultRequestInvoker.RouteRequest</c> races each request against a timer, and when the
+        /// timer wins the scheduler advances to the next group WHILE THE HANDLER IS STILL RUNNING.
+        /// The sync handlers take a <c>CancellationToken</c> and never observe it, and
+        /// <c>UpdateDocument</c> → <c>RunSemanticAnalysis</c> → <see cref="LoadNamespace"/> is
+        /// synchronous with no cancellation checks, so a timed-out didChange keeps writing here while
+        /// a completion request reads.</para>
+        ///
+        /// <para><b>Task 7 raised the stakes rather than creating the race.</b> Before it,
+        /// <see cref="_typesByName"/> was effectively frozen after <see cref="PreloadCoreTypes"/>
+        /// because every assembly read silently failed; it now grows by hundreds of entries during
+        /// editing, which lengthens each didChange and so raises both the chance of hitting that
+        /// hatch and the damage when it is hit. The damage is not a lost entry: an insert racing a
+        /// resize can leave a bucket chain cyclic, so a later <c>TryGetValue</c> SPINS FOREVER — an
+        /// LSP hang — and the enumerating readers throw
+        /// <see cref="InvalidOperationException"/> instead.</para>
+        ///
+        /// <para><b>Lock ordering.</b> This lock may be taken before <see cref="_resolverLock"/> or
+        /// <see cref="_diagnostics"/>, never after. Neither of those ever reaches back into these
+        /// collections, so there is no cycle.</para>
+        /// </summary>
+        private readonly object _stateLock = new object();
+
         // ------------------------------------------------------------------
         // Metadata reading (spec §6.2). See the class remarks for what this replaced.
         // ------------------------------------------------------------------
@@ -144,12 +178,27 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// for the life of the feature, so these are also written to stderr as they happen (stdout
         /// carries LSP framing and must never be used for logging).</para>
         /// </summary>
-        public IReadOnlyList<string> Diagnostics
+        internal IReadOnlyList<string> Diagnostics
         {
             get { lock (_diagnostics) { return _diagnostics.ToList(); } }
         }
 
-        public TypeRegistry()
+        public TypeRegistry() : this(DefaultCacheFilePath())
+        {
+        }
+
+        /// <summary>
+        /// TEST SEAM — the cache file path. Production uses <see cref="DefaultCacheFilePath"/>, a
+        /// single USER-SCOPE file.
+        ///
+        /// <para><b>A test that lets this default is not isolated, it is destructive.</b>
+        /// <see cref="BuildIndex"/> CLEARS the index and then <see cref="SaveIndexToCache"/>
+        /// REPLACES that one file, and <see cref="LoadIndexFromCache"/> accepts whatever it finds —
+        /// so a fixture that builds an index over a temp directory leaves the shipped LSP pointed at
+        /// assemblies that no longer exist, which reinstates the empty-index failure this class was
+        /// fixed to remove. Every fixture must pass a path inside its own temp directory.</para>
+        /// </summary>
+        internal TypeRegistry(string cacheFilePath)
         {
             _namespaceIndex = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
             _loadedTypes = new Dictionary<string, List<NetTypeInfo>>(StringComparer.OrdinalIgnoreCase);
@@ -157,10 +206,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
             _searchPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             _loadedNamespaces = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             _requestedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            _cacheFilePath = cacheFilePath;
+        }
 
-            // Default cache location
+        private static string DefaultCacheFilePath()
+        {
             var appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            _cacheFilePath = Path.Combine(appData, "BasicLang", "namespace_index.json");
+            return Path.Combine(appData, "BasicLang", "namespace_index.json");
         }
 
         /// <summary>
@@ -169,11 +221,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// </summary>
         private void Report(string message)
         {
+            // The CAP IS ON THE LIST, NOT ON THE REPORTING. Returning early here once the list is
+            // full would silently drop every failure past the cap — a partial reintroduction of the
+            // bare catch {} this class was fixed to remove.
             lock (_diagnostics)
             {
-                if (_diagnostics.Count >= MaxDiagnostics)
-                    return;
-                _diagnostics.Add(message);
+                if (_diagnostics.Count < MaxDiagnostics)
+                    _diagnostics.Add(message);
             }
 
             try { Console.Error.WriteLine("[TypeRegistry] " + message); }
@@ -288,7 +342,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
         {
             if (Directory.Exists(path))
             {
-                _searchPaths.Add(path);  // HashSet.Add ignores duplicates
+                lock (_stateLock)
+                {
+                    _searchPaths.Add(path);  // HashSet.Add ignores duplicates
+                }
             }
         }
 
@@ -298,24 +355,27 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// </summary>
         public void BuildIndex()
         {
-            _namespaceIndex.Clear();
-
-            // Collect every candidate FIRST, then build one resolver over the whole batch. A
-            // resolver's reference set is fixed at construction, so indexing assembly-by-assembly
-            // would construct one per file — 163 constructions at 46-49 ms over a framework pack.
-            var assemblyPaths = new List<string>();
-            foreach (var searchPath in _searchPaths)
-                assemblyPaths.AddRange(EnumerateAssemblies(searchPath));
-
-            if (assemblyPaths.Count > 0)
+            lock (_stateLock)
             {
-                var resolver = ResolverFor(assemblyPaths);
-                foreach (var assemblyPath in assemblyPaths)
-                    IndexAssembly(resolver, assemblyPath);
-            }
+                _namespaceIndex.Clear();
 
-            // Save to cache
-            SaveIndexToCache();
+                // Collect every candidate FIRST, then build one resolver over the whole batch. A
+                // resolver's reference set is fixed at construction, so indexing assembly-by-assembly
+                // would construct one per file — 163 constructions at 46-49 ms over a framework pack.
+                var assemblyPaths = new List<string>();
+                foreach (var searchPath in _searchPaths)
+                    assemblyPaths.AddRange(EnumerateAssemblies(searchPath));
+
+                if (assemblyPaths.Count > 0)
+                {
+                    var resolver = ResolverFor(assemblyPaths);
+                    foreach (var assemblyPath in assemblyPaths)
+                        IndexAssembly(resolver, assemblyPath);
+                }
+
+                // Save to cache
+                SaveIndexToCache();
+            }
         }
 
         /// <summary>
@@ -329,18 +389,21 @@ namespace BasicLang.Compiler.SemanticAnalysis
             try
             {
                 var lines = File.ReadAllLines(_cacheFilePath);
-                foreach (var line in lines)
+                lock (_stateLock)
                 {
-                    var parts = line.Split('|');
-                    if (parts.Length == 2)
+                    foreach (var line in lines)
                     {
-                        var ns = parts[0];
-                        var assemblies = parts[1].Split(';').Where(s => !string.IsNullOrEmpty(s)).ToList();
+                        var parts = line.Split('|');
+                        if (parts.Length == 2)
+                        {
+                            var ns = parts[0];
+                            var assemblies = parts[1].Split(';').Where(s => !string.IsNullOrEmpty(s)).ToList();
 
-                        if (!_namespaceIndex.ContainsKey(ns))
-                            _namespaceIndex[ns] = new List<string>();
+                            if (!_namespaceIndex.ContainsKey(ns))
+                                _namespaceIndex[ns] = new List<string>();
 
-                        _namespaceIndex[ns].AddRange(assemblies);
+                            _namespaceIndex[ns].AddRange(assemblies);
+                        }
                     }
                 }
                 return true;
@@ -479,30 +542,33 @@ namespace BasicLang.Compiler.SemanticAnalysis
         {
             try
             {
-                if (type.FullName != null && _typesByName.ContainsKey(type.FullName))
-                    return;
-
-                var info = CreateNetTypeInfo(type);
-                var ns = type.Namespace ?? string.Empty;
-
-                if (!_loadedTypes.ContainsKey(ns))
-                    _loadedTypes[ns] = new List<NetTypeInfo>();
-                _loadedTypes[ns].Add(info);
-
-                if (type.FullName != null)
-                    _typesByName[type.FullName] = info;
-                if (!_typesByName.ContainsKey(type.Name))
-                    _typesByName[type.Name] = info;
-
-                // Generic definitions: also index by the bare name ("List" -> List`1)
-                if (type.IsGenericTypeDefinition)
+                lock (_stateLock)
                 {
-                    var bareName = type.Name.Split('`')[0];
-                    if (!_typesByName.ContainsKey(bareName))
-                        _typesByName[bareName] = info;
-                }
+                    if (type.FullName != null && _typesByName.ContainsKey(type.FullName))
+                        return;
 
-                _loadedNamespaces.Add(ns);
+                    var info = CreateNetTypeInfo(type);
+                    var ns = type.Namespace ?? string.Empty;
+
+                    if (!_loadedTypes.ContainsKey(ns))
+                        _loadedTypes[ns] = new List<NetTypeInfo>();
+                    _loadedTypes[ns].Add(info);
+
+                    if (type.FullName != null)
+                        _typesByName[type.FullName] = info;
+                    if (!_typesByName.ContainsKey(type.Name))
+                        _typesByName[type.Name] = info;
+
+                    // Generic definitions: also index by the bare name ("List" -> List`1)
+                    if (type.IsGenericTypeDefinition)
+                    {
+                        var bareName = type.Name.Split('`')[0];
+                        if (!_typesByName.ContainsKey(bareName))
+                            _typesByName[bareName] = info;
+                    }
+
+                    _loadedNamespaces.Add(ns);
+                }
             }
             catch
             {
@@ -515,40 +581,48 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// </summary>
         public bool LoadNamespace(string namespaceName)
         {
-            if (_loadedNamespaces.Contains(namespaceName))
+            lock (_stateLock)
+            {
+                if (_loadedNamespaces.Contains(namespaceName))
+                    return true;
+
+                // Find assemblies containing this namespace
+                if (!_namespaceIndex.TryGetValue(namespaceName, out var assemblies))
+                {
+                    // Try parent namespace matching (e.g., "System" should match "System.IO")
+                    var matchingNamespaces = _namespaceIndex.Keys
+                        .Where(k => k.StartsWith(namespaceName + ".", StringComparison.OrdinalIgnoreCase) ||
+                                   k.Equals(namespaceName, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+
+                    if (matchingNamespaces.Count == 0)
+                        return false;
+
+                    assemblies = matchingNamespaces
+                        .SelectMany(ns => _namespaceIndex[ns])
+                        .Distinct()
+                        .ToList();
+                }
+
+                // Load types from each assembly. One resolver for the whole batch — see BuildIndex.
+                // The paths may come from the on-disk cache and so predate this process, which is the
+                // one case where they are legitimately outside the current reference set.
+                var resolver = ResolverFor(assemblies);
+                foreach (var assemblyPath in assemblies)
+                {
+                    LoadTypesFromAssembly(resolver, assemblyPath, namespaceName);
+                }
+
+                _loadedNamespaces.Add(namespaceName);
                 return true;
-
-            // Find assemblies containing this namespace
-            if (!_namespaceIndex.TryGetValue(namespaceName, out var assemblies))
-            {
-                // Try parent namespace matching (e.g., "System" should match "System.IO")
-                var matchingNamespaces = _namespaceIndex.Keys
-                    .Where(k => k.StartsWith(namespaceName + ".", StringComparison.OrdinalIgnoreCase) ||
-                               k.Equals(namespaceName, StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-
-                if (matchingNamespaces.Count == 0)
-                    return false;
-
-                assemblies = matchingNamespaces
-                    .SelectMany(ns => _namespaceIndex[ns])
-                    .Distinct()
-                    .ToList();
             }
-
-            // Load types from each assembly. One resolver for the whole batch — see BuildIndex.
-            // The paths may come from the on-disk cache and so predate this process, which is the
-            // one case where they are legitimately outside the current reference set.
-            var resolver = ResolverFor(assemblies);
-            foreach (var assemblyPath in assemblies)
-            {
-                LoadTypesFromAssembly(resolver, assemblyPath, namespaceName);
-            }
-
-            _loadedNamespaces.Add(namespaceName);
-            return true;
         }
 
+        /// <summary>
+        /// CALLER MUST HOLD <see cref="_stateLock"/> — the only call site is
+        /// <see cref="LoadNamespace"/>, which holds it across the whole batch so that a namespace
+        /// becomes visible all at once rather than assembly by assembly.
+        /// </summary>
         private void LoadTypesFromAssembly(NetTypeResolver resolver, string assemblyPath, string targetNamespace)
         {
             if (!CanRead(resolver, assemblyPath))
@@ -593,30 +667,33 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (!CanRead(resolver, assemblyPath))
                 return types;
 
-            foreach (var type in resolver.PublicTypesIn(assemblyPath))
+            lock (_stateLock)
             {
-                var ns = NamespaceOf(type);
-                if (ns == null)
-                    continue;
+                foreach (var type in resolver.PublicTypesIn(assemblyPath))
+                {
+                    var ns = NamespaceOf(type);
+                    if (ns == null)
+                        continue;
 
-                var fullName = MetadataFullName(type);
+                    var fullName = MetadataFullName(type);
 
-                // Check if already loaded
-                if (_typesByName.ContainsKey(fullName))
-                    continue;
+                    // Check if already loaded
+                    if (_typesByName.ContainsKey(fullName))
+                        continue;
 
-                var typeInfo = CreateNetTypeInfo(type);
-                types.Add(typeInfo);
+                    var typeInfo = CreateNetTypeInfo(type);
+                    types.Add(typeInfo);
 
-                if (!_loadedTypes.ContainsKey(ns))
-                    _loadedTypes[ns] = new List<NetTypeInfo>();
+                    if (!_loadedTypes.ContainsKey(ns))
+                        _loadedTypes[ns] = new List<NetTypeInfo>();
 
-                _loadedTypes[ns].Add(typeInfo);
-                _typesByName[typeInfo.FullName] = typeInfo;
-                _typesByName[typeInfo.Name] = typeInfo;
+                    _loadedTypes[ns].Add(typeInfo);
+                    _typesByName[typeInfo.FullName] = typeInfo;
+                    _typesByName[typeInfo.Name] = typeInfo;
 
-                // Track namespace as loaded
-                _loadedNamespaces.Add(ns);
+                    // Track namespace as loaded
+                    _loadedNamespaces.Add(ns);
+                }
             }
 
             return types;
@@ -629,8 +706,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
         {
             var extensionMethods = new List<NetMemberInfo>();
 
+            // Snapshot under the lock: enumerating _typesByName.Values while another thread inserts
+            // throws InvalidOperationException. A type's own Members list is append-only during
+            // construction and frozen once published, so it is safe to walk outside the lock.
+            List<NetTypeInfo> staticTypes;
+            lock (_stateLock)
+            {
+                staticTypes = _typesByName.Values.Where(t => t.IsStatic).ToList();
+            }
+
             // Look through all static types for extension methods
-            foreach (var typeInfo in _typesByName.Values.Where(t => t.IsStatic))
+            foreach (var typeInfo in staticTypes)
             {
                 foreach (var member in typeInfo.Members)
                 {
@@ -931,6 +1017,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
             var methods = new List<NetMemberInfo>();
             var properties = new List<NetMemberInfo>();
             var fields = new List<NetMemberInfo>();
+
+            // Separators are written as ESCAPES, never as raw control bytes — see
+            // NetOverloadProbe.ResolveOverload's key, which spells the same two the same way. U+0001
+            // and U+0002 cannot occur in a metadata name or a VB type spelling, which is what keeps
+            // two different signatures from sharing one key; the VB spellings already contain '(',
+            // ')', ',' and spaces, so an ordinary punctuation separator would not.
             var seen = new HashSet<string>(StringComparer.Ordinal);
 
             for (var current = type; current != null; current = current.BaseType)
@@ -952,8 +1044,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             // reflection skipped IsSpecialName, which is what kept property and
                             // event accessors and user-defined operators out. MethodKind.Ordinary
                             // is the metadata-symbol equivalent.
-                            if (!seen.Add("M" + method.Name + "" + method.Arity + ""
-                                          + string.Join("", method.Parameters.Select(p => GetParameterTypeName(p)))))
+                            if (!seen.Add("M\u0001" + method.Name + "\u0001" + method.Arity + "\u0001"
+                                          + string.Join("\u0002", method.Parameters.Select(p => GetParameterTypeName(p)))))
                                 continue;
 
                             methods.Add(new NetMemberInfo
@@ -974,8 +1066,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         case IPropertySymbol property:
                             // MetadataName, so an indexer is "Item" as reflection reported it, and
                             // its parameters are part of the key — two indexers differ only there.
-                            if (!seen.Add("P" + property.MetadataName + ""
-                                          + string.Join("", property.Parameters.Select(p => GetParameterTypeName(p)))))
+                            if (!seen.Add("P\u0001" + property.MetadataName + "\u0001"
+                                          + string.Join("\u0002", property.Parameters.Select(p => GetParameterTypeName(p)))))
                                 continue;
 
                             properties.Add(new NetMemberInfo
@@ -990,7 +1082,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             break;
 
                         case IFieldSymbol field:
-                            if (!seen.Add("F" + field.Name))
+                            if (!seen.Add("F\u0001" + field.Name))
                                 continue;
 
                             fields.Add(new NetMemberInfo
@@ -1044,11 +1136,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 .ToList();
 
         /// <summary>
-        /// A parameter's type as reflection spelled it. Reflection hands
-        /// <c>GetTypeName</c> a BY-REF <see cref="Type"/> for a <c>ref</c>/<c>out</c>/<c>in</c>
-        /// parameter, whose <c>Name</c> carries a trailing <c>&amp;</c> (<c>Int32&amp;</c>); Roslyn
-        /// models by-ref-ness on the PARAMETER instead, so <c>IParameterSymbol.Type</c> is the bare
-        /// type and the suffix has to be re-added or every by-ref overload's signature help changes.
+        /// A parameter's type, with the by-ref suffix re-added. Reflection models by-ref-ness on the
+        /// TYPE (it hands <see cref="GetTypeName(Type)"/> a by-ref <see cref="Type"/>); Roslyn models
+        /// it on the PARAMETER, so <see cref="IParameterSymbol.Type"/> is the bare type and the
+        /// suffix has to be restored here or every by-ref overload's signature help loses it.
+        ///
+        /// <para>Both producers spell the result the VB way — <c>Integer&amp;</c>, not
+        /// <c>Int32&amp;</c>. See <see cref="GetTypeName(Type)"/>'s first two lines for why the
+        /// reflection side had to change to agree, and
+        /// <c>TypeRegistryMetadataTests.TheReflectionAndMetadataProducersAgreeOnShape</c> for the
+        /// pin.</para>
         /// </summary>
         private string GetParameterTypeName(IParameterSymbol parameter)
         {
@@ -1086,9 +1183,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (type is IArrayTypeSymbol array)
                 return $"{GetTypeName(array.ElementType)}()";
 
-            // reflection fell through to Type.Name here, which for a pointer is "Int32*". Roslyn's
-            // IPointerTypeSymbol.Name is empty, so the one shape whose Name is not usable is spelled
-            // out rather than silently becoming "".
+            // Roslyn's IPointerTypeSymbol.Name is empty, so a pointer is the one shape whose Name is
+            // unusable and has to be spelled out rather than silently becoming "". The reflection
+            // producer unwraps pointers too, so both agree on "Integer*".
             if (type is IPointerTypeSymbol pointer)
                 return $"{GetTypeName(pointer.PointedAtType)}*";
 
@@ -1097,6 +1194,18 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         private string GetTypeName(Type type)
         {
+            // BY-REF AND POINTER ARE UNWRAPPED FIRST, and this is a deliberate change from what
+            // reflection did on its own. typeof(int).MakeByRefType() is not typeof(int), so none of
+            // the primitive arms below ever matched a by-ref parameter and the ladder fell through to
+            // Type.Name — spelling Integer.TryParse's second parameter "Int32&" while the metadata
+            // producer spells it "Integer&". Both producers are live in ONE registry
+            // (PreloadCoreTypes registers System.Int32 by reflection while a project <Reference> is
+            // read as metadata), so that divergence put two spellings of the same signature into two
+            // completion lists. VB spelling wins for both: every other name this class produces is
+            // already VB ("Integer", "String", "List(Of T)"), so "Int32&" was the odd one out.
+            if (type.IsByRef) return GetTypeName(type.GetElementType()) + "&";
+            if (type.IsPointer) return GetTypeName(type.GetElementType()) + "*";
+
             if (type == typeof(void)) return "Void";
             if (type == typeof(int)) return "Integer";
             if (type == typeof(long)) return "Long";
@@ -1128,20 +1237,25 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// </summary>
         public IEnumerable<NetTypeInfo> GetTypesInNamespace(string namespaceName)
         {
-            if (_loadedTypes.TryGetValue(namespaceName, out var types))
-                return types;
-
-            // Also check for child namespaces
-            var result = new List<NetTypeInfo>();
-            foreach (var kvp in _loadedTypes)
+            lock (_stateLock)
             {
-                if (kvp.Key.StartsWith(namespaceName + ".") || kvp.Key.Equals(namespaceName, StringComparison.OrdinalIgnoreCase))
-                {
-                    result.AddRange(kvp.Value);
-                }
-            }
+                // A COPY, not the live list: the caller would otherwise be enumerating the same
+                // List<T> that LoadNamespace appends to.
+                if (_loadedTypes.TryGetValue(namespaceName, out var types))
+                    return types.ToList();
 
-            return result;
+                // Also check for child namespaces
+                var result = new List<NetTypeInfo>();
+                foreach (var kvp in _loadedTypes)
+                {
+                    if (kvp.Key.StartsWith(namespaceName + ".") || kvp.Key.Equals(namespaceName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        result.AddRange(kvp.Value);
+                    }
+                }
+
+                return result;
+            }
         }
 
         /// <summary>
@@ -1149,8 +1263,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// </summary>
         public NetTypeInfo GetType(string typeName)
         {
-            _typesByName.TryGetValue(typeName, out var type);
-            return type;
+            lock (_stateLock)
+            {
+                _typesByName.TryGetValue(typeName, out var type);
+                return type;
+            }
         }
 
         /// <summary>
@@ -1158,7 +1275,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// </summary>
         public IEnumerable<NetTypeInfo> GetAllLoadedTypes()
         {
-            return _typesByName.Values.Distinct();
+            lock (_stateLock)
+            {
+                // Materialized inside the lock. Returning the lazy Distinct() would defer the
+                // enumeration of _typesByName.Values to the caller, i.e. to outside the lock.
+                return _typesByName.Values.Distinct().ToList();
+            }
         }
 
         /// <summary>
@@ -1166,8 +1288,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// </summary>
         public IEnumerable<NetMemberInfo> GetTypeMembers(string typeName)
         {
-            if (_typesByName.TryGetValue(typeName, out var type))
-                return type.Members;
+            lock (_stateLock)
+            {
+                if (_typesByName.TryGetValue(typeName, out var type))
+                    return type.Members;
+            }
 
             return Enumerable.Empty<NetMemberInfo>();
         }
@@ -1177,15 +1302,22 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// </summary>
         public bool IsNamespaceLoaded(string namespaceName)
         {
-            return _loadedNamespaces.Contains(namespaceName);
+            lock (_stateLock)
+            {
+                return _loadedNamespaces.Contains(namespaceName);
+            }
         }
 
         /// <summary>
-        /// Get all loaded namespaces
+        /// Get all loaded namespaces. A COPY — handing out the live <see cref="HashSet{T}"/> let a
+        /// caller enumerate it while <see cref="LoadNamespace"/> added to it.
         /// </summary>
         public IEnumerable<string> GetLoadedNamespaces()
         {
-            return _loadedNamespaces;
+            lock (_stateLock)
+            {
+                return _loadedNamespaces.ToList();
+            }
         }
 
         /// <summary>
