@@ -27,7 +27,17 @@ public class CppProjectCliBuildTests
         }
     }
 
-    private ProjectFile MakeCppProject(params (string Name, string Content)[] files)
+    private ProjectFile MakeCppProject(params (string Name, string Content)[] files) =>
+        MakeCppProject(null, files);
+
+    /// <summary>
+    /// THE one App.blproj template for this fixture — <paramref name="itemGroupBody"/> is the only
+    /// variation point, so a property added here reaches every test rather than only the callers
+    /// someone remembered. Written with File.WriteAllText, never ProjectFile.Save
+    /// (XDocument.Save injects a BOM).
+    /// </summary>
+    private ProjectFile MakeCppProject(string itemGroupBody,
+        params (string Name, string Content)[] files)
     {
         foreach (var (name, content) in files)
         {
@@ -35,15 +45,16 @@ public class CppProjectCliBuildTests
             Directory.CreateDirectory(Path.GetDirectoryName(full)!);
             File.WriteAllText(full, content);
         }
+        var items = itemGroupBody == null ? "" : $"\n  <ItemGroup>\n{itemGroupBody}\n  </ItemGroup>";
         var blproj = Path.Combine(_dir, "App.blproj");
-        File.WriteAllText(blproj, """
+        File.WriteAllText(blproj, $"""
             <BasicLangProject Version="1.0">
               <PropertyGroup>
                 <ProjectName>App</ProjectName>
                 <OutputType>Exe</OutputType>
                 <Language>Cpp</Language>
                 <TargetBackend>Cpp</TargetBackend>
-              </PropertyGroup>
+              </PropertyGroup>{items}
             </BasicLangProject>
             """);
         return ProjectFile.Load(blproj);
@@ -409,37 +420,17 @@ public class CppProjectCliBuildTests
     // all. These pin the end-to-end behavior through BOTH entry points.
     // ------------------------------------------------------------------
 
-    /// <summary>
-    /// Same fixed PropertyGroup as <see cref="MakeCppProject"/> plus a raw ItemGroup body, and a
-    /// compilable main.cpp so a reference diagnostic is never confused with BL6007. Written with
-    /// File.WriteAllText, never ProjectFile.Save — XDocument.Save injects a BOM.
-    /// </summary>
-    private ProjectFile MakeCppProjectWithItems(string itemGroupBody)
-    {
-        File.WriteAllText(Path.Combine(_dir, "main.cpp"), "int main() { return 0; }\n");
-        var blproj = Path.Combine(_dir, "App.blproj");
-        File.WriteAllText(blproj, $"""
-            <BasicLangProject Version="1.0">
-              <PropertyGroup>
-                <ProjectName>App</ProjectName>
-                <OutputType>Exe</OutputType>
-                <Language>Cpp</Language>
-                <TargetBackend>Cpp</TargetBackend>
-              </PropertyGroup>
-              <ItemGroup>
-            {itemGroupBody}
-              </ItemGroup>
-            </BasicLangProject>
-            """);
-        return ProjectFile.Load(blproj);
-    }
+    // Both go through the fixture's single blproj template. main.cpp keeps a reference
+    // diagnostic from ever being confused with BL6007.
+    private const string TrivialMain = "int main() { return 0; }\n";
 
     private ProjectFile MakeCppProjectWithReference(string name, string hintPath) =>
-        MakeCppProjectWithItems(
-            $"""    <Reference Include="{name}"><HintPath>{hintPath}</HintPath></Reference>""");
+        MakeCppProject($"""    <Reference Include="{name}"><HintPath>{hintPath}</HintPath></Reference>""",
+            ("main.cpp", TrivialMain));
 
     private ProjectFile MakeCppProjectWithProjectReference(string include) =>
-        MakeCppProjectWithItems($"""    <ProjectReference Include="{include}" />""");
+        MakeCppProject($"""    <ProjectReference Include="{include}" />""",
+            ("main.cpp", TrivialMain));
 
     [Test]
     public void NativeProject_WithMissingAssemblyReference_ReportsBL6021AndFails()
@@ -492,6 +483,12 @@ public class CppProjectCliBuildTests
         Assert.That(result.Diagnostics.Select(d => d.Code), Does.Not.Contain("BL6021"),
             "A project with no <Reference>/<PackageReference>/<ProjectReference> must produce "
             + "no reference diagnostics at all.");
+        Assert.That(File.Exists(Path.Combine(_dir, "obj", "project.assets.json")), Is.False,
+            "A package-free native project must not trigger a package restore on the BUILD path "
+            + "either. PackageManager.RestoreAsync creates obj/ and writes project.assets.json "
+            + "unconditionally, so this file appearing means the `PackageReferences.Count == 0` "
+            + "guard in CppProjectBuilder.RestorePackagesForClosure was bypassed — which changes "
+            + "what every existing native project writes to disk and prints to stdout.");
     }
 
     [Test]
@@ -509,14 +506,21 @@ public class CppProjectCliBuildTests
     [Test]
     public async Task Cli_Build_CppProject_ProjectReference_WarnsAndStillSucceeds()
     {
-        if (CppToolchain.Find() == null) Assert.Ignore("No C++ toolchain available");
         var project = MakeCppProjectWithProjectReference("..\\Sibling\\Sibling.blproj");
 
         var (exit, stdout, stderr) = await RunCli(_dir, "build", project.FilePath);
 
+        // Machine-independent: the warning is printed before the toolchain gate is even reached,
+        // so this — the only coverage of the CLI's warning FORMATTING — runs everywhere. Matching
+        // the conditional-assertion idiom used by Build_NoToolchainElement_UsesMachineProbe_AsToday.
+        Assert.That(stdout, Does.Contain("warning BL6021"),
+            $"the CLI prints warnings to stdout via CppDiagnosticsParser.FormatNormalized."
+            + $"\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+
+        if (CppToolchain.Find() == null)
+            Assert.Ignore("No C++ toolchain available; the warning-formatting assertion above still ran");
+
         Assert.That(exit, Is.EqualTo(0),
             $"INERTNESS GATE (CLI leg).\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
-        Assert.That(stdout, Does.Contain("warning BL6021"),
-            $"the CLI prints warnings to stdout.\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
     }
 }

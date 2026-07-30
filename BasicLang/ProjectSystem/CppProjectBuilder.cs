@@ -194,7 +194,10 @@ namespace BasicLang.Compiler.ProjectSystem
 
             var objGenDir = Path.Combine(projectDir, "obj", "gen");
 
-            // ---- 0. Resolve .NET references (spec §10.1 phase 1 — before everything else) ----
+            // ---- Resolve .NET references (spec §10.1 phase 1) ----
+            // Deliberately unnumbered: the spec's phase 1 is THIS, and its phase 2 is the BL->IR
+            // transpile that the "3." below already covers, so any ordinal here would put the
+            // file's 1..7 permanently one out of step with the spec's. Position conveys "first".
             // Runs on BOTH paths. Until P2a-1 every reference element was parsed into the project
             // model and then silently discarded on the native path (Program.cs returned before
             // restore, and this builder read no reference item at all), so a typo'd <HintPath>
@@ -211,12 +214,14 @@ namespace BasicLang.Compiler.ProjectSystem
                 project, project.FilePath, packageAssemblies, packageErrors);
             outcome.NetReferences = netReferences;
 
-            // Diagnostics reach result ONLY on a build. IntelliSense stays byte-for-byte as it
-            // was: it bypasses the BUILD-rule gates (BL6007/BL6005/BL6009) for the same reason —
-            // an unresolvable reference must not cost the user their generated headers — and
-            // IntelliSenseEmitter derives Success from outcome.Completed, so an error here would
-            // otherwise turn a perfectly good header regeneration into an Output-panel failure
-            // line. outcome.NetReferences.Diagnostics is the complete record on both paths.
+            // Diagnostics reach result ONLY on a build. IntelliSense's OUTPUTS stay byte-for-byte
+            // as they were (it does pay for the resolution work itself): it bypasses the
+            // BUILD-rule gates (BL6007/BL6005/BL6009) for the same reason — an unresolvable
+            // reference must not cost the user their generated headers — and IntelliSenseEmitter
+            // derives Success from outcome.Completed, so an error here would otherwise turn a
+            // perfectly good header regeneration into an Output-panel failure line on every typo'd
+            // HintPath. outcome.NetReferences.Diagnostics is the complete record on both paths.
+            // Pinned by IntelliSenseEmitterTests.Emit_WithUnresolvableReference_*.
             if (!forIntelliSense)
             {
                 var referenceErrors = 0;
@@ -224,6 +229,8 @@ namespace BasicLang.Compiler.ProjectSystem
                 {
                     if (diag.IsWarning)
                     {
+                        // Hand-constructed rather than routed through Fail: Fail forces
+                        // Success = false, and a warning must not. Do NOT "unify" these two.
                         result.Diagnostics.Add(new CppDiagnostic
                         {
                             FilePath = project.FilePath,
@@ -598,6 +605,12 @@ namespace BasicLang.Compiler.ProjectSystem
         }
 
         /// <summary>
+        /// Lazily created, process-wide. See <see cref="RestorePackagesForClosure"/> for why it is
+        /// shared and why it must not be created eagerly.
+        /// </summary>
+        private static readonly Lazy<PackageManager> SharedPackageManager = new(() => new PackageManager());
+
+        /// <summary>
         /// Produces the <c>&lt;PackageReference&gt;</c> half of the .NET reference closure, so
         /// <see cref="NetReferenceResolver.Resolve"/> can stay a pure synchronous function.
         ///
@@ -618,14 +631,33 @@ namespace BasicLang.Compiler.ProjectSystem
         /// contributes nothing and reports nothing — the next build restores it and reports for
         /// real. A floating version ("*", a range) cannot be pinned without the network, so it is
         /// skipped here rather than guessed at.</para>
+        ///
+        /// <para><b>KNOWN GAP, deliberately not fixed here (Task 13's job).</b> The blocking
+        /// restore has no timeout beyond <c>HttpClient</c>'s default 100 s per request, no
+        /// cancellation (<see cref="Build"/> takes no <c>CancellationToken</c> yet), and its
+        /// progress goes to <c>Console</c>, which the GUI Shell discards — so an IDE build of a
+        /// package-declaring native project can sit silent for minutes. All three are pre-existing
+        /// <see cref="PackageManager"/> properties, but THIS change is what put them on the native
+        /// build path. Spec §10.3 / plan Task 13 threads a <c>CancellationToken</c> through
+        /// <see cref="Build"/> and is the right home for the fix.</para>
+        ///
+        /// <para><c>internal</c> rather than private so tests can pin all four behaviors directly
+        /// — the same seam-for-testability precedent as <see cref="ApplyCompileOutcome"/>.</para>
         /// </summary>
-        private static (IReadOnlyList<string> Assemblies, IReadOnlyList<string> Errors)
+        internal static (IReadOnlyList<string> Assemblies, IReadOnlyList<string> Errors)
             RestorePackagesForClosure(ProjectFile project, string configuration, bool forIntelliSense)
         {
             if (project.PackageReferences.Count == 0)
                 return (Array.Empty<string>(), Array.Empty<string>());
 
-            var manager = new PackageManager();
+            // One PackageManager per process, created on first USE (so a project that declares no
+            // packages never triggers its ctor, which allocates a never-disposed HttpClient and
+            // does Directory.CreateDirectory(~/.basiclang/packages)). Sharing it also stops a
+            // long-lived IDE from leaking a fresh HttpClient + handler on every debounced
+            // IntelliSense emission. GetPackageAssemblies is a pure path walk but is an INSTANCE
+            // method reading _globalPackagesFolder, so it cannot be reached without one — and
+            // PackageManager is shared with the C# backend, so its shape is not ours to change.
+            var manager = SharedPackageManager.Value;
 
             if (!forIntelliSense)
             {

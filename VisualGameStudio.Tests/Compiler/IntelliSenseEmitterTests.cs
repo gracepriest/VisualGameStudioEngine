@@ -360,4 +360,69 @@ public class IntelliSenseEmitterTests
         Assert.That(Directory.Exists(Path.Combine(_dir, "bin")), Is.False,
             "IntelliSense emission must not create bin/<config>");
     }
+
+    // ------------------------------------------------------------------
+    // .NET reference resolution (P2a-1 Task 3) runs on this path too — spec §10.1
+    // phase 1, "IntelliSense runs it? yes". These pin that it costs the user
+    // nothing observable: no denied headers, no Output-panel noise, no restore.
+    // ------------------------------------------------------------------
+
+    private string AssetsFilePath => Path.Combine(_dir, "obj", "project.assets.json");
+
+    // A broken <HintPath> is a BUILD error (BL6021). On this path it must be bypassed exactly
+    // like BL6007/BL6005/BL6009 are: a typo'd reference must not cost the user their headers.
+    [Test]
+    public void Emit_WithUnresolvableReference_StillSucceedsAndReportsNoBL6021()
+    {
+        var project = WriteProject(
+            Blproj("App", """
+                <ItemGroup>
+                  <Reference Include="Ghost"><HintPath>lib\Ghost.dll</HintPath></Reference>
+                </ItemGroup>
+                """),
+            ("App.bas", MainSource));
+
+        var r = IntelliSenseEmitter.Emit(project, "Debug", toolchain: null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(r.Success, Is.True,
+                "an unresolvable <Reference> must not deny header regeneration. If this fails, the "
+                + "reference-diagnostic loop in CppProjectBuilder.EmitCore has escaped its "
+                + "`if (!forIntelliSense)` guard — put it back. " + DiagCodes(r));
+            Assert.That(r.Diagnostics.Select(d => d.Code), Has.None.EqualTo("BL6021"),
+                "IntelliSenseEmissionService prints result.Diagnostics whenever Success is false; a "
+                + "BL6021 here would surface a build-rule failure on the editing path. The complete "
+                + "record lives on CppEmitOutcome.NetReferences.Diagnostics instead. " + DiagCodes(r));
+            Assert.That(File.Exists(ObjGen("BasicLangRuntime.g.h")), Is.True,
+                "the headers are the whole deliverable — they must still be there");
+        });
+    }
+
+    // Opening a project must never wait on nuget.org. The assets file is the proof: PackageManager
+    // .RestoreAsync writes obj/project.assets.json unconditionally, so its ABSENCE means restore
+    // never ran, which means no network call was made and there was nothing to block on.
+    [Test]
+    public void Emit_WithFloatingPackageReference_DoesNotRestore()
+    {
+        var project = WriteProject(
+            Blproj("App", """
+                <ItemGroup>
+                  <PackageReference Include="Contoso.DoesNotExist" Version="*" />
+                </ItemGroup>
+                """),
+            ("App.bas", MainSource));
+
+        var r = IntelliSenseEmitter.Emit(project, "Debug", toolchain: null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(r.Success, Is.True, DiagCodes(r));
+            Assert.That(r.Diagnostics.Select(d => d.Code), Has.None.EqualTo("BL6021"), DiagCodes(r));
+            Assert.That(File.Exists(AssetsFilePath), Is.False,
+                "the IntelliSense branch of CppProjectBuilder.RestorePackagesForClosure is "
+                + "cache-only. An assets file here means RestoreAsync ran on the editing path, "
+                + "which means project-open can now hang on the network.");
+        });
+    }
 }
