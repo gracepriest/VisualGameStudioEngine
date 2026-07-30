@@ -8,6 +8,9 @@
     <!-- Suppress nullable warnings - these are mostly false positives from AST/IR classes that work correctly at runtime -->
     <!-- Also suppress VS threading analyzer warnings (VSTHRD) that come from OmniSharp LSP patterns -->
     <NoWarn>$(NoWarn);CS8618;CS8619;CS8620;CS8622;CS8625;CS8600;CS8601;CS8602;CS8603;CS8604;CS8609;CS8613;CS8714;CS0108;CS0162;CS0219;CS0414;CS1998;VSTHRD002;VSTHRD100;VSTHRD103;VSTHRD110;VSTHRD200</NoWarn>
+    <!-- Roslyn ships 26 satellite resource DLLs across 13 locales; the IDE/ drop is
+         hand-committed, so keep it to en. -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
 
   <ItemGroup>
@@ -26,6 +29,11 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.0" />
     <!-- PDB reading for debugger -->
     <PackageReference Include="System.Reflection.Metadata" Version="8.0.0" />
+    <!-- .NET type resolution for Native projects (spec §6.1): metadata reading,
+         overload resolution and inheritance, without loading assemblies.
+         Version pinned to match VisualGameStudio.Tests.csproj exactly — a different
+         version gives the test project two conflicting requests. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.9.2" />
   </ItemGroup>
 
   <ItemGroup>
