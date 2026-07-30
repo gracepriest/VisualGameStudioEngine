@@ -1647,3 +1647,63 @@ so the suite gained no network dependency.
 IDE-visible progress** (`HttpClient`'s default 100 s, no `CancellationToken`, progress written to
 `Console` which the GUI Shell discards). **Task 13** threads a `CancellationToken` through `Build`
 and is the right home for fixing this.
+
+### The second trade: Task 7 changes live LSP behavior — for the better
+
+Task 7 is the first task touching **running product code**, so "inert" there means *no observable
+change except the defects being fixed*. Two changes are observable, both deliberate:
+
+1. **.NET completions get dramatically better.** `TypeRegistry.BuildIndex()` was spending **7295 ms
+   to produce a completely empty index**: the LSP runs on net8.0 while `DetectDotNetSdkPath` supplies
+   the *newest* installed reference pack, and `Assembly.LoadFrom` cannot load a reference assembly
+   built for a higher framework than the running runtime. **141 of 164 assemblies failed with
+   `FileLoadException`, every one swallowed by a bare `catch {}`** — reproduced independently
+   (`succeeded 23, failed 141, types seen 0`). Every .NET completion the IDE has ever offered came
+   from the small `PreloadCoreTypes` fallback. After: **827 ms, 0 diagnostics, 1430 types.**
+2. **By-ref/pointer parameter spelling changes** in signature help for `PreloadCoreTypes` types:
+   `Int32&` → `Integer&`, `Int32*` → `Integer*`. Reflection's ladder never matched the primitive arm
+   (`typeof(int).MakeByRefType() != typeof(int)`) and fell through to `Type.Name`, while the metadata
+   producer re-added the suffix to the VB-mapped name. Both now use the VB spelling, which every
+   other name the class produces already used. This **is** a user-visible change; it is deliberate
+   and pinned by a dedicated test (the whole-type producer-agreement test does **not** catch it —
+   `Regex` has no by-ref parameters).
+
+⚠ **Two pre-existing defects found but NOT fixed** (chips filed) — both gate whether users actually
+see improvement 1:
+
+- **`LoadIndexFromCache` treats an empty/parseable cache as success** (`:324-352`; returns `true` at
+  `:346` for a zero-line file), so `DocumentManager.cs:55` never calls `BuildIndex()`. On a machine
+  with a stale cache the fix is **inert**; fresh installs do run it.
+- **`DetectDotNetSdkPath:1194-1219` sorts reference packs with `OrderByDescending(d => d)` — a
+  STRING sort on the path.** With `10.0.0`, `8.0.23`, `9.0.12` installed it picks **9.0.12**, since
+  `"9" > "8" > "1"`. net10.0 is silently skipped.
+
+⚠ **Three limitations recorded for later tasks:**
+
+- **`CoreLibraryFileNames` keys on file name only.** A `<Reference>` pointing at a stray *facade*
+  `System.Runtime.dll` (a pure type-forwarder declaring no `System.Object`) satisfies
+  `bringsOwnCoreLibrary`, suppresses the framework fallback, and silently restores the error-symbol
+  base types the reference-set rule exists to prevent.
+- **`_requestedPaths` only grows**, so after `BuildIndex` every later user reference is read against
+  the reference pack rather than the runtime.
+- **`TypeRegistry.Diagnostics` has no product consumer** — failures reach stderr only, so an end user
+  still sees nothing in the editor. Task 8 or P2a-2 should surface them.
+
+⚠ **Thread safety — do not remove the lock on the theory that the LSP is single-threaded.**
+`TypeRegistry` is a DI **singleton** shared across all LSP documents (`DocumentManager.cs:137`); its
+five collections are now under one `_stateLock`. The reason this never bit before Task 7 is subtle
+and worth keeping: OmniSharp marks didOpen/didChange/didSave `[Serial]` and
+completion/hover/definition `[Parallel]`, scheduled under an **outer `Concat` over groups**, so
+mutation never overlaps reads under normal scheduling. The hole is
+`DefaultRequestInvoker.RouteRequest`'s `Observable.Amb(Timer, handler)` — when the timer wins the
+scheduler advances **while the handler keeps running**, and the sync handlers never observe their
+`CancellationToken`. Task 7 changed *volume*, not concurrency, which raised both the odds of hitting
+that hatch and the damage when hit. Damage is not "a lost entry": a concurrent insert during a
+resize can leave a bucket chain cyclic so a later `TryGetValue` **spins forever**.
+
+⚠ **Never let a fixture write the user-scope LSP cache.** `BuildIndex` → `SaveIndexToCache` writes
+the fixed path `%LOCALAPPDATA%\BasicLang\namespace_index.json` and clears it first. Task 7's tests
+did this and left the real cache pointing at deleted temp DLLs — which, because
+`LoadIndexFromCache` then returns `true`, **reinstated the exact empty-index failure the task
+existed to fix.** `TypeRegistry` now has an `internal TypeRegistry(string cacheFilePath)` seam; any
+fixture constructing one **must** use it.
