@@ -476,14 +476,62 @@ Rules:
 - `AssemblyPaths` and `FrameworkPaths` are separately **de-duplicated by full path** and
   **order-stable** — Task 15's cache key hashes them.
 
-> **Where `FrameworkPaths` comes from, and what if it is absent.** Use
-> `AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")` — the compiler is itself a net8.0 process, so
-> this needs **no SDK or targeting pack on the machine**. This matters: today the native path
-> requires only a C++ toolchain (`CppProjectBuilder.cs:354-375`), and depending on a targeting pack
-> would introduce a brand-new environment failure mode for projects that use no .NET at all. If the
-> TPA list is somehow empty, `FrameworkPaths` is empty and resolution proceeds — a project with no
-> .NET usage is unaffected either way. The same helper backs Task 4's test fixture
-> (`CSharpRun.cs:28-33` is the in-repo precedent).
+> **Where `FrameworkPaths` comes from, and what if it is absent.** Start from
+> `AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")` — the compiler runs on net8.0, so this needs
+> **no SDK or targeting pack on the machine**. This matters: today the native path requires only a
+> C++ toolchain (`CppProjectBuilder.cs:354-375`), and depending on a targeting pack would introduce
+> a brand-new environment failure mode for projects that use no .NET at all. If the resulting set is
+> empty, `FrameworkPaths` is empty and resolution proceeds — a project with no .NET usage is
+> unaffected either way. The same helper backs Task 4's test fixture (`CSharpRun.cs:28-33` is the
+> in-repo precedent).
+>
+> ⛔ **The raw TPA list is NOT usable as-is — it is the HOST PROCESS's assembly set, not the
+> framework's.** This was a defect in an earlier revision of this plan, found by review after Task 3
+> shipped and fixed in the follow-up commit. The original wording ("the compiler is itself a net8.0
+> process") holds for `BasicLang.exe` and is **false** when `BasicLang.dll` is loaded in-process by
+> `VisualGameStudio.exe` — which is the IDE's *only* native build path (`BuildService.cs:1169`) and
+> its *only* IntelliSense path (`IntelliSenseEmissionService.cs:204`). `IDE/` ships ~40 non-framework
+> managed DLLs (`Avalonia.*`, `AvaloniaEdit`, `Dock.*`, `CommunityToolkit.Mvvm`, `Newtonsoft.Json`,
+> `SkiaSharp`, …). Three consequences, all real:
+>
+> 1. `<Reference Include="Avalonia" />` with no `<HintPath>` resolves **clean in the IDE** and is a
+>    **BL6021 error in the CLI**, for a byte-identical `.blproj` — exactly the cross-entry-point
+>    divergence CLAUDE.md's "test both entry points" law exists to prevent.
+> 2. Task 15 hashes `FrameworkPaths`. Host-dependent content makes alternating IDE and CLI builds on
+>    one project a guaranteed cache miss, and would compile the shim against a different framework
+>    set depending on who built it.
+> 3. Task 4's `NetTypeResolver.Create(closure.All)` would grant BasicLang programs ambient
+>    visibility into the IDE's entire dependency graph — in the IDE only.
+>
+> **Therefore: intersect the TPA list with the shared-framework directory.** Both inputs are
+> load-bearing and neither alone is correct:
+>
+> - **TPA contributes "managed and trusted."** Do NOT simply enumerate the framework directory — it
+>   contains native DLLs (`coreclr.dll`, `clrjit.dll`, `mscordbi.dll`, `hostpolicy.dll`) and
+>   `MetadataReference.CreateFromFile` throws `BadImageFormatException` on those, which would break
+>   Task 4.
+> - **The directory contributes "framework, not the host's dependencies."** Source it from
+>   `Path.GetDirectoryName(typeof(object).Assembly.Location)` (CoreLib's own directory — the most
+>   exact match, since TPA is guaranteed to contain CoreLib from that directory), falling back to
+>   `RuntimeEnvironment.GetRuntimeDirectory()` for a single-file bundle where `Location` is empty.
+> - ⚠ **Normalize both sides** with `Path.TrimEndingDirectorySeparator`: `GetRuntimeDirectory()`
+>   returns a trailing separator and `GetDirectoryName()` does not, so a naive compare matches
+>   nothing and **silently empties the set**.
+>
+> **Pinning it takes three assertions, not one.** A bare directory invariant is *vacuous* — an empty
+> `FrameworkPaths` satisfies it:
+>
+> 1. **Directory invariant** — no entry lives outside the shared-framework directory. Failure
+>    message must name the host-TPA trap and say "do NOT fix this by relaxing the filter."
+> 2. **Strict-subset count** — `FrameworkPaths.Count < (TPA .dll count)`. This is the assertion that
+>    actually fails if the fix is reverted, and it works *because* the test host resembles the Shell:
+>    it needs the host to load extra assemblies, which `VisualGameStudio.Tests.csproj:28`'s Avalonia
+>    reference guarantees.
+> 3. **Over-filtering guard** — `System.Runtime`, `System.Console` and `System.Text.RegularExpressions`
+>    are present, since §6.5 needs those to resolve with no `<Reference>` at all.
+>
+> Do **not** assert the absence of specific names (e.g. "Avalonia"): that pins an accident of this
+> host's dependency list rather than the rule.
 
 - [ ] **Step 4: Wire `<PackageReference>` through `PackageManager`**
 
@@ -1452,3 +1500,33 @@ Stated so a reviewer can tell "missing" from "deferred" (all of this is P2a-2, s
 - `BasicLang/ExternalLibraryLoader.cs:169`'s `Assembly.LoadFrom` channel (reachable via
   `Import … From`) is untouched.
 - No parity programs and no generated-shim conformance suite.
+
+## The one place inertness is knowingly traded
+
+Stated explicitly so it is not mistaken for an oversight. Found by review after Task 3 shipped.
+
+**A native project that declares `<Reference>` or `<PackageReference>` changes behavior.** On
+`master` the element is parsed into the model and silently dropped, so the project builds. After
+Task 3 it resolves — and if it does not resolve, the build fails **BL6021**. For
+`<PackageReference>` the build path additionally creates `obj/`, prints
+`Restoring packages for <name>...`, and **may reach nuget.org over the network**.
+
+This is the intended feature (§5: "not silence"; Task 3 Step 4: "An unrestorable package is
+BL6021"), not a regression. But note the trade is *reachable by real users*, by the same kind of
+route that made `<ProjectReference>` a warning rather than an error:
+
+- `BasicLang/Program.cs:339-368` — `basiclang add package <id>` writes `<PackageReference>` into
+  whatever project `FindProjectFile` returns, with **no `IsNativeProject` check**.
+- `SolutionExplorerViewModel.cs:625-627 → :689` — "Add Project Reference" has no backend filter
+  either (which is *why* `<ProjectReference>` is only a warning).
+
+So the honest statement of this plan's central claim is: **no project that compiled clean at
+`dfee728` and declares no reference elements changes in any way.** A project that *does* declare
+one was already silently broken; it now says so. No repo test or IDE template creates such a
+project (verified by grep — nothing anywhere builds a native project with a `<PackageReference>`),
+so the suite gained no network dependency.
+
+⚠ Two consequences for later tasks: the blocking restore has **no timeout, no cancellation, and no
+IDE-visible progress** (`HttpClient`'s default 100 s, no `CancellationToken`, progress written to
+`Console` which the GUI Shell discards). **Task 13** threads a `CancellationToken` through `Build`
+and is the right home for fixing this.
