@@ -824,6 +824,25 @@ invariant. Without it, §6.3's "valid programs behave identically on both backen
 - Modify: `BasicLang/CSharpBackend.cs:171-187`
 - Test: `VisualGameStudio.Tests/Blnet/NetAmbientNamespaceTests.cs`
 
+> ⚠ **There is no class named `CSharpBackend`.** The file `BasicLang/CSharpBackend.cs` contains
+> `ImprovedCSharpCodeGenerator` in namespace `BasicLang.Compiler.CodeGen.CSharp`. The Step 1 snippet
+> below is written against `CSharpBackend.AmbientNamespacesForTest` and **will not compile as
+> literally written** — use the real type name.
+>
+> Verified while executing: the count really is **17**, all added unconditionally at one call site,
+> and there is no third duplicate of the list in `BasicLang/`. **Order does not matter** — `Generate`
+> re-sorts `_usings` alphabetically at emission (`CSharpBackend.cs:423`, `.OrderBy(u => u)`) and the
+> candidate collection is a `HashSet<string>`, so insertion order never reached the output. Pin
+> **set** equality (`Is.EquivalentTo`), not sequence.
+>
+> ⚠ **Expect the drift test to be tautological against the obvious mutation, and do not "fix" that.**
+> After a genuinely pure extraction, `AmbientNamespacesForTest` aliases the same array, so removing a
+> namespace from `NetAmbientNamespaces.All` changes *both* sides of the comparison identically and
+> the equivalence test still passes. That is **evidence the duplicate is gone**, not a broken test —
+> the count assertion is what catches that mutation. To prove the equivalence test is live, mutate
+> the *backend* side instead (simulate a stray `_usings.Add(...)` reintroduced outside the shared
+> loop); that is the regression it actually guards, and it does fail.
+
 - [ ] **Step 1: Write the failing drift test**
 
 ```csharp
@@ -1050,6 +1069,15 @@ public class NetClaimPredicateTests
 > warning on a valid program. Task 4's code asserts "every caller knows the arity", but that caller
 > is *this task* and no test enforces it. **Add a bare-unclaimed-generic test** (`Queue(Of Integer)`
 > is the cheapest) and map the BasicLang generic arity onto the metadata name before lookup.
+>
+> **(c) Task 6's shared constant is currently one-sided — close it here.** `NetAmbientNamespaces.All`
+> is consumed by the C# backend but **not** by `NetTypeResolver`, because the resolver has no
+> ambient/unqualified-name concept at all: every lookup takes a fully-qualified metadata name. Task 6
+> deliberately did not invent one. So when this task gives the analyzer unqualified-name resolution,
+> it **must read `NetAmbientNamespaces.All` directly** rather than hand-copy a list — otherwise
+> Task 6's drift guard is hollow on the resolver side, and §6.3's equal-behavior claim fails exactly
+> where Task 6 was meant to protect it: a namespace the C# backend auto-imports but the resolver does
+> not know becomes a spurious **BL6016** natively.
 >
 > **(b) `NetTypeResolver.Diagnostics` must NOT land on `result.Diagnostics`.** Task 4 added a second
 > diagnostic bag beside `NetReferenceClosure.Diagnostics`. `IntelliSenseEmitterTests.cs:393-396`
