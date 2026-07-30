@@ -1470,6 +1470,31 @@ git commit -m "feat(p2a1): NetSurface, NetProxyEmitter and the blnet startup con
 **The riskiest "inert" task** — restructuring `EmitCore` must produce byte-identical generated C++
 for every existing project.
 
+> ⛔ **EVERY `CppProjectBuilder.cs` LINE NUMBER BELOW HAS DRIFTED.** Tasks 3, 7 and 8 all edited this
+> file. Verified real anchors at Task 12's commit (`bef38b6`) — re-verify before use, they will move
+> again:
+>
+> | What | Plan says | Actually |
+> |---|---|---|
+> | `objGenDir` | — | **`:195`** |
+> | `emitMain` (`isExe && basicLangMainCount == 1`) | `:262` | **`:397`** |
+> | `split` declared null | `:265` | **`:400`** |
+> | `obj/gen` clean + write | `:323-325` / `:326-327` | **`:458-462`** |
+> | `generatedTus` | `:338-340` | **`:473-475`** |
+> | `request.SourceFiles` | `:414` | **`:549`** |
+> | include path | `:419-420` | **`:555`** |
+>
+> ⛔ **`CleanGeneratedDir` (`:893-905`) deletes only `.g.cpp` and `.g.h`.** Task 12 emits **five**
+> artifacts — `blnet.h`, `blnet_runtime.hpp`, `blnet_bindings.g.hpp`, `blnet_proxies.g.hpp`,
+> `blnet_startup.g.cpp` — and **four of them survive that filter**. So when a project stops using
+> .NET, a removed member's proxy header lingers on the include path and can still be `#include`d.
+> **This task must widen the clean**, and must not widen it so far that it deletes user files.
+>
+> ℹ️ **§9.1 lists six ENTRIES, not six files:** five files plus the `shim/` directory, which is phase
+> 5's (`NetShimGenerator`, Task 14). §10.1 requires phases 1–4 to give full C++ IntelliSense without
+> ever publishing, so `blnet_startup.g.cpp` is the **only** TU
+> (`NetProxyEmitter.TranslationUnitFileNames`).
+
 **Files:**
 - Modify: `BasicLang/ProjectSystem/CppProjectBuilder.cs`
 - Test: `VisualGameStudio.Tests/Blnet/NetBuildPipelineTests.cs`
