@@ -81,14 +81,38 @@ namespace BasicLang.Net
         /// buckets and hangs or throws at some unrelated later read, which is about the worst
         /// failure shape available for a language server.</para>
         ///
-        /// <para><b>Unbounded, and keyed on arbitrary user text.</b> On the IntelliSense path every
-        /// half-typed identifier becomes a permanent entry. Entries are small (an outcome plus a
-        /// symbol reference Roslyn already holds), and the resolver's lifetime is the closure's, so
-        /// this is bounded in practice by how much a user types between reference changes — but it
-        /// is a real growth path and Task 7/8 should decide whether to cap it.</para>
+        /// <para><b>Keyed on arbitrary user text, and therefore capped</b> — see
+        /// <see cref="MaxTypeCacheEntries"/> for the cap and for why it is far higher than
+        /// <see cref="MaxOverloadCacheEntries"/>.</para>
         /// </summary>
         private readonly ConcurrentDictionary<string, CachedLookup> _cache =
             new ConcurrentDictionary<string, CachedLookup>(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Cap on <see cref="_cache"/>. Task 7 gave this resolver its first real owner
+        /// (<c>TypeRegistry</c>, whose instance lives as long as the LSP's document manager), so
+        /// "unbounded but short-lived" stopped being true and the growth path had to be closed.
+        ///
+        /// <para><b>Why an order of magnitude above
+        /// <see cref="MaxOverloadCacheEntries"/>.</b> Growth here is LINEAR in the distinct type
+        /// spellings a user types, not combinatorial: the key is one type name, and an entry is an
+        /// enum plus a symbol reference the compilation already holds — tens of bytes, against an
+        /// overload entry's whole descriptor and parameter list. The recompute cost also runs the
+        /// other way: a miss scans every referenced assembly at ~17 ms, against ~2 ms for an
+        /// overload probe, so clearing this cache is the more expensive mistake. High cap, purely as
+        /// a backstop against a session that types forever.</para>
+        ///
+        /// <para><b>Deliberately out of reach of the test suite.</b> Constraint (c) measured during
+        /// Task 5: a mutation that merely reduced cache HITS caused one extra Roslyn bind, which
+        /// lazily loaded a Roslyn assembly and tripped
+        /// <c>NetTypeResolverTests.DoesNotLoadAssembliesIntoTheProcess</c>'s before/after assembly
+        /// count. A cap low enough for ordinary fixtures to reach would make that test's outcome
+        /// depend on how many lookups ran before it.</para>
+        /// </summary>
+        internal const int MaxTypeCacheEntries = 32768;
+
+        /// <summary>Live entry count, for the bound's test. Not part of the facade.</summary>
+        internal int TypeCacheCount => _cache.Count;
 
         private readonly struct CachedLookup
         {
@@ -107,13 +131,24 @@ namespace BasicLang.Net
             public INamedTypeSymbol Symbol { get; }
         }
 
+        /// <summary>
+        /// The referenced assemblies keyed by the path they were read from, so a consumer that
+        /// thinks in FILES rather than in type names can ask what one particular assembly declares.
+        /// <c>TypeRegistry</c> is that consumer: its job is "index every namespace this DLL exports"
+        /// and "load every type this DLL exports", which is a per-file question the by-name lookup
+        /// cannot answer. Case-insensitive because the keys are Windows paths.
+        /// </summary>
+        private readonly IReadOnlyDictionary<string, IAssemblySymbol> _assembliesByPath;
+
         private NetTypeResolver(
             CSharpCompilation compilation,
             IReadOnlyList<IAssemblySymbol> assemblies,
+            IReadOnlyDictionary<string, IAssemblySymbol> assembliesByPath,
             ImmutableArray<NetReferenceDiagnostic> diagnostics)
         {
             _compilation = compilation;
             _assemblies = assemblies;
+            _assembliesByPath = assembliesByPath;
             _diagnostics = diagnostics;
         }
 
@@ -163,16 +198,23 @@ namespace BasicLang.Net
             // exception. Asking now costs ~0ms over a full framework closure and converts a
             // deferred silent degradation into a diagnostic at construction.
             var assemblies = new List<IAssemblySymbol>();
+            var byPath = new Dictionary<string, IAssemblySymbol>(StringComparer.OrdinalIgnoreCase);
             foreach (var reference in references)
             {
                 if (compilation.GetAssemblyOrModuleSymbol(reference) is IAssemblySymbol assembly)
+                {
                     assemblies.Add(assembly);
+                    if (reference.FilePath != null)
+                        byPath[reference.FilePath] = assembly;
+                }
                 else
+                {
                     diagnostics.Add(Unreadable(reference.FilePath,
                         "the file is not a managed assembly Roslyn can read metadata from"));
+                }
             }
 
-            return new NetTypeResolver(compilation, assemblies, diagnostics.ToImmutableArray());
+            return new NetTypeResolver(compilation, assemblies, byPath, diagnostics.ToImmutableArray());
         }
 
         private static NetReferenceDiagnostic Unreadable(string path, string reason) =>
@@ -342,6 +384,81 @@ namespace BasicLang.Net
             (m.Kind, m.Name, m.IsStatic, m.Arity, string.Join(",", m.Parameters));
 
         // ------------------------------------------------------------------
+        // Per-assembly enumeration (Task 7's seam for TypeRegistry)
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// True when <paramref name="assemblyPath"/> was among the paths this resolver was built
+        /// over AND its metadata was readable. A caller that needs a path this resolver does not
+        /// cover has to build a resolver that does — the reference set is fixed at construction.
+        /// </summary>
+        internal bool Covers(string assemblyPath) =>
+            assemblyPath != null && _assembliesByPath.ContainsKey(assemblyPath);
+
+        /// <summary>
+        /// Every PUBLIC type the assembly at <paramref name="assemblyPath"/> declares, nested types
+        /// included and flattened — the metadata-reading equivalent of
+        /// <c>Assembly.GetExportedTypes()</c>, which is what <c>TypeRegistry</c> called through
+        /// <c>Assembly.LoadFrom</c> before Task 7 (spec §6.2). Empty when the path is not
+        /// <see cref="Covers"/>ed, never a throw: the caller is on the IntelliSense path.
+        ///
+        /// <para><b>Declared, not exported-and-forwarded.</b> Reflection's
+        /// <c>GetExportedTypes()</c> on a FACADE assembly follows its type forwarders and reports the
+        /// targets; a metadata walk reports only what the file itself declares, so a pure facade
+        /// (<c>netstandard.dll</c>, <c>mscorlib.dll</c>, the <c>System.*</c> shims) contributes
+        /// nothing here. That is the right answer for both of <c>TypeRegistry</c>'s uses: the type is
+        /// still reached through the assembly that really declares it, and attributing it to the
+        /// facade as well only duplicated it in the namespace index under a second path.</para>
+        ///
+        /// <para><b>Nesting is flattened, matching what it replaces.</b> A public type nested inside
+        /// a public type is yielded as its own entry, because that is how
+        /// <c>GetExportedTypes()</c> reported it and how <c>TypeRegistry</c> indexed it —
+        /// <c>System.Environment+SpecialFolder</c> is a name the LSP looks up. A type nested inside a
+        /// NON-public type is not reachable and is not yielded, which
+        /// <see cref="Accessibility.Public"/> at every level gives for free.</para>
+        /// </summary>
+        internal IEnumerable<INamedTypeSymbol> PublicTypesIn(string assemblyPath)
+        {
+            if (assemblyPath == null || !_assembliesByPath.TryGetValue(assemblyPath, out var assembly))
+                return Array.Empty<INamedTypeSymbol>();
+
+            return PublicTypesInNamespace(assembly.GlobalNamespace);
+        }
+
+        private static IEnumerable<INamedTypeSymbol> PublicTypesInNamespace(INamespaceSymbol ns)
+        {
+            foreach (var member in ns.GetMembers())
+            {
+                if (member is INamespaceSymbol child)
+                {
+                    foreach (var type in PublicTypesInNamespace(child))
+                        yield return type;
+                }
+                else if (member is INamedTypeSymbol type)
+                {
+                    foreach (var nested in PublicTypeAndNested(type))
+                        yield return nested;
+                }
+            }
+        }
+
+        private static IEnumerable<INamedTypeSymbol> PublicTypeAndNested(INamedTypeSymbol type)
+        {
+            // Stopping the recursion here rather than filtering afterwards is what makes a type
+            // nested in a non-public type unreachable: accessibility does not widen on the way down.
+            if (type.DeclaredAccessibility != Accessibility.Public)
+                yield break;
+
+            yield return type;
+
+            foreach (var nested in type.GetTypeMembers())
+            {
+                foreach (var deeper in PublicTypeAndNested(nested))
+                    yield return deeper;
+            }
+        }
+
+        // ------------------------------------------------------------------
         // Lookup
         // ------------------------------------------------------------------
 
@@ -354,6 +471,12 @@ namespace BasicLang.Net
                 return cached;
 
             var result = LookupUncached(fullName);
+
+            // Bounded for the reason MaxTypeCacheEntries gives; cleared wholesale for the reason
+            // MaxOverloadCacheEntries gives.
+            if (_cache.Count >= MaxTypeCacheEntries)
+                _cache.Clear();
+
             _cache[fullName] = result;
             return result;
         }

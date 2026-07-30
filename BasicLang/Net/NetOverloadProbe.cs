@@ -68,10 +68,46 @@ namespace BasicLang.Net
         /// <summary>
         /// Overload results, keyed on the whole request. Separate from <see cref="_cache"/> because
         /// the key is a request, not a type name. Concurrent for the reason <see cref="_cache"/>
-        /// documents, and unbounded in the same way — one entry per distinct call site.
+        /// documents, and BOUNDED by <see cref="MaxOverloadCacheEntries"/> — see there for why this
+        /// one needed a cap more urgently than <see cref="_cache"/> did.
         /// </summary>
         private readonly ConcurrentDictionary<string, NetOverloadResult> _overloadCache =
             new ConcurrentDictionary<string, NetOverloadResult>(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Cap on <see cref="_overloadCache"/>. Measured during Task 5, this cache grows worse than
+        /// <see cref="_cache"/> in three independent ways, which is why it is the one that had to be
+        /// bounded:
+        /// <list type="bullet">
+        /// <item><description>The key is a whole REQUEST — call form, type, member, type arguments
+        /// and every argument spelling — so entry count is COMBINATORIAL in half-typed identifiers
+        /// rather than linear in names. On the IntelliSense path, typing <c>Regex.IsMatch(</c> one
+        /// character at a time yields a distinct entry per keystroke.</description></item>
+        /// <item><description>Entries are created BEFORE the spellings are validated (deliberately —
+        /// see <see cref="ResolveOverload"/>'s key comment), so every malformed spelling buys a
+        /// permanent <see cref="NetOverloadOutcome.NoMatch"/> entry. Rejecting a spelling costs a
+        /// cache slot.</description></item>
+        /// <item><description>Entries carry a <see cref="NetMemberDescriptor"/> with its own
+        /// <see cref="NetMemberDescriptor.Parameters"/> list, so they are materially larger than a
+        /// lookup entry's (outcome + a symbol reference Roslyn already holds).</description></item>
+        /// </list>
+        ///
+        /// <para><b>Bounded rather than key-reordered.</b> The obvious alternative — validate the
+        /// spellings first so invalid input never keys an entry — was rejected: it moves the
+        /// invalid-input path from cached to recomputed at ~2 ms per probe, and invalid input is
+        /// exactly what a half-typed call site produces on every keystroke. Capping keeps the
+        /// pathological population out of memory without making it slow.</para>
+        ///
+        /// <para><b>Cleared wholesale, not evicted LRU.</b> A
+        /// <see cref="ConcurrentDictionary{TKey, TValue}"/> carries no recency order to evict by, and
+        /// adding that bookkeeping puts a lock on the path this cache exists to keep fast. The
+        /// keystroke-driven entries that fill it are precisely the ones never asked for again, so a
+        /// clear discards mostly-dead weight; a genuine call site costs one ~2 ms re-probe.</para>
+        /// </summary>
+        internal const int MaxOverloadCacheEntries = 4096;
+
+        /// <summary>Live entry count, for the bound's test. Not part of the facade.</summary>
+        internal int OverloadCacheCount => _overloadCache.Count;
 
         private static readonly NetOverloadResult NoOverloadMatch =
             new NetOverloadResult(NetOverloadOutcome.NoMatch, null);
@@ -248,6 +284,14 @@ namespace BasicLang.Net
                 return cached;
 
             var result = ResolveOverloadUncached(typeFullName, form, memberName, arguments, typeArguments);
+
+            // Bound BEFORE inserting, so the cap is a real ceiling rather than a ceiling plus one
+            // per racing writer. See MaxOverloadCacheEntries for why a wholesale clear beats an LRU
+            // eviction here. Concurrent writers may both observe the cap and both clear; that is
+            // harmless — the cache holds no state that has to survive, only work already done.
+            if (_overloadCache.Count >= MaxOverloadCacheEntries)
+                _overloadCache.Clear();
+
             _overloadCache[key] = result;
             return result;
         }

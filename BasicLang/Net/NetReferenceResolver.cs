@@ -193,6 +193,24 @@ namespace BasicLang.Net
         internal static string FrameworkDirectoryForTests => SharedFrameworkDirectory();
 
         /// <summary>
+        /// The framework set on its own, for a consumer that has no <c>.blproj</c> to resolve but
+        /// still needs Roslyn to be able to see <c>System.Object</c>.
+        ///
+        /// <para><c>TypeRegistry</c> is that consumer: it reads an arbitrary assembly for the LSP's
+        /// IntelliSense and has no project in hand. Without the framework in the reference set a
+        /// type's base type binds to an ERROR symbol — which costs every completion list
+        /// <c>System.Object</c>'s members and makes a <c>public enum</c> report
+        /// <see cref="NetTypeCategory.Class"/>, because a type's enum-ness IS "its base type is
+        /// <c>System.Enum</c>".</para>
+        ///
+        /// <para>Exposed as an accessor onto the SAME <c>FrameworkSet</c> the closure uses rather
+        /// than re-derived, for the reason this class's remarks give at length: a parallel derivation
+        /// is what makes a byte-identical <c>.blproj</c> behave differently in the IDE and the
+        /// CLI.</para>
+        /// </summary>
+        internal static IReadOnlyList<string> FrameworkAssemblies => FrameworkSet.Value;
+
+        /// <summary>
         /// Resolves <paramref name="project"/>'s reference elements into an assembly closure.
         /// </summary>
         /// <param name="projectFilePath">

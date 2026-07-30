@@ -1,5 +1,6 @@
 using BasicLang.Net;
 using BasicLang.Compiler.ProjectSystem;   // NOT BasicLang.ProjectSystem — see ProjectFile.cs:8
+using BasicLang.Compiler.SemanticAnalysis;   // TypeRegistry, NetTypeInfo, NetMemberKind
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using NUnit.Framework;
@@ -1331,5 +1332,617 @@ public class NetTypeResolverTests
         Assert.That(resolver.Diagnostics, Is.Empty,
             "the framework set must be clean: every entry readable as managed metadata. A " +
             "BL6021 here means the closure has started handing native DLLs to Roslyn.");
+    }
+}
+
+/// <summary>
+/// <c>TypeRegistry</c> is the LSP's .NET IntelliSense source, and until Task 7 it read assemblies
+/// with <c>Assembly.LoadFrom</c> (<c>TypeRegistry.cs:145/:310/:346</c>) behind three bare
+/// <c>catch {}</c> blocks. This fixture pins the two properties that made that a defect and the
+/// observable shape that must survive the swap.
+///
+/// <para><b>Why the assertions go through <see cref="TypeRegistry"/> and not
+/// <see cref="NetTypeResolver"/>.</b> The resolver already reads metadata without loading — a test
+/// written against it is green before the fix and proves nothing. The LSP calls
+/// <c>TypeRegistry</c>, so that is where the guard has to bite.</para>
+///
+/// <para><b>Why every probe assembly is COMPILED with a fresh identity rather than copied.</b>
+/// Measured: <c>Assembly.LoadFrom</c> on a copy of an assembly already loaded in the process
+/// (<c>BasicLang.dll</c>, <c>typeof(TypeRegistry).Assembly.Location</c>) resolves by ASSEMBLY
+/// IDENTITY, hands back the instance already loaded, and never opens the copy at all — so the copy
+/// is not locked and a delete-succeeds assertion passes with the defect fully in place. A
+/// fresh-identity assembly is the only shape that locks: <c>LoadFrom</c> then throws
+/// <c>UnauthorizedAccessException</c> on the delete. A guard that cannot fail is worse than no
+/// guard, so do not "simplify" these back to <c>File.Copy</c>.</para>
+/// </summary>
+[TestFixture]
+public class TypeRegistryMetadataTests
+{
+    private string _dir = null!;
+
+    [SetUp]
+    public void SetUp()
+    {
+        _dir = Path.Combine(Path.GetTempPath(), "typereg-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_dir);
+    }
+
+    [TearDown]
+    public void TearDown()
+    {
+        for (var i = 0; i < 3; i++)
+        {
+            try { Directory.Delete(_dir, recursive: true); return; }
+            catch { Thread.Sleep(200); }
+        }
+    }
+
+    /// <summary>
+    /// Compiles a real on-disk assembly whose simple name is unique to this test run, so that its
+    /// presence in <c>AppDomain.CurrentDomain.GetAssemblies()</c> is unambiguous evidence of a load
+    /// and <c>LoadFrom</c> cannot short-circuit to an already-loaded instance.
+    /// </summary>
+    private string EmitFreshAssembly(string assemblyName, string source)
+    {
+        var compilation = CSharpCompilation.Create(assemblyName,
+            new[] { CSharpSyntaxTree.ParseText(source) },
+            NetTypeResolverTestRefs.FrameworkPaths.Select(p => MetadataReference.CreateFromFile(p)),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        var path = Path.Combine(_dir, assemblyName + ".dll");
+        var result = compilation.Emit(path);
+        Assert.That(result.Success, Is.True,
+            "the FIXTURE failed to build its probe assembly (not TypeRegistry): " + string.Join("\n",
+                result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
+        return path;
+    }
+
+    private static string FreshName(string prefix) => prefix + Guid.NewGuid().ToString("N");
+
+    // ------------------------------------------------------------------
+    // The two properties that made Assembly.LoadFrom a defect.
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void LoadTypesFromAssemblyDoesNotLockTheFile()
+    {
+        var name = FreshName("TypeRegLockProbe");
+        var probe = EmitFreshAssembly(name, "namespace Contoso { public class Gadget { public int Spin() { return 1; } } }");
+
+        var registry = new TypeRegistry();
+        var types = registry.LoadTypesFromAssembly(probe);
+        Assert.That(types.Select(t => t.FullName), Does.Contain("Contoso.Gadget"),
+            "guard: the registry must actually have read this assembly, or the delete below is vacuous");
+
+        Assert.That(() => File.Delete(probe), Throws.Nothing,
+            "Assembly.LoadFrom holds a lock here — measured, it throws UnauthorizedAccessException " +
+            "on this delete. Spec §6.2 replaces it precisely because the LSP could not reload a " +
+            "rebuilt referenced assembly without restarting. Fix TypeRegistry, not this test.");
+    }
+
+    [Test]
+    public void LoadTypesFromAssemblyDoesNotLoadThatAssemblyIntoTheProcess()
+    {
+        var name = FreshName("TypeRegLoadProbe");
+        var probe = EmitFreshAssembly(name, "namespace Contoso { public class Gizmo { } }");
+
+        var registry = new TypeRegistry();
+        Assert.That(registry.LoadTypesFromAssembly(probe).Select(t => t.FullName),
+            Does.Contain("Contoso.Gizmo"), "guard: the registry must actually have read the probe");
+
+        Assert.That(AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetName().Name),
+            Does.Not.Contain(name),
+            "TypeRegistry must READ metadata, never LOAD it. A load runs module initializers and " +
+            "cannot be undone, and it is why the index silently degraded. Fix TypeRegistry.");
+    }
+
+    [Test]
+    public void BuildIndexDoesNotLockTheAssembliesItScans()
+    {
+        var name = FreshName("TypeRegScanProbe");
+        EmitFreshAssembly(name, "namespace Contoso.Scanned { public class Seen { } }");
+
+        var registry = new TypeRegistry();
+        registry.AddSearchPath(_dir);
+        registry.BuildIndex();
+
+        Assert.That(registry.LoadNamespace("Contoso.Scanned"), Is.True,
+            "guard: BuildIndex must have indexed the probe's namespace, or the delete is vacuous");
+        Assert.That(() => File.Delete(Path.Combine(_dir, name + ".dll")), Throws.Nothing,
+            "ScanAssembly (TypeRegistry.cs:145) used Assembly.LoadFrom, which locks every DLL in " +
+            "every search path for the life of the LSP process. Fix TypeRegistry.");
+    }
+
+    /// <summary>
+    /// The measured production failure: the LSP runs on net8.0 while
+    /// <see cref="TypeRegistry.DetectDotNetSdkPath"/> hands it the NEWEST installed reference pack.
+    /// <c>Assembly.LoadFrom</c> cannot load a reference assembly built for a higher framework
+    /// version than the running runtime — measured 141 of 164 failures over
+    /// <c>Microsoft.NETCore.App.Ref/9.0.12</c> on a net8.0 host — and the bare <c>catch {}</c> made
+    /// that look like success, so the whole namespace index was empty and nobody noticed. Reading
+    /// metadata has no such version coupling.
+    /// </summary>
+    [Test]
+    public void IndexesAnAssemblyBuiltForANewerFrameworkThanTheRunningRuntime()
+    {
+        var newerRefPack = Directory
+            .GetDirectories(Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                "dotnet", "packs", "Microsoft.NETCore.App.Ref"))
+            .Select(d => new { Dir = d, Name = Path.GetFileName(d) })
+            .Where(d => Version.TryParse(d.Name, out var v) && v.Major > Environment.Version.Major)
+            .OrderBy(d => d.Name)
+            .FirstOrDefault();
+
+        if (newerRefPack == null)
+            Assert.Ignore("no reference pack newer than the running runtime is installed; " +
+                          "this machine cannot exhibit the version-coupling failure.");
+
+        var refDir = Directory.GetDirectories(Path.Combine(newerRefPack!.Dir, "ref")).OrderBy(d => d).First();
+        var systemRuntime = Path.Combine(refDir, "System.Runtime.dll");
+        Assert.That(File.Exists(systemRuntime), Is.True, "guard: the ref pack must contain System.Runtime.dll");
+
+        var registry = new TypeRegistry();
+        var types = registry.LoadTypesFromAssembly(systemRuntime);
+
+        Assert.That(types, Is.Not.Empty,
+            $"reading {Path.GetFileName(refDir)} reference metadata on a net{Environment.Version.Major} " +
+            "host must work. Assembly.LoadFrom fails here with FileLoadException ('Could not load " +
+            "file or assembly ... Version=" + newerRefPack.Name + "') and the bare catch {} hid it, " +
+            "leaving the LSP's namespace index permanently empty. Fix TypeRegistry.");
+    }
+
+    // ------------------------------------------------------------------
+    // Failures are reported, not swallowed.
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void AnUnreadableAssemblyIsReportedAsBL6021_NotSwallowed()
+    {
+        var junk = Path.Combine(_dir, "Junk.dll");
+        File.WriteAllBytes(junk, new byte[] { 0x4D, 0x5A });        // "MZ" and nothing else
+
+        var registry = new TypeRegistry();
+        List<NetTypeInfo> types = null!;
+        Assert.That(() => types = registry.LoadTypesFromAssembly(junk), Throws.Nothing,
+            "every path here is user-reachable — a <Reference> can name a native DLL or a truncated " +
+            "file — so an unreadable assembly must never crash the LSP request.");
+        Assert.That(types, Is.Empty);
+
+        Assert.That(registry.Diagnostics.Any(d => d.Contains("BL6021")), Is.True,
+            "the three call sites used a bare catch {}, which is why nobody noticed the index was " +
+            "empty. An unreadable reference must leave a BL6021 behind. Fix TypeRegistry.");
+        Assert.That(registry.Diagnostics.Any(d => d.Contains("Junk.dll")), Is.True,
+            "a diagnostic that does not name the file it is about cannot be acted on.");
+    }
+
+    [Test]
+    public void AMissingAssemblyIsReportedAsBL6021_NotSwallowed()
+    {
+        var missing = Path.Combine(_dir, "NeverExisted.dll");
+
+        var registry = new TypeRegistry();
+        Assert.That(() => registry.LoadTypesFromAssembly(missing), Throws.Nothing);
+        Assert.That(registry.Diagnostics.Any(d => d.Contains("BL6021") && d.Contains("NeverExisted.dll")),
+            Is.True,
+            "a <Reference> deleted between resolution and use must be reported, not swallowed. " +
+            "Fix TypeRegistry.");
+    }
+
+    // ------------------------------------------------------------------
+    // Observable shape: what the LSP's completion lists are built from.
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void ReadsTheShapeTheLspConsumesFromAFreshAssembly()
+    {
+        var name = FreshName("TypeRegShapeProbe");
+        var probe = EmitFreshAssembly(name, @"
+namespace Contoso
+{
+    public class Widget : Base, System.IDisposable
+    {
+        public Widget() { }
+        public Widget(int spokes) { }
+        public int Spokes { get; set; }
+        public string Label;
+        public static string Describe(int n, string tag = ""x"") { return tag; }
+        public void Dispose() { }
+    }
+    public class Base { public void Inherited() { } }
+    public enum Gear { Low, High }
+    public static class Helpers { public static int Twice(int n) { return n * 2; } }
+}");
+
+        var registry = new TypeRegistry();
+        registry.LoadTypesFromAssembly(probe);
+
+        var widget = registry.GetType("Contoso.Widget");
+        Assert.That(widget, Is.Not.Null, "the LSP looks types up by full name");
+        Assert.That(registry.GetType("Widget"), Is.Not.Null, "…and by simple name");
+
+        Assert.That(widget!.Name, Is.EqualTo("Widget"));
+        Assert.That(widget.Namespace, Is.EqualTo("Contoso"));
+        Assert.That(widget.IsClass, Is.True);
+        Assert.That(widget.IsInterface, Is.False);
+        Assert.That(widget.IsEnum, Is.False);
+        Assert.That(widget.IsStruct, Is.False);
+        Assert.That(widget.IsStatic, Is.False);
+        Assert.That(widget.BaseType, Is.EqualTo("Base"));
+        Assert.That(widget.Interfaces, Does.Contain("IDisposable"));
+
+        Assert.That(widget.Constructors.Count, Is.EqualTo(2), "both declared public constructors");
+        Assert.That(widget.Constructors.Select(c => c.Name), Is.All.EqualTo("New"),
+            "the LSP renders constructors as VB's New");
+        Assert.That(widget.Constructors.All(c => c.Kind == NetMemberKind.Constructor), Is.True);
+
+        var members = widget.Members;
+        var spokes = members.Single(m => m.Name == "Spokes");
+        Assert.That(spokes.Kind, Is.EqualTo(NetMemberKind.Property));
+        Assert.That(spokes.ReturnType, Is.EqualTo("Integer"), "VB spellings, not C# ones");
+        Assert.That(spokes.CanRead, Is.True);
+        Assert.That(spokes.CanWrite, Is.True);
+
+        var label = members.Single(m => m.Name == "Label");
+        Assert.That(label.Kind, Is.EqualTo(NetMemberKind.Field));
+        Assert.That(label.ReturnType, Is.EqualTo("String"));
+
+        var describe = members.Single(m => m.Name == "Describe");
+        Assert.That(describe.Kind, Is.EqualTo(NetMemberKind.Method));
+        Assert.That(describe.IsStatic, Is.True);
+        Assert.That(describe.Parameters.Select(p => p.Name), Is.EqualTo(new[] { "n", "tag" }));
+        Assert.That(describe.Parameters.Select(p => p.Type), Is.EqualTo(new[] { "Integer", "String" }));
+        Assert.That(describe.Parameters[1].IsOptional, Is.True,
+            "signature help renders optional parameters differently");
+
+        Assert.That(members.Select(m => m.Name), Does.Contain("Inherited"),
+            "reflection's GetMethods(Public|Instance|Static) is TRANSITIVE, so the LSP has always " +
+            "offered inherited members. A metadata walk that stops at the queried type silently " +
+            "shortens every completion list.");
+        Assert.That(members.Select(m => m.Name), Does.Contain("GetHashCode"),
+            "System.Object's members too — NetTypeResolver.CandidateMembers deliberately EXCLUDES " +
+            "them for §7.2's shim surface, which is the wrong rule for a completion list. These " +
+            "two member sets are not interchangeable.");
+
+        Assert.That(members.Select(m => m.Name), Does.Not.Contain("get_Spokes"),
+            "reflection skipped IsSpecialName accessors; a property is one member.");
+
+        Assert.That(registry.GetType("Contoso.Helpers")!.IsStatic, Is.True,
+            "reflection reported IsAbstract && IsSealed as IsStatic");
+
+        var gear = registry.GetType("Contoso.Gear");
+        Assert.That(gear!.IsEnum, Is.True);
+        Assert.That(gear.Members.Where(m => m.Kind == NetMemberKind.EnumValue).Select(m => m.Name),
+            Is.EquivalentTo(new[] { "Low", "High" }));
+    }
+
+    /// <summary>
+    /// The one member reflection reported that metadata cannot, decided deliberately rather than
+    /// discovered later. Reflection's <c>GetFields(Public|Instance|Static)</c> surfaces an enum's
+    /// compiler-generated <c>value__</c> backing field; Roslyn's PE symbols never expose it. It is
+    /// not a member a user can write, so a completion list offering <c>DayOfWeek.value__</c> was a
+    /// defect. Dropping it is the intended difference.
+    /// </summary>
+    [Test]
+    public void AnEnumsValueBackingFieldIsNotOfferedAsAMember()
+    {
+        var name = FreshName("TypeRegEnumProbe");
+        var probe = EmitFreshAssembly(name, "namespace Contoso { public enum Gear { Low, High } }");
+
+        var registry = new TypeRegistry();
+        registry.LoadTypesFromAssembly(probe);
+
+        Assert.That(registry.GetType("Contoso.Gear")!.Members.Select(m => m.Name),
+            Does.Not.Contain("value__"),
+            "value__ is a compiler-generated backing field, not something a user can write. If " +
+            "this starts failing, TypeRegistry has gone back to reflection over a loaded assembly.");
+    }
+
+    /// <summary>
+    /// <c>PreloadCoreTypes</c> still describes the RUNNING runtime through reflection — it has no
+    /// <c>Assembly.LoadFrom</c> and Task 7 does not touch it. So the file now has TWO producers of
+    /// <see cref="NetTypeInfo"/>, and a completion list must not change shape depending on which
+    /// one answered.
+    /// </summary>
+    [Test]
+    public void TheReflectionAndMetadataProducersAgreeOnShape()
+    {
+        // Regex and NOT StringBuilder: StringBuilder is declared by System.Private.CoreLib, which
+        // Roslyn cannot read as a metadata reference at all, and the System.Runtime.dll that appears
+        // to export it is a pure type-forwarder that declares nothing. Regex is declared by an
+        // ordinary readable framework assembly and is in PreloadCoreTypes' curated list.
+        const string name = "System.Text.RegularExpressions.Regex";
+
+        var registry = new TypeRegistry();
+        registry.PreloadCoreTypes();
+        var preloaded = registry.GetType(name);
+        Assert.That(preloaded, Is.Not.Null, "guard: PreloadCoreTypes must register Regex");
+
+        var fromMetadata = new TypeRegistry();
+        fromMetadata.LoadTypesFromAssembly(typeof(System.Text.RegularExpressions.Regex).Assembly.Location);
+        var metadata = fromMetadata.GetType(name);
+        Assert.That(metadata, Is.Not.Null,
+            "guard: the metadata producer must have read Regex out of " +
+            Path.GetFileName(typeof(System.Text.RegularExpressions.Regex).Assembly.Location));
+
+        Assert.That(metadata!.Name, Is.EqualTo(preloaded!.Name));
+        Assert.That(metadata.FullName, Is.EqualTo(preloaded.FullName));
+        Assert.That(metadata.Namespace, Is.EqualTo(preloaded.Namespace));
+        Assert.That(metadata.IsClass, Is.EqualTo(preloaded.IsClass));
+        Assert.That(metadata.IsStruct, Is.EqualTo(preloaded.IsStruct));
+        Assert.That(metadata.IsEnum, Is.EqualTo(preloaded.IsEnum));
+        Assert.That(metadata.IsStatic, Is.EqualTo(preloaded.IsStatic));
+        Assert.That(metadata.Members.Select(m => m.Name), Does.Contain("IsMatch"));
+        Assert.That(metadata.Members.Select(m => m.Name), Does.Contain("Match"));
+        Assert.That(metadata.Members.Select(m => m.Name), Does.Contain("Options"),
+            "a property the reflection producer reported too");
+        Assert.That(metadata.Constructors, Is.Not.Empty);
+    }
+
+    // ------------------------------------------------------------------
+    // Reference-set composition. Roslyn resolves an assembly's references only against what it was
+    // given, so WHICH framework is in the set decides whether a base type resolves at all.
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// A lone assembly — a project <c>&lt;Reference&gt;</c>, the common case — needs the shared
+    /// framework added, or its base types bind to error symbols.
+    /// </summary>
+    [Test]
+    public void AnAssemblyReadOnItsOwnStillResolvesItsBaseTypes()
+    {
+        var name = FreshName("TypeRegSoloProbe");
+        var probe = EmitFreshAssembly(name,
+            "namespace Contoso { public class Solo { } public enum Lonely { One } }");
+
+        var registry = new TypeRegistry();
+        registry.LoadTypesFromAssembly(probe);
+
+        Assert.That(registry.GetType("Contoso.Solo")!.BaseType, Is.EqualTo("Object"),
+            "without the shared framework in the reference set a base type binds to an ERROR " +
+            "symbol. Reflection never hit this because a LOADED assembly resolves its references " +
+            "through the runtime.");
+        Assert.That(registry.GetType("Contoso.Solo")!.Members.Select(m => m.Name),
+            Does.Contain("GetHashCode"),
+            "…and System.Object contributing no members silently shortens every completion list.");
+        Assert.That(registry.GetType("Contoso.Lonely")!.IsEnum, Is.True,
+            "a type's enum-ness IS 'its base type is System.Enum', so an unresolvable corlib makes " +
+            "a public enum report IsEnum = false.");
+    }
+
+    /// <summary>
+    /// The LSP's own configuration: the search path is a reference PACK, which brings its own core
+    /// library. Adding the shared framework on top would put TWO framework versions in one
+    /// compilation — measured, that is strictly worse than none, because every core type is declared
+    /// twice and <c>System.Enum</c> then resolves to nothing at all.
+    /// </summary>
+    [Test]
+    public void AReferencePackIsReadWithoutMixingInASecondFrameworkVersion()
+    {
+        var sdkPath = TypeRegistry.DetectDotNetSdkPath();
+        if (string.IsNullOrEmpty(sdkPath))
+            Assert.Ignore("no Microsoft.NETCore.App.Ref pack installed.");
+
+        var registry = new TypeRegistry();
+        registry.AddSearchPath(sdkPath!);
+        registry.BuildIndex();
+
+        Assert.That(registry.LoadNamespace("System.IO"), Is.True, "guard: the index must be populated");
+
+        var fileMode = registry.GetType("System.IO.FileMode");
+        Assert.That(fileMode, Is.Not.Null, "guard: FileMode must be readable from the pack");
+        Assert.That(fileMode!.IsEnum, Is.True,
+            "FileMode reporting IsEnum = false is the signature of two framework versions in one " +
+            "compilation: System.Enum is declared twice, resolves to neither, and the enum stops " +
+            "looking like an enum. The reference pack brings its own core library and must own the " +
+            "framework alone — see TypeRegistry.EffectiveReferenceSet.");
+        Assert.That(fileMode.Members.Where(m => m.Kind == NetMemberKind.EnumValue).Select(m => m.Name),
+            Does.Contain("Open"));
+
+        Assert.That(registry.Diagnostics, Is.Empty,
+            "a healthy reference pack must produce no BL6021. A crop of 'not a managed assembly' " +
+            "warnings here means the reference set is self-conflicting, not that the pack is bad.");
+    }
+
+    /// <summary>
+    /// Nested public types were reachable through reflection's <c>GetExportedTypes</c>, which
+    /// flattens them, spells their <c>FullName</c> with <c>+</c> and reports the ENCLOSING
+    /// namespace. A metadata walk that only visits namespace members drops them entirely, and
+    /// <c>System.Environment.SpecialFolder</c> is exactly the kind of name a user completes.
+    /// </summary>
+    [Test]
+    public void NestedPublicTypesAreIndexedTheWayReflectionReportedThem()
+    {
+        var name = FreshName("TypeRegNestProbe");
+        var probe = EmitFreshAssembly(name,
+            "namespace Contoso { public class Outer { public enum Inner { A, B } } }");
+
+        var registry = new TypeRegistry();
+        registry.LoadTypesFromAssembly(probe);
+
+        var inner = registry.GetType("Contoso.Outer+Inner");
+        Assert.That(inner, Is.Not.Null,
+            "reflection's Type.FullName spells nesting with '+', and the registry indexed that " +
+            "spelling. Dropping it changes what the LSP can look up.");
+        Assert.That(inner!.Name, Is.EqualTo("Inner"));
+        Assert.That(inner.Namespace, Is.EqualTo("Contoso"),
+            "reflection reports the ENCLOSING namespace for a nested type, not 'Contoso.Outer'");
+        Assert.That(inner.IsEnum, Is.True);
+        Assert.That(registry.GetType("Inner"), Is.Not.Null, "…and by simple name");
+    }
+
+    /// <summary>
+    /// Generic types keep reflection's metadata spelling: <c>List`1</c>, arity-suffixed, indexed
+    /// additionally under the bare name so <c>List</c> resolves.
+    /// </summary>
+    [Test]
+    public void GenericTypesKeepTheirMetadataArityAndVbDisplayName()
+    {
+        var name = FreshName("TypeRegGenProbe");
+        var probe = EmitFreshAssembly(name,
+            "namespace Contoso { public class Box<T> { public T Item; } }");
+
+        var registry = new TypeRegistry();
+        registry.LoadTypesFromAssembly(probe);
+
+        var box = registry.GetType("Contoso.Box`1");
+        Assert.That(box, Is.Not.Null, "reflection's Type.Name for a generic carries the arity suffix");
+        Assert.That(box!.IsGeneric, Is.True);
+        Assert.That(box.GenericParameters, Is.EqualTo(new[] { "T" }));
+        Assert.That(box.DisplayName, Is.EqualTo("Box(Of T)"),
+            "DisplayName is what completion renders; it strips the arity and uses VB syntax");
+    }
+
+    // ------------------------------------------------------------------
+    // Resolver ownership (spec §6.1 measured 209 ms cold / 46-49 ms per fresh instance).
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void TheResolverIsBuiltOncePerRegistryAndReusedAcrossCalls()
+    {
+        var a = FreshName("TypeRegOwnA");
+        var b = FreshName("TypeRegOwnB");
+        EmitFreshAssembly(a, "namespace Contoso { public class Alpha { } }");
+        EmitFreshAssembly(b, "namespace Contoso { public class Beta { } }");
+
+        var registry = new TypeRegistry();
+        registry.AddSearchPath(_dir);
+        registry.BuildIndex();
+        var afterIndex = registry.ResolverBuildCount;
+        Assert.That(afterIndex, Is.GreaterThan(0), "guard: BuildIndex must have built one");
+
+        registry.LoadNamespace("Contoso");
+        registry.GetType("Contoso.Alpha");
+        registry.LoadNamespace("Contoso");
+
+        Assert.That(registry.ResolverBuildCount, Is.EqualTo(afterIndex),
+            "construction costs 209 ms cold and 46-49 ms per fresh instance over a framework " +
+            "closure, and a fresh instance throws away the lookup cache. One per registry, reused. " +
+            "If this fails, TypeRegistry is rebuilding per call.");
+    }
+
+    [Test]
+    public void ANewAssemblyPathRebuildsTheResolverExactlyOnce()
+    {
+        var a = FreshName("TypeRegAddA");
+        EmitFreshAssembly(a, "namespace Contoso { public class Alpha { } }");
+        var registry = new TypeRegistry();
+        registry.AddSearchPath(_dir);
+        registry.BuildIndex();
+        var afterIndex = registry.ResolverBuildCount;
+
+        var outside = Path.Combine(_dir, "outside");
+        Directory.CreateDirectory(outside);
+        var b = FreshName("TypeRegAddB");
+        var compilation = CSharpCompilation.Create(b,
+            new[] { CSharpSyntaxTree.ParseText("namespace Contoso { public class Beta { } }") },
+            NetTypeResolverTestRefs.FrameworkPaths.Select(p => MetadataReference.CreateFromFile(p)),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var bPath = Path.Combine(outside, b + ".dll");
+        Assert.That(compilation.Emit(bPath).Success, Is.True, "fixture guard");
+
+        Assert.That(registry.LoadTypesFromAssembly(bPath).Select(t => t.FullName),
+            Does.Contain("Contoso.Beta"), "a path the resolver has never seen must still resolve");
+        var afterAdd = registry.ResolverBuildCount;
+        Assert.That(afterAdd, Is.EqualTo(afterIndex + 1),
+            "a genuinely new assembly path is the ONE thing that justifies a rebuild");
+
+        registry.LoadTypesFromAssembly(bPath);
+        Assert.That(registry.ResolverBuildCount, Is.EqualTo(afterAdd),
+            "…and the rebuilt resolver must then be reused, not rebuilt per call");
+    }
+
+    // ------------------------------------------------------------------
+    // The two-enum hazard NetTypeDescriptors.cs warns about.
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// <c>BasicLang.Compiler.SemanticAnalysis.NetMemberKind</c> is <c>Method=0 … Constructor=5</c>;
+    /// <c>BasicLang.Net.NetMemberCategory</c> is <c>Constructor=0 … Field=3</c>. Task 7 maps Roslyn
+    /// symbols STRAIGHT onto the former and never converts between the two, because every value
+    /// they share disagrees. This pins the disagreement so that a future int cast or "unification"
+    /// cannot look harmless.
+    /// </summary>
+    [Test]
+    public void TheTwoMemberKindEnumsAreNotIntCompatible()
+    {
+        Assert.That((int)NetMemberKind.Method, Is.EqualTo(0));
+        Assert.That((int)NetMemberKind.Property, Is.EqualTo(1));
+        Assert.That((int)NetMemberKind.Field, Is.EqualTo(2));
+        Assert.That((int)NetMemberKind.Event, Is.EqualTo(3));
+        Assert.That((int)NetMemberKind.EnumValue, Is.EqualTo(4));
+        Assert.That((int)NetMemberKind.Constructor, Is.EqualTo(5));
+
+        Assert.That((int)NetMemberCategory.Constructor, Is.EqualTo(0));
+        Assert.That((int)NetMemberCategory.Method, Is.EqualTo(1));
+        Assert.That((int)NetMemberCategory.Property, Is.EqualTo(2));
+        Assert.That((int)NetMemberCategory.Field, Is.EqualTo(3));
+
+        Assert.That((int)NetMemberCategory.Constructor, Is.Not.EqualTo((int)NetMemberKind.Constructor),
+            "these two enums must never be round-tripped through an int. If you are here because " +
+            "you want one enum, RENAME rather than renumber — NetMemberKind is public API consumed " +
+            "by SemanticAnalyzer, SymbolTable, ExternalLibraryLoader and four LSP files.");
+        Assert.That((int)NetMemberCategory.Method, Is.Not.EqualTo((int)NetMemberKind.Method));
+        Assert.That((int)NetMemberCategory.Property, Is.Not.EqualTo((int)NetMemberKind.Property));
+        Assert.That((int)NetMemberCategory.Field, Is.Not.EqualTo((int)NetMemberKind.Field));
+    }
+
+    // ------------------------------------------------------------------
+    // Cache bounds (constraint (a) measured during Tasks 4-5).
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// The overload cache is keyed on a whole REQUEST — call form, type, member, type-args and each
+    /// argument spelling — so on the IntelliSense path typing <c>Regex.IsMatch(</c> one character at
+    /// a time buys a distinct entry per keystroke, entries are created BEFORE the spellings are
+    /// validated (so rejecting a malformed spelling still costs a slot), and each holds a
+    /// <see cref="NetMemberDescriptor"/> with its own parameter list. Entry count is combinatorial
+    /// in half-typed identifiers, not linear in names, and the resolver's lifetime is the closure's.
+    ///
+    /// <para>Reordering the key so invalid input is validated first was rejected: it moves that
+    /// input from cached to recomputed at ~2 ms per probe. The cache is BOUNDED instead.</para>
+    /// </summary>
+    [Test]
+    public void TheOverloadCacheIsBounded()
+    {
+        var resolver = NetTypeResolver.Create(NetTypeResolverTestRefs.FrameworkPaths);
+        var cap = NetTypeResolver.MaxOverloadCacheEntries;
+
+        // "Nope 5" — with the space — is NOT one well-formed type name, so each of these is
+        // rejected by the spelling gate WITHOUT paying the ~2 ms probe, and still keys an entry.
+        // That is precisely the growth path the cap exists for (entries are created before
+        // validation), and it also keeps this test off a cap-times-2 ms treadmill.
+        for (var i = 0; i < cap + 50; i++)
+        {
+            resolver.ResolveOverload("System.Text.RegularExpressions.Regex", NetCallForm.Static,
+                "IsMatch", new[] { "System.String", "Nope " + i });
+        }
+
+        Assert.That(resolver.OverloadCacheCount, Is.LessThanOrEqualTo(cap),
+            "an unbounded request-keyed cache on the IntelliSense path grows per keystroke and is " +
+            "never released while the closure lives. Bound it in NetOverloadProbe.cs.");
+
+        // Regex.IsMatch(String) is an INSTANCE member; the Shared overloads take two strings.
+        Assert.That(resolver.ResolveOverload("System.Text.RegularExpressions.Regex",
+                NetCallForm.Static, "IsMatch", new[] { "System.String", "System.String" }).Outcome,
+            Is.EqualTo(NetOverloadOutcome.Resolved),
+            "bounding must not break correctness — a real call still resolves after eviction");
+    }
+
+    [Test]
+    public void TheTypeLookupCacheIsBounded()
+    {
+        var resolver = NetTypeResolver.Create(NetTypeResolverTestRefs.FrameworkPaths);
+        var cap = NetTypeResolver.MaxTypeCacheEntries;
+
+        for (var i = 0; i < cap + 50; i++)
+            resolver.ResolveType("Contoso.NeverExists" + i);
+
+        Assert.That(resolver.TypeCacheCount, Is.LessThanOrEqualTo(cap),
+            "keyed on arbitrary user text, so every half-typed identifier is a permanent entry. " +
+            "Entries are far smaller than the overload cache's and the miss path is dearer to " +
+            "recompute, which is why the cap is higher — but unbounded is still unbounded.");
+        Assert.That(resolver.ResolveType("System.Console"), Is.Not.Null,
+            "bounding must not break correctness");
     }
 }

@@ -3,12 +3,52 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using BasicLang.Net;
+using Microsoft.CodeAnalysis;
+// BasicLang declares its OWN TypeKind (SymbolTable.cs:181) and it wins the unqualified name here,
+// so Roslyn's must be aliased rather than used bare — the two have no values in common and an
+// accidental bind is a compile error today but would be a silent mismap if they ever overlapped.
+using RoslynTypeKind = Microsoft.CodeAnalysis.TypeKind;
 
 namespace BasicLang.Compiler.SemanticAnalysis
 {
     /// <summary>
-    /// Registry for .NET types loaded from assemblies.
-    /// Provides lazy loading based on Using statements.
+    /// Registry for .NET types the LSP offers IntelliSense over. Provides lazy loading based on
+    /// Using statements.
+    ///
+    /// <para><b>Assemblies are READ, never LOADED (spec §6.2).</b> Until P2a-1 Task 7 the three
+    /// assembly-reading paths here — the namespace index scan, the per-namespace type load, and the
+    /// public whole-assembly load used for project references — all called
+    /// <c>Assembly.LoadFrom</c> behind a bare <c>catch {}</c>. That had three consequences, and the
+    /// third is the one that mattered:</para>
+    /// <list type="number">
+    /// <item><description>It LOCKED every DLL in every search path for the life of the LSP process,
+    /// so a referenced assembly could not be rebuilt while the editor was open, and the LSP could
+    /// not see the new one without a restart.</description></item>
+    /// <item><description>It ran module initializers from arbitrary user assemblies inside the
+    /// compiler process, and a loaded assembly cannot be unloaded.</description></item>
+    /// <item><description><b>It could not read a reference assembly built for a higher framework
+    /// version than the running runtime at all.</b> The LSP process is net8.0 and
+    /// <see cref="DetectDotNetSdkPath"/> hands it the NEWEST installed reference pack, so on any
+    /// machine whose newest pack outranks the runtime, <c>Assembly.LoadFrom</c> failed with
+    /// <c>FileLoadException</c> — measured 141 of 164 assemblies over
+    /// <c>Microsoft.NETCore.App.Ref/9.0.12</c> — the <c>catch {}</c> swallowed every one, and the
+    /// namespace index came out EMPTY after ~7.3 s of work. Every .NET completion the LSP has been
+    /// offering came from <see cref="PreloadCoreTypes"/> instead.</description></item>
+    /// </list>
+    /// <para>Reading metadata through <see cref="NetTypeResolver"/> has none of those properties:
+    /// no lock, no load, no version coupling. Measured over the same 163-assembly pack it is also
+    /// ~4x faster (≈620 ms against 3030 ms) and finds MORE — 122 namespaces and 3778 public types
+    /// against 93 and 2198 — because a metadata walk does not depend on the host runtime being able
+    /// to execute what it is describing.</para>
+    ///
+    /// <para><b><see cref="PreloadCoreTypes"/> still uses reflection, deliberately.</b> It describes
+    /// the RUNNING runtime's own <see cref="Type"/> objects and never touches a file, so it has none
+    /// of the defects above. That leaves two producers of <see cref="NetTypeInfo"/> in this file —
+    /// <see cref="CreateNetTypeInfo(Type)"/> and <see cref="CreateNetTypeInfo(INamedTypeSymbol)"/> —
+    /// kept side by side so that any drift between them is visible in one screen. They are pinned
+    /// against each other by
+    /// <c>TypeRegistryMetadataTests.TheReflectionAndMetadataProducersAgreeOnShape</c>.</para>
     /// </summary>
     public class TypeRegistry
     {
@@ -30,6 +70,85 @@ namespace BasicLang.Compiler.SemanticAnalysis
         // Track which namespaces have been loaded
         private readonly HashSet<string> _loadedNamespaces;
 
+        // ------------------------------------------------------------------
+        // Metadata reading (spec §6.2). See the class remarks for what this replaced.
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Every assembly path a caller has asked this registry to read. Grows only; a path already
+        /// present never triggers a rebuild. The resolver's actual reference set is this plus, when
+        /// needed, the shared framework — see <see cref="ResolverFor"/>.
+        /// </summary>
+        private readonly HashSet<string> _requestedPaths;
+
+        /// <summary>
+        /// Assemblies that make a reference set self-sufficient: they declare
+        /// <c>System.Object</c>/<c>System.Enum</c>, so a set containing one needs no framework added.
+        ///
+        /// <para><c>System.Private.CoreLib.dll</c> is deliberately NOT here even though it is the
+        /// runtime's real core library — Roslyn cannot read it as a metadata reference at all
+        /// (measured: <c>GetAssemblyOrModuleSymbol</c> returns null for it), so its presence makes a
+        /// set self-sufficient in name only.</para>
+        /// </summary>
+        private static readonly HashSet<string> CoreLibraryFileNames =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "System.Runtime.dll",   // every reference pack and the shared framework
+                "mscorlib.dll"          // desktop-style layouts
+            };
+
+        /// <summary>
+        /// ONE resolver per registry, rebuilt only when a genuinely new assembly path appears.
+        ///
+        /// <para><b>The lifetime is the point.</b> Construction was measured at 209 ms cold and a
+        /// steady 46-49 ms for every subsequent fresh instance over the same closure, and a fresh
+        /// instance also throws away the lookup cache so the ~17 ms miss path recurs. A registry is
+        /// owned by the LSP's document manager and lives as long as the server, so one resolver per
+        /// registry is exactly one per reference closure — which is what
+        /// <see cref="NetTypeResolver"/>'s remarks ask for. Building one per call, or per debounced
+        /// IntelliSense pass, would cost ~47 ms and a cold cache on every keystroke.</para>
+        ///
+        /// <para>A reference set is fixed at construction, so a path outside the current set forces a
+        /// rebuild over the UNION. That is why callers hand in every path they are about to need in
+        /// one batch — a per-path rebuild in a 163-assembly loop would be ~163 constructions.</para>
+        /// </summary>
+        private NetTypeResolver _resolver;
+
+        private readonly object _resolverLock = new object();
+
+        private int _resolverBuildCount;
+
+        /// <summary>
+        /// How many times a resolver has been constructed for this registry. Observability for the
+        /// ownership invariant above — one build, then reuse. Not part of the LSP-facing surface.
+        /// </summary>
+        internal int ResolverBuildCount
+        {
+            get { lock (_resolverLock) { return _resolverBuildCount; } }
+        }
+
+        private readonly List<string> _diagnostics = new List<string>();
+
+        /// <summary>
+        /// Cap on <see cref="_diagnostics"/>. A search path full of native DLLs yields one entry per
+        /// file, and this list is as long-lived as the LSP session; the point of the list is that a
+        /// failure is visible at all, which the first few entries already achieve.
+        /// </summary>
+        private const int MaxDiagnostics = 256;
+
+        /// <summary>
+        /// Assemblies that could not be read, one BL6021 each — the replacement for the three bare
+        /// <c>catch {}</c> blocks this class used to hide its failures in. Empty on a healthy setup.
+        ///
+        /// <para>A swallowed error here is exactly why nobody noticed the namespace index was empty
+        /// for the life of the feature, so these are also written to stderr as they happen (stdout
+        /// carries LSP framing and must never be used for logging).</para>
+        /// </summary>
+        public IReadOnlyList<string> Diagnostics
+        {
+            get { lock (_diagnostics) { return _diagnostics.ToList(); } }
+        }
+
         public TypeRegistry()
         {
             _namespaceIndex = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
@@ -37,10 +156,129 @@ namespace BasicLang.Compiler.SemanticAnalysis
             _typesByName = new Dictionary<string, NetTypeInfo>(StringComparer.OrdinalIgnoreCase);
             _searchPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             _loadedNamespaces = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            _requestedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             // Default cache location
             var appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             _cacheFilePath = Path.Combine(appData, "BasicLang", "namespace_index.json");
+        }
+
+        /// <summary>
+        /// Records a failure instead of swallowing it. Deliberately never throws: every caller is on
+        /// the LSP request path, where a malformed reference must degrade the answer, not the server.
+        /// </summary>
+        private void Report(string message)
+        {
+            lock (_diagnostics)
+            {
+                if (_diagnostics.Count >= MaxDiagnostics)
+                    return;
+                _diagnostics.Add(message);
+            }
+
+            try { Console.Error.WriteLine("[TypeRegistry] " + message); }
+            catch { /* a closed or redirected stderr must not break an LSP request */ }
+        }
+
+        /// <summary>
+        /// The resolver covering <paramref name="assemblyPaths"/>, rebuilt over the union only if
+        /// some path is not covered yet. Callers pass a whole batch — see <see cref="_resolver"/>.
+        /// </summary>
+        private NetTypeResolver ResolverFor(IEnumerable<string> assemblyPaths)
+        {
+            lock (_resolverLock)
+            {
+                var added = false;
+                foreach (var path in assemblyPaths)
+                {
+                    if (!string.IsNullOrWhiteSpace(path) && _requestedPaths.Add(path))
+                        added = true;
+                }
+
+                if (_resolver != null && !added)
+                    return _resolver;
+
+                _resolver = NetTypeResolver.Create(EffectiveReferenceSet());
+                _resolverBuildCount++;
+                return _resolver;
+            }
+        }
+
+        /// <summary>
+        /// True when <paramref name="assemblyPath"/> is readable as .NET metadata; reports a BL6021
+        /// naming it when not. This is the replacement for the three bare <c>catch {}</c> blocks.
+        ///
+        /// <para><b>Reported here rather than forwarded from
+        /// <see cref="NetTypeResolver.Diagnostics"/>.</b> The reference set also contains the shared
+        /// framework, which no caller asked for, and forwarding the resolver's list wholesale put a
+        /// crop of "not a managed assembly" warnings on stderr at every LSP startup — about files the
+        /// user never named and cannot act on. Measured: 23 of them in one run. A diagnostic is worth
+        /// having only if it is about something the reader chose, so this reports exactly the paths a
+        /// caller handed in.</para>
+        /// </summary>
+        private bool CanRead(NetTypeResolver resolver, string assemblyPath)
+        {
+            if (resolver.Covers(assemblyPath))
+                return true;
+
+            Report($"BL6021: '{assemblyPath}' could not be read as .NET metadata and contributes no "
+                   + "types to IntelliSense — it is not a managed assembly, or it was removed after "
+                   + "being resolved.");
+            return false;
+        }
+
+        /// <summary>
+        /// The reference set to build a resolver over: the requested paths, plus the shared framework
+        /// ONLY IF the requested paths bring no core library of their own.
+        ///
+        /// <para><b>Why the framework has to be added at all.</b> Reflection never needed it, because
+        /// a LOADED assembly resolves its own references through the runtime. Roslyn resolves them
+        /// only against the references it is handed, so an assembly read on its own has an ERROR
+        /// symbol for every base type. Measured on one probe assembly read alone:
+        /// <c>class Widget : Base</c> lost all four of <c>System.Object</c>'s members from its
+        /// completion list, and a <c>public enum</c> reported <c>IsEnum = false</c> — a type's
+        /// enum-ness IS "its base type is <c>System.Enum</c>", which is unknowable without corlib.
+        /// That is a project <c>&lt;Reference&gt;</c>'s situation, and it is the common case.</para>
+        ///
+        /// <para><b>Why it must NOT be added unconditionally.</b> Two framework versions in one
+        /// compilation is far worse than none. The LSP's own search path is a reference PACK, chosen
+        /// by <see cref="DetectDotNetSdkPath"/> as the newest installed — normally a different
+        /// version from the runtime this process is on. Measured over
+        /// <c>Microsoft.NETCore.App.Ref/9.0.12</c> plus the net8.0 shared framework: every core type
+        /// is declared twice, so <c>System.Enum</c> resolves to NOTHING and
+        /// <c>System.IO.FileMode</c> and <c>System.Text.StringBuilder</c> stop being found at all —
+        /// against both sets working perfectly on their own. De-duplicating by file name does not
+        /// rescue it either (measured): the pack declares the core types in
+        /// <c>System.Runtime.dll</c> and the shared framework in
+        /// <c>System.Private.CoreLib.dll</c>, so there is no name collision to remove.</para>
+        ///
+        /// <para>Hence: whoever brings a core library owns the framework, and the shared framework is
+        /// a FALLBACK for callers who bring none. Recomputed per build rather than latched, so a
+        /// registry that is handed a reference pack after a bare DLL converges on the pack instead of
+        /// keeping a poisoned mixture.</para>
+        /// </summary>
+        private IReadOnlyList<string> EffectiveReferenceSet()
+        {
+            var set = new List<string>(_requestedPaths);
+
+            var bringsOwnCoreLibrary = _requestedPaths.Any(
+                p => CoreLibraryFileNames.Contains(Path.GetFileName(p)));
+            if (bringsOwnCoreLibrary)
+                return set;
+
+            // Taken WHOLE, including System.Private.CoreLib. Whether Roslyn can read that one is
+            // host-dependent (measured: unreadable in a plain console host, readable in the test
+            // host) and in the host where it is readable it is what makes base types resolve at all —
+            // dropping it cost every probe assembly System.Object's members. Any residual
+            // unreadable entry is silent here by design: see ResolverFor, which reports only the
+            // paths a CALLER asked for.
+            var seen = new HashSet<string>(_requestedPaths, StringComparer.OrdinalIgnoreCase);
+            foreach (var frameworkPath in NetReferenceResolver.FrameworkAssemblies)
+            {
+                if (seen.Add(frameworkPath))
+                    set.Add(frameworkPath);
+            }
+            return set;
         }
 
         /// <summary>
@@ -62,9 +300,18 @@ namespace BasicLang.Compiler.SemanticAnalysis
         {
             _namespaceIndex.Clear();
 
+            // Collect every candidate FIRST, then build one resolver over the whole batch. A
+            // resolver's reference set is fixed at construction, so indexing assembly-by-assembly
+            // would construct one per file — 163 constructions at 46-49 ms over a framework pack.
+            var assemblyPaths = new List<string>();
             foreach (var searchPath in _searchPaths)
+                assemblyPaths.AddRange(EnumerateAssemblies(searchPath));
+
+            if (assemblyPaths.Count > 0)
             {
-                ScanDirectory(searchPath);
+                var resolver = ResolverFor(assemblyPaths);
+                foreach (var assemblyPath in assemblyPaths)
+                    IndexAssembly(resolver, assemblyPath);
             }
 
             // Save to cache
@@ -122,49 +369,46 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
         }
 
-        private void ScanDirectory(string path)
+        private IReadOnlyList<string> EnumerateAssemblies(string path)
         {
             try
             {
-                foreach (var dll in Directory.GetFiles(path, "*.dll"))
-                {
-                    ScanAssembly(dll);
-                }
+                return Directory.GetFiles(path, "*.dll");
             }
-            catch
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException
+                                       || ex is ArgumentException)
             {
-                // Ignore scan errors
+                // A search path can be removed or made unreadable between AddSearchPath and here.
+                Report($"BL6021: search path '{path}' could not be enumerated and will contribute "
+                       + $"no .NET types: {ex.Message}");
+                return Array.Empty<string>();
             }
         }
 
-        private void ScanAssembly(string assemblyPath)
+        /// <summary>
+        /// Indexes which namespaces one assembly declares. Was <c>Assembly.LoadFrom</c> +
+        /// <c>GetExportedTypes()</c> (see the class remarks); now a metadata walk.
+        /// </summary>
+        private void IndexAssembly(NetTypeResolver resolver, string assemblyPath)
         {
-            try
+            if (!CanRead(resolver, assemblyPath))
+                return;
+
+            var namespaces = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var type in resolver.PublicTypesIn(assemblyPath))
             {
-                // Use reflection to scan for namespaces
-                var assembly = Assembly.LoadFrom(assemblyPath);
-                var namespaces = new HashSet<string>();
-
-                foreach (var type in assembly.GetExportedTypes())
-                {
-                    if (!string.IsNullOrEmpty(type.Namespace))
-                    {
-                        namespaces.Add(type.Namespace);
-                    }
-                }
-
-                foreach (var ns in namespaces)
-                {
-                    if (!_namespaceIndex.ContainsKey(ns))
-                        _namespaceIndex[ns] = new List<string>();
-
-                    if (!_namespaceIndex[ns].Contains(assemblyPath))
-                        _namespaceIndex[ns].Add(assemblyPath);
-                }
+                var ns = NamespaceOf(type);
+                if (!string.IsNullOrEmpty(ns))
+                    namespaces.Add(ns);
             }
-            catch
+
+            foreach (var ns in namespaces)
             {
-                // Skip assemblies that can't be loaded
+                if (!_namespaceIndex.ContainsKey(ns))
+                    _namespaceIndex[ns] = new List<string>();
+
+                if (!_namespaceIndex[ns].Contains(assemblyPath))
+                    _namespaceIndex[ns].Add(assemblyPath);
             }
         }
 
@@ -292,86 +536,89 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     .ToList();
             }
 
-            // Load types from each assembly
+            // Load types from each assembly. One resolver for the whole batch — see BuildIndex.
+            // The paths may come from the on-disk cache and so predate this process, which is the
+            // one case where they are legitimately outside the current reference set.
+            var resolver = ResolverFor(assemblies);
             foreach (var assemblyPath in assemblies)
             {
-                LoadTypesFromAssembly(assemblyPath, namespaceName);
+                LoadTypesFromAssembly(resolver, assemblyPath, namespaceName);
             }
 
             _loadedNamespaces.Add(namespaceName);
             return true;
         }
 
-        private void LoadTypesFromAssembly(string assemblyPath, string targetNamespace)
+        private void LoadTypesFromAssembly(NetTypeResolver resolver, string assemblyPath, string targetNamespace)
         {
-            try
+            if (!CanRead(resolver, assemblyPath))
+                return;
+
+            foreach (var type in resolver.PublicTypesIn(assemblyPath))
             {
-                // Use reflection to load type metadata
-                var assembly = Assembly.LoadFrom(assemblyPath);
+                // Only load types from the target namespace (or child namespaces)
+                var ns = NamespaceOf(type);
+                if (ns == null)
+                    continue;
 
-                foreach (var type in assembly.GetExportedTypes())
-                {
-                    // Only load types from the target namespace (or child namespaces)
-                    if (type.Namespace == null)
-                        continue;
+                if (!ns.Equals(targetNamespace, StringComparison.OrdinalIgnoreCase) &&
+                    !ns.StartsWith(targetNamespace + ".", StringComparison.OrdinalIgnoreCase))
+                    continue;
 
-                    if (!type.Namespace.Equals(targetNamespace, StringComparison.OrdinalIgnoreCase) &&
-                        !type.Namespace.StartsWith(targetNamespace + ".", StringComparison.OrdinalIgnoreCase))
-                        continue;
+                var typeInfo = CreateNetTypeInfo(type);
 
-                    var typeInfo = CreateNetTypeInfo(type);
+                if (!_loadedTypes.ContainsKey(ns))
+                    _loadedTypes[ns] = new List<NetTypeInfo>();
 
-                    if (!_loadedTypes.ContainsKey(type.Namespace))
-                        _loadedTypes[type.Namespace] = new List<NetTypeInfo>();
-
-                    _loadedTypes[type.Namespace].Add(typeInfo);
-                    _typesByName[type.FullName] = typeInfo;
-                    _typesByName[type.Name] = typeInfo; // Also index by simple name
-                }
-            }
-            catch
-            {
-                // Skip assemblies that can't be loaded
+                _loadedTypes[ns].Add(typeInfo);
+                _typesByName[typeInfo.FullName] = typeInfo;
+                _typesByName[typeInfo.Name] = typeInfo; // Also index by simple name
             }
         }
 
         /// <summary>
-        /// Load all types from an assembly (used for NuGet packages)
+        /// Load all types from an assembly (used for NuGet packages and project
+        /// <c>&lt;Reference&gt;</c>s).
+        ///
+        /// <para>Returns an empty list — never throws — when the assembly cannot be read, leaving a
+        /// BL6021 in <see cref="Diagnostics"/>. Every path that reaches here comes from user text: a
+        /// <c>&lt;HintPath&gt;</c> can name a native DLL, a truncated file, or something deleted
+        /// between resolution and use.</para>
         /// </summary>
         public List<NetTypeInfo> LoadTypesFromAssembly(string assemblyPath)
         {
             var types = new List<NetTypeInfo>();
-            try
+
+            var resolver = ResolverFor(new[] { assemblyPath });
+            if (!CanRead(resolver, assemblyPath))
+                return types;
+
+            foreach (var type in resolver.PublicTypesIn(assemblyPath))
             {
-                var assembly = Assembly.LoadFrom(assemblyPath);
+                var ns = NamespaceOf(type);
+                if (ns == null)
+                    continue;
 
-                foreach (var type in assembly.GetExportedTypes())
-                {
-                    if (type.Namespace == null)
-                        continue;
+                var fullName = MetadataFullName(type);
 
-                    // Check if already loaded
-                    if (_typesByName.ContainsKey(type.FullName))
-                        continue;
+                // Check if already loaded
+                if (_typesByName.ContainsKey(fullName))
+                    continue;
 
-                    var typeInfo = CreateNetTypeInfo(type);
-                    types.Add(typeInfo);
+                var typeInfo = CreateNetTypeInfo(type);
+                types.Add(typeInfo);
 
-                    if (!_loadedTypes.ContainsKey(type.Namespace))
-                        _loadedTypes[type.Namespace] = new List<NetTypeInfo>();
+                if (!_loadedTypes.ContainsKey(ns))
+                    _loadedTypes[ns] = new List<NetTypeInfo>();
 
-                    _loadedTypes[type.Namespace].Add(typeInfo);
-                    _typesByName[type.FullName] = typeInfo;
-                    _typesByName[type.Name] = typeInfo;
+                _loadedTypes[ns].Add(typeInfo);
+                _typesByName[typeInfo.FullName] = typeInfo;
+                _typesByName[typeInfo.Name] = typeInfo;
 
-                    // Track namespace as loaded
-                    _loadedNamespaces.Add(type.Namespace);
-                }
+                // Track namespace as loaded
+                _loadedNamespaces.Add(ns);
             }
-            catch
-            {
-                // Skip assemblies that can't be loaded
-            }
+
             return types;
         }
 
@@ -538,6 +785,314 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
 
             return info;
+        }
+
+        // ------------------------------------------------------------------
+        // The metadata producer. Mirrors CreateNetTypeInfo(Type) above member for member; see the
+        // class remarks for why both exist.
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Reflection's <c>Type.Namespace</c>: the ENCLOSING namespace, so a nested type reports
+        /// <c>System</c> and not <c>System.Environment</c>. Null for the global namespace, which is
+        /// the value both callers skip on — matching reflection, where <c>Type.Namespace</c> is null
+        /// rather than empty for a type declared outside any namespace.
+        /// </summary>
+        private static string NamespaceOf(INamedTypeSymbol type)
+        {
+            var outermost = type;
+            while (outermost.ContainingType != null)
+                outermost = outermost.ContainingType;
+
+            var ns = outermost.ContainingNamespace;
+            return ns == null || ns.IsGlobalNamespace ? null : ns.ToDisplayString();
+        }
+
+        /// <summary>
+        /// Reflection's <c>Type.FullName</c>: namespace-qualified, nesting spelled with <c>+</c>,
+        /// generic arity kept (<c>System.Collections.Generic.Dictionary`2+Enumerator</c>). This is
+        /// the spelling the registry indexes and the LSP looks up, so it has to match exactly.
+        /// </summary>
+        private static string MetadataFullName(INamedTypeSymbol type)
+        {
+            var parts = new List<string>();
+            for (var current = type; current != null; current = current.ContainingType)
+                parts.Insert(0, current.MetadataName);
+
+            var nested = string.Join("+", parts);
+            var ns = NamespaceOf(type);
+            return ns == null ? nested : ns + "." + nested;
+        }
+
+        /// <summary>
+        /// Reflection's <c>Type.GetGenericArguments()</c>, which for a type nested inside a generic
+        /// includes the ENCLOSING type's parameters — <c>Dictionary`2+Enumerator</c> reports
+        /// <c>[TKey, TValue]</c> and is <c>IsGenericType</c> even though it declares none of its own.
+        /// Roslyn's <c>TypeParameters</c> is per-level, so the chain has to be walked outermost-first
+        /// to reproduce both the membership and the order.
+        /// </summary>
+        private static List<string> GenericParameterNames(INamedTypeSymbol type)
+        {
+            var levels = new List<INamedTypeSymbol>();
+            for (var current = type; current != null; current = current.ContainingType)
+                levels.Insert(0, current);
+
+            var names = new List<string>();
+            foreach (var level in levels)
+            {
+                foreach (var parameter in level.TypeParameters)
+                    names.Add(parameter.Name);
+            }
+            return names;
+        }
+
+        private NetTypeInfo CreateNetTypeInfo(INamedTypeSymbol type)
+        {
+            var genericParameters = GenericParameterNames(type);
+
+            var info = new NetTypeInfo
+            {
+                Name = type.MetadataName,          // reflection's Type.Name keeps the `1 arity suffix
+                FullName = MetadataFullName(type),
+                Namespace = NamespaceOf(type),
+                // reflection computed this as IsAbstract && IsSealed, which is what a static class
+                // is in metadata and what INamedTypeSymbol.IsStatic reports.
+                IsStatic = type.IsStatic,
+                // reflection's Type.IsClass is !IsInterface && !IsValueType, so it is TRUE for a
+                // delegate. TypeKind splits them, so Delegate has to be folded back in.
+                IsClass = type.TypeKind == RoslynTypeKind.Class || type.TypeKind == RoslynTypeKind.Delegate,
+                IsInterface = type.TypeKind == RoslynTypeKind.Interface,
+                IsEnum = type.TypeKind == RoslynTypeKind.Enum,
+                IsStruct = type.IsValueType && type.TypeKind != RoslynTypeKind.Enum,
+                IsGeneric = genericParameters.Count > 0,
+                GenericParameters = genericParameters,
+                BaseType = type.BaseType != null ? GetTypeName(type.BaseType) : null,
+                // reflection's GetInterfaces() is TRANSITIVE, so AllInterfaces and not Interfaces.
+                // Verified equal in count on DayOfWeek (4) and StringBuilder (1).
+                Interfaces = type.AllInterfaces.Select(GetTypeName).ToList()
+            };
+
+            // Constructors: reflection's GetConstructors(Public | Instance).
+            //
+            // IsImplicitlyDeclared is load-bearing. Roslyn synthesizes a public parameterless
+            // constructor for every metadata VALUE type; reflection reports none, because metadata
+            // holds no such token — typeof(Gear).GetConstructors(...) is empty and
+            // typeof(DateTime)'s 17 are all declared. Without this filter every struct gains a
+            // constructor the LSP would offer and no call could reach.
+            foreach (var constructor in type.InstanceConstructors)
+            {
+                if (constructor.DeclaredAccessibility != Accessibility.Public
+                    || constructor.IsImplicitlyDeclared)
+                    continue;
+
+                info.Constructors.Add(new NetMemberInfo
+                {
+                    Name = "New",
+                    Kind = NetMemberKind.Constructor,
+                    ReturnType = type.MetadataName,
+                    Parameters = DescribeParameters(constructor.Parameters)
+                });
+            }
+
+            AddMembers(info, type);
+            return info;
+        }
+
+        /// <summary>
+        /// Reproduces <c>GetMethods/GetProperties/GetFields(Public | Instance | Static)</c> — the
+        /// exact flags the reflection producer passes, and the three rules they imply that a naive
+        /// "members of this type" walk gets wrong:
+        ///
+        /// <list type="number">
+        /// <item><description><b>Inherited INSTANCE members are included</b> — the flags omit
+        /// <c>DeclaredOnly</c>, so the base chain is walked and <c>System.Object</c>'s
+        /// <c>ToString</c>/<c>Equals</c>/<c>GetHashCode</c>/<c>GetType</c> are part of every class's
+        /// completion list. <see cref="NetTypeResolver.GetMembers"/> deliberately EXCLUDES those,
+        /// because spec §7.2 is about which members deserve a shim export — a different question
+        /// with a different right answer. The two member sets are not interchangeable, and using
+        /// §7.2's here would silently shorten every completion list.</description></item>
+        /// <item><description><b>Inherited STATIC members are NOT included</b> — that needs
+        /// <c>FlattenHierarchy</c>, which the flags omit. Measured on a two-level hierarchy:
+        /// <c>Derived</c> reports its own statics and the base's INSTANCE members, but not the
+        /// base's statics, and not <c>Object.ReferenceEquals</c>.</description></item>
+        /// <item><description><b>An override appears once</b>, under its most-derived declaration.
+        /// The walk is derived-to-base and first-seen wins, so the signature key collapses an
+        /// override onto the member it overrides — which is what reflection reports (measured: one
+        /// <c>Overridden</c>, <c>DeclaringType</c> = <c>Derived</c>). The key therefore has to carry
+        /// generic arity and parameter types, or two real overloads collapse into one.</description>
+        /// </item>
+        /// </list>
+        ///
+        /// <para>Members are appended methods-then-properties-then-fields-then-enum-values, matching
+        /// the reflection producer's order, because the LSP renders this list directly.</para>
+        /// </summary>
+        private void AddMembers(NetTypeInfo info, INamedTypeSymbol type)
+        {
+            var methods = new List<NetMemberInfo>();
+            var properties = new List<NetMemberInfo>();
+            var fields = new List<NetMemberInfo>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+
+            for (var current = type; current != null; current = current.BaseType)
+            {
+                var isQueriedType = ReferenceEquals(current, type);
+
+                foreach (var member in current.GetMembers())
+                {
+                    if (member.DeclaredAccessibility != Accessibility.Public)
+                        continue;
+
+                    // Rule 2: a base type contributes instance members only.
+                    if (!isQueriedType && member.IsStatic)
+                        continue;
+
+                    switch (member)
+                    {
+                        case IMethodSymbol method when method.MethodKind == MethodKind.Ordinary:
+                            // reflection skipped IsSpecialName, which is what kept property and
+                            // event accessors and user-defined operators out. MethodKind.Ordinary
+                            // is the metadata-symbol equivalent.
+                            if (!seen.Add("M" + method.Name + "" + method.Arity + ""
+                                          + string.Join("", method.Parameters.Select(p => GetParameterTypeName(p)))))
+                                continue;
+
+                            methods.Add(new NetMemberInfo
+                            {
+                                Name = method.Name,
+                                Kind = NetMemberKind.Method,
+                                ReturnType = GetTypeName(method.ReturnType),
+                                IsStatic = method.IsStatic,
+                                IsExtensionMethod = method.IsExtensionMethod,
+                                IsGeneric = method.Arity > 0,
+                                GenericParameters = method.Arity > 0
+                                    ? method.TypeParameters.Select(p => p.Name).ToList()
+                                    : new List<string>(),
+                                Parameters = DescribeParameters(method.Parameters)
+                            });
+                            break;
+
+                        case IPropertySymbol property:
+                            // MetadataName, so an indexer is "Item" as reflection reported it, and
+                            // its parameters are part of the key — two indexers differ only there.
+                            if (!seen.Add("P" + property.MetadataName + ""
+                                          + string.Join("", property.Parameters.Select(p => GetParameterTypeName(p)))))
+                                continue;
+
+                            properties.Add(new NetMemberInfo
+                            {
+                                Name = property.MetadataName,
+                                Kind = NetMemberKind.Property,
+                                ReturnType = GetTypeName(property.Type),
+                                IsStatic = property.IsStatic,
+                                CanRead = property.GetMethod != null,
+                                CanWrite = property.SetMethod != null
+                            });
+                            break;
+
+                        case IFieldSymbol field:
+                            if (!seen.Add("F" + field.Name))
+                                continue;
+
+                            fields.Add(new NetMemberInfo
+                            {
+                                Name = field.Name,
+                                Kind = NetMemberKind.Field,
+                                ReturnType = GetTypeName(field.Type),
+                                IsStatic = field.IsStatic
+                            });
+                            break;
+                    }
+                }
+            }
+
+            info.Members.AddRange(methods);
+            info.Members.AddRange(properties);
+            info.Members.AddRange(fields);
+
+            if (type.TypeKind == RoslynTypeKind.Enum)
+            {
+                // reflection added Enum.GetNames(type) on TOP of the literal fields GetFields
+                // already returned, so each name legitimately appears twice — once as a Field and
+                // once as an EnumValue. Preserved: CompletionService renders the two kinds
+                // differently and has always seen both.
+                foreach (var member in type.GetMembers())
+                {
+                    if (member is IFieldSymbol literal && literal.HasConstantValue
+                        && literal.DeclaredAccessibility == Accessibility.Public)
+                    {
+                        info.Members.Add(new NetMemberInfo
+                        {
+                            Name = literal.Name,
+                            Kind = NetMemberKind.EnumValue,
+                            ReturnType = type.MetadataName,
+                            IsStatic = true
+                        });
+                    }
+                }
+            }
+        }
+
+        private List<NetParameterInfo> DescribeParameters(
+            System.Collections.Immutable.ImmutableArray<IParameterSymbol> parameters) =>
+            parameters
+                .Select(p => new NetParameterInfo
+                {
+                    Name = p.Name,
+                    Type = GetParameterTypeName(p),
+                    IsOptional = p.IsOptional
+                })
+                .ToList();
+
+        /// <summary>
+        /// A parameter's type as reflection spelled it. Reflection hands
+        /// <c>GetTypeName</c> a BY-REF <see cref="Type"/> for a <c>ref</c>/<c>out</c>/<c>in</c>
+        /// parameter, whose <c>Name</c> carries a trailing <c>&amp;</c> (<c>Int32&amp;</c>); Roslyn
+        /// models by-ref-ness on the PARAMETER instead, so <c>IParameterSymbol.Type</c> is the bare
+        /// type and the suffix has to be re-added or every by-ref overload's signature help changes.
+        /// </summary>
+        private string GetParameterTypeName(IParameterSymbol parameter)
+        {
+            var name = GetTypeName(parameter.Type);
+            return parameter.RefKind == RefKind.None ? name : name + "&";
+        }
+
+        /// <summary>
+        /// The metadata mirror of <see cref="GetTypeName(Type)"/>, arm for arm and in the same order
+        /// — VB primitive spellings, then <c>Name(Of …)</c> for a constructed generic, then
+        /// <c>Name()</c> for an array, then the bare simple name.
+        /// </summary>
+        private string GetTypeName(ITypeSymbol type)
+        {
+            switch (type.SpecialType)
+            {
+                case SpecialType.System_Void: return "Void";
+                case SpecialType.System_Int32: return "Integer";
+                case SpecialType.System_Int64: return "Long";
+                case SpecialType.System_Single: return "Single";
+                case SpecialType.System_Double: return "Double";
+                case SpecialType.System_String: return "String";
+                case SpecialType.System_Boolean: return "Boolean";
+                case SpecialType.System_Char: return "Char";
+                case SpecialType.System_Byte: return "Byte";
+                case SpecialType.System_Object: return "Object";
+            }
+
+            if (type is INamedTypeSymbol named && named.TypeArguments.Length > 0)
+            {
+                var args = string.Join(", ", named.TypeArguments.Select(GetTypeName));
+                return $"{named.Name}(Of {args})";
+            }
+
+            if (type is IArrayTypeSymbol array)
+                return $"{GetTypeName(array.ElementType)}()";
+
+            // reflection fell through to Type.Name here, which for a pointer is "Int32*". Roslyn's
+            // IPointerTypeSymbol.Name is empty, so the one shape whose Name is not usable is spelled
+            // out rather than silently becoming "".
+            if (type is IPointerTypeSymbol pointer)
+                return $"{GetTypeName(pointer.PointedAtType)}*";
+
+            return type.Name;
         }
 
         private string GetTypeName(Type type)
