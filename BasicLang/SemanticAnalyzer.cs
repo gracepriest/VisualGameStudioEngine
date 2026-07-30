@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using BasicLang.Compiler.AST;
 using BasicLang.Compiler;
+using BasicLang.Net;
 
 namespace BasicLang.Compiler.SemanticAnalysis
 {
@@ -58,6 +59,26 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         // Loaded external libraries for symbol resolution
         private readonly Dictionary<string, ExternalLibrary> _externalLibraries = new(StringComparer.OrdinalIgnoreCase);
+
+        // ---- P2a-1 (spec §6.5): warning-only .NET name resolution ----
+        // Deliberately NOT the TypeRegistry seam. ConfigureTypeRegistry stays LSP-only in P2a-1:
+        // activating it on the compile path un-deadens the registry branch in LookupNetTypeMember,
+        // which SHADOWS the String/common fallbacks below it and changes existing programs'
+        // behavior (TypeRegistry.GetTypeName answers "String()" for arrays while ResolveNetTypeName
+        // only unwraps "[]"). That move belongs to P2a-2.
+        //
+        // A FACTORY, not an instance: building the resolver reads ~170 framework assemblies as
+        // Roslyn metadata, and a program that names no .NET type must not pay for it. The factory
+        // memoizes on the caller's side, so all units of one compilation share one resolver.
+        private Func<NetTypeResolver> _netResolverFactory;
+        private NetTypeResolver _netResolver;
+        private bool _netResolverCreated;
+
+        /// <summary>Metadata full name per (source spelling + arity), or null when unresolvable.</summary>
+        private readonly Dictionary<string, string> _netTypeNameCache = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>De-dupes identical findings — one warning per name, not one per occurrence.</summary>
+        private readonly HashSet<string> _netReportedFindings = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
         /// Get the TypeRegistry for .NET type lookups
@@ -1883,6 +1904,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     genericType = new TypeInfo(typeRef.Name, TypeKind.Class);
                     genericType.GenericArguments.AddRange(typeArgs);
+                    // P2a-1 §6.5: warning-only. Arity is known here, which is what lets an
+                    // UNCLAIMED generic (Queue(Of T), SortedDictionary(Of K,V), …) be asked for
+                    // as Queue`1 rather than answering NotFound and warning on a valid program.
+                    ProbeNetTypeReference(typeRef.Name, typeArgs.Count);
                 }
 
                 // Func(Of ...) / Action(Of ...) are delegate types - mark them so lambdas
@@ -1902,6 +1927,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 Error($"Unknown type '{typeRef.Name}'", 0, 0);
                 return _typeManager.ObjectType;
             }
+
+            // P2a-1 §6.5: warning-only .NET resolution. ProbeNetTypeReference only acts on a
+            // System.-rooted dotted spelling, which no user-defined BasicLang type, type parameter
+            // or type-manager entry can collide with — so no extra "is this really .NET?" guard is
+            // needed here, and adding one would only make the seam disagree with the probe.
+            ProbeNetTypeReference(typeRef.Name, 0);
 
             // Handle fixed-length strings
             if (typeRef.IsFixedLengthString)
@@ -2103,6 +2134,261 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             return null;
         }
+
+        #region P2a-1 spec §6.5 — warning-only .NET name resolution
+
+        /// <summary>
+        /// Supplies the .NET type resolver. WARNING-ONLY in P2a-1: nothing this enables can fail a
+        /// build. §6.3's native-error behavior lands in P2a-2.
+        /// </summary>
+        /// <param name="resolverFactory">
+        /// Memoized by the caller and invoked at most once per analyzer, and only if the unit
+        /// actually names something that needs resolving. Null (the default) disables every probe
+        /// below, which is what keeps the LSP and every existing test path byte-identical.
+        /// </param>
+        internal void ConfigureNetResolution(Func<NetTypeResolver> resolverFactory)
+        {
+            _netResolverFactory = resolverFactory;
+        }
+
+        private NetTypeResolver NetResolver()
+        {
+            if (!_netResolverCreated)
+            {
+                _netResolverCreated = true;
+                _netResolver = _netResolverFactory?.Invoke();
+            }
+            return _netResolver;
+        }
+
+        /// <summary>
+        /// P2a-1's warning-only findings, kept OUT of <see cref="Errors"/>.
+        ///
+        /// <para><b>This separation is not stylistic — it is what makes "warning-only" true.</b>
+        /// <see cref="Analyze"/> returns <c>_errors.Count == 0</c> (it does NOT filter by
+        /// severity), <c>CompileUnit</c> treats that false as a failed unit, and
+        /// <c>CompilationResult.HasErrors</c> is likewise <c>AllErrors.Count > 0</c> with
+        /// <c>Success = !HasErrors</c>. So a <see cref="SemanticError"/> carrying
+        /// <see cref="ErrorSeverity.Warning"/> FAILS THE BUILD and skips IR generation entirely.
+        /// Putting a BL6016 there would make P2a-1's "the resolver can be wrong without breaking a
+        /// build" claim false in the most direct way possible.</para>
+        ///
+        /// <para>(That also means the analyzer's pre-existing <c>Warning(...)</c> calls are
+        /// effectively fatal today — a latent defect this task deliberately does not change.)</para>
+        ///
+        /// <para>The caller routes these into <c>CppEmitOutcome.NetReferences.Diagnostics</c>,
+        /// which <c>CppProjectBuilder</c> already renders as non-failing
+        /// <c>CppDiagnostic { IsWarning = true }</c> — the one warning channel in this pipeline
+        /// that does not set <c>Success = false</c>.</para>
+        /// </summary>
+        internal IReadOnlyList<NetReferenceDiagnostic> NetDiagnostics => _netDiagnostics;
+
+        private readonly List<NetReferenceDiagnostic> _netDiagnostics = new();
+
+        private void NetWarning(string code, string message, int line, int column)
+        {
+            if (!_netReportedFindings.Add(code + "|" + message)) return;
+            var where = line > 0 ? $" (line {line.ToString(CultureInfo.InvariantCulture)})" : string.Empty;
+            _netDiagnostics.Add(new NetReferenceDiagnostic(code, message + where, IsWarning: true));
+        }
+
+        /// <summary>
+        /// Where an unqualified .NET type name is searched, in spec §6.5's order: the unit's
+        /// <c>Using</c> directives first, then the ambient set the C# backend auto-imports, then
+        /// the name as written (which covers a fully-qualified spelling).
+        ///
+        /// <para><b>The ambient set is READ from <see cref="NetAmbientNamespaces.All"/>, never
+        /// copied.</b> Task 6 extracted that constant so the C# backend and this resolver cannot
+        /// drift; hand-copying the list here would make that guard hollow on the resolver side, and
+        /// a namespace the C# backend auto-imports but this does not know becomes a spurious BL6016
+        /// natively — the exact §6.3 violation the shared constant exists to prevent.</para>
+        ///
+        /// <para><b>Generic arity is mapped onto the metadata name here.</b>
+        /// <see cref="NetTypeResolver"/> requires arity and never guesses, so
+        /// <c>Queue(Of Integer)</c> must be asked for as <c>System.Collections.Generic.Queue`1</c>.
+        /// Without this every UNCLAIMED generic a program can name with
+        /// <c>System.Collections.Generic</c> ambient — <c>Queue</c>, <c>Stack</c>,
+        /// <c>SortedDictionary</c>, <c>LinkedList</c>, <c>Comparer</c>, <c>KeyValuePair</c>,
+        /// <c>Nullable</c> — would answer NotFound and draw a spurious warning on a valid
+        /// program. (<c>List</c>/<c>Dictionary</c>/<c>HashSet</c>/<c>Task</c>/<c>Func</c>/
+        /// <c>Action</c> are safe only because §6.5 row (b) CLAIMS them, so they never get here.)</para>
+        /// </summary>
+        private IEnumerable<string> NetCandidateNames(string name, int genericArgumentCount)
+        {
+            var suffix = genericArgumentCount > 0
+                ? "`" + genericArgumentCount.ToString(CultureInfo.InvariantCulture)
+                : string.Empty;
+
+            foreach (var ns in _netNamespaces)
+                yield return ns + "." + name + suffix;
+
+            foreach (var ns in NetAmbientNamespaces.All)
+                yield return ns + "." + name + suffix;
+
+            yield return name + suffix;
+        }
+
+        /// <summary>
+        /// Resolves a BasicLang type spelling against the .NET closure. Answers
+        /// <see cref="NetTypeLookupOutcome.Resolved"/> with the metadata full name,
+        /// <see cref="NetTypeLookupOutcome.Ambiguous"/> when the only answers are ambiguous ones,
+        /// or <see cref="NetTypeLookupOutcome.NotFound"/>.
+        ///
+        /// <para>A RESOLVED candidate always wins over an ambiguous one: an ambiguity under a
+        /// namespace the program never meant is not a finding about the program.</para>
+        /// </summary>
+        private NetTypeLookupOutcome ResolveNetType(string name, int genericArgumentCount, out string fullName)
+        {
+            fullName = null;
+            if (string.IsNullOrEmpty(name)) return NetTypeLookupOutcome.NotFound;
+
+            var cacheKey = name + "`" + genericArgumentCount.ToString(CultureInfo.InvariantCulture);
+            if (_netTypeNameCache.TryGetValue(cacheKey, out var cached))
+            {
+                fullName = cached;
+                return cached == null ? NetTypeLookupOutcome.NotFound : NetTypeLookupOutcome.Resolved;
+            }
+
+            var resolver = NetResolver();
+            if (resolver == null) return NetTypeLookupOutcome.NotFound;
+
+            var sawAmbiguous = false;
+            foreach (var candidate in NetCandidateNames(name, genericArgumentCount))
+            {
+                var lookup = resolver.ResolveTypeDetailed(candidate);
+                if (lookup.Outcome == NetTypeLookupOutcome.Resolved)
+                {
+                    // The CANDIDATE, not NetTypeDescriptor.FullName: the descriptor reports the
+                    // readable form ("List<T>"), which deliberately does not round-trip back
+                    // through ResolveTypeDetailed/GetMembers. The candidate does.
+                    _netTypeNameCache[cacheKey] = candidate;
+                    fullName = candidate;
+                    return NetTypeLookupOutcome.Resolved;
+                }
+                if (lookup.Outcome == NetTypeLookupOutcome.Ambiguous)
+                    sawAmbiguous = true;
+            }
+
+            if (sawAmbiguous) return NetTypeLookupOutcome.Ambiguous;
+
+            _netTypeNameCache[cacheKey] = null;
+            return NetTypeLookupOutcome.NotFound;
+        }
+
+        /// <summary>
+        /// The evidence bar for a BL6016 in P2a-1, and the reason this task stays inert.
+        ///
+        /// <para><see cref="IsNetType"/> answers TRUE for <b>any PascalCase identifier without an
+        /// underscore</b> (its catch-all), so "the analyzer thinks this is .NET" is not evidence of
+        /// anything — every typo'd or not-yet-declared BasicLang type name reaches the same branch.
+        /// Warning on those would put a new BL6016 on programs that compile clean today, which this
+        /// plan forbids outright.</para>
+        ///
+        /// <para>So P2a-1 warns only for a name the user SPELLED as .NET: dotted, rooted at
+        /// <c>System</c>. <c>Microsoft</c> and <c>Windows</c> are deliberately excluded even though
+        /// <see cref="IsNetType"/> accepts them — those roots live in assemblies the shared
+        /// framework closure does not contain (<c>System.Windows.Forms</c> being the obvious one),
+        /// so "not found" there means "not referenced", not "does not exist", and would be a false
+        /// accusation.</para>
+        ///
+        /// <para>Bare unresolvable names become an ERROR in P2a-2, once the catch-all heuristic is
+        /// replaced and "unknown" is knowable.</para>
+        /// </summary>
+        private static bool IsExplicitlyNetQualified(string name) =>
+            !string.IsNullOrEmpty(name)
+            && name.IndexOf('.') > 0
+            && name.StartsWith("System.", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Type-reference seam. A CLAIMED name never reaches the resolver at all (spec §6.5's
+        /// direction rule: <c>Dim a As Action</c> stays <c>std::function</c>).
+        /// </summary>
+        private void ProbeNetTypeReference(string name, int genericArgumentCount)
+        {
+            if (_netResolverFactory == null) return;
+            if (string.IsNullOrEmpty(name)) return;
+            if (NetClaimPredicate.IsClaimedTypeName(name, genericArgumentCount)) return;
+            if (!IsExplicitlyNetQualified(name)) return;
+
+            var outcome = ResolveNetType(name, genericArgumentCount, out _);
+            if (outcome == NetTypeLookupOutcome.Resolved) return;
+
+            // ResolveTypeReference has no position information — the pre-existing "Unknown type"
+            // errors beside it report 0,0 too (SemanticAnalyzer.cs:1864/1902). Threading a position
+            // through every one of its ~25 call sites is a change to existing diagnostics, which
+            // P2a-1 does not make.
+            if (outcome == NetTypeLookupOutcome.Ambiguous)
+            {
+                NetWarning("BL6023",
+                    $"'{name}' is declared in more than one referenced assembly. Qualify it or drop "
+                    + "one of the references.", 0, 0);
+                return;
+            }
+
+            NetWarning("BL6016",
+                $".NET type '{name}' was not found in the project's referenced assemblies. Add a "
+                + "<Reference> for the assembly that declares it, or correct the name.", 0, 0);
+        }
+
+        /// <summary>
+        /// Member-access seam. Warns BL6017 only when the receiver's type RESOLVED from metadata —
+        /// a member finding about a type that was never found is the least actionable message the
+        /// compiler could produce, and <see cref="NetOverloadOutcome.TypeUnavailable"/> exists in
+        /// Task 5 precisely to keep those apart. Type-level failures are reported by
+        /// <see cref="ProbeNetTypeReference"/> as BL6016/BL6023 instead.
+        /// </summary>
+        private void ProbeNetMemberAccess(TypeInfo objectType, string memberName, int line, int column)
+        {
+            if (_netResolverFactory == null) return;
+            if (objectType == null || string.IsNullOrEmpty(memberName)) return;
+
+            var typeName = objectType.Name;
+            if (string.IsNullOrEmpty(typeName)) return;
+
+            // §6.5 rows (a)/(b)/(c): claimed names and claimed CALLS never reach the resolver.
+            if (NetClaimPredicate.IsClaimedTypeName(typeName, objectType.GenericArguments?.Count ?? 0)) return;
+            if (NetClaimPredicate.IsClaimedCall(typeName, memberName)) return;
+
+            // P1's native BCL surface owns these members and is consulted before metadata
+            // everywhere else (LookupNetTypeMember:2070); disagreeing here would report a member
+            // the compiler demonstrably handles.
+            if (NativeBclSurface.TryGetMember(typeName, memberName, out _)) return;
+
+            // System.Object's members are deliberately absent from NetTypeResolver.GetMembers
+            // (spec §7.2 excludes them unless overridden). They are callable on EVERY .NET type, so
+            // treating their absence as a finding would put a BL6017 on `x.ToString()` — a valid
+            // program — for any type that does not override it.
+            if (ObjectMemberNames.Contains(memberName)) return;
+
+            if (ResolveNetType(typeName, objectType.GenericArguments?.Count ?? 0, out var fullName)
+                != NetTypeLookupOutcome.Resolved)
+            {
+                return;
+            }
+
+            var members = NetResolver().GetMembers(fullName);
+            if (members.Count == 0) return;   // no surface to judge against
+
+            foreach (var member in members)
+            {
+                if (string.Equals(member.Name, memberName, StringComparison.OrdinalIgnoreCase))
+                    return;
+            }
+
+            NetWarning("BL6017",
+                $".NET type '{fullName}' has no accessible member named '{memberName}'.",
+                line, column);
+        }
+
+        /// <summary>
+        /// <see cref="object"/>'s callable members. See <see cref="ProbeNetMemberAccess"/>.
+        /// </summary>
+        private static readonly HashSet<string> ObjectMemberNames = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "ToString", "Equals", "GetHashCode", "GetType", "ReferenceEquals", "MemberwiseClone",
+        };
+
+        #endregion
 
         /// <summary>
         /// Resolve a .NET type name string to a TypeInfo
@@ -5615,6 +5901,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 // For .NET types, try to look up the member to get its return type
                 var memberType = LookupNetTypeMember(objectType.Name, node.MemberName);
+                // P2a-1 §6.5: warning-only. The line above swallows a miss (`?? ObjectType`);
+                // this reports one, but ONLY when the receiver type actually resolved from
+                // metadata. Emits no diagnostic and changes no type.
+                ProbeNetMemberAccess(objectType, node.MemberName, node.Line, node.Column);
                 SetNodeType(node, memberType ?? _typeManager.ObjectType);
             }
             else

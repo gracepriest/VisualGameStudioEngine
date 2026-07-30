@@ -212,6 +212,35 @@ namespace BasicLang.Compiler.ProjectSystem
                 RestorePackagesForClosure(project, configuration, forIntelliSense);
             var netReferences = NetReferenceResolver.Resolve(
                 project, project.FilePath, packageAssemblies, packageErrors);
+
+            // P2a-1 Task 8 (spec §6.5): the analyzer's warning-only .NET resolver, built over this
+            // closure. MEMOIZED — one resolver for every unit of this compilation — and LAZY: the
+            // Roslyn metadata read happens only if some unit actually names an unclaimed .NET type,
+            // so a project that touches no .NET pays nothing and the toolchain-free IntelliSense
+            // path is unaffected.
+            NetTypeResolver netResolver = null;
+            Func<NetTypeResolver> netResolverFactory = () =>
+                netResolver ??= NetTypeResolver.Create(netReferences.All);
+
+            // The resolver's OWN diagnostics (BL6021 for a reference Roslyn cannot read as
+            // metadata) belong to the closure, MERGED — not to a third bag and not to
+            // result.Diagnostics directly. IntelliSenseEmitterTests pins that
+            // outcome.NetReferences.Diagnostics is the complete record; a second channel would
+            // break it and start denying header regeneration. Only forced when the project
+            // DECLARED something, because the framework set is already filtered to managed
+            // assemblies and can produce none of these.
+            if (netReferences.AssemblyPaths.Count > 0)
+            {
+                var resolverDiagnostics = netResolverFactory().Diagnostics;
+                if (resolverDiagnostics.Count > 0)
+                {
+                    netReferences = new NetReferenceClosure(
+                        netReferences.AssemblyPaths,
+                        netReferences.FrameworkPaths,
+                        netReferences.Diagnostics.Concat(resolverDiagnostics).ToList());
+                }
+            }
+
             outcome.NetReferences = netReferences;
 
             // Diagnostics reach result ONLY on a build. IntelliSense's OUTPUTS stay byte-for-byte
@@ -286,8 +315,47 @@ namespace BasicLang.Compiler.ProjectSystem
             var basicLangMainCount = 0;
             if (blSources.Count > 0)
             {
-                var compiler = new BasicCompiler(new CompilerOptions { TargetBackend = "cpp" });
+                var compiler = new BasicCompiler(new CompilerOptions
+                {
+                    TargetBackend = "cpp",
+                    NetResolverFactory = netResolverFactory,
+                });
                 compilation = compiler.CompileProjectFiles(blSources);
+
+                // P2a-1 §6.5: the analyzer's warning-only .NET findings. MERGED into the closure's
+                // existing bag — not a third channel — because IntelliSenseEmitterTests pins
+                // outcome.NetReferences.Diagnostics as the complete record, and because
+                // result.AllErrors/result.Diagnostics-via-Fail both force Success = false, which a
+                // warning must never do. Merged before the failure return so a unit that failed for
+                // an unrelated reason still carries them.
+                if (compilation.NetDiagnostics.Count > 0)
+                {
+                    netReferences = new NetReferenceClosure(
+                        netReferences.AssemblyPaths,
+                        netReferences.FrameworkPaths,
+                        netReferences.Diagnostics.Concat(compilation.NetDiagnostics).ToList());
+                    outcome.NetReferences = netReferences;
+
+                    if (!forIntelliSense)
+                    {
+                        foreach (var diag in compilation.NetDiagnostics)
+                        {
+                            // Hand-constructed, never routed through Fail — Fail forces
+                            // Success = false and these are warnings. Same shape as the
+                            // reference-resolution warning block above.
+                            result.Diagnostics.Add(new CppDiagnostic
+                            {
+                                FilePath = project.FilePath,
+                                Line = 0,
+                                Column = 0,
+                                IsWarning = true,
+                                Code = diag.Code,
+                                Message = diag.Message
+                            });
+                        }
+                    }
+                }
+
                 if (!compilation.Success)
                 {
                     // On failure result.Units is empty; errors are attributed per-unit

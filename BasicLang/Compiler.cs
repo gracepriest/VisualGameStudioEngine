@@ -20,10 +20,23 @@ namespace BasicLang.Compiler
         public IRModule CombinedIR { get; set; }
         public TimeSpan Duration { get; set; }
 
+        /// <summary>
+        /// P2a-1 (spec §6.5): the analyzer's warning-only .NET findings (BL6016/BL6017/BL6023).
+        ///
+        /// <para><b>Deliberately NOT <see cref="AllErrors"/>.</b> <see cref="HasErrors"/> is
+        /// <c>AllErrors.Count > 0</c> with no severity filter, and <c>Success = !HasErrors</c> — so
+        /// anything placed there fails the build no matter what severity it carries. These are
+        /// warnings, so they get their own list and are surfaced by <c>CppProjectBuilder</c> through
+        /// <c>CppEmitOutcome.NetReferences.Diagnostics</c>, the one channel that renders a warning
+        /// without setting <c>Success = false</c>.</para>
+        /// </summary>
+        internal List<Net.NetReferenceDiagnostic> NetDiagnostics { get; }
+
         public CompilationResult()
         {
             Units = new List<CompilationUnit>();
             AllErrors = new List<SemanticError>();
+            NetDiagnostics = new List<Net.NetReferenceDiagnostic>();
         }
 
         public bool HasErrors => AllErrors.Count > 0;
@@ -46,6 +59,22 @@ namespace BasicLang.Compiler
         public string OutputPath { get; set; }
         public string TargetBackend { get; set; } = "csharp";
         public List<string> SearchPaths { get; set; } = new List<string>();
+
+        /// <summary>
+        /// P2a-1 (spec §6.5): supplies the .NET type resolver to every unit's
+        /// <see cref="SemanticAnalysis.SemanticAnalyzer"/>. <b>WARNING-ONLY</b> — nothing reachable
+        /// through it can fail a build in P2a-1.
+        ///
+        /// <para>Null by default, which is what every existing caller passes, and with it null the
+        /// analyzer's .NET probes are entirely inert. <c>CppProjectBuilder</c> sets it from the
+        /// <see cref="Net.NetReferenceClosure"/> it already computes.</para>
+        ///
+        /// <para><b>A factory, and the caller memoizes it.</b> Constructing the resolver reads the
+        /// whole framework closure as Roslyn metadata; deferring that until a unit actually names
+        /// something unclaimed keeps a program that touches no .NET from paying for it, and
+        /// memoizing keeps a 40-file project from paying 40 times.</para>
+        /// </summary>
+        internal Func<Net.NetTypeResolver> NetResolverFactory { get; set; }
     }
 
     /// <summary>
@@ -542,6 +571,11 @@ namespace BasicLang.Compiler
                 // Semantic analysis
                 var analyzer = new SemanticAnalyzer();
                 analyzer.ConfigureModuleSystem(_registry, _resolver, unit);
+                // P2a-1 §6.5, warning-only. Deliberately NOT ConfigureTypeRegistry: activating
+                // that on the compile path un-deadens LookupNetTypeMember's registry branch, which
+                // shadows the String/common fallbacks below it and changes existing programs'
+                // behavior. That move is P2a-2's.
+                analyzer.ConfigureNetResolution(_options.NetResolverFactory);
                 if (implicitImports != null)
                 {
                     analyzer.AddImplicitImports(implicitImports);
@@ -561,6 +595,11 @@ namespace BasicLang.Compiler
                 }
 
                 unit.Errors.AddRange(analyzer.Errors);
+
+                // Warning-only .NET findings (spec §6.5). Collected BEFORE the failure return so a
+                // unit that fails for an unrelated reason still reports them, and kept off
+                // AllErrors so they cannot turn a warning into a failed build.
+                result.NetDiagnostics.AddRange(analyzer.NetDiagnostics);
 
                 if (!success)
                 {

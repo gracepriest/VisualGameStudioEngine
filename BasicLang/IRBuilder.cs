@@ -3663,6 +3663,31 @@ namespace BasicLang.Compiler.IR
             "Process", "Stopwatch", "Debug", "Trace"
         };
 
+        /// <summary>
+        /// Spec §6.5 row (c)'s FIRST half, exposed so
+        /// <see cref="BasicLang.Net.NetClaimPredicate"/> reads the one table rather than copying it.
+        ///
+        /// <para><b>This is a call-SHAPE classifier, not an inventory of native implementations.</b>
+        /// Membership alone claims nothing: 51 of these 58 names have no
+        /// <c>EmitStdLibCall</c> arm for any member (<c>File</c>, <c>Activator</c>, <c>Encoding</c>,
+        /// <c>Convert</c>, …), and claiming them by membership would strand exactly the .NET surface
+        /// P2a exists to deliver. Row (c) is membership AND
+        /// <see cref="Compiler.CodeGen.CPlusPlus.CppCodeGenerator.HasStdLibEmission"/>.</para>
+        ///
+        /// <para>Exposed read-only over the live set — a copy would be a second table to keep in
+        /// sync, which is the failure mode this whole seam exists to prevent.</para>
+        /// </summary>
+        internal static IReadOnlyCollection<string> KnownNetStaticTypeNames => KnownNetStaticTypes;
+
+        /// <summary>
+        /// Case-insensitive membership in <see cref="KnownNetStaticTypeNames"/>. NOTE this is the
+        /// static table only — the instance method <see cref="IsKnownNetStaticType"/> additionally
+        /// applies a PascalCase heuristic keyed on the current unit's imports, which is a
+        /// call-routing decision and deliberately not part of the claim predicate.
+        /// </summary>
+        internal static bool IsKnownNetStaticTypeName(string name) =>
+            !string.IsNullOrEmpty(name) && KnownNetStaticTypes.Contains(name);
+
         private bool IsKnownNetStaticType(string name)
         {
             // Check the hardcoded list first

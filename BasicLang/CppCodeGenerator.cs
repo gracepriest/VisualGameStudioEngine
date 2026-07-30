@@ -2111,7 +2111,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             return _module.Functions.Any(f => f.Name == plain) ? plain : functionName;
         }
 
-        private string GetArg(List<string> args, int index) => index < args.Count ? args[index] : "0";
+        private static string GetArg(List<string> args, int index) => index < args.Count ? args[index] : "0";
 
         /// <summary>
         /// Widen a Byte/SByte console argument for printing (spec §14.6). <c>cout</c>
@@ -2231,22 +2231,68 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // member function `BasicLang::X::Member(args)`. StaticProperty covers the
             // parenthesized access form (`DateTime.Now()`); the paren-less property form
             // arrives as an IRFieldAccess and is handled in Visit(IRFieldAccess).
-            var bclDot = functionName.LastIndexOf('.');
-            if (bclDot > 0 && bclDot < functionName.Length - 1)
+            if (TryGetNativeBclStaticMember(functionName, out var bclTypeName, out var bclStatic))
             {
-                var bclTypeName = functionName.Substring(0, bclDot);
-                var bclMemberName = functionName.Substring(bclDot + 1);
-                if (IsNativeOwnedBclType(bclTypeName)
-                    && NativeBclSurface.TryGetMember(bclTypeName, bclMemberName, out var bclStatic)
-                    && (bclStatic.Kind == NativeBclMemberKind.StaticMethod
-                        || bclStatic.Kind == NativeBclMemberKind.StaticProperty))
-                {
-                    return $"BasicLang::{BclCanonicalName(bclTypeName)}::{bclStatic.CppName ?? bclStatic.MemberName}({string.Join(", ", args)})";
-                }
+                return $"BasicLang::{BclCanonicalName(bclTypeName)}::{bclStatic.CppName ?? bclStatic.MemberName}({string.Join(", ", args)})";
             }
 
+            return StdLibArm(functionName, args, call);
+        }
+
+        /// <summary>
+        /// The <c>NativeBclSurface</c> static-dispatch branch of <see cref="EmitStdLibCall"/>
+        /// (spec §6.5 row (c), historically inline at lines 2234-2246), lifted out so
+        /// <see cref="BasicLang.Net.NetClaimPredicate"/> can ask the SAME question the generator
+        /// answers instead of re-deriving it. A dotted call on a NativeOwned type name
+        /// (<c>DateTime.Parse(s)</c>, <c>Guid.NewGuid()</c>, <c>TimeSpan.FromDays(n)</c>) lowers to
+        /// the runtime's static member function <c>BasicLang::X::Member(args)</c>. StaticProperty
+        /// covers the parenthesized access form (<c>DateTime.Now()</c>); the paren-less property
+        /// form arrives as an IRFieldAccess and is handled in Visit(IRFieldAccess).
+        /// </summary>
+        internal static bool TryGetNativeBclStaticMember(
+            string functionName, out string typeName, out NativeBclMember member)
+        {
+            typeName = null;
+            member = null;
+            if (string.IsNullOrEmpty(functionName)) return false;
+
+            var dot = functionName.LastIndexOf('.');
+            if (dot <= 0 || dot >= functionName.Length - 1) return false;
+
+            var candidateType = functionName.Substring(0, dot);
+            var candidateMember = functionName.Substring(dot + 1);
+            if (!IsNativeOwnedBclType(candidateType)
+                || !NativeBclSurface.TryGetMember(candidateType, candidateMember, out var found)
+                || (found.Kind != NativeBclMemberKind.StaticMethod
+                    && found.Kind != NativeBclMemberKind.StaticProperty))
+            {
+                return false;
+            }
+
+            typeName = candidateType;
+            member = found;
+            return true;
+        }
+
+        /// <summary>
+        /// The plain stdlib arm table — the <c>functionName.ToLower()</c> switch that used to sit
+        /// inline at the end of <see cref="EmitStdLibCall"/> (historically lines 2256-2346).
+        ///
+        /// <para><b>Extracted so there is exactly ONE arm table, not two.</b> Spec §6.5 row (c)
+        /// makes "does an arm exist for this call?" a question the claim predicate must answer
+        /// identically to the generator, and a predicate carrying its own parallel switch is how
+        /// <c>Console.WriteLine</c> silently stops being claimed and every existing program gets
+        /// rewritten through the shim. <see cref="HasStdLibEmission"/> calls this method; so does
+        /// <see cref="EmitStdLibCall"/>. Static and free of generator state precisely so the
+        /// predicate can reach it. Pinned by
+        /// <c>NetClaimPredicateTests.RowCUsesTheGeneratorsOwnArmCheckAndCannotDrift</c>.</para>
+        /// </summary>
+        internal static string StdLibArm(string functionName, List<string> args, IRCall call)
+        {
+            if (functionName == null) return null;
+
             // The C* conversion intrinsics (CInt/CLng/CDbl/CSng/CStr/CBool) take the
-            // stdlib route below, NOT Visit(IRCast) — on a Decimal-typed argument a
+            // stdlib route here, NOT Visit(IRCast) — on a Decimal-typed argument a
             // static_cast / std::to_string is invalid C++ (the engine deliberately has no
             // conversion operator), so those arms route through the engine instead.
             var arg0IsDecimal = call != null && call.Arguments.Count > 0
@@ -2413,9 +2459,38 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// </summary>
         private string EmitFrameworkCall(string functionName, List<string> args)
         {
+            var result = FrameworkCallExpression(functionName, args);
+
+            if (result != null)
+            {
+                _usesFramework = true;
+                // Extract the C function name from the result (everything before the first '(')
+                var parenIdx = result.IndexOf('(');
+                if (parenIdx > 0)
+                    _frameworkFunctionsUsed.Add(result.Substring(0, parenIdx));
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// The game-framework arm table, split out of <see cref="EmitFrameworkCall"/> so it can be
+        /// asked WITHOUT its side effects (<c>_usesFramework</c> and <c>_frameworkFunctionsUsed</c>,
+        /// which decide whether the generated translation unit declares the Framework_* externs).
+        /// <see cref="HasStdLibEmission"/> — and through it spec §6.5's claim predicate — needs the
+        /// answer only; marking the framework as used because a PREDICATE asked would emit extern
+        /// declarations into programs that never call the engine.
+        ///
+        /// <para>Every arm key here is a bare, undotted name, so this can never claim a
+        /// <c>Type.Member</c> call. It is still consulted by <see cref="HasStdLibEmission"/> rather
+        /// than assumed away, because "no arm has a dot" is a property of this table that a future
+        /// edit could change silently.</para>
+        /// </summary>
+        internal static string FrameworkCallExpression(string functionName, List<string> args)
+        {
             var allArgs = string.Join(", ", args);
 
-            string result = functionName switch
+            return functionName switch
             {
                 // Core
                 "GameInit" => $"Framework_Initialize({allArgs})",
@@ -2518,18 +2593,43 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
                 _ => null
             };
-
-            if (result != null)
-            {
-                _usesFramework = true;
-                // Extract the C function name from the result (everything before the first '(')
-                var parenIdx = result.IndexOf('(');
-                if (parenIdx > 0)
-                    _frameworkFunctionsUsed.Add(result.Substring(0, parenIdx));
-            }
-
-            return result;
         }
+
+        /// <summary>
+        /// Spec §6.5 row (c)'s second half: does <paramref name="functionName"/> have a native emit
+        /// arm at all? True iff <see cref="EmitStdLibCall"/> would return non-null for it through
+        /// any of its three providers — <see cref="FrameworkCallExpression"/>,
+        /// <see cref="TryGetNativeBclStaticMember"/>, or <see cref="StdLibArm"/>.
+        ///
+        /// <para><b>This is the anti-drift seam and the reason those three are static.</b> The
+        /// claim predicate must not carry its own copy of the arm table: reading "claimed" as
+        /// "registry + CppCapabilityChecker" and losing <c>Console.WriteLine</c> would route every
+        /// existing program's output through the shim.</para>
+        ///
+        /// <para><b>The module-shadowing guard is deliberately NOT applied.</b>
+        /// <see cref="EmitStdLibCall"/> first checks <see cref="IsUserDefinedFunctionName"/>, which
+        /// depends on the module being generated; this asks only whether a BUILTIN arm exists. A
+        /// user function shadowing a builtin is dispatched as a user function and never reaches
+        /// the shim either, so the narrower question is the safe one — and it keeps the predicate a
+        /// pure function of the name, which is what lets the analyzer call it before any module
+        /// exists.</para>
+        ///
+        /// <para>Arguments are placeholders: no arm's EXISTENCE depends on argument values, and
+        /// eight of them is past the highest index any arm reads (args[2], in
+        /// <c>mid</c>/<c>replace</c>/<c>dateadd</c>/<c>datediff</c>). <c>call</c> is null, which
+        /// only makes the Decimal-aware C* arms pick their non-Decimal shape — still non-null.</para>
+        /// </summary>
+        internal static bool HasStdLibEmission(string functionName)
+        {
+            if (string.IsNullOrEmpty(functionName)) return false;
+
+            return FrameworkCallExpression(functionName, ArmProbeArgs) != null
+                   || TryGetNativeBclStaticMember(functionName, out _, out _)
+                   || StdLibArm(functionName, ArmProbeArgs, null) != null;
+        }
+
+        private static readonly List<string> ArmProbeArgs =
+            new List<string> { "a", "a", "a", "a", "a", "a", "a", "a" };
 
         /// <summary>
         /// Map of Framework_* function name to its C declaration (without __declspec).
