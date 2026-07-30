@@ -279,6 +279,19 @@ Changes required:
   restore entirely" is now false and must go.
 - A reference that cannot be resolved is **BL6021**, not silence.
 - `NetReferenceResolver` rejects `<ProjectReference>` with BL6021 naming the workaround.
+- **BL6021 also covers a path that resolves but is not readable as managed metadata.** Added after
+  plan Task 4; the original table had no row for it. `MetadataReference.CreateFromFile` behaves in
+  two different ways here, verified by probe on Roslyn 4.9.2:
+  - **missing file → throws `FileNotFoundException` eagerly**, so an unguarded resolver crashes the
+    build;
+  - **malformed or native DLL → returns successfully and DEFERS**; the failure only surfaces as
+    `Compilation.GetAssemblyOrModuleSymbol` returning null, so an unguarded resolver **degrades
+    silently** instead.
+
+  Both must become BL6021 rather than an exception or a silent miss. Note this corrects an earlier
+  claim in `NetReferenceResolver.cs` that `CreateFromFile` *throws* on a native DLL — it does not.
+  The shared-framework-directory filter (§6.1) is still required, but because native DLLs yield a
+  null assembly symbol, not because they throw.
 
 > **Why `<ProjectReference>` is out.** "Build the referenced project first, then use its output
 > assembly" is *cross-project compilation*, and it does not exist on any BasicLang build path.
@@ -1080,7 +1093,7 @@ Next free code is BL6016 (grep-verified).
 | BL6018 | ambiguous overload |
 | BL6019 | unsupported marshaling at the boundary |
 | BL6020 | AOT-incompatible member (mapped from any ILC trim/AOT diagnostic — §11.3) |
-| BL6021 | reference could not be resolved, or `<ProjectReference>` used (§5) |
+| BL6021 | reference could not be resolved, or resolved but unreadable as managed metadata, or `<ProjectReference>` used (§5) |
 | BL6022 | `<NetProxy>` names an unknown type |
 | BL6023 | ambiguous .NET **type** reference (§6.5) |
 | BL6024 | .NET call inside a BasicLang **generic body** (§15.5 decision) |

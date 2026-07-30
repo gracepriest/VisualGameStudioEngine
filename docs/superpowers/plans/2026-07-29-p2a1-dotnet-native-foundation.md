@@ -993,6 +993,28 @@ public class NetClaimPredicateTests
 - The resolver is constructed from the `NetReferenceClosure` that Task 3 put on `CppEmitOutcome`,
   threaded through `CompilerOptions` to `new BasicCompiler(...)` (`CppProjectBuilder.cs:222`).
 
+> ⛔ **Two constraints inherited from Task 4 — both found by review, both easy to violate.**
+>
+> **(a) Bare unclaimed generics get a spurious BL6016 unless you handle arity.** `NetTypeResolver`
+> deliberately **requires** generic arity and never guesses: `` List`1 `` resolves, `List` is
+> `NotFound`. That decision is correct — guessing arity fabricates bindings, which is the whole
+> defect this class exists to remove — and it is safe for `List`/`Dictionary`/`HashSet`/`Task`/`Func`/
+> `Action`, because §6.5 row (b) *claims* those so they never reach the resolver. But **unclaimed**
+> generics do reach it, and a program can plausibly name them with `System.Collections.Generic`
+> ambient: `Queue(Of T)`, `Stack(Of T)`, `SortedDictionary`, `LinkedList`, `Comparer(Of T)`,
+> `KeyValuePair(Of K,V)`, `Nullable(Of T)`. Each currently yields `NotFound` → a spurious BL6016
+> warning on a valid program. Task 4's code asserts "every caller knows the arity", but that caller
+> is *this task* and no test enforces it. **Add a bare-unclaimed-generic test** (`Queue(Of Integer)`
+> is the cheapest) and map the BasicLang generic arity onto the metadata name before lookup.
+>
+> **(b) `NetTypeResolver.Diagnostics` must NOT land on `result.Diagnostics`.** Task 4 added a second
+> diagnostic bag beside `NetReferenceClosure.Diagnostics`. `IntelliSenseEmitterTests.cs:393-396`
+> pins `Has.None.EqualTo("BL6021")` on `IntelliSenseEmitter.Emit(...).Diagnostics`, with the
+> remedy spelled out in its failure message: *the complete record lives on
+> `CppEmitOutcome.NetReferences.Diagnostics` instead*. Route the resolver's diagnostics into that
+> closure — **merging the two bags, not adding a third** — or that test breaks and the IntelliSense
+> path starts denying header regeneration.
+
 > ⛔ **Do NOT call `ConfigureTypeRegistry` from `CompileUnit` in P2a-1.** It is at
 > `BasicLang/Compiler.cs:524/529` with the analyzer configured at `:543-544` — and activating it on
 > the compile path **un-deadens `SemanticAnalyzer.cs:2075-2088`, which shadows the String/common
