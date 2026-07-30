@@ -590,6 +590,40 @@ namespace BasicLang.Compiler.IR
         /// </summary>
         public List<TypeInfo> GenericArguments { get; set; } = new List<TypeInfo>();
 
+        /// <summary>
+        /// P2a-1 CARRIAGE — <b>read by nobody until P2a-2.</b> The .NET member this call was
+        /// resolved to, or NULL when the call has no resolved .NET target (which is every call
+        /// in every program that exists today: <see cref="IRBuilder"/> has no
+        /// <c>NetTypeResolver</c>, so only P2a-2 ever writes a non-null value here).
+        ///
+        /// <para><b>Why the descriptor and not a Roslyn <c>ISymbol</c>.</b> An <c>ISymbol</c> is
+        /// owned by the <c>Compilation</c> that produced it; putting one on an IR node would
+        /// drag Roslyn into every IR consumer and tie node lifetime to a compilation that the
+        /// optimizer has no reason to keep alive. <c>NetMemberDescriptor</c> is a detached
+        /// value the optimizer carries opaquely.</para>
+        ///
+        /// <para><b>Why this exists before anything reads it.</b> P2a-2's lowering dispatches on
+        /// this field; if any IR copy/clone path drops it the lowering silently falls back to
+        /// name-based dispatch, which is the wild-pointer class spec §8.5 exists to prevent.
+        /// Pinned by <c>NetIrCarriageTests</c>.</para>
+        ///
+        /// <para>INTERNAL on purpose: P2a-1 adds <b>nothing</b> to the compiler's public API.</para>
+        /// </summary>
+        internal BasicLang.Net.NetMemberDescriptor ResolvedNetTarget { get; set; }
+
+        /// <summary>
+        /// P2a-1 CARRIAGE — <b>read by nobody until P2a-2.</b> Spec C1 boundary category of this
+        /// call's RECEIVER type, as <see cref="BoundaryTypeRegistry.Categorize"/> sees it.
+        /// P2a-2 reads it to decide whether a call is natively handled
+        /// ({<c>NativeOwned</c>, <c>Bridged</c>}) or must route through the .NET shim
+        /// (<c>ManagedOwned</c>).
+        ///
+        /// <para><b>The initializer is load-bearing.</b> <c>NativeOwned</c> is 0, so the implicit
+        /// enum default would mark every call in the program "natively handled" — the most
+        /// dangerous possible wrong answer. It must start at <c>Unknown</c>.</para>
+        /// </summary>
+        internal BoundaryTypeCategory NetCategory { get; set; } = BoundaryTypeCategory.Unknown;
+
         public IRCall(string resultName, string functionName, TypeInfo returnType)
             : base(resultName, returnType)
         {

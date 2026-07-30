@@ -3340,6 +3340,19 @@ namespace BasicLang.Compiler.IR
                 {
                     // Static method call: ClassName.Method()
                     var call = new IRCall(tempName, $"{staticVar.Name}.{memberExpr.MemberName}", returnType);
+
+                    // P2a-1 CARRIAGE (read by nobody until P2a-2). The fused name above is the
+                    // ONLY place the receiver type survives as a distinct token — everything
+                    // downstream sees the single string "Receiver.Member". Record the receiver's
+                    // spec-C1 category here, while we still have it.
+                    //
+                    // INERT BY CONSTRUCTION: Categorize is a pure static table lookup over a name
+                    // — no Roslyn, no assembly references, no IO — and no backend reads
+                    // NetCategory. ResolvedNetTarget stays null: IRBuilder has no NetTypeResolver
+                    // (the P2a-1 resolver runs warning-only, out in CppProjectBuilder), so P2a-2
+                    // is what will populate it once the resolver is threaded here.
+                    call.NetCategory = BoundaryTypeRegistry.Categorize(staticVar.Name);
+
                     call.GenericArguments.AddRange(BuildGenericArgTypes(node.GenericArguments));
                     foreach (var arg in node.Arguments)
                     {

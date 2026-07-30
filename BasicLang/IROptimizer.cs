@@ -1404,6 +1404,13 @@ namespace BasicLang.Compiler.IR.Optimization
                         : null;
                     return new IRReturn(retVal);
 
+                // NOTE (P2a-1 Task 10): there is deliberately NO `case IRCall` here, and adding
+                // one is a breaking change. Falling through to `default` returns the SAME node,
+                // which is what carries IRCall.ResolvedNetTarget / NetCategory across inlining —
+                // this is the only clone path an IRCall can reach. Any IRCall case added here
+                // MUST copy both fields; NetIrCarriageTests
+                // .AggressivePipelinePreservesCarriageThroughTheInliningClonePath fails if it
+                // does not.
                 default:
                     return inst;
             }
@@ -2277,6 +2284,11 @@ namespace BasicLang.Compiler.IR.Optimization
                         CloneValue(load.Address, prefix),
                         load.Type);
 
+                // NOTE (P2a-1 Task 10): an IRCall cannot reach this switch — a loop containing
+                // one is refused for unrolling upstream (IsSimpleLoop, "if (inst is IRCall)
+                // return false"). If that ever relaxes, a `case IRCall` added here MUST copy
+                // ResolvedNetTarget and NetCategory across, for the reason spelled out on
+                // FunctionInliningPass.CloneAndRemap's default arm.
                 default:
                     return inst;
             }
