@@ -81,8 +81,23 @@ namespace BasicLang.Net
     /// such overload" for a call the user can see two candidates for is the least actionable
     /// message available, so the distinction has to survive to Task 8 rather than being recovered
     /// there.</para>
+    ///
+    /// <para><b><see cref="TypeUnavailable"/> exists so the ordering requirement cannot be
+    /// forgotten.</b> Overload resolution presupposes a resolved type, and the three type-level
+    /// answers — not found (BL6016), declared twice (BL6023), and resolved but not effectively
+    /// public (also BL6016, because a shim referencing it fails in <c>csc</c> with CS0122) — are
+    /// none of them a statement about overloads. Folding them into
+    /// <see cref="NoMatch"/> would make Task 8 report "no matching overload" for a type that was
+    /// never found, and §6.5 is explicit that BL6018 "covers ambiguous <i>overloads</i> only". A
+    /// doc comment telling the caller to ask <see cref="NetTypeResolver.ResolveTypeDetailed"/> first
+    /// is not enforcement; a distinct outcome is. Ask
+    /// <see cref="NetTypeResolver.ResolveTypeDetailed"/> for WHICH of the three it was.</para>
+    ///
+    /// <para><b>Appended, not inserted.</b> New members go on the end for the reason this file's
+    /// header gives about <c>NetMemberKind</c>: anything that round-trips an outcome through an int
+    /// silently remaps every value after an insertion.</para>
     /// </summary>
-    internal enum NetOverloadOutcome { Resolved, NoMatch, Ambiguous }
+    internal enum NetOverloadOutcome { Resolved, NoMatch, Ambiguous, TypeUnavailable }
 
     /// <summary>
     /// The winning member, or why there is none. <see cref="Member"/> is non-null only for
@@ -94,7 +109,7 @@ namespace BasicLang.Net
     /// <see cref="Outcome"/> by value and <see cref="Member"/> by REFERENCE. Compare
     /// <c>Member.ToString()</c> when content equality is what is wanted.</para>
     /// </summary>
-    internal sealed record NetOverloadResult(NetOverloadOutcome Outcome, NetMemberDescriptor Member);
+    internal sealed record NetOverloadResult(NetOverloadOutcome Outcome, NetMemberDescriptor? Member);
 
     /// <summary>
     /// A resolved .NET type. A record is safe here — every member is a string, enum or bool, so
