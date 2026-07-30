@@ -492,6 +492,27 @@ declared on the type **and on its base types**, static and instance — **exclud
 `System.Object`'s members unless overridden and marshalable. `[Obsolete]` members are included
 (omitting them would silently diverge from what the C# backend can call).
 
+> ⛔ **Correction — constructors come from the queried type ONLY, never from base types.** The
+> sentence above, read literally, includes them; that is a spec slip, found and measured during plan
+> Task 4. **Constructors are not inherited**: `New Derived(baseCtorArgs)` is a compile error unless
+> `Derived` declares that signature, so collecting them from base types invents members that cannot
+> be called. Measured across the public framework surface: **447 spurious members** — e.g.
+> `FileNotFoundException` yielded 15 constructors for the 5 it declares. It also *silently replaced*
+> a derived constructor with a base one of identical signature (`ApplicationException` vs
+> `Exception`), which is why the defect was invisible rather than merely noisy.
+>
+> Left uncorrected, Task 5 resolves an uncallable constructor and Task 12 emits a proxy slot for it.
+>
+> **Methods, properties and fields DO still come from the whole base chain** (minus `System.Object`)
+> — only constructors are type-local.
+>
+> ⚠ Related, from the same measurement pass: member identity across the base chain must be
+> **signature-complete** — `(kind, name, isStatic, arity, [refkind + parameter type]…)`. Neither
+> generic arity nor parameter `RefKind` is part of a parameter *type*, so a key built from parameter
+> types alone silently deletes real overloads: 37 public types lose 186 members that way, including
+> every `Expression.Lambda`/`Lambda<TDelegate>` pair, `Task.FromException`/`FromException<T>`, and
+> `EventSource.Write(…, ref …)`. §7.3's collision-freedom requirement depends on this.
+
 **Unmarshalable and AOT-hostile members are omitted, not errors.** A member is skipped with a
 **BL6026 warning** naming type, member and offending type when either:
 

@@ -788,6 +788,23 @@ internal sealed record NetOverloadResult(NetOverloadOutcome Outcome, NetMemberIn
 The three outcomes map onto BL6017 / BL6018 in Task 8. Keeping them distinct **here** is what
 makes those diagnostics honest later.
 
+> **Consume Task 4's member walk through a seam; do not re-walk.** Task 4 ends with an internal
+> `CandidateMembers(string)` returning `(ISymbol, NetMemberDescriptor)` pairs, shared by `GetMembers`
+> and this task. Use it. Two reasons this is not optional:
+>
+> - **Do not take `INamedTypeSymbol` onto the public surface.** That pushes a Roslyn dependency into
+>   the analyzer, which Task 8 then inherits.
+> - **Re-walking derived→base yourself re-meets the duplicate-override problem in a second place.**
+>   Task 4 already paid for that bug once: an undeduped walk returns `FileStream.Read(byte[],int,int)`
+>   twice (from `FileStream` and from `Stream`), which this task would read as `Ambiguous` and report
+>   as a spurious **BL6018 on an ordinary `fs.Read(buf, 0, n)`**. The dedup must stay in exactly one
+>   place.
+>
+> Task 5 will additionally want `IsParams` and optional-parameter counts on the descriptor. ⚠ Note a
+> type parameter currently spells as bare `T` — indistinguishable from a global type named `T`, and
+> unsubstituted for `List<Integer>`. Decide explicitly how overload resolution treats that rather
+> than discovering it through a wrong match.
+
 - [ ] **Step 4: Run — expect PASS**
 - [ ] **Step 5: Commit**
 
@@ -1074,6 +1091,29 @@ git commit -m "feat(p2a1): claim predicate + resolver wired warning-only on both
   fully-qualified declaring types** (`MyLib.Customer` vs `OtherLib.Customer` — §7.3's explicit
   trap); distinctness across an overload set; independence from input order; and output being a
   legal C identifier.
+
+> ⛔ **Mangling from (declaring type, member name, parameter types) is NOT collision-free.** Found by
+> review of Task 4, which measured it. Two axes of a CLR signature are not parameter types:
+>
+> - **Generic method arity.** `IMethodSymbol.MetadataName` carries no arity suffix, so
+>   `Task.FromException(Exception)` and `Task.FromException<T>(Exception)` mangle **identically**.
+>   Measured across the public framework surface: **37 public types** contain such pairs — including
+>   every `Expression.Lambda(...)` / `Lambda<TDelegate>(...)` pair, `ValueTask.FromCanceled`,
+>   `IQueryProvider.CreateQuery`/`Execute`, and two `Marshal` members.
+> - **Parameter `RefKind`.** `ref`/`out`/`in` are not part of the parameter *type*.
+>   `EventSource.Write(String, EventSourceOptions, T)` and `Write(String, ref EventSourceOptions, ref T)`
+>   mangle identically.
+>
+> **Mangle from `(fully-qualified declaring type, member name, arity, [refkind + parameter type]…)`.**
+> `NetMemberDescriptor` carries `Arity` and per-parameter `RefKind` as of Task 4's second fix
+> specifically so this is possible.
+>
+> ⚠ **Do not write the distinctness test so that it groups by the mangler's own key** — that is
+> tautological and cannot fail. Task 4 shipped exactly that mistake: its collision guard grouped by
+> byte-for-byte the key the implementation deduplicated on, so it stayed green while the
+> implementation silently deleted 186 members. Assert distinctness against an **independently
+> derived** signature identity, and mutation-test it (drop `Arity` from the mangler → must fail on
+> `Task`; drop `RefKind` → must fail on `EventSource`).
 - [ ] **Step 2: Run and verify it fails**
 - [ ] **Step 3: Implement.** Mangle from (fully-qualified declaring type, member name, parameter
   types). Keep it a pure function — Task 15's cache key depends on its stability.
