@@ -1361,6 +1361,40 @@ public void ShimAbiConstantComesFromTheContract() =>
 > shim (simplest — the name is arbitrary and never crosses the ABI), or parameterize it and relax
 > the test to compare modulo the namespace line. Pick one **now** and write it down; Task 14's
 > `Exports.g.cs` must agree.
+>
+> ✅ **DECIDED while executing: the generated shim keeps `namespace BlnetTestShim;` verbatim.** Three
+> consequences Task 14 must honor:
+> 1. `Exports.g.cs` **must** declare `namespace BlnetTestShim;` or it cannot see `HandleTable`.
+> 2. `BlnetStatusCs` carries **no namespace** — invariant 2 pins it byte-for-byte to
+>    `GenerateStatusEnumCs()`, which emits none. So `BlnetStatus` lands in the **global namespace** in
+>    a generated shim while sitting inside `BlnetTestShim` in the hand shim. This compiles (lookup
+>    from inside `BlnetTestShim` falls out to global) and is the single shape divergence between the
+>    two shims. **Do not "fix" it by prepending a namespace — that breaks invariant 2.**
+> 3. The emitted `.csproj` **must** set `ImplicitUsings=enable`: `HandleTable` depends on it for
+>    `List<T>`/`Stack<T>` and for LINQ's `Count(predicate)` in `AliveCount`.
+>
+> ⚠ **Invariants 2 and 3 are TAUTOLOGICAL under a correct implementation** and cannot fail today:
+> `BlnetStatusCs => BlnetContract.GenerateStatusEnumCs()` compares a delegation to its own target.
+> Their value is as tripwires against a *future* edit that inlines the text or hard-codes the number
+> — mutation confirmed both go red under exactly that. **Only invariant 1 is a genuine two-copy drift
+> test.** A fourth test was added whose two sides are both hand-written scaffolding in
+> `BlnetShimSources` (namespace agreement between `HandleTable` and `ShimAbiCs`); that is the model
+> to follow if real teeth are wanted.
+>
+> ⚠ **`core.autocrlf=true` on this machine and `.gitattributes` sets `* text=auto`.** The
+> `.Replace("\r\n", "\n")` normalization in invariant 1 is therefore **load-bearing, not cosmetic** —
+> on a fresh clone `HandleTable.cs` and/or the embedded constant will be CRLF. Never simplify it away.
+>
+> ⛔ **`BlnetContract.CoreExportNames` DOES NOT EXIST.** The only occurrence repo-wide is in *this
+> plan document*. The real export-name list lives inline in `BlnetContractTests.cs:92-93` and in the
+> `blnet.h` text. **Task 14's Step-1 snippet iterates `BlnetContract.CoreExportNames` and will not
+> compile.** Task 14 must either add it to `BlnetContract` as a genuine source of truth (preferred —
+> it is exactly the kind of constant that class exists to own, and `blnet.h` plus the test both want
+> it) or read the existing list; it must **not** hand-copy a third parallel list.
+>
+> ℹ️ `BlnetRuntimeSources` is `public static class`, so `BlnetShimSources` mirrors that rather than
+> the folder's `internal` default — the source-of-truth family (`BlnetContract`, `BlnetRuntimeSources`)
+> is public and drift-paired.
 - [ ] **Step 4: Run — expect PASS**
 - [ ] **Step 5: Commit**
 
