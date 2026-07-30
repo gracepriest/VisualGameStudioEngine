@@ -9,6 +9,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
     /// at read time so the header can never drift from the contract table
     /// (drift-tested in <c>BlnetRuntimeSourcesTests</c>, compile-smoked in
     /// <c>BlnetNativeRuntimeTests</c>).
+    ///
+    /// <para><b>P2a §9.3 additions (plan Task 12).</b> <c>blnet_runtime.hpp</c> also carries
+    /// the three symbols the generated startup TU needs and P0 never had:
+    /// <c>g_native_vtable</c> (the native half of P0's 2-slot positional vtable),
+    /// <c>blnet_bind_core</c> (binds P0's seven exports into <c>g_shim</c>), and the
+    /// platform primitives <c>blnet_load_module</c> / <c>blnet_get_symbol</c> /
+    /// <c>blnet_load_error</c>. The first two are transport-neutral and P2b reuses them
+    /// unchanged; only the platform primitives are transport-A-specific, and their
+    /// DEFINITIONS sit behind <c>BLNET_IMPLEMENT_LOADER</c> so <c>&lt;windows.h&gt;</c>
+    /// reaches exactly one translation unit. See the header text for why that matters.</para>
     /// </summary>
     public static class BlnetRuntimeSources
     {
@@ -313,7 +323,117 @@ inline int32_t BLNET_CALL blnet_get_native_error(char** message) {
     return BLNET_OK;
 }
 
+/* ---- P2a §9.3: the native side of P0's 2-slot POSITIONAL vtable ----
+   Slot order must match BlnetNativeVtable's declaration in blnet.h: swapping the two
+   silently routes every callback invocation into the error-message puller instead.
+   Both members are defined above in this same header, so this table is always fully
+   bound — unlike g_shim, which the generated startup TU fills at run time. */
+inline BlnetNativeVtable g_native_vtable{ &blnet_invoke_callback, &blnet_get_native_error };
+
+/* ---- P2a §9.3: module loading + core binding ----
+   blnet_load_module / blnet_get_symbol / blnet_load_error are DECLARED here and
+   DEFINED at the bottom of this header, behind BLNET_IMPLEMENT_LOADER. Exactly one
+   translation unit — the generated blnet_startup.g.cpp — defines that macro, so
+   <windows.h> / <dlfcn.h> never reach a TU that also contains generated BasicLang
+   code. That confinement is not tidiness: windows.h macro-replaces ordinary
+   identifiers (CreateFile, DeleteFile, CopyFile, min, max, ...) and would break a
+   user program whose only sin is naming a Sub `DeleteFile`.
+
+   ORDERING HAZARD: this header is #pragma once, so a TU that includes it WITHOUT the
+   macro and then defines the macro and includes it again gets nothing. Define
+   BLNET_IMPLEMENT_LOADER before the implementing TU's FIRST include of this header. */
+void* blnet_load_module(const char* name);
+void* blnet_get_symbol(void* module, const char* name);
+/* Why the last blnet_load_module returned null: an OS error code (Windows) or the
+   dlerror text (POSIX). Empty when nothing has failed. Never null. */
+const char* blnet_load_error();
+
+namespace detail { inline thread_local std::string g_load_error; }
+
+/* Binds P0's seven core exports (blnet.h's BLNET_EXPORT_* names) into g_shim.
+   TRANSPORT-NEUTRAL: it needs only blnet_get_symbol, which P2b redefines over
+   hostfxr's delegate lookup.
+
+   Returns nullptr on success, or the FIRST export name that would not resolve.
+   Deliberately NOT an int32_t status: the contract has no ""missing export"" code, and
+   adding one bumps BLNET_ABI_VERSION (contract rule C7), which would invalidate P0's
+   frozen conformance shim. The caller needs the NAME anyway — §9.3's normative message
+   quotes it. */
+inline const char* blnet_bind_core(void* module) {
+    void* p = blnet_get_symbol(module, BLNET_EXPORT_ABI_VERSION);
+    if (!p) return BLNET_EXPORT_ABI_VERSION;
+    g_shim.abi_version = reinterpret_cast<int32_t (BLNET_CALL *)(void)>(p);
+
+    p = blnet_get_symbol(module, BLNET_EXPORT_INITIALIZE);
+    if (!p) return BLNET_EXPORT_INITIALIZE;
+    g_shim.initialize = reinterpret_cast<int32_t (BLNET_CALL *)(int32_t, const BlnetNativeVtable*)>(p);
+
+    p = blnet_get_symbol(module, BLNET_EXPORT_ADDREF);
+    if (!p) return BLNET_EXPORT_ADDREF;
+    g_shim.addref = reinterpret_cast<int32_t (BLNET_CALL *)(blnet_handle)>(p);
+
+    p = blnet_get_symbol(module, BLNET_EXPORT_RELEASE);
+    if (!p) return BLNET_EXPORT_RELEASE;
+    g_shim.release = reinterpret_cast<int32_t (BLNET_CALL *)(blnet_handle)>(p);
+
+    p = blnet_get_symbol(module, BLNET_EXPORT_ALLOC);
+    if (!p) return BLNET_EXPORT_ALLOC;
+    g_shim.alloc = reinterpret_cast<void* (BLNET_CALL *)(int64_t)>(p);
+
+    p = blnet_get_symbol(module, BLNET_EXPORT_FREE);
+    if (!p) return BLNET_EXPORT_FREE;
+    g_shim.free_ = reinterpret_cast<void (BLNET_CALL *)(void*)>(p);
+
+    p = blnet_get_symbol(module, BLNET_EXPORT_LAST_ERROR);
+    if (!p) return BLNET_EXPORT_LAST_ERROR;
+    g_shim.last_error = reinterpret_cast<int32_t (BLNET_CALL *)(char**, char**)>(p);
+
+    return nullptr;
+}
+
 }} /* namespace BasicLang::blnet */
+
+/* ---- Platform loader definitions — see blnet_bind_core's remarks above. ---- */
+#ifdef BLNET_IMPLEMENT_LOADER
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
+
+namespace BasicLang { namespace blnet {
+
+void* blnet_load_module(const char* name) {
+#if defined(_WIN32)
+    HMODULE m = ::LoadLibraryA(name);
+    if (!m) detail::g_load_error =
+        ""os error "" + std::to_string(static_cast<unsigned long>(::GetLastError()));
+    return reinterpret_cast<void*>(m);
+#else
+    void* m = ::dlopen(name, RTLD_NOW | RTLD_LOCAL);
+    if (!m) { const char* e = ::dlerror(); detail::g_load_error = e ? e : ""dlopen failed""; }
+    return m;
+#endif
+}
+
+void* blnet_get_symbol(void* module, const char* name) {
+#if defined(_WIN32)
+    return reinterpret_cast<void*>(::GetProcAddress(reinterpret_cast<HMODULE>(module), name));
+#else
+    return ::dlsym(module, name);
+#endif
+}
+
+const char* blnet_load_error() { return detail::g_load_error.c_str(); }
+
+}} /* namespace BasicLang::blnet */
+#endif /* BLNET_IMPLEMENT_LOADER */
 ";
     }
 }

@@ -18,6 +18,13 @@ public static class CppCompile
     private readonly record struct ProcResult(bool Exited, int ExitCode, string StdOut, string StdErr);
 
     /// <summary>
+    /// What a compiled program did, for the cases where a NON-zero exit is the expected
+    /// answer — <c>blnet_startup.g.cpp</c>'s handshake failures are specified as
+    /// "message on stderr, exit 3", so the exit-0-asserting helpers cannot express them.
+    /// </summary>
+    public readonly record struct RunOutcome(int ExitCode, string StdOut, string StdErr);
+
+    /// <summary>
     /// Run <paramref name="proc"/> to completion, capturing both streams without deadlocking.
     ///
     /// stderr is drained on a background task while we block reading stdout, so a child that
@@ -128,7 +135,7 @@ public static class CppCompile
             File.WriteAllText(srcPath, cppSource);
 
             return CompileAndRunCore(tmpDir, srcPath, exePath, compiler,
-                                     $"--- source ---\n{cppSource}");
+                                     $"--- source ---\n{cppSource}").StdOut;
         }
         finally
         {
@@ -174,7 +181,47 @@ public static class CppCompile
                 .Where(kv => !kv.Key.Equals(CppCodeGenerator.RuntimeHeaderFileName, StringComparison.OrdinalIgnoreCase))
                 .Select(kv => $"--- {kv.Key} ---\n{kv.Value}"));
 
-            return CompileAndRunCore(tmpDir, string.Join("\" \"", tuList), exePath, compiler, context);
+            return CompileAndRunCore(tmpDir, string.Join("\" \"", tuList), exePath, compiler, context)
+                .StdOut;
+        }
+        finally
+        {
+            try { Directory.Delete(tmpDir, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    /// <summary>
+    /// <see cref="CompileAndRunFiles"/>, but returning the program's exit code and BOTH streams
+    /// instead of asserting a zero exit. Compilation is still asserted to succeed — only the RUN
+    /// is allowed to fail, because for some generated programs a specific non-zero exit IS the
+    /// contract under test (spec §9.3's startup failures: one line on stderr, exit 3).
+    /// </summary>
+    public static RunOutcome CompileAndRunFilesForOutcome(
+        IReadOnlyDictionary<string, string> files,
+        IEnumerable<string> translationUnits,
+        (string exe, string argsTemplate) compiler)
+    {
+        var tuList = translationUnits.ToList();
+        Assert.That(tuList, Is.Not.Empty, "no translation units to compile");
+        foreach (var tu in tuList)
+            Assert.That(files.ContainsKey(tu), Is.True, $"translation unit '{tu}' has no file content");
+
+        var tmpDir = Path.Combine(Path.GetTempPath(), "bl-splitc-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tmpDir);
+        var exePath = Path.Combine(tmpDir, "prog" + (OperatingSystem.IsWindows() ? ".exe" : ""));
+
+        try
+        {
+            foreach (var kv in files)
+                File.WriteAllText(Path.Combine(tmpDir, kv.Key), kv.Value);
+
+            var context = string.Join("\n", files
+                .Where(kv => !kv.Key.Equals(CppCodeGenerator.RuntimeHeaderFileName, StringComparison.OrdinalIgnoreCase))
+                .Select(kv => $"--- {kv.Key} ---\n{kv.Value}"));
+
+            var r = CompileAndRunCore(tmpDir, string.Join("\" \"", tuList), exePath, compiler, context,
+                                      requireZeroExit: false);
+            return new RunOutcome(r.ExitCode, r.StdOut, r.StdErr);
         }
         finally
         {
@@ -186,15 +233,18 @@ public static class CppCompile
     /// Shared compile+run tail: formats the compiler args template with
     /// (<paramref name="sourcesForTemplate"/>, <paramref name="exePath"/>), compiles in
     /// <paramref name="tmpDir"/> (asserting exit 0 with compiler output plus
-    /// <paramref name="failureContext"/> in the message), runs the produced exe (asserting
-    /// exit 0), and returns its stdout.
+    /// <paramref name="failureContext"/> in the message), runs the produced exe, and returns
+    /// what it did. A run TIMEOUT is always a failure; a non-zero exit is a failure only when
+    /// <paramref name="requireZeroExit"/> (the default for every caller but
+    /// <see cref="CompileAndRunFilesForOutcome"/>, whose whole point is a specified non-zero exit).
     /// </summary>
-    private static string CompileAndRunCore(
+    private static ProcResult CompileAndRunCore(
         string tmpDir,
         string sourcesForTemplate,
         string exePath,
         (string exe, string argsTemplate) compiler,
-        string failureContext)
+        string failureContext,
+        bool requireZeroExit = true)
     {
         // Compile.
         var (compilerExe, argsTemplate) = compiler;
@@ -232,9 +282,10 @@ public static class CppCompile
             var r = RunToCompletion(rproc!, 30000);
             Assert.That(r.Exited, Is.True,
                 $"compiled program timed out after 30000 ms:\n{r.StdOut}\n{r.StdErr}");
-            Assert.That(r.ExitCode, Is.EqualTo(0),
-                $"compiled program exited with {r.ExitCode}:\n{r.StdOut}\n{r.StdErr}");
-            return r.StdOut;
+            if (requireZeroExit)
+                Assert.That(r.ExitCode, Is.EqualTo(0),
+                    $"compiled program exited with {r.ExitCode}:\n{r.StdOut}\n{r.StdErr}");
+            return r;
         }
     }
 }

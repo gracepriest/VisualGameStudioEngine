@@ -93,6 +93,67 @@ public class BlnetRuntimeSourcesTests
             "blnet_release", "blnet_alloc", "blnet_free", "blnet_last_error" })
             Assert.That(h, Does.Contain($"\"{export}\""));
     }
+
+    /// <summary>
+    /// P2a §9.3's three additions (plan Task 12). Two are transport-neutral and P2b reuses
+    /// them; the third — the platform loader — is transport-A-specific.
+    /// </summary>
+    [Test]
+    public void Runtime_CarriesTheStartupSymbols()
+    {
+        var r = BlnetRuntimeSources.BlnetRuntime;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(r, Does.Contain(
+                "inline BlnetNativeVtable g_native_vtable{ &blnet_invoke_callback, "
+                + "&blnet_get_native_error };"),
+                "g_native_vtable is the native half of P0's 2-slot POSITIONAL vtable. Its slot "
+                + "order must match BlnetNativeVtable in blnet.h; swapping the two routes every "
+                + "callback invocation into the error-message puller instead.");
+            Assert.That(r, Does.Contain("inline const char* blnet_bind_core(void* module)"),
+                "blnet_bind_core binds P0's seven exports into g_shim and is what the generated "
+                + "startup TU calls. It returns the first UNRESOLVED export name (nullptr on "
+                + "success) rather than a status, because the contract has no missing-export "
+                + "code and adding one bumps BLNET_ABI_VERSION (rule C7).");
+            Assert.That(r, Does.Contain("void* blnet_load_module(const char* name);"),
+                "blnet_load_module is DECLARED unconditionally and defined only under "
+                + "BLNET_IMPLEMENT_LOADER.");
+            Assert.That(r, Does.Contain("void* blnet_get_symbol(void* module, const char* name);"));
+            Assert.That(r, Does.Contain("const char* blnet_load_error();"));
+        });
+    }
+
+    /// <summary>
+    /// The platform headers must reach exactly ONE translation unit. <c>&lt;windows.h&gt;</c>
+    /// macro-replaces ordinary identifiers (<c>CreateFile</c>, <c>DeleteFile</c>,
+    /// <c>CopyFile</c>, <c>min</c>, <c>max</c>, ...), and this header is included by every
+    /// generated BasicLang TU in a .NET-using project — so an unguarded include here would
+    /// break user programs whose only sin is naming a Sub <c>DeleteFile</c>.
+    /// </summary>
+    [Test]
+    public void Runtime_ConfinesPlatformHeadersBehindTheLoaderMacro()
+    {
+        var r = BlnetRuntimeSources.BlnetRuntime;
+        var guard = r.IndexOf("#ifdef BLNET_IMPLEMENT_LOADER", StringComparison.Ordinal);
+
+        Assert.That(guard, Is.GreaterThan(-1),
+            "blnet_runtime.hpp lost its BLNET_IMPLEMENT_LOADER guard.");
+        Assert.Multiple(() =>
+        {
+            Assert.That(r.IndexOf("#include <windows.h>", StringComparison.Ordinal),
+                Is.GreaterThan(guard),
+                "<windows.h> escaped the BLNET_IMPLEMENT_LOADER guard in blnet_runtime.hpp. "
+                + "Every generated .NET TU includes this header; windows.h's macros would then "
+                + "rewrite ordinary identifiers in user code.");
+            Assert.That(r.IndexOf("#include <dlfcn.h>", StringComparison.Ordinal),
+                Is.GreaterThan(guard),
+                "<dlfcn.h> escaped the BLNET_IMPLEMENT_LOADER guard in blnet_runtime.hpp.");
+            Assert.That(r, Does.Contain("#define NOMINMAX"),
+                "windows.h must be pulled in with NOMINMAX — std::min/std::max appear in "
+                + "generated C++ and the macros break them.");
+        });
+    }
 }
 
 [TestFixture]
