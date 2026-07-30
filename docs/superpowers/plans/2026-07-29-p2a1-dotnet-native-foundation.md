@@ -1038,6 +1038,34 @@ public class NetClaimPredicateTests
 ```
 
 - [ ] **Step 2: Run and verify it fails**
+> ⛔ **"Warning-only" is NOT implementable via `SemanticAnalyzer.Warning(...)`.** Discovered while
+> executing; the plan's premise was wrong. `Warning(...)` (`SemanticAnalyzer.cs:1560-1563`) appends a
+> `SemanticError` with `ErrorSeverity.Warning` to `_errors`, `Errors` (`:120`) is `=> _errors`
+> unfiltered, `Analyze` returns `_errors.Count == 0` (`:894`), and `CompilationResult.HasErrors` is
+> `AllErrors.Count > 0` — **neither filters severity**. So a "warning" **fails the build and skips IR
+> generation entirely**, the exact opposite of this task's premise.
+>
+> Findings must therefore go on a **separate `NetDiagnostics` list**, surfacing through
+> `CppEmitOutcome.NetReferences.Diagnostics` → `CppDiagnostic { IsWarning = true }` — the only
+> non-failing channel in the pipeline. Conveniently this is the same bag constraint (b) already
+> required, so both resolve to one design.
+>
+> ⚠ **Side finding — a shipped product bug, NOT this task's to fix.** The analyzer's **10 pre-existing
+> `Warning(...)` call sites are all fatal today** for the same reason: `:4255, :4293, :4414, :4563,
+> :4614, :4861, :4873, :5098, :5119, :5508`. At least five are reachable on ordinary VB idiom —
+> `If x Then` with a numeric condition is a hard build failure, rendered as
+> `Error at line N: Warning at line N, column C: Condition should be Boolean`. Verified through the
+> CLI. Chip filed; fixing it is a behavior change P2a-1 forbids.
+>
+> ⚠ **Corrected line numbers and counts** (the plan's were wrong):
+> `CppCapabilityChecker`'s early returns start at **`:590`** (Bridged), not `:598`. `new BasicCompiler`
+> is at `CppProjectBuilder.cs:`**`289`**, not `:222` (which is mid-comment). And **"22 entries have no
+> `EmitStdLibCall` arm" is really 52** — the table has **58** entries and exactly **6** can produce a
+> non-null arm (`Console`, `DateTime`, `DateTimeOffset`, `Decimal`, `Guid`, `TimeSpan`).
+> **`StringBuilder` is NOT among them**: it is `NativeOwned`, but every `NativeBclSurface` row for it
+> is an instance member, so no static probe succeeds. The spec's "22" was a list of *notable* names,
+> not a total.
+
 - [ ] **Step 3: Implement the three-source predicate** exactly as §6.5's table specifies:
   (a) `BoundaryTypeRegistry.Categorize ∈ {NativeOwned, Bridged}`;
   (b) `CppCapabilityChecker`'s early returns (`:598-625`);
@@ -1609,6 +1637,22 @@ Stated so a reviewer can tell "missing" from "deferred" (all of this is P2a-2, s
 - No `NetSurfaceCollector` — surfaces are hand-fed via Task 13's internal seam, in tests only.
 - No typed-catch lowering, no collection consumption, no outbound array copy, no delegates.
 - The resolver **warns**; it never fails a build. §6.3's native-error behavior is P2a-2.
+- **The C# backend is NOT wired.** Task 8's Step 5 says "warning-only on **both** backends" and spec
+  §6.3 gives the C# backend a warning row, but `CompilerOptions.NetResolverFactory` is set at exactly
+  one site — `CppProjectBuilder.cs:321`. Every C#-backend path (`Program.cs:506`, `:1022`,
+  `BuildService.cs:624`, `MultiTargetCompiler.cs:237`) leaves it null, so **no C# project can produce
+  BL6016/BL6017/BL6023**. Deliberate: wiring it adds spurious-warning risk to a path P2a-1 gains
+  nothing from, and Task 8's gates already prove the resolver on the native backend. **§6.3's C#
+  warning row moves to P2a-2.** The seam itself is backend-agnostic (it lives in `SemanticAnalyzer`),
+  so this is a one-line change when P2a-2 wants it.
+- **The LSP is not wired either** — `DocumentManager` calls only `ConfigureTypeRegistry`. So no
+  BL60xx reaches editor squiggles in P2a-1; findings appear only in CLI/IDE build output.
+- **BL6018 is not emitted, and BL6017 is member-existence only.** `ResolveOverload` has **zero**
+  product callers, deliberately: it answers `NoMatch` when *any* argument type is unknown, and
+  `Visit(CallExpressionNode)`'s early-return chain has no single point where every argument is typed.
+  Wiring it in a warning-only task is how you manufacture spurious warnings. Spec §11.4 defines
+  BL6017 as "member not found / **no matching overload**" — the second half, and all of BL6018,
+  land in P2a-2.
 - **`ConfigureTypeRegistry` is NOT wired into `CompileUnit`** (`BasicLang/Compiler.cs:524/529`,
   analyzer configured at `:543-544`). Doing so un-deadens `SemanticAnalyzer.cs:2075-2088`, which
   shadows the String/common fallbacks at `:2090-2102` — a behavior change to existing programs.
