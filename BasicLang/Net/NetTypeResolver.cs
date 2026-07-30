@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using Microsoft.CodeAnalysis;
@@ -7,149 +9,11 @@ using Microsoft.CodeAnalysis.CSharp;
 
 namespace BasicLang.Net
 {
-    // ----------------------------------------------------------------------
-    // NAMING: these are the "…Descriptor"/"…Category" types ON PURPOSE.
-    //
-    // BasicLang.Compiler.SemanticAnalysis ALREADY declares public NetTypeInfo, NetMemberInfo,
-    // NetParameterInfo and NetMemberKind (TypeRegistry.cs:670-755), consumed by
-    // SemanticAnalyzer.cs, SymbolTable.cs, ExternalLibraryLoader.cs and four LSP files. Those are
-    // the LSP's loose IntelliSense shapes; these are the resolver's precise ones. They are
-    // deliberately DISTINCT types and must not be "unified":
-    //
-    //   * the enums disagree on ordering — the old NetMemberKind is Method=0 … Constructor=5,
-    //     this one is Constructor=0 … Field=3 — so any int round-trip between them silently
-    //     mismaps a member's kind;
-    //   * Task 7 modifies TypeRegistry.cs and Task 8 modifies SemanticAnalyzer.cs, both files
-    //     where the OLD names are already in scope, and any file importing both namespaces would
-    //     get CS0104 on the unqualified name.
-    //
-    // Renaming them here rather than there is the cheap direction: this namespace has one
-    // consumer, that one has seven files.
-    // ----------------------------------------------------------------------
-
-    /// <summary>What a .NET type is, coarsely. Spec §6.1 makes kind part of the answer.</summary>
-    internal enum NetTypeCategory { Class, Struct, Interface, Enum, Delegate, Other }
-
-    /// <summary>
-    /// The four member categories spec §7.2 admits into a generated surface: "public
-    /// constructors, methods, properties and fields".
-    /// </summary>
-    internal enum NetMemberCategory { Constructor, Method, Property, Field }
-
-    /// <summary>
-    /// Why a type lookup answered the way it did.
-    ///
-    /// <para><b>The three cases must stay distinct.</b>
-    /// <c>Compilation.GetTypeByMetadataName</c> returns null for BOTH absence and ambiguity, and
-    /// spec §11.4 gives those two different diagnostics — BL6016 ".NET type not found" versus
-    /// BL6023 "ambiguous .NET type reference". Collapsing them here makes one of the two a lie in
-    /// Task 8, and "type not found" for a type the user can see declared twice is the least
-    /// actionable message the compiler could produce.</para>
-    /// </summary>
-    internal enum NetTypeLookupOutcome { Resolved, NotFound, Ambiguous }
-
-    /// <summary>
-    /// A resolved .NET type. A record is safe here — every member is a string, enum or bool, so
-    /// value equality means what it appears to mean (contrast <see cref="NetMemberDescriptor"/>).
-    /// </summary>
-    /// <param name="FullName">
-    /// Namespace-qualified, nested types spelled with '.', generic type parameters spelled
-    /// <c>&lt;T&gt;</c>. See <see cref="NetTypeResolver.ResolveType"/> for the round-trip caveat on
-    /// generics.
-    /// </param>
-    internal sealed record NetTypeDescriptor(string FullName, NetTypeCategory Kind, bool IsPublic);
-
-    /// <summary>
-    /// The outcome of a type lookup. <see cref="Type"/> is non-null only for
-    /// <see cref="NetTypeLookupOutcome.Resolved"/> — an ambiguous reference has no single winner,
-    /// and picking one silently is how a build ends up bound to whichever assembly happened to be
-    /// enumerated first.
-    /// </summary>
-    internal sealed record NetTypeLookupResult(NetTypeLookupOutcome Outcome, NetTypeDescriptor Type);
-
-    /// <summary>
-    /// One member of a .NET type, carrying exactly the three things
-    /// <c>NetNameMangler</c> mangles from (spec §7.3): the fully-qualified declaring type, the
-    /// member's metadata name, and its parameter types.
-    ///
-    /// <para><b>Deliberately a class and not a record</b>, for the reason
-    /// <see cref="NetReferenceClosure"/> documents: record equality over an
-    /// <see cref="IReadOnlyList{T}"/> member degenerates to REFERENCE equality, so
-    /// <c>==</c> on two members with identical parameter lists would look like a content
-    /// comparison and behave like an identity one. Reference equality is the honest default here,
-    /// and <see cref="ToString"/> covers the only thing record synthesis was actually buying us —
-    /// readable assertion failures.</para>
-    /// </summary>
-    internal sealed class NetMemberDescriptor
-    {
-        public NetMemberDescriptor(
-            string name,
-            string declaringTypeFullName,
-            NetMemberCategory kind,
-            bool isStatic,
-            string typeFullName,
-            IReadOnlyList<string> parameterTypeFullNames)
-        {
-            Name = name;
-            DeclaringTypeFullName = declaringTypeFullName;
-            Kind = kind;
-            IsStatic = isStatic;
-            TypeFullName = typeFullName;
-            ParameterTypeFullNames = parameterTypeFullNames;
-        }
-
-        /// <summary>
-        /// The member's METADATA name: <c>".ctor"</c> for a constructor, <c>"Item"</c> for an
-        /// indexer, the plain name otherwise (CLR method metadata names carry no generic-arity
-        /// suffix). <see cref="Kind"/> is what distinguishes a constructor, not the name.
-        /// </summary>
-        public string Name { get; }
-
-        /// <summary>
-        /// The type that DECLARES this member, fully qualified — for an inherited member that is
-        /// the base type, not the type that was queried. §7.3 requires the mangler to be
-        /// collision-free over the fully-qualified declaring type, so reporting the queried type
-        /// here would collapse <c>Base.Foo</c> and <c>Derived.Foo</c> into one export.
-        /// </summary>
-        public string DeclaringTypeFullName { get; }
-
-        public NetMemberCategory Kind { get; }
-
-        public bool IsStatic { get; }
-
-        /// <summary>
-        /// Return type for a method, value type for a property or field. For a constructor this
-        /// is <c>System.Void</c>, which is what metadata says.
-        /// </summary>
-        public string TypeFullName { get; }
-
-        /// <summary>
-        /// Parameter types in declaration order, fully qualified and never C# keywords. Empty for
-        /// fields and for ordinary properties; an INDEXER's parameters ARE recorded here, because
-        /// an indexer is a parameterized member and two of them differ only by those types.
-        /// <c>bool</c> and <c>System.Boolean</c> would mangle to different identifiers for one
-        /// method, so the format is fixed at the fully-qualified spelling.
-        ///
-        /// <para>Recording indexer parameters is load-bearing, not tidiness: it is what stops
-        /// <see cref="NetTypeResolver.GetMembers"/>'s duplicate-collapsing from eating one of
-        /// them. Measured on <c>System.Collections.Specialized.NameValueCollection</c>, whose
-        /// <c>this[int]</c> and <c>this[string]</c> present one identity without this and two
-        /// with it.</para>
-        /// </summary>
-        public IReadOnlyList<string> ParameterTypeFullNames { get; }
-
-        public override string ToString() =>
-            $"{(IsStatic ? "static " : "")}{Kind} {TypeFullName} {DeclaringTypeFullName}.{Name}"
-            + (ParameterTypeFullNames.Count == 0
-               && (Kind == NetMemberCategory.Property || Kind == NetMemberCategory.Field)
-                ? ""
-                : "(" + string.Join(", ", ParameterTypeFullNames) + ")");
-    }
-
     /// <summary>
     /// The compiler's .NET type knowledge (spec §6.1), backed by a Roslyn
     /// <see cref="CSharpCompilation"/> over the reference closure
-    /// <see cref="NetReferenceResolver"/> produces.
+    /// <see cref="NetReferenceResolver"/> produces. The data model lives in
+    /// <c>NetTypeDescriptors.cs</c>.
     ///
     /// <para><b>Why this exists.</b> Before P2a-1 the analyzer accepted any PascalCase identifier
     /// as a .NET type, so <c>New Regex(1, 2, 3)</c> type-checked clean and failed later inside
@@ -167,16 +31,28 @@ namespace BasicLang.Net
     /// with generics, inheritance, optional parameters, <c>params</c> and implicit conversions —
     /// which Task 5 adds on top of this.</para>
     ///
+    /// <para><b>Ownership: build ONE per reference closure and keep it.</b> Construction is not
+    /// free — measured at 209 ms cold and a steady 46–49 ms per fresh instance over a 168-assembly
+    /// framework closure, since every reference is opened and every lookup cache starts empty.
+    /// Nothing in this API stops a caller from constructing one per call, so the guidance has to
+    /// live here: a consumer on the IntelliSense path that builds one per debounced pass pays
+    /// ~47 ms and throws away its warm cache on every keystroke. Rebuild only when the closure
+    /// itself changes.</para>
+    ///
+    /// <para><b>Not thread-safe to CONSTRUCT concurrently, safe to USE concurrently.</b> Roslyn's
+    /// symbol APIs are thread-safe and the lookup cache is a
+    /// <see cref="ConcurrentDictionary{TKey, TValue}"/>, which matters because spec §6.2 makes the
+    /// LSP one of three consumers and Task 7 points it here.</para>
+    ///
     /// <para><b>Nothing consumes this yet.</b> P2a-1 changes the behavior of not one existing
     /// program; Task 8 wires the resolver into the analyzer warning-only.</para>
     /// </summary>
     internal sealed class NetTypeResolver
     {
         /// <summary>
-        /// Fully-qualified spelling with no <c>global::</c> prefix and no C# keyword aliases:
-        /// <c>System.Int32</c>, never <c>int</c>. Two spellings of one type would mangle to two
-        /// export names (§7.3), and <c>UseSpecialTypes</c> — which Roslyn's default display format
-        /// enables — is exactly how that happens.
+        /// Fallback spelling for symbols <see cref="TypeName"/> does not special-case (type
+        /// parameters, <c>dynamic</c>, function pointers). Omits <c>global::</c> and does NOT set
+        /// <c>UseSpecialTypes</c>, so <c>System.Int32</c> rather than <c>int</c>.
         /// </summary>
         private static readonly SymbolDisplayFormat FullNameFormat = new SymbolDisplayFormat(
             globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Omitted,
@@ -191,7 +67,7 @@ namespace BasicLang.Net
         /// </summary>
         private readonly IReadOnlyList<IAssemblySymbol> _assemblies;
 
-        private readonly List<NetReferenceDiagnostic> _diagnostics;
+        private readonly ImmutableArray<NetReferenceDiagnostic> _diagnostics;
 
         /// <summary>
         /// Lookup cache. The analyzer resolves the same handful of names once per reference in a
@@ -203,15 +79,16 @@ namespace BasicLang.Net
         /// path with it — so one instance will be shared across concurrent LSP requests. A plain
         /// <see cref="Dictionary{TKey, TValue}"/> mutated from two request threads corrupts its
         /// buckets and hangs or throws at some unrelated later read, which is about the worst
-        /// failure shape available for a language server. Roslyn's own symbol APIs are already
-        /// thread-safe, so this dictionary was the only unsafe thing here.</para>
+        /// failure shape available for a language server.</para>
         ///
-        /// <para><see cref="System.Collections.Concurrent.ConcurrentDictionary{TKey, TValue}.GetOrAdd(TKey, Func{TKey, TValue})"/>
-        /// may run the factory more than once under contention. That is harmless: the lookup is a
-        /// pure function of the compilation, so duplicate work yields an equal result.</para>
+        /// <para><b>Unbounded, and keyed on arbitrary user text.</b> On the IntelliSense path every
+        /// half-typed identifier becomes a permanent entry. Entries are small (an outcome plus a
+        /// symbol reference Roslyn already holds), and the resolver's lifetime is the closure's, so
+        /// this is bounded in practice by how much a user types between reference changes — but it
+        /// is a real growth path and Task 7/8 should decide whether to cap it.</para>
         /// </summary>
-        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, CachedLookup> _cache =
-            new System.Collections.Concurrent.ConcurrentDictionary<string, CachedLookup>(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, CachedLookup> _cache =
+            new ConcurrentDictionary<string, CachedLookup>(StringComparer.Ordinal);
 
         private readonly struct CachedLookup
         {
@@ -233,7 +110,7 @@ namespace BasicLang.Net
         private NetTypeResolver(
             CSharpCompilation compilation,
             IReadOnlyList<IAssemblySymbol> assemblies,
-            List<NetReferenceDiagnostic> diagnostics)
+            ImmutableArray<NetReferenceDiagnostic> diagnostics)
         {
             _compilation = compilation;
             _assemblies = assemblies;
@@ -295,7 +172,7 @@ namespace BasicLang.Net
                         "the file is not a managed assembly Roslyn can read metadata from"));
             }
 
-            return new NetTypeResolver(compilation, assemblies, diagnostics);
+            return new NetTypeResolver(compilation, assemblies, diagnostics.ToImmutableArray());
         }
 
         private static NetReferenceDiagnostic Unreadable(string path, string reason) =>
@@ -309,7 +186,8 @@ namespace BasicLang.Net
         /// <summary>
         /// References that could not be read, one BL6021 each. Empty for a well-formed closure —
         /// <see cref="NetReferenceResolver"/>'s framework set is already filtered to managed
-        /// assemblies precisely so that Roslyn never sees <c>coreclr.dll</c>.
+        /// assemblies precisely so that Roslyn never sees <c>coreclr.dll</c>. Immutable: fixed at
+        /// construction and never appended to.
         /// </summary>
         public IReadOnlyList<NetReferenceDiagnostic> Diagnostics => _diagnostics;
 
@@ -333,6 +211,11 @@ namespace BasicLang.Net
         /// arity. (Consequence: <see cref="NetTypeDescriptor.FullName"/> does not round-trip through
         /// this method for a generic type — it reports <c>List&lt;T&gt;</c>, the readable form,
         /// because its consumers are diagnostics and the mangler, not this lookup.)</para>
+        ///
+        /// <para><b><see cref="NetTypeDescriptor.IsPublic"/> is EFFECTIVE accessibility.</b> A
+        /// public type nested inside an internal one reports false, because a shim that references
+        /// it fails in <c>csc</c> with CS0122 — the late-failure shape P2a-1 exists to remove. The
+        /// type still resolves; the caller decides the diagnostic.</para>
         /// </summary>
         public NetTypeDescriptor ResolveType(string fullName) => ResolveTypeDetailed(fullName).Type;
 
@@ -348,11 +231,16 @@ namespace BasicLang.Net
 
         /// <summary>
         /// Every public constructor, method, property and field declared on the named type or on
-        /// its base types (spec §7.2), or empty when the type does not exist.
+        /// its base types (spec §7.2).
         ///
-        /// <para><b>Empty, not an exception</b>, for an unknown type: this is called from the
-        /// analyzer and the IntelliSense path, where a user typo must not become a crashed build
-        /// or a dead LSP request.</para>
+        /// <para><b>Empty — not an exception — when the type does not resolve</b>, which covers
+        /// BOTH <see cref="NetTypeLookupOutcome.NotFound"/> and
+        /// <see cref="NetTypeLookupOutcome.Ambiguous"/>. Those are different diagnostics (BL6016 vs
+        /// BL6023), so a caller that needs to tell "you typo'd the name" from "that name is
+        /// declared in two references" must ask <see cref="ResolveTypeDetailed"/> first rather than
+        /// infer anything from an empty member list. Throwing is not an option: this is called from
+        /// the analyzer and the IntelliSense path, where a user typo must not become a crashed
+        /// build or a dead LSP request.</para>
         ///
         /// <para><b>The base walk stops at (and excludes) <see cref="object"/></b>, per §7.2's
         /// "excluding <c>System.Object</c>'s members unless overridden": an override is a member of
@@ -361,20 +249,21 @@ namespace BasicLang.Net
         /// <c>System.ValueType</c>, <c>System.Enum</c>, <c>System.MarshalByRefObject</c> — are
         /// included, because "base types" is what the spec says.</para>
         ///
+        /// <para><b>CONSTRUCTORS COME ONLY FROM THE QUERIED TYPE.</b> Constructors are not
+        /// inherited — <c>New Derived(argsOfABaseCtor)</c> is a compile error unless
+        /// <c>Derived</c> declares that signature — so collecting them from base types invents
+        /// members that cannot be called. Read literally §7.2 says "declared on the type and on its
+        /// base types" without carving constructors out; that reading is taken as a spec slip
+        /// because the alternative makes Task 5 resolve an uncallable constructor and Task 12 emit
+        /// a proxy slot for it. Measured: it added a spurious member to
+        /// <c>FileNotFoundException</c> and <c>ArgumentNullException</c> among many others, and
+        /// silently replaced the base's identical-signature constructors elsewhere.</para>
+        ///
         /// <para><b>Interfaces are not walked.</b> §7.2 says "the type and its base types". An
         /// interface member reachable on a class is a member of that class.</para>
         ///
-        /// <para><b>An override appears ONCE, under its most-derived declaration.</b> A base walk
-        /// with no dedup reports both the override and the member it overrides — measured on the
-        /// real framework, <c>System.IO.FileStream</c> yields 95 members of which 26
-        /// (name, parameters, static-ness) identities appear TWICE (<c>Read(Byte[], Int32, Int32)</c>
-        /// declared by both <c>FileStream</c> and <c>Stream</c>), <c>MemoryStream</c> 21, and any
-        /// enum 3 (<c>Equals</c>/<c>GetHashCode</c>/<c>ToString</c> from both <c>Enum</c> and
-        /// <c>ValueType</c>). That is not cosmetic: Task 5 filters this list by name and matches
-        /// parameter types, so two identical candidates become <c>Ambiguous</c> and a plain
-        /// <c>fs.Read(buf, 0, n)</c> earns a spurious BL6018; Task 12 would emit two proxy slots
-        /// per override. The most-derived declaration wins because that is the one that actually
-        /// runs, and the walk visits derived before base so first-seen is most-derived.</para>
+        /// <para><b>An override appears ONCE, under its most-derived declaration</b> — see
+        /// <see cref="CandidateMembers"/>, which owns the collapse.</para>
         ///
         /// <para><b>Deliberate exclusions, all with the same reason — they are not callable
         /// members of the surface:</b> property/event accessors (<c>get_X</c>/<c>set_X</c>: a
@@ -394,38 +283,63 @@ namespace BasicLang.Net
         /// resolve against, which is correct in that there is no metadata token to call — a
         /// zero-argument value-type construction is <c>default(T)</c>, not a call.</para>
         /// </summary>
-        public IReadOnlyList<NetMemberDescriptor> GetMembers(string fullName)
+        public IReadOnlyList<NetMemberDescriptor> GetMembers(string fullName) =>
+            CandidateMembers(fullName).Select(m => m.Descriptor).ToList();
+
+        /// <summary>
+        /// <see cref="GetMembers"/>, but keeping each member's Roslyn symbol alongside its
+        /// descriptor.
+        ///
+        /// <para><b>INTERNAL ON PURPOSE — this is Task 5's seam, not part of the facade.</b>
+        /// Overload resolution needs real <see cref="IMethodSymbol"/>s, and the alternative to this
+        /// seam is Task 5 re-walking derived-to-base itself, which would re-meet the
+        /// duplicate-override problem in a second place and put a Roslyn dependency in front of the
+        /// analyzer. The walk, the exclusion rules and the duplicate collapse stay in exactly one
+        /// method; Roslyn stays behind the facade.</para>
+        ///
+        /// <para>Ordering is derived-to-base and is RELIED ON: first-seen wins the collapse, so the
+        /// most-derived declaration — the one that actually runs — is the one kept.</para>
+        /// </summary>
+        internal IEnumerable<(ISymbol Symbol, NetMemberDescriptor Descriptor)> CandidateMembers(string fullName)
         {
             var symbol = Lookup(fullName).Symbol;
             if (symbol == null)
-                return Array.Empty<NetMemberDescriptor>();
+                yield break;
 
-            var members = new List<NetMemberDescriptor>();
-            var seen = new HashSet<(NetMemberCategory, string, bool, string)>();
+            var seen = new HashSet<(NetMemberCategory, string, bool, int, string)>();
+            var isQueriedType = true;
             for (var type = symbol;
                  type != null && type.SpecialType != SpecialType.System_Object;
                  type = type.BaseType)
             {
                 foreach (var member in type.GetMembers())
                 {
+                    // Constructors are not inherited. See GetMembers' remarks.
+                    if (!isQueriedType && member is IMethodSymbol ctor
+                        && ctor.MethodKind == MethodKind.Constructor)
+                        continue;
+
                     var described = DescribeMember(member);
                     if (described == null)
                         continue;
 
-                    // Presentation identity, NOT declaring type: an override and the member it
-                    // overrides differ only in the latter, which is precisely why they collide.
-                    // Kind participates so a base property and a derived method of the same name
-                    // do not shadow each other; parameter types participate so two indexers
-                    // survive (see NetMemberDescriptor.ParameterTypeFullNames).
-                    if (!seen.Add((described.Kind, described.Name, described.IsStatic,
-                                   string.Join(",", described.ParameterTypeFullNames))))
+                    // Signature identity, NOT declaring type: an override and the member it
+                    // overrides differ only in the latter, which is exactly why they collide.
+                    // Every other axis of a CLR signature has to be in here or the collapse
+                    // DELETES a real overload — see NetMemberDescriptor's remarks for the two
+                    // (arity, ref-kind) that are invisible in a bare name-plus-types key and the
+                    // 186 framework members they cost.
+                    if (!seen.Add(SignatureKey(described)))
                         continue;
 
-                    members.Add(described);
+                    yield return (member, described);
                 }
+                isQueriedType = false;
             }
-            return members;
         }
+
+        private static (NetMemberCategory, string, bool, int, string) SignatureKey(NetMemberDescriptor m) =>
+            (m.Kind, m.Name, m.IsStatic, m.Arity, string.Join(",", m.Parameters));
 
         // ------------------------------------------------------------------
         // Lookup
@@ -514,16 +428,95 @@ namespace BasicLang.Net
         }
 
         // ------------------------------------------------------------------
+        // Type naming
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// The canonical spelling of a type: fully qualified, no C# keyword or shorthand syntax,
+        /// and structural through arrays, pointers and generic arguments.
+        ///
+        /// <para><b><c>ToDisplayString</c> alone does not deliver this, even with
+        /// <c>UseSpecialTypes</c> off.</b> Measured with exactly the format above:</para>
+        /// <list type="bullet">
+        /// <item><description><c>System.IntPtr</c> renders as <c>nint</c> and
+        /// <c>System.UIntPtr</c> as <c>nuint</c> — 670 and 274 occurrences respectively across the
+        /// public framework surface's parameter and return spellings, plus <c>nint*</c>,
+        /// <c>nint[]</c> and <c>nint?</c> forms.</description></item>
+        /// <item><description>Tuples render as tuple SYNTAX INCLUDING ELEMENT NAMES —
+        /// <c>Math.SinCos</c> returns <c>(System.Double Sin, System.Double Cos)</c> — so two APIs
+        /// over the same runtime type get different spellings, and the string carries <c>(</c>,
+        /// <c>)</c>, <c>,</c> and spaces straight into whatever Task 9 mangles.</description></item>
+        /// </list>
+        /// <para>Both matter twice over: as §7.3 export names, and as components of the signature
+        /// key <see cref="CandidateMembers"/> collapses on.</para>
+        /// </summary>
+        private static string TypeName(ITypeSymbol type)
+        {
+            if (type is IArrayTypeSymbol array)
+                return TypeName(array.ElementType) + "[" + new string(',', Math.Max(0, array.Rank - 1)) + "]";
+
+            if (type is IPointerTypeSymbol pointer)
+                return TypeName(pointer.PointedAtType) + "*";
+
+            if (type is INamedTypeSymbol named)
+            {
+                // A tuple is ValueTuple<...>; its element names are metadata decoration, not part
+                // of the type, and must not reach a name.
+                if (named.IsTupleType && named.TupleUnderlyingType != null)
+                    named = named.TupleUnderlyingType;
+
+                if (named.SpecialType == SpecialType.System_IntPtr)
+                    return "System.IntPtr";
+                if (named.SpecialType == SpecialType.System_UIntPtr)
+                    return "System.UIntPtr";
+
+                var name = QualifiedName(named);
+                return named.TypeArguments.Length == 0
+                    ? name
+                    : name + "<" + string.Join(", ", named.TypeArguments.Select(TypeName)) + ">";
+            }
+
+            // Type parameters, dynamic, function pointers: nothing to normalize.
+            return type.ToDisplayString(FullNameFormat);
+        }
+
+        /// <summary>Namespace + containing types + name, with no type-argument list.</summary>
+        private static string QualifiedName(INamedTypeSymbol named)
+        {
+            var parts = new List<string>();
+            for (var type = named; type != null; type = type.ContainingType)
+                parts.Insert(0, type.Name);
+
+            var containingNamespace = named.ContainingNamespace;
+            if (containingNamespace != null && !containingNamespace.IsGlobalNamespace)
+                parts.Insert(0, containingNamespace.ToDisplayString());
+
+            return string.Join(".", parts);
+        }
+
+        // ------------------------------------------------------------------
         // Description
         // ------------------------------------------------------------------
 
         private static NetTypeDescriptor Describe(INamedTypeSymbol symbol) =>
             symbol == null
                 ? null
-                : new NetTypeDescriptor(
-                    symbol.ToDisplayString(FullNameFormat),
-                    KindOf(symbol),
-                    symbol.DeclaredAccessibility == Accessibility.Public);
+                : new NetTypeDescriptor(TypeName(symbol), KindOf(symbol), IsEffectivelyPublic(symbol));
+
+        /// <summary>
+        /// Public all the way out. A public type nested in an internal one is NOT reachable, and
+        /// reporting it as public hands the shim a reference that fails in <c>csc</c> with CS0122 —
+        /// exactly the late failure P2a-1 exists to move earlier.
+        /// </summary>
+        private static bool IsEffectivelyPublic(INamedTypeSymbol symbol)
+        {
+            for (var type = symbol; type != null; type = type.ContainingType)
+            {
+                if (type.DeclaredAccessibility != Accessibility.Public)
+                    return false;
+            }
+            return true;
+        }
 
         private static NetTypeCategory KindOf(INamedTypeSymbol symbol)
         {
@@ -560,34 +553,61 @@ namespace BasicLang.Net
                         return null;
                     return new NetMemberDescriptor(
                         method.MetadataName,
-                        method.ContainingType.ToDisplayString(FullNameFormat),
+                        TypeName(method.ContainingType),
                         kind.Value,
                         method.IsStatic,
-                        method.ReturnType.ToDisplayString(FullNameFormat),
-                        method.Parameters.Select(p => p.Type.ToDisplayString(FullNameFormat)).ToList());
+                        method.Arity,
+                        TypeName(method.ReturnType),
+                        Describe(method.Parameters));
 
                 case IPropertySymbol property:
                     return new NetMemberDescriptor(
                         property.MetadataName,
-                        property.ContainingType.ToDisplayString(FullNameFormat),
+                        TypeName(property.ContainingType),
                         NetMemberCategory.Property,
                         property.IsStatic,
-                        property.Type.ToDisplayString(FullNameFormat),
+                        arity: 0,
+                        TypeName(property.Type),
                         // An indexer's parameters, empty for an ordinary property. Without these
-                        // two indexers present one identity and GetMembers' dedup eats one.
-                        property.Parameters.Select(p => p.Type.ToDisplayString(FullNameFormat)).ToList());
+                        // two indexers present one identity and the collapse eats one.
+                        Describe(property.Parameters));
 
                 case IFieldSymbol field:
                     return new NetMemberDescriptor(
                         field.MetadataName,
-                        field.ContainingType.ToDisplayString(FullNameFormat),
+                        TypeName(field.ContainingType),
                         NetMemberCategory.Field,
                         field.IsStatic,
-                        field.Type.ToDisplayString(FullNameFormat),
-                        Array.Empty<string>());
+                        arity: 0,
+                        TypeName(field.Type),
+                        Array.Empty<NetParameterDescriptor>());
 
                 default:
                     return null;   // events, nested types, everything else
+            }
+        }
+
+        private static IReadOnlyList<NetParameterDescriptor> Describe(
+            IEnumerable<IParameterSymbol> parameters) =>
+            parameters
+                .Select(p => new NetParameterDescriptor(RefKindOf(p.RefKind), TypeName(p.Type)))
+                .ToList();
+
+        /// <summary>
+        /// Roslyn's <see cref="RefKind"/> mapped onto ours. The default arm covers
+        /// <c>RefKind.RefReadOnlyParameter</c> (C# 12's <c>ref readonly</c>) and anything a later
+        /// Roslyn adds — mapping an unknown ref-kind onto <see cref="NetRefKind.None"/> instead
+        /// would silently merge it with by-value and delete an overload.
+        /// </summary>
+        private static NetRefKind RefKindOf(RefKind refKind)
+        {
+            switch (refKind)
+            {
+                case RefKind.None: return NetRefKind.None;
+                case RefKind.Ref: return NetRefKind.Ref;
+                case RefKind.Out: return NetRefKind.Out;
+                case RefKind.In: return NetRefKind.In;
+                default: return NetRefKind.RefReadOnly;
             }
         }
     }

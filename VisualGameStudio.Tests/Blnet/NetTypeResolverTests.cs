@@ -203,6 +203,25 @@ public class NetTypeResolverTests
             "caller decides the diagnostic, the resolver reports the fact.");
     }
 
+    [Test]
+    public void APublicTypeNestedInAnInternalOneIsNotEffectivelyPublic()
+    {
+        // DECLARED accessibility is public here; EFFECTIVE accessibility is not. Reporting true
+        // hands the shim a type reference that fails in csc with CS0122 — the late-failure shape
+        // P2a-1 exists to move earlier — so the containing chain has to be walked.
+        var probe = EmitProbeAssembly("BlnetNestedAccess",
+            "namespace Contoso { internal class HiddenOuter { public class VisibleInner { } } " +
+            "public class ShownOuter { public class AlsoVisible { } } }");
+        var resolver = NetTypeResolver.Create(NetTypeResolverTestRefs.FrameworkPaths.Concat(new[] { probe }));
+
+        Assert.That(resolver.ResolveType("Contoso.ShownOuter.AlsoVisible")!.IsPublic, Is.True,
+            "guard: public nested in public is reachable");
+        Assert.That(resolver.ResolveType("Contoso.HiddenOuter.VisibleInner")!.IsPublic, Is.False,
+            "IsPublic must be EFFECTIVE, not declared: a public type inside an internal one " +
+            "cannot be named from outside its assembly. Walk ContainingType in " +
+            "NetTypeResolver.IsEffectivelyPublic.");
+    }
+
     // ------------------------------------------------------------------
     // Members.
     // ------------------------------------------------------------------
@@ -279,9 +298,10 @@ public class NetTypeResolverTests
         Assert.That(members, Is.Not.Empty, "guard: the fixture must have found a real type");
 
         var collisions = members
-            .GroupBy(m => (m.Kind, m.Name, m.IsStatic, Params: string.Join(",", m.ParameterTypeFullNames)))
+            .GroupBy(m => (m.Kind, m.Name, m.IsStatic, m.Arity,
+                           Params: string.Join(",", m.Parameters)))
             .Where(g => g.Count() > 1)
-            .Select(g => $"{g.Key.Kind} {g.Key.Name}({g.Key.Params}) declared by "
+            .Select(g => $"{g.Key.Kind} {g.Key.Name}`{g.Key.Arity}({g.Key.Params}) declared by "
                          + string.Join(" AND ", g.Select(m => m.DeclaringTypeFullName)))
             .ToList();
 
@@ -292,6 +312,181 @@ public class NetTypeResolverTests
             "reports Ambiguous -> a spurious BL6018 on an ordinary call; Task 12 emits two proxy " +
             "slots for one member. Fix the collapsing in NetTypeResolver.GetMembers.\n"
             + string.Join("\n", collisions));
+    }
+
+    // ------------------------------------------------------------------
+    // The OTHER half of the collapse: it must not DELETE anything. The test above cannot
+    // see that — it groups by the very key GetMembers collapses on, so it holds no matter
+    // what the collapse destroys. These are the tests with an INDEPENDENT oracle.
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Counts members the way a CLR signature actually distinguishes them, derived straight from
+    /// Roslyn and deliberately INDEPENDENT of NetTypeResolver's own key — that independence is the
+    /// entire point. Parameter types are spelled with Roslyn's raw display format rather than the
+    /// resolver's normalized one: the two disagree on <c>nint</c> vs <c>System.IntPtr</c>, but both
+    /// are injective over distinct types, so the DISTINCT COUNT is the same and the comparison
+    /// isolates the axes under test (kind, name, static-ness, arity, parameter ref-kinds/types).
+    /// </summary>
+    private static int SignatureCompleteMemberCount(string typeName)
+    {
+        var format = new SymbolDisplayFormat(
+            globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Omitted,
+            typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
+            genericsOptions: SymbolDisplayGenericsOptions.IncludeTypeParameters);
+
+        var compilation = CSharpCompilation.Create("oracle",
+            references: NetTypeResolverTestRefs.FrameworkPaths.Select(p => MetadataReference.CreateFromFile(p)));
+        var type = compilation.GetTypeByMetadataName(typeName);
+        Assert.That(type, Is.Not.Null, "guard: the oracle must find " + typeName);
+
+        static IEnumerable<IParameterSymbol> Parameters(ISymbol m) => m switch
+        {
+            IMethodSymbol method => method.Parameters,
+            IPropertySymbol property => property.Parameters,
+            _ => Enumerable.Empty<IParameterSymbol>(),
+        };
+
+        var keys = new HashSet<string>();
+        var isQueriedType = true;
+        for (var t = type; t != null && t.SpecialType != SpecialType.System_Object; t = t.BaseType)
+        {
+            foreach (var m in t.GetMembers())
+            {
+                if (m.DeclaredAccessibility != Accessibility.Public || m.IsImplicitlyDeclared)
+                    continue;
+                if (m is IMethodSymbol method)
+                {
+                    if (method.MethodKind != MethodKind.Ordinary
+                        && method.MethodKind != MethodKind.Constructor)
+                        continue;
+                    if (!isQueriedType && method.MethodKind == MethodKind.Constructor)
+                        continue;   // constructors are not inherited
+                }
+                else if (!(m is IPropertySymbol || m is IFieldSymbol))
+                {
+                    continue;
+                }
+
+                var kind = m is IMethodSymbol me
+                    ? (me.MethodKind == MethodKind.Constructor ? "Ctor" : "Method")
+                    : m is IPropertySymbol ? "Property" : "Field";
+                var arity = m is IMethodSymbol ma ? ma.Arity : 0;
+                var ps = string.Join(",", Parameters(m).Select(p =>
+                    (p.RefKind == RefKind.None ? "" : p.RefKind + " ") + p.Type.ToDisplayString(format)));
+                keys.Add($"{kind}|{m.MetadataName}|{m.IsStatic}|{arity}|{ps}");
+            }
+            isQueriedType = false;
+        }
+        return keys.Count;
+    }
+
+    [Test]
+    [TestCase("System.Threading.Tasks.Task")]
+    [TestCase("System.Linq.Expressions.Expression")]
+    [TestCase("System.Linq.IQueryProvider")]
+    [TestCase("System.Diagnostics.Tracing.EventSource")]
+    public void TheDuplicateCollapseLosesNoMember(string typeName)
+    {
+        // The four types measured to lose members when the collapse key is not a COMPLETE CLR
+        // signature. A deleted overload is strictly worse than a duplicated one: duplicates make
+        // Task 5 answer Ambiguous, which is at least a signal, whereas a deleted overload makes it
+        // answer "no such overload" for a member that plainly exists.
+        //
+        //   arity missing    -> Task 99->97, Expression 316->310, IQueryProvider 4->2
+        //                       (Task.FromException vs FromException<T>, all six
+        //                        Expression.Lambda/Lambda<TDelegate> pairs, both CreateQuery)
+        //   ref-kind missing -> EventSource 28->27
+        //                       (Write(String, EventSourceOptions, T) vs
+        //                        Write(String, ref EventSourceOptions, ref T))
+        Assert.That(FrameworkOnly().GetMembers(typeName).Count,
+            Is.EqualTo(SignatureCompleteMemberCount(typeName)),
+            "GetMembers returned fewer members than " + typeName + " has distinct CLR " +
+            "signatures, so the duplicate collapse DELETED a real overload. Its key must carry " +
+            "every axis of a signature — kind, name, static-ness, generic ARITY, and each " +
+            "parameter's REF-KIND and type. Add the missing axis to NetMemberDescriptor and to " +
+            "NetTypeResolver.SignatureKey; do not relax this test.");
+    }
+
+    [Test]
+    public void GenericAndNonGenericOverloadsBothSurvive()
+    {
+        // The named case behind the count above, so a failure says WHICH member vanished.
+        var fromException = FrameworkOnly().GetMembers("System.Threading.Tasks.Task")
+            .Where(m => m.Name == "FromException" && m.Kind == NetMemberCategory.Method)
+            .ToList();
+
+        Assert.That(fromException.Select(m => m.Arity), Is.EquivalentTo(new[] { 0, 1 }),
+            "Task.FromException(Exception) and Task.FromException<T>(Exception) differ ONLY by " +
+            "generic arity — IMethodSymbol.MetadataName carries no arity suffix, so a key built " +
+            "from name and parameter types alone cannot tell them apart and deletes one.");
+    }
+
+    [Test]
+    public void OverloadsDifferingOnlyByRefKindBothSurvive()
+    {
+        var write = FrameworkOnly().GetMembers("System.Diagnostics.Tracing.EventSource")
+            .Where(m => m.Name == "Write" && m.Arity == 1 && m.Parameters.Count == 3)
+            .ToList();
+
+        Assert.That(write.Select(m => string.Join(",", m.Parameters.Select(p => p.RefKind))),
+            Is.EquivalentTo(new[] { "None,None,None", "None,Ref,Ref" }),
+            "EventSource.Write(String, EventSourceOptions, T) and " +
+            "Write(String, ref EventSourceOptions, ref T) differ ONLY by parameter ref-kind. " +
+            "Recording p.Type without p.RefKind makes them one member and metadata-table order " +
+            "decides which survives.");
+    }
+
+    [Test]
+    public void ConstructorsAreNotInherited()
+    {
+        // Constructors are the one member kind that is NOT inherited: `New Derived(baseCtorArgs)`
+        // is a compile error unless Derived declares that signature. Collecting them from base
+        // types invents members no caller can invoke — Task 5 would resolve one and Task 12 would
+        // emit a proxy slot for it. Measured on the framework, it also added a spurious member to
+        // FileNotFoundException and ArgumentNullException among others.
+        var probe = EmitProbeAssembly("BlnetCtors",
+            "namespace Contoso { public class CtorBase { public CtorBase(int i) { } } " +
+            "public class CtorDerived : CtorBase { public CtorDerived(string s) : base(0) { } } }");
+        var resolver = NetTypeResolver.Create(NetTypeResolverTestRefs.FrameworkPaths.Concat(new[] { probe }));
+
+        var ctors = resolver.GetMembers("Contoso.CtorDerived")
+            .Where(m => m.Kind == NetMemberCategory.Constructor).ToList();
+
+        Assert.That(ctors.Select(m => string.Join(",", m.ParameterTypeFullNames)),
+            Is.EqualTo(new[] { "System.String" }),
+            "only CtorDerived's OWN constructor may appear. CtorBase(int) is not callable as a " +
+            "constructor of CtorDerived, so the base walk must skip constructors.");
+    }
+
+    [Test]
+    [TestCase("System.IntPtr", "System.IntPtr")]
+    [TestCase("System.UIntPtr", "System.UIntPtr")]
+    public void NativeIntegerTypesAreNotSpelledWithTheirCSharpKeyword(string metadataName, string expected)
+    {
+        // ToDisplayString renders these as nint/nuint even with UseSpecialTypes off — measured at
+        // 670 and 274 occurrences across the public framework's parameter/return spellings. Two
+        // spellings of one type mangle to two export names (§7.3), and would also split the
+        // signature key.
+        Assert.That(FrameworkOnly().ResolveType(metadataName)!.FullName, Is.EqualTo(expected),
+            "NetTypeResolver.TypeName must special-case SpecialType.System_IntPtr/System_UIntPtr; " +
+            "a bare ToDisplayString gives the C# keyword.");
+    }
+
+    [Test]
+    public void TupleTypesAreSpelledStructurally_NotAsTupleSyntaxWithElementNames()
+    {
+        // Math.SinCos returns (double Sin, double Cos). ToDisplayString spells that as tuple
+        // SYNTAX INCLUDING THE ELEMENT NAMES, so the same runtime type gets a different name per
+        // API, and the string carries '(', ')', ',' and spaces straight into the mangler.
+        var sinCos = FrameworkOnly().GetMembers("System.Math").Single(m => m.Name == "SinCos");
+
+        Assert.That(sinCos.TypeFullName,
+            Is.EqualTo("System.ValueTuple<System.Double, System.Double>"),
+            "a tuple must be reported as its underlying ValueTuple<...>. Element names are " +
+            "metadata decoration, not part of the type — two APIs over the same tuple type must " +
+            "produce the same TypeFullName.");
+        Assert.That(sinCos.TypeFullName, Does.Not.Contain("Sin").And.Not.Contain("Cos"));
     }
 
     [Test]
@@ -337,17 +532,20 @@ public class NetTypeResolverTests
     public void MemberCarriesTheThreeInputsTheManglerNeeds()
     {
         // §7.3: NetNameMangler produces its identifier from (declaring type, member name,
-        // parameter types). All three must be readable off a NetMemberDescriptor.
+        // parameter types) — plus the arity and ref-kinds those three do not capture. All of it
+        // must be readable off a NetMemberDescriptor.
         var overloads = FrameworkOnly().GetMembers("System.Text.RegularExpressions.Regex")
             .Where(m => m.Name == "IsMatch" && m.Kind == NetMemberCategory.Method)
             .ToList();
 
         var instanceOneArg = overloads.Single(m =>
-            !m.IsStatic && m.ParameterTypeFullNames.Count == 1 &&
-            m.ParameterTypeFullNames[0] == "System.String");
+            !m.IsStatic && m.Parameters.Count == 1 &&
+            m.Parameters[0].TypeFullName == "System.String");
 
         Assert.That(instanceOneArg.DeclaringTypeFullName,
             Is.EqualTo("System.Text.RegularExpressions.Regex"));
+        Assert.That(instanceOneArg.Arity, Is.EqualTo(0));
+        Assert.That(instanceOneArg.Parameters[0].RefKind, Is.EqualTo(NetRefKind.None));
         Assert.That(instanceOneArg.TypeFullName, Is.EqualTo("System.Boolean"),
             "parameter and return type names must be fully qualified and NOT C# keywords — " +
             "'bool' and 'System.Boolean' would mangle to different identifiers for one method.");
