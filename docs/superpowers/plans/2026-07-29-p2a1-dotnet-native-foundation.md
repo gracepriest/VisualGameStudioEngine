@@ -1551,8 +1551,34 @@ this is inert.
 dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --filter "FullyQualifiedName~CppBackendTests|FullyQualifiedName~CppCollectionTests|FullyQualifiedName~CppBclEndToEndTests" > test-run.txt 2>&1
 ```
 
-Expected: **118 pre-existing C++ fixtures unchanged.** This task's entire success criterion is
-"nothing changed", and these are what prove it.
+Expected: **108 pre-existing C++ fixtures unchanged** — the plan's "118" was wrong; the real count
+was measured at **108 / 0 / 0** both before and after the change. This task's entire success
+criterion is "nothing changed", and these are what prove it. ⚠ **Always measure the baseline
+yourself before changing anything** rather than trusting a number in this document.
+
+> ⛔ **BL6025's gate must be `!isExe`, NOT `emitMain == false`.** `emitMain` is
+> `isExe && basicLangMainCount == 1`, so `!emitMain` is *also* true for an **executable with a
+> hand-written C++ `main()`** — a shape §9.5 explicitly supports. Gating on `emitMain` rejects it.
+> `!isExe ⟹ !emitMain`, so `!isExe` is the correct and narrower condition. Pinned by a test.
+>
+> ⛔ **This task is NOT the right home for fixing the uncancellable NuGet restore**, despite what the
+> earlier note in this plan says. `PackageManager.RestoreAsync` takes **no `CancellationToken`** and
+> is shared with the C# backend, so widening it is a separate change. Cancellation here is honored
+> **between phases** only; a restore already in flight runs to completion. The stale comment in
+> `RestorePackagesForClosure` was corrected rather than left as a promise the code does not keep.
+>
+> ℹ️ **Cancellation throws** `OperationCanceledException` naming the phase rather than returning a
+> failed result — a cancel must not look like a build error in the IDE. Existing callers cannot
+> observe it (default `CancellationToken.None`), and **no caller passes a token yet**, so the IDE/CLI
+> wiring remains to be done.
+>
+> ℹ️ **BL6025 is bypassed for IntelliSense**, consistent with every other build-rule gate
+> (BL6007/BL6005/BL6009) — enforcing a link-time rule in the editor would cost the user every
+> generated header. One condition to flip, with a test pinning it either way.
+>
+> ⛔ **`ShimAssemblyName` is `<SafeProject>.Blnet`** — invented in Task 13 because the spec never
+> names it. **Task 14's `NetShimGenerator` must name its csproj from that same function**, or
+> `blnet_load_module` looks for the wrong DLL at runtime.
 
 - [ ] **Step 6: Commit**
 
