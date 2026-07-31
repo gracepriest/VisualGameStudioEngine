@@ -2,13 +2,49 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using BasicLang.Compiler.CodeGen.CPlusPlus;
+using BasicLang.Compiler.CodeGen.Net;
 using BasicLang.Compiler.IR;
 using BasicLang.Compiler.SemanticAnalysis;
 using BasicLang.Net;
 
 namespace BasicLang.Compiler.ProjectSystem
 {
+    /// <summary>
+    /// Spec §10.1's phase model, named in code. The ordinals ARE the spec's — do not renumber
+    /// them to match the section comments inside <see cref="CppProjectBuilder.EmitCore"/>, which
+    /// carry their own older 1..7 numbering for a different partition of the same work.
+    ///
+    /// <para><b>Which phases run for IntelliSense</b> (<c>forIntelliSense: true</c>) — §10.1's
+    /// table, verbatim, because "phases 1–4 give full C++ IntelliSense at zero publish cost" is
+    /// a load-bearing claim and the only place it is written down in code:</para>
+    /// <list type="table">
+    /// <item><description>1 <see cref="ResolveReferences"/> — yes</description></item>
+    /// <item><description>2 <see cref="TranspileToIr"/> — yes</description></item>
+    /// <item><description>3 <see cref="CollectNetSurface"/> — yes</description></item>
+    /// <item><description>4 <see cref="EmitNative"/> — yes</description></item>
+    /// <item><description>5 <see cref="GenerateAndPublishShim"/> — <b>no</b></description></item>
+    /// <item><description>6 <see cref="CompileAndLink"/> — no</description></item>
+    /// <item><description>7 <see cref="Deploy"/> — no</description></item>
+    /// </list>
+    ///
+    /// <para>1–4 live in <see cref="CppProjectBuilder.EmitCore"/> and 6–7 in
+    /// <see cref="CppProjectBuilder.Build"/>. <see cref="GenerateAndPublishShim"/> has NO code
+    /// yet (plan Task 14/15) and therefore no cancellation checkpoint — a checkpoint for a phase
+    /// that does not run would be a lie about where a build can be interrupted.</para>
+    /// </summary>
+    internal enum CppBuildPhase
+    {
+        ResolveReferences = 1,
+        TranspileToIr = 2,
+        CollectNetSurface = 3,
+        EmitNative = 4,
+        GenerateAndPublishShim = 5,
+        CompileAndLink = 6,
+        Deploy = 7,
+    }
+
     public sealed class CppProjectBuildResult
     {
         public bool Success { get; set; }
@@ -76,21 +112,42 @@ namespace BasicLang.Compiler.ProjectSystem
         /// toolchain resolver (null = <see cref="CppToolchain.Find"/>); the IDE's
         /// BuildService injects an override-aware resolver here, keeping this compiler
         /// layer settings-agnostic.
+        ///
+        /// <para><paramref name="cancellationToken"/> (spec §10.3) is honored at the
+        /// <see cref="CppBuildPhase"/> boundaries, where it throws
+        /// <see cref="OperationCanceledException"/> naming the phase it stopped before — the
+        /// cooperative-cancellation idiom, deliberately NOT a failed
+        /// <see cref="CppProjectBuildResult"/>, because a user-initiated cancel must not be
+        /// indistinguishable from a build error in the IDE's error list.</para>
+        ///
+        /// <para><b>An uncancelled build is completely unaffected.</b> The parameter is optional
+        /// and defaults to <see cref="CancellationToken.None"/>, whose
+        /// <c>IsCancellationRequested</c> is a constant false — so every existing caller keeps
+        /// compiling unchanged and can never observe the exception.</para>
+        ///
+        /// <para><b>What is NOT interruptible yet.</b> Cancellation is checked BETWEEN phases,
+        /// not inside them, so a long-running step still runs to completion: notably the blocking
+        /// NuGet restore in phase 1 (see <see cref="RestorePackagesForClosure"/>), because
+        /// <c>PackageManager.RestoreAsync</c> accepts no token and it is shared with the C#
+        /// backend. Making that interruptible is a PackageManager change, not this one.</para>
         /// </summary>
         public static CppProjectBuildResult Build(ProjectFile project, string configuration,
             Func<string, CppToolchain> resolveById = null,
             Func<CppToolchainAvailability> probeAvailability = null,
-            Func<CppToolchain> resolveToolchain = null)
+            Func<CppToolchain> resolveToolchain = null,
+            CancellationToken cancellationToken = default)
         {
             var result = new CppProjectBuildResult();
             var emit = EmitCore(project, configuration, result,
-                resolveToolchain ?? CppToolchain.Find, forIntelliSense: false, resolveById, probeAvailability);
+                resolveToolchain ?? CppToolchain.Find, forIntelliSense: false, resolveById, probeAvailability,
+                cancellationToken: cancellationToken);
             if (!emit.Completed)
                 return result;
 
             var request = emit.Request;
 
-            // ---- Compile ----
+            // ---- Phase 6 (spec §10.1): compile + link ----
+            Checkpoint(cancellationToken, CppBuildPhase.CompileAndLink);
             var (ok, output) = emit.Toolchain.Compile(request);
             ApplyCompileOutcome(result, ok, output, emit.OutputDir, project.FilePath);
             if (!result.Success)
@@ -98,6 +155,11 @@ namespace BasicLang.Compiler.ProjectSystem
 
             if (emit.IsExe) result.ExecutablePath = request.OutputPath;
             result.Messages.Add($"Output: {request.OutputPath}");
+
+            // ---- Phase 7 (spec §10.1): deploy ----
+            // Checked here rather than per-DLL: a half-deployed output dir next to a linked exe
+            // is worse than a fully deployed one, and the copies are milliseconds.
+            Checkpoint(cancellationToken, CppBuildPhase.Deploy);
 
             // ---- Engine DLL deploy ----
             if (emit.EngineLib != null)
@@ -154,6 +216,9 @@ namespace BasicLang.Compiler.ProjectSystem
         /// otherwise get no headers at all, which is the normal mid-edit state.</item>
         /// <item>BL6005 no-toolchain (and BL6015 pinned-toolchain-missing) — the entire
         /// point of the seam.</item>
+        /// <item>BL6025 library-output-uses-.NET — a LINK-time rule (the startup object cannot
+        /// be guaranteed to survive being pulled from a static archive). Enforcing it here would
+        /// deny the project every generated header, and with them every completion.</item>
         /// <item>Native libs (BL6009) and the engine framework auto-link — LINK-time
         /// concerns. <c>request.Libraries</c> never reaches <c>CppToolchain.FlagsFor</c>,
         /// so libraries contribute NOTHING to a compilation database (it carries compile
@@ -167,12 +232,35 @@ namespace BasicLang.Compiler.ProjectSystem
         /// <paramref name="resolveToolchain"/> is a factory rather than a value so the probe
         /// stays lazy and keeps its original position (after the obj/gen write) — the
         /// ordering Task 8's test pins.
+        ///
+        /// <para>This method is spec §10.1 phases 1–4 (<see cref="CppBuildPhase"/>); phases 6–7
+        /// are <see cref="Build"/>'s tail and phase 5 does not exist yet.</para>
         /// </summary>
+        /// <param name="surfaceOverride">
+        /// <b>A TEST SEAM, and nothing else.</b> Phase 3 (<see cref="CppBuildPhase.CollectNetSurface"/>)
+        /// has no collector in P2a-1 — §7.1's call-site walk lands later — so it always yields
+        /// <see cref="NetSurface.Empty"/> and every artifact keyed on the surface is therefore
+        /// inert. That makes the merge below unreachable, and an unreachable merge is untestable:
+        /// this parameter is how a test supplies the non-empty surface the real collector will one
+        /// day produce. <b>When phase 3 gains a collector, this must become the collector's result
+        /// with the override used only as a substitute</b> — not a second, parallel input.
+        /// Production callers pass null.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// See <see cref="Build"/>. Honored at phase boundaries only; defaults to
+        /// <see cref="CancellationToken.None"/>, so existing callers are unaffected.
+        /// </param>
         internal static CppEmitOutcome EmitCore(ProjectFile project, string configuration,
             CppProjectBuildResult result, Func<CppToolchain> resolveToolchain, bool forIntelliSense,
             Func<string, CppToolchain> resolveById = null,
-            Func<CppToolchainAvailability> probeAvailability = null)
+            Func<CppToolchainAvailability> probeAvailability = null,
+            NetSurface surfaceOverride = null,
+            CancellationToken cancellationToken = default)
         {
+            // Before ANY side effect — a token already cancelled on entry must leave the project
+            // directory exactly as it found it (no bin/<config>, no obj/gen, no restore).
+            Checkpoint(cancellationToken, CppBuildPhase.ResolveReferences);
+
             var outcome = new CppEmitOutcome();
             var projectDir = Path.GetDirectoryName(project.FilePath) ?? ".";
             var outputName = project.AssemblyName ?? project.ProjectName ?? "Program";
@@ -309,7 +397,8 @@ namespace BasicLang.Compiler.ProjectSystem
                 return outcome;
             }
 
-            // ---- 3. Transpile stage (BasicLang -> C++) ----
+            // ---- 3. Transpile stage (BasicLang -> C++) — spec §10.1 phase 2 ----
+            Checkpoint(cancellationToken, CppBuildPhase.TranspileToIr);
             CompilationResult compilation = null;
             List<IRModule> unitIRs = null;
             var basicLangMainCount = 0;
@@ -374,6 +463,13 @@ namespace BasicLang.Compiler.ProjectSystem
                 basicLangMainCount = CountBasicLangMains(compiler.Registry.Modules.Select(u => u.IR));
             }
 
+            // ---- Collect the .NET surface (spec §10.1 phase 3) ----
+            // Runs on BOTH paths. There is no collector in P2a-1 (§7.1's call-site walk lands
+            // later), so this is NetSurface.Empty for every project that exists — which is what
+            // makes the whole artifact merge below inert. See surfaceOverride's remarks.
+            Checkpoint(cancellationToken, CppBuildPhase.CollectNetSurface);
+            var surface = surfaceOverride ?? NetSurface.Empty;
+
             // ---- 4. Entry-point rule (pre-link, so 0/2-main cases give clickable diags) ----
             // Bypassed for IntelliSense: "no Sub Main yet" is the normal mid-edit state and
             // must not cost the user their headers. Skipping the block also skips reading
@@ -396,15 +492,47 @@ namespace BasicLang.Compiler.ProjectSystem
             // the C++ side provides main().
             var emitMain = isExe && basicLangMainCount == 1;
 
-            // ---- 5. Generate split C++ from the transpiled IR ----
+            // ---- BL6025: a library output cannot use .NET (spec §9.5, §14.12) ----
+            // §9.5 reads the rule off emitMain, whose false case covers TWO shapes — a
+            // user-written C++ main() in an executable, and a library with no main at all. Only
+            // the SECOND is rejected, so the condition here is !isExe and not !emitMain: an exe
+            // whose entry point is hand-written C++ is fully supported (blnet_startup.g.cpp's
+            // static-initializer object covers both executable shapes). What v1 cannot do is make
+            // that object survive being pulled from a static archive no symbol references —
+            // a linker problem, deferred as §15.13.
+            //
+            // INERT: surface.IsNonEmpty is false for every project in the repo, so a library
+            // builds exactly as it does today. Bypassed for IntelliSense alongside the other
+            // BUILD-rule gates (BL6007, the entry-point rule, BL6005/BL6015): refusing a
+            // library's generated headers would cost the user every completion in the editor to
+            // enforce a rule that only bites at link time.
+            if (!forIntelliSense && !isExe && surface.IsNonEmpty)
+            {
+                Fail(result, "BL6025",
+                    "A library output cannot use .NET. This project's OutputType is Library and it "
+                    + "has a non-empty .NET surface, but the generated startup object that loads the "
+                    + "shim and performs the ABI handshake only runs from an executable. Change "
+                    + "<OutputType> to Exe, or remove the .NET usage.",
+                    project.FilePath);
+                return outcome;
+            }
+
+            // ---- 5. Generate the native artifact set (spec §10.1 phase 4) ----
+            // TWO producers, ONE merged file set (§9.5): GenerateSplit's per-module C++, keyed on
+            // the presence of .bas sources, and NetProxyEmitter's .NET artifacts, keyed on the
+            // SURFACE. Neither gates the other — a pure-C++ project that reaches .NET gets the
+            // proxy artifacts with no .bas file in sight, and a BasicLang project with no .NET
+            // gets exactly what it got before this task existed.
+            Checkpoint(cancellationToken, CppBuildPhase.EmitNative);
+
+            // GenerateSplit's precondition: projectName must be filename-safe (it is
+            // used verbatim in <Project>.g.h etc). The builder owns that guarantee.
+            // Hoisted out of the .bas gate because the shim assembly name derives from it too.
+            var safeProject = SanitizeProjectName(outputName);
+
             CppSplitResult split = null;
-            var generatedTus = new List<string>();
             if (blSources.Count > 0)
             {
-                // GenerateSplit's precondition: projectName must be filename-safe (it is
-                // used verbatim in <Project>.g.h etc). The builder owns that guarantee.
-                var safeProject = SanitizeProjectName(outputName);
-
                 // ---- 5a. Pure codegen (BL6001) — no file IO happens in here. -------------
                 // Generate the full file set into memory BEFORE touching obj/gen. A codegen
                 // failure (CppCapabilityException on an unsupported construct, or the
@@ -442,14 +570,38 @@ namespace BasicLang.Compiler.ProjectSystem
                     Fail(result, "BL6001", ex.Message, project.FilePath);
                     return outcome;
                 }
+            }
 
-                // ---- 5b. File IO (BL6006) — a separate try so an IO fault is never -------
-                // mislabeled as a codegen error. ArgumentException belongs to BL6006 HERE
-                // (an invalid path out of Path.Combine/WriteAllText), which is exactly why
-                // the two stages cannot share one catch list: the same exception type means
-                // "codegen rejected a name" above and "the filesystem rejected a path" here.
-                // (A mid-loop IO fault at the write step can still leave a partial set —
-                // a genuine environment failure, out of scope.)
+            // ---- 5b. The .NET artifact set (§9.1), also pure — no file IO in here. --------
+            // Keyed on the SURFACE alone: an empty surface returns an empty dictionary and an
+            // empty TU list, which is what collapses everything below back to today's behavior.
+            //
+            // NOT wrapped in a try: NetProxyEmitter throws NotSupportedException for a ByRef
+            // handle/String parameter (§8.3 leaves their ownership unspecified), and that is
+            // UNREACHABLE in P2a-1 because no collector populates a surface. Whoever writes phase
+            // 3's collector owns mapping it to BL6019 ("unsupported marshaling at the boundary",
+            // §11.4) — swallowing it here without a diagnostic would be worse than the throw.
+            var netArtifacts = NetProxyEmitter.Emit(
+                surface, NetProxyEmitter.ShimModuleFileName(ShimAssemblyName(safeProject)));
+            var netTus = NetProxyEmitter.TranslationUnitFileNames(surface);
+
+            // ---- 5c. File IO (BL6006) — a separate try so an IO fault is never -----------
+            // mislabeled as a codegen error. ArgumentException belongs to BL6006 HERE
+            // (an invalid path out of Path.Combine/WriteAllText), which is exactly why
+            // the two stages cannot share one catch list: the same exception type means
+            // "codegen rejected a name" above and "the filesystem rejected a path" here.
+            // (A mid-loop IO fault at the write step can still leave a partial set —
+            // a genuine environment failure, out of scope.)
+            //
+            // The gate is the MERGED set being non-empty, NOT blSources.Count > 0. Those are the
+            // same condition whenever the surface is empty — codegen failure already returned, so
+            // split != null iff there were .bas sources — which is why an existing project's
+            // obj/gen is untouched by this change, down to whether the directory gets created at
+            // all. It is NOT a widened `if`: split stays null for a pure-C++ project and is
+            // dereferenced only under its own null check (§9.5).
+            var hasGeneratedArtifacts = split != null || netArtifacts.Count > 0;
+            if (hasGeneratedArtifacts)
+            {
                 try
                 {
                     // Stale generated files from renamed/removed modules would otherwise
@@ -458,7 +610,13 @@ namespace BasicLang.Compiler.ProjectSystem
                     foreach (var stale in CleanGeneratedDir(objGenDir))
                         result.Messages.Add($"warning: could not delete stale generated file {stale}");
                     Directory.CreateDirectory(objGenDir);
-                    foreach (var kv in split.Files)
+                    // split first, then the .NET artifacts — the two name sets are disjoint, so
+                    // the order is documentation rather than precedence, and split's writes stay
+                    // in the position (and the order) they have always been in.
+                    if (split != null)
+                        foreach (var kv in split.Files)
+                            File.WriteAllText(Path.Combine(objGenDir, kv.Key), kv.Value);
+                    foreach (var kv in netArtifacts)
                         File.WriteAllText(Path.Combine(objGenDir, kv.Key), kv.Value);
                 }
                 catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException
@@ -469,10 +627,22 @@ namespace BasicLang.Compiler.ProjectSystem
                         project.FilePath);
                     return outcome;
                 }
+            }
 
-                generatedTus = split.TranslationUnitFileNames
-                    .Select(n => Path.Combine(objGenDir, n))
-                    .ToList();
+            // The UNION of both producers' translation units (§9.5). Without blnet_startup.g.cpp
+            // in here the .NET artifacts would be emitted and then never compiled or linked.
+            // split's TUs keep their original order and position; the de-dup is belt-and-braces
+            // against a module whose generated .g.cpp name collides with a blnet artifact (both
+            // sets live in one directory, so a collision would otherwise pass the same file to
+            // the compiler twice).
+            var generatedTus = new List<string>();
+            if (split != null)
+                generatedTus.AddRange(split.TranslationUnitFileNames.Select(n => Path.Combine(objGenDir, n)));
+            foreach (var name in netTus)
+            {
+                var path = Path.Combine(objGenDir, name);
+                if (!generatedTus.Contains(path, StringComparer.OrdinalIgnoreCase))
+                    generatedTus.Add(path);
             }
 
             // ---- 6. Toolchain (hard requirement for ALL native projects, D6) ----
@@ -550,8 +720,12 @@ namespace BasicLang.Compiler.ProjectSystem
 
             // projectDir first (so user quote-includes and #CppInclude "helper.h" resolve),
             // then obj/gen (so user C++ can #include the generated shim headers), then items.
+            // Gated on the MERGED artifact set, not on .bas sources: a pure-C++ project's
+            // #include "blnet_proxies.g.hpp" needs this line as much as a BasicLang project's
+            // #include "Logic.g.h" does. Equivalent to the old condition whenever the surface is
+            // empty, for the reason spelled out at the merged write above.
             request.IncludeDirs.Add(projectDir);
-            if (blSources.Count > 0)
+            if (hasGeneratedArtifacts)
                 request.IncludeDirs.Add(objGenDir);
             foreach (var inc in project.IncludeDirs)
                 request.IncludeDirs.Add(Path.IsPathRooted(inc) ? inc : Path.Combine(projectDir, inc));
@@ -700,14 +874,16 @@ namespace BasicLang.Compiler.ProjectSystem
         /// real. A floating version ("*", a range) cannot be pinned without the network, so it is
         /// skipped here rather than guessed at.</para>
         ///
-        /// <para><b>KNOWN GAP, deliberately not fixed here (Task 13's job).</b> The blocking
-        /// restore has no timeout beyond <c>HttpClient</c>'s default 100 s per request, no
-        /// cancellation (<see cref="Build"/> takes no <c>CancellationToken</c> yet), and its
+        /// <para><b>KNOWN GAP, still open after Task 13.</b> The blocking restore has no timeout
+        /// beyond <c>HttpClient</c>'s default 100 s per request, cannot be interrupted, and its
         /// progress goes to <c>Console</c>, which the GUI Shell discards — so an IDE build of a
         /// package-declaring native project can sit silent for minutes. All three are pre-existing
         /// <see cref="PackageManager"/> properties, but THIS change is what put them on the native
-        /// build path. Spec §10.3 / plan Task 13 threads a <c>CancellationToken</c> through
-        /// <see cref="Build"/> and is the right home for the fix.</para>
+        /// build path. Task 13 threaded spec §10.3's <c>CancellationToken</c> through
+        /// <see cref="Build"/>, and it is honored at every <see cref="CppBuildPhase"/> boundary —
+        /// but NOT inside this call, because <c>PackageManager.RestoreAsync</c> accepts no token.
+        /// Cancelling mid-restore therefore takes effect only when the restore returns. Fixing it
+        /// means widening <c>PackageManager</c>'s signature, which the C# backend shares.</para>
         ///
         /// <para><c>internal</c> rather than private so tests can pin all four behaviors directly
         /// — the same seam-for-testability precedent as <see cref="ApplyCompileOutcome"/>.</para>
@@ -744,6 +920,45 @@ namespace BasicLang.Compiler.ProjectSystem
             }
             return (cached, Array.Empty<string>());
         }
+
+        /// <summary>
+        /// Spec §10.3's cancellation point, taken BEFORE <paramref name="nextPhase"/> starts.
+        ///
+        /// <para>Throws rather than returning a failed <see cref="CppProjectBuildResult"/> on
+        /// purpose: a cancel is not a build error, and a caller that cannot tell them apart shows
+        /// the user a red error list for their own Ctrl-C. The message names the phase so a caller
+        /// (or a test) can tell WHERE a build stopped, which is the only observable difference
+        /// between "cancelled before it did anything" and "cancelled after obj/gen was written".</para>
+        ///
+        /// <para>Costs nothing when nobody cancels: <see cref="CancellationToken.None"/>'s
+        /// <c>IsCancellationRequested</c> is a constant false, so the uncancelled path is one
+        /// predictable branch per phase.</para>
+        /// </summary>
+        private static void Checkpoint(CancellationToken cancellationToken, CppBuildPhase nextPhase)
+        {
+            if (!cancellationToken.IsCancellationRequested) return;
+            throw new OperationCanceledException(
+                $"The native build was cancelled before phase {(int)nextPhase} ({nextPhase}).",
+                cancellationToken);
+        }
+
+        /// <summary>
+        /// The generated shim assembly's name for a project — THE one place it is decided, so the
+        /// name baked into <c>blnet_startup.g.cpp</c>'s <c>blnet_load_module</c> call, the csproj
+        /// Task 14 generates, and the DLL Task 15 deploys cannot each invent their own spelling.
+        /// <c>dotnet publish -p:NativeLib=Shared</c> names its output after the project
+        /// (<see cref="NetShimPublisher.ExpectedDllPath"/>), so naming the csproj from this
+        /// function is what makes the loaded file name correct by construction.
+        ///
+        /// <para>Per-project rather than a fixed constant because the shim DLL is deployed next to
+        /// the executable, where a fixed name would collide across two BasicLang programs sharing
+        /// an output directory.</para>
+        /// </summary>
+        /// <param name="safeProjectName">
+        /// <see cref="SanitizeProjectName"/>'s output — this becomes a file name, so an
+        /// unsanitized project name would produce an unopenable module.
+        /// </param>
+        internal static string ShimAssemblyName(string safeProjectName) => safeProjectName + ".Blnet";
 
         private static void Fail(CppProjectBuildResult result, string code, string message, string filePath)
         {
@@ -881,22 +1096,58 @@ namespace BasicLang.Compiler.ProjectSystem
         }
 
         /// <summary>
-        /// Deletes stale generated files so a renamed/removed module's old .g.cpp/.g.h can
-        /// never be picked up by a later compile, and returns the ones it could NOT delete.
+        /// The .NET artifact names <see cref="NetProxyEmitter"/> writes into <c>obj/gen</c>, read
+        /// off the emitter's own constants so the two cannot drift. Four of the five escape the
+        /// <c>.g.cpp</c>/<c>.g.h</c> suffix test below (<c>blnet.h</c>, <c>blnet_runtime.hpp</c>,
+        /// and the two <c>.g.hpp</c> headers), which is why an exact-name set exists at all:
+        /// without it, a project that stops using .NET leaves a removed member's proxy header on
+        /// the include path, where user C++ can still <c>#include</c> it.
+        /// <c>NetProxyEmitterTests</c> and this file's clean filter are held equal by
+        /// <c>NetBuildPipelineTests.CleanGeneratedDirRemovesEveryNetArtifact</c>.
+        /// </summary>
+        private static readonly HashSet<string> NetArtifactFileNames =
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                NetProxyEmitter.ContractHeaderFileName,
+                NetProxyEmitter.RuntimeHeaderFileName,
+                NetProxyEmitter.BindingsFileName,
+                NetProxyEmitter.ProxiesFileName,
+                NetProxyEmitter.StartupFileName,
+            };
+
+        /// <summary>
+        /// Deletes stale generated files so a renamed/removed module's old .g.cpp/.g.h — or a
+        /// removed .NET member's old proxy header — can never be picked up by a later compile,
+        /// and returns the ones it could NOT delete.
         ///
-        /// Deletion stays best-effort ON PURPOSE: any process may hold a transient handle on
+        /// <para><b>What the filter matches, and why it cannot eat a user file.</b> Two suffixes,
+        /// <c>.g.cpp</c> and <c>.g.h</c> (unchanged — this is <c>CppCodeGenerator</c>'s naming
+        /// convention for generated output), plus <b>five exact file names</b> taken from
+        /// <see cref="NetArtifactFileNames"/>. No new suffix CLASS is admitted: <c>.hpp</c> and
+        /// <c>.h</c> at large are untouched, so a hand-written <c>helper.h</c> is as safe as it
+        /// ever was, and the only additional names are five literals the build itself writes.
+        /// <see cref="Directory.EnumerateFiles(string)"/> is non-recursive, so <c>obj/gen/shim/</c>
+        /// (spec §9.1) is out of reach. And <c>obj/gen</c> is a build-output directory that
+        /// <c>ProjectFile.IsInBuildOutputDir</c> already excludes from source discovery, so
+        /// nothing here is ever a project source in the first place.</para>
+        ///
+        /// <para>Deletion stays best-effort ON PURPOSE: any process may hold a transient handle on
         /// a generated file — an indexer, antivirus, a concurrent build, an open editor —
         /// and promoting that to a hard BL6006 would let an unrelated process break the
         /// build. But a skipped file must not be SILENT either: a stale one that survives
-        /// goes on to be compiled. The caller surfaces each failure as a warning.
+        /// goes on to be compiled. The caller surfaces each failure as a warning.</para>
+        ///
+        /// <para><c>internal</c> rather than private only so the drift test can drive it directly
+        /// — same seam-for-testability precedent as <see cref="ApplyCompileOutcome"/>.</para>
         /// </summary>
-        private static List<string> CleanGeneratedDir(string objGenDir)
+        internal static List<string> CleanGeneratedDir(string objGenDir)
         {
             var failed = new List<string>();
             if (!Directory.Exists(objGenDir)) return failed;
             foreach (var file in Directory.EnumerateFiles(objGenDir)
                 .Where(f => f.EndsWith(".g.cpp", StringComparison.OrdinalIgnoreCase)
-                         || f.EndsWith(".g.h", StringComparison.OrdinalIgnoreCase)))
+                         || f.EndsWith(".g.h", StringComparison.OrdinalIgnoreCase)
+                         || NetArtifactFileNames.Contains(Path.GetFileName(f))))
             {
                 try { File.Delete(file); }
                 catch { failed.Add(file); }
