@@ -1,5 +1,15 @@
 # P2a-1 — .NET-in-Native Foundation Implementation Plan
 
+**Status: COMPLETE (2026-07-31).** All 16 tasks landed. Closing gates: fast subset
+`3916 passed / 0 failed / 1 skipped`; all Blnet tests incl. the 16 frozen P0 scenarios
+`381 / 0 / 0`; the pre-existing C++ fixtures + the 13-program parity oracle `181 / 0 / 0`.
+Inertness was verified empirically, not assumed: a Native (BL+C++) console project and a
+game project produce **byte-identical** build logs, generated code and runtime stdout at
+this plan's HEAD and at `b348b66`. Phase 5 remains unwired — there is no
+`NetSurfaceCollector`, so every surface is `NetSurface.Empty` and `NetShimGenerator` /
+`NetShimPublisher` / `NetShimCache` / `AotDiagnosticMapper` are all still uncalled by any
+build path. **P2a-2 wires them.**
+
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build every transport-neutral component needed for .NET class access from Native (BL+C++) projects, **without changing the behavior of a single existing program** — so P2a-2's flip is a small, reviewable commit rather than a big bang.
