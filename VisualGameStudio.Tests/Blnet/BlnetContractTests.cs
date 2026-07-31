@@ -89,9 +89,30 @@ public class BlnetRuntimeSourcesTests
         var h = BlnetRuntimeSources.BlnetHeader;
         Assert.That(h, Does.Contain("#define BLNET_CALL"));
         Assert.That(h, Does.Contain("typedef uint64_t blnet_handle;"));
-        foreach (var export in new[] { "blnet_abi_version", "blnet_initialize", "blnet_addref",
-            "blnet_release", "blnet_alloc", "blnet_free", "blnet_last_error" })
+        // Reads BlnetContract, not a fourth hand-typed copy of the seven names. This half is a
+        // wiring check by construction (the header is GENERATED from the same list); the real
+        // oracle is CoreExportMacros_AreAllBoundByBindCore below, whose other side is a
+        // hand-written C++ constant.
+        foreach (var export in BlnetContract.CoreExportNames)
             Assert.That(h, Does.Contain($"\"{export}\""));
+    }
+
+    /// <summary>
+    /// THE drift oracle for <see cref="BlnetContract.CoreExports"/>: <c>blnet_bind_core</c> is a
+    /// hand-written C++ literal inside <c>BlnetRuntimeSources.Runtime</c>, derived from nothing,
+    /// so this genuinely compares two independent things. Adding a core export to the contract
+    /// without teaching <c>blnet_bind_core</c> to resolve it would otherwise ship a shim export
+    /// that no native code ever binds — silent, and only observable as a null slot at a call site.
+    /// </summary>
+    [Test]
+    public void CoreExportMacros_AreAllBoundByBindCore()
+    {
+        var runtime = BlnetRuntimeSources.BlnetRuntime;
+        foreach (var (macro, name, _) in BlnetContract.CoreExports)
+            Assert.That(runtime, Does.Contain($"blnet_get_symbol(module, {macro})"),
+                $"blnet_bind_core in BlnetRuntimeSources does not resolve '{name}' via {macro}. "
+                + "Fix blnet_runtime.hpp's blnet_bind_core (the C++ side), or drop the export "
+                + "from BlnetContract.CoreExports if it was added by mistake.");
     }
 
     /// <summary>

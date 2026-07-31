@@ -22,8 +22,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
     /// </summary>
     public static class BlnetRuntimeSources
     {
-        /// <summary>Complete <c>blnet.h</c> text (status section spliced from <see cref="BlnetContract"/>).</summary>
-        public static string BlnetHeader => Header1 + BlnetContract.GenerateStatusHeader() + Header2;
+        /// <summary>
+        /// Complete <c>blnet.h</c> text. TWO sections are spliced from <see cref="BlnetContract"/>
+        /// rather than written here: the status <c>#define</c>s and the
+        /// <c>BLNET_EXPORT_*</c> names. Both were literals once; both are lists whose members
+        /// must agree with something else (the shim's status enum, the shim's
+        /// <c>[UnmanagedCallersOnly]</c> entry points), and a literal copy of such a list is the
+        /// exact drift shape <see cref="BlnetContract"/> exists to remove.
+        /// </summary>
+        public static string BlnetHeader =>
+            Header1 + BlnetContract.GenerateStatusHeader() + Header2 + BlnetContract.GenerateCoreExportHeader();
 
         /// <summary>Complete <c>blnet_runtime.hpp</c> text.</summary>
         public static string BlnetRuntime => Runtime;
@@ -72,13 +80,6 @@ typedef struct BlnetNativeVtable {
 } BlnetNativeVtable;
 
 /* Shim exports (managed side). Native code binds these by name. */
-#define BLNET_EXPORT_ABI_VERSION   ""blnet_abi_version""   /* int32_t (void) */
-#define BLNET_EXPORT_INITIALIZE    ""blnet_initialize""    /* int32_t (int32_t expected_abi, const BlnetNativeVtable*) */
-#define BLNET_EXPORT_ADDREF        ""blnet_addref""        /* int32_t (blnet_handle) */
-#define BLNET_EXPORT_RELEASE       ""blnet_release""       /* int32_t (blnet_handle) */
-#define BLNET_EXPORT_ALLOC         ""blnet_alloc""         /* void*   (int64_t size) — NULL on failure */
-#define BLNET_EXPORT_FREE          ""blnet_free""          /* void    (void*) */
-#define BLNET_EXPORT_LAST_ERROR    ""blnet_last_error""    /* int32_t (char** type_name, char** message) — buffers freed via blnet_free */
 ";
 
         /// <summary><c>blnet_runtime.hpp</c> — complete text.</summary>
