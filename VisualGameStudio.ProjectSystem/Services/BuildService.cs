@@ -7,6 +7,7 @@ using VisualGameStudio.Core.Models;
 using VisualGameStudio.ProjectSystem.Serialization;
 using MSBuildText = BasicLang.Compiler.ProjectSystem.MSBuildText;
 using CppToolchain = BasicLang.Compiler.ProjectSystem.CppToolchain;
+using NetShimCache = BasicLang.Compiler.CodeGen.Net.NetShimCache;
 
 namespace VisualGameStudio.ProjectSystem.Services;
 
@@ -322,6 +323,26 @@ public class BuildService : IBuildService
                 {
                     _outputService.WriteError($"Failed to delete {outputDir}: {ex.Message}", OutputCategory.Build);
                 }
+            }
+        }
+
+        // Spec §10.2: clean deletes bin/<config> but never obj/, so the AOT shim cache would
+        // survive a clean and a stale-looking build would still skip its publish. The cache root
+        // covers every configuration in one delete, which is why this sits OUTSIDE the loop above.
+        // Deliberately scoped to obj/blnet and nothing wider — obj/ also holds obj/gen (the
+        // generated C++ headers clangd is serving right now) and the C# backend's restore state,
+        // and clean has never touched either.
+        var shimCache = NetShimCache.CacheRoot(project.ProjectDirectory);
+        if (Directory.Exists(shimCache))
+        {
+            try
+            {
+                Directory.Delete(shimCache, true);
+                _outputService.WriteLine($"Deleted: {shimCache}", OutputCategory.Build);
+            }
+            catch (Exception ex)
+            {
+                _outputService.WriteError($"Failed to delete {shimCache}: {ex.Message}", OutputCategory.Build);
             }
         }
 
