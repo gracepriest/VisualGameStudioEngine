@@ -1633,6 +1633,44 @@ public void ProxyTableSlotsMatchTheSurfaceDerivedExports()
 - [ ] **Step 3: Implement**, emitting the pattern `Exports.cs:82-93` proves, with §8.2's null
   handling. `TrimmerSingleWarn=false` is load-bearing for Task 16 — without it ILC collapses
   per-assembly warnings and the mapper has nothing to parse.
+
+> ⛔ **NEVER name a generated C# file `*.g.cs` in the shim.** Roslyn classifies `*.g.cs` as
+> **auto-generated and silently disables every nullable annotation** — the first publish emitted
+> **8 × CS8669**. Give the verbatim splices spec §9.1's real names (`HandleTable.cs`,
+> `BlnetStatus.cs`, `ShimAbi.cs`) — §12.4 forbids prepending a directive to them — and put an
+> explicit `#nullable enable` at the top of `Exports.g.cs`. Guard with
+> `Does.Not.Contain("warning CS")`, **not** `"warning IL"`: §12.3 deliberately inverts that for
+> generated shims.
+>
+> ⛔ **§8.2's inline `rv is null ? 0UL : Table.Create(rv)` does not compile for a value-type result**
+> (CS0037), and §8.3's default row sends **every enum** down the handle path. Route returns through a
+> `ToHandle(object?)` helper carrying exactly that body.
+>
+> ⛔ **§8.5's `Unsafe.Unbox<T>` needs value-type-ness, which `NetMemberDescriptor` does not carry.**
+> Pass an optional `valueTypeReceiverNames` set rather than mutating the shared descriptor — the
+> collector holds the `ITypeSymbol`. **Only receivers need it**: one cast spelling serves reference
+> and value *parameters*, and returns need nothing.
+>
+> ⚠ **§8.6's array helpers and §8.4's delegate dispatcher are NOT emitted.** Both need element-type /
+> delegate-ness a descriptor doesn't carry, and both are §12.4-exempt. Emitting ~13 speculative
+> uncalled helpers per shim would be worse than the documented gap. P2a-2 owns them.
+>
+> ⚠ **The §12.4 slot/export equality test is a WIRING TRIPWIRE, not an oracle** — both sides call
+> `NetNameMangler` on the same descriptors, so it is true by construction. It catches "someone
+> invented a second naming scheme"; nothing subtler. The real oracle added beside it parses the C
+> function-pointer signatures out of `blnet_bindings.g.hpp` and the C# signatures out of
+> `Exports.g.cs` and compares them through a C→C# table **owned by neither producer** — that one
+> catches a width/arity divergence, i.e. stack corruption rather than cosmetic drift.
+>
+> ⚠ **Two §8.3 wire tables now exist** — `NetProxyEmitter.WireOf` (C) and `NetShimGenerator.WireOf`
+> (C#). The signature test above is the **only** thing holding them together; a new §8.3 row must be
+> added to both.
+>
+> ⛔ **`Directory.Build.props` hazard for Tasks 15/16.** The generated shim lands under the *user's*
+> `obj/gen/shim/`, so any `Directory.Build.props` above it is imported **before** the csproj body and
+> can rewrite §8.1's properties out from under the shim. `ImportDirectoryBuildProps=false` does
+> **not** help — it is read too late. The publish test deliberately writes outside the repo to avoid
+> this.
 - [ ] **Step 4: Run — expect PASS**
 - [ ] **Step 5: Commit**
 
