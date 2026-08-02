@@ -445,11 +445,16 @@ namespace BasicLang.Compiler.ProjectSystem
                     }
                 }
 
+                // Mapped on success as well as failure: analyzer warnings are non-fatal
+                // (a SUCCESSFUL compilation can carry Warning-severity entries) and must
+                // surface as CppDiagnostic { IsWarning = true }. AddTranspileDiagnostic
+                // never touches result.Success, so warnings cannot fail the build here.
+                MapTranspileDiagnostics(result, compiler, compilation, project.FilePath);
+
                 if (!compilation.Success)
                 {
                     // On failure result.Units is empty; errors are attributed per-unit
                     // through the registry (mirrors BuildService.MapCompilerDiagnostics).
-                    MapTranspileDiagnostics(result, compiler, compilation, project.FilePath);
                     result.Success = false;
                     return outcome;   // Completed stays false — note this returns BEFORE the
                                       // obj/gen clean, which is what preserves stale headers.
@@ -968,7 +973,9 @@ namespace BasicLang.Compiler.ProjectSystem
         }
 
         /// <summary>
-        /// Maps a failed transpile's errors into build diagnostics with the best file
+        /// Maps a transpile's errors AND non-fatal warnings into build diagnostics
+        /// (called on success too — a successful compilation can carry Warning-severity
+        /// entries) with the best file
         /// attribution available (loosely modeled on BuildService.MapCompilerDiagnostics,
         /// a different assembly's consumer): per-unit errors carry the unit's file path;
         /// the SemanticError type has no path of its own. Each DISTINCT source error

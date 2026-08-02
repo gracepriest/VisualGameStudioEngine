@@ -520,11 +520,22 @@ namespace BasicLang.Compiler.Driver
                 success = false;
                 foreach (var error in projectResult.AllErrors)
                 {
-                    Console.Error.WriteLine($"    Error: {error.Message}");
+                    // Label by severity: non-fatal warnings can sit alongside the
+                    // errors of a failed build and must not be relabeled "Error".
+                    // (The "<label>: <message with embedded location>" shape is what
+                    // the VS Code problem matcher parses — keep it.)
+                    var label = error.Severity == ErrorSeverity.Warning ? "Warning" : "Error";
+                    Console.Error.WriteLine($"    {label}: {error.Message}");
                 }
             }
             else
             {
+                // Non-fatal warnings on a successful build still surface, in the
+                // same problem-matcher-parsable shape as the failure path.
+                foreach (var warning in projectResult.AllErrors.Where(e => e.Severity == ErrorSeverity.Warning))
+                {
+                    Console.Error.WriteLine($"    Warning: {warning.Message}");
+                }
                 combinedIR = projectResult.CombinedIR;
             }
 
@@ -1030,6 +1041,16 @@ namespace BasicLang.Compiler.Driver
                 Console.ResetColor();
                 Console.WriteLine($"  Files compiled: {result.Units.Count}");
 
+                // Warnings are non-fatal but must still surface. Post-FinalizeResult
+                // messages already embed "Warning at line N, column M: ", so print the
+                // message as-is — no second label, each warning rendered exactly once.
+                foreach (var warning in result.AllErrors.Where(e => e.Severity == ErrorSeverity.Warning))
+                {
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.Error.WriteLine($"  {warning.Message}");
+                    Console.ResetColor();
+                }
+
                 // Generate output
                 if (result.CombinedIR != null)
                 {
@@ -1076,7 +1097,7 @@ namespace BasicLang.Compiler.Driver
             else
             {
                 Console.ForegroundColor = ConsoleColor.Red;
-                Console.Error.WriteLine($"Compilation failed with {result.AllErrors.Count} error(s):");
+                Console.Error.WriteLine($"Compilation failed with {result.AllErrors.Count(e => e.Severity == ErrorSeverity.Error)} error(s):");
                 Console.ResetColor();
 
                 // Get source code for error context
@@ -1091,13 +1112,21 @@ namespace BasicLang.Compiler.Driver
                 }
                 var sourceLines = sourceCode?.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
 
-                // Group errors for better display
-                var grouped = ErrorGrouper.GroupErrors(result.AllErrors);
+                // Group errors for better display. Errors are ordered before warnings
+                // (stable sort) so a same-line warning can never become a group's
+                // primary and hide the real error behind a Warning-labeled line.
+                var grouped = ErrorGrouper.GroupErrors(result.AllErrors
+                    .OrderBy(e => e.Severity == ErrorSeverity.Warning ? 1 : 0)
+                    .ToList());
                 foreach (var group in grouped)
                 {
+                    // Label by the diagnostic's own severity — a warning grouped into
+                    // a failing build must still render as a Warning, never as
+                    // "Error at line N: Warning at line N: ...".
+                    var isWarning = group.PrimaryError.Severity == ErrorSeverity.Warning;
                     Console.Error.WriteLine();
-                    Console.ForegroundColor = ConsoleColor.Red;
-                    Console.Error.WriteLine($"  Error at line {group.PrimaryError.Line}: {group.PrimaryError.Message}");
+                    Console.ForegroundColor = isWarning ? ConsoleColor.Yellow : ConsoleColor.Red;
+                    Console.Error.WriteLine($"  {(isWarning ? "Warning" : "Error")} at line {group.PrimaryError.Line}: {group.PrimaryError.Message}");
                     Console.ResetColor();
 
                     // Show source code context

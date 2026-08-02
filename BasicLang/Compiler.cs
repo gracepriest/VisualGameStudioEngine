@@ -23,12 +23,13 @@ namespace BasicLang.Compiler
         /// <summary>
         /// P2a-1 (spec §6.5): the analyzer's warning-only .NET findings (BL6016/BL6017/BL6023).
         ///
-        /// <para><b>Deliberately NOT <see cref="AllErrors"/>.</b> <see cref="HasErrors"/> is
-        /// <c>AllErrors.Count > 0</c> with no severity filter, and <c>Success = !HasErrors</c> — so
-        /// anything placed there fails the build no matter what severity it carries. These are
-        /// warnings, so they get their own list and are surfaced by <c>CppProjectBuilder</c> through
-        /// <c>CppEmitOutcome.NetReferences.Diagnostics</c>, the one channel that renders a warning
-        /// without setting <c>Success = false</c>.</para>
+        /// <para><b>Deliberately NOT <see cref="AllErrors"/>.</b> These are typed
+        /// <see cref="Net.NetReferenceDiagnostic"/>s (code + message + IsWarning) surfaced by
+        /// <c>CppProjectBuilder</c> through <c>CppEmitOutcome.NetReferences.Diagnostics</c> —
+        /// their own channel with their own rendering. (Historically the separation was also what
+        /// kept them non-fatal, back when <see cref="HasErrors"/> was <c>AllErrors.Count > 0</c>
+        /// with no severity filter; <see cref="HasErrors"/> now counts only Error-severity
+        /// entries, but the typed channel stays.)</para>
         /// </summary>
         internal List<Net.NetReferenceDiagnostic> NetDiagnostics { get; }
 
@@ -39,13 +40,18 @@ namespace BasicLang.Compiler
             NetDiagnostics = new List<Net.NetReferenceDiagnostic>();
         }
 
-        public bool HasErrors => AllErrors.Count > 0;
+        /// <summary>
+        /// True when any Error-severity diagnostic was recorded. Warning-severity
+        /// entries in <see cref="AllErrors"/> are non-fatal: they stay in the list
+        /// for callers to render, but do not fail the compilation.
+        /// </summary>
+        public bool HasErrors => AllErrors.Any(e => e.Severity == ErrorSeverity.Error);
 
         public override string ToString()
         {
             if (Success)
                 return $"Compilation succeeded: {Units.Count} file(s) in {Duration.TotalMilliseconds:F0}ms";
-            return $"Compilation failed with {AllErrors.Count} error(s)";
+            return $"Compilation failed with {AllErrors.Count(e => e.Severity == ErrorSeverity.Error)} error(s)";
         }
     }
 
@@ -597,13 +603,18 @@ namespace BasicLang.Compiler
                 unit.Errors.AddRange(analyzer.Errors);
 
                 // Warning-only .NET findings (spec §6.5). Collected BEFORE the failure return so a
-                // unit that fails for an unrelated reason still reports them, and kept off
-                // AllErrors so they cannot turn a warning into a failed build.
+                // unit that fails for an unrelated reason still reports them; they stay off
+                // AllErrors because they are typed NetReferenceDiagnostics with their own channel.
                 result.NetDiagnostics.AddRange(analyzer.NetDiagnostics);
+
+                // Copied on success as well as failure: Analyze() returns true when only
+                // Warning-severity entries were recorded, and those warnings must still
+                // surface through AllErrors. HasErrors filters by severity, so warnings
+                // here cannot fail the build.
+                result.AllErrors.AddRange(analyzer.Errors);
 
                 if (!success)
                 {
-                    result.AllErrors.AddRange(analyzer.Errors);
                     unit.Status = CompilationStatus.Error;
                     return;
                 }

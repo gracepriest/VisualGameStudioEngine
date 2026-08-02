@@ -891,7 +891,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
                 // Pass 2: Full analysis including function bodies
                 program.Accept(this);
-                return _errors.Count == 0;
+                // Warnings are non-fatal: analysis succeeds unless an
+                // Error-severity entry was recorded. Warning-severity entries
+                // stay in Errors so callers can still render them.
+                return !_errors.Any(e => e.Severity == ErrorSeverity.Error);
             }
             catch (Exception ex)
             {
@@ -2164,22 +2167,18 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// <summary>
         /// P2a-1's warning-only findings, kept OUT of <see cref="Errors"/>.
         ///
-        /// <para><b>This separation is not stylistic — it is what makes "warning-only" true.</b>
-        /// <see cref="Analyze"/> returns <c>_errors.Count == 0</c> (it does NOT filter by
-        /// severity), <c>CompileUnit</c> treats that false as a failed unit, and
-        /// <c>CompilationResult.HasErrors</c> is likewise <c>AllErrors.Count > 0</c> with
-        /// <c>Success = !HasErrors</c>. So a <see cref="SemanticError"/> carrying
-        /// <see cref="ErrorSeverity.Warning"/> FAILS THE BUILD and skips IR generation entirely.
-        /// Putting a BL6016 there would make P2a-1's "the resolver can be wrong without breaking a
-        /// build" claim false in the most direct way possible.</para>
+        /// <para>These are typed diagnostics (code + message + IsWarning), not
+        /// <see cref="SemanticError"/>s: the caller routes them into
+        /// <c>CppEmitOutcome.NetReferences.Diagnostics</c>, which <c>CppProjectBuilder</c>
+        /// renders as non-failing <c>CppDiagnostic { IsWarning = true }</c>. Keeping them off
+        /// <see cref="Errors"/> keeps that channel — and its per-code rendering — intact.</para>
         ///
-        /// <para>(That also means the analyzer's pre-existing <c>Warning(...)</c> calls are
-        /// effectively fatal today — a latent defect this task deliberately does not change.)</para>
-        ///
-        /// <para>The caller routes these into <c>CppEmitOutcome.NetReferences.Diagnostics</c>,
-        /// which <c>CppProjectBuilder</c> already renders as non-failing
-        /// <c>CppDiagnostic { IsWarning = true }</c> — the one warning channel in this pipeline
-        /// that does not set <c>Success = false</c>.</para>
+        /// <para>(Historical note: this separation originally also carried the load of keeping
+        /// them non-fatal — <see cref="Analyze"/> used to return <c>_errors.Count == 0</c> with
+        /// no severity filter, so every <c>Warning(...)</c> was build-fatal. <see cref="Analyze"/>
+        /// and <c>CompilationResult.HasErrors</c> now count only
+        /// <see cref="ErrorSeverity.Error"/> entries, making ordinary analyzer warnings
+        /// non-fatal; the .NET findings simply stay on their own channel.)</para>
         /// </summary>
         internal IReadOnlyList<NetReferenceDiagnostic> NetDiagnostics => _netDiagnostics;
 
