@@ -409,6 +409,11 @@ AST separately, so the hand-off is an annotation side table.
    `:614-618` adds a `ManagedOwned` early return; `:627-631`'s unknown-class arm excludes names
    the surface resolved; `:322-336`'s `IRNewObject` arm accepts `ManagedOwned` ctors.
    `Object` hard check `:606-610` unchanged.
+2a. Task-4 carry-forward: the `_netNamespaces.Count > 0` unresolved-base gate is NOT probed
+   (classes aren't pre-registered; a forward-referenced user base under a `Using` would draw a
+   false BL6016) — verify during this task's severity promotion that native `Inherits` of a
+   .NET class stays checker-rejected and the false-BL6016 shape has a test proving it does NOT
+   fire as an error.
 3. Severity: on the native backend, BL6016/BL6017/BL6018/BL6019/BL6023/BL6024 become
    **errors** (`IsWarning: false`, routed through the same channel — `CppProjectBuilder.cs:420-446`
    already fails the build for non-warning closure diagnostics; verify and extend). C# backend
@@ -516,6 +521,16 @@ round trip).
 - **This task is emit-level only** — generated C++ is asserted textually and compiled against a
   STUB `blnet_bindings` (a test-emitted fake `g_net` whose slots are C++ lambdas recording
   calls), the same trick the P0 harness uses. No AOT publish in this task's tests.
+- ⛔ **Name-only descriptors must NOT be trusted (Task-4 concern #1).** Task 4 left these call
+  shapes name-only recorded with no overload probe: `Nothing` arguments (probe grammar has no
+  null spelling), Object-degraded args, lambda/delegate args, **.NET-enum-valued args**
+  (`File.Open(p, FileMode.Open)` — the member access types as Object today), method-level
+  generic args. Pinned by `NothingArgument_LeavesTheCallNameOnlyRecorded_WithNoFinding`. THIS
+  task must decide per shape: extend `NetOverloadProbe` with null/enum spellings (spec §6.5
+  says "`Nothing` participates as a null literal" — the probe gap contradicts it; enum member
+  accesses should resolve+type via the resolver), or refuse to lower a name-only descriptor
+  with a BL6017-class error at emission. Silently lowering a name-matched-first-overload
+  descriptor is a miscompile, not a fallback. Delegate-arg shapes may defer to Task 11.
 - `NetProxyEmitter`'s `NotSupportedException` (ByRef Handle/String wire forms) becomes reachable:
   map it to BL6019 at the `CppProjectBuilder.cs:589` call site (try/catch → diagnostic, not a
   crash). ref/out themselves land in Task 8.
