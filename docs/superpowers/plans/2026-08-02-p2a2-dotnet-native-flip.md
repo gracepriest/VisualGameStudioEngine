@@ -704,6 +704,12 @@ DLL — each with its specified message/stream/exit code, fixed HERE per §9.3);
 called-out rows: result-bearing inline delegate; concrete-`List<T>` iteration; empty-surface
 `Try/Catch ex As Exception` program; `<NetProxy>` omitted-member BL6026-and-still-builds.
 
+⚠ Task-3 review carry-forwards for this suite: a `ref`-returning declared member (e.g.
+`CollectionsMarshal`) is ADMITTED by the Task-3 omission filter (`SignatureTypes` checks
+`ReturnType`, not `ReturnsByRef`) — decide reject-vs-omit here with a scenario; and the BL6022
+unknown-type message suggests `` List`1 `` spelling, but declaring an OPEN generic BL6026-omits
+nearly every member — consider the message tweak or closed-generic spelling support here.
+
 **The §12.2/§12.3 boundary:** the 16 frozen P0 scenarios stay EXACTLY as they are (hand shim).
 `ShimPublishHasNoAotAnalysisWarnings` keeps its hand-shim scope; generated-shim ILC warnings are
 BL6020 INPUTS, never that assertion's subject.

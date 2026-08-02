@@ -1131,11 +1131,21 @@ Next free code is BL6016 (grep-verified).
 | BL6019 | unsupported marshaling at the boundary |
 | BL6020 | AOT-incompatible member (mapped from any ILC trim/AOT diagnostic — §11.3) |
 | BL6021 | reference could not be resolved, or resolved but unreadable as managed metadata, or `<ProjectReference>` used (§5) |
-| BL6022 | `<NetProxy>` names an unknown type |
+| BL6022 | `<NetProxy>` names an unknown type — *and, per the 2026-08-02 Task-3 correction below, a resolved but not-effectively-public type* |
 | BL6023 | ambiguous .NET **type** reference (§6.5) |
 | BL6024 | .NET call inside a BasicLang **generic body** (§15.5 decision) |
 | BL6025 | **library output** with a non-empty .NET surface (§9.5) |
 | BL6026 | *warning* — `<NetProxy>` member omitted as unmarshalable or AOT-hostile (§7.2) |
+
+> **Correction (2026-08-02, P2a-2 Task 3):** three adjudicated extensions to this table, all
+> shipped in `NetSurfaceCollector`: an AMBIGUOUS `<NetProxy>` type (two assemblies declare the
+> full name) is **BL6023**, not BL6022 — it is §6.5's ambiguity condition, and BL6022 would
+> recreate the misleading degradation §6.5 warns about; a resolved but **not-effectively-public**
+> declared type is **BL6022** (CS0122 moved to phase 3); **generic methods** in a declared
+> surface are **BL6026-omitted by name** (open type parameters have no §8.3 wire form and a
+> declared surface has no instantiation site). Known v1 casualty: `params Object[]` members
+> (e.g. `String.Format(String, Object[])`) are BL6026-omitted from declared surfaces —
+> revisit at §8.5's Task-9 work if element-type synthetic exports change the calculus.
 
 **Un-rejection takes three sites, and the catch-all is not the blocking one.** `CheckType`
 returns at `CppCapabilityChecker.cs:614-618` before ever reaching the `:627-631` catch-all, and
