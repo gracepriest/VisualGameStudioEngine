@@ -509,6 +509,14 @@ round trip).
 
 ### Task 7a: call lowering — resolved calls become proxy invocations
 
+> ⚠ Task-4 quality-review carry-forward: BEFORE this task's marshaling work, lift the
+> §8.3+§6.4 argument-admissibility projection (`NetArgumentSpellings`/`TryMapNetArgumentType`,
+> private in `SemanticAnalyzer`) into `BasicLang/Net/` beside `NetClaimPredicate` — or add an
+> invariant test tying the §6.4 rows across the three encodings (analyzer table, `NetProxyEmitter`
+> wire types, `NetShimGenerator` C# types) — so this task consumes rather than re-derives it.
+> Also consider storing the canonical member name in `_netResolvedReceivers` (kills the second
+> `GetMembers` walk and carries the member-kind guard naturally).
+
 **Files:**
 - Modify: `BasicLang/CppCodeGenerator.cs` (+`.Split.cs`): new lowering arm for
   `IRCall`/`IRInstanceMethodCall`/`IRNewObject` nodes carrying `ResolvedNetTarget`
