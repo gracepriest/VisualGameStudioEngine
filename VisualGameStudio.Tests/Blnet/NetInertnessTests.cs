@@ -329,27 +329,6 @@ public class NetInertnessTests
         // for an unrelated reason, so this coverage never depends on the template compiling.
         AssertNoNetFindings(templateName, result, outcome);
 
-        // PRE-EXISTING, NOT introduced by P2a-1: TemplateEngine's "game" template calls
-        // ClearBackground with FOUR arguments (TemplateEngine.cs:222) against the stdlib's
-        // three-parameter signature, so it has never compiled. The IDE's own copy of the same
-        // template (ProjectTemplateService.cs:497) passes three and is correct. Asserting success
-        // here would make this fixture red for a defect it does not own — but the tolerance is
-        // pinned to EXACTLY that one error, so a second, unrelated break in the template still
-        // fails. When the real bug is fixed, delete this branch.
-        if (templateName == "game")
-        {
-            var gameErrors = TranspileErrors(result);
-            Assert.That(gameErrors, Has.Count.EqualTo(1),
-                "The 'game' template has a DIFFERENT number of compile errors than the single "
-                + "known-pre-existing one. Investigate before touching this fixture: "
-                + string.Join(" | ", gameErrors));
-            Assert.That(gameErrors[0], Does.Contain("ClearBackground").And.Contain("expects 3"),
-                "The 'game' template's one error is no longer the known ClearBackground arity bug. "
-                + "If it was fixed, delete this branch and assert success for every template. "
-                + "Otherwise a new defect is hiding behind this tolerance: " + gameErrors[0]);
-            return;
-        }
-
         // "empty" has no sources, so BL6007 (no translation units) is its correct outcome.
         if (templateName == "empty")
         {

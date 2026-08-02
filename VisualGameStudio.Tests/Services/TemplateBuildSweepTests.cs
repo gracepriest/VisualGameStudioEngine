@@ -9,7 +9,10 @@ namespace VisualGameStudio.Tests.Services;
 /// End-to-end template sweep: every built-in project template must produce a
 /// project that the real BasicLang compiler can build. This is the invariant
 /// behind File → New Project — a template that generates unbuildable code is
-/// broken no matter how nice the dialog is.
+/// broken no matter how nice the dialog is. Covers BOTH template systems: the
+/// IDE's ProjectTemplates.All (ProjectTemplateService) and the CLI's separate
+/// TemplateEngine roster (`basiclang new`) — the CLI roster shipped a
+/// never-compiling "game" template precisely because only the IDE side was swept.
 /// </summary>
 [Category("Integration")]
 [TestFixture]
@@ -281,6 +284,140 @@ public class TemplateBuildSweepTests
         var content = File.ReadAllText(result.ProjectPath!);
         Assert.That(content, Does.Not.Contain("<CppStandard>"));
         Assert.That(content, Does.Not.Contain("<CppToolchain>"));
+    }
+
+    // =====================================================================
+    // CLI (TemplateEngine) sweep — `basiclang new <template>`. This roster is
+    // a SEPARATE implementation from ProjectTemplates.All above and had zero
+    // build coverage until the "game" template shipped never having compiled
+    // (4-arg ClearBackground vs the 3-arg stdlib signature).
+    //
+    // Roster note: TemplateEngine also registers "sln", which emits only a
+    // .blsln solution stub — there is no project file to build, so it has no
+    // case here by design (not a silent skip: this comment is the exclusion).
+    // =====================================================================
+
+    /// <summary>
+    /// Mirrors the CLI's exact call shape (`basiclang new t -n name -o dir` →
+    /// Program.HandleNewCommand → TemplateEngine.CreateProject). CreateProject
+    /// refuses an existing directory, so each case gets a fresh one; returns
+    /// the generated .blproj path.
+    /// </summary>
+    private string CreateCliProject(string shortName, string projectName)
+    {
+        var outputDir = Path.Combine(_rootDir, "cli-" + projectName);
+        var created = new BasicLang.Compiler.ProjectSystem.TemplateEngine()
+            .CreateProject(shortName, projectName, outputDir);
+        Assert.That(created, Is.True, $"TemplateEngine.CreateProject failed for '{shortName}'");
+
+        var projectFile = Path.Combine(outputDir, projectName + ".blproj");
+        Assert.That(File.Exists(projectFile), Is.True,
+            $"CLI '{shortName}' template did not generate {projectName}.blproj");
+        return projectFile;
+    }
+
+    [TestCase("console")]
+    // "game" targets the CSharp backend and must build WITHOUT the native
+    // engine being built (same contract as the IDE "game-app" case above:
+    // no engine gate — a game project must at least compile anywhere).
+    [TestCase("game")]
+    [TestCase("classlib")] // OutputType=Library — no entry point required
+    public void CliTemplate_CreatesProject_ThatCompilerBuilds(string shortName)
+    {
+        var compiler = FindCompiler();
+        if (compiler == null)
+            Assert.Inconclusive("BasicLang.exe not built; run 'dotnet build BasicLang -c Release' first.");
+
+        var name = "SweepCli" + string.Concat(shortName.Split('-').Select(
+            p => char.ToUpperInvariant(p[0]) + p.Substring(1)));
+        var projectFile = CreateCliProject(shortName, name);
+
+        var (exitCode, output) = RunCompilerBuild(compiler, projectFile);
+        Assert.That(exitCode, Is.EqualTo(0),
+            $"CLI '{shortName}' template project failed to build.\n--- compiler output ---\n{output}");
+    }
+
+    [Test]
+    public void CliEmptyTemplate_BuildFails_WithNoSourceFiles()
+    {
+        // "empty" ships a .blproj with no <Compile> items — that IS the
+        // template's designed shape (NetInertnessTests pins the same fact at
+        // the transpile level via BL6007). The CLI build therefore refuses it;
+        // pin the SPECIFIC refusal so any behavior change (building an empty
+        // project, or dying differently) surfaces here instead of hiding.
+        var compiler = FindCompiler();
+        if (compiler == null)
+            Assert.Inconclusive("BasicLang.exe not built; run 'dotnet build BasicLang -c Release' first.");
+
+        var projectFile = CreateCliProject("empty", "SweepCliEmpty");
+
+        var (exitCode, output) = RunCompilerBuild(compiler, projectFile);
+        Assert.That(exitCode, Is.Not.EqualTo(0),
+            "The 'empty' CLI template unexpectedly BUILT. If empty projects became buildable "
+            + "on purpose, move this template into CliTemplate_CreatesProject_ThatCompilerBuilds.\n"
+            + output);
+        Assert.That(output, Does.Contain("No source files found"),
+            "The 'empty' CLI template failed, but not with the expected no-sources refusal — "
+            + $"a different defect is hiding here.\n--- compiler output ---\n{output}");
+    }
+
+    // KNOWN-BROKEN, PRE-EXISTING (surfaced by this sweep's first run; unrelated
+    // to the ClearBackground fix): these CLI templates emit syntax the BasicLang
+    // parser does not support — "webapi" an anonymous-type initializer
+    // (`New With { ... }`, Program.bas), "test" attribute syntax (`<Fact>`,
+    // UnitTest1.bas). Same tolerance-pin pattern as the (now-deleted)
+    // NetInertnessTests game branch: each case pins its EXACT current failure so
+    // (a) any DIFFERENT breakage still fails loudly, and (b) fixing the template
+    // or the parser goes red here, telling you to promote the template into
+    // CliTemplate_CreatesProject_ThatCompilerBuilds and delete its pin.
+    [TestCase("webapi", "Expected type name but found With")]
+    [TestCase("test", "Unexpected token in class: '<'")]
+    public void CliKnownBrokenTemplate_FailsWithExactlyTheKnownParseError(
+        string shortName, string knownError)
+    {
+        var compiler = FindCompiler();
+        if (compiler == null)
+            Assert.Inconclusive("BasicLang.exe not built; run 'dotnet build BasicLang -c Release' first.");
+
+        var name = "SweepCliPin" + string.Concat(shortName.Where(char.IsLetterOrDigit));
+        var projectFile = CreateCliProject(shortName, name);
+
+        var (exitCode, output) = RunCompilerBuild(compiler, projectFile);
+        Assert.That(exitCode, Is.Not.EqualTo(0),
+            $"The '{shortName}' CLI template now BUILDS — the known parser-vs-template defect "
+            + "was fixed. Promote it to CliTemplate_CreatesProject_ThatCompilerBuilds and delete "
+            + "this pinned case.\n" + output);
+        Assert.That(output, Does.Contain(knownError),
+            $"The '{shortName}' CLI template still fails, but NOT with the known pre-existing "
+            + $"parse error (expected \"{knownError}\") — a new defect is hiding behind this "
+            + $"tolerance.\n--- compiler output ---\n{output}");
+    }
+
+    [TestCase("cpp-console")]
+    [TestCase("cpp-library")]
+    [TestCase("cpp-game")]
+    public void CliCppTemplate_CreatesProject_ThatCompilerBuilds(string shortName)
+    {
+        // Same gates as the IDE cpp sweep above; the CLI .blproj intentionally
+        // diverges (defaults only — hardcoded c++20, no <CppToolchain>), so this
+        // exercises the CLI's own project file, not just the shared sources.
+        var compiler = FindCompiler();
+        if (compiler == null)
+            Assert.Inconclusive("BasicLang.exe not built; run 'dotnet build BasicLang -c Release' first.");
+        if (BasicLang.Compiler.ProjectSystem.CppToolchain.Find() == null)
+            Assert.Ignore("No C++ toolchain available (clang++/g++/MSVC)");
+        if (shortName == "cpp-game" &&
+            BasicLang.Compiler.ProjectSystem.EngineDeployment.LocateImportLib() == null)
+            Assert.Ignore("VisualGameStudioEngine.lib not found (engine not built)");
+
+        var name = "SweepCli" + string.Concat(shortName.Split('-').Select(
+            p => char.ToUpperInvariant(p[0]) + p.Substring(1)));
+        var projectFile = CreateCliProject(shortName, name);
+        Assert.That(File.ReadAllText(projectFile), Does.Contain("<Language>Cpp</Language>"));
+
+        var (exitCode, output) = RunCompilerBuild(compiler, projectFile);
+        Assert.That(exitCode, Is.EqualTo(0),
+            $"CLI '{shortName}' template project failed to build.\n--- compiler output ---\n{output}");
     }
 
     private static (int ExitCode, string Output) RunCompilerBuild(string compiler, string projectFile)

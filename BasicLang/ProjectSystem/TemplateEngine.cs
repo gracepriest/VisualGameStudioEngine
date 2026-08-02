@@ -219,7 +219,7 @@ End Class
 
         While Not GameShouldClose()
             GameBeginFrame()
-            ClearBackground(40, 40, 60, 255)
+            ClearBackground(40, 40, 60)
             DrawText(player.Name, 10, 10, 20, 255, 255, 255, 255)
             GameEndFrame()
         End While
