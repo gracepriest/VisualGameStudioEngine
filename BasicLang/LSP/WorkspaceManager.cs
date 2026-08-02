@@ -470,23 +470,23 @@ namespace BasicLang.Compiler.LSP
                 dotnetPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet");
             }
 
-            // Find ref assemblies for .NET 8
+            // Find the newest installed reference assemblies. Both picks are BY VERSION, never by
+            // string — "9.0.12" outranks "10.0.0" ordinally — and the newest ref\net* subfolder
+            // replaces the old hardcoded net8.0→net7.0→net6.0 ladder, which could never select
+            // net9.0 or later at all.
             var refPath = Path.Combine(dotnetPath, "packs", "Microsoft.NETCore.App.Ref");
             if (Directory.Exists(refPath))
             {
-                var versions = Directory.GetDirectories(refPath)
-                    .OrderByDescending(d => d)
-                    .FirstOrDefault();
+                var versions = TypeRegistry.PickNewestVersionDirectory(Directory.GetDirectories(refPath));
 
                 if (versions != null)
                 {
-                    var netPath = Path.Combine(versions, "ref", "net8.0");
-                    if (!Directory.Exists(netPath))
-                        netPath = Path.Combine(versions, "ref", "net7.0");
-                    if (!Directory.Exists(netPath))
-                        netPath = Path.Combine(versions, "ref", "net6.0");
+                    var refDir = Path.Combine(versions, "ref");
+                    var netPath = Directory.Exists(refDir)
+                        ? TypeRegistry.PickNewestVersionDirectory(Directory.GetDirectories(refDir))
+                        : null;
 
-                    if (Directory.Exists(netPath))
+                    if (netPath != null && Directory.Exists(netPath))
                     {
                         _typeRegistry.AddSearchPath(netPath);
                     }

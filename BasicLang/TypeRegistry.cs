@@ -193,10 +193,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
         ///
         /// <para><b>A test that lets this default is not isolated, it is destructive.</b>
         /// <see cref="BuildIndex"/> CLEARS the index and then <see cref="SaveIndexToCache"/>
-        /// REPLACES that one file, and <see cref="LoadIndexFromCache"/> accepts whatever it finds —
-        /// so a fixture that builds an index over a temp directory leaves the shipped LSP pointed at
-        /// assemblies that no longer exist, which reinstates the empty-index failure this class was
-        /// fixed to remove. Every fixture must pass a path inside its own temp directory.</para>
+        /// REPLACES that one file — so a fixture that builds an index over a temp directory
+        /// destroys the developer's real cache. <see cref="LoadIndexFromCache"/> now rejects an
+        /// index whose entries or assembly paths are gone, so the shipped LSP at least rebuilds
+        /// instead of running on the dead index (the incident that motivated that validation), but
+        /// the cache the user had is still lost. Every fixture must pass a path inside its own
+        /// temp directory.</para>
         /// </summary>
         internal TypeRegistry(string cacheFilePath)
         {
@@ -379,7 +381,24 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
-        /// Load index from cache if available
+        /// Load index from cache if available.
+        ///
+        /// <para><b>Parseable is not valid.</b> Both LSP consumers skip <see cref="BuildIndex"/>
+        /// whenever this returns <c>true</c> — and <c>DocumentManager</c> skips SDK detection with
+        /// it — so accepting a zero-byte file, a file of junk lines (no <c>|</c> means every line
+        /// is silently skipped), or a stale index whose assembly paths are all gone leaves
+        /// IntelliSense running on a dead index for the life of the session (measured — see the
+        /// <see cref="TypeRegistry(string)"/> remarks). A load is valid only if at least one entry
+        /// parsed AND at least one referenced assembly still exists on disk; the existence probe
+        /// short-circuits on the first hit, so a healthy cache pays ~one
+        /// <see cref="File.Exists(string)"/>. One live path suffices because individually dead
+        /// paths already degrade per-namespace later, through the <see cref="CanRead"/>/BL6021
+        /// path, rather than poisoning the whole load.</para>
+        ///
+        /// <para>Parsing goes through a LOCAL structure and merges only on success — a rejected file
+        /// must leave the in-memory index exactly as it was. The old shape merged into
+        /// <see cref="_namespaceIndex"/> WHILE parsing, so even the paths that did return
+        /// <c>false</c> could leave partial state behind.</para>
         /// </summary>
         public bool LoadIndexFromCache()
         {
@@ -388,28 +407,44 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             try
             {
-                var lines = File.ReadAllLines(_cacheFilePath);
+                var parsed = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+                foreach (var line in File.ReadAllLines(_cacheFilePath))
+                {
+                    var parts = line.Split('|');
+                    if (parts.Length == 2)
+                    {
+                        var ns = parts[0];
+                        var assemblies = parts[1].Split(';').Where(s => !string.IsNullOrEmpty(s)).ToList();
+
+                        if (!parsed.TryGetValue(ns, out var list))
+                            parsed[ns] = list = new List<string>();
+
+                        list.AddRange(assemblies);
+                    }
+                }
+
+                if (parsed.Count == 0)
+                    return false;
+
+                if (!parsed.Values.SelectMany(assemblies => assemblies).Any(File.Exists))
+                    return false;
+
                 lock (_stateLock)
                 {
-                    foreach (var line in lines)
+                    foreach (var kvp in parsed)
                     {
-                        var parts = line.Split('|');
-                        if (parts.Length == 2)
-                        {
-                            var ns = parts[0];
-                            var assemblies = parts[1].Split(';').Where(s => !string.IsNullOrEmpty(s)).ToList();
-
-                            if (!_namespaceIndex.ContainsKey(ns))
-                                _namespaceIndex[ns] = new List<string>();
-
-                            _namespaceIndex[ns].AddRange(assemblies);
-                        }
+                        if (!_namespaceIndex.TryGetValue(kvp.Key, out var existing))
+                            _namespaceIndex[kvp.Key] = kvp.Value;
+                        else
+                            existing.AddRange(kvp.Value);
                     }
                 }
                 return true;
             }
-            catch
+            catch (Exception ex)
             {
+                Report($"BL6021: namespace index cache '{_cacheFilePath}' could not be read and "
+                       + $"will be rebuilt: {ex.Message}");
                 return false;
             }
         }
@@ -1321,6 +1356,55 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
+        /// The directory whose LEAF name carries the highest version — <b>never a string sort</b>.
+        /// <c>"9.0.12"</c> outranks <c>"10.0.0"</c> ordinally and <c>"net9.0"</c> outranks
+        /// <c>"net10.0"</c>, so the <c>OrderByDescending(d =&gt; d)</c> this replaces (here and in
+        /// <c>WorkspaceManager.InitializeTypeRegistry</c>) could never select .NET 10 once
+        /// installed.
+        ///
+        /// <para>Keying: an optional leading <c>net</c> is stripped (ref monikers), the numeric
+        /// prefix before any <c>-</c> is taken (so <c>10.0.0-preview.7.25380.108</c> keys as
+        /// 10.0.0), and the remainder must <see cref="Version.TryParse(string, out Version)"/> —
+        /// both <c>10.0</c> and <c>10.0.0</c> shapes parse. Directories whose names do not parse
+        /// sort BELOW every parseable one, ordered ordinally among themselves for determinism.
+        /// Returns <c>null</c> for empty input.</para>
+        /// </summary>
+        internal static string PickNewestVersionDirectory(IEnumerable<string> directories)
+        {
+            if (directories == null)
+                return null;
+
+            return directories
+                .Where(d => !string.IsNullOrEmpty(d))
+                .Select(d => new { Dir = d, Version = ParseVersionLeaf(Path.GetFileName(d)) })
+                .OrderByDescending(x => x.Version != null)
+                .ThenByDescending(x => x.Version)
+                .ThenByDescending(x => x.Dir, StringComparer.Ordinal)
+                .Select(x => x.Dir)
+                .FirstOrDefault();
+        }
+
+        /// <summary>
+        /// The version a directory leaf name denotes, or <c>null</c> when it denotes none — see
+        /// <see cref="PickNewestVersionDirectory"/> for the accepted shapes.
+        /// </summary>
+        private static Version ParseVersionLeaf(string leafName)
+        {
+            if (string.IsNullOrEmpty(leafName))
+                return null;
+
+            var candidate = leafName.StartsWith("net", StringComparison.OrdinalIgnoreCase)
+                ? leafName.Substring(3)
+                : leafName;
+
+            var dash = candidate.IndexOf('-');
+            if (dash >= 0)
+                candidate = candidate.Substring(0, dash);
+
+            return Version.TryParse(candidate, out var version) ? version : null;
+        }
+
+        /// <summary>
         /// Detect .NET SDK path automatically
         /// </summary>
         public static string DetectDotNetSdkPath()
@@ -1330,17 +1414,20 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             if (Directory.Exists(dotnetPath))
             {
-                // Find the latest version
-                var versions = Directory.GetDirectories(dotnetPath)
-                    .OrderByDescending(d => d)
-                    .FirstOrDefault();
+                // Find the latest version — by version, not by string (see PickNewestVersionDirectory)
+                var versions = PickNewestVersionDirectory(Directory.GetDirectories(dotnetPath));
 
                 if (versions != null)
                 {
-                    // Find ref folder for latest .NET version
-                    var refPath = Directory.GetDirectories(Path.Combine(versions, "ref"))
-                        .OrderByDescending(d => d)
-                        .FirstOrDefault();
+                    // Find ref folder for latest .NET version. Guarded: a corrupted install can
+                    // leave the picked pack version without a ref\ subfolder, and the caller
+                    // (DocumentManager's LSP init) sits outside any try/catch — GetDirectories on
+                    // the missing folder would take down server initialization.
+                    var refDir = Path.Combine(versions, "ref");
+                    if (!Directory.Exists(refDir))
+                        return null;
+
+                    var refPath = PickNewestVersionDirectory(Directory.GetDirectories(refDir));
 
                     if (refPath != null && Directory.Exists(refPath))
                         return refPath;
