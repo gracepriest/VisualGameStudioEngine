@@ -403,9 +403,13 @@ public class NetInertnessTests
 
     /// <summary>
     /// The warning-only contract, asserted through the real builder.
-    /// <c>CompilationResult.HasErrors</c> is <c>AllErrors.Count > 0</c> with NO severity filter and
-    /// <c>Success = !HasErrors</c>, so a finding placed on <c>AllErrors</c> fails the build whatever
-    /// severity it claims. This is why the .NET findings live on their own list.
+    /// <c>Analyze()</c> and <c>CompilationResult.HasErrors</c> now count only
+    /// <c>ErrorSeverity.Error</c> entries (analyzer warnings are non-fatal), so a
+    /// Warning-severity entry on <c>AllErrors</c> no longer fails a build. The .NET findings
+    /// still live on their own list because they are typed <c>NetReferenceDiagnostic</c>s
+    /// (code + message + IsWarning) surfaced through
+    /// <c>CppEmitOutcome.NetReferences.Diagnostics</c> — their own channel with their own
+    /// rendering — not because <c>AllErrors</c> would make them fatal.
     ///
     /// <para><b>The probe program DOES fail to build — for a PRE-EXISTING reason that has nothing
     /// to do with P2a-1.</b> <c>CppCapabilityChecker</c> has always rejected an unmappable type in
@@ -428,8 +432,9 @@ public class NetInertnessTests
                                        .Where(d => NetFindingCodes.Contains(d.Code))
                                        .Select(d => d.Code + ": " + d.Message))
             + ". P2a-1 is warning-only — §6.3's native-error behavior lands in P2a-2. Findings must "
-            + "not reach CompilationResult.AllErrors or go through Fail(), because neither "
-            + "HasErrors nor Analyze() filters by severity.");
+            + "not reach CompilationResult.AllErrors or go through Fail(): they are typed "
+            + "NetReferenceDiagnostics with their own channel and rendering (and Fail() would "
+            + "still force Success = false).");
 
         Assert.That(outcome.NetReferences!.Diagnostics.Where(d => NetFindingCodes.Contains(d.Code)),
             Is.All.Matches<NetReferenceDiagnostic>(d => d.IsWarning),
