@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using BasicLang;
@@ -302,5 +303,326 @@ public class NetIrCarriageTests
         Assert.That(call.ResolvedNetTarget, Is.Null,
             "A plain user-defined call acquired a resolved .NET target. FIX whatever populates "
             + "ResolvedNetTarget: in P2a-1 nothing may set it at all.");
+    }
+
+    // ====================================================================================
+    // P2a-2 Task 2 — carriage on IRInstanceMethodCall / IRBaseMethodCall, and the analyzer
+    // annotation table (SemanticAnalyzer.NetResolvedMembers) that populates it for real.
+    // ====================================================================================
+
+    /// <summary>
+    /// The INSTANCE <c>Regex.IsMatch(String)</c> — the shape `r.IsMatch("x")` resolves to.
+    /// </summary>
+    private static NetMemberDescriptor RegexInstanceIsMatchDescriptor() =>
+        new NetMemberDescriptor(
+            "IsMatch",
+            "System.Text.RegularExpressions.Regex",
+            NetMemberCategory.Method,
+            isStatic: false,
+            arity: 0,
+            typeFullName: "System.Boolean",
+            parameters: new List<NetParameterDescriptor>
+            {
+                new NetParameterDescriptor(NetRefKind.None, "System.String"),
+            });
+
+    private static IRInstanceMethodCall FindInstanceCall(IRModule module, string methodName) =>
+        module.Functions
+              .SelectMany(f => f.Blocks)
+              .SelectMany(b => b.Instructions)
+              .OfType<IRInstanceMethodCall>()
+              .Single(c => c.MethodName == methodName);
+
+    private static IRBaseMethodCall FindBaseCall(IRModule module, string methodName) =>
+        module.Functions
+              .SelectMany(f => f.Blocks)
+              .SelectMany(b => b.Instructions)
+              .OfType<IRBaseMethodCall>()
+              .Single(c => c.MethodName == methodName);
+
+    /// <summary>
+    /// The Task-2 round trip for the two new node types, mirror of
+    /// <see cref="OptimizerPreservesTheResolvedNetTargetAndCategoryMarker"/> — and the same
+    /// honesty note applies: measured at the Task-2 commit, IROptimizer.cs constructs NEITHER
+    /// node type anywhere (zero `new IRInstanceMethodCall` / `new IRBaseMethodCall` sites), so
+    /// both survive today by aliasing and this is the regression guard for the day a pass
+    /// starts rebuilding them.
+    /// </summary>
+    [Test]
+    public void OptimizerPreservesCarriageOnInstanceAndBaseMethodCalls()
+    {
+        var module = new IRModule("InstanceCarriageModule");
+        var main = new IRFunction("Main", VoidType);
+        var entry = new BasicBlock("entry");
+
+        var receiver = new IRVariable("r", new TypeInfo("Regex", TypeKind.Class));
+        var instanceCall = new IRInstanceMethodCall("_tmp_inst", receiver, "IsMatch", BoolType);
+        instanceCall.Arguments.Add(new IRConstant("x", StringType));
+        instanceCall.ResolvedNetTarget = RegexInstanceIsMatchDescriptor();
+        instanceCall.NetCategory = BoundaryTypeCategory.ManagedOwned;
+
+        var baseCall = new IRBaseMethodCall("_tmp_base", "IsMatch", BoolType);
+        baseCall.Arguments.Add(new IRConstant("x", StringType));
+        baseCall.ResolvedNetTarget = RegexInstanceIsMatchDescriptor();
+        baseCall.NetCategory = BoundaryTypeCategory.ManagedOwned;
+
+        entry.AddInstruction(instanceCall);
+        entry.AddInstruction(baseCall);
+        entry.AddInstruction(new IRReturn());
+        main.Blocks.Add(entry);
+        main.EntryBlock = entry;
+        module.Functions.Add(main);
+
+        var expectedInstanceTarget = instanceCall.ResolvedNetTarget;
+        var expectedBaseTarget = baseCall.ResolvedNetTarget;
+
+        var pipeline = new OptimizationPipeline();
+        pipeline.AddStandardPasses();
+        pipeline.Run(module);
+
+        var instanceAfter = FindInstanceCall(module, "IsMatch");
+        Assert.That(instanceAfter.ResolvedNetTarget, Is.EqualTo(expectedInstanceTarget),
+            "The optimizer dropped an instance call's resolved .NET target. FIX THE OPTIMIZER "
+            + "(BasicLang/IROptimizer.cs), not this test: every copy/clone path for "
+            + "IRInstanceMethodCall must carry ResolvedNetTarget, or P2a-2's lowering silently "
+            + "falls back to name-based dispatch (the §8.5 wild-pointer class).");
+        Assert.That(instanceAfter.NetCategory, Is.EqualTo(BoundaryTypeCategory.ManagedOwned),
+            "The optimizer dropped an instance call's boundary category marker. FIX THE "
+            + "OPTIMIZER (BasicLang/IROptimizer.cs), not this test.");
+
+        var baseAfter = FindBaseCall(module, "IsMatch");
+        Assert.That(baseAfter.ResolvedNetTarget, Is.EqualTo(expectedBaseTarget),
+            "The optimizer dropped a base call's resolved .NET target. FIX THE OPTIMIZER "
+            + "(BasicLang/IROptimizer.cs), not this test.");
+        Assert.That(baseAfter.NetCategory, Is.EqualTo(BoundaryTypeCategory.ManagedOwned),
+            "The optimizer dropped a base call's boundary category marker. FIX THE OPTIMIZER "
+            + "(BasicLang/IROptimizer.cs), not this test.");
+    }
+
+    /// <summary>
+    /// The clone path with teeth, for the two new node types: the instance and base calls sit
+    /// inside a small inlineable helper, so <c>FunctionInliningPass.CloneAndRemap</c> processes
+    /// every instruction of the helper body. Both node types fall through that switch's
+    /// <c>default: return inst;</c> arm — adding a case there that rebuilds either node without
+    /// carrying the two fields turns THIS test red (verified by mutation at the Task-2 commit:
+    /// a deliberately-dropping <c>case IRInstanceMethodCall</c> made it fail).
+    /// </summary>
+    [Test]
+    public void AggressivePipelinePreservesInstanceAndBaseCallCarriageThroughTheInliningClonePath()
+    {
+        var target = RegexInstanceIsMatchDescriptor();
+
+        var module = new IRModule("InstanceCarriageInlineModule");
+
+        // Helper() — small enough to inline (<=10 instructions, <=2 blocks, no self-call).
+        var helper = new IRFunction("Helper", VoidType);
+        var helperEntry = new BasicBlock("entry");
+
+        var receiver = new IRVariable("r", new TypeInfo("Regex", TypeKind.Class));
+        var instanceCall = new IRInstanceMethodCall("_tmp_inst", receiver, "IsMatch", BoolType);
+        instanceCall.Arguments.Add(new IRConstant("x", StringType));
+        instanceCall.ResolvedNetTarget = target;
+        instanceCall.NetCategory = BoundaryTypeCategory.ManagedOwned;
+        helperEntry.AddInstruction(instanceCall);
+
+        var baseCall = new IRBaseMethodCall("_tmp_base", "IsMatch", BoolType);
+        baseCall.ResolvedNetTarget = target;
+        baseCall.NetCategory = BoundaryTypeCategory.ManagedOwned;
+        helperEntry.AddInstruction(baseCall);
+
+        helperEntry.AddInstruction(new IRReturn());
+        helper.Blocks.Add(helperEntry);
+        helper.EntryBlock = helperEntry;
+        module.Functions.Add(helper);
+
+        // Main() — calls Helper(), giving the inliner a site to rewrite.
+        var main = new IRFunction("Main", VoidType);
+        var mainEntry = new BasicBlock("entry");
+        mainEntry.AddInstruction(new IRCall("_tmp_helper", "Helper", VoidType));
+        mainEntry.AddInstruction(new IRReturn());
+        main.Blocks.Add(mainEntry);
+        main.EntryBlock = mainEntry;
+        module.Functions.Add(main);
+
+        var pipeline = new OptimizationPipeline();
+        pipeline.AddAggressivePasses();
+        pipeline.Run(module);
+
+        var mainInstructions = module.Functions
+                                     .Single(f => f.Name == "Main")
+                                     .Blocks.SelectMany(b => b.Instructions)
+                                     .ToList();
+        Assert.That(mainInstructions.OfType<IRInstanceMethodCall>().Any(c => c.MethodName == "IsMatch"),
+            Is.True,
+            "guard: FunctionInliningPass did not inline Helper into Main, so CloneAndRemap never "
+            + "saw the instance call and this test proves nothing. FIX THE TEST FIXTURE (make "
+            + "Helper inlineable again — see FunctionInliningPass.IsInlineable), not the optimizer.");
+
+        var inlinedInstance = mainInstructions.OfType<IRInstanceMethodCall>()
+                                              .Single(c => c.MethodName == "IsMatch");
+        Assert.That(inlinedInstance.ResolvedNetTarget, Is.EqualTo(target),
+            "Inlining rebuilt an instance call and dropped ResolvedNetTarget. FIX THE OPTIMIZER's "
+            + "clone path (FunctionInliningPass.CloneAndRemap, BasicLang/IROptimizer.cs) — any "
+            + "IRInstanceMethodCall case there must carry ResolvedNetTarget and NetCategory "
+            + "across (spec §8.5).");
+        Assert.That(inlinedInstance.NetCategory, Is.EqualTo(BoundaryTypeCategory.ManagedOwned),
+            "Inlining rebuilt an instance call and dropped NetCategory. FIX THE OPTIMIZER's clone "
+            + "path (FunctionInliningPass.CloneAndRemap, BasicLang/IROptimizer.cs).");
+
+        var inlinedBase = mainInstructions.OfType<IRBaseMethodCall>()
+                                          .Single(c => c.MethodName == "IsMatch");
+        Assert.That(inlinedBase.ResolvedNetTarget, Is.EqualTo(target),
+            "Inlining rebuilt a base call and dropped ResolvedNetTarget. FIX THE OPTIMIZER's "
+            + "clone path (FunctionInliningPass.CloneAndRemap, BasicLang/IROptimizer.cs).");
+        Assert.That(inlinedBase.NetCategory, Is.EqualTo(BoundaryTypeCategory.ManagedOwned),
+            "Inlining rebuilt a base call and dropped NetCategory. FIX THE OPTIMIZER's clone "
+            + "path (FunctionInliningPass.CloneAndRemap, BasicLang/IROptimizer.cs).");
+    }
+
+    // ------------------------------------------------------------------------------------
+    // Population on the REAL analyzer+IRBuilder path, with a real resolver over the real
+    // framework closure — the non-vacuous half of Task 2.
+    // ------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// ONE resolver for the whole fixture: construction reads ~170 framework assemblies as
+    /// Roslyn metadata (~0.6 s cold), which no test should pay twice.
+    /// </summary>
+    private static readonly Lazy<NetTypeResolver> SharedResolver =
+        new(() => NetTypeResolver.Create(NetTypeResolverTestRefs.FrameworkPaths));
+
+    private static IRModule BuildIrWithResolver(string source)
+    {
+        var parser = new Parser(new Lexer(source).Tokenize());
+        var ast = parser.Parse();
+        Assert.That(parser.Errors, Is.Empty,
+            "parse errors:\n" + string.Join("\n", parser.Errors.Select(e => e.Message)));
+
+        var analyzer = new SemanticAnalyzer();
+        analyzer.ConfigureNetResolution(() => SharedResolver.Value);
+        Assert.That(analyzer.Analyze(ast), Is.True,
+            "semantic errors:\n" + string.Join("\n", analyzer.Errors.Select(e => e.Message)));
+
+        return new IRBuilder(analyzer).Build(ast, "TestModule");
+    }
+
+    /// <summary>
+    /// The plan's Task-2 acceptance shape: `Dim r As New Regex("a")` + `r.IsMatch("x")`. The
+    /// analyzer's warning-only probe resolves `Regex` through the ambient namespaces
+    /// (System.Text.RegularExpressions), name-matches `IsMatch`, and RECORDS the descriptor in
+    /// its annotation table; IRBuilder's instance arm reads it back by node identity. Note
+    /// `Regex` is still Rejected/unclaimed pre-flip — recording is severity-independent, so the
+    /// annotation is written TODAY, before Task 5 moves the name to ManagedOwned.
+    /// </summary>
+    [Test]
+    public void IrBuilderAttachesTheAnalyzersResolvedMemberToAnInstanceCall()
+    {
+        var source = "Module M\n"
+                   + " Sub Main()\n"
+                   + "  Dim r As New Regex(\"a\")\n"
+                   + "  Dim ok = r.IsMatch(\"x\")\n"
+                   + " End Sub\n"
+                   + "End Module";
+
+        var module = BuildIrWithResolver(source);
+        var call = FindInstanceCall(module, "IsMatch");
+
+        Assert.That(call.ResolvedNetTarget, Is.Not.Null,
+            "The analyzer resolved Regex.IsMatch but the instance-call IR node carries no "
+            + "ResolvedNetTarget. FIX the hand-off: SemanticAnalyzer.ProbeNetMemberAccess must "
+            + "record into NetResolvedMembers and IRBuilder's instance arm must read it "
+            + "(BasicLang/SemanticAnalyzer.cs, BasicLang/IRBuilder.cs).");
+        Assert.That(call.ResolvedNetTarget!.DeclaringTypeFullName,
+            Is.EqualTo("System.Text.RegularExpressions.Regex"),
+            "The carried descriptor names the wrong declaring type.");
+        Assert.That(call.ResolvedNetTarget.Name, Is.EqualTo("IsMatch"),
+            "The carried descriptor names the wrong member.");
+
+        // Deliberately asserted AGAINST THE REGISTRY, not against a literal category: Task 5
+        // moves Regex from Rejected to ManagedOwned, and this pin must churn ZERO lines then.
+        Assert.That(BoundaryTypeRegistry.Categorize("Regex"),
+            Is.Not.EqualTo(BoundaryTypeCategory.Unknown),
+            "guard: Regex must be a registry name, or the category assertion below is vacuous");
+        Assert.That(call.NetCategory, Is.EqualTo(BoundaryTypeRegistry.Categorize("Regex")),
+            "IRBuilder did not stamp the receiver's boundary category on the annotated instance "
+            + "call. FIX IRBuilder's instance arm (BasicLang/IRBuilder.cs), not this test.");
+    }
+
+    /// <summary>
+    /// The fused static arm's half of the same hand-off: `File.ReadAllText(...)` routes through
+    /// IRBuilder's static arm (File is in KnownNetStaticTypes), is unclaimed (no
+    /// EmitStdLibCall arm — NetClaimPredicate row (c) is per-call), resolves through the
+    /// ambient System.IO, and the produced fused-name IRCall must carry the descriptor. This is
+    /// the first production writer IRCall.ResolvedNetTarget has ever had.
+    /// </summary>
+    [Test]
+    public void IrBuilderAttachesTheAnalyzersResolvedMemberToAFusedStaticCall()
+    {
+        var source = "Module M\n"
+                   + " Sub Main()\n"
+                   + "  Dim txt = File.ReadAllText(\"x.txt\")\n"
+                   + " End Sub\n"
+                   + "End Module";
+
+        var module = BuildIrWithResolver(source);
+        var call = FindCall(module, "File.ReadAllText");
+
+        Assert.That(call.ResolvedNetTarget, Is.Not.Null,
+            "The analyzer resolved File.ReadAllText but the fused static IRCall carries no "
+            + "ResolvedNetTarget. FIX the hand-off (SemanticAnalyzer.ProbeNetMemberAccess "
+            + "recording / IRBuilder's fused static arm).");
+        Assert.That(call.ResolvedNetTarget!.DeclaringTypeFullName, Is.EqualTo("System.IO.File"),
+            "The carried descriptor names the wrong declaring type.");
+        Assert.That(call.ResolvedNetTarget.Name, Is.EqualTo("ReadAllText"),
+            "The carried descriptor names the wrong member.");
+    }
+
+    /// <summary>
+    /// The inertness half for the two new node types, and the enum-default trap
+    /// (<c>NativeOwned == 0</c>): an ordinary user-defined instance call and a MyBase call must
+    /// come out <c>Unknown</c> with no resolved target — even with a live resolver factory
+    /// configured, because user-defined receivers never resolve from metadata.
+    /// </summary>
+    [Test]
+    public void OrdinaryInstanceAndBaseCallsCarryNoNetCarriage()
+    {
+        var source = "Class Animal\n"
+                   + " Public Sub Speak()\n"
+                   + " End Sub\n"
+                   + "End Class\n"
+                   + "Class Dog\n"
+                   + " Inherits Animal\n"
+                   + " Public Sub Bark()\n"
+                   + "  MyBase.Speak()\n"
+                   + " End Sub\n"
+                   + "End Class\n"
+                   + "Module M\n"
+                   + " Sub Main()\n"
+                   + "  Dim d As New Dog()\n"
+                   + "  d.Bark()\n"
+                   + " End Sub\n"
+                   + "End Module";
+
+        var module = BuildIrWithResolver(source);
+
+        var instanceCall = FindInstanceCall(module, "Bark");
+        Assert.That(instanceCall.NetCategory, Is.EqualTo(BoundaryTypeCategory.Unknown),
+            "A plain user-defined instance call came out of IRBuilder marked as something other "
+            + "than Unknown. FIX IRInstanceMethodCall (BasicLang/IRNodes.cs): NetCategory must "
+            + "be INITIALIZED to BoundaryTypeCategory.Unknown, because the enum's implicit "
+            + "default is NativeOwned (value 0) — 'natively handled', the most dangerous "
+            + "possible wrong answer.");
+        Assert.That(instanceCall.ResolvedNetTarget, Is.Null,
+            "A plain user-defined instance call acquired a resolved .NET target. FIX whatever "
+            + "populates ResolvedNetTarget: user-defined receivers must never resolve.");
+
+        var baseCall = FindBaseCall(module, "Speak");
+        Assert.That(baseCall.NetCategory, Is.EqualTo(BoundaryTypeCategory.Unknown),
+            "A MyBase call came out of IRBuilder marked as something other than Unknown. FIX "
+            + "IRBaseMethodCall (BasicLang/IRNodes.cs): NetCategory must be INITIALIZED to "
+            + "BoundaryTypeCategory.Unknown (NativeOwned is the enum's implicit default).");
+        Assert.That(baseCall.ResolvedNetTarget, Is.Null,
+            "A MyBase call acquired a resolved .NET target. No production writer exists for "
+            + "IRBaseMethodCall.ResolvedNetTarget in Task 2; nothing may set it.");
     }
 }

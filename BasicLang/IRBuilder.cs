@@ -3348,10 +3348,19 @@ namespace BasicLang.Compiler.IR
                     //
                     // INERT BY CONSTRUCTION: Categorize is a pure static table lookup over a name
                     // — no Roslyn, no assembly references, no IO — and no backend reads
-                    // NetCategory. ResolvedNetTarget stays null: IRBuilder has no NetTypeResolver
-                    // (the P2a-1 resolver runs warning-only, out in CppProjectBuilder), so P2a-2
-                    // is what will populate it once the resolver is threaded here.
+                    // NetCategory.
                     call.NetCategory = BoundaryTypeRegistry.Categorize(staticVar.Name);
+
+                    // P2a-2 Task 2: attach the analyzer's resolution. The analyzer probed this
+                    // SAME MemberAccessExpressionNode (both walks share one AST, so reference
+                    // identity is the key) and recorded the winning descriptor in its annotation
+                    // side table. Absent for every claimed name and for every compilation
+                    // without a NetResolverFactory — then ResolvedNetTarget stays null and
+                    // nothing downstream changes.
+                    if (_semanticAnalyzer.NetResolvedMembers.TryGetValue(memberExpr, out var staticNetTarget))
+                    {
+                        call.ResolvedNetTarget = staticNetTarget;
+                    }
 
                     call.GenericArguments.AddRange(BuildGenericArgTypes(node.GenericArguments));
                     foreach (var arg in node.Arguments)
@@ -3367,6 +3376,20 @@ namespace BasicLang.Compiler.IR
                     // Instance method call: obj.Method()
                     var methodCall = new IRInstanceMethodCall(tempName, obj, memberExpr.MemberName, returnType);
                     methodCall.GenericArguments.AddRange(BuildGenericArgTypes(node.GenericArguments));
+
+                    // P2a-2 Task 2 (mirror of the fused static arm above): the annotation is
+                    // keyed on the callee MemberAccessExpressionNode; the receiver's spec-C1
+                    // category rides along so the surface collector can tell a natively-handled
+                    // receiver from a shim-routed one. itemReceiverType IS the receiver's static
+                    // type (computed above for the .Item check). Both fields keep their inert
+                    // defaults (null / Unknown) for every non-.NET call.
+                    if (_semanticAnalyzer.NetResolvedMembers.TryGetValue(memberExpr, out var instanceNetTarget))
+                    {
+                        methodCall.ResolvedNetTarget = instanceNetTarget;
+                        methodCall.NetCategory = !string.IsNullOrEmpty(itemReceiverType?.Name)
+                            ? BoundaryTypeRegistry.Categorize(itemReceiverType.Name)
+                            : BoundaryTypeCategory.Unknown;
+                    }
 
                     foreach (var arg in node.Arguments)
                     {

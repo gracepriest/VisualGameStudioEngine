@@ -61,11 +61,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
         private readonly Dictionary<string, ExternalLibrary> _externalLibraries = new(StringComparer.OrdinalIgnoreCase);
 
         // ---- P2a-1 (spec §6.5): warning-only .NET name resolution ----
-        // Deliberately NOT the TypeRegistry seam. ConfigureTypeRegistry stays LSP-only in P2a-1:
+        // Deliberately NOT the TypeRegistry seam. ConfigureTypeRegistry stays LSP-only:
         // activating it on the compile path un-deadens the registry branch in LookupNetTypeMember,
         // which SHADOWS the String/common fallbacks below it and changes existing programs'
         // behavior (TypeRegistry.GetTypeName answers "String()" for arrays while ResolveNetTypeName
-        // only unwraps "[]"). That move belongs to P2a-2.
+        // only unwraps "[]"). P2a-2 Task 2 ran the wiring experiment, CONFIRMED the flip
+        // mechanically, and kept the deferral — see TypeRegistryFallbackPinningTests (the pins +
+        // the WiringAnLspConfiguredTypeRegistry… canary) and the comment in Compiler.CompileUnit.
         //
         // A FACTORY, not an instance: building the resolver reads ~170 framework assemblies as
         // Roslyn metadata, and a program that names no .NET type must not pay for it. The factory
@@ -79,6 +81,24 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         /// <summary>De-dupes identical findings — one warning per name, not one per occurrence.</summary>
         private readonly HashSet<string> _netReportedFindings = new(StringComparer.OrdinalIgnoreCase);
+
+        // ---- P2a-2 Task 2: resolved-member annotations, the analyzer→IRBuilder hand-off ----
+        // The analyzer and IRBuilder walk the SAME AST separately (Compiler.CompileUnit builds
+        // `new IRBuilder(analyzer)`), so the probe's resolution reaches codegen through this
+        // reference-keyed side table rather than through AST mutation. Recording is NOT
+        // reporting: severity and diagnostics are untouched, and with _netResolverFactory null
+        // (every C#-backend build, the LSP, every existing test path) the probes never run and
+        // this table stays empty.
+        private readonly NetAstAnnotations _netAnnotations = new NetAstAnnotations();
+
+        /// <summary>
+        /// P2a-2 Task 2 — the .NET members the warning-only probes resolved, keyed by AST node
+        /// (reference identity). <see cref="IRBuilder"/> reads this while lowering member calls
+        /// and stamps <c>ResolvedNetTarget</c>/<c>NetCategory</c> onto the produced IR nodes.
+        /// Empty unless <see cref="ConfigureNetResolution"/> supplied a resolver factory.
+        /// </summary>
+        internal IReadOnlyDictionary<ExpressionNode, NetMemberDescriptor> NetResolvedMembers =>
+            _netAnnotations.ResolvedMembers;
 
         /// <summary>
         /// Get the TypeRegistry for .NET type lookups
@@ -2343,8 +2363,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// compiler could produce, and <see cref="NetOverloadOutcome.TypeUnavailable"/> exists in
         /// Task 5 precisely to keep those apart. Type-level failures are reported by
         /// <see cref="ProbeNetTypeReference"/> as BL6016/BL6023 instead.
+        ///
+        /// <para>P2a-2 Task 2: on a NAME MATCH the resolved descriptor is RECORDED in
+        /// <see cref="NetResolvedMembers"/> against <paramref name="node"/> instead of being
+        /// thrown away — recording is not reporting; severity and diagnostics are untouched.
+        /// Overload-precise selection replaces the name match in Task 4; a name-unique member is
+        /// already exact.</para>
         /// </summary>
-        private void ProbeNetMemberAccess(TypeInfo objectType, string memberName, int line, int column)
+        private void ProbeNetMemberAccess(
+            MemberAccessExpressionNode node, TypeInfo objectType, string memberName,
+            int line, int column)
         {
             if (_netResolverFactory == null) return;
             if (objectType == null || string.IsNullOrEmpty(memberName)) return;
@@ -2379,7 +2407,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
             foreach (var member in members)
             {
                 if (string.Equals(member.Name, memberName, StringComparison.OrdinalIgnoreCase))
+                {
+                    // P2a-2 Task 2: the descriptor used to be thrown away here. Record it so
+                    // IRBuilder can stamp the produced IR node (carriage; read by nobody until
+                    // the surface collector / call lowering). Claimed names returned above and
+                    // never reach this line, which is what keeps existing surfaces empty.
+                    _netAnnotations.RecordResolvedMember(node, member);
                     return;
+                }
             }
 
             NetWarning("BL6017",
@@ -5910,8 +5945,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 var memberType = LookupNetTypeMember(objectType.Name, node.MemberName);
                 // P2a-1 §6.5: warning-only. The line above swallows a miss (`?? ObjectType`);
                 // this reports one, but ONLY when the receiver type actually resolved from
-                // metadata. Emits no diagnostic and changes no type.
-                ProbeNetMemberAccess(objectType, node.MemberName, node.Line, node.Column);
+                // metadata. Emits no diagnostic and changes no type. P2a-2 Task 2: on a resolve
+                // it also RECORDS the descriptor against this node (see NetResolvedMembers).
+                ProbeNetMemberAccess(node, objectType, node.MemberName, node.Line, node.Column);
                 SetNodeType(node, memberType ?? _typeManager.ObjectType);
             }
             else

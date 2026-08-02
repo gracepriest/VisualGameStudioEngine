@@ -580,7 +580,17 @@ namespace BasicLang.Compiler
                 // P2a-1 §6.5, warning-only. Deliberately NOT ConfigureTypeRegistry: activating
                 // that on the compile path un-deadens LookupNetTypeMember's registry branch, which
                 // shadows the String/common fallbacks below it and changes existing programs'
-                // behavior. That move is P2a-2's.
+                // behavior.
+                //
+                // P2a-2 Task 2 RAN that experiment and CONFIRMED the flip: an LSP-configured
+                // registry (PreloadCoreTypes, as DocumentManager.InitializeTypeRegistry does)
+                // answers String.Split with reflection's "String()" spelling, which
+                // ResolveNetTypeName cannot unwrap — a synthetic class instead of a real array —
+                // and gap-fills members the fallbacks deliberately answer null for. The §6.2 move
+                // therefore stays deferred; TypeRegistryFallbackPinningTests pins today's answers
+                // end-to-end through this method and holds the canary that says when the
+                // divergence has eased. Wire nothing here until every pin in that fixture passes
+                // over the wired configuration UNMODIFIED.
                 analyzer.ConfigureNetResolution(_options.NetResolverFactory);
                 if (implicitImports != null)
                 {

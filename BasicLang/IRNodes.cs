@@ -1555,6 +1555,42 @@ namespace BasicLang.Compiler.IR
         /// <summary>Explicit generic type arguments: obj.Method(Of T)() -> obj.Method&lt;T&gt;().</summary>
         public List<TypeInfo> GenericArguments { get; set; } = new List<TypeInfo>();
 
+        /// <summary>
+        /// P2a-2 CARRIAGE (Task 2) — the .NET member the analyzer resolved this instance call to,
+        /// or NULL when the call has no resolved .NET target (which is every call on a
+        /// user-defined receiver, every claimed-name receiver, and every compilation without a
+        /// <c>NetResolverFactory</c> — i.e. every C#-backend build and the LSP today). Written by
+        /// <see cref="IRBuilder"/> from the analyzer's <c>NetAstAnnotations</c> side table; read
+        /// by nobody until the surface collector / call lowering (P2a-2 Tasks 3/7a).
+        ///
+        /// <para><b>Why the descriptor and not a Roslyn <c>ISymbol</c>.</b> Same reason as
+        /// <see cref="IRCall.ResolvedNetTarget"/>: an <c>ISymbol</c> is owned by the
+        /// <c>Compilation</c> that produced it; <c>NetMemberDescriptor</c> is a detached value the
+        /// optimizer carries opaquely.</para>
+        ///
+        /// <para><b>Why this exists before anything reads it.</b> P2a-2's lowering dispatches on
+        /// this field; if any IR copy/clone path drops it the lowering silently falls back to
+        /// name-based dispatch, which is the wild-pointer class spec §8.5 exists to prevent.
+        /// Pinned by <c>NetIrCarriageTests</c>.</para>
+        ///
+        /// <para>INTERNAL on purpose: carriage adds <b>nothing</b> to the compiler's public API.</para>
+        /// </summary>
+        internal BasicLang.Net.NetMemberDescriptor ResolvedNetTarget { get; set; }
+
+        /// <summary>
+        /// P2a-2 CARRIAGE (Task 2) — spec C1 boundary category of this call's RECEIVER type, as
+        /// <see cref="BoundaryTypeRegistry.Categorize"/> sees it. Written only alongside
+        /// <see cref="ResolvedNetTarget"/> (a call with no resolved target keeps the default);
+        /// P2a-2 reads it to decide whether a call is natively handled
+        /// ({<c>NativeOwned</c>, <c>Bridged</c>}) or must route through the .NET shim
+        /// (<c>ManagedOwned</c>).
+        ///
+        /// <para><b>The initializer is load-bearing.</b> <c>NativeOwned</c> is 0, so the implicit
+        /// enum default would mark every instance call in the program "natively handled" — the
+        /// most dangerous possible wrong answer. It must start at <c>Unknown</c>.</para>
+        /// </summary>
+        internal BoundaryTypeCategory NetCategory { get; set; } = BoundaryTypeCategory.Unknown;
+
         public IRInstanceMethodCall(string resultName, IRValue obj, string methodName, TypeInfo returnType)
             : base(resultName, returnType)
         {
@@ -1578,6 +1614,32 @@ namespace BasicLang.Compiler.IR
     {
         public string MethodName { get; set; }
         public List<IRValue> Arguments { get; set; }
+
+        /// <summary>
+        /// P2a-2 CARRIAGE (Task 2) — the .NET member the analyzer resolved this base call to, or
+        /// NULL otherwise. No production writer exists yet: a <c>MyBase</c> receiver is a
+        /// BasicLang class today, so nothing resolves. The field exists so the two instance-call
+        /// node types stay field-identical with <see cref="IRCall"/> and the optimizer's
+        /// carry-across contract covers all three BEFORE a writer appears — the same
+        /// carriage-before-writers discipline P2a-1 applied to <see cref="IRCall"/>.
+        ///
+        /// <para>See <see cref="IRInstanceMethodCall.ResolvedNetTarget"/> for why this is a
+        /// detached descriptor and why dropping it in a clone path is the §8.5 wild-pointer
+        /// class. Pinned by <c>NetIrCarriageTests</c>.</para>
+        ///
+        /// <para>INTERNAL on purpose: carriage adds <b>nothing</b> to the compiler's public API.</para>
+        /// </summary>
+        internal BasicLang.Net.NetMemberDescriptor ResolvedNetTarget { get; set; }
+
+        /// <summary>
+        /// P2a-2 CARRIAGE (Task 2) — spec C1 boundary category of this call's receiver type.
+        /// Written only alongside <see cref="ResolvedNetTarget"/>.
+        ///
+        /// <para><b>The initializer is load-bearing.</b> <c>NativeOwned</c> is 0, so the implicit
+        /// enum default would mark every base call "natively handled" — the most dangerous
+        /// possible wrong answer. It must start at <c>Unknown</c>.</para>
+        /// </summary>
+        internal BoundaryTypeCategory NetCategory { get; set; } = BoundaryTypeCategory.Unknown;
 
         public IRBaseMethodCall(string resultName, string methodName, TypeInfo returnType)
             : base(resultName, returnType)
