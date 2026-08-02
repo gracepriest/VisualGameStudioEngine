@@ -114,22 +114,44 @@ namespace BasicLang.Net
                 }
             }
 
-            var declared = (IReadOnlyList<string>)(project?.NetProxyTypes ?? new List<string>());
-            declared = declared.Where(n => !string.IsNullOrWhiteSpace(n)).ToList();
+            // Verbatim declarations, malformed entries INCLUDED: a whitespace Include is
+            // still a user statement of intent (BL6022 below), and DeclaredTypeNames must
+            // carry it so a Library project cannot skip BL6025 through a typo.
+            var declared = project?.NetProxyTypes == null
+                ? new List<string>()
+                : new List<string>(project.NetProxyTypes);
 
             // ---- §7.2: declared -------------------------------------------------------------
             if (declared.Count > 0)
             {
-                if (resolverFactory == null)
-                    throw new ArgumentNullException(nameof(resolverFactory),
-                        "<NetProxy> declarations require a resolver factory.");
-
-                var resolver = resolverFactory();
+                NetTypeResolver resolver = null;
                 var expandedTypes = new HashSet<string>(StringComparer.Ordinal);
                 foreach (var typeName in declared)
                 {
-                    if (!expandedTypes.Add(typeName))
+                    if (!expandedTypes.Add(typeName ?? string.Empty))
                         continue;   // the same Include twice is one surface, not two diagnostics
+
+                    // An empty/whitespace Include must not vanish silently: no type can be
+                    // meant, so it is the same "names an unknown type" failure BL6022 exists
+                    // for. Checked BEFORE the resolver is forced — a declaration that names
+                    // nothing needs no Roslyn.
+                    if (string.IsNullOrWhiteSpace(typeName))
+                    {
+                        diagnostics.Add(new NetReferenceDiagnostic("BL6022",
+                            "<NetProxy> Include names no type (it is empty or whitespace). "
+                            + "Name a fully-qualified .NET type, e.g. "
+                            + "<NetProxy Include=\"System.Text.RegularExpressions.Regex\" />.",
+                            IsWarning: false));
+                        continue;
+                    }
+
+                    if (resolver == null)
+                    {
+                        if (resolverFactory == null)
+                            throw new ArgumentNullException(nameof(resolverFactory),
+                                "<NetProxy> declarations require a resolver factory.");
+                        resolver = resolverFactory();
+                    }
 
                     ExpandDeclaredType(resolver, typeName, members, seenMangled, diagnostics);
                 }
@@ -294,7 +316,9 @@ namespace BasicLang.Net
         private static bool TryGetOmissionReason(
             ISymbol symbol, NetMemberDescriptor descriptor, out string reason)
         {
-            // (b) AOT-hostility: the member, its accessors, or its declaring type.
+            // §7.2's two omission bullets, checked in reverse bullet order (an attribute
+            // probe is cheaper than a signature walk).
+            // (a) AOT-hostility: the member, its accessors, or its declaring type.
             var hostileCarrier = FindAotHostileCarrier(symbol, out var attributeName);
             if (hostileCarrier != null)
             {
@@ -303,7 +327,7 @@ namespace BasicLang.Net
                 return true;
             }
 
-            // (a) a signature type outside §8.3's rows. A GENERIC METHOD is the degenerate
+            // (b) a signature type outside §8.3's rows. A GENERIC METHOD is the degenerate
             // case of the same rule: its type parameters are types §8.3 has no wire form for,
             // whether or not they appear in the parameter list — a monomorphic C export cannot
             // carry an open T.

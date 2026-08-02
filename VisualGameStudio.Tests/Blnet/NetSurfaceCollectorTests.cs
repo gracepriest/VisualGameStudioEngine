@@ -698,16 +698,21 @@ public class NetSurfaceCollectorTests
               </PropertyGroup>
               <ItemGroup>
                 <NetProxy Include="MyLib.Customer" />
+                <NetProxy />
                 <NetProxy Include="System.Text.RegularExpressions.Regex" />
               </ItemGroup>
             </BasicLangProject>
             """);
 
         var loaded = ProjectFile.Load(path);
+        // The MISSING-Include element is skipped at parse (the same IsNullOrEmpty rule every
+        // other item element uses — there is no value to carry, so there is nothing to
+        // diagnose about it downstream either; a WHITESPACE Include, by contrast, survives
+        // the parse and is the collector's BL6022).
         Assert.That(loaded.NetProxyTypes,
             Is.EqualTo(new[] { "MyLib.Customer", "System.Text.RegularExpressions.Regex" }),
             "<NetProxy Include> must parse verbatim, in declaration order (spec §7.2's own "
-            + "worked example).");
+            + "worked example), and an element with NO Include attribute is skipped.");
 
         var savedPath = Path.Combine(_dir, "Declared.roundtrip.blproj");
         loaded.Save(savedPath);
@@ -866,6 +871,54 @@ public class NetSurfaceCollectorTests
             Assert.That(outcome.Request.SourceFiles,
                 Does.Contain(Path.Combine(objGen, NetProxyEmitter.StartupFileName)),
                 "blnet_startup.g.cpp must be in the compile inputs (§9.5's TU union).");
+
+            // The WARNING-mapping arm of the phase-3 wiring: FileNotFoundException's expansion
+            // inevitably omits members (e.g. Exception.TargetSite carries
+            // [RequiresUnreferencedCode]), and each omission's BL6026 must reach
+            // result.Diagnostics as a warning — deleting the mapping block silently eats them
+            // (measured: the suite survived exactly that deletion before this assertion).
+            Assert.That(result.Diagnostics.Any(d => d.IsWarning && d.Code == "BL6026"),
+                Is.True,
+                "No BL6026 warning reached result.Diagnostics on a build. The collector's "
+                + "warning-severity diagnostics must be hand-constructed onto the result (the "
+                + "same arm the reference-resolution warnings use) — never dropped, and never "
+                + "routed through Fail.");
+        });
+    }
+
+    /// <summary>
+    /// A whitespace-only <c>Include</c> must not vanish silently: the parse layer keeps it
+    /// (diagnostic-free by design), and the COLLECTOR reports it as BL6022 — no type can be
+    /// meant, which is the same failure class as naming an unknown one. It must also still
+    /// count as a declaration (BL6025 integrity), and it must not force the resolver.
+    /// </summary>
+    [Test]
+    public void DeclaredType_WhitespaceInclude_IsABl6022Error_WithoutForcingTheResolver()
+    {
+        var factoryCalls = 0;
+        var diagnostics = new List<NetReferenceDiagnostic>();
+        var surface = Collect(
+            project: ProjectDeclaring("   "),
+            resolverFactory: () => { factoryCalls++; return SharedResolver.Value; },
+            diagnostics: diagnostics);
+
+        var bl6022 = diagnostics.Where(d => d.Code == "BL6022").ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(bl6022, Has.Count.EqualTo(1),
+                "A whitespace-only <NetProxy Include> must produce exactly one BL6022 — "
+                + "silently dropping it leaves the user with a declaration that does nothing. "
+                + "Got: " + string.Join(" | ", diagnostics.Select(d => d.Code + ": " + d.Message)));
+            Assert.That(bl6022[0].IsWarning, Is.False);
+            Assert.That(bl6022[0].Message, Does.Contain("names no type"),
+                "The empty-Include case must carry its distinct message.");
+            Assert.That(surface.Members, Is.Empty);
+            Assert.That(surface.DeclaredTypeNames, Does.Contain("   "),
+                "The malformed declaration must still appear verbatim in DeclaredTypeNames — "
+                + "a Library project must not skip BL6025 through a typo.");
+            Assert.That(factoryCalls, Is.Zero,
+                "A declaration that names nothing needs no Roslyn — the resolver must not be "
+                + "forced for it.");
         });
     }
 }
