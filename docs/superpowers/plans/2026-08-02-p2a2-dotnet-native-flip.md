@@ -420,7 +420,15 @@ AST separately, so the hand-off is an annotation side table.
    stays warnings (§6.3).
 4. `<ProjectReference>` on the native path: warning → **error** BL6021 (P2a-1's
    `:483` deferral; the "IDE creates such projects" concern is now resolved BY reporting, since
-   a real error names the workaround).
+   a real error names the workaround). ⚠ Task-4 review flag: ALSO promote the D-P2 TFM-rule
+   BL6021 (net9+ reference) on the native path — post-flip a net9 reference breaks the shim
+   publish (NU1201) whenever a surface is non-empty; promote here, or surface-gate it at 7b,
+   but decide explicitly (it is enumerated nowhere else).
+   ⚠ Task-4 review flag #2: BL6024 covers member-access annotations only — a ManagedOwned
+   CONSTRUCTOR in a BL generic body (`New FileStream(...)`) bypasses it once this task's
+   `IRNewObject` acceptance lands, handing Task 7a a call inside a C++ template. Extend BL6024
+   to ctor invocations in generic bodies in THIS task (the checker rejection that covers it
+   pre-flip disappears with the flip).
 5. `MapType`: `ManagedOwned` names (and Task-2-annotated resolved types) map to `NetRef` BEFORE
    the collection branch `:500-504`. Declaration-level only — call lowering is Task 7a. §12.4's
    "every `ManagedOwned` name → `NetRef`, no other registry name does" invariant test added.
