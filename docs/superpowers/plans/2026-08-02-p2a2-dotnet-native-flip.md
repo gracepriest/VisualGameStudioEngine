@@ -370,7 +370,12 @@ AST separately, so the hand-off is an annotation side table.
   `NetTypeResolver.CandidateMembers`: when walking a type whose chain excludes `System.Object`
   (`NetTypeResolver.cs:354`), additionally admit `ToString()` (nullary → `String`) and
   `GetHashCode()` (nullary → `Int32`) as callable members of every reference type that does not
-  override them. Unit tests: `System.IO.Stream` (non-overriding — the spec's clean case) resolves
+  override them. ⚠ ALSO lift the probe's `ObjectMemberNames` early-out
+  (`SemanticAnalyzer.cs:2368/:2393-2396`) for exactly these two names — it currently suppresses
+  both the warning AND the Task-2 annotation recording, so without this the allowlisted members
+  are never annotated, never collected into the surface, and never get a proxy slot (Task 2
+  quality-review finding: the recording gaps also include NativeBclSurface-owned members and
+  unresolvable types — the collector must not assume "resolved ⇒ annotated"). Unit tests: `System.IO.Stream` (non-overriding — the spec's clean case) resolves
   both; `GetType()` still `NoMatch`; `Equals(Object)` still `NoMatch`; `StringBuilder.ToString()`
   (overriding) resolves to the OVERRIDE, not the allowlist entry (assert declaring type).
   Mutation: comment the allowlist → the Stream tests go red; restore; record.
