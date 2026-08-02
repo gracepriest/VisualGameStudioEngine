@@ -93,4 +93,43 @@ public class BookmarkServicePersistenceTests
         Assert.That(all, Has.Count.EqualTo(1));
         Assert.That(all[0].Line, Is.EqualTo(7));
     }
+
+    [Test]
+    public async Task ConcurrentFireAndForgetSaves_AwaitedSaveThenLoad_YieldsExactPersistedSet()
+    {
+        // Regression test for the save/load file race: every ToggleBookmark fires an
+        // unawaited SaveAsync; without per-instance serialization those writes overlap
+        // the awaited save and the subsequent load (sharing violations / torn reads,
+        // all swallowed by the best-effort catches), leaving the reader with a stale
+        // in-memory set. Post-fix this must be deterministic.
+        const int iterations = 50;
+        const int lineCount = 300; // large JSON payload widens the write window
+
+        for (int i = 0; i < iterations; i++)
+        {
+            var iterDir = Path.Combine(_projectDir, $"iter{i}");
+            Directory.CreateDirectory(iterDir);
+            var file = Path.Combine(iterDir, "a.bas");
+
+            var writer = new BookmarkService();
+            writer.SetProjectDirectory(iterDir);
+            for (int line = 1; line <= lineCount; line++)
+            {
+                writer.ToggleBookmark(file, line); // each fires a fire-and-forget save
+            }
+            writer.ToggleBookmark(file, lineCount + 1); // the racing fire-and-forget save
+            await writer.SaveAsync();
+
+            var reader = new BookmarkService();
+            reader.ToggleBookmark(file, 99999); // pre-existing in-memory bookmark (no project dir yet => not saved)
+            reader.SetProjectDirectory(iterDir);
+            await reader.LoadAsync();
+
+            var all = reader.GetAllBookmarks();
+            Assert.That(all, Has.Count.EqualTo(lineCount + 1),
+                $"Iteration {i}: loaded bookmark count does not match what the writer persisted");
+            Assert.That(all.Any(b => b.Line == 99999), Is.False,
+                $"Iteration {i}: reader's stale pre-existing in-memory bookmark survived LoadAsync");
+        }
+    }
 }

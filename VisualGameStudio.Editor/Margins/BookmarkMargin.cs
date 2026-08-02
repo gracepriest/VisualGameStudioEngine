@@ -77,11 +77,14 @@ public class BookmarkMargin : AbstractMargin
     {
         if (_filePath == null) return;
 
-        // Normalize paths for comparison
-        var normalizedFilePath = Path.GetFullPath(_filePath).ToLowerInvariant();
-        var normalizedEventPath = Path.GetFullPath(e.FilePath).ToLowerInvariant();
+        // Cleared events (full refresh) may carry an empty FilePath — handle them
+        // before any Path.GetFullPath call, which throws on an empty string.
+        var refresh = e.ChangeType == BookmarkChangeType.Cleared
+            || (!string.IsNullOrEmpty(e.FilePath)
+                && Path.GetFullPath(_filePath).ToLowerInvariant()
+                   == Path.GetFullPath(e.FilePath).ToLowerInvariant());
 
-        if (normalizedFilePath == normalizedEventPath || e.ChangeType == BookmarkChangeType.Cleared)
+        if (refresh)
         {
             Avalonia.Threading.Dispatcher.UIThread.Post(InvalidateVisual);
         }

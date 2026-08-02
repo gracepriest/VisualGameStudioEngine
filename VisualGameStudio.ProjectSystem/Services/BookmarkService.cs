@@ -9,6 +9,12 @@ public class BookmarkService : IBookmarkService
     private readonly ConcurrentDictionary<string, List<Bookmark>> _bookmarks = new();
     private string? _projectDirectory;
 
+    // Serializes all bookmarks-file I/O on this instance. Mutation methods fire
+    // unawaited SaveAsync calls; without this, overlapping writes (and a read
+    // overlapping a write) hit sharing violations / torn reads that the
+    // best-effort catches silently swallow.
+    private readonly SemaphoreSlim _fileLock = new(1, 1);
+
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
         WriteIndented = true,
@@ -191,42 +197,70 @@ public class BookmarkService : IBookmarkService
         if (string.IsNullOrEmpty(dir)) return;
 
         var path = Path.Combine(dir, ".vgs", "bookmarks.json");
-        if (!File.Exists(path)) return;
 
+        var loaded = false;
+        await _fileLock.WaitAsync();
         try
         {
-            var json = await File.ReadAllTextAsync(path);
-            var data = JsonSerializer.Deserialize<BookmarksPersistenceData>(json, s_jsonOptions);
-
-            _bookmarks.Clear();
-            if (data?.Bookmarks != null)
+            if (File.Exists(path))
             {
-                foreach (var item in data.Bookmarks)
+                var json = await File.ReadAllTextAsync(path);
+                var data = JsonSerializer.Deserialize<BookmarksPersistenceData>(json, s_jsonOptions);
+
+                _bookmarks.Clear();
+                if (data?.Bookmarks != null)
                 {
-                    if (string.IsNullOrEmpty(item.FilePath)) continue;
-                    var list = _bookmarks.GetOrAdd(NormalizePath(item.FilePath), _ => new List<Bookmark>());
-                    if (list.All(b => b.Line != item.Line))
+                    foreach (var item in data.Bookmarks)
                     {
-                        list.Add(new Bookmark { FilePath = item.FilePath, Line = item.Line, Label = item.Label });
+                        if (string.IsNullOrEmpty(item.FilePath)) continue;
+                        var list = _bookmarks.GetOrAdd(NormalizePath(item.FilePath), _ => new List<Bookmark>());
+                        if (list.All(b => b.Line != item.Line))
+                        {
+                            list.Add(new Bookmark { FilePath = item.FilePath, Line = item.Line, Label = item.Label });
+                        }
                     }
                 }
-            }
 
-            // A single event triggers a full panel refresh from GetAllBookmarks().
-            BookmarkChanged?.Invoke(this, new BookmarkChangedEventArgs { ChangeType = BookmarkChangeType.Cleared });
+                loaded = true;
+            }
         }
         catch
         {
             // Best-effort: a corrupt/unreadable file leaves the in-memory set as-is.
         }
+        finally
+        {
+            _fileLock.Release();
+        }
+
+        if (loaded)
+        {
+            // A single event triggers a full panel refresh from GetAllBookmarks().
+            // Raised after releasing _fileLock (so subscriber work never blocks
+            // queued saves and can safely call back into Save/Load), but kept in
+            // this awaited method body — not offloaded to a chained task — so it
+            // fires on the caller's synchronization context; Avalonia UI
+            // subscribers rely on that.
+            BookmarkChanged?.Invoke(this, new BookmarkChangedEventArgs { ChangeType = BookmarkChangeType.Cleared });
+        }
     }
 
-    /// <summary>Persists the current bookmarks for the project (best-effort, fire-and-forget).</summary>
+    /// <summary>
+    /// Persists the current bookmarks for the project (best-effort, fire-and-forget).
+    /// All file I/O on this instance is serialized, and the bookmark snapshot is taken
+    /// while holding the lock, so: when an awaited <see cref="SaveAsync"/> call returns,
+    /// every save initiated earlier on this instance has completed, and the file
+    /// reflects a state at least as fresh as the last mutation made before the call.
+    /// The "every earlier save has completed" half relies on <see cref="SemaphoreSlim"/>
+    /// serving async waiters in FIFO order — do not swap the primitive for one
+    /// without that ordering guarantee.
+    /// </summary>
     public async Task SaveAsync()
     {
         var dir = _projectDirectory;
         if (string.IsNullOrEmpty(dir)) return;
 
+        await _fileLock.WaitAsync();
         try
         {
             var data = new BookmarksPersistenceData
@@ -245,6 +279,10 @@ public class BookmarkService : IBookmarkService
         catch
         {
             // Persistence is non-critical; ignore IO failures.
+        }
+        finally
+        {
+            _fileLock.Release();
         }
     }
 
