@@ -20,6 +20,16 @@ namespace BasicLang.Compiler.Driver
         private readonly Dictionary<string, Func<ICodeGenerator>> _backendFactories;
         private readonly CompilerOptions _options;
 
+        // P2a-2 Task 4 (spec §6.3): this driver compiles raw source with no project, so its
+        // closure is the shared framework set alone. Memoized per driver instance — the resolver
+        // reads ~170 assemblies as Roslyn metadata and is only built if a program actually names
+        // something unclaimed. Findings stay warnings on every backend until the P2a-2 flip.
+        private BasicLang.Net.NetTypeResolver _netResolver;
+
+        private BasicLang.Net.NetTypeResolver NetResolver() =>
+            _netResolver ??= BasicLang.Net.NetTypeResolver.Create(
+                BasicLang.Net.NetReferenceResolver.FrameworkAssemblies);
+
         public MultiTargetCompiler(CompilerOptions options = null)
         {
             _options = options ?? new CompilerOptions();
@@ -95,12 +105,22 @@ namespace BasicLang.Compiler.Driver
                 // Phase 3: Semantic Analysis
                 Console.Write("Phase 3: Semantic Analysis... ");
                 var semanticAnalyzer = new SemanticAnalyzer();
+                // P2a-2 Task 4 (spec §6.3): warning-only .NET resolution — the enumerated
+                // P2a-1 deferral for this driver. The backend flag selects the evidence bar.
+                semanticAnalyzer.ConfigureNetResolution(
+                    NetResolver,
+                    nativeBackend: string.Equals(targetBackend, "cpp", StringComparison.OrdinalIgnoreCase));
                 if (!semanticAnalyzer.Analyze(ast))
                 {
                     var errors = string.Join("\n  ", semanticAnalyzer.Errors.Select(e => e.ToString()));
                     return CompilationResult.CreateError($"Semantic errors:\n  {errors}");
                 }
                 Console.WriteLine($"âœ“ Type checking passed");
+                foreach (var netDiag in semanticAnalyzer.NetDiagnostics)
+                {
+                    var netLabel = netDiag.IsWarning ? "Warning" : "Error";
+                    Console.WriteLine($"  {netLabel} {netDiag.Code}: {netDiag.Message}");
+                }
 
                 // Phase 4: IR Generation
                 Console.Write("Phase 4: IR Generation... ");

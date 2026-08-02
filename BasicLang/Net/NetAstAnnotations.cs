@@ -69,5 +69,35 @@ namespace BasicLang.Net
 
             _resolvedMembers[node] = member;
         }
+
+        // ------------------------------------------------------------------
+        // P2a-2 Task 4 — resolved catch-clause exception types (spec §11.1's ladder-trigger
+        // completion). A `Catch e As FileNotFoundException` clause whose type name is OUTSIDE
+        // CppExceptionTypes' 12-name set but RESOLVES as a .NET exception type records the
+        // resolver-supplied fully-qualified name here; IRBuilder stamps it onto the produced
+        // IRCatchClause so the C++ ladder can emit an arm for it — without this the clause
+        // silently binds to a later `Exception` clause. Keyed by CatchClauseNode reference
+        // identity for the same reason the member table is.
+        // ------------------------------------------------------------------
+
+        private readonly Dictionary<CatchClauseNode, string> _resolvedExceptionTypes =
+            new Dictionary<CatchClauseNode, string>(ReferenceEqualityComparer.Instance);
+
+        /// <summary>Resolved .NET exception full name per catch clause. Read by IRBuilder.</summary>
+        internal IReadOnlyDictionary<CatchClauseNode, string> ResolvedExceptionTypes =>
+            _resolvedExceptionTypes;
+
+        /// <summary>
+        /// Records the fully-qualified .NET name a catch clause's exception type resolved to.
+        /// Null-tolerant for the same lost-annotation-degrades-safely reason as
+        /// <see cref="RecordResolvedMember"/>.
+        /// </summary>
+        internal void RecordResolvedExceptionType(CatchClauseNode node, string fullName)
+        {
+            if (node == null || string.IsNullOrEmpty(fullName))
+                return;
+
+            _resolvedExceptionTypes[node] = fullName;
+        }
     }
 }

@@ -235,6 +235,54 @@ End Sub";
             "the per-clause copy keeps its labels unsuffixed:\n" + main);
     }
 
+    /// <summary>
+    /// P2a-2 Task 4: the three <c>_regionLabelSuffix</c> sites now SAVE/RESTORE and COMPOSE
+    /// instead of literal-assign/reset — which retires the whole nested-copy label-collision
+    /// class. This is the pre-existing finally-inside-finally variant: the outer finally body is
+    /// emitted twice, the inner finally twice per copy, and with literal suffixes both outer
+    /// copies emitted the inner labels as "_fex"/"_fnorm" (and the literal RESET to "" also
+    /// stripped the outer suffix mid-region). Composition gives the four inner copies
+    /// _fex_fex / _fex_fnorm / _fnorm_fex / _fnorm_fnorm.
+    /// </summary>
+    [Test]
+    public void Cpp_FinallyInsideFinally_ControlFlow_NoDuplicateLabels()
+    {
+        var source = @"
+Sub Main()
+    Dim x As Integer = 1
+    Try
+        x = 2
+    Finally
+        Try
+            x = 3
+        Finally
+            If x > 0 Then
+                Console.WriteLine(""pos"")
+            Else
+                Console.WriteLine(""neg"")
+            End If
+        End Try
+    End Try
+End Sub";
+
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+
+        var main = MainRegion(output);
+        var labels = Regex.Matches(main, @"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*): ;\s*$")
+                          .Select(m => m.Groups[1].Value)
+                          .ToList();
+        Assert.That(labels, Is.Not.Empty,
+            "expected interior labels for the If inside the nested finally body:\n" + main);
+        Assert.That(labels, Is.Unique,
+            "duplicate C++ label definition (clang 'redefinition of label' / MSVC C2045) — the "
+            + "nested finally's copies must COMPOSE suffixes (_fex_fex, _fex_fnorm, …), not "
+            + "re-assign literals:\n" + main);
+        Assert.That(labels.Any(l => l.EndsWith("_fex_fnorm", StringComparison.Ordinal)
+                                 || l.EndsWith("_fnorm_fnorm", StringComparison.Ordinal)), Is.True,
+            "composed suffixes expected for the inner finally's copies:\n" + main);
+    }
+
     // ========================================================================
     // Step 1c: <catchVar>.Message lowers to what()
     // ========================================================================

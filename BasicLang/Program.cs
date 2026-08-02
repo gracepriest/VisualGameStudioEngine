@@ -503,6 +503,12 @@ namespace BasicLang.Compiler.Driver
                 }
             }
 
+            // P2a-2 Task 4 (spec §6.3): the C#-backend warning row. Resolution findings
+            // (BL6016/17/18/23) are WARNINGS here, preserving late-csc behavior for anything
+            // the closure cannot judge; the native path reached its own wiring inside
+            // CppProjectBuilder and never gets here.
+            options.EnableNetResolution(project, projectPath, restoreResult.ResolvedAssemblies);
+
             var compiler = new BasicCompiler(options);
             var success = true;
             IR.IRModule combinedIR = null;
@@ -515,6 +521,17 @@ namespace BasicLang.Compiler.Driver
             // Compile all project files as ONE program: every file sees every
             // other file's public symbols, and the combined IR keeps them all.
             var projectResult = compiler.CompileProjectFiles(sourceFiles);
+
+            // §6.5 findings (their own typed channel, never on AllErrors) — rendered in the
+            // problem-matcher-parsable "<label>: <message>" shape on both outcomes. All
+            // warnings until the P2a-2 flip; the label honors severity so the flip needs no
+            // change here.
+            foreach (var netDiag in projectResult.NetDiagnostics)
+            {
+                var netLabel = netDiag.IsWarning ? "Warning" : "Error";
+                Console.Error.WriteLine($"    {netLabel}: {netDiag.Code}: {netDiag.Message}");
+            }
+
             if (!projectResult.Success)
             {
                 success = false;
@@ -1029,9 +1046,24 @@ namespace BasicLang.Compiler.Driver
                 }
             }
 
+            // P2a-2 Task 4 (spec §6.3): single-file compiles resolve against the shared
+            // framework closure alone (there is no project to declare references). Warning-only
+            // on the C# backend; --target=cpp gets the native evidence bar through the analyzer's
+            // backend flag, still warning-only until the flip.
+            options.EnableNetResolution();
+
             // Create compiler and compile
             var compiler = new BasicCompiler(options);
             var result = compiler.CompileFile(filePath);
+
+            // §6.5 findings — their own typed channel, surfaced on both outcomes.
+            foreach (var netDiag in result.NetDiagnostics)
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                var netLabel = netDiag.IsWarning ? "Warning" : "Error";
+                Console.Error.WriteLine($"  {netLabel}: {netDiag.Code}: {netDiag.Message}");
+                Console.ResetColor();
+            }
 
             // Report results
             if (result.Success)

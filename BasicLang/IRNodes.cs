@@ -1011,6 +1011,18 @@ namespace BasicLang.Compiler.IR
         public string VariableName { get; set; }
         public BasicBlock Block { get; set; }
 
+        /// <summary>
+        /// P2a-2 Task 4 (spec §11.1's ladder-trigger completion): the fully-qualified .NET name
+        /// the analyzer's resolver answered for this clause's exception type, when that type is
+        /// OUTSIDE <c>CppExceptionTypes</c>' 12-name set (e.g.
+        /// <c>System.IO.FileNotFoundException</c>). Null for the 12 known names (the generator
+        /// maps those itself), for user-defined exception types, and for every compilation
+        /// without a resolver factory. The C++ backend's NetException ladder emits a
+        /// <c>Matches("&lt;this&gt;")</c> arm for it — without the carriage the clause silently
+        /// binds to a later <c>Exception</c> clause.
+        /// </summary>
+        public string NetExceptionFullName { get; set; }
+
         public IRCatchClause(TypeInfo exceptionType, string variableName, BasicBlock block)
         {
             ExceptionType = exceptionType;

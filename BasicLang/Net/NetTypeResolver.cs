@@ -378,6 +378,82 @@ namespace BasicLang.Net
                 }
                 isQueriedType = false;
             }
+
+            // ---- D-P1 (spec §14.15, P2a-2 Task 4 Step 2a): the two-name System.Object
+            // allowlist. The walk above deliberately stops BEFORE System.Object (§7.2); exactly
+            // two of Object's members are admitted anyway — ToString() and GetHashCode(), both
+            // nullary, both §8.3-marshalable (String / Int32, no Object anywhere in either
+            // signature) — because they are callable on EVERY .NET object and a surface without
+            // them turns `x.ToString()` into a BL6017 on a valid program. This is NOT a general
+            // "any marshalable nullary Object member" rule: GetType() stays excluded (the
+            // reflection root) and Equals(Object) stays excluded (§8.3 — Object is permanently
+            // Rejected). The `seen` collapse keeps an OVERRIDE authoritative: a type that
+            // overrides ToString already yielded it above under its most-derived declaration, so
+            // the System.Object entry collides on signature identity and is dropped here
+            // (StringBuilder.ToString() reports System.Text.StringBuilder, never System.Object).
+            // Value types get the same answer through a different door — System.ValueType's
+            // overrides are ordinary walk output — and static classes are skipped outright: an
+            // instance member cannot be called through a type name, so admitting one would put an
+            // uncallable member into a §7.2 declared surface.
+            if (!symbol.IsStatic)
+            {
+                var objectType = _compilation.GetSpecialType(SpecialType.System_Object);
+                foreach (var allowed in ObjectAllowlistMemberNames)
+                {
+                    foreach (var member in objectType.GetMembers(allowed))
+                    {
+                        if (member is not IMethodSymbol { Parameters.Length: 0, IsStatic: false })
+                            continue;
+
+                        var described = DescribeMember(member);
+                        if (described == null)
+                            continue;
+
+                        if (!seen.Add(SignatureKey(described)))
+                            continue;
+
+                        yield return (member, described);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// The D-P1 two-name allowlist (spec §14.15). Exactly these — see
+        /// <see cref="CandidateMembers"/> for why the list must not grow.
+        /// </summary>
+        private static readonly string[] ObjectAllowlistMemberNames = { "ToString", "GetHashCode" };
+
+        /// <summary>
+        /// The resolved type's Roslyn symbol, or null (NotFound and Ambiguous alike — ask
+        /// <see cref="ResolveTypeDetailed"/> which). INTERNAL SEAM for
+        /// <c>NetSurfaceCollector</c>'s declared-type attribute checks (a queried type's own
+        /// AOT-hostility must cover its whole surface, including the D-P1 allowlist members
+        /// whose DECLARING type is <c>System.Object</c>); not part of the facade.
+        /// </summary>
+        internal INamedTypeSymbol TypeSymbol(string fullName) => Lookup(fullName).Symbol;
+
+        /// <summary>
+        /// True when <paramref name="fullName"/> resolves and derives from
+        /// <c>System.Exception</c> (or IS it). Spec §11.1's ladder-trigger completion (P2a-2
+        /// Task 4): a catch clause whose type resolves as a .NET exception gets a
+        /// <c>NetException</c> ladder arm carrying the resolver-supplied fully-qualified name;
+        /// gating on exception-ness keeps a resolved NON-exception catch type from acquiring an
+        /// arm that could never match a managed chain.
+        /// </summary>
+        internal bool IsExceptionType(string fullName)
+        {
+            for (var type = Lookup(fullName).Symbol; type != null; type = type.BaseType)
+            {
+                if (string.Equals(type.Name, "Exception", StringComparison.Ordinal)
+                    && type.ContainingType == null
+                    && string.Equals(type.ContainingNamespace?.ToDisplayString(), "System",
+                                     StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private static (NetMemberCategory, string, bool, int, string) SignatureKey(NetMemberDescriptor m) =>

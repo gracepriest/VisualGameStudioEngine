@@ -3554,12 +3554,23 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // TWICE (ladder arm + per-clause handler) and C++ labels are
             // function-scoped, so the ladder's copies carry the _nex label suffix —
             // the same trick the finally duplication plays with _fex/_fnorm.
-            if (tryCatch.CatchClauses.Any(cc => CppExceptionTypes.IsNetException(cc.ExceptionType?.Name)))
+            // Trigger (P2a-2 Task 4 completed it per §11.1): a clause type in the 12-name set
+            // OR one the analyzer RESOLVED as a .NET exception (IRCatchClause carries the
+            // resolver-supplied FQ name) arms the ladder — without the second half a
+            // `Catch e As FileNotFoundException` silently bound to a later Exception clause.
+            if (tryCatch.CatchClauses.Any(cc => CppExceptionTypes.IsNetException(cc.ExceptionType?.Name)
+                                                || !string.IsNullOrEmpty(cc.NetExceptionFullName)))
             {
                 WriteLine("catch (const BasicLang::NetException& __nex)");
                 WriteLine("{");
                 Indent();
-                _regionLabelSuffix = "_nex";
+                // Save/restore + COMPOSE rather than literal-assign/reset (P2a-2 Task 4): a
+                // literal reset re-manufactured the nested-copy label-collision class — a Try
+                // ladder inside a duplicated finally body would emit both copies under the same
+                // "_nex" labels. Composing onto the saved suffix keeps every nesting level's
+                // copies distinct; for the non-nested case the emitted text is unchanged.
+                var savedSuffix = _regionLabelSuffix;
+                _regionLabelSuffix = savedSuffix + "_nex";
                 var firstArm = true;
                 foreach (var catchClause in tryCatch.CatchClauses)
                 {
@@ -3570,6 +3581,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                         // An untyped Catch catches everything; every managed chain
                         // ends "System.Exception".
                         fqName = "System.Exception";
+                    }
+                    else if (!string.IsNullOrEmpty(catchClause.NetExceptionFullName))
+                    {
+                        // Resolved outside the 12-name set — the analyzer supplied the
+                        // fully-qualified chain-element spelling (§11.1's "resolves as a
+                        // .NET exception type" trigger half).
+                        fqName = catchClause.NetExceptionFullName;
                     }
                     else if (!CppExceptionTypes.TryGetNetFullName(clauseTypeName, out fqName))
                     {
@@ -3590,7 +3608,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     Unindent();
                     WriteLine("}");
                 }
-                _regionLabelSuffix = "";
+                _regionLabelSuffix = savedSuffix;
                 WriteLine("throw;");
                 Unindent();
                 WriteLine("}");
@@ -3614,16 +3632,20 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             {
                 // The finally body is emitted TWICE (exceptional + normal path). When it contains
                 // control flow its region has interior labels; a distinct label suffix per copy
-                // keeps the two emissions from redefining the same C++ label (C2045).
+                // keeps the two emissions from redefining the same C++ label (C2045). The suffix
+                // COMPOSES onto the saved outer suffix (P2a-2 Task 4) so a finally nested inside
+                // another duplicated finally body gets four distinct suffixes instead of the
+                // pre-existing _fex/_fex collision; non-nested emission is byte-identical.
                 // Known limitation: Return inside Try bypasses the finally body.
+                var savedFinallySuffix = _regionLabelSuffix;
                 WriteLine("catch (...)");
                 WriteLine("{");
                 Indent();
                 WriteLine("{");
                 Indent();
-                _regionLabelSuffix = "_fex";
+                _regionLabelSuffix = savedFinallySuffix + "_fex";
                 EmitInlineRegion(tryCatch.FinallyBlock, tryCatch.EndBlock, RegionEnd.FallThrough);
-                _regionLabelSuffix = "";
+                _regionLabelSuffix = savedFinallySuffix;
                 Unindent();
                 WriteLine("}");
                 WriteLine("throw;");
@@ -3633,9 +3655,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // Normal path; braces scope the duplicated body against redeclarations.
                 WriteLine("{");
                 Indent();
-                _regionLabelSuffix = "_fnorm";
+                _regionLabelSuffix = savedFinallySuffix + "_fnorm";
                 EmitInlineRegion(tryCatch.FinallyBlock, tryCatch.EndBlock, RegionEnd.FallThrough);
-                _regionLabelSuffix = "";
+                _regionLabelSuffix = savedFinallySuffix;
                 Unindent();
                 WriteLine("}");
             }

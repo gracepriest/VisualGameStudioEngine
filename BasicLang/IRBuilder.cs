@@ -2664,7 +2664,16 @@ namespace BasicLang.Compiler.IR
                 var exceptionType = catchClause.ExceptionType != null
                     ? new TypeInfo(catchClause.ExceptionType.Name, TypeKind.Class)
                     : new TypeInfo("Exception", TypeKind.Class);
-                catchClauses.Add(new IRCatchClause(exceptionType, catchClause.ExceptionVariable, catchBlock));
+                var irClause = new IRCatchClause(exceptionType, catchClause.ExceptionVariable, catchBlock);
+
+                // P2a-2 Task 4 (§11.1 ladder-trigger completion): the analyzer resolved this
+                // clause's exception type as a .NET exception OUTSIDE the 12-name set — carry
+                // the FQ name so the C++ ladder can emit its Matches(...) arm. Absent (null) for
+                // the known names, user types, and resolver-less compilations.
+                if (_semanticAnalyzer.NetResolvedExceptionTypes.TryGetValue(catchClause, out var netExceptionName))
+                    irClause.NetExceptionFullName = netExceptionName;
+
+                catchClauses.Add(irClause);
                 catchBlockList.Add((catchClause, catchBlock));
             }
 

@@ -379,6 +379,18 @@ public class NetTypeResolverTests
             }
             isQueriedType = false;
         }
+
+        // D-P1 (P2a-2 Task 4 Step 2a, spec §14.15): the oracle mirrors the two-name
+        // System.Object allowlist — nullary ToString()/GetHashCode() are members of every
+        // non-static type's surface. The HashSet collapses them into an existing override
+        // exactly as CandidateMembers' signature-identity dedup does, so the count stays an
+        // independent derivation of the same rule set.
+        if (!type!.IsStatic)
+        {
+            keys.Add("Method|ToString|False|0|");
+            keys.Add("Method|GetHashCode|False|0|");
+        }
+
         return keys.Count;
     }
 
@@ -1029,38 +1041,33 @@ public class NetTypeResolverTests
     }
 
     [Test]
-    public void ResolveOverload_ANullaryObjectMemberOnANonOverridingTypeIsNoMatch_ARECORDEDSPECGAP()
+    public void ResolveOverload_ANullaryObjectMemberOnANonOverridingTypeResolves_DP1()
     {
-        // THE GENUINE DIVERGENCE, and it is deliberately not the Equals(Object) case above.
-        // Stream does not override ToString or GetHashCode, so both resolve to System.Object's
-        // declarations. They take ZERO arguments and return String/Int32 — no Object appears
-        // anywhere in either signature, so neither §8.3's marshaling objection nor §6.5's
-        // argument-side rule applies. `s.ToString()` compiles clean on the C# backend today, yet
-        // §7.2 keeps System.Object's members out of the candidate set, so this is NoMatch — which
-        // spec §6.3 turns into a HARD ERROR on the native backend in P2a-2.
-        //
-        // StringBuilder.ToString() cannot stand in for this: it OVERRIDES, so it is in the surface
-        // and resolves. This test exists because that distinction leaves the real case unexercised.
-        //
-        // Pinning CURRENT behavior, not endorsing it. Escalated to the coordinator as a spec gap
-        // (§14 shipped-divergence item + a §12.1 parity row). If §7.2 later admits the nullary
-        // Object members, this test is the one to change, deliberately.
+        // FORMERLY …IsNoMatch_ARECORDEDSPECGAP, whose own comment named it "the one to change,
+        // deliberately" the day §7.2 admitted the nullary Object members. P2a-2 Task 4 Step 2a
+        // (decision D-P1, spec §14.15) did exactly that: CandidateMembers admits ToString() and
+        // GetHashCode() — and ONLY those two — from System.Object for every non-overriding type,
+        // so `s.ToString()` now resolves instead of drawing a spurious BL6017 on a valid
+        // program. The neighboring exclusions are unchanged and pinned by
+        // NetStrictResolutionTests (GetType(), Equals(Object)), and the Equals(Object) case
+        // above still holds — the allowlist is two names, not a principle.
         var r = FrameworkOnly();
 
-        Assert.That(Overload(r, "System.IO.Stream", NetCallForm.Instance, "ToString").Outcome,
-            Is.EqualTo(NetOverloadOutcome.NoMatch),
-            "pins current behavior: §7.2 excludes System.Object's members, so Stream.ToString() " +
-            "does not resolve even though it is a valid call on the C# backend. If this starts " +
-            "resolving, §7.2's surface changed — make sure that was intended and that Task 12 can " +
-            "emit an export for it.");
+        var toString = Overload(r, "System.IO.Stream", NetCallForm.Instance, "ToString");
+        Assert.That(toString.Outcome, Is.EqualTo(NetOverloadOutcome.Resolved),
+            "D-P1: Stream does not override ToString, so the System.Object allowlist entry is " +
+            "the candidate and must resolve.");
+        Assert.That(toString.Member!.DeclaringTypeFullName, Is.EqualTo("System.Object"),
+            "the winner is System.Object's declaration — there is no override to prefer.");
+
         Assert.That(Overload(r, "System.IO.Stream", NetCallForm.Instance, "GetHashCode").Outcome,
-            Is.EqualTo(NetOverloadOutcome.NoMatch),
-            "same shape as ToString and for the same reason — nullary, no Object in the signature.");
+            Is.EqualTo(NetOverloadOutcome.Resolved),
+            "same shape as ToString — the allowlist's second (and last) name.");
 
         Assert.That(r.GetMembers("System.IO.Stream").Select(m => m.Name),
-            Does.Not.Contain("GetHashCode"),
-            "guard: the cause really is §7.2's exclusion — GetHashCode is absent from the surface, " +
-            "so ResolveOverload is consistent with GetMembers here rather than losing a member.");
+            Does.Contain("GetHashCode"),
+            "GetMembers and ResolveOverload share CandidateMembers, so the surface must list " +
+            "what resolution answers — Task 12 emits the export from this same seam.");
     }
 
     [Test]

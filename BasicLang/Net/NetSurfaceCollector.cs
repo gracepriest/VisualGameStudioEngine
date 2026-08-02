@@ -288,8 +288,30 @@ namespace BasicLang.Net
                 return;
             }
 
+            // D-P1 interaction (P2a-2 Task 4): the QUERIED type's own AOT-hostility covers its
+            // whole declared surface. FindAotHostileCarrier checks each member's DECLARING
+            // type, which for the D-P1 System.Object allowlist entries is System.Object — an
+            // AOT-hostile declared type would otherwise leak exactly ToString()/GetHashCode()
+            // into its surface (caught by DeclaredType_AotHostileDeclaringType_OmitsEveryMember).
+            string queriedTypeAttribute = null;
+            var queriedSymbol = resolver.TypeSymbol(typeName);
+            var queriedTypeHostile = queriedSymbol != null
+                && HasAotHostileAttribute(queriedSymbol, out queriedTypeAttribute);
+
             foreach (var (symbol, descriptor) in resolver.CandidateMembers(typeName))
             {
+                if (queriedTypeHostile)
+                {
+                    diagnostics.Add(new NetReferenceDiagnostic("BL6026",
+                        $"<NetProxy> type '{typeName}': member '{descriptor}' was omitted from "
+                        + $"the generated surface: the declared type itself is marked "
+                        + $"[{queriedTypeAttribute}], which cannot run under Native AOT. The "
+                        + "generated proxy overload set is a subset of the .NET overload set "
+                        + "(spec §7.2).",
+                        IsWarning: true));
+                    continue;
+                }
+
                 if (TryGetOmissionReason(symbol, descriptor, out var reason))
                 {
                     diagnostics.Add(new NetReferenceDiagnostic("BL6026",

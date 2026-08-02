@@ -639,6 +639,11 @@ public class BuildService : IBuildService
                 }
             }
 
+            // P2a-2 Task 4 (spec §6.3): the C#-backend warning row — CLI parity with
+            // `BasicLang.exe build`. Everything this arms is a WARNING on this path; the
+            // native path routes through BuildCppProject/CppProjectBuilder and never gets here.
+            compilerOptions.EnableNetResolution(cliProject, project.FilePath, restoredAssemblies);
+
             // Compile all project files as ONE program: the compiler handles
             // .mod/.cls preprocessing, compile order, implicit sibling imports,
             // combined IR and optimization internally — exactly like the CLI.
@@ -648,6 +653,19 @@ public class BuildService : IBuildService
             cancellationToken.ThrowIfCancellationRequested();
 
             MapCompilerDiagnostics(compiler, compilation, result);
+
+            // §6.5 findings ride their own typed channel (never AllErrors); render them into the
+            // IDE's Error List with their real severity — all warnings until the P2a-2 flip.
+            foreach (var netDiag in compilation.NetDiagnostics)
+            {
+                result.Diagnostics.Add(new DiagnosticItem
+                {
+                    Id = netDiag.Code,
+                    Message = netDiag.Message,
+                    FilePath = project.FilePath,
+                    Severity = netDiag.IsWarning ? DiagnosticSeverity.Warning : DiagnosticSeverity.Error
+                });
+            }
 
             if (!compilation.Success || compilation.CombinedIR == null)
             {

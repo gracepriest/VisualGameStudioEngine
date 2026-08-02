@@ -21,7 +21,8 @@ namespace BasicLang.Compiler
         public TimeSpan Duration { get; set; }
 
         /// <summary>
-        /// P2a-1 (spec §6.5): the analyzer's warning-only .NET findings (BL6016/BL6017/BL6023).
+        /// P2a-1 (spec §6.5): the analyzer's .NET findings (BL6016/17/18/19/23/24) — warning-only
+        /// until the P2a-2 flip.
         ///
         /// <para><b>Deliberately NOT <see cref="AllErrors"/>.</b> These are typed
         /// <see cref="Net.NetReferenceDiagnostic"/>s (code + message + IsWarning) surfaced by
@@ -30,8 +31,11 @@ namespace BasicLang.Compiler
         /// kept them non-fatal, back when <see cref="HasErrors"/> was <c>AllErrors.Count > 0</c>
         /// with no severity filter; <see cref="HasErrors"/> now counts only Error-severity
         /// entries, but the typed channel stays.)</para>
+        ///
+        /// <para>PUBLIC since P2a-2 Task 4: §6.3's C#-backend warning row makes the CLI and the
+        /// IDE's <c>BuildService</c> renderers of this channel.</para>
         /// </summary>
-        internal List<Net.NetReferenceDiagnostic> NetDiagnostics { get; }
+        public List<Net.NetReferenceDiagnostic> NetDiagnostics { get; }
 
         public CompilationResult()
         {
@@ -81,6 +85,48 @@ namespace BasicLang.Compiler
         /// memoizing keeps a 40-file project from paying 40 times.</para>
         /// </summary>
         internal Func<Net.NetTypeResolver> NetResolverFactory { get; set; }
+
+        /// <summary>
+        /// P2a-2 Task 4 (spec §6.3's C#-backend warning row): arms .NET name resolution over the
+        /// project's reference closure — the SAME closure/resolver machinery the native path
+        /// uses, exposed publicly so <c>Program.cs</c> and the IDE's <c>BuildService</c>
+        /// (a different assembly) can set the internal factory. Everything this enables is a
+        /// WARNING on the C# backend, per §6.3, and the analyzer keeps the C#-path evidence bar
+        /// (only System.-rooted spellings are judged for bare type references — a C# program may
+        /// legitimately name types outside this closure, e.g. WinForms/WPF).
+        ///
+        /// <para>Fully lazy AND memoized: the closure is resolved and the Roslyn metadata read
+        /// only if some unit actually names something unclaimed, once per options instance.
+        /// The closure's own reference diagnostics are NOT surfaced on this path — reference
+        /// errors are csc's to report on the C# backend; this seam exists for §6.5 name/member
+        /// findings only.</para>
+        /// </summary>
+        /// <param name="project">
+        /// The CLI project model, for its reference elements; null resolves against the shared
+        /// framework set alone (the single-file compile shape).
+        /// </param>
+        /// <param name="projectFilePath">Resolves relative <c>&lt;HintPath&gt;</c>s.</param>
+        /// <param name="packageAssemblies">The caller's restored package assemblies, if any.</param>
+        public void EnableNetResolution(
+            ProjectSystem.ProjectFile project = null,
+            string projectFilePath = null,
+            IReadOnlyList<string> packageAssemblies = null)
+        {
+            // WinForms/WPF projects target a DIFFERENT shared framework this closure cannot see
+            // (Microsoft.WindowsDesktop.App); every unqualified Form/Window/MessageBox would be
+            // structurally unresolvable and §6.3 forbids manufacturing warnings on valid
+            // programs. Leave those projects un-armed until the closure can include the desktop
+            // reference set.
+            if (project != null && (project.UseWindowsForms || project.UseWpf))
+                return;
+
+            Net.NetTypeResolver resolver = null;
+            NetResolverFactory = () => resolver ??= Net.NetTypeResolver.Create(
+                project != null
+                    ? Net.NetReferenceResolver.Resolve(
+                          project, projectFilePath ?? project.FilePath, packageAssemblies).All
+                    : Net.NetReferenceResolver.FrameworkAssemblies);
+        }
     }
 
     /// <summary>
@@ -591,7 +637,14 @@ namespace BasicLang.Compiler
                 // end-to-end through this method and holds the canary that says when the
                 // divergence has eased. Wire nothing here until every pin in that fixture passes
                 // over the wired configuration UNMODIFIED.
-                analyzer.ConfigureNetResolution(_options.NetResolverFactory);
+                // P2a-2 Task 4 (§6.3): the backend flag selects the evidence bar — real §6.5
+                // resolution for bare names on the native path, the legacy System.-rooted bar on
+                // the C# path — and gates BL6024 (native-only). Severity is warning-only on BOTH
+                // backends until the Task-5 flip.
+                analyzer.ConfigureNetResolution(
+                    _options.NetResolverFactory,
+                    nativeBackend: string.Equals(_options.TargetBackend, "cpp",
+                                                 StringComparison.OrdinalIgnoreCase));
                 if (implicitImports != null)
                 {
                     analyzer.AddImplicitImports(implicitImports);

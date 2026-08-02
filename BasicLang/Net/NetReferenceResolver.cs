@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 using System.Runtime.InteropServices;
 
 namespace BasicLang.Net
@@ -10,10 +12,13 @@ namespace BasicLang.Net
     /// One reference-resolution finding. Deliberately transport-neutral (no
     /// <c>CppDiagnostic</c>, no file/line): the resolver is a pure function over a
     /// <see cref="Compiler.ProjectSystem.ProjectFile"/> and its caller decides how to surface
-    /// these. All of them carry BL6021 today (spec §11.4); BL6022 is reserved for
-    /// <c>&lt;NetProxy&gt;</c> naming an unknown type and must not be borrowed here.
+    /// these. Mostly BL6021 here (spec §11.4); BL6022 is reserved for <c>&lt;NetProxy&gt;</c>
+    /// naming an unknown type and must not be borrowed. PUBLIC since P2a-2 Task 4: §6.3's
+    /// C#-backend warning row makes the IDE's <c>BuildService</c> (a different assembly) a
+    /// consumer of <c>CompilationResult.NetDiagnostics</c>, and this record is the channel's
+    /// element type.
     /// </summary>
-    internal sealed record NetReferenceDiagnostic(string Code, string Message, bool IsWarning);
+    public sealed record NetReferenceDiagnostic(string Code, string Message, bool IsWarning);
 
     /// <summary>
     /// The assembly closure a project can see. <see cref="AssemblyPaths"/> is what the project
@@ -317,7 +322,121 @@ namespace BasicLang.Net
                     IsWarning: true));
             }
 
+            // ---- 4. D-P2 (spec §15.11): shim TFM vs newer references ----
+            // The AOT shim stays pinned net8.0, and a net8.0 project cannot reference a
+            // net9.0+ assembly — the shim's csc would answer NU1201/CS0012 late and unreadably.
+            // Say it here instead, per resolved DECLARED assembly (the framework set is by
+            // definition the running runtime's own and never judged). WARNING in Task 4 —
+            // severity stays warning-only on both backends until the Task-5 flip.
+            foreach (var path in assemblies)
+            {
+                var tfm = TryReadTargetFramework(path);
+                if (tfm != null && IsNewerThanNet8(tfm))
+                {
+                    diagnostics.Add(new NetReferenceDiagnostic("BL6021",
+                        $"Reference '{path}' targets '{tfm}', which is newer than the net8.0 the "
+                        + "AOT shim is pinned to. The generated shim cannot reference it, so "
+                        + "native .NET access to its types will fail at publish. Retarget the "
+                        + "assembly to net8.0 or lower, or drop the reference.",
+                        IsWarning: true));
+                }
+            }
+
             return new NetReferenceClosure(assemblies, FrameworkSet.Value, diagnostics);
+        }
+
+        /// <summary>
+        /// The assembly-level <c>TargetFrameworkAttribute</c> string
+        /// (<c>".NETCoreApp,Version=v9.0"</c>), or null when absent or unreadable. Read via
+        /// <c>System.Reflection.Metadata</c> — no assembly load, same as the Roslyn path — and
+        /// never a throw: every input is user-reachable (a <c>&lt;HintPath&gt;</c> can name
+        /// anything) and an unreadable file already draws its own BL6021 downstream.
+        /// </summary>
+        private static string TryReadTargetFramework(string assemblyPath)
+        {
+            try
+            {
+                using var stream = File.OpenRead(assemblyPath);
+                using var pe = new PEReader(stream);
+                if (!pe.HasMetadata)
+                    return null;
+
+                var metadata = pe.GetMetadataReader();
+                foreach (var handle in metadata.GetAssemblyDefinition().GetCustomAttributes())
+                {
+                    var attribute = metadata.GetCustomAttribute(handle);
+                    if (!IsTargetFrameworkAttribute(metadata, attribute))
+                        continue;
+
+                    // Fixed-argument blob: UInt16 prolog (0x0001) then the serialized string.
+                    var blob = metadata.GetBlobReader(attribute.Value);
+                    if (blob.ReadUInt16() != 1)
+                        return null;
+                    return blob.ReadSerializedString();
+                }
+                return null;
+            }
+            catch (Exception ex) when (ex is IOException || ex is BadImageFormatException
+                                       || ex is ArgumentException || ex is NotSupportedException
+                                       || ex is UnauthorizedAccessException
+                                       || ex is System.Security.SecurityException
+                                       || ex is InvalidOperationException)
+            {
+                return null;
+            }
+        }
+
+        private static bool IsTargetFrameworkAttribute(
+            MetadataReader metadata, CustomAttribute attribute)
+        {
+            // The attribute type sits behind the constructor handle; a metadata reference is a
+            // MemberReference into a TypeReference, a same-assembly definition (not possible for
+            // this attribute in practice, but cheap to honor) a MethodDefinition.
+            StringHandle name, ns;
+            switch (attribute.Constructor.Kind)
+            {
+                case HandleKind.MemberReference:
+                    var member = metadata.GetMemberReference(
+                        (MemberReferenceHandle)attribute.Constructor);
+                    if (member.Parent.Kind != HandleKind.TypeReference)
+                        return false;
+                    var typeRef = metadata.GetTypeReference((TypeReferenceHandle)member.Parent);
+                    name = typeRef.Name;
+                    ns = typeRef.Namespace;
+                    break;
+
+                case HandleKind.MethodDefinition:
+                    var method = metadata.GetMethodDefinition(
+                        (MethodDefinitionHandle)attribute.Constructor);
+                    var typeDef = metadata.GetTypeDefinition(method.GetDeclaringType());
+                    name = typeDef.Name;
+                    ns = typeDef.Namespace;
+                    break;
+
+                default:
+                    return false;
+            }
+
+            return metadata.StringComparer.Equals(name, "TargetFrameworkAttribute")
+                   && metadata.StringComparer.Equals(ns, "System.Runtime.Versioning");
+        }
+
+        /// <summary>
+        /// True for <c>.NETCoreApp</c> version 9.0 or higher. <c>.NETStandard</c>/
+        /// <c>.NETFramework</c> identifiers never trip this — a net8.0 shim can reference both.
+        /// </summary>
+        private static bool IsNewerThanNet8(string targetFramework)
+        {
+            try
+            {
+                var parsed = new System.Runtime.Versioning.FrameworkName(targetFramework);
+                return string.Equals(parsed.Identifier, ".NETCoreApp", StringComparison.OrdinalIgnoreCase)
+                       && parsed.Version.Major >= 9;
+            }
+            catch (ArgumentException)
+            {
+                return false;   // a malformed TFM string is not evidence of anything
+            }
         }
 
         /// <summary>

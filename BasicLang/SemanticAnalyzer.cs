@@ -101,6 +101,36 @@ namespace BasicLang.Compiler.SemanticAnalysis
             _netAnnotations.ResolvedMembers;
 
         /// <summary>
+        /// P2a-2 Task 4 — resolved catch-clause exception types (spec §11.1's ladder-trigger
+        /// completion). <see cref="IRBuilder"/> stamps these onto <c>IRCatchClause</c> so the C++
+        /// backend's NetException ladder emits an arm for a resolved exception type outside
+        /// <c>CppExceptionTypes</c>' 12-name set. Empty unless a resolver factory is configured.
+        /// </summary>
+        internal IReadOnlyDictionary<CatchClauseNode, string> NetResolvedExceptionTypes =>
+            _netAnnotations.ResolvedExceptionTypes;
+
+        /// <summary>
+        /// P2a-2 Task 4 (§6.3): true when this compilation targets the NATIVE (C++) backend —
+        /// which is where §6.5's REAL evidence bar applies (bare unclaimed names are probed
+        /// against the resolver) and where BL6024 fires. The C# path retains the narrower
+        /// System.-rooted lexical bar per §6.5's "superseded lexical mechanisms … retained on the
+        /// C# path": its programs may legitimately name types OUTSIDE the shared-framework
+        /// closure (WinForms, WPF), so "not resolvable" is not evidence of anything there.
+        /// </summary>
+        private bool _netNativeBackend = true;
+
+        /// <summary>
+        /// P2a-2 Task 4 — receivers <see cref="ProbeNetMemberAccess"/> RESOLVED, keyed by the
+        /// member-access node: node → the receiver's metadata full name. This is the eligibility
+        /// gate for the invocation-aware overload probe: <see cref="ProbeNetInvocation"/> acts
+        /// only on callees recorded here, so it inherits the member probe's exact claim /
+        /// NativeBclSurface / resolution gating and cannot invent findings for receivers the
+        /// member probe declined to judge.
+        /// </summary>
+        private readonly Dictionary<MemberAccessExpressionNode, string> _netResolvedReceivers =
+            new(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
         /// Get the TypeRegistry for .NET type lookups
         /// </summary>
         public TypeRegistry TypeRegistry => _typeRegistry;
@@ -1930,7 +1960,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     // P2a-1 §6.5: warning-only. Arity is known here, which is what lets an
                     // UNCLAIMED generic (Queue(Of T), SortedDictionary(Of K,V), …) be asked for
                     // as Queue`1 rather than answering NotFound and warning on a valid program.
-                    ProbeNetTypeReference(typeRef.Name, typeArgs.Count);
+                    // The user-type guard mirrors ResolveTypeName's fallback: a shadowed or
+                    // sibling-declared generic user class must never be probed (factory-null
+                    // first so un-armed paths skip the walk).
+                    if (_netResolverFactory != null && !IsUserDefinedTypeName(typeRef.Name))
+                        ProbeNetTypeReference(typeRef.Name, typeArgs.Count);
                 }
 
                 // Func(Of ...) / Action(Of ...) are delegate types - mark them so lambdas
@@ -1951,11 +1985,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return _typeManager.ObjectType;
             }
 
-            // P2a-1 §6.5: warning-only .NET resolution. ProbeNetTypeReference only acts on a
-            // System.-rooted dotted spelling, which no user-defined BasicLang type, type parameter
-            // or type-manager entry can collide with — so no extra "is this really .NET?" guard is
-            // needed here, and adding one would only make the seam disagree with the probe.
-            ProbeNetTypeReference(typeRef.Name, 0);
+            // P2a-2 Task 4: the probe moved INTO ResolveTypeName's .NET synthetic fallback
+            // branch. Probing here — after ANY channel resolved the name — would put a BL6016 on
+            // every user-defined type once the native path judges bare names (§6.5's evidence-bar
+            // replacement); the fallback branch is the one place "no user meaning exists" is known.
 
             // Handle fixed-length strings
             if (typeRef.IsFixedLengthString)
@@ -2035,6 +2068,23 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Check if this could be a .NET type
             if (IsNetType(name))
             {
+                // P2a-2 Task 4 (§6.5): THE probe seam for non-generic type spellings. This
+                // branch is only reached after every user channel above declined the name, so
+                // probing here is what makes "the analyzer thinks this is .NET" true rather
+                // than lexical. ONE user channel is deliberately re-checked through
+                // IsUserDefinedTypeName: scope lookup is CASE-INSENSITIVE and a LOCAL can
+                // shadow a type name — `Dim player As New Player("Hero")` defines `player`
+                // BEFORE its initializer is visited, so the initializer's `Player` resolves to
+                // the variable and falls through to here. Same-file classes are rescued by the
+                // type manager above; SIBLING-file classes live only in GlobalScope symbols,
+                // which the shadow hides — probing would then put a BL6016 on the stock game
+                // template (caught by NetInertnessTests). Typing is UNCHANGED either way
+                // (synthetic fallback, both backends, §6.3); only the probe is suppressed.
+                // Factory-null first: the LSP and every un-armed path must not pay the
+                // user-type walk for a probe that cannot run.
+                if (_netResolverFactory != null && !IsUserDefinedTypeName(name))
+                    ProbeNetTypeReference(name, 0);
+
                 // Create a synthetic type for .NET types
                 return new TypeInfo(name, TypeKind.Class);
             }
@@ -2174,6 +2224,19 @@ namespace BasicLang.Compiler.SemanticAnalysis
             _netResolverFactory = resolverFactory;
         }
 
+        /// <summary>
+        /// P2a-2 Task 4 (§6.3): same as above plus the backend split. <paramref name="nativeBackend"/>
+        /// selects the evidence bar — real §6.5 resolution for bare names on the native path, the
+        /// legacy System.-rooted lexical bar on the C# path — and gates BL6024 (native-only).
+        /// The one-argument overload defaults to NATIVE, which is every pre-Task-4 caller's
+        /// semantics (the factory was only ever set on the native path before this task).
+        /// </summary>
+        internal void ConfigureNetResolution(Func<NetTypeResolver> resolverFactory, bool nativeBackend)
+        {
+            _netResolverFactory = resolverFactory;
+            _netNativeBackend = nativeBackend;
+        }
+
         private NetTypeResolver NetResolver()
         {
             if (!_netResolverCreated)
@@ -2303,23 +2366,24 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
-        /// The evidence bar for a BL6016 in P2a-1, and the reason this task stays inert.
+        /// The C#-PATH evidence bar for a BL6016 (P2a-1's bar, retained per §6.5's "superseded
+        /// lexical mechanisms … retained on the C# path").
         ///
-        /// <para><see cref="IsNetType"/> answers TRUE for <b>any PascalCase identifier without an
-        /// underscore</b> (its catch-all), so "the analyzer thinks this is .NET" is not evidence of
-        /// anything — every typo'd or not-yet-declared BasicLang type name reaches the same branch.
-        /// Warning on those would put a new BL6016 on programs that compile clean today, which this
-        /// plan forbids outright.</para>
+        /// <para>On the C# path a program may legitimately name types the shared-framework
+        /// closure cannot see — WinForms, WPF, anything the generated csproj's TFM or SDK brings
+        /// in that <see cref="Net.NetReferenceResolver"/>'s closure does not — so "not resolvable
+        /// here" is not evidence of anything for a bare name. Only a name the user SPELLED as
+        /// .NET (dotted, rooted at <c>System</c>) is judged. <c>Microsoft</c> and <c>Windows</c>
+        /// roots are deliberately excluded: those live in assemblies the closure does not
+        /// contain, so "not found" there means "not referenced", not "does not exist".</para>
         ///
-        /// <para>So P2a-1 warns only for a name the user SPELLED as .NET: dotted, rooted at
-        /// <c>System</c>. <c>Microsoft</c> and <c>Windows</c> are deliberately excluded even though
-        /// <see cref="IsNetType"/> accepts them — those roots live in assemblies the shared
-        /// framework closure does not contain (<c>System.Windows.Forms</c> being the obvious one),
-        /// so "not found" there means "not referenced", not "does not exist", and would be a false
-        /// accusation.</para>
-        ///
-        /// <para>Bare unresolvable names become an ERROR in P2a-2, once the catch-all heuristic is
-        /// replaced and "unknown" is knowable.</para>
+        /// <para><b>The NATIVE path no longer consults this</b> (P2a-2 Task 4, §6.5): its
+        /// closure IS the whole world the backend can reach, so real resolution replaced the
+        /// lexical bar — <see cref="ProbeNetTypeReference"/>'s callers sit in the .NET synthetic
+        /// fallback branches of <see cref="ResolveTypeName"/>/<see cref="ResolveTypeReference"/>,
+        /// where every probed name is one no user type, type parameter or type-manager entry
+        /// claimed, and an unresolvable one is a genuine finding (warning here; the Task-5 flip
+        /// makes it a native error).</para>
         /// </summary>
         private static bool IsExplicitlyNetQualified(string name) =>
             !string.IsNullOrEmpty(name)
@@ -2328,14 +2392,18 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         /// <summary>
         /// Type-reference seam. A CLAIMED name never reaches the resolver at all (spec §6.5's
-        /// direction rule: <c>Dim a As Action</c> stays <c>std::function</c>).
+        /// direction rule: <c>Dim a As Action</c> stays <c>std::function</c>). CALLERS SIT IN THE
+        /// .NET-FALLBACK BRANCHES ONLY — a name that resolved as a user type, type parameter,
+        /// project symbol or type-manager entry must never be probed, or a valid program's own
+        /// class names draw BL6016.
         /// </summary>
         private void ProbeNetTypeReference(string name, int genericArgumentCount)
         {
             if (_netResolverFactory == null) return;
             if (string.IsNullOrEmpty(name)) return;
+            if (name.IndexOf("::", StringComparison.Ordinal) >= 0) return;   // foreign C++ passthrough
             if (NetClaimPredicate.IsClaimedTypeName(name, genericArgumentCount)) return;
-            if (!IsExplicitlyNetQualified(name)) return;
+            if (!_netNativeBackend && !IsExplicitlyNetQualified(name)) return;
 
             var outcome = ResolveNetType(name, genericArgumentCount, out _);
             if (outcome == NetTypeLookupOutcome.Resolved) return;
@@ -2390,10 +2458,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (NativeBclSurface.TryGetMember(typeName, memberName, out _)) return;
 
             // System.Object's members are deliberately absent from NetTypeResolver.GetMembers
-            // (spec §7.2 excludes them unless overridden). They are callable on EVERY .NET type, so
-            // treating their absence as a finding would put a BL6017 on `x.ToString()` — a valid
-            // program — for any type that does not override it.
-            if (ObjectMemberNames.Contains(memberName)) return;
+            // (spec §7.2 excludes them unless overridden). They are callable on EVERY .NET type,
+            // so treating their absence as a finding would put a BL6017 on a valid program.
+            // P2a-2 Task 4 Step 2a (D-P1): ToString/GetHashCode are LIFTED out of this early-out
+            // — CandidateMembers now admits exactly those two from System.Object, so they must
+            // flow through to be warned-about, ANNOTATED and eventually surfaced; without the
+            // lift the allowlisted members never reach the surface collector or a proxy slot.
+            if (ObjectMemberNames.Contains(memberName)
+                && !NetObjectAllowlistNames.Contains(memberName))
+            {
+                return;
+            }
 
             if (ResolveNetType(typeName, objectType.GenericArguments?.Count ?? 0, out var fullName)
                 != NetTypeLookupOutcome.Resolved)
@@ -2404,6 +2479,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
             var members = NetResolver().GetMembers(fullName);
             if (members.Count == 0) return;   // no surface to judge against
 
+            // P2a-2 Task 4: the receiver RESOLVED and has a surface — record the eligibility for
+            // the invocation-aware overload probe (ProbeNetInvocation gates on this map, so it
+            // inherits every early-return above).
+            _netResolvedReceivers[node] = fullName;
+
             foreach (var member in members)
             {
                 if (string.Equals(member.Name, memberName, StringComparison.OrdinalIgnoreCase))
@@ -2412,7 +2492,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     // IRBuilder can stamp the produced IR node (carriage; read by nobody until
                     // the surface collector / call lowering). Claimed names returned above and
                     // never reach this line, which is what keeps existing surfaces empty.
+                    // Task 4 replaces this name-match record with the overload WINNER for call
+                    // sites (ProbeNetInvocation overwrites by node identity); a non-call access
+                    // or an unprobeable call keeps the name-match record.
                     _netAnnotations.RecordResolvedMember(node, member);
+                    WarnNetCallInGenericBody(fullName, memberName, line, column);
                     return;
                 }
             }
@@ -2429,6 +2513,345 @@ namespace BasicLang.Compiler.SemanticAnalysis
         {
             "ToString", "Equals", "GetHashCode", "GetType", "ReferenceEquals", "MemberwiseClone",
         };
+
+        /// <summary>
+        /// The D-P1 two-name allowlist (spec §14.15) — the only <see cref="ObjectMemberNames"/>
+        /// entries the probe judges. Mirrors <c>NetTypeResolver.ObjectAllowlistMemberNames</c>.
+        /// </summary>
+        private static readonly HashSet<string> NetObjectAllowlistNames = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "ToString", "GetHashCode",
+        };
+
+        // ==================================================================
+        // P2a-2 Task 4 — invocation-aware overload resolution (§6.5's argument side)
+        // ==================================================================
+
+        /// <summary>
+        /// The call-site half of the probe: given a call whose callee
+        /// <see cref="ProbeNetMemberAccess"/> resolved (the <see cref="_netResolvedReceivers"/>
+        /// gate — which makes every claim/NativeBclSurface/resolution early-return above binding
+        /// here too), types the arguments per §6.5's argument-side rule and asks
+        /// <c>NetTypeResolver.ResolveOverload</c> — real C# overload resolution — which member
+        /// the call selects.
+        ///
+        /// <para><b>Outcomes:</b> a winner REPLACES the name-only Task-2 annotation (recording
+        /// stays severity-independent); <c>Ambiguous</c> → BL6018; <c>NoMatch</c> → BL6017's
+        /// "no matching overload" half, argument types in the message. A member name the type
+        /// does not have at all is NOT re-judged here — that is the member probe's BL6017,
+        /// already reported.</para>
+        ///
+        /// <para><b>The probe never guesses (its own contract): every argument must be typed, or
+        /// this method must not ask.</b> Shapes left NAME-ONLY recorded, deliberately and
+        /// silently (no warning is manufactured for a shape the analyzer cannot type):
+        /// a <c>Nothing</c> argument (the null literal has no spelling in
+        /// <c>ResolveOverload</c>'s grammar), an <c>Object</c>-typed argument (the analyzer's
+        /// own lost-precision fallback — judging it would put spurious BL6017s on valid
+        /// programs), lambdas/delegates/foreign/tuple/pointer/type-parameter arguments, and
+        /// explicit method-level generic arguments (the probe API has no input for them). A
+        /// USER-DEFINED class/structure/interface argument is the one non-silent case: §6.5
+        /// says it is never admissible → BL6019.</para>
+        /// </summary>
+        private void ProbeNetInvocation(CallExpressionNode call, MemberAccessExpressionNode callee)
+        {
+            if (_netResolverFactory == null) return;
+            if (!_netResolvedReceivers.TryGetValue(callee, out var receiverFullName)) return;
+            if (call.GenericArguments != null && call.GenericArguments.Count > 0) return;
+
+            var resolver = NetResolver();
+            if (resolver == null) return;
+
+            // Canonicalize the member's casing against the surface: BasicLang is
+            // case-insensitive, ResolveOverload's candidate filter is Ordinal.
+            string memberName = null;
+            foreach (var member in resolver.GetMembers(receiverFullName))
+            {
+                if (string.Equals(member.Name, callee.MemberName, StringComparison.OrdinalIgnoreCase))
+                {
+                    memberName = member.Name;
+                    break;
+                }
+            }
+            if (memberName == null) return;   // member-not-found: ProbeNetMemberAccess's BL6017
+
+            // Receiver generic arguments (Queue(Of Integer) → ["System.Int32"]). All-or-nothing:
+            // an unmappable type argument leaves the call name-only recorded.
+            var typeArguments = new List<string>();
+            var receiverType = GetNodeType(callee.Object);
+            if (receiverType?.GenericArguments is { Count: > 0 } receiverTypeArgs)
+            {
+                foreach (var typeArg in receiverTypeArgs)
+                {
+                    if (!TryMapNetArgumentType(typeArg, out var argSpelling, out _)) return;
+                    typeArguments.Add(argSpelling);
+                }
+            }
+
+            var arguments = new List<string>(call.Arguments.Count);
+            for (var i = 0; i < call.Arguments.Count; i++)
+            {
+                var argument = call.Arguments[i];
+                if (IsNothingLiteral(argument)) return;   // null literal: no spelling — name-only
+
+                if (!TryMapNetArgumentType(GetNodeType(argument), out var spelling, out var userDefined))
+                {
+                    if (userDefined)
+                    {
+                        // §6.5's argument-side rule: a user-defined BasicLang class is NEVER an
+                        // admissible .NET argument under P2a (Object is Rejected, and no user
+                        // type has a metadata identity the shim could name).
+                        NetWarning("BL6019",
+                            $"Argument {(i + 1).ToString(CultureInfo.InvariantCulture)} of "
+                            + $"'{receiverFullName}.{memberName}': BasicLang type "
+                            + $"'{GetNodeType(argument)?.Name}' cannot cross the .NET boundary "
+                            + "(spec §6.5 — user-defined types are not marshalable under P2a).",
+                            argument.Line, argument.Column);
+                    }
+                    return;
+                }
+                arguments.Add(spelling);
+            }
+
+            // NetCallForm.Instance throughout: the probe self-corrects — a static class
+            // receiver is retried as Static inside ResolveOverload, and VB's
+            // shared-through-instance leniency is its documented CS0176 fallback. The analyzer
+            // cannot reliably tell `Guid.NewGuid()` (type receiver) from `g.Frob()` (value
+            // receiver) at this seam, and does not need to.
+            var result = resolver.ResolveOverload(
+                receiverFullName, NetCallForm.Instance, memberName, arguments, typeArguments);
+
+            switch (result.Outcome)
+            {
+                case NetOverloadOutcome.Resolved:
+                    // THE WINNING descriptor replaces the member probe's name-only record —
+                    // same node key, last write wins.
+                    _netAnnotations.RecordResolvedMember(callee, result.Member);
+                    WarnNetCallInGenericBody(receiverFullName, memberName, call.Line, call.Column);
+                    break;
+
+                case NetOverloadOutcome.Ambiguous:
+                    NetWarning("BL6018",
+                        $"Call to '{receiverFullName}.{memberName}({string.Join(", ", arguments)})' "
+                        + "is ambiguous between multiple overloads. Cast the arguments to select "
+                        + "one overload explicitly.",
+                        call.Line, call.Column);
+                    break;
+
+                case NetOverloadOutcome.NoMatch:
+                    NetWarning("BL6017",
+                        $"'{receiverFullName}' has no overload of '{memberName}' matching the "
+                        + $"argument types ({string.Join(", ", arguments)}).",
+                        call.Line, call.Column);
+                    break;
+
+                // TypeUnavailable: a type-level failure is BL6016/BL6023, reported by the
+                // type-reference probe — never re-reported as an overload answer.
+            }
+        }
+
+        /// <summary>
+        /// §6.5's admissible argument set — §8.3's rows plus §6.4's conversion pairs — projected
+        /// onto C# type spellings (<c>ResolveOverload</c>'s argument grammar). False means "do
+        /// not ask": <paramref name="isUserDefined"/> distinguishes the BL6019 case (a
+        /// user-declared class/structure/interface) from the silent leave-name-only cases.
+        /// </summary>
+        private bool TryMapNetArgumentType(TypeInfo type, out string spelling, out bool isUserDefined)
+        {
+            spelling = null;
+            isUserDefined = false;
+
+            if (type == null || string.IsNullOrEmpty(type.Name)) return false;
+
+            // The analyzer's lost-precision fallback: Object is what an untypeable expression
+            // degrades to, so treating it as a REAL System.Object argument would judge calls the
+            // analyzer never actually typed. Object is also permanently Rejected (§6.4).
+            if (string.Equals(type.Name, "Object", StringComparison.OrdinalIgnoreCase)) return false;
+
+            switch (type.Kind)
+            {
+                case TypeKind.Pointer:
+                case TypeKind.Foreign:
+                case TypeKind.Delegate:
+                case TypeKind.TypeParameter:
+                case TypeKind.Tuple:
+                case TypeKind.Void:
+                case TypeKind.Nullable:
+                    return false;
+            }
+            if (type.IsPointer || type.IsNullable || type.IsFixedLengthString) return false;
+
+            if (type.Kind == TypeKind.Array)
+            {
+                if (type.ArrayRank > 1) return false;
+                if (!TryMapNetArgumentType(type.ElementType, out var element, out isUserDefined))
+                    return false;
+                spelling = element + "[]";
+                return true;
+            }
+
+            if (NetArgumentSpellings.TryGetValue(type.Name, out var mapped))
+            {
+                spelling = mapped;
+                return true;
+            }
+
+            // A user-declared type is checked BEFORE metadata resolution: `Class Timer` must
+            // answer "user-defined" even though System.Threading.Timer would resolve — the
+            // ambient-collision trap NetInertnessTests pins.
+            if (IsUserDefinedTypeName(type.Name))
+            {
+                isUserDefined = type.Kind == TypeKind.Class || type.Kind == TypeKind.Structure
+                                || type.Kind == TypeKind.Interface;
+                return false;
+            }
+
+            // A .NET-typed value (`Dim st As Stream` passed along): resolve the spelling the
+            // same way the receiver resolved.
+            var genericCount = type.GenericArguments?.Count ?? 0;
+            if (ResolveNetType(type.Name, genericCount, out var fullName)
+                != NetTypeLookupOutcome.Resolved)
+            {
+                return false;
+            }
+            if (fullName.IndexOf('+') >= 0) return false;   // metadata-nested spelling: not C# syntax
+
+            if (genericCount == 0)
+            {
+                spelling = fullName;
+                return true;
+            }
+
+            var backtick = fullName.LastIndexOf('`');
+            if (backtick < 0) return false;
+            var argSpellings = new List<string>(genericCount);
+            foreach (var typeArg in type.GenericArguments)
+            {
+                if (!TryMapNetArgumentType(typeArg, out var argSpelling, out _)) return false;
+                argSpellings.Add(argSpelling);
+            }
+            spelling = fullName.Substring(0, backtick) + "<" + string.Join(", ", argSpellings) + ">";
+            return true;
+        }
+
+        /// <summary>
+        /// §8.3's by-value rows + §6.4's conversion pairs, as C# spellings. Everything else
+        /// either resolves from metadata, is user-defined (BL6019), or is left untyped.
+        /// </summary>
+        private static readonly Dictionary<string, string> NetArgumentSpellings =
+            new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Integer"] = "System.Int32",
+            ["Long"] = "System.Int64",
+            ["Short"] = "System.Int16",
+            ["Byte"] = "System.Byte",
+            ["SByte"] = "System.SByte",
+            ["UByte"] = "System.Byte",
+            ["UShort"] = "System.UInt16",
+            ["UInteger"] = "System.UInt32",
+            ["ULong"] = "System.UInt64",
+            ["Single"] = "System.Single",
+            ["Double"] = "System.Double",
+            ["Boolean"] = "System.Boolean",
+            ["Char"] = "System.Char",
+            ["String"] = "System.String",
+            // §6.4 conversion pairs (P1 NativeOwned values with managed counterparts).
+            ["Decimal"] = "System.Decimal",
+            ["DateTime"] = "System.DateTime",
+            ["TimeSpan"] = "System.TimeSpan",
+            ["Guid"] = "System.Guid",
+            ["DateTimeOffset"] = "System.DateTimeOffset",
+            ["StringBuilder"] = "System.Text.StringBuilder",
+        };
+
+        /// <summary>True for the `Nothing` literal (§6.5: participates as a null literal).</summary>
+        private static bool IsNothingLiteral(ExpressionNode node) =>
+            node is LiteralExpressionNode literal && literal.LiteralType == TokenType.Nothing;
+
+        /// <summary>
+        /// True when <paramref name="name"/> denotes a BasicLang-declared class / structure /
+        /// interface — in scope (the CLI channel), in the GLOBAL scope (the sibling-unit
+        /// channel, consulted separately because scope lookup is case-insensitive and a local
+        /// variable can shadow a type name — <c>Dim player As New Player(...)</c>), or in the
+        /// project symbol table (the LSP channel). Used to keep user types out of metadata
+        /// resolution — probes must never judge a name the project itself declares.
+        /// </summary>
+        private bool IsUserDefinedTypeName(string name)
+        {
+            static bool IsTypeSymbol(Symbol symbol) =>
+                symbol != null &&
+                (symbol.Kind == SymbolKind.Class || symbol.Kind == SymbolKind.Structure ||
+                 symbol.Kind == SymbolKind.Interface || symbol.Kind == SymbolKind.Type);
+
+            if (IsTypeSymbol(_currentScope?.Resolve(name))) return true;
+            if (IsTypeSymbol(GlobalScope?.Resolve(name))) return true;
+            return ResolveProjectSymbolType(name) != null;
+        }
+
+        /// <summary>
+        /// BL6024 (spec §15.5 decision / §14.13): a .NET-annotated call inside a generic
+        /// BasicLang body, NATIVE PATH ONLY — BasicLang generics emit real C++ templates, so the
+        /// set of .NET instantiations cannot be enumerated at phase 3 and no proxy can be
+        /// generated for the call. Warning in this task; the Task-5 flip promotes it.
+        /// Fired wherever an annotation is recorded; <see cref="NetWarning"/>'s de-dup keeps one
+        /// finding per site.
+        /// </summary>
+        private void WarnNetCallInGenericBody(string typeFullName, string memberName, int line, int column)
+        {
+            if (!_netNativeBackend) return;
+            if (!IsInsideGenericBody()) return;
+
+            NetWarning("BL6024",
+                $"'{typeFullName}.{memberName}' is called inside a generic BasicLang body. "
+                + "BasicLang generics compile to real C++ templates, so .NET instantiations "
+                + "cannot be enumerated at build time — .NET member calls are not supported "
+                + "inside generic bodies on the native backend (spec §14.13). Move the call to a "
+                + "non-generic method.",
+                line, column);
+        }
+
+        /// <summary>
+        /// True when any enclosing scope declares a type parameter — a generic function/sub, or
+        /// any body nested inside a generic class.
+        /// </summary>
+        private bool IsInsideGenericBody()
+        {
+            for (var scope = _currentScope; scope != null; scope = scope.Parent)
+            {
+                foreach (var symbol in scope.Symbols.Values)
+                {
+                    if (symbol.Kind == SymbolKind.TypeParameter)
+                        return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Spec §11.1's ladder-trigger completion (P2a-2 Task 4): a catch clause whose type name
+        /// is OUTSIDE <c>CppExceptionTypes</c>' 12-name set but RESOLVES as a .NET exception type
+        /// records the resolver-supplied fully-qualified name, which IRBuilder stamps onto the
+        /// <c>IRCatchClause</c> so the C++ NetException ladder emits an arm for it. Without this,
+        /// <c>Catch e As FileNotFoundException</c> silently binds to a later <c>Exception</c>
+        /// clause. Recording only — no diagnostic; an unresolvable catch type already drew its
+        /// BL6016 from the type-reference probe when the clause type was resolved.
+        /// </summary>
+        private void ProbeNetCatchClause(CatchClauseNode node)
+        {
+            if (_netResolverFactory == null) return;
+            var name = node?.ExceptionType?.Name;
+            if (string.IsNullOrEmpty(name)) return;
+            if (name.IndexOf("::", StringComparison.Ordinal) >= 0) return;   // foreign C++
+            if (BasicLang.Compiler.CodeGen.CPlusPlus.CppExceptionTypes.IsNetException(name)) return;
+            if (IsUserDefinedTypeName(name)) return;   // a BL exception type never arrives managed
+
+            var arity = node.ExceptionType.GenericArguments?.Count ?? 0;
+            if (ResolveNetType(name, arity, out var fullName) != NetTypeLookupOutcome.Resolved)
+                return;
+            var resolver = NetResolver();
+            if (resolver == null || !resolver.IsExceptionType(fullName)) return;
+
+            _netAnnotations.RecordResolvedExceptionType(node, fullName);
+        }
 
         #endregion
 
@@ -5177,6 +5600,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
         {
             var exceptionType = ResolveTypeReference(node.ExceptionType);
 
+            // P2a-2 Task 4 (§11.1 ladder-trigger completion): record the resolver-supplied FQ
+            // name for a resolved .NET exception type outside the 12-name set. Recording only.
+            ProbeNetCatchClause(node);
+
             EnterScope("Catch", ScopeKind.Block);
 
             if (!string.IsNullOrEmpty(node.ExceptionVariable))
@@ -6219,6 +6646,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 foreach (var arg in node.Arguments)
                 {
                     arg.Accept(this);
+                }
+
+                // P2a-2 Task 4 (§6.5's argument side): the callee visit above ran
+                // ProbeNetMemberAccess; if it RESOLVED the receiver, judge the whole invocation
+                // — real overload resolution over the now-typed arguments. Warning-only; the
+                // winner replaces the name-only annotation.
+                if (node.Callee is MemberAccessExpressionNode netCallee)
+                {
+                    ProbeNetInvocation(node, netCallee);
                 }
 
                 // For method calls on .NET types, use the type we computed for the member access
