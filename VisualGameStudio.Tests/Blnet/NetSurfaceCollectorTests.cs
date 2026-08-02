@@ -507,6 +507,181 @@ public class NetSurfaceCollectorTests
     }
 
     // ====================================================================================
+    // Decision-path guards (spec-review adjudicated additions beyond the plan text —
+    // each of these four arms was added by Task 3 and deserves its own test).
+    // ====================================================================================
+
+    /// <summary>
+    /// Decision: an AMBIGUOUS declared type is BL6023 (the "ambiguous .NET TYPE reference"
+    /// code, §6.5/§11.4), an ERROR on this path — never a fall-through to BL6022's "unknown",
+    /// and never a silent zero-member expansion.
+    /// </summary>
+    [Test]
+    public void DeclaredType_DeclaredInTwoReferences_IsABl6023Error()
+    {
+        var salt = Guid.NewGuid().ToString("N");
+        var a = EmitProbeAssembly("BlColDupA" + salt,
+            "namespace Contoso { public class Dup { public int FromA() { return 1; } } }");
+        var b = EmitProbeAssembly("BlColDupB" + salt,
+            "namespace Contoso { public class Dup { public int FromB() { return 2; } } }");
+        var resolver = NetTypeResolver.Create(
+            NetTypeResolverTestRefs.FrameworkPaths.Concat(new[] { a, b }));
+
+        var diagnostics = new List<NetReferenceDiagnostic>();
+        var surface = Collect(
+            project: ProjectDeclaring("Contoso.Dup"),
+            resolverFactory: () => resolver,
+            diagnostics: diagnostics);
+
+        var bl6023 = diagnostics.Where(d => d.Code == "BL6023").ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(bl6023, Has.Count.EqualTo(1),
+                "A <NetProxy> type declared in TWO referenced assemblies must produce exactly "
+                + "one BL6023 (ambiguous .NET type reference) — not BL6022, which would tell "
+                + "the user a type they can see declared twice was 'not found'. Got: "
+                + string.Join(" | ", diagnostics.Select(d => d.Code + ": " + d.Message)));
+            Assert.That(bl6023[0].IsWarning, Is.False,
+                "Ambiguity of a DECLARED type is an error: the declaration cannot be honored.");
+            Assert.That(bl6023[0].Message,
+                Does.Contain("Contoso.Dup").And.Contain("more than one referenced assembly"),
+                "BL6023 must name the declaration and say WHY it cannot be expanded.");
+            Assert.That(surface.Members, Is.Empty,
+                "An ambiguous declaration must expand to nothing — picking a winner silently "
+                + "binds the build to whichever assembly enumerated first.");
+            Assert.That(surface.DeclaredTypeNames, Does.Contain("Contoso.Dup"));
+        });
+    }
+
+    /// <summary>
+    /// Decision: a type that RESOLVES but is not effectively public is BL6022 with its own
+    /// message — the generated shim would reference it and die in csc with CS0122, the exact
+    /// late-failure shape phase 3 exists to move earlier.
+    /// </summary>
+    [Test]
+    public void DeclaredType_ResolvedButNotPublic_IsABl6022Error_WithTheNonPublicMessage()
+    {
+        var probe = EmitProbeAssembly("BlColHid" + Guid.NewGuid().ToString("N"),
+            "namespace Contoso { internal class Hidden { public int Peek() { return 1; } } }");
+        var resolver = NetTypeResolver.Create(
+            NetTypeResolverTestRefs.FrameworkPaths.Concat(new[] { probe }));
+
+        var diagnostics = new List<NetReferenceDiagnostic>();
+        var surface = Collect(
+            project: ProjectDeclaring("Contoso.Hidden"),
+            resolverFactory: () => resolver,
+            diagnostics: diagnostics);
+
+        var bl6022 = diagnostics.Where(d => d.Code == "BL6022").ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(bl6022, Has.Count.EqualTo(1),
+                "An internal declared type must produce exactly one BL6022. Got: "
+                + string.Join(" | ", diagnostics.Select(d => d.Code + ": " + d.Message)));
+            Assert.That(bl6022[0].IsWarning, Is.False);
+            Assert.That(bl6022[0].Message,
+                Does.Contain("Contoso.Hidden").And.Contain("not publicly accessible"),
+                "The non-public case must carry its DISTINCT message — telling the user a type "
+                + "that exists was 'not found' sends them hunting the wrong bug.");
+            Assert.That(bl6022[0].Message, Does.Not.Contain("unknown"),
+                "The non-public message must not be the unknown-type message.");
+            Assert.That(surface.Members, Is.Empty,
+                "No member of a non-public type may be expanded — the shim cannot reference "
+                + "any of them (CS0122).");
+        });
+    }
+
+    /// <summary>
+    /// Decision: a GENERIC METHOD (arity &gt; 0) is BL6026-omitted even before its signature
+    /// is walked — its type parameters are types §8.3 has no wire form for, whether or not
+    /// they appear in the parameter list; a monomorphic C export cannot carry an open T.
+    /// </summary>
+    [Test]
+    public void DeclaredType_GenericMethod_IsOmittedWithBl6026_NamingTheGenericRule()
+    {
+        var probe = EmitProbeAssembly("BlColGen" + Guid.NewGuid().ToString("N"), """
+            namespace Contoso
+            {
+                public class Gen
+                {
+                    public T Echo<T>(T value) { return value; }
+                    public int Plain() { return 1; }
+                }
+            }
+            """);
+        var resolver = NetTypeResolver.Create(
+            NetTypeResolverTestRefs.FrameworkPaths.Concat(new[] { probe }));
+
+        var diagnostics = new List<NetReferenceDiagnostic>();
+        var surface = Collect(
+            project: ProjectDeclaring("Contoso.Gen"),
+            resolverFactory: () => resolver,
+            diagnostics: diagnostics);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(surface.Members.Select(m => m.Name), Does.Contain("Plain"),
+                "The non-generic sibling must survive.");
+            Assert.That(surface.Members.Select(m => m.Name), Does.Not.Contain("Echo"),
+                "A generic method must be OMITTED — an open T has no wire form (§8.3).");
+            Assert.That(diagnostics.Any(d => d.Code == "BL6026"
+                    && d.IsWarning
+                    && d.Message.Contains("Echo")
+                    && d.Message.Contains("generic method")), Is.True,
+                "The omission must be announced by BL6026 naming the member AND the "
+                + "generic-method rule (not merely a signature-type finding). Got: "
+                + string.Join(" | ", diagnostics.Select(d => d.Code + ": " + d.Message)));
+        });
+    }
+
+    /// <summary>
+    /// Decision: an ARRAY is judged by its ELEMENT type — <c>int[]</c> crosses as a handle
+    /// (§8.6's representation rule: a .NET array VALUE is always a handle) and survives, while
+    /// <c>object[]</c> is omitted because its element is permanently Rejected: every element a
+    /// Task-9 accessor could ever hand out would be an <c>Object</c> handle no export can
+    /// consume. This deliberately pins the <c>params Object[]</c> casualty class.
+    /// </summary>
+    [Test]
+    public void DeclaredType_Arrays_AreJudgedByElement_IntSurvivesObjectIsOmitted()
+    {
+        var probe = EmitProbeAssembly("BlColArr" + Guid.NewGuid().ToString("N"), """
+            namespace Contoso
+            {
+                public class Arrays
+                {
+                    public int[] GetInts() { return new int[0]; }
+                    public object[] GetObjects() { return new object[0]; }
+                }
+            }
+            """);
+        var resolver = NetTypeResolver.Create(
+            NetTypeResolverTestRefs.FrameworkPaths.Concat(new[] { probe }));
+
+        var diagnostics = new List<NetReferenceDiagnostic>();
+        var surface = Collect(
+            project: ProjectDeclaring("Contoso.Arrays"),
+            resolverFactory: () => resolver,
+            diagnostics: diagnostics);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(surface.Members.Select(m => m.Name), Does.Contain("GetInts"),
+                "int[] must survive: a .NET array value is always a handle (§8.6), and an "
+                + "int element has a §8.3 row.");
+            Assert.That(surface.Members.Select(m => m.Name), Does.Not.Contain("GetObjects"),
+                "object[] must be OMITTED — the element is permanently Rejected, so the "
+                + "handle's contents are unreachable by construction.");
+            Assert.That(diagnostics.Any(d => d.Code == "BL6026"
+                    && d.IsWarning
+                    && d.Message.Contains("GetObjects")
+                    && d.Message.Contains("uses 'object'")), Is.True,
+                "The omission must name the member and the offending ELEMENT type (the array "
+                + "is judged by its element, and the diagnostic must say which one). Got: "
+                + string.Join(" | ", diagnostics.Select(d => d.Code + ": " + d.Message)));
+        });
+    }
+
+    // ====================================================================================
     // <NetProxy> in the project file — parse + round-trip.
     // ====================================================================================
 
