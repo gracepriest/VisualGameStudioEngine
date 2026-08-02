@@ -350,8 +350,9 @@ of `CompileUnit` construction so the compile path is configured identically to t
 > `Uri.AbsolutePath` stop answering null — all violations of §6.3's "preserving today's
 > late-`csc` behavior" row. The native path does not need this wiring (it runs on
 > `NetResolverFactory` + the AST annotation table). Standing acceptance gate for whoever takes
-> it later: `TypeRegistryFallbackPinningTests` (11 pins, must pass unmodified) + the canary
-> test `WiringAnLspConfiguredTypeRegistryChangesStringSplitsAnswer_TheTask2Blocker`, plus the
+> it later: `TypeRegistryFallbackPinningTests` (11 tests: 10 pins that must pass unmodified +
+> the canary `WiringAnLspConfiguredTypeRegistryChangesStringSplitsAnswer_TheTask2Blocker`,
+> which inverts when wired), plus the
 > open production-instance question (sharing the LSP's `%LOCALAPPDATA%` cache vs a fresh
 > per-compilation registry). The `"()"`-spelling fix alone does not clear the canaries.
 

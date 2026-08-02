@@ -810,8 +810,9 @@ duplicate; grep `BlnetContractTests`/`NetShimGeneratorTests` first).
 - **`ConfigureTypeRegistry` into `CompileUnit` — REMOVED from Task 2 by measurement
   (2026-08-02).** The wiring changes type inference for existing programs (`String.Split` →
   synthetic `"String()"` class; four gap-fill canaries stop answering null), contradicting spec
-  §6.3's C#-preservation row — see the dated correction in spec §6.2. The pins
-  (`TypeRegistryFallbackPinningTests`, 11) and the canary test hold the divergence mechanically;
+  §6.3's C#-preservation row — see the dated correction in spec §6.2. The
+  `TypeRegistryFallbackPinningTests` fixture (11 tests: 10 pins + the canary) holds the
+  divergence mechanically;
   the native path needs none of it. Deferred as a follow-up outside P2a-2 (chipped).
 
 ## Execution notes for the controller
