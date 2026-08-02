@@ -344,7 +344,10 @@ AST separately, so the hand-off is an annotation side table.
   Task 5), extend the trigger + `TryGetNetFullName` so resolved exception types outside the
   12-name set (e.g. `FileNotFoundException`) get their ladder arm with the resolver-supplied FQ
   name — otherwise they silently bind to a later `Exception` clause. Add a test with exactly
-  that shape.
+  that shape. While touching the ladder, also convert the THREE `_regionLabelSuffix`
+  literal-assign/reset sites (`_fex`/`_fnorm`/`_nex`) to save/restore (`var saved = …; …;
+  _regionLabelSuffix = saved;`) — retires the whole nested-copy label-collision class incl. the
+  pre-existing finally-inside-finally variant (Task 1 quality-review item).
 - **Severity stays warning-only in this task on BOTH backends** — §6.3's native-error promotion
   is the flip (Task 5), keeping this commit's churn reviewable.
 - **C# warning row (§6.3):** set `CompilerOptions.NetResolverFactory` on the C#-backend paths
