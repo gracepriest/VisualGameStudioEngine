@@ -44,6 +44,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, string> _foreignLocalTypeByName =
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // §11.1 `<catchVar>.Message`: the IRFieldAccess nodes that read `Message` off a
+        // catch variable INSIDE that clause's own body region. Collected per function
+        // (InitializeFunctionContext) because their result temps must already be
+        // declared std::string by DeclareLocalsAndTemporaries — the analyzer types the
+        // access Object/unknown for most exception types, which would declare void*.
+        // Visit(IRFieldAccess) lowers members of this set to BasicLang::String(v.what()).
+        // Strictly catch-variable-scoped: no general exception-object model exists.
+        private readonly HashSet<IRValue> _catchMessageAccesses = new HashSet<IRValue>();
         private bool _usesFramework;
         private readonly HashSet<string> _frameworkFunctionsUsed;
         private IRModule _module;
@@ -317,6 +325,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // include-free; their std headers live in the unconditional include set above.
             SpliceRuntimeSource(CppBclRuntime.BclBody);
             SpliceRuntimeSource(CppDecimalRuntime.DecimalBody);
+
+            // §11.1 NetException + the BasicLang::String alias: UNCONDITIONAL in both
+            // modes — the typed-catch ladder's trigger is source-level (any .NET-typed
+            // Catch), not surface-level, so the declaration must always exist
+            // (split-mode counterpart: EmitRuntimeHeader in CppCodeGenerator.Split.cs).
+            SpliceRuntimeSource(CppNetExceptionRuntime.Source);
         }
 
         /// <summary>
@@ -714,6 +728,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var savedNames = new Dictionary<IRValue, string>(_valueNames);
             var savedDeclared = new HashSet<string>(_declaredIdentifiers, StringComparer.OrdinalIgnoreCase);
             var savedTemps = new HashSet<IRValue>(_allTemporaries);
+            var savedCatchMessageAccesses = new HashSet<IRValue>(_catchMessageAccesses);
             var savedSuppress = _suppressLineDirectives;
 
             try
@@ -754,6 +769,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 foreach (var d in savedDeclared) _declaredIdentifiers.Add(d);
                 _allTemporaries.Clear();
                 foreach (var t in savedTemps) _allTemporaries.Add(t);
+                _catchMessageAccesses.Clear();
+                foreach (var t in savedCatchMessageAccesses) _catchMessageAccesses.Add(t);
             }
         }
 
@@ -1422,6 +1439,28 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     }
                 }
             }
+
+            // §11.1: collect `<catchVar>.Message` reads, scoped to each catch clause's
+            // OWN body region and its OWN variable name (an unnamed clause has no
+            // referenceable exception variable and contributes nothing). The set backs
+            // both the std::string temp declaration and the what() lowering.
+            _catchMessageAccesses.Clear();
+            foreach (var block in function.Blocks)
+                foreach (var instruction in block.Instructions)
+                {
+                    if (instruction is not IRTryCatch tc) continue;
+                    foreach (var cc in tc.CatchClauses)
+                    {
+                        if (string.IsNullOrEmpty(cc.VariableName) || cc.Block == null) continue;
+                        foreach (var regionBlock in ComputeInlineRegion(cc.Block, tc.EndBlock))
+                            foreach (var inst in regionBlock.Instructions)
+                                if (inst is IRFieldAccess fa
+                                    && string.Equals(fa.FieldName, "Message", StringComparison.OrdinalIgnoreCase)
+                                    && fa.Object is IRVariable fv
+                                    && string.Equals(fv.Name, cc.VariableName, StringComparison.OrdinalIgnoreCase))
+                                    _catchMessageAccesses.Add(fa);
+                    }
+                }
         }
 
         /// <summary>
@@ -1479,7 +1518,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 .Where(t => t.Type?.Name != "Void" && MapType(t.Type) != "void")
                 .Where(t => t.Type?.Kind != TypeKind.Foreign)
                 .Where(t => !CppExceptionTypes.IsNetException(t.Type?.Name))
-                .GroupBy(t => MapType(t.Type))
+                // §11.1: a `<catchVar>.Message` read lowers to
+                // BasicLang::String(v.what()) — its temp must be std::string
+                // regardless of what the analyzer inferred (often Object -> void*).
+                .GroupBy(t => _catchMessageAccesses.Contains(t) ? "std::string" : MapType(t.Type))
                 .ToList();
 
             foreach (var group in tempsByType)
@@ -3381,6 +3423,17 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // Result temps are pre-declared by DeclareLocalsAndTemporaries: assign, don't redeclare.
             var result = GetValueName(fieldAccess);
 
+            // §11.1 `<catchVar>.Message` (collected in InitializeFunctionContext, strictly
+            // scoped to catch variables inside their own clause regions): NetException's
+            // message IS its what(), and the per-clause std::exception/std::runtime_error
+            // bindings carry the message the same way — one lowering serves both copies
+            // of the (twice-emitted) catch body.
+            if (_catchMessageAccesses.Contains(fieldAccess) && fieldAccess.Object is IRVariable catchVar)
+            {
+                WriteLine($"{result} = BasicLang::String({SanitizeName(catchVar.Name)}.what());");
+                return;
+            }
+
             // P1 static dispatch: a NativeOwned TYPE-NAME receiver (`DateTime.Now`,
             // `DateTime.MinValue`, `Decimal.One`, `TimeSpan.Zero`) with a surface
             // StaticProperty/StaticMethod lowers to the runtime's static member FUNCTION:
@@ -3404,7 +3457,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 fieldAccess.Object != null)
             {
                 var receiverType = fieldAccess.Object.Type;
-                if (string.Equals(receiverType?.Name, "String", StringComparison.OrdinalIgnoreCase))
+                // `<catchVar>.Message` results are std::string regardless of the
+                // analyzer's inferred type (see _catchMessageAccesses), so
+                // `ex.Message.Length` takes the String path too.
+                if (string.Equals(receiverType?.Name, "String", StringComparison.OrdinalIgnoreCase)
+                    || _catchMessageAccesses.Contains(fieldAccess.Object))
                 {
                     WriteLine($"{result} = static_cast<int32_t>({GetValueName(fieldAccess.Object)}.length());");
                     return;
@@ -3482,6 +3539,60 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             EmitInlineRegion(tryCatch.TryBlock, tryCatch.EndBlock, RegionEnd.GotoEnd);
             Unindent();
             WriteLine("}");
+
+            // §11.1: a Try with at least one .NET-typed clause gets ONE leading
+            // catch (const BasicLang::NetException&) holding an if/else-if ladder over
+            // ALL clauses in source order (chain element matching), ending in a bare
+            // throw; reached only when no clause matched. ORDER IS LOAD-BEARING: it
+            // must precede the MapCatchType handlers AND the catch(...) finally pair —
+            // NetException IS a std::runtime_error, so any later position would be
+            // swallowed. A BL-thrown Throw New ArgumentException(...) is a plain
+            // std::runtime_error: it skips this handler and lands in the per-clause
+            // handlers below (the dual-shape behavior). Each clause body is emitted
+            // TWICE (ladder arm + per-clause handler) and C++ labels are
+            // function-scoped, so the ladder's copies carry the _nex label suffix —
+            // the same trick the finally duplication plays with _fex/_fnorm.
+            if (tryCatch.CatchClauses.Any(cc => CppExceptionTypes.IsNetException(cc.ExceptionType?.Name)))
+            {
+                WriteLine("catch (const BasicLang::NetException& __nex)");
+                WriteLine("{");
+                Indent();
+                _regionLabelSuffix = "_nex";
+                var firstArm = true;
+                foreach (var catchClause in tryCatch.CatchClauses)
+                {
+                    string fqName;
+                    var clauseTypeName = catchClause.ExceptionType?.Name;
+                    if (clauseTypeName == null)
+                    {
+                        // An untyped Catch catches everything; every managed chain
+                        // ends "System.Exception".
+                        fqName = "System.Exception";
+                    }
+                    else if (!CppExceptionTypes.TryGetNetFullName(clauseTypeName, out fqName))
+                    {
+                        // A user-defined BL exception type can never arrive as a
+                        // managed NetException — skipping its arm preserves the
+                        // first-matching-clause-in-source-order semantics.
+                        continue;
+                    }
+                    WriteLine($"{(firstArm ? "if" : "else if")} (__nex.Matches(\"{fqName}\"))");
+                    firstArm = false;
+                    WriteLine("{");
+                    Indent();
+                    var armVar = !string.IsNullOrEmpty(catchClause.VariableName)
+                        ? SanitizeName(catchClause.VariableName)
+                        : "ex";
+                    WriteLine($"const BasicLang::NetException& {armVar} = __nex;");
+                    EmitInlineRegion(catchClause.Block, tryCatch.EndBlock, RegionEnd.GotoEnd);
+                    Unindent();
+                    WriteLine("}");
+                }
+                _regionLabelSuffix = "";
+                WriteLine("throw;");
+                Unindent();
+                WriteLine("}");
+            }
 
             foreach (var catchClause in tryCatch.CatchClauses)
             {

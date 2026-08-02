@@ -12,15 +12,42 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
     /// </summary>
     public static class CppExceptionTypes
     {
-        private static readonly HashSet<string> Names = new(StringComparer.OrdinalIgnoreCase)
+        // Single source for the 12 known names: canonical .NET casing (all live in
+        // System). §11.1's NetException ladder compares the fully-qualified spelling
+        // against the shim-reported inheritance chain with CASE-SENSITIVE element
+        // equality, so a BL clause's case-insensitive spelling must canonicalize here.
+        private static readonly Dictionary<string, string> FullNames = new(StringComparer.OrdinalIgnoreCase)
         {
-            "Exception", "SystemException", "ApplicationException", "ArgumentException",
-            "ArgumentNullException", "InvalidOperationException", "NotImplementedException",
-            "NullReferenceException", "IndexOutOfRangeException", "FormatException",
-            "OverflowException", "DivideByZeroException"
+            ["Exception"] = "System.Exception",
+            ["SystemException"] = "System.SystemException",
+            ["ApplicationException"] = "System.ApplicationException",
+            ["ArgumentException"] = "System.ArgumentException",
+            ["ArgumentNullException"] = "System.ArgumentNullException",
+            ["InvalidOperationException"] = "System.InvalidOperationException",
+            ["NotImplementedException"] = "System.NotImplementedException",
+            ["NullReferenceException"] = "System.NullReferenceException",
+            ["IndexOutOfRangeException"] = "System.IndexOutOfRangeException",
+            ["FormatException"] = "System.FormatException",
+            ["OverflowException"] = "System.OverflowException",
+            ["DivideByZeroException"] = "System.DivideByZeroException"
         };
 
+        private static readonly HashSet<string> Names = new(FullNames.Keys, StringComparer.OrdinalIgnoreCase);
+
         public static bool IsNetException(string name) => name != null && Names.Contains(name);
+
+        /// <summary>
+        /// Canonical fully-qualified .NET name for a BL catch-clause type name
+        /// (<c>Exception</c> → <c>System.Exception</c>), for §11.1 chain matching.
+        /// False for user-defined names — a BasicLang exception type can never arrive
+        /// as a managed <c>NetException</c>.
+        /// </summary>
+        public static bool TryGetNetFullName(string name, out string fullName)
+        {
+            if (name != null && FullNames.TryGetValue(name, out fullName)) return true;
+            fullName = null;
+            return false;
+        }
     }
 
     /// <summary>

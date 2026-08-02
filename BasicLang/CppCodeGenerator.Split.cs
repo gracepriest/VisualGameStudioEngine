@@ -396,6 +396,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             SpliceRuntimeSource(CppBclRuntime.BclBody);
             SpliceRuntimeSource(CppDecimalRuntime.DecimalBody);
 
+            // §11.1 NetException + the BasicLang::String alias: UNCONDITIONAL, mirroring
+            // the combined mode (GenerateHeader in CppCodeGenerator.cs — keep in sync).
+            // The typed-catch ladder's trigger is source-level, not surface-level.
+            SpliceRuntimeSource(CppNetExceptionRuntime.Source);
+
             EmitFrameworkCatalog();
         }
 
