@@ -338,6 +338,13 @@ AST separately, so the hand-off is an annotation side table.
   now resolves (churns `BareUnclaimedGenericsAreBelowTheEvidenceBar` — Task 5 owns the severity
   churn; THIS task keeps everything `IsWarning: true` so the only visible change is MORE warnings
   on programs naming unresolvable/ambiguous .NET types).
+- **Ladder-trigger completion (Task 1 spec-review finding):** Task 1 implemented the typed-catch
+  ladder trigger for the 12 `CppExceptionTypes` names only; spec §11.1's trigger ALSO covers a
+  clause type that "resolves as a .NET exception type". Once resolution is live (this task /
+  Task 5), extend the trigger + `TryGetNetFullName` so resolved exception types outside the
+  12-name set (e.g. `FileNotFoundException`) get their ladder arm with the resolver-supplied FQ
+  name — otherwise they silently bind to a later `Exception` clause. Add a test with exactly
+  that shape.
 - **Severity stays warning-only in this task on BOTH backends** — §6.3's native-error promotion
   is the flip (Task 5), keeping this commit's churn reviewable.
 - **C# warning row (§6.3):** set `CompilerOptions.NetResolverFactory` on the C#-backend paths
@@ -711,7 +718,11 @@ BL6020 INPUTS, never that assertion's subject.
 **The seven programs (spec §12.1 table, each pinning a would-be-silent divergence):**
 1. the six §6.4 conversion pairs round-tripped through a .NET call (tick epochs + Decimal bits);
 2. multiple `Catch` clauses incl. a SUBCLASS match around a throwing .NET call — **with control
-   flow in at least one catch body** (the `_nex` label-redefinition guard, spec §11.1);
+   flow in at least one catch body** (the `_nex` label-redefinition guard, spec §11.1).
+   ⛔ **C2312 constraint (Task 1 finding):** at most ONE non-`Exception` typed clause per `Try` —
+   two collapse to duplicate `catch (const std::runtime_error&)` per-clause handlers (MSVC
+   C2312, pre-existing `MapCatchType` behavior). Author as derived-then-`Exception` (the
+   `Cpp_Run_TypedCatch_SourceOrderPreference` shape) unless per-clause dedup has landed;
 3. `Throw New ArgumentException` caught locally in a file that also calls .NET (dual shape);
 4. an array mutated inside a .NET call (§14.11 one-way copy — expected output documents the
    divergence, ref-slot variant shows the readback);
