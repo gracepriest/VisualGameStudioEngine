@@ -1628,10 +1628,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private string LabelName(string blockName) => blockName.Replace('.', '_') + _regionLabelSuffix;
 
         /// <summary>
-        /// Appended to every emitted label and goto target while set. Used ONLY to keep the two
-        /// copies of a Finally body (the catch(...) rethrow path and the normal path) from
-        /// defining the same C++ label twice when the Finally contains control flow — each copy
-        /// gets a distinct suffix so labels/gotos stay internally consistent yet globally unique.
+        /// Appended to every emitted label and goto target while set. Used ONLY to keep the
+        /// duplicate emissions of one body from defining the same C++ label twice when it
+        /// contains control flow: the two copies of a Finally body (the catch(...) rethrow
+        /// path <c>_fex</c> and the normal path <c>_fnorm</c>), and the §11.1 NetException
+        /// ladder's copies of the catch-clause bodies (<c>_nex</c>) — each copy gets a
+        /// distinct suffix so labels/gotos stay internally consistent yet globally unique.
         /// Empty everywhere else.
         /// </summary>
         private string _regionLabelSuffix = "";
@@ -3580,10 +3582,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     firstArm = false;
                     WriteLine("{");
                     Indent();
-                    var armVar = !string.IsNullOrEmpty(catchClause.VariableName)
-                        ? SanitizeName(catchClause.VariableName)
-                        : "ex";
-                    WriteLine($"const BasicLang::NetException& {armVar} = __nex;");
+                    // An unnamed clause has no referenceable exception variable — a
+                    // binding would be dead and could shadow a user local in the arm.
+                    if (!string.IsNullOrEmpty(catchClause.VariableName))
+                        WriteLine($"const BasicLang::NetException& {SanitizeName(catchClause.VariableName)} = __nex;");
                     EmitInlineRegion(catchClause.Block, tryCatch.EndBlock, RegionEnd.GotoEnd);
                     Unindent();
                     WriteLine("}");
