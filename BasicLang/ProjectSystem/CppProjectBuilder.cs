@@ -237,14 +237,13 @@ namespace BasicLang.Compiler.ProjectSystem
         /// are <see cref="Build"/>'s tail and phase 5 does not exist yet.</para>
         /// </summary>
         /// <param name="surfaceOverride">
-        /// <b>A TEST SEAM, and nothing else.</b> Phase 3 (<see cref="CppBuildPhase.CollectNetSurface"/>)
-        /// has no collector in P2a-1 — §7.1's call-site walk lands later — so it always yields
-        /// <see cref="NetSurface.Empty"/> and every artifact keyed on the surface is therefore
-        /// inert. That makes the merge below unreachable, and an unreachable merge is untestable:
-        /// this parameter is how a test supplies the non-empty surface the real collector will one
-        /// day produce. <b>When phase 3 gains a collector, this must become the collector's result
-        /// with the override used only as a substitute</b> — not a second, parallel input.
-        /// Production callers pass null.
+        /// <b>A TEST SEAM, and nothing else.</b> Phase 3
+        /// (<see cref="CppBuildPhase.CollectNetSurface"/>) runs
+        /// <see cref="NetSurfaceCollector.Collect"/> since P2a-2 Task 3; a non-null override
+        /// SUBSTITUTES for the collector wholesale (the collector does not run, and no
+        /// collector diagnostics are produced) — it is not a second, parallel input. Kept so
+        /// tests can hand the pipeline an arbitrary surface without authoring IR carriage or a
+        /// <c>&lt;NetProxy&gt;</c>. Production callers pass null.
         /// </param>
         /// <param name="cancellationToken">
         /// See <see cref="Build"/>. Honored at phase boundaries only; defaults to
@@ -469,11 +468,68 @@ namespace BasicLang.Compiler.ProjectSystem
             }
 
             // ---- Collect the .NET surface (spec §10.1 phase 3) ----
-            // Runs on BOTH paths. There is no collector in P2a-1 (§7.1's call-site walk lands
-            // later), so this is NetSurface.Empty for every project that exists — which is what
-            // makes the whole artifact merge below inert. See surfaceOverride's remarks.
+            // Runs on BOTH paths (§10.1's table: IntelliSense includes phase 3, so a declared
+            // <NetProxy> project gets its proxy headers for clangd too). P2a-2 Task 3: the
+            // collector is LIVE — §7.1's used-only walk over the optimized IR (the module
+            // GenerateSplit emits from) plus §7.2's <NetProxy> expansion. Every project without
+            // Task-2 carriage and without a <NetProxy> still collects NetSurface.Empty, which is
+            // what keeps the artifact merge below inert for the entire existing repo
+            // (NetInertnessTests + NetBuildPipelineTests are the standing gates).
             Checkpoint(cancellationToken, CppBuildPhase.CollectNetSurface);
-            var surface = surfaceOverride ?? NetSurface.Empty;
+            NetSurface surface;
+            if (surfaceOverride != null)
+            {
+                surface = surfaceOverride;   // the test seam substitutes for the collector
+            }
+            else
+            {
+                // Collector diagnostics (BL6022/BL6023/BL6026) ride the SAME two channels the
+                // reference-resolution and analyzer findings above use: merged into the closure
+                // (the complete record on both paths), then mapped onto the build result only
+                // on a build — warnings hand-constructed (never through Fail, which forces
+                // Success = false), errors through Fail with all of them reported before
+                // stopping.
+                var collectorDiagnostics = new List<NetReferenceDiagnostic>();
+                surface = NetSurfaceCollector.Collect(
+                    compilation?.CombinedIR is IRModule combined
+                        ? new[] { combined }
+                        : Array.Empty<IRModule>(),
+                    project, netResolverFactory, collectorDiagnostics);
+
+                if (collectorDiagnostics.Count > 0)
+                {
+                    netReferences = new NetReferenceClosure(
+                        netReferences.AssemblyPaths,
+                        netReferences.FrameworkPaths,
+                        netReferences.Diagnostics.Concat(collectorDiagnostics).ToList());
+                    outcome.NetReferences = netReferences;
+
+                    if (!forIntelliSense)
+                    {
+                        var surfaceErrors = 0;
+                        foreach (var diag in collectorDiagnostics)
+                        {
+                            if (diag.IsWarning)
+                            {
+                                result.Diagnostics.Add(new CppDiagnostic
+                                {
+                                    FilePath = project.FilePath,
+                                    Line = 0,
+                                    Column = 0,
+                                    IsWarning = true,
+                                    Code = diag.Code,
+                                    Message = diag.Message
+                                });
+                                continue;
+                            }
+                            Fail(result, diag.Code, diag.Message, project.FilePath);
+                            surfaceErrors++;
+                        }
+                        if (surfaceErrors > 0)
+                            return outcome;   // Completed stays false.
+                    }
+                }
+            }
 
             // ---- 4. Entry-point rule (pre-link, so 0/2-main cases give clickable diags) ----
             // Bypassed for IntelliSense: "no Sub Main yet" is the normal mid-edit state and

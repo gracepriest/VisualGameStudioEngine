@@ -34,6 +34,12 @@ namespace BasicLang.Compiler.ProjectSystem
         // Assembly references (direct DLL references)
         public List<AssemblyReference> AssemblyReferences { get; set; } = new List<AssemblyReference>();
 
+        // .NET proxy type declarations (P2a spec §7.2): <NetProxy Include="Full.Type.Name" />
+        // declares that hand-written C++ in this project uses the named .NET type, whose full
+        // public surface is then collected by NetSurfaceCollector. Verbatim Include values,
+        // in declaration order.
+        public List<string> NetProxyTypes { get; set; } = new List<string>();
+
         // Compiler options
         public bool OptimizationsEnabled { get; set; } = true;
         public bool DebugSymbols { get; set; } = true;
@@ -221,6 +227,14 @@ namespace BasicLang.Compiler.ProjectSystem
                         });
                     }
                 }
+
+                // .NET proxy type declarations (P2a spec §7.2)
+                foreach (var netProxy in itemGroup.Elements("NetProxy"))
+                {
+                    var include = netProxy.Attribute("Include")?.Value;
+                    if (!string.IsNullOrEmpty(include))
+                        project.NetProxyTypes.Add(include);
+                }
             }
 
             // Parse build configurations
@@ -352,6 +366,14 @@ namespace BasicLang.Compiler.ProjectSystem
                         new XAttribute("Include", a.Name),
                         string.IsNullOrEmpty(a.HintPath) ? null : new XElement("HintPath", a.HintPath)
                     ))
+                ));
+            }
+
+            // Add ItemGroup for .NET proxy type declarations (P2a spec §7.2)
+            if (NetProxyTypes.Count > 0)
+            {
+                root.Add(new XElement("ItemGroup",
+                    NetProxyTypes.Select(t => new XElement("NetProxy", new XAttribute("Include", t)))
                 ));
             }
 
