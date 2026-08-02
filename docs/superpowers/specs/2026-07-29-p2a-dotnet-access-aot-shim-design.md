@@ -340,6 +340,21 @@ beside it.
 `ConfigureTypeRegistry` — today reachable only from `LSP/DocumentManager.cs:571` — becomes part
 of `CompileUnit` construction so the compile path is configured identically to the LSP path.
 
+> ⛔ **Correction (2026-08-02, measured during P2a-2 Task 2): this paragraph contradicts §6.3
+> and is DEFERRED beyond P2a.** Wiring an LSP-configured registry into `CompileUnit` was
+> attempted behind fallback-pinning tests and measurably changes type inference for existing
+> programs: `ResolveNetMemberType("String","Split")` flips from the fallback's real
+> `TypeKind.Array` to a synthetic class named `"String()"` (the registry spells arrays `"()"`
+> while `ResolveNetTypeName` unwraps only `"[]"`), `ToCharArray` flips identically, and
+> registry gap-filling makes `Regex.IsMatch`/`List.Reverse`/`String.GetTypeCode`/
+> `Uri.AbsolutePath` stop answering null — all violations of §6.3's "preserving today's
+> late-`csc` behavior" row. The native path does not need this wiring (it runs on
+> `NetResolverFactory` + the AST annotation table). Standing acceptance gate for whoever takes
+> it later: `TypeRegistryFallbackPinningTests` (11 pins, must pass unmodified) + the canary
+> test `WiringAnLspConfiguredTypeRegistryChangesStringSplitsAnswer_TheTask2Blocker`, plus the
+> open production-instance question (sharing the LSP's `%LOCALAPPDATA%` cache vs a fresh
+> per-compilation registry). The `"()"`-spelling fix alone does not clear the canaries.
+
 ### 6.3 Strictness, phased by backend
 
 Today's permissiveness is load-bearing on the C# backend and, per recon, **untested** —
