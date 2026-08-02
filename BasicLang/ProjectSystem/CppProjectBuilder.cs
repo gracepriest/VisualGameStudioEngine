@@ -338,33 +338,10 @@ namespace BasicLang.Compiler.ProjectSystem
             // perfectly good header regeneration into an Output-panel failure line on every typo'd
             // HintPath. outcome.NetReferences.Diagnostics is the complete record on both paths.
             // Pinned by IntelliSenseEmitterTests.Emit_WithUnresolvableReference_*.
-            if (!forIntelliSense)
+            if (MergeNetDiagnostics(netReferences.Diagnostics, ref netReferences, outcome, result,
+                    project.FilePath, forIntelliSense, alreadyOnClosure: true) > 0)
             {
-                var referenceErrors = 0;
-                foreach (var diag in netReferences.Diagnostics)
-                {
-                    if (diag.IsWarning)
-                    {
-                        // Hand-constructed rather than routed through Fail: Fail forces
-                        // Success = false, and a warning must not. Do NOT "unify" these two.
-                        result.Diagnostics.Add(new CppDiagnostic
-                        {
-                            FilePath = project.FilePath,
-                            Line = 0,
-                            Column = 0,
-                            IsWarning = true,
-                            Code = diag.Code,
-                            Message = diag.Message
-                        });
-                        continue;
-                    }
-                    // Report ALL of them before stopping: one BL6021 per broken reference is far
-                    // more useful than the first one alone.
-                    Fail(result, diag.Code, diag.Message, project.FilePath);
-                    referenceErrors++;
-                }
-                if (referenceErrors > 0)
-                    return outcome;   // Completed stays false — the caller returns the result as-is.
+                return outcome;   // Completed stays false — the caller returns the result as-is.
             }
 
             // ---- 1. Partition sources ----
@@ -410,39 +387,16 @@ namespace BasicLang.Compiler.ProjectSystem
                 });
                 compilation = compiler.CompileProjectFiles(blSources);
 
-                // P2a-1 §6.5: the analyzer's warning-only .NET findings. MERGED into the closure's
-                // existing bag — not a third channel — because IntelliSenseEmitterTests pins
-                // outcome.NetReferences.Diagnostics as the complete record, and because
-                // result.AllErrors/result.Diagnostics-via-Fail both force Success = false, which a
-                // warning must never do. Merged before the failure return so a unit that failed for
-                // an unrelated reason still carries them.
-                if (compilation.NetDiagnostics.Count > 0)
-                {
-                    netReferences = new NetReferenceClosure(
-                        netReferences.AssemblyPaths,
-                        netReferences.FrameworkPaths,
-                        netReferences.Diagnostics.Concat(compilation.NetDiagnostics).ToList());
-                    outcome.NetReferences = netReferences;
-
-                    if (!forIntelliSense)
-                    {
-                        foreach (var diag in compilation.NetDiagnostics)
-                        {
-                            // Hand-constructed, never routed through Fail — Fail forces
-                            // Success = false and these are warnings. Same shape as the
-                            // reference-resolution warning block above.
-                            result.Diagnostics.Add(new CppDiagnostic
-                            {
-                                FilePath = project.FilePath,
-                                Line = 0,
-                                Column = 0,
-                                IsWarning = true,
-                                Code = diag.Code,
-                                Message = diag.Message
-                            });
-                        }
-                    }
-                }
+                // P2a-1 §6.5: the analyzer's .NET findings. MERGED into the closure's existing
+                // bag — not a third channel — because IntelliSenseEmitterTests pins
+                // outcome.NetReferences.Diagnostics as the complete record. Merged before the
+                // failure return so a unit that failed for an unrelated reason still carries
+                // them. The error count is 0 while the analyzer's findings stay warning-only
+                // (P2a-2 Task 4 keeps them warnings on both backends); Task 5's severity flip
+                // arms the failure return below.
+                var analyzerNetErrors = MergeNetDiagnostics(
+                    compilation.NetDiagnostics, ref netReferences, outcome, result,
+                    project.FilePath, forIntelliSense);
 
                 // Mapped on success as well as failure: analyzer warnings are non-fatal
                 // (a SUCCESSFUL compilation can carry Warning-severity entries) and must
@@ -458,6 +412,12 @@ namespace BasicLang.Compiler.ProjectSystem
                     return outcome;   // Completed stays false — note this returns BEFORE the
                                       // obj/gen clean, which is what preserves stale headers.
                 }
+
+                // Unreachable while every analyzer .NET finding is a warning; the P2a-2 flip
+                // (Task 5) makes BL6016/17/18/19/23/24 native errors and arms this return.
+                if (analyzerNetErrors > 0)
+                    return outcome;   // Completed stays false; Fail already set Success = false.
+
                 unitIRs = compilation.Units.Select(u => u.IR).Where(ir => ir != null).ToList();
                 // Count Main from the PER-UNIT IRs, never CombinedIR: the combiner is
                 // first-wins on duplicate cross-file Sub Main, so CombinedIR has at most
@@ -484,11 +444,8 @@ namespace BasicLang.Compiler.ProjectSystem
             else
             {
                 // Collector diagnostics (BL6022/BL6023/BL6026) ride the SAME two channels the
-                // reference-resolution and analyzer findings above use: merged into the closure
-                // (the complete record on both paths), then mapped onto the build result only
-                // on a build — warnings hand-constructed (never through Fail, which forces
-                // Success = false), errors through Fail with all of them reported before
-                // stopping.
+                // reference-resolution and analyzer findings above use — MergeNetDiagnostics
+                // is that shared shape.
                 var collectorDiagnostics = new List<NetReferenceDiagnostic>();
                 surface = NetSurfaceCollector.Collect(
                     compilation?.CombinedIR is IRModule combined
@@ -496,38 +453,10 @@ namespace BasicLang.Compiler.ProjectSystem
                         : Array.Empty<IRModule>(),
                     project, netResolverFactory, collectorDiagnostics);
 
-                if (collectorDiagnostics.Count > 0)
+                if (MergeNetDiagnostics(collectorDiagnostics, ref netReferences, outcome, result,
+                        project.FilePath, forIntelliSense) > 0)
                 {
-                    netReferences = new NetReferenceClosure(
-                        netReferences.AssemblyPaths,
-                        netReferences.FrameworkPaths,
-                        netReferences.Diagnostics.Concat(collectorDiagnostics).ToList());
-                    outcome.NetReferences = netReferences;
-
-                    if (!forIntelliSense)
-                    {
-                        var surfaceErrors = 0;
-                        foreach (var diag in collectorDiagnostics)
-                        {
-                            if (diag.IsWarning)
-                            {
-                                result.Diagnostics.Add(new CppDiagnostic
-                                {
-                                    FilePath = project.FilePath,
-                                    Line = 0,
-                                    Column = 0,
-                                    IsWarning = true,
-                                    Code = diag.Code,
-                                    Message = diag.Message
-                                });
-                                continue;
-                            }
-                            Fail(result, diag.Code, diag.Message, project.FilePath);
-                            surfaceErrors++;
-                        }
-                        if (surfaceErrors > 0)
-                            return outcome;   // Completed stays false.
-                    }
+                    return outcome;   // Completed stays false.
                 }
             }
 
@@ -1026,6 +955,75 @@ namespace BasicLang.Compiler.ProjectSystem
             result.Success = false;
             result.Diagnostics.Add(new CppDiagnostic
             { FilePath = filePath, Line = 0, Column = 0, IsWarning = false, Code = code, Message = message });
+        }
+
+        /// <summary>
+        /// The ONE .NET-diagnostic merge shape <c>EmitCore</c> uses for every producer
+        /// (reference resolution, the analyzer's §6.5 findings, the surface collector — and any
+        /// later phase). Extracted in P2a-2 Task 4 from three hand-copied blocks.
+        ///
+        /// <para>Two halves, both order-sensitive:</para>
+        /// <list type="number">
+        /// <item><description><b>Closure merge</b> (skipped when <paramref name="alreadyOnClosure"/>
+        /// — the reference-resolution diagnostics are born on the closure): the new diagnostics are
+        /// appended to <c>netReferences.Diagnostics</c> and <c>outcome.NetReferences</c> is
+        /// refreshed. This runs on BOTH paths — IntelliSenseEmitterTests pins
+        /// <c>outcome.NetReferences.Diagnostics</c> as the complete record, and a second channel
+        /// would break it.</description></item>
+        /// <item><description><b>Build-result mapping</b> (build path only — IntelliSense outputs
+        /// stay byte-for-byte as they were): warnings become hand-constructed
+        /// <c>CppDiagnostic {{ IsWarning = true }}</c> — NEVER routed through <see cref="Fail"/>,
+        /// which forces <c>Success = false</c>; do NOT "unify" the two arms — and errors go through
+        /// <see cref="Fail"/>, ALL of them before the caller stops (one diagnostic per broken item
+        /// is far more useful than the first alone).</description></item>
+        /// </list>
+        /// </summary>
+        /// <returns>How many non-warning diagnostics were mapped; the caller decides whether a
+        /// positive count aborts its phase.</returns>
+        private static int MergeNetDiagnostics(
+            IReadOnlyList<NetReferenceDiagnostic> newDiagnostics,
+            ref NetReferenceClosure netReferences,
+            CppEmitOutcome outcome,
+            CppProjectBuildResult result,
+            string projectFilePath,
+            bool forIntelliSense,
+            bool alreadyOnClosure = false)
+        {
+            if (newDiagnostics == null || newDiagnostics.Count == 0)
+                return 0;
+
+            if (!alreadyOnClosure)
+            {
+                netReferences = new NetReferenceClosure(
+                    netReferences.AssemblyPaths,
+                    netReferences.FrameworkPaths,
+                    netReferences.Diagnostics.Concat(newDiagnostics).ToList());
+                outcome.NetReferences = netReferences;
+            }
+
+            if (forIntelliSense)
+                return 0;
+
+            var errors = 0;
+            foreach (var diag in newDiagnostics)
+            {
+                if (diag.IsWarning)
+                {
+                    result.Diagnostics.Add(new CppDiagnostic
+                    {
+                        FilePath = projectFilePath,
+                        Line = 0,
+                        Column = 0,
+                        IsWarning = true,
+                        Code = diag.Code,
+                        Message = diag.Message
+                    });
+                    continue;
+                }
+                Fail(result, diag.Code, diag.Message, projectFilePath);
+                errors++;
+            }
+            return errors;
         }
 
         /// <summary>
