@@ -320,6 +320,10 @@ AST separately, so the hand-off is an annotation side table.
   `BasicLang/Net/NetReferenceResolver.cs` (D-P2 TFM rule), `BasicLang/Program.cs` (`:506`,
   `:1022`), `VisualGameStudio.ProjectSystem/Services/BuildService.cs` (`:624`),
   `BasicLang/MultiTargetCompiler.cs` (`:237`)
+- First mechanical step (Task-3 quality-review Important #1): extract the now-TRIPLICATED
+  closure-rebuild + diagnostic-mapping block in `CppProjectBuilder.EmitCore` (~`:341-368`,
+  `:419-445`, `:499-531`) into one helper (e.g. `MergeNetDiagnostics(...)`) that preserves the
+  warning/`Fail` severity split internally — do it BEFORE adding this task's fourth consumer.
 - Test: `VisualGameStudio.Tests/Blnet/NetStrictResolutionTests.cs` (new)
 
 **Design:**
@@ -549,6 +553,9 @@ round trip).
   no-op (phase skipped — §12.5's `Console.WriteLine`-only guard).
 - Deploy: `Build` copies the shim DLL next to the exe (same `File.Copy` pattern as the engine
   DLL deploy). `CppEmitOutcome.ShimDllPath` carries it from `EmitCore` to `Build`.
+- Task-3 review carry-forward: duplicate `<NetProxy>` declarations survive verbatim in
+  `DeclaredTypeNames` and would churn the cache key (`NetShimCache.cs:283-284`) for an identical
+  member set — dedup on the key side (or normalize DeclaredTypeNames) when wiring the cache.
 - CancellationToken honored around the publish (`Publish` already has the 10-min guard).
 - Provenance: `NetShimGenerator` gets the (mangled name → `NetWrapperOrigin`) pairs — BL call
   sites from the annotation table's node positions, `<NetProxy>` members as
@@ -596,6 +603,11 @@ inbound narrows with the §14.10 divergence documented at the lowering site; `re
   the generated C# uses `Unsafe.Unbox`; `Char` narrowing emit; `Span<char>` overload use → BL6019.
 - [ ] **Step 2:** implement; green; mutation: swap `Unsafe.Unbox` back to a cast → the generated
   shim must FAIL to compile in the test (CS0445 pinned as the oracle); restore.
+- [ ] **Step 2b (Task-3 review carry-forward):** add the §8.3 drift test — every signature type
+  the collector ADMITS (`FirstUnmarshalable` returns null) must get a wire form from
+  `NetShimGenerator.WireForm`/`NetProxyEmitter.WireOf`; the three §8.3 encodings are currently
+  linked only by doc comments. Also add the cross-reference comments in both emitter tables
+  naming `FirstUnmarshalable`.
 - [ ] **Step 3:** fast subset; commit (`feat(p2a2): ref/out slots, boxed receivers, Char`).
 
 ### Task 9: §8.5 — consuming handle-represented collections
