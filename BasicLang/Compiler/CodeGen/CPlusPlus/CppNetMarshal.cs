@@ -33,6 +33,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
     /// <para>Same mechanics as the sibling splices: <c>#ifndef</c>-guarded, carries its own std
     /// includes, every function <c>inline</c> (the header lands in multiple TUs under split
     /// emission), and newlines are '\n' so content hashes are host-independent.</para>
+    ///
+    /// <para><b>ABI form.</b> The wire structs are native-side conveniences; the ABI slots are
+    /// the scalar fields. <c>NetDateTimeOffsetWire</c> in particular is <c>{int64_t, int16_t}</c>
+    /// — sizeof 16 with 6 bytes of trailing padding — so Task 7a's proxy slots and the managed
+    /// <c>(long, short)</c> signatures pass the fields as individual scalars, never the padded
+    /// struct.</para>
     /// </summary>
     public static class CppNetMarshal
     {
@@ -40,7 +46,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
    SOURCE OF TRUTH: BasicLang CppNetMarshal.cs — do not edit the emitted copy.
    REQUIRES the P1 native BCL types (BasicLang::DateTime/TimeSpan/Decimal/Guid/
    DateTimeOffset/StringBuilder) to be in scope BEFORE this header: include your
-   generated runtime preamble (or bl_bcltypes.hpp + bl_decimal.hpp) first. */
+   generated runtime preamble (or bl_bcltypes.hpp + bl_decimal.hpp) first.
+   ABI form: the wire structs are native-side conveniences; the ABI slots are the
+   scalar fields (NetDateTimeOffsetWire carries 6 bytes of trailing padding and
+   never crosses the ABI by value). */
 #ifndef BASICLANG_NETMARSHAL_RUNTIME
 #define BASICLANG_NETMARSHAL_RUNTIME
 #include <cstdint>
@@ -148,9 +157,10 @@ inline BasicLang::DateTimeOffset from_net_datetimeoffset(const NetDateTimeOffset
 
 /* ---- StringBuilder: crosses BY VALUE as String, ONE direction only (§6.4's table).
    The wire value is the UTF-8 content; the existing String wire rules carry it.
-   Nothing converts a .NET StringBuilder back — there is deliberately no
-   from_net_stringbuilder. Null-ness of the shared_ptr is the CALL SITE's problem
-   (Nothing crosses as the null wire form, not as an empty StringBuilder). ---- */
+   Nothing converts a .NET StringBuilder back — the from-net direction deliberately
+   does not exist (a fast pin asserts its absence). Null-ness of the shared_ptr is
+   the CALL SITE's problem (Nothing crosses as the null wire form, not as an empty
+   StringBuilder). ---- */
 inline std::string to_net_stringbuilder(const BasicLang::StringBuilder& v) {
     return v.ToString();
 }

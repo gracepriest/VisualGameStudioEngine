@@ -336,6 +336,18 @@ public class NetConversionPairTests
         });
     }
 
+    /// <summary>
+    /// The native mirror of the reflection pin above: §6.4's StringBuilder row has exactly one
+    /// direction, so the native header must not grow a <c>from_net_stringbuilder</c> either.
+    /// A content pin (not a compile) — the header's comments describe the absence without
+    /// spelling the identifier, precisely so this assert stays meaningful.
+    /// </summary>
+    [Test]
+    public void NativeHeader_HasNoStringBuilderFromNetDirection() =>
+        Assert.That(CppNetMarshal.GuardedSource, Does.Not.Contain("from_net_stringbuilder"),
+            "§6.4 defines ONE direction for StringBuilder — a native from_net_* converter "
+            + "would invent the reverse conversion the spec's table does not have.");
+
     // ======================================================================================
     // FAST: wiring — the native header is spliced, surface-keyed, verbatim.
     // ======================================================================================
