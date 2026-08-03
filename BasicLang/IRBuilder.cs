@@ -3465,6 +3465,20 @@ namespace BasicLang.Compiler.IR
                     {
                         arg.Accept(this);
                         call.Arguments.Add(_expressionResult);
+
+                        // P2a-2 Task 8: ByRefArguments was populated only for resolved USER
+                        // functions (funcSymbol.Parameters[i].IsByRef, below). A resolved .NET
+                        // target carries the same fact in its DESCRIPTOR, and §8.3's ref/out
+                        // row makes it observable — an IRCall that says every argument is
+                        // by-value while the callee writes one back is IR that lies about its
+                        // own effects, which is exactly what an optimizer is entitled to trust.
+                        // Read from the descriptor rather than re-derived: it is the same
+                        // signature the lowering marshals against.
+                        var parameters = call.ResolvedNetTarget?.Parameters;
+                        call.ByRefArguments.Add(
+                            parameters != null && call.Arguments.Count - 1 < parameters.Count
+                            && parameters[call.Arguments.Count - 1].RefKind
+                               != BasicLang.Net.NetRefKind.None);
                     }
                     EmitInstruction(call);
                     _expressionResult = call;

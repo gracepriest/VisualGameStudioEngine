@@ -2858,14 +2858,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 var parameter = winner.Parameters[i];
                 var position = (i + 1).ToString(CultureInfo.InvariantCulture);
-                if (parameter.RefKind != NetRefKind.None)
+                if (parameter.RefKind != NetRefKind.None
+                    && ReportUnlowerableByRefParameter(
+                        target, parameter, position, callArguments[i], line, column))
                 {
-                    NetWarning("BL6019",
-                        $"'{target}': parameter {position} ('{parameter}') is passed "
-                        + $"{parameter.RefKind.ToString().ToLowerInvariant()} — ref/out "
-                        + "parameters have no wire form at the native boundary yet (spec §8.3 "
-                        + "pointer slots).",
-                        line, column);
                     return true;
                 }
 
@@ -2888,6 +2884,59 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         line, column);
                     return true;
                 }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// §8.3's <c>ref</c>/<c>out</c> row, analyzer half: true when a finding was reported.
+        ///
+        /// <para>A ByRef parameter lowers to a POINTER SLOT and is carried for the by-value
+        /// scalar rows plus the rows whose native representation differs from their wire (Char,
+        /// §6.4's single-slot pairs, which cross through a converted temporary). Two shapes
+        /// still refuse, and neither is guessable:</para>
+        /// <list type="bullet">
+        /// <item><description>a type with no single by-value wire slot — a <c>String</c>
+        /// (<c>const char*</c> in, <c>char**</c> out, opposite ownership in each direction), a
+        /// .NET object handle (writing a NEW handle over the caller's releases one the callee
+        /// may have returned unchanged — a double release), or a multi-slot §6.4 pair. This is
+        /// the same line <c>NetProxyEmitter.PlanMember</c> refuses to cross, reported HERE with
+        /// a source position instead of as a positionless codegen refusal;</description></item>
+        /// <item><description>an argument that is not a plain variable. The callee writes back
+        /// through the slot, and there is nowhere to write an expression or a literal — VB's own
+        /// ByRef rules say the same thing.</description></item>
+        /// </list>
+        /// </summary>
+        private bool ReportUnlowerableByRefParameter(
+            string target, NetParameterDescriptor parameter, string position,
+            ExpressionNode argument, int line, int column)
+        {
+            var passing = parameter.RefKind.ToString().ToLowerInvariant();
+
+            if (!NetMarshalTable.TryGetWireRow(parameter.TypeFullName, out var row)
+                || row.IsMultiSlot || string.IsNullOrEmpty(row.CWire))
+            {
+                NetWarning("BL6019",
+                    $"'{target}': parameter {position} ('{parameter}') is passed {passing} and "
+                    + $"its type '{parameter.TypeFullName}' has no single by-value wire slot. "
+                    + "§8.3 pins ByRef slots to by-value scalars: a ByRef String has opposite "
+                    + "ownership in each direction, and a ByRef .NET object would leave handle "
+                    + "ownership undefined (a double release). Pass it by value, or use an "
+                    + "overload that returns the value instead.",
+                    line, column);
+                return true;
+            }
+
+            if (argument is not IdentifierExpressionNode)
+            {
+                NetWarning("BL6019",
+                    $"'{target}': parameter {position} is passed {passing}, so the argument must "
+                    + "be a variable the call can write back into — an expression or a literal "
+                    + "has nowhere to receive the result. Assign it to a local first and pass "
+                    + "that.",
+                    argument?.Line ?? line, argument?.Column ?? column);
+                return true;
             }
 
             return false;

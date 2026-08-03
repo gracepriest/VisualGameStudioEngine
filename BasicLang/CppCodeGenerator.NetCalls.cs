@@ -279,10 +279,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var position = (index + 1).ToString(CultureInfo.InvariantCulture);
 
             if (parameter.RefKind != NetRefKind.None)
-                throw NetLoweringRefusal("BL6019",
-                    $"'{targetDisplay}': parameter {position} ('{parameter}') is passed "
-                    + $"{parameter.RefKind.ToString().ToLowerInvariant()} — ref/out parameters "
-                    + "have no wire form at the native boundary yet (spec §8.3 pointer slots).");
+                return MarshalNetByRefArgument(targetDisplay, parameter, position, argument);
 
             var isNullConstant = argument is IRConstant { Value: null };
             var paramType = parameter.TypeFullName;
@@ -353,6 +350,93 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 + "into a .NET reference slot is §8.6 outbound-copy territory, which is not "
                 + "lowered at the native boundary yet. Pass Nothing or a ManagedOwned-typed "
                 + "value.");
+        }
+
+        /// <summary>
+        /// §8.3's <c>ref</c>/<c>out</c> row: a POINTER SLOT.
+        ///
+        /// <para><b>The &amp;-taking is the proxy's, not the call site's.</b>
+        /// <c>NetProxyEmitter</c> shapes a ByRef parameter as a C++ REFERENCE over the WIRE type
+        /// (<c>int32_t&amp; a0</c>), copies it into a temporary, passes <c>&amp;temp</c> across
+        /// the C ABI and writes the temporary back on return. So the call site's whole job is to
+        /// hand it an lvalue OF THE WIRE TYPE — which for the by-value scalar rows the native
+        /// variable already is, and for the rows whose native representation differs from their
+        /// wire (Char, and §6.4's single-slot pairs) is what the prologue/epilogue produce:
+        /// <c>uint64_t t = to_net_datetime(d); proxy(t); d = from_net_datetime(t);</c></para>
+        ///
+        /// <para><b><c>out</c> does not read the caller's value.</b> The temporary is
+        /// value-initialized instead of converted from the native variable: an <c>out</c>
+        /// parameter's incoming value is ignored by the callee (the generated shim assigns
+        /// <c>default</c> before the call), and converting an uninitialized BasicLang local
+        /// through a range-checking §6.4 converter would throw on a value nobody passed.</para>
+        ///
+        /// <para><b>What still refuses, and why it is not a guess we could make.</b> A ByRef
+        /// STRING has no single wire type — <c>const char*</c> in, <c>char**</c> out, with
+        /// opposite ownership — and a ByRef HANDLE leaves ownership undefined: writing a NEW
+        /// handle over the caller's releases one the callee may have returned unchanged, a
+        /// double release. §8.3 says "ref/out → pointer slot" and stops there, so both refuse
+        /// here exactly as <c>NetProxyEmitter.PlanMember</c> refuses to emit them. The analyzer
+        /// reports the same shapes at their source positions first.</para>
+        /// </summary>
+        private NetArgEmission MarshalNetByRefArgument(
+            string targetDisplay, NetParameterDescriptor parameter, string position, IRValue argument)
+        {
+            var paramType = parameter.TypeFullName;
+            var passing = parameter.RefKind.ToString().ToLowerInvariant();
+
+            if (!NetMarshalTable.TryGetWireRow(paramType, out var row)
+                || row.IsMultiSlot || string.IsNullOrEmpty(row.CWire))
+            {
+                throw NetLoweringRefusal("BL6019",
+                    $"'{targetDisplay}': parameter {position} ('{parameter}') is passed "
+                    + $"{passing} and its type '{paramType}' has no single by-value wire slot. "
+                    + "§8.3 pins ByRef slots to by-value scalars only: a ByRef String has "
+                    + "opposite ownership in each direction, and a ByRef .NET object would "
+                    + "leave handle ownership undefined (a double release). Pass it by value, "
+                    + "or use an overload that returns the value instead.");
+            }
+
+            // The C++ reference the proxy takes must bind to something assignable. An IRVariable
+            // is the only IR value that is; a temporary or a constant would either fail to
+            // compile or silently discard the callee's write.
+            if (argument is not IRVariable)
+            {
+                throw NetLoweringRefusal("BL6019",
+                    $"'{targetDisplay}': parameter {position} is passed {passing}, so the "
+                    + "argument must be a variable the call can write back into — an expression "
+                    + "or literal has nowhere to receive the result. Assign it to a local first "
+                    + "and pass that.");
+            }
+
+            var native = GetValueName(argument);
+
+            // Boolean and the numeric scalars: MapType already spells the native variable as the
+            // proxy's C++ parameter type (Integer -> int32_t, Boolean -> bool), so it binds
+            // directly and no temporary can go stale.
+            if (row.Shape == NetWireShape.Scalar || row.Shape == NetWireShape.Boolean)
+                return NetArgEmission.Value(native);
+
+            var temp = NextNetTemp();
+            var isOut = parameter.RefKind == NetRefKind.Out;
+            string inbound, outbound;
+            if (row.Shape == NetWireShape.Char)
+            {
+                // Same zero-extend/narrow pair as the by-value Char row, including the
+                // load-bearing `unsigned char` hop (plain char is signed here, so a bare cast
+                // sign-extends every byte >= 0x80 into 0xFFxx) and §14.10's lossy inbound.
+                inbound = "static_cast<uint16_t>(static_cast<unsigned char>(" + native + "))";
+                outbound = "static_cast<char>(" + temp + ")";
+            }
+            else
+            {
+                inbound = row.NativeToNet + "(" + native + ")";
+                outbound = row.NativeFromNet + "(" + temp + ")";
+            }
+
+            return NetArgEmission.Statements(
+                new[] { temp },
+                prologue: new[] { row.CWire + " " + temp + (isOut ? "{};" : " = " + inbound + ";") },
+                epilogue: new[] { native + " = " + outbound + ";" });
         }
 
         /// <summary>

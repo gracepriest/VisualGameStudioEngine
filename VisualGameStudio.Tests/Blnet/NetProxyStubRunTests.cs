@@ -260,7 +260,108 @@ public class NetProxyStubRunTests
     }
 
     // ====================================================================================
-    // 5. The proxy-name agreement pin: a wrong slot name is a COMPILE failure, never a
+    // 5. §8.3's ref/out POINTER SLOT — the value the callee writes back reaches the caller.
+    // ====================================================================================
+
+    /// <summary>
+    /// <c>Int32.TryParse("42", n)</c>: the canonical <c>out</c> shape, end to end. The slot's C
+    /// signature carries <c>int32_t* a1</c>, the proxy takes <c>int32_t&amp;</c> and does the
+    /// &amp;-taking itself, and the value the stub plants must arrive in the BasicLang local.
+    ///
+    /// <para>Printing <c>n</c> AFTER the call is the whole oracle: a lowering that passed a
+    /// temporary, or that dropped the write-back, still compiles and still returns True — it
+    /// just leaves <c>n</c> at zero.</para>
+    /// </summary>
+    [Test]
+    public void OutParameter_WritesBackIntoTheBasicLangLocal()
+    {
+        var (cpp, surface) = CompileWithSurface("""
+            Module M
+             Sub Main()
+              Dim n As Integer
+              Dim ok = Int32.TryParse("42", n)
+              If ok Then
+               Console.WriteLine(n)
+              End If
+             End Sub
+            End Module
+            """);
+
+        var tryParse = NetNameMangler.Mangle(
+            Winner("System.Int32", NetCallForm.Static, "TryParse",
+                   "System.String", "System.Int32"));
+
+        var stub = StubTranslationUnit(new[]
+        {
+            new NetStubHarness.StubSlot(tryParse,
+                "[](const char* a0, int32_t* a1, int32_t* result) -> int32_t {"
+                + " std::printf(\"TRYPARSE(%s)\\n\", a0);"
+                + " *a1 = 42; *result = 1; return 0; }"),
+        });
+
+        var output = RunWithStub(cpp, surface, stub);
+
+        Assert.That(output.Replace("\r\n", "\n"), Is.EqualTo("TRYPARSE(42)\n42\n"),
+            "the out slot must carry the callee's write back into the BasicLang local. A '0' on "
+            + "the second line means the write-back was dropped — the proxy wrote its temporary "
+            + "and nothing copied it out, or the call site passed a copy instead of the "
+            + "variable. Nothing else about this program would go red for either bug.");
+    }
+
+    // ====================================================================================
+    // 6. §8.3's Char row at RUN time — the byte >= 0x80 case an emit assertion cannot reach.
+    // ====================================================================================
+
+    /// <summary>
+    /// <b>The <c>unsigned char</c> hop, proven rather than asserted.</b> Emit-level tests pin
+    /// the CAST TEXT, which looks equally right whichever way it is written; only a value with
+    /// its high bit set separates them. Native <c>char</c> is SIGNED here, so 0xC8 is −56 and a
+    /// bare <c>static_cast&lt;uint16_t&gt;</c> sign-extends it to <c>0xFFC8</c> — a wrong UTF-16
+    /// code unit handed to .NET, silently, which is exactly the class §12.1 exists to catch.
+    ///
+    /// <para>The round trip is deliberate: the first call plants 0x00C8 inbound (narrowed to the
+    /// 1-byte native Char per §14.10) and the second sends it back out, so the printed wire
+    /// value is the outbound encoding of a byte that is negative as a native <c>char</c>.</para>
+    /// </summary>
+    [Test]
+    public void CharAboveSeven_FBits_ZeroExtendsOutbound_NotSignExtends()
+    {
+        var (cpp, surface) = CompileWithSurface("""
+            Module M
+             Sub Main()
+              Dim c = Convert.ToChar(200)
+              Dim n = Convert.ToInt32(c)
+              Console.WriteLine(n)
+             End Sub
+            End Module
+            """);
+
+        var toChar = NetNameMangler.Mangle(
+            Winner("System.Convert", NetCallForm.Static, "ToChar", "System.Int32"));
+        var toInt32 = NetNameMangler.Mangle(
+            Winner("System.Convert", NetCallForm.Static, "ToInt32", "System.Char"));
+
+        var stub = StubTranslationUnit(new[]
+        {
+            new NetStubHarness.StubSlot(toChar,
+                "[](int32_t a0, uint16_t* result) -> int32_t {"
+                + " *result = (uint16_t)a0; return 0; }"),
+            new NetStubHarness.StubSlot(toInt32,
+                "[](uint16_t a0, int32_t* result) -> int32_t {"
+                + " std::printf(\"WIRE:%04x\\n\", (unsigned)a0);"
+                + " *result = (int32_t)a0; return 0; }"),
+        });
+
+        var output = RunWithStub(cpp, surface, stub);
+
+        Assert.That(output.Replace("\r\n", "\n"), Is.EqualTo("WIRE:00c8\n200\n"),
+            "the outbound Char must ZERO-extend: 0x00c8. 'WIRE:ffc8' means the `unsigned char` "
+            + "hop was dropped and a signed native char sign-extended onto the UTF-16 wire — "
+            + "every byte >= 0x80 would reach .NET as U+FFxx.");
+    }
+
+    // ====================================================================================
+    // 7. The proxy-name agreement pin: a wrong slot name is a COMPILE failure, never a
     //    silently-misbound call.
     // ====================================================================================
 

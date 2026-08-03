@@ -349,6 +349,103 @@ public class NetCallLoweringTests
             "the inferred local types as the native Char:\n" + cpp);
     }
 
+    // ====================================================================================
+    // §8.3's ref/out POINTER SLOT (P2a-2 Task 8)
+    // ====================================================================================
+
+    /// <summary>
+    /// A by-value SCALAR <c>out</c> slot needs no marshaling at the call site at all: the
+    /// native local is already spelled as the wire type (<c>Integer</c> → <c>int32_t</c>), and
+    /// <c>NetProxyEmitter</c> shapes the proxy parameter as a C++ REFERENCE and does the
+    /// &amp;-taking, the temporary and the write-back itself.
+    ///
+    /// <para>The negative assertion is the one with teeth: a call site that copied the variable
+    /// into a temporary — the obvious way to write this — would compile, return the right
+    /// Boolean, and silently leave the caller's variable untouched.</para>
+    /// </summary>
+    [Test]
+    public void OutScalarParameter_PassesTheVariableItself()
+    {
+        var cpp = CompileToCpp("""
+            Module M
+             Sub Main()
+              Dim n As Integer
+              Dim ok = Int32.TryParse("42", n)
+              Console.WriteLine(n)
+             End Sub
+            End Module
+            """);
+
+        var tryParse = Winner("System.Int32", NetCallForm.Static, "TryParse",
+                              "System.String", "System.Int32");
+        Assert.That(cpp, Does.Contain(ProxyCall(tryParse) + "(\"42\", n)"),
+            "§8.3's pointer slot: the proxy takes `int32_t&`, so the call site hands it the "
+            + "VARIABLE. Anything else — a temporary, an explicit & — either fails to compile "
+            + "or drops the callee's write-back:\n" + cpp);
+    }
+
+    /// <summary>
+    /// A ByRef parameter whose type has no single by-value wire slot must refuse, and §8.3 is
+    /// why rather than a limitation to be lifted casually: a ByRef HANDLE leaves ownership
+    /// undefined — writing a new handle over the caller's releases one the callee may have
+    /// returned unchanged, a double release in generated C++. <c>NetProxyEmitter.PlanMember</c>
+    /// draws the same line; reporting it HERE is what gives it a source position.
+    /// </summary>
+    [Test]
+    public void ByRefHandleParameter_IsRefusedWithTheOwnershipReason()
+    {
+        var analyzer = AnalyzeForFindings("""
+            Module M
+             Sub Main()
+              Dim v As Version
+              Dim ok = Version.TryParse("1.0", v)
+             End Sub
+            End Module
+            """);
+
+        var finding = analyzer.NetDiagnostics.FirstOrDefault(d => d.Code == "BL6019");
+        Assert.Multiple(() =>
+        {
+            Assert.That(finding, Is.Not.Null,
+                "a ByRef .NET object parameter must refuse — its handle ownership is "
+                + "unspecified (§8.3). Findings: " + string.Join(" | ",
+                    analyzer.NetDiagnostics.Select(d => d.Code + ": " + d.Message)));
+            Assert.That(finding?.Message, Does.Contain("ownership"),
+                "the message must TEACH the reason (a double release), not merely say no: "
+                + finding?.Message);
+            Assert.That(finding?.IsWarning, Is.False,
+                "native path: a lowering-blocking shape is an ERROR since the flip.");
+        });
+    }
+
+    /// <summary>
+    /// The callee writes back THROUGH the slot, so there has to be something to write into. A
+    /// literal argument would compile in C# and is perfectly ordinary VB nonsense; refusing it
+    /// with the fix ("assign it to a local first") beats a C++ compile error about binding a
+    /// non-const reference to an rvalue.
+    /// </summary>
+    [Test]
+    public void ByRefArgumentThatIsNotAVariable_IsRefused()
+    {
+        var analyzer = AnalyzeForFindings("""
+            Module M
+             Sub Main()
+              Dim ok = Int32.TryParse("42", 5)
+             End Sub
+            End Module
+            """);
+
+        var finding = analyzer.NetDiagnostics.FirstOrDefault(d => d.Code == "BL6019");
+        Assert.Multiple(() =>
+        {
+            Assert.That(finding, Is.Not.Null,
+                "a literal in a ByRef position must refuse. Findings: " + string.Join(" | ",
+                    analyzer.NetDiagnostics.Select(d => d.Code + ": " + d.Message)));
+            Assert.That(finding?.Message, Does.Contain("variable"),
+                "the message must name the fix: " + finding?.Message);
+        });
+    }
+
     [Test]
     public void TimeSpanArgument_CrossesThroughToNetTimespan()
     {
@@ -556,10 +653,16 @@ public class NetCallLoweringTests
             "§6.3: the C# path keeps its permissive row — csc judges the call late");
     }
 
+    /// <summary>
+    /// The <c>ref</c> counterpart of <see cref="OutScalarParameter_PassesTheVariableItself"/>,
+    /// and the test P2a-2 Task 8 deliberately FLIPPED: until §8.3's pointer slots landed,
+    /// <c>Interlocked.Increment(ref Integer)</c> drew a BL6019 saying ref/out had no wire form.
+    /// It lowers now. The churn is the feature.
+    /// </summary>
     [Test]
-    public void RefOutParameter_DrawsBl6019_NamingTheParameter()
+    public void RefScalarParameter_LowersToThePointerSlot()
     {
-        var analyzer = AnalyzeForFindings("""
+        var source = """
             Module M
              Sub Main()
               Dim n As Integer
@@ -567,16 +670,17 @@ public class NetCallLoweringTests
               Console.WriteLine("done")
              End Sub
             End Module
-            """);
+            """;
 
-        var bl6019 = analyzer.NetDiagnostics.Where(d => d.Code == "BL6019").ToList();
-        Assert.That(bl6019, Has.Count.EqualTo(1),
-            "a resolved call whose winner takes ref/out cannot lower yet (§8.3 pointer "
-            + "slots are Task 8) — the standard BL6019 naming the parameter. Got: "
+        var analyzer = AnalyzeForFindings(source);
+        Assert.That(analyzer.NetDiagnostics, Is.Empty,
+            "a ref SCALAR parameter is §8.3's pointer-slot row and must no longer refuse. Got: "
             + string.Join(" | ", analyzer.NetDiagnostics.Select(d => d.Code + ": " + d.Message)));
-        Assert.That(bl6019[0].IsWarning, Is.False);
-        Assert.That(bl6019[0].Message, Does.Contain("Increment"));
-        Assert.That(bl6019[0].Message, Does.Contain("ref").IgnoreCase);
+
+        var increment = Winner("System.Threading.Interlocked", NetCallForm.Static, "Increment",
+                               "System.Int32");
+        Assert.That(CompileToCpp(source), Does.Contain(ProxyCall(increment) + "(n)"),
+            "the ref slot takes the variable itself — the proxy's parameter is `int32_t&`.");
     }
 
     // ====================================================================================

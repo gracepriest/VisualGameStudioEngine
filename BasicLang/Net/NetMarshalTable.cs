@@ -58,13 +58,19 @@ namespace BasicLang.Net
     /// The native inbound converter, or null when the row has NO inbound direction —
     /// StringBuilder, whose §6.4 table row is explicitly one-way.
     /// </param>
+    /// <param name="CWire">
+    /// The C spelling of this row's single wire slot — what a call site must declare to hold
+    /// the value across a §8.3 POINTER SLOT (<c>ref</c>/<c>out</c>). Null for the rows that do
+    /// not have one scalar slot (String, and every multi-slot §6.4 pair).
+    /// </param>
     internal sealed record NetWireRow(
         string NetFullName,
         string BasicLangSpelling,
         NetWireShape Shape,
         bool IsMultiSlot = false,
         string NativeToNet = null,
-        string NativeFromNet = null);
+        string NativeFromNet = null,
+        string CWire = null);
 
     /// <summary>
     /// The environment-specific JUDGMENTS <see cref="NetMarshalTable"/> cannot make for itself,
@@ -203,19 +209,35 @@ namespace BasicLang.Net
         internal static readonly IReadOnlyDictionary<string, NetWireRow> WireRows =
             new Dictionary<string, NetWireRow>(StringComparer.Ordinal)
             {
-                // §8.3's by-value rows.
-                ["System.Boolean"] = new("System.Boolean", "Boolean", NetWireShape.Boolean),
-                ["System.SByte"] = new("System.SByte", "SByte", NetWireShape.Scalar),
-                ["System.Byte"] = new("System.Byte", "Byte", NetWireShape.Scalar),
-                ["System.Int16"] = new("System.Int16", "Short", NetWireShape.Scalar),
-                ["System.UInt16"] = new("System.UInt16", "UShort", NetWireShape.Scalar),
-                ["System.Int32"] = new("System.Int32", "Integer", NetWireShape.Scalar),
-                ["System.UInt32"] = new("System.UInt32", "UInteger", NetWireShape.Scalar),
-                ["System.Int64"] = new("System.Int64", "Long", NetWireShape.Scalar),
-                ["System.UInt64"] = new("System.UInt64", "ULong", NetWireShape.Scalar),
-                ["System.Single"] = new("System.Single", "Single", NetWireShape.Scalar),
-                ["System.Double"] = new("System.Double", "Double", NetWireShape.Scalar),
-                ["System.Char"] = new("System.Char", "Char", NetWireShape.Char),
+                // §8.3's by-value rows. CWire is NetProxyEmitter.WireOf's C column — the two
+                // must agree, and the §8.3 drift test compares them row by row.
+                ["System.Boolean"] = new(
+                    "System.Boolean", "Boolean", NetWireShape.Boolean, CWire: "int32_t"),
+                ["System.SByte"] = new(
+                    "System.SByte", "SByte", NetWireShape.Scalar, CWire: "int8_t"),
+                ["System.Byte"] = new(
+                    "System.Byte", "Byte", NetWireShape.Scalar, CWire: "uint8_t"),
+                ["System.Int16"] = new(
+                    "System.Int16", "Short", NetWireShape.Scalar, CWire: "int16_t"),
+                ["System.UInt16"] = new(
+                    "System.UInt16", "UShort", NetWireShape.Scalar, CWire: "uint16_t"),
+                ["System.Int32"] = new(
+                    "System.Int32", "Integer", NetWireShape.Scalar, CWire: "int32_t"),
+                ["System.UInt32"] = new(
+                    "System.UInt32", "UInteger", NetWireShape.Scalar, CWire: "uint32_t"),
+                ["System.Int64"] = new(
+                    "System.Int64", "Long", NetWireShape.Scalar, CWire: "int64_t"),
+                ["System.UInt64"] = new(
+                    "System.UInt64", "ULong", NetWireShape.Scalar, CWire: "uint64_t"),
+                ["System.Single"] = new(
+                    "System.Single", "Single", NetWireShape.Scalar, CWire: "float"),
+                ["System.Double"] = new(
+                    "System.Double", "Double", NetWireShape.Scalar, CWire: "double"),
+                ["System.Char"] = new(
+                    "System.Char", "Char", NetWireShape.Char, CWire: "uint16_t"),
+                // String's two directions have different C types (const char* in, char** out)
+                // and different OWNERSHIP, so there is no single CWire and a ByRef String slot
+                // is refused rather than guessed — the same reason NetProxyEmitter refuses it.
                 ["System.String"] = new("System.String", "String", NetWireShape.String),
 
                 // §6.4's conversion pairs. Converter names are blnet_marshal.hpp's
@@ -225,11 +247,13 @@ namespace BasicLang.Net
                 ["System.DateTime"] = new(
                     "System.DateTime", "DateTime", NetWireShape.Conversion,
                     NativeToNet: "BasicLang::net::to_net_datetime",
-                    NativeFromNet: "BasicLang::net::from_net_datetime"),
+                    NativeFromNet: "BasicLang::net::from_net_datetime",
+                    CWire: "uint64_t"),
                 ["System.TimeSpan"] = new(
                     "System.TimeSpan", "TimeSpan", NetWireShape.Conversion,
                     NativeToNet: "BasicLang::net::to_net_timespan",
-                    NativeFromNet: "BasicLang::net::from_net_timespan"),
+                    NativeFromNet: "BasicLang::net::from_net_timespan",
+                    CWire: "int64_t"),
                 ["System.Decimal"] = new(
                     "System.Decimal", "Decimal", NetWireShape.Conversion, IsMultiSlot: true,
                     NativeToNet: "BasicLang::net::to_net_decimal",
