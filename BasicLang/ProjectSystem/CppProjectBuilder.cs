@@ -29,10 +29,10 @@ namespace BasicLang.Compiler.ProjectSystem
     /// <item><description>7 <see cref="Deploy"/> — no</description></item>
     /// </list>
     ///
-    /// <para>1–4 live in <see cref="CppProjectBuilder.EmitCore"/> and 6–7 in
-    /// <see cref="CppProjectBuilder.Build"/>. <see cref="GenerateAndPublishShim"/> has NO code
-    /// yet (plan Task 14/15) and therefore no cancellation checkpoint — a checkpoint for a phase
-    /// that does not run would be a lie about where a build can be interrupted.</para>
+    /// <para>1–5 live in <see cref="CppProjectBuilder.EmitCore"/> and 6–7 in
+    /// <see cref="CppProjectBuilder.Build"/>. Phase 5 is LAST in <c>EmitCore</c> — after the
+    /// toolchain gate, whose identity §10.2's cache key needs, and after the compile-database
+    /// write, so a shim failure still leaves the editor's view of the project consistent.</para>
     /// </summary>
     internal enum CppBuildPhase
     {
@@ -87,6 +87,23 @@ namespace BasicLang.Compiler.ProjectSystem
         /// Tasks 8, 12, 14 and 15 consume this.
         /// </summary>
         public NetReferenceClosure NetReferences { get; set; }
+
+        /// <summary>
+        /// The .NET surface phase 3 collected (spec §10.1) — <see cref="NetSurface.Empty"/> for
+        /// every project that does not touch .NET, which is what every consumer must treat as the
+        /// normal case. Set on BOTH paths, so IntelliSense callers can see it too; null only if
+        /// EmitCore never reached phase 3.
+        /// </summary>
+        public NetSurface Surface { get; set; }
+
+        /// <summary>
+        /// The AOT-published shim DLL phase 5 produced or found in the cache (spec §10.2/§10.4),
+        /// or NULL — which is the normal answer for an empty surface, for the IntelliSense path
+        /// (§10.1 promises IntelliSense never publishes), and for a build that stopped before
+        /// phase 5. <see cref="Build"/>'s phase 7 copies it next to the executable; without that
+        /// copy the program dies at startup in <c>blnet_load_module</c>.
+        /// </summary>
+        public string ShimDllPath { get; set; }
     }
 
     /// <summary>
@@ -160,6 +177,18 @@ namespace BasicLang.Compiler.ProjectSystem
             // Checked here rather than per-DLL: a half-deployed output dir next to a linked exe
             // is worse than a fully deployed one, and the copies are milliseconds.
             Checkpoint(cancellationToken, CppBuildPhase.Deploy);
+
+            // ---- .NET shim deploy (spec §10.4) ----
+            // The published shim is a SELF-CONTAINED native DLL (NativeLib=Shared), so this is an
+            // ordinary File.Copy exactly like the engine and MinGW runtime deploys below — no .NET
+            // runtime is required on the target machine, which is transport A's whole value.
+            // blnet_startup.g.cpp loads it by BARE NAME, and the OS resolves a bare name from the
+            // executable's own directory first, so "next to the exe" is not a convenience: it is
+            // where the loader will look.
+            // Null for every project with an empty .NET surface — i.e. every project that existed
+            // before P2a-2 — so this line is inert for all of them.
+            if (emit.ShimDllPath != null)
+                DeployDll(result, emit.OutputDir, emit.ShimDllPath);
 
             // ---- Engine DLL deploy ----
             if (emit.EngineLib != null)
@@ -249,12 +278,25 @@ namespace BasicLang.Compiler.ProjectSystem
         /// See <see cref="Build"/>. Honored at phase boundaries only; defaults to
         /// <see cref="CancellationToken.None"/>, so existing callers are unaffected.
         /// </param>
+        /// <param name="publishShim">
+        /// <b>A TEST SEAM, and nothing else.</b> False makes phase 5
+        /// (<see cref="CppBuildPhase.GenerateAndPublishShim"/>) a complete no-op:
+        /// <see cref="CppEmitOutcome.ShimDllPath"/> stays null and nothing is generated,
+        /// published or cached. It exists because phase 5 spawns <c>dotnet publish</c> for tens of
+        /// seconds, which a fixture asserting on <c>obj/gen</c> file sets or on a diagnostic has no
+        /// business paying for — and because a <paramref name="surfaceOverride"/> surface is
+        /// hand-built and may name types no assembly declares, which would fail the shim compile
+        /// for reasons that say nothing about the code under test. Production callers pass true
+        /// (the default); a test that WANTS phase 5 uses a real program and
+        /// <c>[Category("Integration")]</c>.
+        /// </param>
         internal static CppEmitOutcome EmitCore(ProjectFile project, string configuration,
             CppProjectBuildResult result, Func<CppToolchain> resolveToolchain, bool forIntelliSense,
             Func<string, CppToolchain> resolveById = null,
             Func<CppToolchainAvailability> probeAvailability = null,
             NetSurface surfaceOverride = null,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            bool publishShim = true)
         {
             // Before ANY side effect — a token already cancelled on entry must leave the project
             // directory exactly as it found it (no bin/<config>, no obj/gen, no restore).
@@ -440,6 +482,11 @@ namespace BasicLang.Compiler.ProjectSystem
             // (NetInertnessTests + NetBuildPipelineTests are the standing gates).
             Checkpoint(cancellationToken, CppBuildPhase.CollectNetSurface);
             NetSurface surface;
+            // §11.3's tier-1 provenance, declared half: (mangled export → the <NetProxy> item that
+            // produced it). Filled by the collector because it is the last place that still knows
+            // WHICH declaration a member came from. The §7.1 call-site half rides on
+            // compilation.NetCallSiteOrigins; phase 5 merges the two.
+            var declaredProvenance = new List<KeyValuePair<string, NetWrapperOrigin>>();
             if (surfaceOverride != null)
             {
                 surface = surfaceOverride;   // the test seam substitutes for the collector
@@ -454,7 +501,7 @@ namespace BasicLang.Compiler.ProjectSystem
                     compilation?.CombinedIR is IRModule combined
                         ? new[] { combined }
                         : Array.Empty<IRModule>(),
-                    project, netResolverFactory, collectorDiagnostics);
+                    project, netResolverFactory, collectorDiagnostics, declaredProvenance);
 
                 if (MergeNetDiagnostics(collectorDiagnostics, ref netReferences, outcome, result,
                         project.FilePath, forIntelliSense) > 0)
@@ -462,6 +509,7 @@ namespace BasicLang.Compiler.ProjectSystem
                     return outcome;   // Completed stays false.
                 }
             }
+            outcome.Surface = surface;
 
             // ---- 4. Entry-point rule (pre-link, so 0/2-main cases give clickable diags) ----
             // Bypassed for IntelliSense: "no Sub Main yet" is the normal mid-edit state and
@@ -591,7 +639,8 @@ namespace BasicLang.Compiler.ProjectSystem
             try
             {
                 netArtifacts = NetProxyEmitter.Emit(
-                    surface, NetProxyEmitter.ShimModuleFileName(ShimAssemblyName(safeProject)));
+                    surface,
+                    NetProxyEmitter.ShimModuleFileName(NetShimGenerator.ShimAssemblyName(safeProject)));
             }
             catch (NotSupportedException ex)
             {
@@ -833,6 +882,41 @@ namespace BasicLang.Compiler.ProjectSystem
                 result.Messages.Add($"warning: could not write compilation database: {ex.Message}");
             }
 
+            // ---- 8. Generate + publish the .NET shim (spec §10.1 phase 5) ----
+            // BUILD PATH ONLY. §10.1's table makes "phases 1-4 give full C++ IntelliSense at zero
+            // publish cost" a promise, not an optimization: the proxy header is pure C++
+            // declarations and needs no shim to exist, so clangd resolves proxies on a project that
+            // has never been published, and F5 is the only thing that ever waits.
+            //
+            // INERT for an empty surface — every project that existed before P2a-2 — because there
+            // is no shim to generate (NetShimGenerator's own rule) and nothing to cache.
+            //
+            // POSITION: last in EmitCore, AFTER the toolchain gate and the compile-database write,
+            // and still before phase 6 in Build. Three reasons, all deliberate:
+            //   * §10.2's cache key carries the toolchain identity, which does not exist until the
+            //     gate above has run;
+            //   * a machine with no C++ compiler fails BL6005 in milliseconds instead of after a
+            //     ~27 s publish it could never have linked;
+            //   * a phase-5 failure leaves obj/gen AND compile_commands.json fully refreshed, so
+            //     the editor stays consistent with the sources on disk while the user fixes it.
+            if (publishShim && !forIntelliSense && surface.IsNonEmpty)
+            {
+                Checkpoint(cancellationToken, CppBuildPhase.GenerateAndPublishShim);
+                if (!GenerateAndPublishShim(project, projectDir, objGenDir, configuration,
+                        safeProject, surface, netReferences, netResolverFactory,
+                        compilation, declaredProvenance, toolchain, outcome, result))
+                {
+                    return outcome;   // Completed stays false — the failure is already recorded.
+                }
+                // §10.3, the far side of the long operation. `dotnet publish` is a child process
+                // this builder cannot interrupt (it has its own 10-minute guard), so a cancel
+                // arriving mid-publish takes effect HERE, the moment it returns — which still
+                // saves the C++ compile and link. Build's own phase-6 checkpoint would catch it a
+                // few statements later; taking it inside the phase-5 block is what makes "the token
+                // is honored around the publish" true rather than approximately true.
+                Checkpoint(cancellationToken, CppBuildPhase.CompileAndLink);
+            }
+
             outcome.Completed = true;
             return outcome;
         }
@@ -958,22 +1042,220 @@ namespace BasicLang.Compiler.ProjectSystem
         }
 
         /// <summary>
-        /// The generated shim assembly's name for a project — THE one place it is decided, so the
-        /// name baked into <c>blnet_startup.g.cpp</c>'s <c>blnet_load_module</c> call, the csproj
-        /// Task 14 generates, and the DLL Task 15 deploys cannot each invent their own spelling.
-        /// <c>dotnet publish -p:NativeLib=Shared</c> names its output after the project
-        /// (<see cref="NetShimPublisher.ExpectedDllPath"/>), so naming the csproj from this
-        /// function is what makes the loaded file name correct by construction.
+        /// Spec §10.1's phase 5, whole: cache probe → generate <c>obj/gen/shim</c> → AOT publish →
+        /// map ILC's output onto BL6020 (§11.3/§15.10) → commit the cache entry → hand the DLL to
+        /// <see cref="Build"/>'s phase 7 through <see cref="CppEmitOutcome.ShimDllPath"/>.
         ///
-        /// <para>Per-project rather than a fixed constant because the shim DLL is deployed next to
-        /// the executable, where a fixed name would collide across two BasicLang programs sharing
-        /// an output directory.</para>
+        /// <para>Returns false when the build must stop; the diagnostic is already on
+        /// <paramref name="result"/>. A phase-5 WARNING (§15.10's trim-analysis and aggregate rows)
+        /// returns true — the program still builds and runs, which is exactly what §15.10 decided.</para>
+        ///
+        /// <para><b>The cache is allowed to be absent, never allowed to be wrong.</b>
+        /// <c>NetShimCache.KeyFor</c> answers null for any input it cannot identify with certainty
+        /// (an unreadable reference, no <c>dotnet</c> on PATH), <c>TryGetHit</c> answers null for
+        /// any manifest it cannot fully vouch for, and <c>Commit</c> refuses a null key. All three
+        /// degrade to "publish unconditionally", so nothing here needs to special-case them.</para>
         /// </summary>
-        /// <param name="safeProjectName">
-        /// <see cref="SanitizeProjectName"/>'s output — this becomes a file name, so an
-        /// unsanitized project name would produce an unopenable module.
-        /// </param>
-        internal static string ShimAssemblyName(string safeProjectName) => safeProjectName + ".Blnet";
+        private static bool GenerateAndPublishShim(
+            ProjectFile project, string projectDir, string objGenDir, string configuration,
+            string safeProject, NetSurface surface, NetReferenceClosure netReferences,
+            Func<NetTypeResolver> netResolverFactory, CompilationResult compilation,
+            IReadOnlyList<KeyValuePair<string, NetWrapperOrigin>> declaredProvenance,
+            CppToolchain toolchain, CppEmitOutcome outcome, CppProjectBuildResult result)
+        {
+            // The csproj's <Reference><HintPath> set AND §10.2's key component 1. The same list on
+            // purpose: the key must identify what the shim actually compiles against. The FRAMEWORK
+            // closure is deliberately NOT in either — the shim compiles against its own net8.0
+            // reference assemblies, which the SDK identity already keys, and hashing ~170 framework
+            // MVIDs per build would be a measurable cost for no discrimination.
+            var referencePaths = netReferences?.AssemblyPaths ?? (IReadOnlyList<string>)Array.Empty<string>();
+
+            var environment = new NetShimCacheEnvironment(
+                configuration,
+                NetShimGenerator.TargetFramework,
+                NetShimPublisher.DefaultRuntimeIdentifier,
+                toolchain?.DisplayName ?? string.Empty,
+                NetShimCache.ProbeSdkIdentity(projectDir) ?? string.Empty);
+
+            var key = NetShimCache.KeyFor(surface, referencePaths, environment);
+            var hit = NetShimCache.TryGetHit(projectDir, configuration, key);
+            if (hit != null)
+            {
+                // §10.2: "Hit → skip entirely. The ordinary edit-run loop pays nothing." The
+                // generate step is skipped too, not only the publish — obj/gen/shim's contents are
+                // an input to a publish that is not going to run, and rewriting them would make the
+                // hit cost file IO for nothing.
+                outcome.ShimDllPath = hit.DllPath;
+                result.Messages.Add($".NET shim: up to date ({Path.GetFileName(hit.DllPath)})");
+                return true;
+            }
+
+            var shimDir = Path.Combine(objGenDir, "shim");
+            var csprojPath = Path.Combine(
+                shimDir, NetShimGenerator.ProjectFileName(NetShimGenerator.ShimAssemblyName(safeProject)));
+            try
+            {
+                NetShimGenerator.WriteTo(shimDir, surface, safeProject, referencePaths,
+                    ValueTypeReceiverNames(surface, netResolverFactory));
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException
+                                                        || ex is ArgumentException
+                                                        || ex is NotSupportedException)
+            {
+                Fail(result, "BL6006", "Failed to write the generated .NET shim to obj/gen/shim: "
+                    + ex.Message, project.FilePath);
+                return false;
+            }
+
+            result.Messages.Add("Publishing .NET shim (Native AOT)...");
+            NetShimPublishResult publish;
+            try
+            {
+                publish = NetShimPublisher.Publish(
+                    csprojPath, NetShimCache.PublishDirectory(projectDir, configuration),
+                    workingDirectory: shimDir);
+            }
+            catch (Exception ex) when (ex is TimeoutException || ex is FileNotFoundException)
+            {
+                // Publish's own two throw paths: a publish that hung past 10 minutes, and a csproj
+                // that vanished between the write above and the spawn. Neither is a diagnosable
+                // AOT finding, so neither is a BL6020.
+                Fail(result, "BL6006", ".NET shim publish failed: " + ex.Message, project.FilePath);
+                return false;
+            }
+
+            // §11.3 + §15.10. Run on SUCCESS too: a publish that succeeded can still carry
+            // IL2xxx warnings, and §15.10 keeps those non-fatal precisely so the user sees the
+            // ceiling coming instead of hitting it.
+            var errors = MergeAotDiagnostics(publish.Output, surface, compilation, declaredProvenance,
+                referencePaths, project.FilePath, result);
+
+            if (!publish.Success)
+            {
+                // A BL6020 ERROR already failed the build and already says WHY, in §11.3's terms.
+                // Only add the raw-output fallback when nothing did — the same "a failed compile
+                // that parses zero errors must never fail silently" rule ApplyCompileOutcome has.
+                if (errors == 0)
+                {
+                    Fail(result, "BL6006",
+                        $".NET shim publish failed (exit {publish.ExitCode}). This is a compile of "
+                        + "GENERATED code, so the fault is usually a member the surface admitted "
+                        + "but the shim cannot spell:\n" + publish.Output,
+                        project.FilePath);
+                }
+                return false;
+            }
+            if (errors > 0)
+                return false;
+
+            NetShimCache.Commit(projectDir, configuration, key, publish.DllPath);
+            outcome.ShimDllPath = publish.DllPath;
+            result.Messages.Add($".NET shim: {publish.DllPath}");
+            return true;
+        }
+
+        /// <summary>
+        /// The surface's VALUE-type receivers (spec §8.5) — the declaring types of non-static,
+        /// non-constructor members that are structs or enums, which the shim must reach through
+        /// <c>Unsafe.Unbox&lt;T&gt;</c> rather than an unboxing cast.
+        ///
+        /// <para>Answered from the resolver rather than guessed from a name: a
+        /// <see cref="NetMemberDescriptor"/> carries no value-type flag, and getting this wrong is
+        /// not cosmetic — an unboxing cast on a value-type receiver mutates the temporary the
+        /// unboxing produced (§8.5's infinite-<c>MoveNext</c> failure), and a property SET through
+        /// one is a hard CS0445 that makes the whole shim fail to compile.</para>
+        ///
+        /// <para>Costs nothing new: any surface non-empty enough to reach phase 5 already forced
+        /// the resolver, in the analyzer's probe or in the collector's <c>&lt;NetProxy&gt;</c>
+        /// expansion. A resolver that cannot answer contributes nothing, which degrades to
+        /// "reference type" — the pre-existing behavior.</para>
+        /// </summary>
+        private static IReadOnlyCollection<string> ValueTypeReceiverNames(
+            NetSurface surface, Func<NetTypeResolver> netResolverFactory)
+        {
+            var receivers = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var member in surface.Members)
+            {
+                if (member.IsStatic || member.Kind == NetMemberCategory.Constructor) continue;
+                if (!string.IsNullOrEmpty(member.DeclaringTypeFullName))
+                    receivers.Add(member.DeclaringTypeFullName);
+            }
+            if (receivers.Count == 0 || netResolverFactory == null)
+                return Array.Empty<string>();
+
+            var resolver = netResolverFactory();
+            if (resolver == null)
+                return Array.Empty<string>();
+
+            var valueTypes = new List<string>();
+            foreach (var name in receivers)
+            {
+                if (resolver.TypeSymbol(name)?.IsValueType == true)
+                    valueTypes.Add(name);
+            }
+            return valueTypes;
+        }
+
+        /// <summary>
+        /// Maps ILC's trim/AOT output onto BL6020 and merges it into
+        /// <paramref name="result"/> at §15.10's severity, returning how many ERRORS were recorded.
+        ///
+        /// <para>The location is carried STRUCTURALLY (<c>FilePath</c>/<c>Line</c>/<c>Column</c>)
+        /// so the IDE's error list can navigate to the <c>.bas</c> line, which is the whole point
+        /// of §11.3's provenance map — hence <c>Format(includeLocation: false)</c>: the renderers
+        /// print the position themselves and it must not appear twice.</para>
+        ///
+        /// <para>A diagnostic with no location at all (tier 3, and tier 2 when ILC names no source)
+        /// is attributed to the <c>.blproj</c>, matching what every other project-level finding in
+        /// this file does.</para>
+        ///
+        /// <para><c>internal</c> rather than private so §15.10's severity split can be pinned
+        /// against REAL captured ILC text without paying for a publish — the same
+        /// seam-for-testability precedent as <see cref="ApplyCompileOutcome"/>.</para>
+        /// </summary>
+        internal static int MergeAotDiagnostics(
+            string ilcOutput, NetSurface surface, CompilationResult compilation,
+            IReadOnlyList<KeyValuePair<string, NetWrapperOrigin>> declaredProvenance,
+            IReadOnlyList<string> referencePaths, string projectFilePath,
+            CppProjectBuildResult result)
+        {
+            // §7.1 call sites FIRST, §7.2 declarations second: NetProvenanceMap is last-write-wins,
+            // and a member reachable both ways is more usefully reported at the .bas line the user
+            // wrote than at the <NetProxy> item that also happened to pull it in.
+            var origins = new List<KeyValuePair<string, NetWrapperOrigin>>();
+            if (compilation != null)
+                origins.AddRange(compilation.NetCallSiteOrigins);
+            if (declaredProvenance != null)
+                origins.AddRange(declaredProvenance);
+
+            var provenance = NetShimGenerator.Provenance(surface, origins);
+            var referenceNames = referencePaths
+                .Select(Path.GetFileNameWithoutExtension)
+                .Where(n => !string.IsNullOrEmpty(n))
+                .ToList();
+
+            var errors = 0;
+            foreach (var diagnostic in AotDiagnosticMapper.Map(ilcOutput, provenance, referenceNames))
+            {
+                var isWarning = diagnostic.IsWarning;
+                result.Diagnostics.Add(new CppDiagnostic
+                {
+                    FilePath = diagnostic.File ?? projectFilePath,
+                    Line = diagnostic.File == null ? 0 : diagnostic.Line,
+                    Column = diagnostic.File == null ? 0 : diagnostic.Column,
+                    IsWarning = isWarning,
+                    Code = AotDiagnosticMapper.DiagnosticCode,
+                    Message = diagnostic.Format(includeLocation: false),
+                });
+                if (isWarning) continue;
+
+                // Not routed through Fail(): Fail() would ALSO append its own CppDiagnostic, and
+                // the one above is the formatted, located copy. Only the Success flag is wanted.
+                result.Success = false;
+                errors++;
+            }
+            return errors;
+        }
 
         private static void Fail(CppProjectBuildResult result, string code, string message, string filePath)
         {

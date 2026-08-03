@@ -1,5 +1,7 @@
+using System;
 using System.Collections.Generic;
 using BasicLang.Compiler.AST;
+using BasicLang.Compiler.CodeGen.Net;   // NetWrapperOrigin — §11.3's provenance element
 
 namespace BasicLang.Net
 {
@@ -93,6 +95,66 @@ namespace BasicLang.Net
                 return;
 
             _resolvedMembers[node] = new NetMemberAnnotation(member, exact);
+        }
+
+        // ------------------------------------------------------------------
+        // P2a-2 Task 7b — §11.3 tier-1 provenance. THIS table is the only thing in the compiler
+        // that knows both the resolved .NET member AND the source position of the BasicLang
+        // expression that reached it: the IR keeps the descriptor but drops the AST node, and the
+        // generated shim ILC reports against has no BasicLang position at all.
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// (mangled wrapper name → BasicLang call site) for every EXACT annotation in this table,
+        /// as spec §11.3's tier-1 input. <c>NetShimGenerator.Provenance</c> intersects the result
+        /// with the exports actually emitted, so offering an entry for a member that never becomes
+        /// an export is harmless here.
+        ///
+        /// <para><b>Two mangles per property/field, one node.</b> A member READ lowers to the
+        /// getter-shaped slot and a member WRITE to
+        /// <see cref="NetAccessorSynthesis.SetterFor"/>'s synthesized <c>set_X</c> — two different
+        /// exports — but the analyzer records ONE annotation per AST node and cannot know which
+        /// the builder will produce. Emitting both keys against the same location is correct for
+        /// either lowering and costs one dictionary entry; emitting only the getter would leave
+        /// every property-write wrapper unattributed at tier 1, which is exactly the shape §11.3's
+        /// worked example is about.</para>
+        ///
+        /// <para><b>Non-exact annotations are skipped</b>, mirroring the surface collector's
+        /// <c>IsCollectable</c>: a name-only record is refused by the C++ lowering, so it can never
+        /// correspond to an emitted wrapper and an entry for it could only ever mis-attribute.</para>
+        /// </summary>
+        /// <param name="filePath">The compilation unit's path — what a BL6020 shows the user.</param>
+        /// <param name="lineOffset">
+        /// The <c>.mod</c>/<c>.cls</c> wrapper offset (<c>CompilationUnit.LineOffset</c>). AST
+        /// nodes carry lines in the WRAPPED source; the analyzer's own errors are un-offset the
+        /// same way in <c>BasicCompiler.CompileUnit</c>, and a BL6020 pointing one line past the
+        /// end of a two-line <c>.cls</c> is worse than no line at all.
+        /// </param>
+        internal IEnumerable<KeyValuePair<string, NetWrapperOrigin>> CallSiteOrigins(
+            string filePath, int lineOffset)
+        {
+            foreach (var entry in _resolvedMembers)
+            {
+                if (!entry.Value.Exact) continue;
+                var member = entry.Value.Member;
+
+                var line = entry.Key.Line > 0 ? Math.Max(1, entry.Key.Line - lineOffset) : 0;
+                var origin = NetWrapperOrigin.BasCallSite(
+                    filePath ?? string.Empty, line, entry.Key.Column,
+                    member.DeclaringTypeFullName + "." + member.Name);
+
+                yield return new KeyValuePair<string, NetWrapperOrigin>(
+                    NetNameMangler.Mangle(member), origin);
+
+                // The write half. SetterFor refuses indexers (§8.5 is Task 9's), so the same
+                // Parameters.Count == 0 clause IRBuilder uses before synthesizing guards it here.
+                if ((member.Kind == NetMemberCategory.Property || member.Kind == NetMemberCategory.Field)
+                    && member.Parameters.Count == 0)
+                {
+                    yield return new KeyValuePair<string, NetWrapperOrigin>(
+                        NetNameMangler.Mangle(NetAccessorSynthesis.SetterFor(member)), origin);
+                }
+            }
         }
 
         // ------------------------------------------------------------------

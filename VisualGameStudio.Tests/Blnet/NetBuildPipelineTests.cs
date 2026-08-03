@@ -188,7 +188,13 @@ public class NetBuildPipelineTests
             resolveToolchain: FakeToolchain,
             forIntelliSense: forIntelliSense,
             surfaceOverride: surfaceOverride,
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken,
+            // Phase 5 OFF for the whole fixture (P2a-2 Task 7b). Every non-empty surface here is
+            // hand-built and names types like "MyLib.Sink" that no assembly declares, so a real
+            // AOT publish would spend ~27 s failing to compile a shim for reasons that say nothing
+            // about the §9.5 merge under test. Phase 5's own proofs live in NetShimPipelineTests,
+            // which uses real programs under [Category("Integration")].
+            publishShim: false);
         return (result, outcome);
     }
 

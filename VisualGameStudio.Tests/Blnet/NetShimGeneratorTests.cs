@@ -124,8 +124,7 @@ public class NetShimGeneratorTests
         var csprojName = files.Keys.Single(k => k.EndsWith(".csproj", StringComparison.Ordinal));
         var startupTu = NetProxyEmitter.Emit(
             OneMemberSurface(),
-            NetProxyEmitter.ShimModuleFileName(
-                BasicLang.Compiler.ProjectSystem.CppProjectBuilder.ShimAssemblyName(SafeProject)))
+            NetProxyEmitter.ShimModuleFileName(NetShimGenerator.ShimAssemblyName(SafeProject)))
             [NetProxyEmitter.StartupFileName];
 
         var publishedDll = Path.GetFileName(
@@ -134,13 +133,13 @@ public class NetShimGeneratorTests
         Assert.Multiple(() =>
         {
             Assert.That(csprojName, Is.EqualTo("ProbeApp.Blnet.csproj"),
-                "The shim project must be named from CppProjectBuilder.ShimAssemblyName "
+                "The shim project must be named from NetShimGenerator.ShimAssemblyName "
                 + "(<SafeProject>.Blnet). Fix NetShimGenerator — do not retype the rule.");
             Assert.That(startupTu, Does.Contain($"kBlnetShimModule = \"{publishedDll}\""),
                 "blnet_startup.g.cpp loads a module name that the published shim will not have. "
                 + "The three sides are NetShimGenerator's csproj name, "
                 + "NetShimPublisher.ExpectedDllPath and NetProxyEmitter.ShimModuleFileName — all "
-                + "three must be fed CppProjectBuilder.ShimAssemblyName's output.");
+                + "three must be fed NetShimGenerator.ShimAssemblyName's output.");
         });
     }
 

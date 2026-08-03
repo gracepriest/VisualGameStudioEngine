@@ -279,9 +279,21 @@ namespace BasicLang.Compiler.CodeGen.Net
                 if (seen.Add(mangled))
                     identity.Append(FieldSeparator).Append(mangled);
             }
+            // DE-DUPLICATED, first-seen, for the same reason the member set is. A .blproj may
+            // legitimately carry `<NetProxy Include="X" />` twice (two ItemGroups, a copy-paste, a
+            // targets file that appends), and NetSurfaceCollector keeps DeclaredTypeNames VERBATIM
+            // — duplicates included — because a declaration is a user statement of intent and
+            // dropping one would let a Library project skip BL6025. But the SURFACE those
+            // duplicates expand to is identical (the collector expands each distinct Include once),
+            // so hashing the raw list would key the same shim two ways and cost a needless ~27 s
+            // cold publish the first time each spelling is seen.
             identity.Append(RecordSeparator).Append("declared");
+            var seenDeclared = new HashSet<string>(StringComparer.Ordinal);
             foreach (var declared in surface.DeclaredTypeNames)
-                identity.Append(FieldSeparator).Append(declared);
+            {
+                if (seenDeclared.Add(declared ?? string.Empty))
+                    identity.Append(FieldSeparator).Append(declared);
+            }
 
             // ---- 3. Shim template version + the generator that assembles it. ----
             identity.Append(RecordSeparator).Append("template")

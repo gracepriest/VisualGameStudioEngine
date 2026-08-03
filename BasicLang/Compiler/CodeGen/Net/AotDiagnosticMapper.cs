@@ -137,8 +137,17 @@ namespace BasicLang.Compiler.CodeGen.Net
         string IlMessage,
         string RawText)
     {
-        /// <summary>§11.3's rendering. The IL code always survives — it is the only token a user can search.</summary>
-        internal string Format()
+        /// <summary>
+        /// §11.3's rendering. The IL code always survives — it is the only token a user can search.
+        /// </summary>
+        /// <param name="includeLocation">
+        /// False drops the trailing <c>file(line,col)</c> line. For a consumer that carries the
+        /// location STRUCTURALLY — <c>CppProjectBuilder</c>'s phase 5 puts it on
+        /// <c>CppDiagnostic.FilePath</c>/<c>Line</c>/<c>Column</c> so the IDE error list can
+        /// navigate to it — repeating it inside the message text prints the same position twice.
+        /// Defaults to true, which is §11.3's literal shape.
+        /// </param>
+        internal string Format(bool includeLocation = true)
         {
             var sb = new StringBuilder();
             switch (Tier)
@@ -172,7 +181,7 @@ namespace BasicLang.Compiler.CodeGen.Net
 
             sb.Append("\n        ").Append(AotDiagnosticMapper.Remedy);
 
-            if (Tier != AotAttribution.AssemblyAggregate && File is not null)
+            if (includeLocation && Tier != AotAttribution.AssemblyAggregate && File is not null)
                 sb.Append("\n        ").Append(FormatLocation());
 
             return sb.ToString();

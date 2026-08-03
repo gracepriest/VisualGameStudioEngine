@@ -111,6 +111,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 (IEqualityComparer<ExpressionNode>)ReferenceEqualityComparer.Instance);
 
         /// <summary>
+        /// P2a-2 Task 7b — spec §11.3's tier-1 provenance for this unit: (mangled wrapper name →
+        /// the BasicLang call site that reached it). Read once per unit by
+        /// <c>BasicCompiler.CompileUnit</c>; see <see cref="NetAstAnnotations.CallSiteOrigins"/>
+        /// for why a property contributes two keys and why non-exact records are skipped.
+        /// </summary>
+        internal IEnumerable<KeyValuePair<string, Compiler.CodeGen.Net.NetWrapperOrigin>>
+            NetCallSiteOrigins(string filePath, int lineOffset) =>
+            _netAnnotations.CallSiteOrigins(filePath, lineOffset);
+
+        /// <summary>
         /// P2a-2 Task 4 — resolved catch-clause exception types (spec §11.1's ladder-trigger
         /// completion). <see cref="IRBuilder"/> stamps these onto <c>IRCatchClause</c> so the C++
         /// backend's NetException ladder emits an arm for a resolved exception type outside
@@ -2972,6 +2982,50 @@ namespace BasicLang.Compiler.SemanticAnalysis
         {
             if (!_netNativeBackend) return;
             NetWarning(code, message, line, column);
+        }
+
+        /// <summary>
+        /// P2a-2 Task 7b (the Task-7a handoff): refuses <c>x.Prop = v</c> when <c>Prop</c> is a
+        /// resolved .NET property or field with no usable setter.
+        ///
+        /// <para><b>What this moves earlier.</b> <c>IRBuilder</c> stamps such a write with
+        /// <see cref="NetAccessorSynthesis.SetterFor"/>'s synthesized <c>set_X</c> descriptor —
+        /// which for a read-only member names a method that does not exist. The surface collector
+        /// then mints a proxy slot and a shim export for it, the generated <c>Exports.g.cs</c>
+        /// spells <c>target.Prop = value</c>, and <c>csc</c> rejects it (CS0200) — AFTER the ~27 s
+        /// AOT publish, in a file under <c>obj/gen/shim</c>, with no BasicLang line anywhere in
+        /// the message. Here it is a positioned BL6017 before phase 4 emits anything.</para>
+        ///
+        /// <para><b>Native-only, like every other lowering-blocking finding.</b> The C# backend
+        /// compiles the same source into C# where <c>csc</c> reports CS0200 at the user's own line
+        /// — a manufactured warning there would be noise (§6.3's permissive row).</para>
+        ///
+        /// <para><b>BL6017, not a new code.</b> §11.4 reads it as ".NET member not found / no
+        /// matching overload", and the member this write needs — the setter — is exactly what does
+        /// not exist. A read of the same property is perfectly legal, which is why the finding
+        /// belongs to the ASSIGNMENT and not to <see cref="ProbeNetMemberAccess"/>.</para>
+        /// </summary>
+        private void RefuseWriteToUnsettableNetMember(ExpressionNode target, int line, int column)
+        {
+            if (!_netNativeBackend) return;
+            if (target is not MemberAccessExpressionNode memberAccess) return;
+            if (!_netAnnotations.ResolvedMembers.TryGetValue(memberAccess, out var annotation)) return;
+
+            var member = annotation.Member;
+            if (!annotation.Exact) return;
+            if (member.Kind != NetMemberCategory.Property && member.Kind != NetMemberCategory.Field) return;
+            if (member.Parameters.Count > 0) return;   // an indexer — NetAccessorSynthesis's own refusal
+            if (member.IsSettable) return;
+
+            NetErrorNativeOnly("BL6017",
+                $"'{member.DeclaringTypeFullName}.{member.Name}' cannot be assigned: the .NET "
+                + (member.Kind == NetMemberCategory.Property
+                    ? "property has no public setter"
+                    : "field is read-only")
+                + ". A native (BL+C++) project reaches .NET members through generated accessor "
+                + "exports, and there is no setter export to generate. Read the member instead, or "
+                + "use a method/constructor that sets it.",
+                line, column);
         }
 
         /// <summary>
@@ -6091,6 +6145,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
         public void Visit(AssignmentStatementNode node)
         {
             node.Target.Accept(this);
+
+            // P2a-2 Task 7b: a WRITE to a .NET member that has no usable setter. Checked here,
+            // before every early return below, because this is the one place that knows both
+            // "the target is a resolved .NET member" (the annotation ProbeNetMemberAccess just
+            // recorded during Accept) and "this is an assignment".
+            RefuseWriteToUnsettableNetMember(node.Target, node.Line, node.Column);
 
             var targetType = GetNodeType(node.Target);
 

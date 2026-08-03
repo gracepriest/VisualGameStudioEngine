@@ -20,6 +20,13 @@ namespace BasicLang.Compiler.CodeGen.Net
     internal static class NetShimPublisher
     {
         /// <summary>
+        /// The publish RID. Named rather than left as a bare default so §10.2's cache key and the
+        /// publish command cannot disagree about what was built (a key that omitted the real RID
+        /// would hit across a cross-compile).
+        /// </summary>
+        internal const string DefaultRuntimeIdentifier = "win-x64";
+
+        /// <summary>
         /// Builds the `dotnet` argument list for publishing <paramref name="csprojPath"/> as a
         /// Native AOT shared native library into <paramref name="outputDir"/> for
         /// <paramref name="runtimeIdentifier"/>. This is the P0-proven recipe (spec §8.1) —
@@ -98,7 +105,8 @@ namespace BasicLang.Compiler.CodeGen.Net
         /// the publish exceeds 10 minutes — a hung publish is not a diagnosable build error.
         /// </summary>
         internal static NetShimPublishResult Publish(
-            string csprojPath, string outputDir, string workingDirectory, string runtimeIdentifier = "win-x64")
+            string csprojPath, string outputDir, string workingDirectory,
+            string runtimeIdentifier = DefaultRuntimeIdentifier)
         {
             csprojPath = Path.GetFullPath(csprojPath, workingDirectory);
             outputDir = Path.GetFullPath(outputDir, workingDirectory);

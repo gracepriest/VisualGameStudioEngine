@@ -191,7 +191,8 @@ namespace BasicLang.Net
             bool isStatic,
             int arity,
             string typeFullName,
-            IReadOnlyList<NetParameterDescriptor> parameters)
+            IReadOnlyList<NetParameterDescriptor> parameters,
+            bool isSettable = true)
         {
             Name = name;
             DeclaringTypeFullName = declaringTypeFullName;
@@ -200,6 +201,7 @@ namespace BasicLang.Net
             Arity = arity;
             TypeFullName = typeFullName;
             Parameters = parameters;
+            IsSettable = isSettable;
         }
 
         /// <summary>
@@ -247,6 +249,32 @@ namespace BasicLang.Net
         /// it.</para>
         /// </summary>
         public IReadOnlyList<NetParameterDescriptor> Parameters { get; }
+
+        /// <summary>
+        /// P2a-2 Task 7b: whether a WRITE to this member is possible at all — a property with a
+        /// publicly-callable, non-init setter, or a field that is neither <c>readonly</c> nor
+        /// <c>const</c>. Meaningless (and <c>true</c>) for methods and constructors.
+        ///
+        /// <para><b>Deliberately NOT part of the CLR signature</b>, so it is absent from
+        /// <see cref="NetNameMangler"/>'s input and from <c>NetTypeResolver</c>'s duplicate-collapse
+        /// key. Two descriptors differing only here are the same member.</para>
+        ///
+        /// <para><b>Why it has to be carried rather than asked for later.</b> A write to a
+        /// read-only .NET property synthesizes a <c>set_X</c> accessor
+        /// (<see cref="NetAccessorSynthesis.SetterFor"/>) that names a member which does not exist;
+        /// the generated shim then spells <c>target.X = value</c> and dies in <c>csc</c> — after
+        /// the ~27 s AOT publish, against a file under <c>obj/gen/shim</c> the user never wrote,
+        /// with no line in their program. The analyzer refuses the assignment instead (BL6017,
+        /// positioned), and this bit is what it refuses on. Downstream (IRBuilder, the collector,
+        /// the emitters) is deliberately left tolerant: the analyzer's finding does not abort
+        /// <c>CompileUnit</c>, so a throw at the synthesis point would turn a clean diagnostic into
+        /// a compiler crash.</para>
+        ///
+        /// <para>Defaults to <c>true</c> so hand-constructed descriptors — every test surface, and
+        /// every §7.2 declared surface member before the resolver fills it in — behave exactly as
+        /// they did before this bit existed.</para>
+        /// </summary>
+        public bool IsSettable { get; }
 
         /// <summary>Parameter types only, for callers that do not care how they are passed.</summary>
         public IEnumerable<string> ParameterTypeFullNames => Parameters.Select(p => p.TypeFullName);

@@ -34,9 +34,12 @@ namespace BasicLang.Compiler.CodeGen.Net
     /// <c>HandleTable</c> names <c>List&lt;T&gt;</c>, <c>Stack&lt;T&gt;</c> and LINQ's
     /// <c>Count(predicate)</c> with no <c>using</c> of its own.</description></item>
     /// <item><description><b>Assembly name</b> (Task 13) is
-    /// <c>CppProjectBuilder.ShimAssemblyName</c>'s output, called rather than retyped — the
-    /// startup TU's <c>blnet_load_module</c> literal is derived from the same function, and the
-    /// two disagreeing is a load failure at process start.</description></item>
+    /// <see cref="ShimAssemblyName"/>'s output, called rather than retyped — the startup TU's
+    /// <c>blnet_load_module</c> literal is derived from the same function, and the two
+    /// disagreeing is a load failure at process start. (P2a-2 Task 7b MOVED that function here
+    /// from <c>CppProjectBuilder</c>: wiring phase 5 makes <c>ProjectSystem</c> call into this
+    /// namespace, and the old callback the other way round would have made the dependency
+    /// bidirectional.)</description></item>
     /// <item><description><b>Export names</b> come from <see cref="NetNameMangler"/>. There is no
     /// second naming scheme anywhere in this class.</description></item>
     /// </list>
@@ -93,6 +96,13 @@ namespace BasicLang.Compiler.CodeGen.Net
         /// <summary>Task 11's binding decision. See this class's header, decision 1.</summary>
         internal const string ShimNamespace = "BlnetTestShim";
 
+        /// <summary>
+        /// The shim's target framework (spec §8.1). <c>net8.0</c> is the NU1201 floor and the
+        /// AOT-analysis floor. Named rather than inlined because §10.2 puts the TFM in the shim
+        /// cache key, and a key that disagreed with the csproj would hit across a TFM change.
+        /// </summary>
+        internal const string TargetFramework = "net8.0";
+
         /// <summary>The one per-project source file — everything else is fixed scaffolding.</summary>
         internal const string ExportsFileName = "Exports.g.cs";
 
@@ -139,6 +149,31 @@ namespace BasicLang.Compiler.CodeGen.Net
         internal static string ProjectFileName(string shimAssemblyName) =>
             shimAssemblyName + ".csproj";
 
+        /// <summary>
+        /// The generated shim assembly's name for a project — THE one place it is decided, so the
+        /// name baked into <c>blnet_startup.g.cpp</c>'s <c>blnet_load_module</c> call, the csproj
+        /// <see cref="EmitProject"/> writes, and the DLL phase 5 deploys cannot each invent their
+        /// own spelling. <c>dotnet publish -p:NativeLib=Shared</c> names its output after the
+        /// project (<see cref="NetShimPublisher.ExpectedDllPath"/>), so naming the csproj from
+        /// this function is what makes the loaded file name correct by construction.
+        ///
+        /// <para>Per-project rather than a fixed constant because the shim DLL is deployed next to
+        /// the executable, where a fixed name would collide across two BasicLang programs sharing
+        /// an output directory.</para>
+        ///
+        /// <para><b>Lives HERE, not in <c>CppProjectBuilder</c>, since P2a-2 Task 7b.</b> Phase 5
+        /// makes <c>ProjectSystem</c> drive this class (generate → publish → map → deploy); the
+        /// pre-7b arrangement — this class calling back into <c>CppProjectBuilder</c> for the name
+        /// — would have closed that into a cycle between the two namespaces. The direction is now
+        /// one-way: <c>ProjectSystem</c> → <c>CodeGen.Net</c>.</para>
+        /// </summary>
+        /// <param name="safeProjectName">
+        /// <c>CppProjectBuilder.SanitizeProjectName</c>'s output — this becomes a file name, so an
+        /// unsanitized project name would produce an unopenable module.
+        /// </param>
+        internal static string ShimAssemblyName(string safeProjectName) =>
+            safeProjectName + ".Blnet";
+
         // ------------------------------------------------------------------------------
         // The artifact set.
         // ------------------------------------------------------------------------------
@@ -149,8 +184,8 @@ namespace BasicLang.Compiler.CodeGen.Net
         /// </summary>
         /// <param name="safeProjectName">
         /// <c>CppProjectBuilder.SanitizeProjectName</c>'s output. The shim assembly name is
-        /// derived from it by calling <c>CppProjectBuilder.ShimAssemblyName</c>, which is the
-        /// same function the startup TU's module literal comes from.
+        /// derived from it by calling <see cref="ShimAssemblyName"/>, which is the same function
+        /// the startup TU's module literal comes from.
         /// </param>
         /// <param name="referenceAssemblyPaths">
         /// The project's reference closure (§5) as absolute assembly paths. Empty for a surface
@@ -177,7 +212,7 @@ namespace BasicLang.Compiler.CodeGen.Net
             if (!surface.IsNonEmpty)
                 return new Dictionary<string, string>(0);
 
-            var assemblyName = ProjectSystem.CppProjectBuilder.ShimAssemblyName(safeProjectName);
+            var assemblyName = ShimAssemblyName(safeProjectName);
             return new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 [ProjectFileName(assemblyName)] = EmitProject(assemblyName, referenceAssemblyPaths),
@@ -246,7 +281,7 @@ namespace BasicLang.Compiler.CodeGen.Net
             L(sb, "<Project Sdk=\"Microsoft.NET.Sdk\">");
             L(sb, "  <PropertyGroup>");
             L(sb, "    <!-- net8.0 is the NU1201 floor and the AOT-analysis floor (spec §8.1). -->");
-            L(sb, "    <TargetFramework>net8.0</TargetFramework>");
+            L(sb, "    <TargetFramework>" + TargetFramework + "</TargetFramework>");
             L(sb, "    <AssemblyName>" + Xml(shimAssemblyName) + "</AssemblyName>");
             L(sb, "    <RootNamespace>" + ShimNamespace + "</RootNamespace>");
             L(sb, "    <Nullable>enable</Nullable>");
@@ -301,6 +336,38 @@ namespace BasicLang.Compiler.CodeGen.Net
         {
             if (surface == null) throw new ArgumentNullException(nameof(surface));
             return Plan(surface).Select(p => p.ExportName).ToList();
+        }
+
+        /// <summary>
+        /// Spec §11.3's provenance map: mangled wrapper name → where that wrapper came from, for
+        /// the wrappers this generator ACTUALLY emits. <c>AotDiagnosticMapper</c> reads it to lift
+        /// an ILC diagnostic reported against <c>obj/gen/shim/Exports.g.cs</c> back onto the
+        /// <c>.bas</c> line that caused it (tier 1).
+        ///
+        /// <para><b>Why the filter is the point, and why this lives here rather than at the two
+        /// producers.</b> <paramref name="origins"/> arrives from upstream — the analyzer's
+        /// annotation table for §7.1 call sites, the surface collector for §7.2
+        /// <c>&lt;NetProxy&gt;</c> expansions — and both producers can legitimately offer an entry
+        /// for a member that never becomes an export: a name-only (non-exact) annotation, a member
+        /// the §7.2 omission filter dropped, a call the optimizer deleted before phase 3 walked the
+        /// IR. Letting such an entry into the map would let a BL6020 name a <c>.bas</c> line for a
+        /// wrapper that is not in the shim at all. This class owns <see cref="Plan"/> — the ONE
+        /// answer to "which exports exist" — so intersecting here is the only place the map cannot
+        /// out-claim the emission.</para>
+        ///
+        /// <para>Entries are applied in order and LAST WINS, matching
+        /// <see cref="NetProvenanceMap"/>'s own rule: one member reached from two call sites
+        /// mangles to one export, and a collision is expected rather than an error. Callers
+        /// therefore order the sources by which location they would rather show.</para>
+        /// </summary>
+        internal static NetProvenanceMap Provenance(
+            NetSurface surface, IEnumerable<KeyValuePair<string, NetWrapperOrigin>> origins)
+        {
+            if (surface == null) throw new ArgumentNullException(nameof(surface));
+            if (origins == null) return NetProvenanceMap.Empty;
+
+            var exported = new HashSet<string>(SurfaceDerivedExportNames(surface), StringComparer.Ordinal);
+            return new NetProvenanceMap(origins.Where(e => exported.Contains(e.Key ?? string.Empty)));
         }
 
         /// <summary>
@@ -713,9 +780,33 @@ namespace BasicLang.Compiler.CodeGen.Net
     /// <summary>C4: records a managed exception for blnet_last_error and degrades to a status.</summary>
     private static int Fail(Exception ex)
     {
-        try { _lastErrorType = ex.GetType().FullName; _lastErrorMessage = ex.Message; }
+        try { _lastErrorType = InheritanceChain(ex.GetType()); _lastErrorMessage = ex.Message; }
         catch { /* C4: the handler itself must be non-throwing; degrade to status-only */ }
         return (int)BlnetStatus.BLNET_E_MANAGED_EXCEPTION;
+    }
+
+    /// <summary>
+    /// Spec §11.1's wire format for the last-error TYPE field: the thrown type's inheritance
+    /// chain, MOST-DERIVED FIRST, fully qualified, ';'-separated — e.g.
+    /// ""System.ArgumentNullException;System.ArgumentException;System.SystemException;System.Exception"".
+    ///
+    /// NOT ex.GetType().FullName. The native side's NetCheckTyped builds a BasicLang::NetException
+    /// from this exact string and matches typed Catch clauses by ';'-delimited ELEMENT equality,
+    /// so a single name makes `Catch ex As Exception` stop catching an ArgumentNullException —
+    /// silently, with the exception escaping to the next handler out.
+    ///
+    /// System.Object is deliberately NOT in the chain: it terminates at System.Exception, which
+    /// is where §11.1's worked example ends and the last type a BasicLang Catch can name.
+    /// </summary>
+    private static string InheritanceChain(Type type)
+    {
+        var chain = new StringBuilder();
+        for (var t = type; t is not null && t != typeof(object); t = t.BaseType)
+        {
+            if (chain.Length != 0) chain.Append(';');
+            chain.Append(t.FullName ?? t.Name);
+        }
+        return chain.ToString();
     }
 
     /// <summary>

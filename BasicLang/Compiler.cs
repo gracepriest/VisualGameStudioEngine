@@ -44,6 +44,25 @@ namespace BasicLang.Compiler
 
         private readonly List<Net.NetReferenceDiagnostic> _netDiagnostics = new();
 
+        /// <summary>
+        /// P2a-2 Task 7b (spec §11.3, tier 1): (mangled shim wrapper name → the BasicLang call
+        /// site that reached it), accumulated across every unit. <c>CppProjectBuilder</c>'s phase 5
+        /// hands this to <c>NetShimGenerator.Provenance</c>, which intersects it with the exports
+        /// actually emitted; <c>AotDiagnosticMapper</c> then lifts an ILC warning reported against
+        /// <c>obj/gen/shim/Exports.g.cs</c> back onto the user's <c>.bas</c> line.
+        ///
+        /// <para>Empty for every compilation without a <c>NetResolverFactory</c> — i.e. every
+        /// C#-backend build and the LSP — because the probe that fills the annotation table never
+        /// runs there.</para>
+        /// </summary>
+        internal IReadOnlyList<KeyValuePair<string, CodeGen.Net.NetWrapperOrigin>> NetCallSiteOrigins
+            => _netCallSiteOrigins;
+
+        internal List<KeyValuePair<string, CodeGen.Net.NetWrapperOrigin>> NetCallSiteOriginsWritable
+            => _netCallSiteOrigins;
+
+        private readonly List<KeyValuePair<string, CodeGen.Net.NetWrapperOrigin>> _netCallSiteOrigins = new();
+
         public CompilationResult()
         {
             Units = new List<CompilationUnit>();
@@ -676,6 +695,13 @@ namespace BasicLang.Compiler
                 // unit that fails for an unrelated reason still reports them; they stay off
                 // AllErrors because they are typed NetReferenceDiagnostics with their own channel.
                 result.NetDiagnosticsWritable.AddRange(analyzer.NetDiagnostics);
+
+                // §11.3 tier-1 provenance (P2a-2 Task 7b). Harvested HERE, beside the diagnostics
+                // and before the failure return, because the analyzer — and with it the annotation
+                // table keyed on THIS unit's AST — goes out of scope at the end of this method.
+                // lineOffset is the same .mod/.cls correction applied to analyzer.Errors above.
+                result.NetCallSiteOriginsWritable.AddRange(
+                    analyzer.NetCallSiteOrigins(unit.FilePath, lineOffset));
 
                 // Copied on success as well as failure: Analyze() returns true when only
                 // Warning-severity entries were recorded, and those warnings must still

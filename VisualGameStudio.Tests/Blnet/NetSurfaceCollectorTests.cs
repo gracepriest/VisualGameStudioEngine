@@ -793,7 +793,12 @@ public class NetSurfaceCollectorTests
         var result = new CppProjectBuildResult();
         var outcome = CppProjectBuilder.EmitCore(
             ProjectFile.Load(projectPath), "Release", result,
-            resolveToolchain: FakeToolchain, forIntelliSense: false);
+            resolveToolchain: FakeToolchain, forIntelliSense: false,
+            // Phase 5 OFF (P2a-2 Task 7b): this fixture's toolchain is resolvable-but-fake, so
+            // without the seam every <NetProxy> test here would spawn a real ~27 s `dotnet publish`
+            // in the FAST subset. What the collector produced is what is under test; whether it
+            // publishes is NetShimPipelineTests' Integration job.
+            publishShim: false);
         return (result, outcome);
     }
 

@@ -609,22 +609,53 @@ round trip).
 
 **Steps:**
 
-- [ ] **Step 1 (the milestone):** Integration test — a temp Native project with
-  `Dim r As New Regex("^a+$")` / `Console.WriteLine(r.IsMatch("aaa"))` builds end-to-end
-  (publish inline, ~27s cold) and the exe prints `True`. THIS IS THE FIRST REAL .NET CALL FROM
-  NATIVE — treat its first green run as the task's acceptance moment and record the wall time.
-- [ ] **Step 2:** cold-then-warm test: second identical build skips phase 5 (`TryGetHit`),
-  asserted via the manifest and elapsed time.
-- [ ] **Step 3:** BL6020 test: a `<NetProxy>` over a deliberately `[RequiresDynamicCode]`-marked
-  test-emitted assembly member that survives to a call → publish → BL6020 ERROR with tier-1
-  `.bas` attribution (provenance proof). Aggregate tier-3 asserted from captured ILC text.
-- [ ] **Step 4:** empty-surface skip test + `forIntelliSense` never-publishes test + a
-  zero-`.bas` SMOKE (a `<NetProxy>`-only project publishes and its `blnet_startup.g.cpp` is in
-  the TU set — the full §12.5 assertion lands in Task 14; this smoke is here because spec §17
-  letters the zero-`.bas` test before the flip, whose operative precondition — §9.5's gate
-  rework — landed in P2a-1, and the full "shim initializes" assert is only satisfiable now).
-- [ ] **Step 5:** fast subset (Integration tests excluded automatically) + targeted Integration
-  runs; commit (`feat(p2a2): phase 5 — generate, cache, publish, map, deploy`).
+- [x] **Step 1 (the milestone):** ✅ **GREEN 2026-08-03.** `NetShimPipelineTests.Milestone_…`:
+  `Dim Rx As New Regex("^a+$")` + `Rx.IsMatch(...)` builds end-to-end and RUNS.
+  **Wall time: 23.4 s cold** through `CppProjectBuilder.Build`, **24.4 s** through the CLI
+  (`BasicLang.exe build`), both including the C++ compile+link.
+  ⛔ **The exe prints `True` through an `If`, not through `Console.WriteLine(bool)`** — printing a
+  Boolean shows `1`/`0` on the C++ backend (item 8 of
+  `specs/2026-07-07-cpp-backend-preexisting-gaps.md`), reproduced on a program with no .NET in it,
+  so it is a Boolean-FORMATTING gap in the C++ BCL layer and not the boundary's. The `If` form is
+  also the stronger oracle (a wrong answer changes the BRANCH), and the raw form is pinned on the
+  negative case (`IsMatch("bbb")` → `0`) so the day the gap is fixed this test says so.
+- [x] **Step 2:** cold-then-warm — `SecondIdenticalBuild_HitsTheCacheAndSkipsPhaseFive`.
+  Manifest + message channel + elapsed: **23.8 s cold → 10.0 s warm**, and the warm build's
+  program still runs (the reused DLL must still be deployed).
+- [x] **Step 3:** `AotHostileMemberReachedFromBasicLang_IsABl6020ErrorAtTheBasLine` — a Roslyn-emitted
+  probe assembly with a `[RequiresDynamicCode]` member, reached by a BasicLang CALL (a `<NetProxy>`
+  cannot carry one: §7.2's filter BL6026-omits AOT-hostile members, and only a call site has a
+  `.bas` line to attribute to). ILC's IL3050 lands as a BL6020 **error** at `Program.bas(5)`.
+  Aggregate tier-3 + the §15.10 split asserted through the phase-5 MERGE in
+  `NetShimPhaseTests.PhaseFiveMerge_…`, on captured ILC text.
+  ⛔ The probe MUST be compiled against the net8.0 **reference** pack: built against the shared
+  framework's implementation assemblies it carries a direct `System.Private.CoreLib` reference and
+  every use of its types in the shim is CS0012.
+- [x] **Step 4:** `EmptySurface_SkipsPhaseFiveEntirely`, `ForIntelliSense_NeverPublishes_EvenWithARealSurface`,
+  `ZeroBasProjectWithANetProxy_PublishesAndLinksTheStartupTu` (which RUNS the exe — reaching the
+  user's own `main()` is what proves the startup TU was linked and the §9.3 handshake passed).
+- [x] **Step 5:** fast subset **4062/0/1** (baseline 4052/0/1 → +10, zero regressions); Blnet
+  filter incl. the 16 frozen P0 scenarios; commit
+  (`feat(p2a2): phase 5 — generate, cache, publish, map, deploy`).
+
+**⚠ Carried out of Task 7b — read before Task 8:**
+- **`ShimAssemblyName` now lives on `NetShimGenerator`**, not `CppProjectBuilder` (the dependency
+  is one-way `ProjectSystem` → `CodeGen.Net` again).
+- **`EmitCore` gained a `publishShim` test seam.** Any fixture that drives the BUILD path with a
+  hand-built `surfaceOverride` — or with a resolvable-but-fake toolchain and a real `<NetProxy>` —
+  must pass `publishShim: false` or it spawns a real ~27 s `dotnet publish` in the FAST subset.
+  `NetBuildPipelineTests` and `NetSurfaceCollectorTests` are already switched.
+- **`valueTypeReceiverNames` is fed for real** (from `NetTypeResolver.TypeSymbol(...).IsValueType`)
+  — Task 8's row for it is already satisfied; do not re-do it.
+- **`NetMemberDescriptor.IsSettable`** exists and is populated by the resolver; it is NOT part of
+  the CLR signature and must stay out of the mangler and the duplicate-collapse key.
+- **The analyzer resolves against IMPLEMENTATION assemblies while the shim compiles against
+  REFERENCE assemblies.** A member present only in the implementation set would be admitted at
+  phase 3 and rejected by `csc` at phase 5. Pre-existing (`NetReferenceResolver`'s framework set),
+  not observed on any real surface yet, but it is the shape of a late failure.
+- **`Directory.Build.props` above `obj/gen/shim` can still rewrite §8.1's properties** — the hazard
+  `NetShimGenerator`'s header documents. Not addressed; the fix, if it ever bites, is publishing
+  from a staged copy outside the user tree.
 
 ### Task 8: ref/out, boxed value types, `Unsafe.Unbox`, `Char`
 

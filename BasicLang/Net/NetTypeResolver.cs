@@ -776,7 +776,8 @@ namespace BasicLang.Net
                         TypeName(property.Type),
                         // An indexer's parameters, empty for an ordinary property. Without these
                         // two indexers present one identity and the collapse eats one.
-                        Describe(property.Parameters));
+                        Describe(property.Parameters),
+                        isSettable: IsSettable(property));
 
                 case IFieldSymbol field:
                     return new NetMemberDescriptor(
@@ -786,12 +787,25 @@ namespace BasicLang.Net
                         field.IsStatic,
                         arity: 0,
                         TypeName(field.Type),
-                        Array.Empty<NetParameterDescriptor>());
+                        Array.Empty<NetParameterDescriptor>(),
+                        // readonly and const fields are writable in metadata terms but not from a
+                        // generated shim: `target.X = v` on either is a hard csc error.
+                        isSettable: !field.IsReadOnly && !field.IsConst);
 
                 default:
                     return null;   // events, nested types, everything else
             }
         }
+
+        /// <summary>
+        /// P2a-2 Task 7b: whether a generated shim could legally spell <c>target.X = value</c> for
+        /// this property. Three ways it cannot, all of them ordinary in the framework:
+        /// no setter at all (<c>Regex.Options</c>, <c>String.Length</c>), a setter that is not
+        /// public (a <c>private set</c> auto-property), and an <c>init</c>-only setter, which C#
+        /// permits only inside an object initializer (CS8852) — a shim body is neither.
+        /// </summary>
+        private static bool IsSettable(IPropertySymbol property) =>
+            property.SetMethod is { DeclaredAccessibility: Accessibility.Public, IsInitOnly: false };
 
         private static IReadOnlyList<NetParameterDescriptor> Describe(
             IEnumerable<IParameterSymbol> parameters) =>

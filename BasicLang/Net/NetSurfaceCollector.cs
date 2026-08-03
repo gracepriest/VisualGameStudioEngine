@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using BasicLang.Compiler.CodeGen;
+using BasicLang.Compiler.CodeGen.Net;   // NetWrapperOrigin — §11.3's provenance element
 using BasicLang.Compiler.IR;
 using BasicLang.Compiler.ProjectSystem;
 using Microsoft.CodeAnalysis;
@@ -85,11 +86,24 @@ namespace BasicLang.Net
         /// when the project declares a <c>&lt;NetProxy&gt;</c>, so a project that never mentions
         /// .NET keeps paying nothing for Roslyn.
         /// </summary>
+        /// <param name="declaredProvenance">
+        /// P2a-2 Task 7b (spec §11.3, tier 1): when non-null, every member a <c>&lt;NetProxy&gt;</c>
+        /// expansion contributes is recorded here as (mangled export name →
+        /// <see cref="NetWrapperOriginKind.NetProxyDeclaration"/> origin), so a BL6020 raised
+        /// against the generated wrapper can say "reached through &lt;NetProxy Include='X'/&gt;"
+        /// instead of pointing at a <c>.bas</c> call site the user never wrote. Recorded HERE
+        /// because this is the only place that still knows WHICH declaration produced a member —
+        /// <see cref="NetSurface.Members"/> is a flat list, and a base-chain member's
+        /// <c>DeclaringTypeFullName</c> is a base type, not the declared name, so the mapping
+        /// cannot be recovered downstream. §7.1 call-site origins come from the analyzer's
+        /// annotation table instead and are merged by the caller.
+        /// </param>
         public static NetSurface Collect(
             IEnumerable<IRModule> optimizedModules,
             ProjectFile project,
             Func<NetTypeResolver> resolverFactory,
-            ICollection<NetReferenceDiagnostic> diagnostics)
+            ICollection<NetReferenceDiagnostic> diagnostics,
+            ICollection<KeyValuePair<string, NetWrapperOrigin>> declaredProvenance = null)
         {
             if (diagnostics == null)
                 throw new ArgumentNullException(nameof(diagnostics));
@@ -154,7 +168,8 @@ namespace BasicLang.Net
                         resolver = resolverFactory();
                     }
 
-                    ExpandDeclaredType(resolver, typeName, members, seenMangled, diagnostics);
+                    ExpandDeclaredType(resolver, typeName, members, seenMangled, diagnostics,
+                        declaredProvenance, project?.FilePath);
                 }
             }
 
@@ -272,10 +287,20 @@ namespace BasicLang.Net
         private static void AddMember(
             NetMemberDescriptor descriptor,
             List<NetMemberDescriptor> members,
-            HashSet<string> seenMangled)
+            HashSet<string> seenMangled,
+            ICollection<KeyValuePair<string, NetWrapperOrigin>> provenance = null,
+            NetWrapperOrigin origin = null)
         {
-            if (seenMangled.Add(NetNameMangler.Mangle(descriptor)))
-                members.Add(descriptor);
+            var mangled = NetNameMangler.Mangle(descriptor);
+            if (!seenMangled.Add(mangled))
+                return;
+            members.Add(descriptor);
+
+            // Recorded only for the member that actually WON the dedup, so the map's key set is a
+            // subset of the emitted export set by construction (NetShimGenerator.Provenance
+            // intersects again — belt and braces, because the two dedups are different code).
+            if (provenance != null && origin != null)
+                provenance.Add(new KeyValuePair<string, NetWrapperOrigin>(mangled, origin));
         }
 
         // ------------------------------------------------------------------------------
@@ -287,7 +312,9 @@ namespace BasicLang.Net
             string typeName,
             List<NetMemberDescriptor> members,
             HashSet<string> seenMangled,
-            ICollection<NetReferenceDiagnostic> diagnostics)
+            ICollection<NetReferenceDiagnostic> diagnostics,
+            ICollection<KeyValuePair<string, NetWrapperOrigin>> provenance,
+            string projectFilePath)
         {
             var lookup = resolver.ResolveTypeDetailed(typeName);
             switch (lookup.Outcome)
@@ -333,6 +360,14 @@ namespace BasicLang.Net
             // type, which for the D-P1 System.Object allowlist entries is System.Object — an
             // AOT-hostile declared type would otherwise leak exactly ToString()/GetHashCode()
             // into its surface (caught by DeclaredType_AotHostileDeclaringType_OmitsEveryMember).
+            // One origin object per declaration, shared by every member it expands to: the
+            // <NetProxy> item IS the location, and there is no finer one — the .blproj is read
+            // through ProjectFile, which does not record the item's XML line (hence line 0, which
+            // NetWrapperOrigin.FormatLocation degrades to a bare file name).
+            var declarationOrigin = provenance == null
+                ? null
+                : NetWrapperOrigin.NetProxyDeclaration(projectFilePath ?? string.Empty, typeName);
+
             string queriedTypeAttribute = null;
             var queriedSymbol = resolver.TypeSymbol(typeName);
             var queriedTypeHostile = queriedSymbol != null
@@ -362,7 +397,7 @@ namespace BasicLang.Net
                     continue;
                 }
 
-                AddMember(descriptor, members, seenMangled);
+                AddMember(descriptor, members, seenMangled, provenance, declarationOrigin);
             }
         }
 
