@@ -446,6 +446,40 @@ public class NetCallLoweringTests
         });
     }
 
+    /// <summary>
+    /// §8.3's permanently-unmarshalable row: a <c>ref struct</c> RESULT.
+    /// <c>Regex.EnumerateMatches</c> returns a <c>ValueMatchEnumerator</c>, which cannot be
+    /// boxed — so unlike the multi-slot §6.4 pairs this is not a gap waiting for a later task,
+    /// and the message says so rather than implying a "yet".
+    /// </summary>
+    [Test]
+    public void RefStructResult_IsRefusedAsPermanentlyUnmarshalable()
+    {
+        var analyzer = AnalyzeForFindings("""
+            Module M
+             Sub Main()
+              Dim e = Regex.EnumerateMatches("aaa", "a+")
+             End Sub
+            End Module
+            """);
+
+        var finding = analyzer.NetDiagnostics.FirstOrDefault(d => d.Code == "BL6019");
+        Assert.Multiple(() =>
+        {
+            Assert.That(finding, Is.Not.Null,
+                "a ref-struct result must draw a POSITIONED BL6019. Without this the annotation "
+                + "is recorded exact, reaches the lowering, and refuses there — positionlessly, "
+                + "under a generic 'no native representation' message. Findings: "
+                + string.Join(" | ",
+                    analyzer.NetDiagnostics.Select(d => d.Code + ": " + d.Message)));
+            Assert.That(finding?.Message, Does.Contain("ref struct"),
+                "the message must name the reason: " + finding?.Message);
+            Assert.That(finding?.Message, Does.Contain("boxed"),
+                "…and WHY it is structural — every non-ref value type crosses as a boxed "
+                + "handle, and a ref struct cannot be boxed: " + finding?.Message);
+        });
+    }
+
     [Test]
     public void TimeSpanArgument_CrossesThroughToNetTimespan()
     {

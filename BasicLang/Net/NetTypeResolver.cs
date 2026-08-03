@@ -441,6 +441,22 @@ namespace BasicLang.Net
         internal INamedTypeSymbol TypeSymbol(string fullName) => Lookup(fullName).Symbol;
 
         /// <summary>
+        /// True when <paramref name="fullName"/> resolves to a <c>ref struct</c> —
+        /// <c>Span&lt;T&gt;</c>, <c>ReadOnlySpan&lt;T&gt;</c>,
+        /// <c>Regex.ValueMatchEnumerator</c> and friends.
+        ///
+        /// <para>Spec §8.3 makes these NOT MARSHALABLE, and the reason is structural rather
+        /// than a gap to be filled later: every non-<c>ref</c> value type crosses as a BOXED
+        /// handle, and a ref-like type cannot be boxed at all —
+        /// <c>GCHandle.Alloc(object)</c> is the operation P0's handle table is built on and it
+        /// has nothing to take. The surface collector already refuses them structurally
+        /// (<c>FirstUnmarshalable</c> checks <c>IsRefLikeType</c>); this seam is for the
+        /// analyzer, which needs the same answer from a NAME so a resolved CALL SITE gets a
+        /// positioned BL6019 instead of a positionless codegen refusal.</para>
+        /// </summary>
+        internal bool IsRefLikeType(string fullName) => Lookup(fullName).Symbol?.IsRefLikeType == true;
+
+        /// <summary>
         /// The metadata full name of an ENUM's underlying integral type
         /// (<c>System.Int32</c> for <c>System.IO.FileMode</c>), or null when
         /// <paramref name="fullName"/> does not resolve or is not an enum.

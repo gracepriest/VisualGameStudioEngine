@@ -327,6 +327,23 @@ namespace BasicLang.Compiler.CodeGen.Net
         /// is the safe default: a handle is opaque, so being wrong about a type's shape costs a
         /// missing convenience, never a misinterpreted 64 bits.
         ///
+        /// <para><b>The other two encodings of these rows, and what ties each to this one.</b>
+        /// <c>NetShimGenerator.WireOf</c> is the C# column — same rows, same ORDER, compared
+        /// signature-for-signature by
+        /// <c>NetShimGeneratorTests.ExportSignaturesMatchTheProxyTableSlotSignatures</c> over
+        /// <c>NetProxyEmitterTests.WireShapeSurface</c>, so a row missing from that fixture is a
+        /// row the comparison is blind to. <c>NetMarshalTable.WireRows</c> is the CALL SITE's
+        /// column (BasicLang spelling, §6.4 converter names, and the <c>CWire</c> a ByRef
+        /// temporary is declared with); <c>NetConversionPairTests</c> ties it to
+        /// <c>blnet_marshal.hpp</c>.</para>
+        ///
+        /// <para><b>What may ARRIVE here is decided elsewhere</b>, by
+        /// <c>NetSurfaceCollector.FirstUnmarshalable</c> — the §7.2 admissibility filter. A type
+        /// it rejects (a pointer, an open type parameter, <c>Object</c>, a <c>ref struct</c>)
+        /// never reaches a slot at all, which is why this table has no arm for any of them and
+        /// must not grow one: a wire form here would silently re-admit a type the collector
+        /// refused.</para>
+        ///
         /// <para><c>Char</c> travels as its .NET width, a <c>uint16_t</c> UTF-16 code unit.
         /// §8.3's shipped divergence — BasicLang's native <c>Char</c> is ONE byte, so inbound
         /// values above U+00FF narrow lossily — belongs to the lowering in

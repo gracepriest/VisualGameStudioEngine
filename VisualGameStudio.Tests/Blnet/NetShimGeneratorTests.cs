@@ -2,6 +2,8 @@ using System.Text.RegularExpressions;
 using BasicLang.Compiler.CodeGen.CPlusPlus;
 using BasicLang.Compiler.CodeGen.Net;
 using BasicLang.Net;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using NUnit.Framework;
 
 namespace VisualGameStudio.Tests.Blnet;
@@ -273,6 +275,106 @@ public class NetShimGeneratorTests
             + "unboxing cast. ((T)o!).Prop = v is CS0445 (the shim would not compile at all) and "
             + "((T)o!).Mutate() silently mutates the temporary the unboxing produced, leaving the "
             + "box untouched. Fix NetShimGenerator's receiver emission.");
+    }
+
+    /// <summary>
+    /// A MUTABLE framework struct with a settable property, reached through the production
+    /// synthesis point. <c>GCHandle.Target</c> is chosen because it is a real
+    /// <c>public object? Target { get; set; }</c> on a struct — the shape §8.5's CS0445 rule is
+    /// about — rather than something invented for the test.
+    /// </summary>
+    private const string MutableStruct = "System.Runtime.InteropServices.GCHandle";
+
+    private static NetSurface MutableStructSetterSurface() => new(
+        new[]
+        {
+            NetAccessorSynthesis.SetterFor(new NetMemberDescriptor(
+                "Target", MutableStruct, NetMemberCategory.Property, isStatic: false, arity: 0,
+                "System.Object", Array.Empty<NetParameterDescriptor>())),
+        },
+        Array.Empty<string>());
+
+    /// <summary>
+    /// Compiles a complete generated shim — <c>Exports.g.cs</c> plus the four spliced
+    /// scaffolding files — with raw Roslyn. This is the ~25 s AOT publish's compile step,
+    /// available in milliseconds, so "does the generated C# compile at all" stops being a
+    /// question only the Integration fixture can answer.
+    ///
+    /// <para><c>allowUnsafe</c> and the global usings mirror the properties
+    /// <see cref="NetShimGenerator.EmitProject"/> writes (§8.1): every export signature is a
+    /// pointer signature, and <c>HandleTable.cs</c> names <c>List&lt;T&gt;</c>/<c>Stack&lt;T&gt;</c>
+    /// /LINQ with no <c>using</c> of its own. A raw compile has no <c>ImplicitUsings</c>, so the
+    /// csproj's own property has to be reproduced here or the scaffolding fails for a reason
+    /// that has nothing to do with what is under test.</para>
+    /// </summary>
+    private static IReadOnlyList<Diagnostic> CompileShim(string exports)
+    {
+        const string globals = """
+            global using System;
+            global using System.Collections.Generic;
+            global using System.IO;
+            global using System.Linq;
+            global using System.Threading;
+            global using System.Threading.Tasks;
+            """;
+        var parse = new CSharpParseOptions(LanguageVersion.Latest);
+        var sources = new[]
+        {
+            globals, exports, BlnetShimSources.HandleTable, BlnetShimSources.BlnetStatusCs,
+            BlnetShimSources.ShimAbiCs, BlnetShimSources.MarshalCs,
+        };
+        var compilation = CSharpCompilation.Create(
+            "BlnetShimCompileProbe",
+            sources.Select(s => CSharpSyntaxTree.ParseText(s, parse)),
+            NetTypeResolverTestRefs.FrameworkPaths.Select(p => MetadataReference.CreateFromFile(p)),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true));
+
+        using var ms = new MemoryStream();
+        return compilation.Emit(ms).Diagnostics
+            .Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
+    }
+
+    /// <summary>
+    /// <b>The §8.5 mutation oracle, and the reason <c>Unsafe.Unbox</c> is a RULE rather than an
+    /// optimization.</b> The generated shim for a property SET on a boxed value-type receiver
+    /// must compile; swapping the receiver back to the obvious unboxing cast must make it fail
+    /// with <b>CS0445</b>, "cannot modify the result of an unboxing conversion".
+    ///
+    /// <para>Without the mutation half this test proves almost nothing: a shim that compiles is
+    /// what you get either way for a READ, and the whole hazard is that the cast form looks
+    /// correct. The mutation is applied to the GENERATED TEXT, so it exercises the exact
+    /// spelling <see cref="NetShimGenerator"/> emits rather than a paraphrase of it.</para>
+    /// </summary>
+    [Test]
+    public void ValueTypeReceiverSetter_CompilesWithUnsafeUnbox_AndIsCs0445WithACast()
+    {
+        var exports = NetShimGenerator.EmitExports(
+            MutableStructSetterSurface(), valueTypeReceiverNames: new[] { MutableStruct });
+
+        var unboxReceiver = "global::System.Runtime.CompilerServices.Unsafe.Unbox<global::"
+                            + MutableStruct + ">(self_!)";
+        Assert.That(exports, Does.Contain(unboxReceiver),
+            "the fixture is not exercising the §8.5 receiver rule at all:\n" + exports);
+
+        var clean = CompileShim(exports);
+        Assert.That(clean, Is.Empty,
+            "the GENERATED shim must compile. These are the errors the ~25 s AOT publish would "
+            + "have reported against a file under obj/gen/shim that the user never wrote:\n"
+            + string.Join("\n", clean));
+
+        // THE MUTATION: Unsafe.Unbox<T>(o) -> ((T)o), the spelling §8.5 forbids.
+        var mutated = exports.Replace(
+            unboxReceiver, "((global::" + MutableStruct + ")self_!)");
+        Assert.That(mutated, Is.Not.EqualTo(exports), "the mutation did not apply");
+
+        var errors = CompileShim(mutated);
+        Assert.That(errors.Select(d => d.Id), Contains.Item("CS0445"),
+            "swapping Unsafe.Unbox<T> for an unboxing CAST must break the compile with CS0445 "
+            + "('cannot modify the result of an unboxing conversion'). If it now compiles, the "
+            + "generator stopped emitting a property SET through the receiver — and §8.5's OTHER "
+            + "failure, a mutating METHOD call through a cast, has no compile error at all: it "
+            + "mutates the temporary and loops forever. Errors were:\n"
+            + string.Join("\n", errors));
     }
 
     [Test]

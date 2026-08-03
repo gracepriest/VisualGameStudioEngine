@@ -149,6 +149,14 @@ inline BasicLang::DateTimeOffset from_net_datetimeoffset(std::int64_t utcTicks,
     r.utc_ = BasicLang::DateTime::FromTicksAndKind(
         utcTicks, BasicLang::DateTime::KindUnspecified);
     r.offsetMinutes_ = offsetMinutes;
+    /* The THIRD range check, and the one the two above cannot cover: .NET's
+       DateTimeOffset constructor takes CLOCK ticks and validates THEM, so a UTC
+       instant that is in range but whose local clock time is not (23:30 UTC with
+       +14:00, or 00:30 UTC with -14:00 at the boundary years) is representable
+       here and not there. Computing the clock time discards nothing and throws on
+       exactly that case, so the pair round-trips or refuses -- it never produces a
+       native value the managed side would reject. */
+    (void)r.ClockDateTime();
     return r;
 }
 inline BasicLang::DateTimeOffset from_net_datetimeoffset(const NetDateTimeOffsetWire& w) {

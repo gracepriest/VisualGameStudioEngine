@@ -705,6 +705,20 @@ namespace BasicLang.Compiler.CodeGen.Net
         /// Everything not listed is a handle — §8.3's "other non-ref value types → handle
         /// (boxed)" row plus every reference type — which is the safe default: being wrong about
         /// an opaque handle costs a missing convenience, never a misinterpreted 64 bits.
+        ///
+        /// <para><b>The other two encodings, and what ties each to this one.</b>
+        /// <c>NetProxyEmitter.WireOf</c> is the C column, held equal to this one
+        /// signature-for-signature by
+        /// <see cref="NetShimGeneratorTests.ExportSignaturesMatchTheProxyTableSlotSignatures"/>
+        /// over <c>NetProxyEmitterTests.WireShapeSurface</c> — a row absent from that fixture is
+        /// a row the comparison cannot see. <c>NetMarshalTable.WireRows</c> is the call site's,
+        /// tied to <c>blnet_marshal.hpp</c> by <c>NetConversionPairTests</c>.</para>
+        ///
+        /// <para><b>What may ARRIVE here is decided by
+        /// <c>NetSurfaceCollector.FirstUnmarshalable</c></b>, the §7.2 admissibility filter: a
+        /// pointer, an open type parameter, <c>Object</c> or a <c>ref struct</c> never reaches a
+        /// wrapper. Adding an arm for one here would silently re-admit a type the collector
+        /// refused.</para>
         /// </summary>
         private static WireForm WireOf(string netTypeFullName) => netTypeFullName switch
         {

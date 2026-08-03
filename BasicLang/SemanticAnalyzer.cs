@@ -2854,10 +2854,44 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return true;
             }
 
+            // The RESULT is judged too, not only the parameters. §8.3 makes a `ref struct`
+            // unmarshalable in EVERY position, and a returned one (Regex.EnumerateMatches ->
+            // ValueMatchEnumerator) would otherwise sail past this gate, be recorded exact, and
+            // reach the lowering — which refuses it, but positionlessly and under the generic
+            // "no native representation" message. A constructor's result is its declaring type;
+            // `New Span(Of Byte)(...)` is the shape that reaches this arm.
+            var resultType = winner.Kind == NetMemberCategory.Constructor
+                ? winner.DeclaringTypeFullName
+                : winner.TypeFullName;
+            if (IsNetRefLikeTypeName(resultType))
+            {
+                NetWarning("BL6019",
+                    $"'{target}' produces '{resultType}', which is a `ref struct` and cannot "
+                    + "cross the native .NET boundary (spec §8.3). Every non-ref value type "
+                    + "crosses as a BOXED handle, and a ref struct cannot be boxed at all — "
+                    + "there is no representation to give it. Use an overload that works in "
+                    + "String or an array instead.",
+                    line, column);
+                return true;
+            }
+
             for (var i = 0; i < winner.Parameters.Count; i++)
             {
                 var parameter = winner.Parameters[i];
                 var position = (i + 1).ToString(CultureInfo.InvariantCulture);
+
+                if (IsNetRefLikeTypeName(parameter.TypeFullName))
+                {
+                    NetWarning("BL6019",
+                        $"'{target}': parameter {position} has type "
+                        + $"'{parameter.TypeFullName}', which is a `ref struct` and cannot cross "
+                        + "the native .NET boundary (spec §8.3). Every non-ref value type "
+                        + "crosses as a BOXED handle, and a ref struct cannot be boxed at all. "
+                        + "Use an overload that takes a String or an array instead.",
+                        line, column);
+                    return true;
+                }
+
                 if (parameter.RefKind != NetRefKind.None
                     && ReportUnlowerableByRefParameter(
                         target, parameter, position, callArguments[i], line, column))
@@ -3008,6 +3042,18 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// True when the metadata full name resolves as a <c>ref struct</c> — §8.3's
+        /// permanently-unmarshalable row. See <see cref="NetTypeResolver.IsRefLikeType"/> for
+        /// why it is structural rather than a gap.
+        /// </summary>
+        private bool IsNetRefLikeTypeName(string fullName)
+        {
+            if (string.IsNullOrEmpty(fullName)) return false;
+            var resolver = NetResolver();
+            return resolver != null && resolver.IsRefLikeType(fullName);
         }
 
         /// <summary>True when the metadata full name resolves as a .NET enum.</summary>

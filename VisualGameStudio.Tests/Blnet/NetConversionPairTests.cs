@@ -349,6 +349,105 @@ public class NetConversionPairTests
             + "would invent the reverse conversion the spec's table does not have.");
 
     // ======================================================================================
+    // FAST: §8.3's drift oracle — the row table, the native converters and the wire types
+    // are three encodings of one fact (P2a-2 Task 8, Step 2b).
+    // ======================================================================================
+
+    /// <summary>
+    /// <b>Ties <c>NetMarshalTable.WireRows</c> to <c>blnet_marshal.hpp</c>, row by row.</b>
+    /// The row table is what the CALL SITE emits from — it spells
+    /// <c>BasicLang::net::to_net_datetime</c> and the <c>uint64_t</c> that carries it — while
+    /// the header is what DEFINES them. Nothing else holds the two together: a converter
+    /// renamed or re-typed in the header still compiles the header, and the failure surfaces as
+    /// generated C++ that will not build, in a file nobody wrote, on whichever program happens
+    /// to use that row.
+    ///
+    /// <para>The single-slot rows get the stronger check — the declared parameter type of
+    /// <c>from_net_*</c> must BE the row's <c>CWire</c> — because those are the rows a call site
+    /// declares a temporary of for §8.3's pointer slots, and a width mismatch there is a
+    /// silently truncated value, not a compile error.</para>
+    /// </summary>
+    [Test]
+    public void EverySection64Row_MatchesTheNativeConverterItNames()
+    {
+        var native = CppNetMarshal.GuardedSource;
+        var rows = BasicLang.Net.NetMarshalTable.WireRows.Values
+            .Where(r => r.Shape == BasicLang.Net.NetWireShape.Conversion).ToList();
+
+        Assert.That(rows.Select(r => r.NetFullName), Is.EquivalentTo(new[]
+        {
+            "System.DateTime", "System.TimeSpan", "System.Decimal", "System.Guid",
+            "System.DateTimeOffset", "System.Text.StringBuilder",
+        }), "§6.4 has exactly SIX conversion pairs. A row added or removed here changes what "
+          + "the boundary treats as a native value rather than a handle — and a §6.4 value that "
+          + "becomes a handle is a silently wrong program.");
+
+        Assert.Multiple(() =>
+        {
+            foreach (var row in rows)
+            {
+                var toNet = Unqualified(row.NativeToNet);
+                Assert.That(native, Does.Contain(toNet + "("),
+                    $"the row for '{row.NetFullName}' names an outbound converter "
+                    + $"'{row.NativeToNet}' that blnet_marshal.hpp does not define. Every call "
+                    + "site that crosses this row emits that exact name.");
+
+                if (row.NativeFromNet == null)
+                {
+                    Assert.That(row.NetFullName, Is.EqualTo("System.Text.StringBuilder"),
+                        "StringBuilder is the ONE directional row in §6.4's table; any other "
+                        + "row without an inbound converter cannot carry a result back.");
+                    continue;
+                }
+
+                var fromNet = Unqualified(row.NativeFromNet);
+                Assert.That(native, Does.Contain(fromNet + "("),
+                    $"the row for '{row.NetFullName}' names an inbound converter "
+                    + $"'{row.NativeFromNet}' that blnet_marshal.hpp does not define.");
+
+                if (row.IsMultiSlot) continue;
+
+                // std:: is the header's spelling of the same fixed-width type the row names.
+                Assert.That(
+                    native.Replace("std::", string.Empty),
+                    Does.Contain(fromNet + "(" + row.CWire + " "),
+                    $"'{row.NativeFromNet}' must take the row's wire type '{row.CWire}'. A call "
+                    + "site declares a temporary of exactly that type for §8.3's pointer slot, "
+                    + "and a width mismatch there truncates silently rather than failing to "
+                    + "compile.");
+            }
+        });
+    }
+
+    /// <summary>
+    /// §8.3's ref/out row needs a single wire slot to declare a temporary of. The rows that
+    /// have one must say so, and the rows that do not must NOT — a <c>CWire</c> invented for
+    /// String or for a multi-slot pair would let the lowering emit a temporary of a type the
+    /// proxy never declared.
+    /// </summary>
+    [Test]
+    public void OnlySingleSlotByValueRows_CarryACallSiteWireType()
+    {
+        Assert.Multiple(() =>
+        {
+            foreach (var row in BasicLang.Net.NetMarshalTable.WireRows.Values)
+            {
+                var expected = !row.IsMultiSlot
+                               && row.Shape != BasicLang.Net.NetWireShape.String;
+                Assert.That(!string.IsNullOrEmpty(row.CWire), Is.EqualTo(expected),
+                    $"'{row.NetFullName}': a call-site wire type must exist for exactly the "
+                    + "single-slot by-value rows. String has two of them with opposite "
+                    + "ownership (const char* in, char** out) and the multi-slot §6.4 pairs "
+                    + "have several, so neither can name one — which is what makes them refuse "
+                    + "a ByRef slot instead of guessing.");
+            }
+        });
+    }
+
+    private static string Unqualified(string qualified) =>
+        qualified.Substring(qualified.LastIndexOf(':') + 1);
+
+    // ======================================================================================
     // FAST: wiring — the native header is spliced, surface-keyed, verbatim.
     // ======================================================================================
 
