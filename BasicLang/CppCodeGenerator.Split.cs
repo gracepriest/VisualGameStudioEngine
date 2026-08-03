@@ -56,6 +56,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             _usesFramework = false;
             _frameworkFunctionsUsed.Clear();
             _tempCounter = 0;
+            // P2a-2 Task 7a: drives the aggregate header's boundary includes (see
+            // EmitNetBoundaryIncludes) — same walk as the phase-3 collector.
+            DetectNetSurface(combined);
 
             var result = new CppSplitResult();
             var projectHeaderName = projectName + ".g.h";
@@ -206,6 +209,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine("#pragma once");
             WriteLine($"#include \"{RuntimeHeaderFileName}\"");
             WriteLine();
+            // P2a-2 Task 7a: boundary includes AFTER the runtime header — its P1 splices
+            // satisfy blnet_marshal.hpp's include-order contract. No-op for a surface-free
+            // module (the inertness rule).
+            EmitNetBoundaryIncludes();
 
             if (module.Classes.Count > 0)
             {

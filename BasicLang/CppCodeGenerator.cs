@@ -86,6 +86,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             _usesFramework = false;
             _frameworkFunctionsUsed.Clear();
             _tempCounter = 0;
+            // P2a-2 Task 7a: same walk the phase-3 collector uses — drives the boundary
+            // includes; false for every surface-free program (the inertness rule).
+            DetectNetSurface(module);
             // Single-file path (unit tests, demos): the whole module is one notional file.
             // The real build goes through GenerateSplit, where CaptureSection sets this
             // per captured file.
@@ -337,6 +340,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // so the type must always exist. Include-guarded and self-including; shared
             // verbatim with blnet_runtime.hpp (single definition).
             SpliceRuntimeSource(CppNetRefRuntime.GuardedSource);
+
+            // P2a-2 Task 7a: the boundary includes, ONLY for a surface-drawing module —
+            // AFTER the splices, honoring blnet_marshal.hpp's include-order contract (the
+            // P1 BCL splices above put BasicLang::DateTime et al. in scope first).
+            EmitNetBoundaryIncludes();
         }
 
         /// <summary>
@@ -2023,6 +2031,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return;
             }
 
+            // P2a-2 Task 7a: a resolved .NET STATIC call (the fused Receiver.Member shape)
+            // lowers to its typed g_net proxy, receiver-less.
+            if (call.ResolvedNetTarget != null
+                && TryLowerNetInvocation(call, call.ResolvedNetTarget,
+                        call.ResolvedNetTargetIsExact, call.NetCategory,
+                        receiver: null, call.Arguments))
+            {
+                return;
+            }
+
             var args = call.Arguments.Select(GetValueName).ToList();
             var functionName = call.FunctionName;
             var hasReturn = call.Type != null && !call.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
@@ -3187,6 +3205,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // there is no C++ class to construct here.
             if (CppExceptionTypes.IsNetException(newObj.ClassName)) return;
 
+            // P2a-2 Task 7a: `New` on a resolved .NET type lowers to the constructor proxy,
+            // whose §8.2 export returns the created object's handle into the declared NetRef.
+            if (newObj.ResolvedNetTarget != null
+                && TryLowerNetInvocation(newObj, newObj.ResolvedNetTarget,
+                        newObj.ResolvedNetTargetIsExact, newObj.NetCategory,
+                        receiver: null, newObj.Arguments))
+            {
+                return;
+            }
+
             // .NET-surface shim: `New String("="c, n)` is (char, count) but
             // std::string's fill constructor is (count, char) — swap. Emitting
             // `String(...)` verbatim references a nonexistent C++ type.
@@ -3294,6 +3322,21 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 if (_inlinedForeignCalls.Contains(methodCall))
                     return;
                 WriteLine($"{RenderForeignMethodCall(methodCall)};");
+                return;
+            }
+
+            // P2a-2 Task 7a: a resolved .NET INSTANCE call lowers to its typed g_net proxy,
+            // receiver NetRef first (§9.2). A STATIC winner reached through an instance
+            // receiver (VB's leniency) or through a type-name receiver outside
+            // KnownNetStaticTypes drops the phantom receiver — TryLowerNetInvocation keys
+            // on the descriptor's IsStatic, not on this node's shape. Property-through-call-
+            // syntax (`st.Length()`) carries the PROPERTY descriptor and lowers as its
+            // getter-shaped slot through the same path.
+            if (methodCall.ResolvedNetTarget != null
+                && TryLowerNetInvocation(methodCall, methodCall.ResolvedNetTarget,
+                        methodCall.ResolvedNetTargetIsExact, methodCall.NetCategory,
+                        methodCall.Object, methodCall.Arguments))
+            {
                 return;
             }
 
@@ -3463,6 +3506,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return;
             }
 
+            // P2a-2 Task 7a: a resolved .NET property/field READ lowers to the getter-shaped
+            // property slot (§9.2); a STATIC one drops the phantom type-name receiver.
+            if (fieldAccess.ResolvedNetTarget != null
+                && TryLowerNetInvocation(fieldAccess, fieldAccess.ResolvedNetTarget,
+                        fieldAccess.ResolvedNetTargetIsExact, fieldAccess.NetCategory,
+                        fieldAccess.Object, Array.Empty<IRValue>()))
+            {
+                return;
+            }
+
             // P1 static dispatch: a NativeOwned TYPE-NAME receiver (`DateTime.Now`,
             // `DateTime.MinValue`, `Decimal.One`, `TimeSpan.Zero`) with a surface
             // StaticProperty/StaticMethod lowers to the runtime's static member FUNCTION:
@@ -3539,6 +3592,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         public override void Visit(IRFieldStore fieldStore)
         {
+            // P2a-2 Task 7a: a resolved .NET property/field WRITE lowers through the
+            // synthesized set_X accessor slot (stamped by IRBuilder).
+            if (TryLowerNetFieldStore(fieldStore)) return;
+
             var obj = GetValueName(fieldStore.Object);
             var op = MemberAccessOp(fieldStore.Object);
             var fieldName = SanitizeName(fieldStore.FieldName);

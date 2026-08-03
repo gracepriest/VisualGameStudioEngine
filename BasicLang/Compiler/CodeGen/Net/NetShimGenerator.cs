@@ -491,6 +491,15 @@ namespace BasicLang.Compiler.CodeGen.Net
             if (member.Kind == NetMemberCategory.Property || member.Kind == NetMemberCategory.Field)
                 return target + "." + member.Name;
 
+            // Task 7a: a synthesized set_X accessor (NetAccessorSynthesis — how IRBuilder
+            // stamps a property/field WRITE) spells as an assignment: C# cannot call an
+            // accessor by its metadata name (CS0571). See IsSyntheticSetterShape's caveat
+            // about foreign metadata declaring an ordinary method named set_X — that shape
+            // fails to compile in csc, loudly, never silently calling the wrong member.
+            if (NetAccessorSynthesis.IsSyntheticSetterShape(member))
+                return target + "." + member.Name.Substring(NetAccessorSynthesis.SetterPrefix.Length)
+                       + " = " + args;
+
             return target + "." + member.Name + "(" + args + ")";
         }
 
@@ -568,6 +577,17 @@ namespace BasicLang.Compiler.CodeGen.Net
             internal static readonly WireForm Char =
                 new(WireKind.Scalar, "ushort", "ushort*", "char");
 
+            /// <summary>
+            /// §6.4 single-slot pairs (Task 7a): the wire is the P1 layout scalar; the
+            /// managed value converts through <c>BlnetMarshal</c> (BlnetShimSources.MarshalCs
+            /// — the Task-6 managed half) in <see cref="FromWire"/>/<see cref="ToWire"/>.
+            /// </summary>
+            internal static readonly WireForm DateTime =
+                new(WireKind.Scalar, "ulong", "ulong*", "System.DateTime");
+
+            internal static readonly WireForm TimeSpan =
+                new(WireKind.Scalar, "long", "long*", "System.TimeSpan");
+
             internal static WireForm Scalar(string cs) =>
                 new(WireKind.Scalar, cs, cs + "*", cs);
         }
@@ -594,15 +614,25 @@ namespace BasicLang.Compiler.CodeGen.Net
             "System.Double" => Wire.Scalar("double"),
             "System.Char" => Wire.Char,
             "System.String" => Wire.String,
+            // §6.4 single-slot pairs — SAME rows, SAME order as NetProxyEmitter.WireOf (the
+            // two are compared by NetShimGeneratorTests). The multi-slot pairs (Decimal,
+            // Guid, DateTimeOffset, StringBuilder) stay in the handle row on BOTH sides
+            // until Task 8's drift completion; the analyzer refuses them at resolved call
+            // sites, so no BasicLang call reaches the handle-shaped slot.
+            "System.DateTime" => Wire.DateTime,
+            "System.TimeSpan" => Wire.TimeSpan,
             _ => Wire.Handle,
         };
 
-        /// <summary>Wire value to managed value. Only <c>Boolean</c> and <c>Char</c> convert.</summary>
+        /// <summary>Wire value to managed value: <c>Boolean</c>, <c>Char</c>, and the §6.4
+        /// single-slot pairs convert (the latter through the Task-6 <c>BlnetMarshal</c>).</summary>
         private static string FromWire(WireForm wire, string expression) =>
             wire.CsManagedType switch
             {
                 "bool" => "(" + expression + " != 0)",
                 "char" => "(char)(" + expression + ")",
+                "System.DateTime" => "BlnetMarshal.DateTimeFromWire(" + expression + ")",
+                "System.TimeSpan" => "BlnetMarshal.TimeSpanFromWire(" + expression + ")",
                 _ => expression,
             };
 
@@ -612,6 +642,8 @@ namespace BasicLang.Compiler.CodeGen.Net
             {
                 "bool" => expression + " ? 1 : 0",
                 "char" => "(ushort)" + expression,
+                "System.DateTime" => "BlnetMarshal.DateTimeToWire(" + expression + ")",
+                "System.TimeSpan" => "BlnetMarshal.TimeSpanToWire(" + expression + ")",
                 _ => expression,
             };
 

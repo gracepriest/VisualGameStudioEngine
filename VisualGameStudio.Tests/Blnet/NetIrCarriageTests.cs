@@ -212,6 +212,96 @@ public class NetIrCarriageTests
             + "path (FunctionInliningPass.CloneAndRemap, BasicLang/IROptimizer.cs:1381).");
     }
 
+    /// <summary>
+    /// P2a-2 Task 7a widened the carriage to <see cref="IRNewObject"/> /
+    /// <see cref="IRFieldAccess"/> / <see cref="IRFieldStore"/> and added the name-only
+    /// gate's <c>ResolvedNetTargetIsExact</c> bit. Same teeth as the call-node test above:
+    /// all three ride through <c>FunctionInliningPass.CloneAndRemap</c> inside an inlined
+    /// helper, so any future <c>case</c> added there that rebuilds one of them without
+    /// copying all THREE fields goes red here.
+    /// </summary>
+    [Test]
+    public void AggressivePipelinePreservesTask7aCarriageOnTheNewNodeTypes()
+    {
+        var ctor = new NetMemberDescriptor(
+            ".ctor", "System.Text.RegularExpressions.Regex", NetMemberCategory.Constructor,
+            isStatic: false, arity: 0, "System.Void",
+            new List<NetParameterDescriptor> { new(NetRefKind.None, "System.String") });
+        var property = new NetMemberDescriptor(
+            "Position", "System.IO.Stream", NetMemberCategory.Property,
+            isStatic: false, arity: 0, "System.Int64",
+            new List<NetParameterDescriptor>());
+        var setter = NetAccessorSynthesis.SetterFor(property);
+
+        var module = new IRModule("CarriageInline7aModule");
+
+        var helper = new IRFunction("Helper", VoidType);
+        var helperEntry = new BasicBlock("entry");
+        var recv = new IRVariable("st", new TypeInfo("Stream", TypeKind.Class));
+        var construction = new IRNewObject("_tmp_new", "Regex",
+            new TypeInfo("Regex", TypeKind.Class));
+        construction.Arguments.Add(new IRConstant("a+", StringType));
+        construction.ResolvedNetTarget = ctor;
+        construction.NetCategory = BoundaryTypeCategory.ManagedOwned;
+        construction.ResolvedNetTargetIsExact = true;
+        var read = new IRFieldAccess("_tmp_get", recv, "Position",
+            new TypeInfo("Long", TypeKind.Primitive));
+        read.ResolvedNetTarget = property;
+        read.NetCategory = BoundaryTypeCategory.ManagedOwned;
+        read.ResolvedNetTargetIsExact = true;
+        var write = new IRFieldStore(recv, "Position", new IRConstant(5L, new TypeInfo("Long", TypeKind.Primitive)));
+        write.ResolvedNetTarget = setter;
+        write.NetCategory = BoundaryTypeCategory.ManagedOwned;
+        write.ResolvedNetTargetIsExact = true;
+        helperEntry.AddInstruction(construction);
+        helperEntry.AddInstruction(read);
+        helperEntry.AddInstruction(write);
+        helperEntry.AddInstruction(new IRReturn());
+        helper.Blocks.Add(helperEntry);
+        helper.EntryBlock = helperEntry;
+        module.Functions.Add(helper);
+
+        var main = new IRFunction("Main", VoidType);
+        var mainEntry = new BasicBlock("entry");
+        mainEntry.AddInstruction(new IRCall("_tmp_helper", "Helper", VoidType));
+        mainEntry.AddInstruction(new IRReturn());
+        main.Blocks.Add(mainEntry);
+        main.EntryBlock = mainEntry;
+        module.Functions.Add(main);
+
+        var pipeline = new OptimizationPipeline();
+        pipeline.AddAggressivePasses();
+        pipeline.Run(module);
+
+        var mainInstructions = module.Functions
+                                     .Single(f => f.Name == "Main")
+                                     .Blocks.SelectMany(b => b.Instructions)
+                                     .ToList();
+
+        var inlinedNew = mainInstructions.OfType<IRNewObject>().SingleOrDefault();
+        Assert.That(inlinedNew, Is.Not.Null,
+            "guard: FunctionInliningPass did not inline Helper — the clone path was never "
+            + "exercised (see the companion test's fixture notes)");
+        Assert.That(inlinedNew!.ResolvedNetTarget, Is.EqualTo(ctor),
+            "the clone path dropped IRNewObject.ResolvedNetTarget — FIX THE OPTIMIZER");
+        Assert.That(inlinedNew.ResolvedNetTargetIsExact, Is.True,
+            "the clone path dropped IRNewObject.ResolvedNetTargetIsExact — losing the bit "
+            + "makes the name-only gate REFUSE a probe-verified construction");
+
+        var inlinedRead = mainInstructions.OfType<IRFieldAccess>().SingleOrDefault();
+        Assert.That(inlinedRead, Is.Not.Null, "guard: the read was not inlined");
+        Assert.That(inlinedRead!.ResolvedNetTarget, Is.EqualTo(property),
+            "the clone path dropped IRFieldAccess.ResolvedNetTarget — FIX THE OPTIMIZER");
+        Assert.That(inlinedRead.ResolvedNetTargetIsExact, Is.True);
+
+        var inlinedWrite = mainInstructions.OfType<IRFieldStore>().SingleOrDefault();
+        Assert.That(inlinedWrite, Is.Not.Null, "guard: the write was not inlined");
+        Assert.That(inlinedWrite!.ResolvedNetTarget, Is.EqualTo(setter),
+            "the clone path dropped IRFieldStore.ResolvedNetTarget (the synthesized set_X "
+            + "descriptor) — FIX THE OPTIMIZER");
+        Assert.That(inlinedWrite.ResolvedNetTargetIsExact, Is.True);
+    }
+
     // ------------------------------------------------------------------------------------
     // Population on the real IRBuilder path — the non-vacuous half.
     // ------------------------------------------------------------------------------------

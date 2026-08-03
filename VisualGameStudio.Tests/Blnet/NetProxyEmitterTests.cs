@@ -262,7 +262,11 @@ public class NetProxyEmitterTests
                     $"The proxy for '{slot}' does not guard its slot. §9.2 requires a clear "
                     + "diagnostic when blnet_startup() has not run (a static-initialization-order "
                     + "violation) instead of a null function-pointer jump.");
-                Assert.That(body, Does.Contain("BasicLang::blnet::NetCheck(blnet_status);"),
+                // P2a-2 Task 7a: proxies call the TYPED check — NetCheckTyped throws
+                // BasicLang::NetException carrying the shim-reported inheritance chain
+                // (§11.1's ladder input); P0's NetCheck keeps its frozen composed-message
+                // shape for hand-written hosts.
+                Assert.That(body, Does.Contain("BasicLang::blnet::NetCheckTyped(blnet_status);"),
                     $"The proxy for '{slot}' drops the returned status on the floor.");
             }
         });
@@ -286,12 +290,14 @@ public class NetProxyEmitterTests
             {
                 var body = ProxyBody(proxies, slot)!;
                 var scopeEnd = body.IndexOf("\n    }\n", StringComparison.Ordinal);
-                var check = body.IndexOf("NetCheck(blnet_status);", StringComparison.Ordinal);
+                // Task 7a spelling: proxies call NetCheckTyped (the §11.1 typed conversion).
+                var check = body.IndexOf("NetCheckTyped(blnet_status);", StringComparison.Ordinal);
                 Assert.That(scopeEnd, Is.GreaterThan(-1), $"proxy '{slot}' has no scope block");
                 Assert.That(check, Is.GreaterThan(scopeEnd),
-                    $"The proxy for '{slot}' calls NetCheck INSIDE the BlnetCallScope block. "
-                    + "NetCheck throws; unwinding through the scope's destructor while it is "
-                    + "still counted corrupts g_call_depth permanently for that thread (§9.2).");
+                    $"The proxy for '{slot}' calls NetCheckTyped INSIDE the BlnetCallScope "
+                    + "block. NetCheckTyped throws; unwinding through the scope's destructor "
+                    + "while it is still counted corrupts g_call_depth permanently for that "
+                    + "thread (§9.2).");
             }
         });
     }

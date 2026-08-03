@@ -92,13 +92,23 @@ namespace BasicLang.Compiler.SemanticAnalysis
         private readonly NetAstAnnotations _netAnnotations = new NetAstAnnotations();
 
         /// <summary>
-        /// P2a-2 Task 2 — the .NET members the warning-only probes resolved, keyed by AST node
-        /// (reference identity). <see cref="IRBuilder"/> reads this while lowering member calls
-        /// and stamps <c>ResolvedNetTarget</c>/<c>NetCategory</c> onto the produced IR nodes.
-        /// Empty unless <see cref="ConfigureNetResolution"/> supplied a resolver factory.
+        /// P2a-2 Task 2/7a — the .NET members the probes resolved, keyed by AST node (reference
+        /// identity), each carrying the Task-7a exactness bit. <see cref="IRBuilder"/> reads
+        /// this while lowering and stamps <c>ResolvedNetTarget</c>/<c>NetCategory</c>/
+        /// <c>ResolvedNetTargetIsExact</c> onto the produced IR nodes. Empty unless
+        /// <see cref="ConfigureNetResolution"/> supplied a resolver factory.
+        /// </summary>
+        internal IReadOnlyDictionary<ExpressionNode, NetMemberAnnotation> NetMemberAnnotations =>
+            _netAnnotations.ResolvedMembers;
+
+        /// <summary>
+        /// Descriptor-only view of <see cref="NetMemberAnnotations"/> (materialized per read —
+        /// a test-assertion convenience; production consumers read the annotation table).
         /// </summary>
         internal IReadOnlyDictionary<ExpressionNode, NetMemberDescriptor> NetResolvedMembers =>
-            _netAnnotations.ResolvedMembers;
+            _netAnnotations.ResolvedMembers.ToDictionary(
+                kv => kv.Key, kv => kv.Value.Member,
+                (IEqualityComparer<ExpressionNode>)ReferenceEqualityComparer.Instance);
 
         /// <summary>
         /// P2a-2 Task 4 — resolved catch-clause exception types (spec §11.1's ladder-trigger
@@ -2543,7 +2553,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 // Task 4 replaces this name-match record with the overload WINNER for call
                 // sites (ProbeNetInvocation overwrites by node identity); a non-call access
                 // or an unprobeable call keeps the name-match record.
-                _netAnnotations.RecordResolvedMember(node, match);
+                //
+                // Task 7a exactness: a PROPERTY or FIELD has no overload axis — the name IS
+                // the signature — so its record is exact and the lowering may trust it
+                // (getter-shaped slot / synthesized setter). A METHOD name-match is NOT
+                // exact (overloads!); only the invocation probe's winner is.
+                _netAnnotations.RecordResolvedMember(node, match,
+                    exact: match.Kind == NetMemberCategory.Property
+                           || match.Kind == NetMemberCategory.Field);
                 WarnNetCallInGenericBody(fullName, memberName, line, column);
                 return;
             }
@@ -2589,22 +2606,27 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// does not have at all is NOT re-judged here — that is the member probe's BL6017,
         /// already reported.</para>
         ///
-        /// <para><b>The probe never guesses (its own contract): every argument must be typed, or
-        /// this method must not ask.</b> Shapes left NAME-ONLY recorded, deliberately and
-        /// silently (no warning is manufactured for a shape the analyzer cannot type):
-        /// a <c>Nothing</c> argument (the null literal has no spelling in
-        /// <c>ResolveOverload</c>'s grammar), an <c>Object</c>-typed argument (the analyzer's
-        /// own lost-precision fallback — judging it would put spurious BL6017s on valid
-        /// programs), lambdas/delegates/foreign/tuple/pointer/type-parameter arguments, and
-        /// explicit method-level generic arguments (the probe API has no input for them). A
-        /// USER-DEFINED class/structure/interface argument is the one non-silent case: §6.5
-        /// says it is never admissible → BL6019.</para>
+        /// <para><b>The probe never guesses, but since Task 7a "cannot type" is no longer
+        /// silent on the NATIVE path.</b> Typeable shapes grew two rows: a <c>Nothing</c>
+        /// argument probes as the null literal (§6.5 — <c>NetTypeResolver.NullArgumentSpelling</c>)
+        /// and a .NET-enum member access (<c>FileMode.Open</c>) probes as its enum type. What
+        /// remains untypeable — an <c>Object</c>-degraded argument, lambdas/delegates
+        /// (§8.4 is Task 11), foreign/tuple/pointer/type-parameter arguments, explicit
+        /// method-level generic arguments — is a BL6017-class ERROR at the call site on the
+        /// native path: the lowering may only lower an EXACTLY-resolved call, so silence here
+        /// would resurface as the generator's positionless refusal. The C# path stays silent
+        /// for these (§6.3 — csc judges the call late). A USER-DEFINED
+        /// class/structure/interface argument stays BL6019 on both.</para>
+        ///
+        /// <para><b>The Resolved arm gates §8.3 shapes the lowering cannot carry yet</b>
+        /// (native only, standard BL6019 naming the parameter): ref/out parameters (pointer
+        /// slots) and enum-typed parameters (underlying-integral wire — the emitters cannot
+        /// recover an enum's underlying type from its name yet).</para>
         /// </summary>
         private void ProbeNetInvocation(CallExpressionNode call, MemberAccessExpressionNode callee)
         {
             if (_netResolverFactory == null) return;
             if (!_netResolvedReceivers.TryGetValue(callee, out var receiver)) return;
-            if (call.GenericArguments != null && call.GenericArguments.Count > 0) return;
 
             var resolver = NetResolver();
             if (resolver == null) return;
@@ -2620,48 +2642,47 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Member-KIND gate: VB spells a property/indexer read with call syntax
             // (`st.Length()`, `sd.Item("k")`), but ResolveOverload's candidate filter is
             // Method-only — asking would answer NoMatch and manufacture a false BL6017 (a
-            // false BUILD BREAK once the Task-5 flip promotes severity). A non-method member
-            // is left name-only recorded, the same "cannot judge this shape" discipline as
-            // every other unprobeable call.
+            // false BUILD BREAK now the Task-5 flip promotes severity). A non-method member
+            // keeps its EXACT property/field record and lowers as an accessor.
             if (memberKind != NetMemberCategory.Method) return;
 
+            var target = receiverFullName + "." + memberName;
+
+            if (call.GenericArguments != null && call.GenericArguments.Count > 0)
+            {
+                // ResolveOverload has no input for explicit method-level generic arguments,
+                // and §14.13's ceiling applies regardless — never lower a guess.
+                NetErrorNativeOnly("BL6017",
+                    $"'{target}' is called with explicit generic arguments; generic .NET "
+                    + "method calls are not supported on the native backend (spec §8.3 — a "
+                    + "monomorphic export cannot carry an open type parameter).",
+                    call.Line, call.Column);
+                return;
+            }
+
             // Receiver generic arguments (Queue(Of Integer) → ["System.Int32"]). All-or-nothing:
-            // an unmappable type argument leaves the call name-only recorded.
+            // an unmappable type argument cannot be judged — a native error, a C# silence.
             var typeArguments = new List<string>();
             var receiverType = GetNodeType(callee.Object);
             if (receiverType?.GenericArguments is { Count: > 0 } receiverTypeArgs)
             {
                 foreach (var typeArg in receiverTypeArgs)
                 {
-                    if (!TryMapNetArgumentType(typeArg, out var argSpelling, out _)) return;
+                    if (!TryMapNetArgumentType(typeArg, out var argSpelling, out _))
+                    {
+                        NetErrorNativeOnly("BL6017",
+                            $"'{target}': receiver type argument '{typeArg?.Name}' has no .NET "
+                            + "spelling the analyzer can present for overload resolution "
+                            + "(spec §8.3/§6.4).",
+                            call.Line, call.Column);
+                        return;
+                    }
                     typeArguments.Add(argSpelling);
                 }
             }
 
-            var arguments = new List<string>(call.Arguments.Count);
-            for (var i = 0; i < call.Arguments.Count; i++)
-            {
-                var argument = call.Arguments[i];
-                if (IsNothingLiteral(argument)) return;   // null literal: no spelling — name-only
-
-                if (!TryMapNetArgumentType(GetNodeType(argument), out var spelling, out var userDefined))
-                {
-                    if (userDefined)
-                    {
-                        // §6.5's argument-side rule: a user-defined BasicLang class is NEVER an
-                        // admissible .NET argument under P2a (Object is Rejected, and no user
-                        // type has a metadata identity the shim could name).
-                        NetWarning("BL6019",
-                            $"Argument {(i + 1).ToString(CultureInfo.InvariantCulture)} of "
-                            + $"'{receiverFullName}.{memberName}': BasicLang type "
-                            + $"'{GetNodeType(argument)?.Name}' cannot cross the .NET boundary "
-                            + "(spec §6.5 — user-defined types are not marshalable under P2a).",
-                            argument.Line, argument.Column);
-                    }
-                    return;
-                }
-                arguments.Add(spelling);
-            }
+            var arguments = TryTypeNetCallArguments(target, call.Arguments);
+            if (arguments == null) return;
 
             // NetCallForm.Instance throughout: the probe self-corrects — a static class
             // receiver is retried as Static inside ResolveOverload, and VB's
@@ -2674,9 +2695,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
             switch (result.Outcome)
             {
                 case NetOverloadOutcome.Resolved:
+                    if (ReportUnlowerableWinnerParameters(
+                            target, result.Member, call.Arguments, call.Line, call.Column))
+                        break;   // native error reported — do not hand codegen a trusted record
+
                     // THE WINNING descriptor replaces the member probe's name-only record —
-                    // same node key, last write wins.
-                    _netAnnotations.RecordResolvedMember(callee, result.Member);
+                    // same node key, last write wins. EXACT: the probe verified the signature,
+                    // so the Task-7a lowering may trust it.
+                    _netAnnotations.RecordResolvedMember(callee, result.Member, exact: true);
                     WarnNetCallInGenericBody(receiverFullName, memberName, call.Line, call.Column);
                     break;
 
@@ -2698,6 +2724,254 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 // TypeUnavailable: a type-level failure is BL6016/BL6023, reported by the
                 // type-reference probe — never re-reported as an overload answer.
             }
+        }
+
+        /// <summary>
+        /// Types one call-site argument list for the overload probe (shared by the invocation
+        /// and constructor probes). Null means "do not ask" — and on the NATIVE path the reason
+        /// was already reported at the argument's position: a call that cannot be typed cannot
+        /// be exactly resolved, and an unresolved call cannot lower (Task 7a's name-only gate,
+        /// first line). The C# path stays silent for the untypeable rows (§6.3) and keeps its
+        /// BL6019 for user-defined argument types.
+        /// </summary>
+        private List<string> TryTypeNetCallArguments(string target, List<ExpressionNode> callArguments)
+        {
+            var arguments = new List<string>(callArguments.Count);
+            for (var i = 0; i < callArguments.Count; i++)
+            {
+                var argument = callArguments[i];
+                var position = (i + 1).ToString(CultureInfo.InvariantCulture);
+
+                // §6.5: Nothing participates as a null literal — the probe grammar's
+                // dedicated spelling (Task 7a closed the gap the Task-4 pin recorded).
+                if (IsNothingLiteral(argument))
+                {
+                    arguments.Add(NetTypeResolver.NullArgumentSpelling);
+                    continue;
+                }
+
+                // §6.5: a .NET-enum member access (FileMode.Open) presents the ENUM type.
+                // Checked before the static-type mapping — the analyzer's own typing of the
+                // access degrades to Object (enums resolve through metadata, not TypeManager).
+                if (TryTypeNetEnumArgument(argument, out var enumSpelling))
+                {
+                    arguments.Add(enumSpelling);
+                    continue;
+                }
+
+                if (!TryMapNetArgumentType(GetNodeType(argument), out var spelling, out var userDefined))
+                {
+                    if (userDefined)
+                    {
+                        // §6.5's argument-side rule: a user-defined BasicLang class is NEVER an
+                        // admissible .NET argument under P2a (Object is Rejected, and no user
+                        // type has a metadata identity the shim could name).
+                        NetWarning("BL6019",
+                            $"Argument {position} of '{target}': BasicLang type "
+                            + $"'{GetNodeType(argument)?.Name}' cannot cross the .NET boundary "
+                            + "(spec §6.5 — user-defined types are not marshalable under P2a).",
+                            argument.Line, argument.Column);
+                    }
+                    else if (argument is LambdaExpressionNode)
+                    {
+                        NetErrorNativeOnly("BL6017",
+                            $"Argument {position} of '{target}' is a lambda; delegate arguments "
+                            + "to .NET members are not supported on the native backend (spec "
+                            + "§8.4). Got a Comparison/Action shape? Perform the work in "
+                            + "BasicLang, or move the call to the C# backend.",
+                            argument.Line, argument.Column);
+                    }
+                    else
+                    {
+                        var argTypeName = GetNodeType(argument)?.Name;
+                        NetErrorNativeOnly("BL6017",
+                            $"Argument {position} of '{target}' has no .NET type the analyzer "
+                            + $"can present for overload resolution"
+                            + (string.IsNullOrEmpty(argTypeName)
+                                ? ""
+                                : $" (its static type is '{argTypeName}')")
+                            + ". The native backend lowers only exactly-resolved .NET calls — "
+                            + "assign the value to a variable of a §8.3/§6.4 type first.",
+                            argument.Line, argument.Column);
+                    }
+                    return null;
+                }
+                arguments.Add(spelling);
+            }
+            return arguments;
+        }
+
+        /// <summary>
+        /// The Resolved-arm §8.3 gate (native only): true when a finding was reported and the
+        /// winner must NOT be recorded as exact — the lowering cannot carry the shape, and a
+        /// positioned analyzer error beats the generator's positionless refusal. The standard
+        /// BL6019, naming the parameter (or the result). Gated shapes:
+        /// argument-count mismatches (optional-parameter / <c>params</c> binding — the proxy
+        /// has one slot per DECLARED parameter, so the call site cannot fill it);
+        /// ref/out parameters (§8.3 pointer slots — Task 8); enum-typed parameters (the
+        /// underlying-integral wire, unrecoverable from a type NAME by either emitter — their
+        /// documented gap); and the multi-slot §6.4 pairs
+        /// (<see cref="NetMarshalTable.MultiSlotConversionPairs"/>).
+        ///
+        /// <para><b>Deliberately NOT gated here</b> (the generator's refusal layer owns them,
+        /// positionless but safe): a HANDLE-wire parameter whose BasicLang argument is not
+        /// handle-backed (§8.6 outbound copy — e.g. a native <c>Byte()</c> against a
+        /// <c>byte[]</c> parameter), and a RESULT type outside what one wire slot can carry
+        /// back. Both shapes RESOLVE legitimately — the annotation stays exact and recorded —
+        /// and Tasks 9/10 lower them; erroring at resolution would flip pinned
+        /// resolution-behavior tests (<c>ConsoleReadKeyResolves…</c>,
+        /// <c>ResolvableStaticOverload…</c>) whose churn the plan does not sanction.</para>
+        /// </summary>
+        private bool ReportUnlowerableWinnerParameters(
+            string target, NetMemberDescriptor winner, List<ExpressionNode> callArguments,
+            int line, int column)
+        {
+            if (!_netNativeBackend) return false;
+
+            if (winner.Parameters.Count != callArguments.Count)
+            {
+                NetWarning("BL6019",
+                    $"'{target}' binds through "
+                    + (winner.Parameters.Count > callArguments.Count
+                        ? "optional parameters"
+                        : "a params expansion")
+                    + $" ({callArguments.Count.ToString(CultureInfo.InvariantCulture)} "
+                    + $"argument(s) against {winner.Parameters.Count.ToString(CultureInfo.InvariantCulture)} "
+                    + "declared parameter(s)) — the native boundary lowers only calls that "
+                    + "fill every declared parameter (spec §8.3). Pass the omitted arguments "
+                    + "explicitly.",
+                    line, column);
+                return true;
+            }
+
+            for (var i = 0; i < winner.Parameters.Count; i++)
+            {
+                var parameter = winner.Parameters[i];
+                var position = (i + 1).ToString(CultureInfo.InvariantCulture);
+                if (parameter.RefKind != NetRefKind.None)
+                {
+                    NetWarning("BL6019",
+                        $"'{target}': parameter {position} ('{parameter}') is passed "
+                        + $"{parameter.RefKind.ToString().ToLowerInvariant()} — ref/out "
+                        + "parameters have no wire form at the native boundary yet (spec §8.3 "
+                        + "pointer slots).",
+                        line, column);
+                    return true;
+                }
+
+                if (NetMarshalTable.MultiSlotConversionPairs.Contains(parameter.TypeFullName))
+                {
+                    NetWarning("BL6019",
+                        $"'{target}': parameter {position} has type "
+                        + $"'{parameter.TypeFullName}', whose §6.4 wire form is not a single "
+                        + "slot — it is not lowered at the native boundary yet.",
+                        line, column);
+                    return true;
+                }
+
+                if (IsNetEnumTypeName(parameter.TypeFullName))
+                {
+                    NetWarning("BL6019",
+                        $"'{target}': parameter {position} has enum type "
+                        + $"'{parameter.TypeFullName}' — §8.3's underlying-integral enum "
+                        + "marshaling is not lowered at the native boundary yet.",
+                        line, column);
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// True when <paramref name="argument"/> is a member access on a bare identifier that
+        /// resolves as a .NET ENUM declaring a member with the accessed name — the
+        /// <c>FileMode.Open</c> shape §6.5's argument side admits. Every shadowing channel is
+        /// checked first (a local/function named like the enum wins), and claimed names never
+        /// reach the resolver.
+        /// </summary>
+        private bool TryTypeNetEnumArgument(ExpressionNode argument, out string spelling)
+        {
+            spelling = null;
+            if (_netResolverFactory == null) return false;
+            if (argument is not MemberAccessExpressionNode access) return false;
+            if (access.Object is not IdentifierExpressionNode identifier) return false;
+
+            var name = identifier.Name;
+            if (string.IsNullOrEmpty(name)) return false;
+            if (name.IndexOf("::", StringComparison.Ordinal) >= 0) return false;
+            if (_currentScope?.Resolve(name) != null) return false;   // anything in scope shadows
+            if (IsUserDefinedTypeName(name)) return false;
+            if (NetClaimPredicate.IsClaimedTypeName(name, 0)) return false;
+            if (ResolveNetType(name, 0, out var fullName) != NetTypeLookupOutcome.Resolved)
+                return false;
+            if (!IsNetEnumTypeName(fullName)) return false;
+
+            foreach (var member in NetResolver().GetMembers(fullName))
+            {
+                if (member.Kind == NetMemberCategory.Field
+                    && string.Equals(member.Name, access.MemberName, StringComparison.OrdinalIgnoreCase))
+                {
+                    spelling = fullName;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// P2a-2 Task 7a — the BasicLang <see cref="TypeInfo"/> a resolved member's RESULT
+        /// produces natively, or null when the result has no representation the lowering can
+        /// type (the caller then keeps its existing Object typing, and the lowering refuses
+        /// the shape rather than emitting unsound C++). Three arms:
+        /// §8.3/§6.4 by-value rows via <see cref="NetMarshalTable.TryGetBasicLangSpelling"/>
+        /// (this is what lifts the flip's documented Object-degrade — <c>Dim ok =
+        /// r.IsMatch("x")</c> types Boolean); <c>System.Void</c>; and ManagedOwned registry
+        /// names by their short spelling, so <c>MapType</c>'s NetRef arm fires for
+        /// <c>Dim r2 = ...ReturnsARegex()</c> exactly as it does for <c>Dim r2 As Regex</c>.
+        /// </summary>
+        private TypeInfo NetMemberResultTypeInfo(NetMemberDescriptor member)
+        {
+            var fullName = member?.TypeFullName;
+            if (string.IsNullOrEmpty(fullName)) return null;
+
+            if (string.Equals(fullName, "System.Void", StringComparison.Ordinal))
+                return _typeManager.VoidType;
+
+            if (NetMarshalTable.TryGetBasicLangSpelling(fullName, out var basicLangName))
+                return ResolveNetTypeName(basicLangName);
+
+            if (BoundaryTypeRegistry.Categorize(fullName) == BoundaryTypeCategory.ManagedOwned)
+            {
+                var lastDot = fullName.LastIndexOf('.');
+                return new TypeInfo(
+                    lastDot >= 0 ? fullName.Substring(lastDot + 1) : fullName, TypeKind.Class);
+            }
+
+            return null;
+        }
+
+        /// <summary>True when the metadata full name resolves as a .NET enum.</summary>
+        private bool IsNetEnumTypeName(string fullName)
+        {
+            if (string.IsNullOrEmpty(fullName)) return false;
+            var resolver = NetResolver();
+            if (resolver == null) return false;
+            var lookup = resolver.ResolveTypeDetailed(fullName);
+            return lookup.Outcome == NetTypeLookupOutcome.Resolved
+                   && lookup.Type?.Kind == NetTypeCategory.Enum;
+        }
+
+        /// <summary>
+        /// A finding that exists only where it blocks lowering: reported (as the flip's native
+        /// ERROR) on the native path, SILENT on the C# path — unlike <see cref="NetWarning"/>'s
+        /// warning row, because these shapes are perfectly compilable C# (§6.3's permissive row)
+        /// and a manufactured warning there would be pure noise.
+        /// </summary>
+        private void NetErrorNativeOnly(string code, string message, int line, int column)
+        {
+            if (!_netNativeBackend) return;
+            NetWarning(code, message, line, column);
         }
 
         /// <summary>
@@ -2812,6 +3086,109 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 + "not supported inside generic bodies on the native backend (spec §14.13). "
                 + "Move the construction to a non-generic method.",
                 line, column);
+        }
+
+        /// <summary>
+        /// P2a-2 Task 7a — the CONSTRUCTOR half of strict resolution: <c>New X(args)</c> on a
+        /// resolved .NET type is judged by real C# overload resolution
+        /// (<see cref="NetTypeResolver.ResolveOverload"/>, <see cref="NetCallForm.Constructor"/>)
+        /// and the winner recorded EXACT against the ObjectCreation node, so
+        /// <c>IRNewObject</c> can lower to the ctor proxy. Same trigger discipline as
+        /// <see cref="ProbeNetConstructorInGenericBody"/>: claimed, user-defined, foreign and
+        /// natively-owned names are never judged; an unresolvable name is silent here (the
+        /// type-reference probe owns BL6016). Outcomes mirror the invocation probe:
+        /// Ambiguous → BL6018, NoMatch → BL6017 with the argument types, argument typing via
+        /// the shared <see cref="TryTypeNetCallArguments"/> rules (Nothing = null literal,
+        /// enum member accesses, native errors for untypeable shapes).
+        ///
+        /// <para><b>The zero-argument VALUE-type construction is deliberately not judged</b> —
+        /// <c>New SomeStruct()</c> has no metadata token to call (default(T), the
+        /// <c>CandidateMembers</c>-documented consequence), so probing it would manufacture a
+        /// BL6017 on a valid program.</para>
+        /// </summary>
+        private void ProbeNetConstruction(NewExpressionNode node, TypeInfo type)
+        {
+            if (_netResolverFactory == null) return;
+            var name = type?.Name;
+            if (string.IsNullOrEmpty(name)) return;
+            if (name.IndexOf("::", StringComparison.Ordinal) >= 0) return;   // foreign C++
+
+            var genericCount = type.GenericArguments?.Count ?? 0;
+            if (NetClaimPredicate.IsClaimedTypeName(name, genericCount)) return;
+            if (IsUserDefinedTypeName(name)) return;
+
+            // The 12 CppExceptionTypes names lower NATIVELY (`Throw New ArgumentException(x)`
+            // → std::runtime_error, no proxy) — same exemption the generic-body probe grants.
+            if (BasicLang.Compiler.CodeGen.CPlusPlus.CppExceptionTypes.IsNetException(name)) return;
+
+            var category = BoundaryTypeRegistry.Categorize(name);
+            if (category == BoundaryTypeCategory.NativeOwned
+                || category == BoundaryTypeCategory.Bridged)
+            {
+                return;   // native constructions
+            }
+
+            if (ResolveNetType(name, genericCount, out var fullName) != NetTypeLookupOutcome.Resolved)
+                return;   // BL6016 belongs to the type-reference probe
+
+            var resolver = NetResolver();
+            if (resolver == null) return;
+            var lookup = resolver.ResolveTypeDetailed(fullName);
+            if (lookup.Outcome != NetTypeLookupOutcome.Resolved || lookup.Type == null) return;
+            if (node.Arguments.Count == 0 && lookup.Type.Kind == NetTypeCategory.Struct)
+                return;   // default(T) — no member exists to resolve against
+
+            var target = "New " + fullName;
+            var typeArguments = new List<string>();
+            if (type.GenericArguments is { Count: > 0 } typeArgs)
+            {
+                foreach (var typeArg in typeArgs)
+                {
+                    if (!TryMapNetArgumentType(typeArg, out var argSpelling, out _))
+                    {
+                        NetErrorNativeOnly("BL6017",
+                            $"'{target}': type argument '{typeArg?.Name}' has no .NET spelling "
+                            + "the analyzer can present for overload resolution (spec §8.3/§6.4).",
+                            node.Line, node.Column);
+                        return;
+                    }
+                    typeArguments.Add(argSpelling);
+                }
+            }
+
+            var arguments = TryTypeNetCallArguments(target, node.Arguments);
+            if (arguments == null) return;
+
+            var result = resolver.ResolveOverload(
+                fullName, NetCallForm.Constructor, ".ctor", arguments, typeArguments);
+
+            switch (result.Outcome)
+            {
+                case NetOverloadOutcome.Resolved:
+                    if (ReportUnlowerableWinnerParameters(
+                            target, result.Member, node.Arguments, node.Line, node.Column))
+                        break;   // native error reported — no trusted record for codegen
+                    _netAnnotations.RecordResolvedMember(node, result.Member, exact: true);
+                    break;
+
+                case NetOverloadOutcome.Ambiguous:
+                    NetWarning("BL6018",
+                        $"'{target}({string.Join(", ", arguments)})' is ambiguous between "
+                        + "multiple constructors. Cast the arguments to select one overload "
+                        + "explicitly.",
+                        node.Line, node.Column);
+                    break;
+
+                case NetOverloadOutcome.NoMatch:
+                    NetWarning("BL6017",
+                        $"'{fullName}' has no accessible constructor matching the argument "
+                        + $"types ({string.Join(", ", arguments)}).",
+                        node.Line, node.Column);
+                    break;
+
+                // TypeUnavailable: unreachable — the type resolved two gates above; if a race
+                // ever surfaces it, the type-reference probe owns the report.
+            }
         }
 
         /// <summary>
@@ -6385,6 +6762,23 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 // metadata. Emits no diagnostic and changes no type. P2a-2 Task 2: on a resolve
                 // it also RECORDS the descriptor against this node (see NetResolvedMembers).
                 ProbeNetMemberAccess(node, objectType, node.MemberName, node.Line, node.Column);
+
+                // P2a-2 Task 7a: when the legacy lookup has no answer but the probe recorded
+                // an EXACT property/field, type the read from the descriptor (st.Position →
+                // Long) instead of degrading to Object — the lowering needs a sound local
+                // type. NATIVE PATH ONLY: retyping inferred locals on the C# path would be
+                // a behavior change for existing programs (§6.3's preservation row — the
+                // exact lesson the spec's dated ConfigureTypeRegistry correction records).
+                if (_netNativeBackend
+                    && memberType == null
+                    && _netAnnotations.ResolvedMembers.TryGetValue(node, out var netAccess)
+                    && netAccess.Exact
+                    && (netAccess.Member.Kind == NetMemberCategory.Property
+                        || netAccess.Member.Kind == NetMemberCategory.Field))
+                {
+                    memberType = NetMemberResultTypeInfo(netAccess.Member);
+                }
+
                 SetNodeType(node, memberType ?? _typeManager.ObjectType);
             }
             else
@@ -6660,11 +7054,29 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
                 // P2a-2 Task 4 (§6.5's argument side): the callee visit above ran
                 // ProbeNetMemberAccess; if it RESOLVED the receiver, judge the whole invocation
-                // — real overload resolution over the now-typed arguments. Warning-only; the
-                // winner replaces the name-only annotation.
+                // — real overload resolution over the now-typed arguments. The winner replaces
+                // the name-only annotation (and is recorded EXACT for the Task-7a lowering).
                 if (node.Callee is MemberAccessExpressionNode netCallee)
                 {
                     ProbeNetInvocation(node, netCallee);
+
+                    // Task 7a: type the CALL from the winner's return type when the probe
+                    // resolved it exactly — `Dim ok = r.IsMatch("x")` types Boolean instead of
+                    // the flip's documented Object-degrade. Unrepresentable returns (arbitrary
+                    // handle types outside the registry) keep the legacy typing; the lowering
+                    // refuses those shapes rather than emitting unsound C++. NATIVE PATH ONLY
+                    // (§6.3's preservation row): on the C# path a retyped inferred local could
+                    // break a valid program that reassigns it — the spec's dated
+                    // ConfigureTypeRegistry correction records exactly this failure class.
+                    if (_netNativeBackend
+                        && _netAnnotations.ResolvedMembers.TryGetValue(netCallee, out var netCall)
+                        && netCall.Exact
+                        && netCall.Member.Kind == NetMemberCategory.Method
+                        && NetMemberResultTypeInfo(netCall.Member) is { } netResultType)
+                    {
+                        SetNodeType(node, netResultType);
+                        return;
+                    }
                 }
 
                 // For method calls on .NET types, use the type we computed for the member access
@@ -6904,6 +7316,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // the registry flip. The resolved TypeInfo carries name + generic arity; a
             // null type (unresolved) is the type-reference probe's BL6016, not ours.
             ProbeNetConstructorInGenericBody(type, node.Line, node.Column);
+
+            // P2a-2 Task 7a: strict constructor resolution — the winner is recorded EXACT so
+            // IRNewObject lowers to the ctor proxy.
+            ProbeNetConstruction(node, type);
 
             SetNodeType(node, type);
         }

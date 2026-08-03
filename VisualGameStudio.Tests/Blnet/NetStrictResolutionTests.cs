@@ -307,13 +307,17 @@ public class NetStrictResolutionTests
     }
 
     /// <summary>
-    /// `Nothing` participates as a null literal (§6.5), but ResolveOverload's grammar has no
-    /// spelling for null — and its contract is explicit that a caller that cannot type every
-    /// argument must not ask. The call stays name-only recorded with NO manufactured finding.
-    /// (Reported to the coordinator as a Task-4 deferral.)
+    /// CONTRACT CHURNED BY P2a-2 Task 7a (the plan sanctions exactly this pin's flip):
+    /// `Nothing` participates as a null literal (§6.5), and the probe now has a spelling for
+    /// it (<c>NetTypeResolver.NullArgumentSpelling</c> — passed verbatim as the C# `null`
+    /// literal, so Roslyn applies the REAL null-conversion and betterness rules). The call
+    /// therefore RESOLVES: `ToBase64String(null)` selects the byte[] overload (the candidate
+    /// binding without default-filled parameters is better — C# §12.6.4.3), the WINNER
+    /// replaces the name-only record, and no finding is manufactured. The pre-7a contract —
+    /// name-only recorded, unprobed — was the recorded Task-4 gap this closes.
     /// </summary>
     [Test]
-    public void NothingArgument_LeavesTheCallNameOnlyRecorded_WithNoFinding()
+    public void NothingArgument_ResolvesThroughTheNullSpelling_WithNoFinding()
     {
         var analyzer = Analyze("""
             Module M
@@ -324,10 +328,13 @@ public class NetStrictResolutionTests
             """);
 
         Assert.That(FindingCodes(analyzer), Is.Empty,
-            "a Nothing argument must not manufacture a finding — the analyzer cannot spell "
-            + "null for the probe, and a wrong guess would be a spurious BL6017/BL6018");
-        Assert.That(analyzer.NetResolvedMembers.Values.Any(m => m.Name == "ToBase64String"),
-            Is.True, "the member probe's name-only record must survive for the collector");
+            "an unambiguous null-argument call must resolve, not warn. Got: "
+            + string.Join(" | ", analyzer.NetDiagnostics.Select(d => d.Code + ": " + d.Message)));
+        var winner = analyzer.NetResolvedMembers.Values.Single(m => m.Name == "ToBase64String");
+        Assert.That(winner.Parameters.Select(p => p.TypeFullName),
+            Is.EqualTo(new[] { "System.Byte[]" }),
+            "the annotation must carry THE WINNING overload for the null literal — a "
+            + "name-only record keeps whichever member metadata order lists first");
     }
 
     // ====================================================================================

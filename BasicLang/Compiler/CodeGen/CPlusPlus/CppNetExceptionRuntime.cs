@@ -18,10 +18,19 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
     /// include sets. Opens its OWN <c>namespace BasicLang</c> (a sibling re-open at
     /// file scope, indent 0). ODR-safe: a class definition with in-class (implicitly
     /// inline) members and a using-alias only — legal in every translation unit.
+    ///
+    /// <para><b>#ifndef-guarded since Task 7a</b> (the same two-headers-one-definition
+    /// contract as <see cref="CppNetRefRuntime"/>): <c>blnet_runtime.hpp</c> now ALSO
+    /// splices this block — its <c>NetCheckTyped</c> throws <c>BasicLang::NetException</c>
+    /// (§9.2's typed conversion for generated proxies) — and a translation unit that sees
+    /// both that header and a generated runtime preamble must get exactly one class
+    /// definition.</para>
     /// </summary>
     public static class CppNetExceptionRuntime
     {
-        public const string Source = @"namespace BasicLang {
+        public const string Source = @"#ifndef BASICLANG_NETEXCEPTION_RUNTIME
+#define BASICLANG_NETEXCEPTION_RUNTIME
+namespace BasicLang {
 
 /* BasicLang String is spelled std::string on the C++ backend (MapType); this alias
    gives runtime and lowered code the BL-facing name (`BasicLang::String(...)`). */
@@ -66,6 +75,7 @@ private:
 };
 
 } /* namespace BasicLang */
+#endif /* BASICLANG_NETEXCEPTION_RUNTIME */
 ";
     }
 }

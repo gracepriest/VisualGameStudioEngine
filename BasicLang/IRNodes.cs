@@ -624,6 +624,17 @@ namespace BasicLang.Compiler.IR
         /// </summary>
         internal BoundaryTypeCategory NetCategory { get; set; } = BoundaryTypeCategory.Unknown;
 
+        /// <summary>
+        /// P2a-2 Task 7a — TRUE only when <see cref="ResolvedNetTarget"/> is the OVERLOAD
+        /// PROBE'S winner (or a member with no overload axis: a property/field access, a
+        /// probed constructor), i.e. the descriptor's signature is known to be the one the
+        /// call selects. A name-only record (first name match in metadata order) stays
+        /// false, and the C++ lowering REFUSES it — lowering a name-matched descriptor
+        /// could call the wrong overload, a silent miscompile (the plan's mandatory
+        /// name-only gate). Defaults false: absent carriage is never trusted.
+        /// </summary>
+        internal bool ResolvedNetTargetIsExact { get; set; }
+
         public IRCall(string resultName, string functionName, TypeInfo returnType)
             : base(resultName, returnType)
         {
@@ -1539,6 +1550,27 @@ namespace BasicLang.Compiler.IR
         public string ClassName { get; set; }
         public List<IRValue> Arguments { get; set; }
 
+        /// <summary>
+        /// P2a-2 Task 7a CARRIAGE — the .NET CONSTRUCTOR this construction resolved to, or
+        /// null for every non-.NET construction (user classes, collections, P1 BCL values —
+        /// i.e. every construction in every pre-P2a program). Written by <see cref="IRBuilder"/>
+        /// from the analyzer's constructor-probe annotation; read by the surface collector and
+        /// the C++ call lowering. See <see cref="IRCall.ResolvedNetTarget"/> for why this is a
+        /// detached descriptor and why an optimizer clone path dropping it is the §8.5
+        /// wild-pointer class.
+        /// </summary>
+        internal BasicLang.Net.NetMemberDescriptor ResolvedNetTarget { get; set; }
+
+        /// <summary>
+        /// P2a-2 Task 7a CARRIAGE — spec C1 category of the constructed type. Written only
+        /// alongside <see cref="ResolvedNetTarget"/>. <b>The initializer is load-bearing</b>
+        /// (<c>NativeOwned</c> is 0 — the P2a-1 trap): it must start at <c>Unknown</c>.
+        /// </summary>
+        internal BoundaryTypeCategory NetCategory { get; set; } = BoundaryTypeCategory.Unknown;
+
+        /// <summary>See <see cref="IRCall.ResolvedNetTargetIsExact"/> — the name-only gate.</summary>
+        internal bool ResolvedNetTargetIsExact { get; set; }
+
         public IRNewObject(string resultName, string className, TypeInfo type)
             : base(resultName, type)
         {
@@ -1603,6 +1635,9 @@ namespace BasicLang.Compiler.IR
         /// </summary>
         internal BoundaryTypeCategory NetCategory { get; set; } = BoundaryTypeCategory.Unknown;
 
+        /// <summary>See <see cref="IRCall.ResolvedNetTargetIsExact"/> — the name-only gate.</summary>
+        internal bool ResolvedNetTargetIsExact { get; set; }
+
         public IRInstanceMethodCall(string resultName, IRValue obj, string methodName, TypeInfo returnType)
             : base(resultName, returnType)
         {
@@ -1653,6 +1688,9 @@ namespace BasicLang.Compiler.IR
         /// </summary>
         internal BoundaryTypeCategory NetCategory { get; set; } = BoundaryTypeCategory.Unknown;
 
+        /// <summary>See <see cref="IRCall.ResolvedNetTargetIsExact"/> — the name-only gate.</summary>
+        internal bool ResolvedNetTargetIsExact { get; set; }
+
         public IRBaseMethodCall(string resultName, string methodName, TypeInfo returnType)
             : base(resultName, returnType)
         {
@@ -1676,6 +1714,25 @@ namespace BasicLang.Compiler.IR
         public IRValue Object { get; set; }
         public string FieldName { get; set; }
 
+        /// <summary>
+        /// P2a-2 Task 7a CARRIAGE — the .NET PROPERTY or FIELD this member READ resolved to
+        /// (the descriptor is the getter-shaped proxy slot), or null for every non-.NET read.
+        /// Written by <see cref="IRBuilder"/> from the member-probe annotation; read by the
+        /// surface collector and the C++ call lowering. See
+        /// <see cref="IRCall.ResolvedNetTarget"/> for the detached-descriptor rationale.
+        /// </summary>
+        internal BasicLang.Net.NetMemberDescriptor ResolvedNetTarget { get; set; }
+
+        /// <summary>
+        /// P2a-2 Task 7a CARRIAGE — spec C1 category of the receiver type. Written only
+        /// alongside <see cref="ResolvedNetTarget"/>. <b>The initializer is load-bearing</b>
+        /// (<c>NativeOwned</c> is 0 — the P2a-1 trap): it must start at <c>Unknown</c>.
+        /// </summary>
+        internal BoundaryTypeCategory NetCategory { get; set; } = BoundaryTypeCategory.Unknown;
+
+        /// <summary>See <see cref="IRCall.ResolvedNetTargetIsExact"/> — the name-only gate.</summary>
+        internal bool ResolvedNetTargetIsExact { get; set; }
+
         public IRFieldAccess(string resultName, IRValue obj, string fieldName, TypeInfo type)
             : base(resultName, type)
         {
@@ -1695,6 +1752,27 @@ namespace BasicLang.Compiler.IR
         public IRValue Object { get; set; }
         public string FieldName { get; set; }
         public IRValue Value { get; set; }
+
+        /// <summary>
+        /// P2a-2 Task 7a CARRIAGE — the SYNTHESIZED accessor-method descriptor
+        /// (<c>set_X</c>: void return, one value parameter of the property/field type) for a
+        /// .NET member WRITE, or null for every non-.NET store. Synthesized in exactly ONE
+        /// place — <see cref="IRBuilder"/>'s store stamping — so the surface collector and
+        /// the C++ lowering mangle the identical descriptor and §12.4's slots-≡-exports
+        /// invariant holds by construction. See <see cref="IRCall.ResolvedNetTarget"/> for
+        /// the detached-descriptor rationale.
+        /// </summary>
+        internal BasicLang.Net.NetMemberDescriptor ResolvedNetTarget { get; set; }
+
+        /// <summary>
+        /// P2a-2 Task 7a CARRIAGE — spec C1 category of the receiver type. Written only
+        /// alongside <see cref="ResolvedNetTarget"/>. <b>The initializer is load-bearing</b>
+        /// (<c>NativeOwned</c> is 0 — the P2a-1 trap): it must start at <c>Unknown</c>.
+        /// </summary>
+        internal BoundaryTypeCategory NetCategory { get; set; } = BoundaryTypeCategory.Unknown;
+
+        /// <summary>See <see cref="IRCall.ResolvedNetTargetIsExact"/> — the name-only gate.</summary>
+        internal bool ResolvedNetTargetIsExact { get; set; }
 
         public IRFieldStore(IRValue obj, string fieldName, IRValue value)
         {

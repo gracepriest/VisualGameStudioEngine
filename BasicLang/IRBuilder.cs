@@ -2900,6 +2900,27 @@ namespace BasicLang.Compiler.IR
                 var obj = _expressionResult;
 
                 var fieldStore = new IRFieldStore(obj, memberExpr.MemberName, value);
+
+                // P2a-2 Task 7a: a .NET PROPERTY/FIELD write carries the SYNTHESIZED set_X
+                // accessor-method descriptor (NetAccessorSynthesis — the single synthesis
+                // point; the surface collector and the C++ lowering both mangle exactly this
+                // stamp, which is what keeps §12.4's slots ≡ exports). The analyzer records
+                // property/field annotations as EXACT (no overload axis), so a non-exact
+                // record here can only be a foreign shape — left unstamped.
+                if (_semanticAnalyzer.NetMemberAnnotations.TryGetValue(memberExpr, out var netWrite)
+                    && netWrite.Exact
+                    && (netWrite.Member.Kind == BasicLang.Net.NetMemberCategory.Property
+                        || netWrite.Member.Kind == BasicLang.Net.NetMemberCategory.Field))
+                {
+                    fieldStore.ResolvedNetTarget =
+                        BasicLang.Net.NetAccessorSynthesis.SetterFor(netWrite.Member);
+                    fieldStore.ResolvedNetTargetIsExact = true;
+                    var receiverTypeName = _semanticAnalyzer.GetNodeType(memberExpr.Object)?.Name;
+                    fieldStore.NetCategory = !string.IsNullOrEmpty(receiverTypeName)
+                        ? BoundaryTypeRegistry.Categorize(receiverTypeName)
+                        : BoundaryTypeCategory.Unknown;
+                }
+
                 EmitInstruction(fieldStore);
             }
             else if (node.Target is ArrayAccessExpressionNode arrayExpr)
@@ -3234,6 +3255,23 @@ namespace BasicLang.Compiler.IR
             var tempName = _currentFunction.GetNextTempName();
 
             var fieldAccess = new IRFieldAccess(tempName, obj, node.MemberName, memberType);
+
+            // P2a-2 Task 7a: a .NET PROPERTY/FIELD read carries its descriptor (the
+            // getter-shaped slot) into IR. Gated to those two kinds on purpose: a METHOD
+            // annotation on a bare member access (a method-group reference) is not a read
+            // and must not make this node lower through a proxy.
+            if (_semanticAnalyzer.NetMemberAnnotations.TryGetValue(node, out var netRead)
+                && (netRead.Member.Kind == BasicLang.Net.NetMemberCategory.Property
+                    || netRead.Member.Kind == BasicLang.Net.NetMemberCategory.Field))
+            {
+                fieldAccess.ResolvedNetTarget = netRead.Member;
+                fieldAccess.ResolvedNetTargetIsExact = netRead.Exact;
+                var receiverTypeName = _semanticAnalyzer.GetNodeType(node.Object)?.Name;
+                fieldAccess.NetCategory = !string.IsNullOrEmpty(receiverTypeName)
+                    ? BoundaryTypeRegistry.Categorize(receiverTypeName)
+                    : BoundaryTypeCategory.Unknown;
+            }
+
             EmitInstruction(fieldAccess);
 
             _expressionResult = fieldAccess;
@@ -3365,10 +3403,12 @@ namespace BasicLang.Compiler.IR
                     // identity is the key) and recorded the winning descriptor in its annotation
                     // side table. Absent for every claimed name and for every compilation
                     // without a NetResolverFactory — then ResolvedNetTarget stays null and
-                    // nothing downstream changes.
-                    if (_semanticAnalyzer.NetResolvedMembers.TryGetValue(memberExpr, out var staticNetTarget))
+                    // nothing downstream changes. Task 7a: the exactness bit rides along —
+                    // the lowering trusts ONLY probe-verified signatures (the name-only gate).
+                    if (_semanticAnalyzer.NetMemberAnnotations.TryGetValue(memberExpr, out var staticNetTarget))
                     {
-                        call.ResolvedNetTarget = staticNetTarget;
+                        call.ResolvedNetTarget = staticNetTarget.Member;
+                        call.ResolvedNetTargetIsExact = staticNetTarget.Exact;
                     }
 
                     call.GenericArguments.AddRange(BuildGenericArgTypes(node.GenericArguments));
@@ -3390,11 +3430,12 @@ namespace BasicLang.Compiler.IR
                     // keyed on the callee MemberAccessExpressionNode; the receiver's spec-C1
                     // category rides along so the surface collector can tell a natively-handled
                     // receiver from a shim-routed one. itemReceiverType IS the receiver's static
-                    // type (computed above for the .Item check). Both fields keep their inert
-                    // defaults (null / Unknown) for every non-.NET call.
-                    if (_semanticAnalyzer.NetResolvedMembers.TryGetValue(memberExpr, out var instanceNetTarget))
+                    // type (computed above for the .Item check). All fields keep their inert
+                    // defaults (null / Unknown / false) for every non-.NET call.
+                    if (_semanticAnalyzer.NetMemberAnnotations.TryGetValue(memberExpr, out var instanceNetTarget))
                     {
-                        methodCall.ResolvedNetTarget = instanceNetTarget;
+                        methodCall.ResolvedNetTarget = instanceNetTarget.Member;
+                        methodCall.ResolvedNetTargetIsExact = instanceNetTarget.Exact;
                         methodCall.NetCategory = !string.IsNullOrEmpty(itemReceiverType?.Name)
                             ? BoundaryTypeRegistry.Categorize(itemReceiverType.Name)
                             : BoundaryTypeCategory.Unknown;
@@ -3565,6 +3606,19 @@ namespace BasicLang.Compiler.IR
 
             // Create new object instruction
             var newObj = new IRNewObject(tempName, className, type);
+
+            // P2a-2 Task 7a: a probed .NET construction carries its resolved CONSTRUCTOR
+            // (recorded EXACT by SemanticAnalyzer.ProbeNetConstruction) so the C++ lowering
+            // can emit the ctor proxy returning the created object's handle into a NetRef.
+            // Inert defaults (null / Unknown / false) for every non-.NET construction.
+            if (_semanticAnalyzer.NetMemberAnnotations.TryGetValue(node, out var netCtor))
+            {
+                newObj.ResolvedNetTarget = netCtor.Member;
+                newObj.ResolvedNetTargetIsExact = netCtor.Exact;
+                newObj.NetCategory = !string.IsNullOrEmpty(className)
+                    ? BoundaryTypeRegistry.Categorize(className)
+                    : BoundaryTypeCategory.Unknown;
+            }
 
             // Evaluate arguments
             foreach (var arg in node.Arguments)

@@ -569,13 +569,23 @@ namespace BasicLang.Compiler.ProjectSystem
             // Keyed on the SURFACE alone: an empty surface returns an empty dictionary and an
             // empty TU list, which is what collapses everything below back to today's behavior.
             //
-            // NOT wrapped in a try: NetProxyEmitter throws NotSupportedException for a ByRef
-            // handle/String parameter (§8.3 leaves their ownership unspecified), and that is
-            // UNREACHABLE in P2a-1 because no collector populates a surface. Whoever writes phase
-            // 3's collector owns mapping it to BL6019 ("unsupported marshaling at the boundary",
-            // §11.4) — swallowing it here without a diagnostic would be worse than the throw.
-            var netArtifacts = NetProxyEmitter.Emit(
-                surface, NetProxyEmitter.ShimModuleFileName(ShimAssemblyName(safeProject)));
+            // P2a-2 Task 7a: NetProxyEmitter's NotSupportedException (a ByRef handle/String
+            // parameter — §8.3 leaves their ownership unspecified) became REACHABLE the moment
+            // the collector populated real surfaces, so it maps to BL6019 here ("unsupported
+            // marshaling at the boundary", §11.4) — a diagnostic, never a crash. Reaching it
+            // needs a <NetProxy>-declared member the §7.2 omission filter admitted (a BL call
+            // site with a ByRef winner is refused by the analyzer first).
+            IReadOnlyDictionary<string, string> netArtifacts;
+            try
+            {
+                netArtifacts = NetProxyEmitter.Emit(
+                    surface, NetProxyEmitter.ShimModuleFileName(ShimAssemblyName(safeProject)));
+            }
+            catch (NotSupportedException ex)
+            {
+                Fail(result, "BL6019", ex.Message, project.FilePath);
+                return outcome;
+            }
             var netTus = NetProxyEmitter.TranslationUnitFileNames(surface);
 
             // ---- 5c. File IO (BL6006) — a separate try so an IO fault is never -----------

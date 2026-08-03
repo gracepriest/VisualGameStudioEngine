@@ -63,6 +63,77 @@ namespace BasicLang.Net
             };
 
         /// <summary>
+        /// The REVERSE projection: the BasicLang spelling of a .NET metadata full name, for the
+        /// §8.3/§6.4 rows that have one. Not a mechanical inverse of
+        /// <see cref="ArgumentSpellings"/> — that map is not injective (<c>Byte</c> and
+        /// <c>UByte</c> both spell <c>System.Byte</c>), so each row here names the CANONICAL
+        /// BasicLang spelling. Used by the analyzer to type resolved-member RESULTS
+        /// (<c>Dim ok = r.IsMatch("x")</c> → Boolean — lifting the flip's documented
+        /// Object-degrade) and consulted by the lowering for representable returns. A full
+        /// name outside this table has no by-value native representation: it is either a
+        /// handle (NetRef) or not yet lowerable.
+        /// </summary>
+        private static readonly IReadOnlyDictionary<string, string> BasicLangSpellings =
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["System.Int32"] = "Integer",
+                ["System.Int64"] = "Long",
+                ["System.Int16"] = "Short",
+                ["System.Byte"] = "Byte",
+                ["System.SByte"] = "SByte",
+                ["System.UInt16"] = "UShort",
+                ["System.UInt32"] = "UInteger",
+                ["System.UInt64"] = "ULong",
+                ["System.Single"] = "Single",
+                ["System.Double"] = "Double",
+                ["System.Boolean"] = "Boolean",
+                ["System.Char"] = "Char",
+                ["System.String"] = "String",
+                ["System.Decimal"] = "Decimal",
+                ["System.DateTime"] = "DateTime",
+                ["System.TimeSpan"] = "TimeSpan",
+                ["System.Guid"] = "Guid",
+                ["System.DateTimeOffset"] = "DateTimeOffset",
+                ["System.Text.StringBuilder"] = "StringBuilder",
+            };
+
+        /// <summary>See <see cref="BasicLangSpellings"/>.</summary>
+        internal static bool TryGetBasicLangSpelling(string netTypeFullName, out string basicLangName)
+        {
+            basicLangName = null;
+            return !string.IsNullOrEmpty(netTypeFullName)
+                   && BasicLangSpellings.TryGetValue(netTypeFullName, out basicLangName);
+        }
+
+        /// <summary>
+        /// The §6.4 pairs whose WIRE form is not one scalar slot: Decimal (the four-field
+        /// GetBits quad), Guid (16 bytes), DateTimeOffset (the DECLARED scalar pair —
+        /// blnet_marshal.hpp's ABI note), StringBuilder (directional — to-net only, as
+        /// String). Their to_net_*/from_net_* converters exist (Task 6), but the two
+        /// emitters plan one wire slot per parameter, so until Task 8's §8.3 drift
+        /// completion adds multi-slot/directional machinery these are REFUSED at resolved
+        /// call sites (BL6019 naming the parameter) rather than silently crossing as the
+        /// handle row — a §6.4 value must never become a handle.
+        /// </summary>
+        internal static readonly IReadOnlyCollection<string> MultiSlotConversionPairs =
+            new HashSet<string>(StringComparer.Ordinal)
+            {
+                "System.Decimal",
+                "System.Guid",
+                "System.DateTimeOffset",
+                "System.Text.StringBuilder",
+            };
+
+        /// <summary>
+        /// True when a resolved member RESULT (or by-value parameter) of this full name has a
+        /// native by-value representation Task 7a's lowering can carry across one wire slot:
+        /// the §8.3 scalar/String rows plus the single-slot §6.4 pairs (DateTime, TimeSpan).
+        /// </summary>
+        internal static bool IsSingleSlotValue(string netTypeFullName) =>
+            TryGetBasicLangSpelling(netTypeFullName, out _)
+            && !MultiSlotConversionPairs.Contains(netTypeFullName);
+
+        /// <summary>
         /// §6.5's admissible argument set — §8.3's rows plus §6.4's conversion pairs — projected
         /// onto C# type spellings. False means "do not ask": <paramref name="isUserDefined"/>
         /// distinguishes the BL6019 case (a user-declared class/structure/interface) from the

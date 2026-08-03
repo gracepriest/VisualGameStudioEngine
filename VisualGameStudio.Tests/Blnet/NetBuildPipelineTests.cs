@@ -388,6 +388,42 @@ public class NetBuildPipelineTests
     }
 
     /// <summary>
+    /// P2a-2 Task 7a: <c>NetProxyEmitter</c>'s <c>NotSupportedException</c> (a ByRef
+    /// handle/String parameter — §8.3 pins ByRef slots only for by-value scalars) became
+    /// REACHABLE once real surfaces exist, and the §11.4 contract is a BL6019 diagnostic,
+    /// never a crash. Reaching it takes a declared-surface member the §7.2 omission filter
+    /// admits (the filter judges parameter TYPES, and String is §8.3-marshalable — the
+    /// ref-ness is what the EMITTER refuses), which is exactly what this hand-fed surface is.
+    /// </summary>
+    [Test]
+    public void ByRefStringSurfaceMember_MapsTheEmitterThrowToBl6019()
+    {
+        var byRefString = new BasicLang.Net.NetMemberDescriptor(
+            "TryFrob", "ProbeLib.Widget", BasicLang.Net.NetMemberCategory.Method,
+            isStatic: true, arity: 0, "System.Boolean",
+            new List<BasicLang.Net.NetParameterDescriptor>
+            {
+                new(BasicLang.Net.NetRefKind.Ref, "System.String"),
+            });
+        var surface = new NetSurface(new[] { byRefString }, new[] { "ProbeLib.Widget" });
+
+        CppProjectBuildResult result = null!;
+        Assert.DoesNotThrow(
+            () => { (result, _) = Emit(TwoModuleProject(), surfaceOverride: surface); },
+            "the emitter's NotSupportedException must be MAPPED at the EmitCore call site, "
+            + "never escape as a crash (§11.4)");
+
+        var bl6019 = result.Diagnostics.Where(d => d.Code == "BL6019" && !d.IsWarning).ToList();
+        Assert.That(bl6019, Has.Count.EqualTo(1),
+            "a ByRef String surface member must surface as one BL6019 build error. Got: "
+            + string.Join(" | ", result.Diagnostics.Select(d => d.Code + ": " + d.Message)));
+        Assert.That(bl6019[0].Message, Does.Contain("ByRef"),
+            "the message must carry the emitter's §8.3 explanation so the fix is actionable");
+        Assert.That(bl6019[0].Message, Does.Contain("TryFrob"),
+            "…and name the offending member");
+    }
+
+    /// <summary>
     /// Both producers at once: .bas sources AND a surface. The merged set is the union, and
     /// neither producer's names are lost.
     /// </summary>

@@ -349,6 +349,18 @@ namespace BasicLang.Compiler.CodeGen.Net
             "System.Double" => Wire.Scalar("double"),
             "System.Char" => Wire.Scalar("uint16_t"),
             "System.String" => Wire.String,
+            // §6.4 SINGLE-SLOT conversion pairs (Task 7a): the P1 native values must never
+            // become handles, and these two have one-scalar wire forms. The proxy carries the
+            // RAW wire scalar — the CALL SITE converts through blnet_marshal.hpp's
+            // to_net_datetime/from_net_datetime (etc.), because this header is deliberately
+            // include-free of the P1 types (the marshal header's include-order contract).
+            // Decimal (4 scalars), Guid (16 bytes), DateTimeOffset (the DECLARED scalar
+            // pair) and StringBuilder (directional String) need multi-slot/directional
+            // machinery — Task 8's §8.3 drift completion; until then they stay in the handle
+            // row here AND the analyzer refuses them at resolved call sites, so no BL call
+            // can reach a handle-shaped §6.4 slot.
+            "System.DateTime" => Wire.Scalar("uint64_t"),
+            "System.TimeSpan" => Wire.Scalar("int64_t"),
             _ => Wire.Handle,
         };
 
@@ -489,9 +501,11 @@ namespace BasicLang.Compiler.CodeGen.Net
             L(sb, "        BasicLang::blnet::BlnetCallScope blnet_scope;");
             L(sb, "        blnet_status = g_net." + plan.SlotName + "(" + string.Join(", ", callArgs) + ");");
             L(sb, "    }");
-            L(sb, "    /* Outside the scope on purpose: NetCheck throws, and unwinding through the");
-            L(sb, "       scope's destructor while it is still counted corrupts the depth counter. */");
-            L(sb, "    BasicLang::blnet::NetCheck(blnet_status);");
+            L(sb, "    /* Outside the scope on purpose: NetCheckTyped throws, and unwinding through");
+            L(sb, "       the scope's destructor while it is still counted corrupts the depth");
+            L(sb, "       counter. Typed (§11.1): a managed failure arrives as BasicLang::NetException");
+            L(sb, "       carrying the shim-reported inheritance chain, so BL typed Catch matches. */");
+            L(sb, "    BasicLang::blnet::NetCheckTyped(blnet_status);");
             L(sb, "    /* §15.12: drain anything a foreign thread queued during the call, but only at");
             L(sb, "       the OUTERMOST boundary call — a nested proxy must not pump. */");
             L(sb, "    if (BasicLang::blnet::g_call_depth == 0) (void)BasicLang::blnet::blnet_pump();");

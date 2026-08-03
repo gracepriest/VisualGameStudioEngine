@@ -14,11 +14,13 @@ namespace BasicLang.Net
     ///
     /// <para><b>§7.1 BL-inferred (used-only).</b> Walks the OPTIMIZED IR — the same modules
     /// <c>CppCodeGenerator.GenerateSplit</c> emits from, so a call the optimizer deleted never
-    /// costs a proxy slot — and collects the descriptor of every call node carrying non-null
-    /// Task-2 carriage (<c>IRCall</c> / <c>IRInstanceMethodCall</c> /
-    /// <c>IRBaseMethodCall</c>.<c>ResolvedNetTarget</c>) whose <c>NetCategory</c> is NOT
-    /// natively handled ({<c>NativeOwned</c>, <c>Bridged</c>}). Never the reference closure:
-    /// used-only is what keeps the shim, and therefore the AOT publish, small.</para>
+    /// costs a proxy slot — and collects the descriptor of every node carrying non-null
+    /// carriage (<c>ResolvedNetTarget</c> on the Task-2 call nodes <c>IRCall</c> /
+    /// <c>IRInstanceMethodCall</c> / <c>IRBaseMethodCall</c>, and since Task 7a on
+    /// <c>IRNewObject</c> / <c>IRFieldAccess</c> / <c>IRFieldStore</c>) whose
+    /// <c>NetCategory</c> is NOT natively handled ({<c>NativeOwned</c>, <c>Bridged</c>}).
+    /// Never the reference closure: used-only is what keeps the shim, and therefore the AOT
+    /// publish, small.</para>
     ///
     /// <para><b>⚠ "Resolved" does NOT imply "annotated" — this collector sees exactly what
     /// carries carriage, nothing more.</b> The analyzer's probe deliberately suppresses
@@ -208,6 +210,23 @@ namespace BasicLang.Net
                 case IRBaseMethodCall baseCall when baseCall.ResolvedNetTarget != null
                                       && !IsNativelyHandled(baseCall.NetCategory):
                     AddMember(baseCall.ResolvedNetTarget, members, seenMangled);
+                    break;
+                // P2a-2 Task 7a: the three shapes the lowering added. A construction carries
+                // its resolved ctor; a member READ carries the property/field descriptor (the
+                // getter-shaped slot); a member WRITE carries the synthesized set_X accessor
+                // (NetAccessorSynthesis — stamped by IRBuilder, the single synthesis point, so
+                // collecting the stamp verbatim keeps §12.4's slots ≡ exports).
+                case IRNewObject construction when construction.ResolvedNetTarget != null
+                                      && !IsNativelyHandled(construction.NetCategory):
+                    AddMember(construction.ResolvedNetTarget, members, seenMangled);
+                    break;
+                case IRFieldAccess read when read.ResolvedNetTarget != null
+                                      && !IsNativelyHandled(read.NetCategory):
+                    AddMember(read.ResolvedNetTarget, members, seenMangled);
+                    break;
+                case IRFieldStore write when write.ResolvedNetTarget != null
+                                      && !IsNativelyHandled(write.NetCategory):
+                    AddMember(write.ResolvedNetTarget, members, seenMangled);
                     break;
             }
 

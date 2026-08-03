@@ -39,9 +39,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// the same constant the always-emitted generated runtime splices — at file scope,
         /// before the <c>blnet</c> namespace opens; the namespace re-exports it and binds
         /// its hooks to <c>g_shim</c>. One definition, two headers, include-guard dedup.
+        /// Task 7a adds <see cref="CppNetExceptionRuntime"/> the same way: <c>NetCheckTyped</c>
+        /// (§9.2's typed status conversion, called by every generated proxy) throws
+        /// <c>BasicLang::NetException</c>, so the class must be in scope here too.
         /// </summary>
         public static string BlnetRuntime =>
-            RuntimeHead + CppNetRefRuntime.GuardedSource + RuntimeBody;
+            RuntimeHead + CppNetExceptionRuntime.Source + CppNetRefRuntime.GuardedSource + RuntimeBody;
 
         /// <summary><c>blnet.h</c> — everything before the generated status section.</summary>
         private const string Header1 = @"/* blnet.h — .NET⇄native boundary contract v1 (spec 2026-07-26). */
@@ -137,6 +140,31 @@ inline void NetCheck(int32_t status) {
         }
     }
     throw std::runtime_error(msg);
+}
+
+/* ---- §9.2/§11.1 (P2a-2 Task 7a): the GENERATED-PROXY status check. Converts a non-OK
+   status into the typed BasicLang::NetException — the last-error TYPE field carries the
+   thrown type's ';'-separated fully-qualified inheritance chain (most-derived first), and
+   what() is the RAW managed message — so BasicLang typed Catch ladders match per §11.1
+   and `ex.Message` is the managed message verbatim (parity with the C# leg). P0's
+   NetCheck above predates the typed ladder and composes a diagnostic string; the frozen
+   P0 conformance suite pins that exact shape, so it stays untouched for hand-written
+   hosts while every generated proxy calls this one. Without an error channel (or an
+   empty type) this degrades to NetCheck's plain runtime_error shape. ---- */
+inline void NetCheckTyped(int32_t status) {
+    if (status == BLNET_OK) return;
+    std::string chain, message;
+    if (g_shim.last_error) {
+        char* type = nullptr; char* m = nullptr;
+        if (g_shim.last_error(&type, &m) == BLNET_OK) {
+            if (type) { chain = type;   if (g_shim.free_) g_shim.free_(type); }
+            if (m)    { message = m;    if (g_shim.free_) g_shim.free_(m); }
+        }
+    }
+    if (!chain.empty())
+        throw ::BasicLang::NetException(
+            chain, message.empty() ? (""blnet status "" + std::to_string(status)) : message);
+    throw std::runtime_error(""blnet status "" + std::to_string(status));
 }
 
 /* ---- C2: NetRef. The class DEFINITION moved to the always-emitted BasicLang runtime at

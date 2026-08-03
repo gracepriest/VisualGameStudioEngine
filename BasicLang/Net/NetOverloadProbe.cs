@@ -66,6 +66,23 @@ namespace BasicLang.Net
         private const int MaxRefKindMasks = 4;
 
         /// <summary>
+        /// The reserved argument spelling for the <c>Nothing</c>/null literal — §6.5:
+        /// "<c>Nothing</c> participates as a null literal" (the P2a-2 Task-7a probe extension;
+        /// Task 4 had recorded the gap as a pin). Passed VERBATIM as the C# <c>null</c> literal
+        /// at the synthesized call site, so Roslyn applies the REAL null-literal conversion and
+        /// betterness rules — never declared as a probe parameter (null has no type to declare)
+        /// and never combined with a by-ref keyword (C# cannot pass null by ref, so
+        /// <see cref="RefKindKeywordMasks"/> forces the by-value shape at null positions).
+        /// <c>"null"</c> is a C# keyword: no well-formed type spelling can collide with it, and
+        /// <see cref="IsOneWellFormedTypeName"/> would reject it — which is why the validation
+        /// loop admits it explicitly for ARGUMENTS and never for type arguments.
+        /// </summary>
+        public const string NullArgumentSpelling = "null";
+
+        private static bool IsNullSpelling(string spelling) =>
+            string.Equals(spelling, NullArgumentSpelling, StringComparison.Ordinal);
+
+        /// <summary>
         /// Overload results, keyed on the whole request. Separate from <see cref="_cache"/> because
         /// the key is a request, not a type name. Concurrent for the reason <see cref="_cache"/>
         /// documents, and BOUNDED by <see cref="MaxOverloadCacheEntries"/> — see there for why this
@@ -229,7 +246,11 @@ namespace BasicLang.Net
         /// or unresolvable argument spelling answers <see cref="NetOverloadOutcome.NoMatch"/>. A
         /// wildcard was considered and rejected: it can only widen the candidate set, so it either
         /// fabricates a binding — the exact defect this class exists to remove — or turns a valid
-        /// call into a spurious BL6018. A caller that cannot type every argument must not ask.</para>
+        /// call into a spurious BL6018. A caller that cannot type every argument must not ask.
+        /// The one non-type spelling is <see cref="NullArgumentSpelling"/> — the KNOWN null
+        /// literal (§6.5), which is not a guess: Roslyn applies the real null-conversion and
+        /// betterness rules, and an over-wide candidate set surfaces honestly as CS0121 →
+        /// <see cref="NetOverloadOutcome.Ambiguous"/>.</para>
         ///
         /// <para><b>Cost: ~2 ms per distinct call site, then cached.</b> Each probe parses a tiny
         /// tree, derives a compilation from this one (cheap — the reference manager and every
@@ -322,8 +343,18 @@ namespace BasicLang.Net
             if (!isConstructor && !SyntaxFacts.IsValidIdentifier(memberName))
                 return NoOverloadMatch;
 
-            foreach (var spelling in arguments.Concat(typeArguments))
+            foreach (var spelling in arguments)
             {
+                // The null literal is a legal ARGUMENT spelling (§6.5), not a type name.
+                if (IsNullSpelling(spelling))
+                    continue;
+                if (!IsOneWellFormedTypeName(spelling))
+                    return NoOverloadMatch;
+            }
+            foreach (var spelling in typeArguments)
+            {
+                // A type ARGUMENT can never be null — reject the sentinel here like any
+                // other malformed spelling.
                 if (!IsOneWellFormedTypeName(spelling))
                     return NoOverloadMatch;
             }
@@ -350,7 +381,7 @@ namespace BasicLang.Net
             if (form == NetCallForm.Instance && type.IsStatic)
                 form = NetCallForm.Static;
 
-            var masks = RefKindKeywordMasks(candidates, arguments.Count);
+            var masks = RefKindKeywordMasks(candidates, arguments);
             var probe = Probe(receiver, memberName, arguments, masks, form);
 
             // VB permits a Shared member through an instance receiver; C# does not.
@@ -433,10 +464,20 @@ namespace BasicLang.Net
             if (form == NetCallForm.Instance)
                 declared.Add(receiver + " " + ProbeReceiverName);
             for (var i = 0; i < arguments.Count; i++)
-                declared.Add(arguments[i] + " " + ProbeArgumentPrefix + i);
+            {
+                // A null argument is passed as the literal, not through a declared
+                // parameter — null has no type to declare. Indices stay stable: the
+                // parameter for slot i keeps the i-suffixed name whether or not earlier
+                // slots were null.
+                if (!IsNullSpelling(arguments[i]))
+                    declared.Add(arguments[i] + " " + ProbeArgumentPrefix + i);
+            }
 
             var passed = string.Join(", ",
-                Enumerable.Range(0, arguments.Count).Select(i => mask[i] + ProbeArgumentPrefix + i));
+                Enumerable.Range(0, arguments.Count).Select(i =>
+                    IsNullSpelling(arguments[i])
+                        ? NullArgumentSpelling
+                        : mask[i] + ProbeArgumentPrefix + i));
 
             // A discard rather than `object x = new ...`: boxing a `ref struct` would be CS0029 and
             // would read as "no such constructor" instead of the §8.3 marshaling answer it is.
@@ -492,11 +533,16 @@ namespace BasicLang.Net
         ///
         /// <para><c>in</c> and <c>ref readonly</c> contribute no shape: C# accepts a by-value
         /// argument for both, so the all-by-value shape already covers them.</para>
+        ///
+        /// <para>A NULL-literal position never takes a keyword (<c>out null</c> is not C#), so
+        /// a candidate's keyword there is forced to by-value — the candidate could never bind
+        /// that slot by ref anyway.</para>
         /// </summary>
         private static IReadOnlyList<string[]> RefKindKeywordMasks(
             IEnumerable<(ISymbol Symbol, NetMemberDescriptor Descriptor)> candidates,
-            int argumentCount)
+            IReadOnlyList<string> arguments)
         {
+            var argumentCount = arguments.Count;
             var byValue = new string[argumentCount];
             for (var i = 0; i < argumentCount; i++)
                 byValue[i] = string.Empty;
@@ -515,7 +561,9 @@ namespace BasicLang.Net
                 var anyKeyword = false;
                 for (var i = 0; i < argumentCount; i++)
                 {
-                    mask[i] = CallSiteKeyword(parameters[i].RefKind);
+                    mask[i] = IsNullSpelling(arguments[i])
+                        ? string.Empty
+                        : CallSiteKeyword(parameters[i].RefKind);
                     anyKeyword |= mask[i].Length != 0;
                 }
 

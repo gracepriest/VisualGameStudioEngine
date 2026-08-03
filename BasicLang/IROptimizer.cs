@@ -1404,14 +1404,15 @@ namespace BasicLang.Compiler.IR.Optimization
                         : null;
                     return new IRReturn(retVal);
 
-                // NOTE (P2a-1 Task 10; widened P2a-2 Task 2): there is deliberately NO case here
-                // for IRCall, IRInstanceMethodCall or IRBaseMethodCall, and adding one is a
-                // breaking change. Falling through to `default` returns the SAME node, which is
-                // what carries ResolvedNetTarget / NetCategory across inlining — this is the only
-                // clone path any of the three can reach. Any case added here for one of them MUST
-                // copy both fields; NetIrCarriageTests
+                // NOTE (P2a-1 Task 10; widened P2a-2 Tasks 2/7a): there is deliberately NO case
+                // here for IRCall, IRInstanceMethodCall, IRBaseMethodCall, IRNewObject,
+                // IRFieldAccess or IRFieldStore, and adding one is a breaking change. Falling
+                // through to `default` returns the SAME node, which is what carries
+                // ResolvedNetTarget / NetCategory / ResolvedNetTargetIsExact across inlining —
+                // this is the only clone path any of the six can reach. Any case added here for
+                // one of them MUST copy all three fields; NetIrCarriageTests
                 // (.AggressivePipelinePreservesCarriageThroughTheInliningClonePath and its
-                // instance/base-call siblings) fails if it does not.
+                // siblings) fails if it does not.
                 default:
                     return inst;
             }
@@ -2285,15 +2286,16 @@ namespace BasicLang.Compiler.IR.Optimization
                         CloneValue(load.Address, prefix),
                         load.Type);
 
-                // NOTE (P2a-1 Task 10; widened P2a-2 Task 2): an IRCall cannot reach this switch
-                // — a loop containing one is refused for unrolling upstream (IsSimpleLoop, "if
-                // (inst is IRCall) return false"). IRInstanceMethodCall / IRBaseMethodCall CAN
-                // reach it (IsSimpleLoop does not refuse them) and land here in `default`, which
-                // returns the SAME node — so their ResolvedNetTarget / NetCategory survive by
-                // aliasing, exactly as every other field of theirs always has across unrolling.
-                // If any `case` is ever added for one of the three call node types it MUST copy
-                // both fields across, for the reason spelled out on
-                // FunctionInliningPass.CloneAndRemap's default arm.
+                // NOTE (P2a-1 Task 10; widened P2a-2 Tasks 2/7a): an IRCall cannot reach this
+                // switch — a loop containing one is refused for unrolling upstream
+                // (IsSimpleLoop, "if (inst is IRCall) return false"). IRInstanceMethodCall /
+                // IRBaseMethodCall / IRNewObject / IRFieldAccess / IRFieldStore CAN reach it
+                // (IsSimpleLoop does not refuse them) and land here in `default`, which returns
+                // the SAME node — so their ResolvedNetTarget / NetCategory /
+                // ResolvedNetTargetIsExact survive by aliasing, exactly as every other field of
+                // theirs always has across unrolling. If any `case` is ever added for one of
+                // the carriage-bearing node types it MUST copy all three fields across, for the
+                // reason spelled out on FunctionInliningPass.CloneAndRemap's default arm.
                 default:
                     return inst;
             }

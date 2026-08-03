@@ -4,6 +4,24 @@ using BasicLang.Compiler.AST;
 namespace BasicLang.Net
 {
     /// <summary>
+    /// One recorded resolution: the descriptor plus whether its signature identity is EXACT
+    /// (see <see cref="NetAstAnnotations.RecordResolvedMember"/> — the Task-7a name-only gate).
+    /// </summary>
+    internal readonly struct NetMemberAnnotation
+    {
+        public NetMemberAnnotation(NetMemberDescriptor member, bool exact)
+        {
+            Member = member;
+            Exact = exact;
+        }
+
+        public NetMemberDescriptor Member { get; }
+
+        /// <summary>False = name-only record; the lowering must refuse it.</summary>
+        public bool Exact { get; }
+    }
+
+    /// <summary>
     /// P2a-2 Task 2 — the analyzer→IRBuilder hand-off for resolved .NET members.
     ///
     /// <para><b>Why a side table and not a field on the AST node.</b> The analyzer and
@@ -49,11 +67,11 @@ namespace BasicLang.Net
     /// </summary>
     internal sealed class NetAstAnnotations
     {
-        private readonly Dictionary<ExpressionNode, NetMemberDescriptor> _resolvedMembers =
-            new Dictionary<ExpressionNode, NetMemberDescriptor>(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<ExpressionNode, NetMemberAnnotation> _resolvedMembers =
+            new Dictionary<ExpressionNode, NetMemberAnnotation>(ReferenceEqualityComparer.Instance);
 
         /// <summary>Resolved member per AST expression node (reference-keyed). Read by IRBuilder.</summary>
-        internal IReadOnlyDictionary<ExpressionNode, NetMemberDescriptor> ResolvedMembers => _resolvedMembers;
+        internal IReadOnlyDictionary<ExpressionNode, NetMemberAnnotation> ResolvedMembers => _resolvedMembers;
 
         /// <summary>
         /// Records (or overwrites — last resolution wins, harmless because the analyzer resolves
@@ -61,13 +79,20 @@ namespace BasicLang.Net
         /// ignored rather than thrown: a lost annotation degrades to the inert default
         /// downstream — the IR node keeps a null <c>ResolvedNetTarget</c> and the call is simply
         /// not part of the .NET surface — which is strictly safer than failing the compilation.
+        ///
+        /// <para><b><paramref name="exact"/> is the Task-7a name-only gate's source bit.</b>
+        /// True only when the descriptor's SIGNATURE is known to be the one the call selects —
+        /// the overload probe's winner, a probed constructor, or a member with no overload axis
+        /// (property/field). A first-name-match record stays false, and the C++ lowering
+        /// refuses to lower it: a name-matched descriptor could be the wrong overload, and
+        /// silently calling it is a miscompile, never a fallback.</para>
         /// </summary>
-        internal void RecordResolvedMember(ExpressionNode node, NetMemberDescriptor member)
+        internal void RecordResolvedMember(ExpressionNode node, NetMemberDescriptor member, bool exact)
         {
             if (node == null || member == null)
                 return;
 
-            _resolvedMembers[node] = member;
+            _resolvedMembers[node] = new NetMemberAnnotation(member, exact);
         }
 
         // ------------------------------------------------------------------
