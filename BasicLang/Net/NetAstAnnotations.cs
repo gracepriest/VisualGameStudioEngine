@@ -122,6 +122,16 @@ namespace BasicLang.Net
         /// <para><b>Non-exact annotations are skipped</b>, mirroring the surface collector's
         /// <c>IsCollectable</c>: a name-only record is refused by the C++ lowering, so it can never
         /// correspond to an emitted wrapper and an entry for it could only ever mis-attribute.</para>
+        ///
+        /// <para><b>Yielded in SOURCE ORDER, and that is a correctness requirement, not tidiness.</b>
+        /// The backing dictionary is keyed by AST node REFERENCE, so its enumeration order follows
+        /// address-derived hash codes and differs run to run. Combined with
+        /// <see cref="NetProvenanceMap"/>'s last-write-wins rule, a member called from two sites in
+        /// one file would get a different <c>.bas</c> line in each build — a BL6020 that moves on
+        /// its own. Sorting by <c>(Line, Column)</c> makes the choice a STATED rule: <b>the LAST
+        /// call site in source order is the one blamed.</b> Arbitrary between the two, but stable,
+        /// and stable is the whole property that was missing. (Across units the later unit still
+        /// wins, which is deterministic because unit order is.)</para>
         /// </summary>
         /// <param name="filePath">The compilation unit's path — what a BL6020 shows the user.</param>
         /// <param name="lineOffset">
@@ -133,7 +143,17 @@ namespace BasicLang.Net
         internal IEnumerable<KeyValuePair<string, NetWrapperOrigin>> CallSiteOrigins(
             string filePath, int lineOffset)
         {
-            foreach (var entry in _resolvedMembers)
+            // Materialized and sorted rather than streamed straight off the dictionary — see the
+            // remarks: reference-keyed enumeration order is an allocation accident, and downstream
+            // is last-write-wins.
+            var ordered = new List<KeyValuePair<ExpressionNode, NetMemberAnnotation>>(_resolvedMembers);
+            ordered.Sort((a, b) =>
+            {
+                var byLine = a.Key.Line.CompareTo(b.Key.Line);
+                return byLine != 0 ? byLine : a.Key.Column.CompareTo(b.Key.Column);
+            });
+
+            foreach (var entry in ordered)
             {
                 if (!entry.Value.Exact) continue;
                 var member = entry.Value.Member;

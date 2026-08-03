@@ -100,9 +100,23 @@ namespace BasicLang.Compiler.CodeGen.Net
         /// Returns a result (<see cref="NetShimPublishResult.Success"/> = false) rather than
         /// throwing for a non-zero exit or a missing output DLL, and rather than throwing when
         /// <c>dotnet</c> itself cannot be started (not on PATH — a supported failure mode per
-        /// spec §10.5). The two throw paths that remain: <see cref="FileNotFoundException"/> if
-        /// <paramref name="csprojPath"/> does not exist, and <see cref="TimeoutException"/> if
-        /// the publish exceeds 10 minutes — a hung publish is not a diagnosable build error.
+        /// spec §10.5, reported as <see cref="NetShimPublishResult.ExitCode"/> <c>-1</c>, which is
+        /// this method's own sentinel and never an SDK exit code).
+        /// <para/>
+        /// <b>What it CAN throw — the list callers must catch, and it is longer than the two
+        /// deliberate ones.</b> Deliberate: <see cref="FileNotFoundException"/> when
+        /// <paramref name="csprojPath"/> does not exist, and <see cref="TimeoutException"/> when
+        /// the publish exceeds 10 minutes (a hung publish is not a diagnosable build error).
+        /// <b>Incidental, from the path and directory work done BEFORE the child is spawned:</b>
+        /// <see cref="Path.GetFullPath(string,string)"/> on either path can throw
+        /// <see cref="ArgumentException"/>, <see cref="NotSupportedException"/> or
+        /// <see cref="PathTooLongException"/>, and <see cref="Directory.CreateDirectory(string)"/>
+        /// on <paramref name="outputDir"/> can throw <see cref="UnauthorizedAccessException"/>,
+        /// <see cref="IOException"/> or <see cref="DirectoryNotFoundException"/> — a read-only
+        /// <c>obj/</c>, a path over MAX_PATH, a permission-denied cache directory. A caller that
+        /// catches only the two deliberate ones lets those escape as an unhandled exception out of
+        /// the compiler, which is precisely the shape the <c>proc.Start()</c> catch below exists to
+        /// avoid. <c>CppProjectBuilder.GenerateAndPublishShim</c> catches the whole set.
         /// </summary>
         internal static NetShimPublishResult Publish(
             string csprojPath, string outputDir, string workingDirectory,

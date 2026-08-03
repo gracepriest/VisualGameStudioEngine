@@ -3019,8 +3019,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             NetErrorNativeOnly("BL6017",
                 $"'{member.DeclaringTypeFullName}.{member.Name}' cannot be assigned: the .NET "
+                // "non-init" is not pedantry: NetTypeResolver.IsSettable answers false for THREE
+                // shapes — no setter, a non-public setter, and an `init`-only one — and an init
+                // property HAS a visible setter. Saying "no public setter" about it sends the user
+                // looking for something that is right there in the metadata.
                 + (member.Kind == NetMemberCategory.Property
-                    ? "property has no public setter"
+                    ? "property has no public, non-init setter"
                     : "field is read-only")
                 + ". A native (BL+C++) project reaches .NET members through generated accessor "
                 + "exports, and there is no setter export to generate. Read the member instead, or "

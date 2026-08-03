@@ -683,8 +683,11 @@ public class NetShimPhaseTests
             Assert.That(finding!.IsWarning, Is.False,
                 "the native backend cannot lower this at all, so §6.3's flip makes it an error.");
             Assert.That(finding.Message, Does.Contain("CanRead"), "…and must name the member.");
-            Assert.That(finding.Message, Does.Contain("no public setter"),
-                "…and say what is actually wrong, so the fix is obvious.");
+            Assert.That(finding.Message, Does.Contain("no public, non-init setter"),
+                "…and say what is actually wrong, so the fix is obvious. 'non-init' is load-bearing: "
+                + "IsSettable is false for THREE shapes — no setter, a non-public setter, and an "
+                + "init-only one — and an init property HAS a visible setter, so 'no public setter' "
+                + "would send that user hunting for something the metadata plainly shows.");
             Assert.That(finding.Message, Does.Contain("(line 4)"),
                 "POSITIONED. An unpositioned diagnostic about a one-line mistake in a 400-line "
                 + "program is barely better than the csc failure it replaces.");
@@ -715,6 +718,51 @@ public class NetShimPhaseTests
             + "perfectly ordinary public setter — check NetTypeResolver.IsSettable, not the "
             + "analyzer: " + string.Join(" | ",
                 analyzer.NetDiagnostics.Select(d => d.Code + ": " + d.Message)));
+    }
+
+    /// <summary>
+    /// <b>Which call site a BL6020 blames must be a rule, not an allocation accident.</b>
+    /// <c>NetAstAnnotations</c>' backing dictionary is keyed by AST node REFERENCE, so its
+    /// enumeration order follows address-derived hash codes and differs run to run; combined with
+    /// <see cref="NetProvenanceMap"/>'s last-write-wins rule, a member called from several sites in
+    /// one file would get a different <c>.bas</c> line in each build — a diagnostic that moves on
+    /// its own between two identical builds.
+    ///
+    /// <para>Yielding in source order fixes the rule at "the LAST call site wins". This asserts the
+    /// ORDER rather than trying to observe cross-run instability, which is not reproducible inside
+    /// one process (hash codes are stable within it) — the order is the property that makes the
+    /// rule true.</para>
+    /// </summary>
+    [Test]
+    public void CallSiteOrigins_AreYieldedInSourceOrder_SoAttributionIsDeterministic()
+    {
+        var analyzer = Analyze("""
+            Module M
+             Sub Main()
+              Dim st As Stream
+              Dim p1 = st.Position
+              Dim p2 = st.Position
+              Dim p3 = st.Position
+             End Sub
+            End Module
+            """);
+
+        var lines = analyzer.NetCallSiteOrigins("Probe.bas", lineOffset: 0)
+            .Select(o => o.Value.Line).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lines, Is.Not.Empty,
+                "the three property reads recorded no annotations, so this proves nothing.");
+            Assert.That(lines, Is.Ordered,
+                "CallSiteOrigins must yield in (Line, Column) order. Straight off the "
+                + "reference-keyed dictionary the order is address-derived, and the last writer "
+                + "into a last-write-wins map then changes between identical builds. Got: "
+                + string.Join(", ", lines));
+            Assert.That(lines.Last(), Is.EqualTo(6),
+                "the LAST entry must be the last call site in the file — that is the stated rule "
+                + "the provenance map's last-write-wins semantics turn into the blamed line.");
+        });
     }
 
     // =====================================================================================

@@ -226,8 +226,12 @@ namespace BasicLang.Compiler.ProjectSystem
             // where the loader will look.
             // Null for every project with an empty .NET surface — i.e. every project that existed
             // before P2a-2 — so this line is inert for all of them.
-            if (emit.ShimDllPath != null)
-                DeployDll(result, emit.OutputDir, emit.ShimDllPath);
+            //
+            // NOT DeployDll: that one warns and carries on, which is right for the engine and
+            // MinGW runtime DLLs below (a stale copy of those still works) and wrong for this one.
+            // See DeployShimDll.
+            if (emit.ShimDllPath != null && !DeployShimDll(result, emit.OutputDir, emit.ShimDllPath))
+                return result;
 
             // ---- Engine DLL deploy ----
             if (emit.EngineLib != null)
@@ -247,9 +251,54 @@ namespace BasicLang.Compiler.ProjectSystem
             return result;
         }
 
+        /// <summary>
+        /// Deploys the AOT-published shim (spec §10.4). Returns false — having recorded a BL6006 —
+        /// when the copy fails.
+        ///
+        /// <para><b>Why this one is fatal where <see cref="DeployDll"/> is tolerant.</b> A stale or
+        /// missing engine/MinGW DLL is survivable; a stale or missing SHIM is not, and both of its
+        /// failure shapes are actively misleading:</para>
+        /// <list type="bullet">
+        /// <item><description><b>Missing</b> — <c>blnet_startup.g.cpp</c> cannot load the module and
+        /// the program exits with <c>NetProxyEmitter.StartupFailureExitCode</c> before reaching
+        /// <c>main</c>. The user gets an exit code and no explanation, from a build that said
+        /// "succeeded".</description></item>
+        /// <item><description><b>STALE</b> — the far worse one. <c>File.Copy(overwrite: true)</c>
+        /// failing leaves the PREVIOUS shim beside a freshly regenerated proxy table, so a slot
+        /// whose signature changed now binds to the old export. §9.3's handshake fails, or worse it
+        /// passes and a call goes through a mismatched signature — and it all looks like a codegen
+        /// bug.</description></item>
+        /// </list>
+        /// <para>Both are ordinary: the previous run's exe still holding the DLL open, or antivirus
+        /// briefly locking a freshly written native binary. Failing the build names the real
+        /// problem at the moment it happens, on <c>Diagnostics</c> (which the IDE error list reads)
+        /// rather than on <c>Messages</c> (which the GUI Shell discards).</para>
+        /// </summary>
+        private static bool DeployShimDll(CppProjectBuildResult result, string outputDir, string shimDll)
+        {
+            try
+            {
+                File.Copy(shimDll, Path.Combine(outputDir, Path.GetFileName(shimDll)), overwrite: true);
+                result.Messages.Add($"Deployed {Path.GetFileName(shimDll)}");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Fail(result, "BL6006",
+                    $"Could not deploy the .NET shim '{Path.GetFileName(shimDll)}' next to the "
+                    + $"executable: {ex.Message} The program loads this DLL by name at startup and "
+                    + "cannot run without it, and a stale copy left in place would be bound to a "
+                    + "proxy table that no longer matches. Close any still-running instance of the "
+                    + "program (or whatever else holds the file open) and build again.",
+                    result.ExecutablePath ?? outputDir);
+                return false;
+            }
+        }
+
         // Copy one DLL next to the built exe. A locked DLL (a previous game run still
         // open) must never discard a successful build result — warn and continue,
-        // mirroring the CLI's existing deploy precedent.
+        // mirroring the CLI's existing deploy precedent. The SHIM is deliberately NOT
+        // deployed through here — see DeployShimDll for why it is fatal instead.
         private static void DeployDll(CppProjectBuildResult result, string outputDir, string dll)
         {
             try
@@ -1166,11 +1215,21 @@ namespace BasicLang.Compiler.ProjectSystem
                     csprojPath, NetShimCache.PublishDirectory(projectDir, configuration),
                     workingDirectory: shimDir);
             }
-            catch (Exception ex) when (ex is TimeoutException || ex is FileNotFoundException)
+            catch (Exception ex) when (ex is TimeoutException || ex is FileNotFoundException
+                                                             || ex is IOException
+                                                             || ex is UnauthorizedAccessException
+                                                             || ex is ArgumentException
+                                                             || ex is NotSupportedException)
             {
-                // Publish's own two throw paths: a publish that hung past 10 minutes, and a csproj
-                // that vanished between the write above and the spawn. Neither is a diagnosable
-                // AOT finding, so neither is a BL6020.
+                // WIDER than Publish's docstring used to advertise, deliberately. It named only
+                // the timeout and the missing csproj, but Publish does path and directory work
+                // BEFORE it spawns anything — Path.GetFullPath (ArgumentException,
+                // NotSupportedException, PathTooLongException) and Directory.CreateDirectory
+                // (UnauthorizedAccessException, IOException, DirectoryNotFoundException). A
+                // read-only obj/, a path over MAX_PATH or a permission-denied cache directory
+                // would otherwise escape as an unhandled exception out of the compiler — the exact
+                // shape Publish catches proc.Start() failures to avoid. None of them is a
+                // diagnosable AOT finding, so none is a BL6020. Publish's docstring now matches.
                 Fail(result, "BL6006", ".NET shim publish failed: " + ex.Message, project.FilePath);
                 return false;
             }
@@ -1188,10 +1247,20 @@ namespace BasicLang.Compiler.ProjectSystem
                 // that parses zero errors must never fail silently" rule ApplyCompileOutcome has.
                 if (errors == 0)
                 {
+                    // ExitCode -1 is Publish's OWN sentinel for "dotnet could not be started" —
+                    // it never comes from the SDK. Branching on it matters because that is the
+                    // likeliest first-run failure on a fresh machine (§10.5 makes the SDK on PATH
+                    // a stated requirement), and the generic message below would tell such a user
+                    // to go hunting through generated C# for a member that spells wrong.
                     Fail(result, "BL6006",
-                        $".NET shim publish failed (exit {publish.ExitCode}). This is a compile of "
-                        + "GENERATED code, so the fault is usually a member the surface admitted "
-                        + "but the shim cannot spell:\n" + publish.Output,
+                        publish.ExitCode == -1
+                            ? "The .NET SDK is required to build a native project that uses .NET, "
+                              + "and `dotnet` could not be started. Install the .NET SDK and make "
+                              + "sure it is on PATH (spec §10.5), then build again. Details: "
+                              + publish.Output
+                            : $".NET shim publish failed (exit {publish.ExitCode}). This is a "
+                              + "compile of GENERATED code, so the fault is usually a member the "
+                              + "surface admitted but the shim cannot spell:\n" + publish.Output,
                         project.FilePath);
                 }
                 return false;
@@ -1199,7 +1268,18 @@ namespace BasicLang.Compiler.ProjectSystem
             if (errors > 0)
                 return false;
 
-            NetShimCache.Commit(projectDir, configuration, key, publish.DllPath);
+            // The cache write is best-effort by design (Commit refuses a null key), but a silent
+            // refusal costs the user ~25 s on EVERY build forever — the 23.8 s -> 10.0 s hit is
+            // the whole point of §10.2 — so say so. A null key is the ordinary cause: no `dotnet`
+            // on PATH for ProbeSdkIdentity, or a reference whose MVID could not be read.
+            if (!NetShimCache.Commit(projectDir, configuration, key, publish.DllPath))
+            {
+                result.Messages.Add(
+                    "warning: the .NET shim cache entry could not be written, so every build will "
+                    + "re-publish the shim (~25 s). Usually the .NET SDK is not on PATH, or one of "
+                    + "the project's <Reference> assemblies could not be read.");
+            }
+
             outcome.ShimDllPath = publish.DllPath;
             outcome.PhaseFive = NetShimPhaseOutcome.Published;
             result.Messages.Add($".NET shim: {publish.DllPath}");
