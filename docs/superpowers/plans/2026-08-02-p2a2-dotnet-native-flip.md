@@ -642,7 +642,10 @@ inbound narrows with the §14.10 divergence documented at the lowering site; `re
   the collector ADMITS (`FirstUnmarshalable` returns null) must get a wire form from
   `NetShimGenerator.WireForm`/`NetProxyEmitter.WireOf`; the three §8.3 encodings are currently
   linked only by doc comments. Also add the cross-reference comments in both emitter tables
-  naming `FirstUnmarshalable`.
+  naming `FirstUnmarshalable`. Task-6 review addendum: the drift test needs SIX §6.4 rows
+  tying wire type ↔ `to_net_*`/`from_net_*` signature ↔ shim parameter type (the DTO ABI form
+  is the SCALAR pair, declared in the marshal header). Also adopt the `(void)r.ClockDateTime();`
+  range-check idiom in native `from_net_datetimeoffset` next time the marshal header is touched.
 - [ ] **Step 3:** fast subset; commit (`feat(p2a2): ref/out slots, boxed receivers, Char`).
 
 ### Task 9: §8.5 — consuming handle-represented collections
