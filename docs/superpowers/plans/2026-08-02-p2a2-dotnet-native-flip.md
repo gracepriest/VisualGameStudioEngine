@@ -595,6 +595,12 @@ round trip).
 - Provenance: `NetShimGenerator` gets the (mangled name → `NetWrapperOrigin`) pairs — BL call
   sites from the annotation table's node positions, `<NetProxy>` members as
   `NetProxyDeclaration` origins.
+- ⚠ **Task-7a handoff (verify early in this task):** `NetCheckTyped` expects the last-error TYPE
+  field to carry the full `;`-separated inheritance chain — the stub planted it, but the
+  GENERATED shim's `Fail(ex)` must actually produce it or typed catch silently stops matching
+  on real calls. Also (7a concern 4): a write to a READ-ONLY .NET property synthesizes a `set_X`
+  slot that fails loudly in csc here — catch it at the analyzer/collector instead (BL6017-class,
+  positioned) rather than as a shim-compile failure.
 
 **Steps:**
 
@@ -630,6 +636,17 @@ round trip).
 decodes to null); other non-ref value types = boxed handles with `Unsafe.Unbox<T>` receivers
 (mutable-struct correctness, not an optimization); `Char` = uint16 wire, outbound zero-extends,
 inbound narrows with the §14.10 divergence documented at the lowering site; `ref struct` = BL6019.
+
+⛔ **Task-7a inherited scope (concerns 1-2) — THIS TASK OWNS ALL OF IT:**
+- **The remaining four §6.4 wire rows.** 7a shipped DateTime + TimeSpan single-slot scalar rows
+  in both emitters; **Decimal, Guid, DateTimeOffset and StringBuilder currently BL6019 at
+  resolved call sites** (multi-slot / by-value-String shapes). ⚠ **Task 13's parity program #1
+  (all six pairs round-tripped through a .NET call — the plan's highest-value oracle) CANNOT
+  PASS until these land.**
+- **Enum arguments.** 7a extended the probe so enum-valued args RESOLVE exactly, but enum
+  PARAMETERS refuse BL6019 — neither emitter can recover an enum's underlying type from a name.
+  Needs underlying-type carriage in the descriptor + both emitters. `File.Open(p, FileMode.Open)`
+  is the canonical shape and is currently a precise refusal, not a miscompile.
 
 **Steps:**
 
@@ -785,7 +802,11 @@ BL6020 INPUTS, never that assertion's subject.
   PROVES it
 
 **The seven programs (spec §12.1 table, each pinning a would-be-silent divergence):**
-1. the six §6.4 conversion pairs round-tripped through a .NET call (tick epochs + Decimal bits);
+1. the six §6.4 conversion pairs round-tripped through a .NET call (tick epochs + Decimal bits).
+   ⛔ **BLOCKED until Task 8 lands the Decimal/Guid/DateTimeOffset/StringBuilder wire rows** —
+   7a shipped only DateTime + TimeSpan; the other four BL6019 at call sites today. If Task 8
+   slips them, this program must be split (DateTime+TimeSpan now, the rest pinned-expected-fail
+   with the §6.4 gap named) rather than silently dropped;
 2. multiple `Catch` clauses incl. a SUBCLASS match around a throwing .NET call — **with control
    flow in at least one catch body** (the `_nex` label-redefinition guard, spec §11.1).
    ⛔ **C2312 constraint (Task 1 finding):** at most ONE non-`Exception` typed clause per `Try` —
