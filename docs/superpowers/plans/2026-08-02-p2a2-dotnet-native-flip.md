@@ -891,6 +891,11 @@ BL6020 INPUTS, never that assertion's subject.
 7. `ToString()` on `System.IO.Stream` (non-overriding — D-P1 makes this a PASSING row; if it
    fails, D-P1's implementation is wrong, not the program).
 
+✅ **NOT blocked by the Task-7b Boolean finding** (`Console.WriteLine(bool)` → `1`/`0` natively,
+chip `task_6fd2c7e4`): the inherited constraint list below ALREADY forbids raw Boolean prints, so
+these programs dodge it by construction. Print through `If`/string instead — and note the `If`
+form is the stronger oracle anyway, since a wrong answer changes the branch.
+
 P1's Task-13 constraint list applies verbatim (no raw Boolean prints, no `t<N>` locals, `CType`
 not `CInt`, ASCII-only, invariant-culture — see `2026-07-27-p1-native-bcl-types.md` Task 13).
 The C# leg runs under `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1`; the shim runs
