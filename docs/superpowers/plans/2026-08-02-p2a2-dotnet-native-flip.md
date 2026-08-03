@@ -720,6 +720,42 @@ inbound narrows with the §14.10 divergence documented at the lowering site; `re
     `NetProxyEmitterTests.SixShapeSurface()` and bump its count guard — the cross-emitter
     signature oracle is currently BLIND to the two rows 7a added, i.e. blind to exactly the
     class of row this task adds four more of.
+
+  **Task-7b quality-review additions (same Step 0 — all cheaper now than after Task 9;
+  the first two are HARD PREREQUISITES for Task 9's indexer work):**
+  - ⛔ **7b-I5 — the synthesized-setter predicate is TRIPLICATED.** `Exact && (Property || Field)
+    && Parameters.Count == 0` is spelled in `IRBuilder.cs:2912-2916` (produces it),
+    `NetAstAnnotations.CallSiteOrigins` (attributes it), and `SemanticAnalyzer`'s
+    `RefuseWriteToUnsettableNetMember` (refuses it). The `Parameters.Count == 0` clause IS the
+    indexer refusal. **Miss the analyzer copy in Task 9 and a read-only indexer write re-opens
+    the CS0200-after-27s failure 7b just closed.** Extract one shared predicate into
+    `NetAccessorSynthesis` — its own docstring already says the two-parameter descriptor belongs
+    "HERE rather than at a call site".
+  - ⛔ **7b-I8 — `ValueTypeReceiverNames` has NO test**, and its failure modes are the most
+    expensive this pipeline has: CS0445 (whole shim fails to compile) and §8.5's
+    mutate-the-temporary infinite `MoveNext`. It is a by-name lookup, which makes
+    `List<T>.Enumerator`/`Dictionary<K,V>.Enumerator` — both structs, both arriving in Tasks
+    9/10 — the highest-risk spellings on the highest-risk path. Add a fast test asserting the
+    derived set over a hand-built surface with a known framework struct.
+  - **7b-I7 — `valueTypeReceiverNames` determines shim CONTENT but is not in the cache key**,
+    and degrades silently (`TypeSymbol(name)?.IsValueType == true` answers "reference type" for
+    any name the resolver can't resolve). Reference-closure failures are protected by accident
+    (an unreadable assembly also fails `TryReadMvid` → null key); **framework paths are
+    deliberately excluded from the key, so a framework struct receiver that fails to resolve
+    once yields a wrong-but-COMPILING shim that is then `Commit`ed and hit forever** — violating
+    the stated invariant "the cache is allowed to be absent, never allowed to be wrong". Treat
+    "resolver could not answer for a receiver in the surface" as key-poisoning (null key ⇒
+    publish unconditionally), the established shape here.
+  - **7b-I6 — `obj/gen/shim` has no stale-file discipline** and `dotnet publish` globs `**/*.cs`
+    rooted there. Latent only while the emitted file set is fixed — Tasks 9/10/11 make it
+    surface-dependent, so a removed member's orphaned `.g.cs` gets compiled into the shim.
+    Prune unrecognized `*.cs`/`*.csproj` in `NetShimGenerator.WriteTo` (keep `obj/`/`bin/`).
+  - **7b-I9 — the Integration fixture's publish cost is strictly linear** (fresh `_dir` +
+    one `Build()` per test; 5 publishes today, +1 per scenario for Tasks 9-12). A shared
+    directory does NOT help (the key hashes the mangled member set, so a different program is a
+    guaranteed miss) — the only lever is FEWER, RICHER programs, and the fixture offers no
+    affordance for it. Add a `BuildOnce(source)` memo (or `OneTimeSetUp`-scoped project) before
+    Task 9 lands; mirror `NetShimPhaseTests.SharedResolver`'s `Lazy` pattern.
 - [ ] **Step 1:** red tests: `Integer.TryParse("42", n)` shape (out slot) through the stub
   runtime; a mutable-struct property set through a boxed receiver (the CS0445 shape) — assert
   the generated C# uses `Unsafe.Unbox`; `Char` narrowing emit; `Span<char>` overload use → BL6019.
