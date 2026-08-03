@@ -121,14 +121,39 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         /// <summary>
         /// P2a-2 Task 4 — receivers <see cref="ProbeNetMemberAccess"/> RESOLVED, keyed by the
-        /// member-access node: node → the receiver's metadata full name. This is the eligibility
-        /// gate for the invocation-aware overload probe: <see cref="ProbeNetInvocation"/> acts
-        /// only on callees recorded here, so it inherits the member probe's exact claim /
-        /// NativeBclSurface / resolution gating and cannot invent findings for receivers the
-        /// member probe declined to judge.
+        /// member-access node. This is the eligibility gate for the invocation-aware overload
+        /// probe: <see cref="ProbeNetInvocation"/> acts only on callees recorded here, so it
+        /// inherits the member probe's exact claim / NativeBclSurface / resolution gating and
+        /// cannot invent findings for receivers the member probe declined to judge.
+        ///
+        /// <para>P2a-2 Task 7a (the lift's second half): the record ALSO carries the first
+        /// name-matched member's CANONICAL name and kind, computed once by the member probe —
+        /// the invocation probe used to re-walk <c>GetMembers</c> to recover exactly these two
+        /// facts. <see cref="NetResolvedReceiver.MemberName"/> is null when the receiver
+        /// resolved but has no member with the accessed name (the member probe's BL6017).</para>
         /// </summary>
-        private readonly Dictionary<MemberAccessExpressionNode, string> _netResolvedReceivers =
+        private readonly Dictionary<MemberAccessExpressionNode, NetResolvedReceiver> _netResolvedReceivers =
             new(ReferenceEqualityComparer.Instance);
+
+        /// <summary>See <see cref="_netResolvedReceivers"/>.</summary>
+        private readonly struct NetResolvedReceiver
+        {
+            public NetResolvedReceiver(string typeFullName, string memberName, NetMemberCategory memberKind)
+            {
+                TypeFullName = typeFullName;
+                MemberName = memberName;
+                MemberKind = memberKind;
+            }
+
+            /// <summary>The receiver's metadata full name.</summary>
+            public string TypeFullName { get; }
+
+            /// <summary>Canonical (surface-cased) member name; null when no member matched.</summary>
+            public string MemberName { get; }
+
+            /// <summary>Meaningful only when <see cref="MemberName"/> is non-null.</summary>
+            public NetMemberCategory MemberKind { get; }
+        }
 
         /// <summary>
         /// Get the TypeRegistry for .NET type lookups
@@ -2492,26 +2517,35 @@ namespace BasicLang.Compiler.SemanticAnalysis
             var members = NetResolver().GetMembers(fullName);
             if (members.Count == 0) return;   // no surface to judge against
 
-            // P2a-2 Task 4: the receiver RESOLVED and has a surface — record the eligibility for
-            // the invocation-aware overload probe (ProbeNetInvocation gates on this map, so it
-            // inherits every early-return above).
-            _netResolvedReceivers[node] = fullName;
-
+            NetMemberDescriptor match = null;
             foreach (var member in members)
             {
                 if (string.Equals(member.Name, memberName, StringComparison.OrdinalIgnoreCase))
                 {
-                    // P2a-2 Task 2: the descriptor used to be thrown away here. Record it so
-                    // IRBuilder can stamp the produced IR node (carriage; read by nobody until
-                    // the surface collector / call lowering). Claimed names returned above and
-                    // never reach this line, which is what keeps existing surfaces empty.
-                    // Task 4 replaces this name-match record with the overload WINNER for call
-                    // sites (ProbeNetInvocation overwrites by node identity); a non-call access
-                    // or an unprobeable call keeps the name-match record.
-                    _netAnnotations.RecordResolvedMember(node, member);
-                    WarnNetCallInGenericBody(fullName, memberName, line, column);
-                    return;
+                    match = member;
+                    break;
                 }
+            }
+
+            // P2a-2 Task 4: the receiver RESOLVED and has a surface — record the eligibility for
+            // the invocation-aware overload probe (ProbeNetInvocation gates on this map, so it
+            // inherits every early-return above). Task 7a: the record carries the canonical
+            // member name + kind so the invocation probe never re-walks GetMembers.
+            _netResolvedReceivers[node] = new NetResolvedReceiver(
+                fullName, match?.Name, match?.Kind ?? NetMemberCategory.Method);
+
+            if (match != null)
+            {
+                // P2a-2 Task 2: the descriptor used to be thrown away here. Record it so
+                // IRBuilder can stamp the produced IR node (carriage; read by nobody until
+                // the surface collector / call lowering). Claimed names returned above and
+                // never reach this line, which is what keeps existing surfaces empty.
+                // Task 4 replaces this name-match record with the overload WINNER for call
+                // sites (ProbeNetInvocation overwrites by node identity); a non-call access
+                // or an unprobeable call keeps the name-match record.
+                _netAnnotations.RecordResolvedMember(node, match);
+                WarnNetCallInGenericBody(fullName, memberName, line, column);
+                return;
             }
 
             NetWarning("BL6017",
@@ -2569,25 +2603,18 @@ namespace BasicLang.Compiler.SemanticAnalysis
         private void ProbeNetInvocation(CallExpressionNode call, MemberAccessExpressionNode callee)
         {
             if (_netResolverFactory == null) return;
-            if (!_netResolvedReceivers.TryGetValue(callee, out var receiverFullName)) return;
+            if (!_netResolvedReceivers.TryGetValue(callee, out var receiver)) return;
             if (call.GenericArguments != null && call.GenericArguments.Count > 0) return;
 
             var resolver = NetResolver();
             if (resolver == null) return;
 
-            // Canonicalize the member's casing against the surface: BasicLang is
-            // case-insensitive, ResolveOverload's candidate filter is Ordinal.
-            string memberName = null;
-            var memberKind = NetMemberCategory.Method;
-            foreach (var member in resolver.GetMembers(receiverFullName))
-            {
-                if (string.Equals(member.Name, callee.MemberName, StringComparison.OrdinalIgnoreCase))
-                {
-                    memberName = member.Name;
-                    memberKind = member.Kind;
-                    break;
-                }
-            }
+            // The canonical member name + kind travel in the receiver record (Task 7a's lift —
+            // the member probe already walked the surface once): BasicLang is case-insensitive,
+            // ResolveOverload's candidate filter is Ordinal.
+            var receiverFullName = receiver.TypeFullName;
+            var memberName = receiver.MemberName;
+            var memberKind = receiver.MemberKind;
             if (memberName == null) return;   // member-not-found: ProbeNetMemberAccess's BL6017
 
             // Member-KIND gate: VB spells a property/indexer read with call syntax
@@ -2675,117 +2702,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         /// <summary>
         /// §6.5's admissible argument set — §8.3's rows plus §6.4's conversion pairs — projected
-        /// onto C# type spellings (<c>ResolveOverload</c>'s argument grammar). False means "do
-        /// not ask": <paramref name="isUserDefined"/> distinguishes the BL6019 case (a
-        /// user-declared class/structure/interface) from the silent leave-name-only cases.
+        /// onto C# type spellings (<c>ResolveOverload</c>'s argument grammar). The projection
+        /// itself LIVES in <see cref="Net.NetMarshalTable"/> (P2a-2 Task 7a's lift: the call
+        /// lowering consumes the same table instead of re-deriving §8.3); this wrapper injects
+        /// the two judgments only the analyzer can make — user-declared-type lookup and
+        /// namespace-contextual .NET name resolution. False means "do not ask":
+        /// <paramref name="isUserDefined"/> distinguishes the BL6019 case (a user-declared
+        /// class/structure/interface) from the silent leave-name-only cases.
         /// </summary>
-        private bool TryMapNetArgumentType(TypeInfo type, out string spelling, out bool isUserDefined)
-        {
-            spelling = null;
-            isUserDefined = false;
-
-            if (type == null || string.IsNullOrEmpty(type.Name)) return false;
-
-            // The analyzer's lost-precision fallback: Object is what an untypeable expression
-            // degrades to, so treating it as a REAL System.Object argument would judge calls the
-            // analyzer never actually typed. Object is also permanently Rejected (§6.4).
-            if (string.Equals(type.Name, "Object", StringComparison.OrdinalIgnoreCase)) return false;
-
-            switch (type.Kind)
-            {
-                case TypeKind.Pointer:
-                case TypeKind.Foreign:
-                case TypeKind.Delegate:
-                case TypeKind.TypeParameter:
-                case TypeKind.Tuple:
-                case TypeKind.Void:
-                case TypeKind.Nullable:
-                    return false;
-            }
-            if (type.IsPointer || type.IsNullable || type.IsFixedLengthString) return false;
-
-            if (type.Kind == TypeKind.Array)
-            {
-                if (type.ArrayRank > 1) return false;
-                if (!TryMapNetArgumentType(type.ElementType, out var element, out isUserDefined))
-                    return false;
-                spelling = element + "[]";
-                return true;
-            }
-
-            if (NetArgumentSpellings.TryGetValue(type.Name, out var mapped))
-            {
-                spelling = mapped;
-                return true;
-            }
-
-            // A user-declared type is checked BEFORE metadata resolution: `Class Timer` must
-            // answer "user-defined" even though System.Threading.Timer would resolve — the
-            // ambient-collision trap NetInertnessTests pins.
-            if (IsUserDefinedTypeName(type.Name))
-            {
-                isUserDefined = type.Kind == TypeKind.Class || type.Kind == TypeKind.Structure
-                                || type.Kind == TypeKind.Interface;
-                return false;
-            }
-
-            // A .NET-typed value (`Dim st As Stream` passed along): resolve the spelling the
-            // same way the receiver resolved.
-            var genericCount = type.GenericArguments?.Count ?? 0;
-            if (ResolveNetType(type.Name, genericCount, out var fullName)
-                != NetTypeLookupOutcome.Resolved)
-            {
-                return false;
-            }
-            if (fullName.IndexOf('+') >= 0) return false;   // metadata-nested spelling: not C# syntax
-
-            if (genericCount == 0)
-            {
-                spelling = fullName;
-                return true;
-            }
-
-            var backtick = fullName.LastIndexOf('`');
-            if (backtick < 0) return false;
-            var argSpellings = new List<string>(genericCount);
-            foreach (var typeArg in type.GenericArguments)
-            {
-                if (!TryMapNetArgumentType(typeArg, out var argSpelling, out _)) return false;
-                argSpellings.Add(argSpelling);
-            }
-            spelling = fullName.Substring(0, backtick) + "<" + string.Join(", ", argSpellings) + ">";
-            return true;
-        }
-
-        /// <summary>
-        /// §8.3's by-value rows + §6.4's conversion pairs, as C# spellings. Everything else
-        /// either resolves from metadata, is user-defined (BL6019), or is left untyped.
-        /// </summary>
-        private static readonly Dictionary<string, string> NetArgumentSpellings =
-            new(StringComparer.OrdinalIgnoreCase)
-        {
-            ["Integer"] = "System.Int32",
-            ["Long"] = "System.Int64",
-            ["Short"] = "System.Int16",
-            ["Byte"] = "System.Byte",
-            ["SByte"] = "System.SByte",
-            ["UByte"] = "System.Byte",
-            ["UShort"] = "System.UInt16",
-            ["UInteger"] = "System.UInt32",
-            ["ULong"] = "System.UInt64",
-            ["Single"] = "System.Single",
-            ["Double"] = "System.Double",
-            ["Boolean"] = "System.Boolean",
-            ["Char"] = "System.Char",
-            ["String"] = "System.String",
-            // §6.4 conversion pairs (P1 NativeOwned values with managed counterparts).
-            ["Decimal"] = "System.Decimal",
-            ["DateTime"] = "System.DateTime",
-            ["TimeSpan"] = "System.TimeSpan",
-            ["Guid"] = "System.Guid",
-            ["DateTimeOffset"] = "System.DateTimeOffset",
-            ["StringBuilder"] = "System.Text.StringBuilder",
-        };
+        private bool TryMapNetArgumentType(TypeInfo type, out string spelling, out bool isUserDefined) =>
+            NetMarshalTable.TryMapArgumentType(
+                type, IsUserDefinedTypeName, ResolveNetType, out spelling, out isUserDefined);
 
         /// <summary>True for the `Nothing` literal (§6.5: participates as a null literal).</summary>
         private static bool IsNothingLiteral(ExpressionNode node) =>
