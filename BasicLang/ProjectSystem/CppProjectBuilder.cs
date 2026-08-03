@@ -45,6 +45,38 @@ namespace BasicLang.Compiler.ProjectSystem
         Deploy = 7,
     }
 
+    /// <summary>
+    /// What spec §10.1's phase 5 actually did, reported on <see cref="CppEmitOutcome.PhaseFive"/>.
+    ///
+    /// <para><b>This exists so a skip test cannot be faked by the test seam.</b> Every phase-5
+    /// skip looks identical from the outside — no shim path, nothing on disk — so a fixture
+    /// asserting ABSENCE stays green if a future maintainer sets <c>publishShim: false</c> on its
+    /// helper for speed, proving nothing at all. A test that names the REASON
+    /// (<see cref="SkippedEmptySurface"/>, <see cref="SkippedForIntelliSense"/>) goes red the
+    /// moment the seam is what did the skipping, because the seam reports
+    /// <see cref="DisabledForTest"/>.</para>
+    /// </summary>
+    internal enum NetShimPhaseOutcome
+    {
+        /// <summary>EmitCore returned before reaching the phase-5 gate (an earlier failure).</summary>
+        NotReached = 0,
+
+        /// <summary>The <c>publishShim</c> test seam is off. Never happens in production.</summary>
+        DisabledForTest,
+
+        /// <summary>§10.1's table: IntelliSense runs phases 1–4 and never publishes.</summary>
+        SkippedForIntelliSense,
+
+        /// <summary>No .NET surface, so there is no shim to generate — every pre-P2a-2 project.</summary>
+        SkippedEmptySurface,
+
+        /// <summary>§10.2's content-hash cache validated a previous publish; nothing was rebuilt.</summary>
+        CacheHit,
+
+        /// <summary>A shim was generated and published, and the cache entry committed.</summary>
+        Published,
+    }
+
     public sealed class CppProjectBuildResult
     {
         public bool Success { get; set; }
@@ -104,6 +136,13 @@ namespace BasicLang.Compiler.ProjectSystem
         /// copy the program dies at startup in <c>blnet_load_module</c>.
         /// </summary>
         public string ShimDllPath { get; set; }
+
+        /// <summary>
+        /// What phase 5 did, and WHY when it did nothing — see <see cref="NetShimPhaseOutcome"/>
+        /// for why the reason is carried rather than left to be inferred from
+        /// <see cref="ShimDllPath"/> being null.
+        /// </summary>
+        public NetShimPhaseOutcome PhaseFive { get; set; } = NetShimPhaseOutcome.NotReached;
     }
 
     /// <summary>
@@ -262,8 +301,11 @@ namespace BasicLang.Compiler.ProjectSystem
         /// stays lazy and keeps its original position (after the obj/gen write) — the
         /// ordering Task 8's test pins.
         ///
-        /// <para>This method is spec §10.1 phases 1–4 (<see cref="CppBuildPhase"/>); phases 6–7
-        /// are <see cref="Build"/>'s tail and phase 5 does not exist yet.</para>
+        /// <para>This method is spec §10.1 phases 1–<b>5</b> (<see cref="CppBuildPhase"/>); phases
+        /// 6–7 are <see cref="Build"/>'s tail. Phase 5 went live in P2a-2 Task 7b and is the LAST
+        /// thing this method does — see the block itself for why it sits after the toolchain gate
+        /// and the compile-database write, and <see cref="CppEmitOutcome.PhaseFive"/> for what it
+        /// reports back.</para>
         /// </summary>
         /// <param name="surfaceOverride">
         /// <b>A TEST SEAM, and nothing else.</b> Phase 3
@@ -899,6 +941,14 @@ namespace BasicLang.Compiler.ProjectSystem
             //     ~27 s publish it could never have linked;
             //   * a phase-5 failure leaves obj/gen AND compile_commands.json fully refreshed, so
             //     the editor stays consistent with the sources on disk while the user fixes it.
+            // The reason is recorded BEFORE the block runs, so every path out of the gate names
+            // itself — see NetShimPhaseOutcome for why "it skipped" is not a sufficient answer.
+            outcome.PhaseFive =
+                !publishShim ? NetShimPhaseOutcome.DisabledForTest
+                : forIntelliSense ? NetShimPhaseOutcome.SkippedForIntelliSense
+                : !surface.IsNonEmpty ? NetShimPhaseOutcome.SkippedEmptySurface
+                : NetShimPhaseOutcome.NotReached;   // overwritten by the block below
+
             if (publishShim && !forIntelliSense && surface.IsNonEmpty)
             {
                 Checkpoint(cancellationToken, CppBuildPhase.GenerateAndPublishShim);
@@ -1086,6 +1136,7 @@ namespace BasicLang.Compiler.ProjectSystem
                 // an input to a publish that is not going to run, and rewriting them would make the
                 // hit cost file IO for nothing.
                 outcome.ShimDllPath = hit.DllPath;
+                outcome.PhaseFive = NetShimPhaseOutcome.CacheHit;
                 result.Messages.Add($".NET shim: up to date ({Path.GetFileName(hit.DllPath)})");
                 return true;
             }
@@ -1150,6 +1201,7 @@ namespace BasicLang.Compiler.ProjectSystem
 
             NetShimCache.Commit(projectDir, configuration, key, publish.DllPath);
             outcome.ShimDllPath = publish.DllPath;
+            outcome.PhaseFive = NetShimPhaseOutcome.Published;
             result.Messages.Add($".NET shim: {publish.DllPath}");
             return true;
         }
@@ -1219,14 +1271,20 @@ namespace BasicLang.Compiler.ProjectSystem
             IReadOnlyList<string> referencePaths, string projectFilePath,
             CppProjectBuildResult result)
         {
-            // §7.1 call sites FIRST, §7.2 declarations second: NetProvenanceMap is last-write-wins,
-            // and a member reachable both ways is more usefully reported at the .bas line the user
-            // wrote than at the <NetProxy> item that also happened to pull it in.
+            // ORDER IS THE PREFERENCE, and it reads backwards: NetProvenanceMap is LAST-WRITE-WINS
+            // (its own remarks), so the source whose location we would rather show goes LAST.
+            // §7.2 declarations first, §7.1 call sites second — a member reachable BOTH ways (a
+            // <NetProxy Include="X"/> plus a .bas call into X, which mangle identically because
+            // both descriptors come from NetTypeResolver.Describe) is far more useful reported at
+            // the .bas line the user wrote than at the .blproj item that also happened to pull it
+            // in, and the .blproj origin carries no line at all. Getting this backwards silently
+            // downgrades §11.3's tier 1 to a file-only attribution — pinned by
+            // NetShimPhaseTests.AMemberReachedBothWays_PrefersTheBasCallSiteOverTheNetProxyItem.
             var origins = new List<KeyValuePair<string, NetWrapperOrigin>>();
-            if (compilation != null)
-                origins.AddRange(compilation.NetCallSiteOrigins);
             if (declaredProvenance != null)
                 origins.AddRange(declaredProvenance);
+            if (compilation != null)
+                origins.AddRange(compilation.NetCallSiteOrigins);
 
             var provenance = NetShimGenerator.Provenance(surface, origins);
             var referenceNames = referencePaths

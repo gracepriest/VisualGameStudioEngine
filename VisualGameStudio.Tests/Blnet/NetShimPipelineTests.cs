@@ -288,6 +288,13 @@ public class NetShimPhaseTests
             Assert.That(outcome.Completed, Is.True, NetShimPipelineFixture.Diagnostics(result));
             Assert.That(outcome.Surface!.IsNonEmpty, Is.False,
                 "the probe program must not draw a .NET surface, or this test proves nothing.");
+            // The POSITIVE signal, and the reason it exists: every phase-5 skip looks identical
+            // from outside (no shim path, nothing on disk), so the two assertions below would stay
+            // green if someone put `publishShim: false` on this fixture's Emit helper for speed.
+            // Naming the REASON makes that impossible — the seam reports DisabledForTest.
+            Assert.That(outcome.PhaseFive, Is.EqualTo(NetShimPhaseOutcome.SkippedEmptySurface),
+                "phase 5 must skip because the SURFACE is empty. DisabledForTest here means this "
+                + "fixture turned the seam off and the assertions below prove nothing.");
             Assert.That(outcome.ShimDllPath, Is.Null,
                 "phase 5 produced a shim path for a project with no .NET at all.");
             Assert.That(ShimArtifactsExist(), Is.False,
@@ -325,6 +332,11 @@ public class NetShimPhaseTests
                 "IntelliSense lost its proxy headers. Phases 1-4 run on BOTH paths — the proxy "
                 + "header is pure C++ declarations and needs no shim to exist, which is exactly why "
                 + "§10.1 can promise clangd completions at zero publish cost.");
+            // Same seam-proofing as the empty-surface test above: this must skip because it is the
+            // INTELLISENSE path, not because a fixture turned publishShim off.
+            Assert.That(outcome.PhaseFive, Is.EqualTo(NetShimPhaseOutcome.SkippedForIntelliSense),
+                "DisabledForTest here means the seam did the skipping and §10.1's promise is no "
+                + "longer under test at all.");
             Assert.That(outcome.ShimDllPath, Is.Null);
             Assert.That(ShimArtifactsExist(), Is.False,
                 "the IntelliSense path generated or published a shim. §10.1's phase table says "
@@ -422,6 +434,91 @@ public class NetShimPhaseTests
             Assert.That(result.Success, Is.False,
                 "a BL6020 ERROR must fail the build — otherwise the user ships a binary whose .NET "
                 + "call is known to throw.");
+        });
+    }
+
+    /// <summary>
+    /// <b>The merge ORDER, which reads backwards and was wrong on first write.</b>
+    /// <c>NetProvenanceMap</c> is last-write-wins, so the source whose location should be shown
+    /// must be appended LAST. A member reachable BOTH ways — a <c>&lt;NetProxy Include="X"/&gt;</c>
+    /// plus a <c>.bas</c> call into <c>X</c>, which mangle identically because both descriptors
+    /// come from <c>NetTypeResolver.Describe</c> — must report at the <c>.bas</c> line the user
+    /// wrote, not at the <c>.blproj</c> item, whose origin carries no line at all.
+    ///
+    /// <para>Every other provenance test here exercises ONE source, so none of them can see this:
+    /// reversing the two <c>AddRange</c> calls in <c>MergeAotDiagnostics</c> leaves them all green
+    /// and turns §11.3's tier 1 into a file-only attribution. Mutation-verified.</para>
+    /// </summary>
+    [Test]
+    public void AMemberReachedBothWays_PrefersTheBasCallSiteOverTheNetProxyItem()
+    {
+        var surface = NetProxyEmitterTests.OneMemberSurface();
+        var wrapper = NetShimGenerator.SurfaceDerivedExportNames(surface).Single();
+
+        // The SAME mangled name from both sources, which is exactly what a project declaring a
+        // type and also calling into it produces.
+        var declared = new List<KeyValuePair<string, NetWrapperOrigin>>
+        {
+            new(wrapper, NetWrapperOrigin.NetProxyDeclaration(@"C:\game\MyGame.blproj", "MyLib.Widget")),
+        };
+        var compilation = new CompilationResult();
+        compilation.NetCallSiteOriginsWritable.Add(new KeyValuePair<string, NetWrapperOrigin>(
+            wrapper, NetWrapperOrigin.BasCallSite(@"C:\game\MyGame.bas", 42, 17, "Widget.Twice")));
+
+        var result = new CppProjectBuildResult { Success = true };
+        CppProjectBuilder.MergeAotDiagnostics(
+            Il3050AgainstWrapper.Replace(CapturedWrapperName, wrapper),
+            surface, compilation, declared,
+            referencePaths: Array.Empty<string>(),
+            projectFilePath: @"C:\game\MyGame.blproj", result: result);
+
+        var diagnostic = result.Diagnostics.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(diagnostic.FilePath, Is.EqualTo(@"C:\game\MyGame.bas"),
+                "the .blproj declaration overwrote the .bas call site. NetProvenanceMap is "
+                + "LAST-write-wins, so MergeAotDiagnostics must append declaredProvenance FIRST "
+                + "and the call sites SECOND — the order reads backwards, which is how it came to "
+                + "be inverted.");
+            Assert.That(diagnostic.Line, Is.EqualTo(42),
+                "a <NetProxy> origin carries no line, so losing the call site also loses the "
+                + "position — the entire value of §11.3's tier 1.");
+        });
+    }
+
+    /// <summary>
+    /// <b>A benign line must never fail a green build.</b> <c>Map</c> scans every line of the
+    /// publish output for a bare <c>ILxxxx</c> token, so a project under <c>C:\builds\IL3050\</c>
+    /// — or any path, package or identifier containing one — produces an
+    /// <see cref="AotAttribution.Unattributed"/> diagnostic. §11.3 says keep it; §15.10's severity
+    /// rule would have made it an ERROR and failed a publish that succeeded, over a directory name.
+    ///
+    /// <para>The forced warning applies ONLY to lines the severity/code grammar could not parse.
+    /// A parsed IL3xxx keeps its error severity — pinned by
+    /// <see cref="PhaseFiveMerge_AppliesSection1510SeverityAndCarriesTheBasLocation"/>, which
+    /// would go red if this were implemented as a blanket downgrade.</para>
+    /// </summary>
+    [Test]
+    public void AnIlTokenInOrdinaryPublishChatter_IsAWarningAndDoesNotFailTheBuild()
+    {
+        var result = new CppProjectBuildResult { Success = true };
+
+        var errors = CppProjectBuilder.MergeAotDiagnostics(
+            @"  ProbeApp -> C:\builds\IL3050\bin\Release\net8.0\win-x64\ProbeApp.dll",
+            NetProxyEmitterTests.OneMemberSurface(), compilation: null,
+            declaredProvenance: null, referencePaths: Array.Empty<string>(),
+            projectFilePath: @"C:\game\MyGame.blproj", result: result);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(errors, Is.EqualTo(0),
+                "an unparsed line became a BL6020 ERROR. AotDiagnosticMapper.Unattributed must "
+                + "force warning severity — a line the parser cannot vouch for as a diagnostic is "
+                + "the last thing that should be trusted to prove the program is broken.");
+            Assert.That(result.Success, Is.True,
+                "a SUCCESSFUL publish was turned into a failed build by a directory name.");
+            Assert.That(result.Diagnostics.Single().IsWarning, Is.True,
+                "…and it is still REPORTED (§11.3 never drops an IL-coded line), just as a warning.");
         });
     }
 

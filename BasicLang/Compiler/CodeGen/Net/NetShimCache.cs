@@ -73,8 +73,10 @@ namespace BasicLang.Compiler.CodeGen.Net
     /// <see cref="NetSurface.DeclaredTypeNames"/>. The mangler is a pure function with no statics
     /// precisely so this component is stable across processes.</description></item>
     /// <item><description><b>The shim template version</b>: <see cref="BlnetContract.AbiVersion"/>
-    /// plus the three <see cref="BlnetShimSources"/> texts, plus <b>this assembly's own
-    /// MVID</b>. The last one is what covers a change to the GENERATOR rather than to the
+    /// plus the four <see cref="BlnetShimSources"/> texts (<c>HandleTable</c>,
+    /// <c>BlnetStatusCs</c>, <c>ShimAbiCs</c> and §6.4's <c>MarshalCs</c> — see
+    /// <see cref="TemplateIdentity"/>, which is the list that actually counts), plus <b>this
+    /// assembly's own MVID</b>. The last one is what covers a change to the GENERATOR rather than to the
     /// templates: a hand-maintained "template version" constant is a drift hazard (edit
     /// <c>NetShimGenerator</c>, forget the constant, ship a stale shim), whereas the compiler
     /// assembly's MVID changes whenever the compiler is rebuilt and cannot be forgotten. It is
@@ -94,10 +96,12 @@ namespace BasicLang.Compiler.CodeGen.Net
     /// <see cref="Invalidate"/> is a courtesy for <c>clean</c>, not a correctness requirement on
     /// the publish path — a caller that forgets it cannot produce a false hit.</para>
     ///
-    /// <para><b>Not wired into the build.</b> P2a-1 Task 15 builds the cache; Task 16 is what
-    /// threads it through <c>CppProjectBuilder</c>'s phase 5. Nothing calls
-    /// <see cref="KeyFor"/> in production yet, so this class changes the behavior of no existing
-    /// program — the same inertness claim every other P2a-1 task carries.</para>
+    /// <para><b>LIVE since P2a-2 Task 7b.</b> <c>CppProjectBuilder.GenerateAndPublishShim</c>
+    /// calls <see cref="KeyFor"/> → <see cref="TryGetHit"/> → <see cref="Commit"/> on every build
+    /// of a project with a non-empty .NET surface; measured on the milestone project, a hit turns
+    /// a 23.8 s build into a 10.0 s one. A project with an EMPTY surface never reaches this class
+    /// at all — phase 5 is skipped wholesale — which is what keeps every pre-P2a-2 project
+    /// unaffected.</para>
     /// </summary>
     // PUBLIC for exactly one member: BuildService.CleanAsync (VisualGameStudio.ProjectSystem)
     // must delete CacheRoot, and BasicLang's InternalsVisibleTo names only the test project.

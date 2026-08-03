@@ -58,10 +58,15 @@ namespace BasicLang.Compiler.CodeGen.Net
     /// GENERATED C#, so without this table every tier-1 diagnostic would point at a file under
     /// <c>obj/gen</c> that the user never wrote.
     ///
-    /// <para><b>P2a-1 never populates this.</b> The surface collector that would build it is
-    /// P2a-2's (§17), and with no collector every surface is <c>NetSurface.Empty</c>, so phase 5
-    /// never runs and nothing calls the mapper. The type exists now so that the mapper it feeds
-    /// can be written and tested against real ILC text ahead of the flip.</para>
+    /// <para><b>Populated since P2a-2 Task 7b, from TWO sources.</b> §7.1 call sites come from the
+    /// Task-2 annotation table (<c>NetAstAnnotations.CallSiteOrigins</c>, carried on
+    /// <c>CompilationResult</c>); §7.2 <c>&lt;NetProxy&gt;</c> members come from
+    /// <c>NetSurfaceCollector</c>, the last place that knows WHICH declaration produced a member.
+    /// <c>CppProjectBuilder.MergeAotDiagnostics</c> concatenates them — <b>declarations first,
+    /// call sites last</b>, because the last write wins and a <c>.bas</c> line beats a
+    /// <c>.blproj</c> item — and <c>NetShimGenerator.Provenance</c> intersects the result with the
+    /// exports actually emitted, so no entry here can name a wrapper the shim does not
+    /// contain.</para>
     /// </summary>
     internal sealed class NetProvenanceMap
     {
@@ -114,6 +119,12 @@ namespace BasicLang.Compiler.CodeGen.Net
         /// assembly — a csc/analyzer-stage diagnostic, or a shape this parser does not know.
         /// It is REPORTED anyway. Dropping it would hide exactly the ceiling BL6020 exists to
         /// make visible, and §11.3 already concedes the granularity varies.
+        ///
+        /// <para>Two sub-cases with DIFFERENT severity rules, and the distinction is load-bearing:
+        /// a line that PARSED but carried no origin keeps §15.10's split, while a line the
+        /// severity/code grammar could not parse at all is forced to warning — see
+        /// <c>AotDiagnosticMapper.Unattributed</c> for why an <c>ILxxxx</c> token in a directory
+        /// name must not be able to fail a green build.</para>
         /// </summary>
         Unattributed = 4,
     }
@@ -221,8 +232,12 @@ namespace BasicLang.Compiler.CodeGen.Net
     /// the publish that produces the text is <see cref="NetShimPublisher"/>'s job, and
     /// <see cref="NetShimPublishResult.Output"/> is the intended input.
     ///
-    /// <para><b>Not wired in P2a-1.</b> Phase 5 never runs while every surface is empty (§17), so
-    /// nothing calls this yet. P2a-2 wires it.</para>
+    /// <para><b>LIVE since P2a-2 Task 7b.</b> <c>CppProjectBuilder.MergeAotDiagnostics</c> feeds
+    /// every publish's output through <see cref="Map"/> — on SUCCESS as well as failure, because a
+    /// publish that succeeded can still carry the IL2xxx warnings §15.10 keeps non-fatal precisely
+    /// so the user sees the ceiling coming instead of hitting it — and turns each result into a
+    /// <c>CppDiagnostic</c> carrying <see cref="AotDiagnostic.File"/>/<c>Line</c>/<c>Column</c>
+    /// structurally. An ERROR fails the build.</para>
     ///
     /// <para><b>Four real line shapes, all handled.</b> These were established by capturing actual
     /// ILC output rather than reasoning about the format, and three of the four are NOT what a
@@ -420,8 +435,23 @@ namespace BasicLang.Compiler.CodeGen.Net
                 File: file, Line: fileLine, Column: column, IlMessage: rest, RawText: line);
         }
 
+        /// <summary>
+        /// A line carrying an <c>ILxxxx</c> token that <see cref="DiagnosticLine"/> could not
+        /// parse. §11.3's never-drop rule keeps it — dropping it would hide exactly the ceiling
+        /// BL6020 exists to make visible — but it is <b>ALWAYS A WARNING</b>, regardless of
+        /// <see cref="IsErrorCode"/>.
+        ///
+        /// <para><b>Why the severity is forced rather than derived.</b> The scan is a bare token
+        /// match over every line of the publish output, so an <c>ILxxxx</c>-shaped substring in
+        /// ordinary chatter lands here — a project under <c>C:\builds\IL3050\</c> is enough, and
+        /// so is any path, package name or identifier containing one. Deriving severity would then
+        /// turn a GREEN publish into a BL6020 error and fail the build over a directory name.
+        /// A line the parser cannot vouch for as a diagnostic at all is the last thing that should
+        /// be trusted to prove the program is broken; the parsed shapes below keep §15.10's split
+        /// in full.</para>
+        /// </summary>
         private static AotDiagnostic Unattributed(string ilCode, string message, string rawText) =>
-            new(DiagnosticCode, ilCode, !IsErrorCode(ilCode), AotAttribution.Unattributed,
+            new(DiagnosticCode, ilCode, IsWarning: true, AotAttribution.Unattributed,
                 OriginMember: null, OriginKind: null, AssemblyName: null,
                 File: null, Line: 0, Column: 0, IlMessage: message, RawText: rawText);
 
