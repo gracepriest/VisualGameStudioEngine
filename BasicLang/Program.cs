@@ -1056,13 +1056,34 @@ namespace BasicLang.Compiler.Driver
             var compiler = new BasicCompiler(options);
             var result = compiler.CompileFile(filePath);
 
-            // §6.5 findings — their own typed channel, surfaced on both outcomes.
+            // §6.5 findings — their own typed channel, surfaced on both outcomes, colored
+            // by severity (error severity only occurs on the native path — the P2a-2 flip;
+            // C#-path findings are always warnings).
+            var netErrorCount = 0;
             foreach (var netDiag in result.NetDiagnostics)
             {
-                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.ForegroundColor = netDiag.IsWarning ? ConsoleColor.Yellow : ConsoleColor.Red;
                 var netLabel = netDiag.IsWarning ? "Warning" : "Error";
                 Console.Error.WriteLine($"  {netLabel}: {netDiag.Code}: {netDiag.Message}");
                 Console.ResetColor();
+                if (!netDiag.IsWarning) netErrorCount++;
+            }
+
+            // P2a-2 THE FLIP fail gate (spec §6.3): a native .NET finding is a build error.
+            // The .NET channel deliberately stays off AllErrors (its own typed channel), so
+            // CompilationResult.Success cannot see it — this driver must enforce the
+            // severity itself, exactly as CppProjectBuilder.MergeNetDiagnostics does on the
+            // project path. Without this the single-file CLI printed "Error: BL6017", then
+            // "Compilation successful!", and wrote C++ the native backend cannot lower.
+            // (result.Success == false takes the ordinary failure path below, which renders
+            // the semantic errors in full — the findings above are already on screen.)
+            if (netErrorCount > 0 && result.Success)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.Error.WriteLine(
+                    $"Compilation failed with {netErrorCount} .NET resolution error(s) (see above).");
+                Console.ResetColor();
+                return 1;
             }
 
             // Report results

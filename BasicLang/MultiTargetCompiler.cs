@@ -123,6 +123,18 @@ namespace BasicLang.Compiler.Driver
                     var errors = string.Join("\n  ", semanticAnalyzer.Errors.Select(e => e.ToString()));
                     return CompilationResult.CreateError($"Semantic errors:\n  {errors}");
                 }
+                // P2a-2 THE FLIP fail gate (spec §6.3): native .NET findings are build
+                // errors, but they ride their own typed channel — Analyze() returns true
+                // with them present — so this driver must stop before codegen itself,
+                // exactly as Program.cs's single-file path and CppProjectBuilder's
+                // MergeNetDiagnostics do. Error severity only occurs on the native path;
+                // the C# backend's findings are always warnings and change nothing here.
+                var netErrorCount = semanticAnalyzer.NetDiagnostics.Count(d => !d.IsWarning);
+                if (netErrorCount > 0)
+                {
+                    return CompilationResult.CreateError(
+                        $".NET resolution failed with {netErrorCount} error(s) — see the findings above.");
+                }
                 Console.WriteLine($"âœ“ Type checking passed");
 
                 // Phase 4: IR Generation

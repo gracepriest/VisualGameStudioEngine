@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using BasicLang;
 using BasicLang.Compiler;
 using BasicLang.Compiler.AST;
@@ -586,6 +587,73 @@ public class NetFlipTests
             + "MapTypeName route:\n" + cpp);
         Assert.That(cpp, Does.Not.Contain("(Regex)"),
             "the bare undefined C++ name must not leak into the delegate alias:\n" + cpp);
+    }
+
+    // ------------------------------------------------------------------------------------
+    // The single-file CLI fail gate (`BasicLang.exe file.bas --target=cpp`): the .NET
+    // channel is off AllErrors, so CompilationResult.Success cannot see a native error —
+    // Program.cs enforces the severity itself. Without the gate the CLI printed
+    // "Error: BL6017", then "Compilation successful!", and wrote the .cpp anyway.
+    // ------------------------------------------------------------------------------------
+
+    private const string CliMemberNotFoundProgram = """
+        Module M
+         Sub Main()
+          Dim r As New Regex("ab")
+          r.NoSuchMemberZzq("x")
+          Console.WriteLine("done")
+         End Sub
+        End Module
+        """;
+
+    [Test]
+    [Category("Integration")]
+    public async Task SingleFileCli_NativeNetError_FailsAndWritesNoOutput()
+    {
+        var basFile = Path.Combine(_dir, "Program.bas");
+        File.WriteAllText(basFile, CliMemberNotFoundProgram);
+
+        var (exitCode, stdOut, stdErr) =
+            await VisualGameStudio.Tests.Compiler.CliTestHarness.RunCli(
+                _dir, basFile, "--target=cpp");
+        var output = stdOut + "\n" + stdErr;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exitCode, Is.Not.EqualTo(0),
+                $"a native BL6017 must FAIL the single-file compile.\nSTDOUT:\n{stdOut}\nSTDERR:\n{stdErr}");
+            Assert.That(output, Does.Contain("Error: BL6017"),
+                $"the finding must render with an Error label on the native path.\nOUTPUT:\n{output}");
+            Assert.That(output, Does.Not.Contain("Compilation successful"),
+                $"the CLI must not claim success over a .NET resolution error.\nOUTPUT:\n{output}");
+            Assert.That(Directory.GetFiles(_dir, "*.cpp"), Is.Empty,
+                "no C++ may be written for a program the native backend cannot lower");
+        });
+    }
+
+    /// <summary>The §6.3 twin: the same program on the C# backend keeps compiling —
+    /// the finding stays a warning and the output is still produced.</summary>
+    [Test]
+    [Category("Integration")]
+    public async Task SingleFileCli_SameProgramOnCSharp_StillSucceedsWithAWarning()
+    {
+        var basFile = Path.Combine(_dir, "Program.bas");
+        File.WriteAllText(basFile, CliMemberNotFoundProgram);
+
+        var (exitCode, stdOut, stdErr) =
+            await VisualGameStudio.Tests.Compiler.CliTestHarness.RunCli(
+                _dir, basFile, "--target=csharp");
+        var output = stdOut + "\n" + stdErr;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exitCode, Is.EqualTo(0),
+                $"the C# backend keeps §6.3's warning row — the compile must succeed.\nSTDOUT:\n{stdOut}\nSTDERR:\n{stdErr}");
+            Assert.That(output, Does.Contain("Warning: BL6017"),
+                $"the finding must still surface, as a warning.\nOUTPUT:\n{output}");
+            Assert.That(Directory.GetFiles(_dir, "*.cs"), Is.Not.Empty,
+                "the C# output must still be written");
+        });
     }
 
     /// <summary>D-P7 composition: the always-emitted runtime carries NetRef, so a
