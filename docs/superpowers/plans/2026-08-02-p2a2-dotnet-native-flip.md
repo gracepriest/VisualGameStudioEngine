@@ -716,6 +716,11 @@ back (EXEMPT from the divergence — the parity program depends on this exact sc
 inside `List.Sort`) invoked synchronously, asserting it ran INLINE and returned its value — an
 `Action`-only test passes even with `BlnetCallScope` missing (queued Actions eventually run).
 
+⚠ Task-5 carry-forward: delegate SIGNATURES are never checker-walked (`module.Delegates` —
+pre-existing gap the flip's `MapTypeName` row only partially closes for ManagedOwned names);
+while touching delegate lowering here, add the checker walk (or a documented decision not to)
+so arbitrary unmapped names in delegate params stop reaching raw C++.
+
 **Steps:**
 
 - [ ] **Step 1:** red: emit tests for lambda-arg lowering (slot desc computation for
@@ -840,7 +845,9 @@ duplicate; grep `BlnetContractTests`/`NetShimGeneratorTests` first).
   known-splice subtraction).
 - [ ] **Step 3:** spec status updates: §14.15 → Resolved (D-P1); §15.11 → Decided (D-P2);
   §15.6 → Recorded-unchanged (D-P4); spec header status → Implemented (P2a complete);
-  `AbiVersion` still 1 (assert, §13).
+  `AbiVersion` still 1 (assert, §13). Stale-prose sweep: `NetInertnessTests` fixture header
+  still claims "NetResolverFactory set at exactly ONE site repo-wide" (stale since Task 4's
+  C# warning row); grep the Blnet fixtures for other Task-4/5-staled prose.
 - [ ] **Step 4:** IDE binary refresh if the session's rules call for it (the prebuilt `IDE/`
   binaries ship the compiler — same procedure as commit `aada862`, including the deps.json
   closure check via `dotnet exec --depsfile`).
