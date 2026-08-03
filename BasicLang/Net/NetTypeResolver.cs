@@ -419,10 +419,12 @@ namespace BasicLang.Net
         }
 
         /// <summary>
-        /// The D-P1 two-name allowlist (spec §14.15). Exactly these — see
-        /// <see cref="CandidateMembers"/> for why the list must not grow.
+        /// The D-P1 two-name allowlist (spec §14.15), THE single source — exactly these two;
+        /// see <see cref="CandidateMembers"/> for why the list must not grow. INTERNAL so the
+        /// analyzer's <c>ObjectMemberNames</c> lift (<c>SemanticAnalyzer.NetObjectAllowlistNames</c>)
+        /// derives from it instead of hand-copying the pair.
         /// </summary>
-        private static readonly string[] ObjectAllowlistMemberNames = { "ToString", "GetHashCode" };
+        internal static readonly string[] ObjectAllowlistMemberNames = { "ToString", "GetHashCode" };
 
         /// <summary>
         /// The resolved type's Roslyn symbol, or null (NotFound and Ambiguous alike — ask

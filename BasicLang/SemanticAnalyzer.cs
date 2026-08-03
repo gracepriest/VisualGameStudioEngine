@@ -2516,12 +2516,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         /// <summary>
         /// The D-P1 two-name allowlist (spec §14.15) — the only <see cref="ObjectMemberNames"/>
-        /// entries the probe judges. Mirrors <c>NetTypeResolver.ObjectAllowlistMemberNames</c>.
+        /// entries the probe judges. DERIVED from the single source
+        /// (<c>NetTypeResolver.ObjectAllowlistMemberNames</c>, the seam that actually admits
+        /// them) so the two halves of Step 2a cannot drift; this is just its
+        /// case-insensitive lookup form.
         /// </summary>
-        private static readonly HashSet<string> NetObjectAllowlistNames = new(StringComparer.OrdinalIgnoreCase)
-        {
-            "ToString", "GetHashCode",
-        };
+        private static readonly HashSet<string> NetObjectAllowlistNames =
+            new(NetTypeResolver.ObjectAllowlistMemberNames, StringComparer.OrdinalIgnoreCase);
 
         // ==================================================================
         // P2a-2 Task 4 — invocation-aware overload resolution (§6.5's argument side)
@@ -2564,15 +2565,25 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Canonicalize the member's casing against the surface: BasicLang is
             // case-insensitive, ResolveOverload's candidate filter is Ordinal.
             string memberName = null;
+            var memberKind = NetMemberCategory.Method;
             foreach (var member in resolver.GetMembers(receiverFullName))
             {
                 if (string.Equals(member.Name, callee.MemberName, StringComparison.OrdinalIgnoreCase))
                 {
                     memberName = member.Name;
+                    memberKind = member.Kind;
                     break;
                 }
             }
             if (memberName == null) return;   // member-not-found: ProbeNetMemberAccess's BL6017
+
+            // Member-KIND gate: VB spells a property/indexer read with call syntax
+            // (`st.Length()`, `sd.Item("k")`), but ResolveOverload's candidate filter is
+            // Method-only — asking would answer NoMatch and manufacture a false BL6017 (a
+            // false BUILD BREAK once the Task-5 flip promotes severity). A non-method member
+            // is left name-only recorded, the same "cannot judge this shape" discipline as
+            // every other unprobeable call.
+            if (memberKind != NetMemberCategory.Method) return;
 
             // Receiver generic arguments (Queue(Of Integer) → ["System.Int32"]). All-or-nothing:
             // an unmappable type argument leaves the call name-only recorded.
@@ -2838,6 +2849,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
         private void ProbeNetCatchClause(CatchClauseNode node)
         {
             if (_netResolverFactory == null) return;
+            // NATIVE-ONLY: the recording's single consumer is the C++ NetException ladder.
+            // On a C# build this probe's ResolveNetType call would be the unit's first — and
+            // possibly only — resolver touch, paying the full ~170-assembly metadata read for
+            // an annotation nothing reads.
+            if (!_netNativeBackend) return;
             var name = node?.ExceptionType?.Name;
             if (string.IsNullOrEmpty(name)) return;
             if (name.IndexOf("::", StringComparison.Ordinal) >= 0) return;   // foreign C++

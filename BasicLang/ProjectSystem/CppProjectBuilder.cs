@@ -972,7 +972,7 @@ namespace BasicLang.Compiler.ProjectSystem
         /// would break it.</description></item>
         /// <item><description><b>Build-result mapping</b> (build path only — IntelliSense outputs
         /// stay byte-for-byte as they were): warnings become hand-constructed
-        /// <c>CppDiagnostic {{ IsWarning = true }}</c> — NEVER routed through <see cref="Fail"/>,
+        /// <c>CppDiagnostic { IsWarning = true }</c> — NEVER routed through <see cref="Fail"/>,
         /// which forces <c>Success = false</c>; do NOT "unify" the two arms — and errors go through
         /// <see cref="Fail"/>, ALL of them before the caller stops (one diagnostic per broken item
         /// is far more useful than the first alone).</description></item>

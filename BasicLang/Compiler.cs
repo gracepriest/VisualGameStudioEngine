@@ -33,15 +33,21 @@ namespace BasicLang.Compiler
         /// entries, but the typed channel stays.)</para>
         ///
         /// <para>PUBLIC since P2a-2 Task 4: §6.3's C#-backend warning row makes the CLI and the
-        /// IDE's <c>BuildService</c> renderers of this channel.</para>
+        /// IDE's <c>BuildService</c> renderers of this channel — read-only outside the
+        /// assembly; the one writer (<c>BasicCompiler.CompileUnit</c>) appends through
+        /// <see cref="NetDiagnosticsWritable"/>.</para>
         /// </summary>
-        public List<Net.NetReferenceDiagnostic> NetDiagnostics { get; }
+        public IReadOnlyList<Net.NetReferenceDiagnostic> NetDiagnostics => _netDiagnostics;
+
+        /// <summary>The channel's single write seam. Internal on purpose — see above.</summary>
+        internal List<Net.NetReferenceDiagnostic> NetDiagnosticsWritable => _netDiagnostics;
+
+        private readonly List<Net.NetReferenceDiagnostic> _netDiagnostics = new();
 
         public CompilationResult()
         {
             Units = new List<CompilationUnit>();
             AllErrors = new List<SemanticError>();
-            NetDiagnostics = new List<Net.NetReferenceDiagnostic>();
         }
 
         /// <summary>
@@ -668,7 +674,7 @@ namespace BasicLang.Compiler
                 // Warning-only .NET findings (spec §6.5). Collected BEFORE the failure return so a
                 // unit that fails for an unrelated reason still reports them; they stay off
                 // AllErrors because they are typed NetReferenceDiagnostics with their own channel.
-                result.NetDiagnostics.AddRange(analyzer.NetDiagnostics);
+                result.NetDiagnosticsWritable.AddRange(analyzer.NetDiagnostics);
 
                 // Copied on success as well as failure: Analyze() returns true when only
                 // Warning-severity entries were recorded, and those warnings must still

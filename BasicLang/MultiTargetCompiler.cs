@@ -110,17 +110,20 @@ namespace BasicLang.Compiler.Driver
                 semanticAnalyzer.ConfigureNetResolution(
                     NetResolver,
                     nativeBackend: string.Equals(targetBackend, "cpp", StringComparison.OrdinalIgnoreCase));
-                if (!semanticAnalyzer.Analyze(ast))
-                {
-                    var errors = string.Join("\n  ", semanticAnalyzer.Errors.Select(e => e.ToString()));
-                    return CompilationResult.CreateError($"Semantic errors:\n  {errors}");
-                }
-                Console.WriteLine($"âœ“ Type checking passed");
+                var analysisSucceeded = semanticAnalyzer.Analyze(ast);
+                // §6.5 findings render on BOTH outcomes (mirrors both Program.cs paths) — a
+                // unit that failed for an unrelated reason still reports them.
                 foreach (var netDiag in semanticAnalyzer.NetDiagnostics)
                 {
                     var netLabel = netDiag.IsWarning ? "Warning" : "Error";
                     Console.WriteLine($"  {netLabel} {netDiag.Code}: {netDiag.Message}");
                 }
+                if (!analysisSucceeded)
+                {
+                    var errors = string.Join("\n  ", semanticAnalyzer.Errors.Select(e => e.ToString()));
+                    return CompilationResult.CreateError($"Semantic errors:\n  {errors}");
+                }
+                Console.WriteLine($"âœ“ Type checking passed");
 
                 // Phase 4: IR Generation
                 Console.Write("Phase 4: IR Generation... ");

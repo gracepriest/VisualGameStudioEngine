@@ -272,6 +272,37 @@ public class NetStrictResolutionTests
     }
 
     /// <summary>
+    /// VB spells a property read with call syntax (`st.Length()`), but ResolveOverload's
+    /// candidate filter is Method-only — an unguarded probe answers NoMatch and manufactures a
+    /// false BL6017 on a valid program (a false BUILD BREAK once the Task-5 flip promotes
+    /// severity). The member-KIND gate leaves a non-method member name-only recorded instead.
+    /// </summary>
+    [Test]
+    public void PropertyThroughCallSyntax_IsLeftNameOnlyRecorded_NoFalseOverloadFinding()
+    {
+        var analyzer = Analyze("""
+            Module M
+             Sub Main()
+              Dim st As Stream
+              Dim n = st.Length()
+             End Sub
+            End Module
+            """);
+
+        Assert.That(FindingCodes(analyzer), Is.Empty,
+            "st.Length() is a valid VB property read through call syntax — the invocation probe "
+            + "must not judge a non-method member against a Method-only candidate set. Got: "
+            + string.Join(" | ", analyzer.NetDiagnostics.Select(d => d.Code + ": " + d.Message)));
+
+        var length = analyzer.NetResolvedMembers.Values.SingleOrDefault(m => m.Name == "Length");
+        Assert.That(length, Is.Not.Null,
+            "the member probe's name-only record must survive for the surface collector");
+        Assert.That(length!.Kind, Is.EqualTo(NetMemberCategory.Property),
+            "guard: the shape under test really is a PROPERTY reached through call syntax — if "
+            + "Stream.Length stops being one, pick another member for this pin");
+    }
+
+    /// <summary>
     /// `Nothing` participates as a null literal (§6.5), but ResolveOverload's grammar has no
     /// spelling for null — and its contract is explicit that a caller that cannot type every
     /// argument must not ask. The call stays name-only recorded with NO manufactured finding.
