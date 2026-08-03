@@ -1662,34 +1662,22 @@ namespace BasicLang.Compiler.IR
         public string MethodName { get; set; }
         public List<IRValue> Arguments { get; set; }
 
-        /// <summary>
-        /// P2a-2 CARRIAGE (Task 2) — the .NET member the analyzer resolved this base call to, or
-        /// NULL otherwise. No production writer exists yet: a <c>MyBase</c> receiver is a
-        /// BasicLang class today, so nothing resolves. The field exists so the two instance-call
-        /// node types stay field-identical with <see cref="IRCall"/> and the optimizer's
-        /// carry-across contract covers all three BEFORE a writer appears — the same
-        /// carriage-before-writers discipline P2a-1 applied to <see cref="IRCall"/>.
-        ///
-        /// <para>See <see cref="IRInstanceMethodCall.ResolvedNetTarget"/> for why this is a
-        /// detached descriptor and why dropping it in a clone path is the §8.5 wild-pointer
-        /// class. Pinned by <c>NetIrCarriageTests</c>.</para>
-        ///
-        /// <para>INTERNAL on purpose: carriage adds <b>nothing</b> to the compiler's public API.</para>
-        /// </summary>
-        internal BasicLang.Net.NetMemberDescriptor ResolvedNetTarget { get; set; }
-
-        /// <summary>
-        /// P2a-2 CARRIAGE (Task 2) — spec C1 boundary category of this call's receiver type.
-        /// Written only alongside <see cref="ResolvedNetTarget"/>.
-        ///
-        /// <para><b>The initializer is load-bearing.</b> <c>NativeOwned</c> is 0, so the implicit
-        /// enum default would mark every base call "natively handled" — the most dangerous
-        /// possible wrong answer. It must start at <c>Unknown</c>.</para>
-        /// </summary>
-        internal BoundaryTypeCategory NetCategory { get; set; } = BoundaryTypeCategory.Unknown;
-
-        /// <summary>See <see cref="IRCall.ResolvedNetTargetIsExact"/> — the name-only gate.</summary>
-        internal bool ResolvedNetTargetIsExact { get; set; }
+        // NO .NET CARRIAGE HERE, DELIBERATELY (P2a-2 Task 7a removed the Task-2 fields).
+        //
+        // A base call exists for exactly one source shape — `MyBase.Method(args)`
+        // (IRBuilder.cs's MyBaseExpressionNode arm, the only `new IRBaseMethodCall` site) — so
+        // its receiver is the ENCLOSING CLASS'S BASE. Since the flip, a native `Inherits` of a
+        // .NET class stays checker-rejected (CppCapabilityChecker's unresolved-base gate), so a
+        // .NET base call is unreachable BY CONSTRUCTION, and IRBuilder accordingly has no stamp
+        // site for one.
+        //
+        // Keeping unstamped fields was the actual hazard: the surface collector had an arm for
+        // this node type while the C++ lowering had none, so a future stamp would have put the
+        // member in the SURFACE (costing a proxy slot and a shim export) while the call itself
+        // fell through to the legacy `Base::Method(...)` emission with NO exactness gate — a
+        // silent miscompile behind a passing slots-≡-exports invariant. If .NET base types ever
+        // become legal, add the fields back TOGETHER WITH a lowering arm that calls
+        // RequireExactNetTarget.
 
         public IRBaseMethodCall(string resultName, string methodName, TypeInfo returnType)
             : base(resultName, returnType)

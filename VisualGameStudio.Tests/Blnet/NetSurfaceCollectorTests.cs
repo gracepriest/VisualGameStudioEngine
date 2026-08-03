@@ -99,6 +99,9 @@ public class NetSurfaceCollectorTests
         call.Arguments.Add(new IRConstant("a.c", StringType));
         call.ResolvedNetTarget = target;
         call.NetCategory = category;
+        // P2a-2 Task 7a: only EXACT (overload-probe-verified) carriage is collectable —
+        // NonExactCarriage_NeverContributes pins the negative.
+        call.ResolvedNetTargetIsExact = true;
         return call;
     }
 
@@ -234,27 +237,55 @@ public class NetSurfaceCollectorTests
             + "'annotated', and unannotated calls are the designed inert state.");
     }
 
+    /// <summary>
+    /// (Was <c>InstanceAndBaseCallCarriage_Contributes</c>.) The BASE-call half is GONE:
+    /// P2a-2 Task 7a deleted <c>IRBaseMethodCall</c>'s carriage fields and this collector's
+    /// arm for it. A base call is only ever <c>MyBase.Method(...)</c>, whose receiver is the
+    /// enclosing class's base — and since the flip a native <c>Inherits</c> of a .NET class
+    /// stays checker-rejected, so a .NET base call is unreachable by construction. Keeping the
+    /// unstamped fields meant the collector could surface a member (a proxy slot AND a shim
+    /// export) that the C++ lowering had no arm for, i.e. a call falling through to legacy
+    /// emission with no exactness gate.
+    /// </summary>
     [Test]
-    public void InstanceAndBaseCallCarriage_Contributes()
+    public void InstanceCallCarriage_Contributes()
     {
         var instance = new IRInstanceMethodCall(
             "_ti", new IRVariable("r", new TypeInfo("Regex", TypeKind.Class)), "IsMatch", BoolType);
         instance.ResolvedNetTarget = RegexIsMatchDescriptor();
         instance.NetCategory = BoundaryTypeCategory.Rejected;
+        instance.ResolvedNetTargetIsExact = true;
 
-        var baseCall = new IRBaseMethodCall("_tb", "GetBaseException", BoolType);
-        baseCall.ResolvedNetTarget = new NetMemberDescriptor(
-            "GetBaseException", "System.Exception", NetMemberCategory.Method,
-            isStatic: false, arity: 0, typeFullName: "System.Exception",
-            parameters: new List<NetParameterDescriptor>());
-        baseCall.NetCategory = BoundaryTypeCategory.Unknown;
+        var surface = Collect(modules: new[] { ModuleOf(instance) });
 
-        var surface = Collect(modules: new[] { ModuleOf(instance, baseCall) });
+        Assert.That(surface.Members.Select(m => m.Name), Is.EquivalentTo(new[] { "IsMatch" }),
+            "IRInstanceMethodCall carriage must reach the surface exactly like IRCall's.");
+    }
 
-        Assert.That(surface.Members.Select(m => m.Name),
-            Is.EquivalentTo(new[] { "IsMatch", "GetBaseException" }),
-            "IRInstanceMethodCall / IRBaseMethodCall carriage (the Task-2 fields) must reach "
-            + "the surface exactly like IRCall's.");
+    /// <summary>
+    /// P2a-2 Task 7a, item 3 of the spec review: the §12.4 slots-≡-exports invariant must hold
+    /// on the DATA, not merely on build-phase ordering. A name-only descriptor (no overload
+    /// probe) can never be LOWERED — <c>CppCodeGenerator</c> refuses it — so collecting one
+    /// would mint a proxy slot and a shim export for a member no call site reaches, and could
+    /// name the wrong overload while doing it. Today <c>GenerateSplit</c> happens to throw
+    /// before <c>NetProxyEmitter.Emit</c> runs; this pin means a reordering (or any
+    /// collect-without-generate caller) cannot quietly break the invariant.
+    /// </summary>
+    [Test]
+    public void NonExactCarriage_NeverContributes()
+    {
+        var nameOnly = new IRCall("_t0", "Regex.IsMatch", BoolType);
+        nameOnly.ResolvedNetTarget = RegexIsMatchDescriptor();
+        nameOnly.NetCategory = BoundaryTypeCategory.ManagedOwned;
+        nameOnly.ResolvedNetTargetIsExact = false;   // the name-only record
+
+        var surface = Collect(modules: new[] { ModuleOf(nameOnly) });
+
+        Assert.That(surface.IsNonEmpty, Is.False,
+            "A NAME-ONLY resolved call contributed to the surface. Only overload-probe-verified "
+            + "(Exact) carriage may be collected — an unlowerable member in the surface is a "
+            + "proxy slot and a shim export with no call site, and potentially the wrong "
+            + "overload. FIX NetSurfaceCollector.IsCollectable, not this test.");
     }
 
     /// <summary>
@@ -278,6 +309,7 @@ public class NetSurfaceCollectorTests
             isStatic: false, arity: 0, typeFullName: "System.Exception",
             parameters: new List<NetParameterDescriptor>());
         inTry.NetCategory = BoundaryTypeCategory.Unknown;
+        inTry.ResolvedNetTargetIsExact = true;
 
         var tryBlock = new BasicBlock("try_body");
         tryBlock.AddInstruction(inTry);

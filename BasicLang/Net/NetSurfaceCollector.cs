@@ -14,13 +14,12 @@ namespace BasicLang.Net
     ///
     /// <para><b>§7.1 BL-inferred (used-only).</b> Walks the OPTIMIZED IR — the same modules
     /// <c>CppCodeGenerator.GenerateSplit</c> emits from, so a call the optimizer deleted never
-    /// costs a proxy slot — and collects the descriptor of every node carrying non-null
-    /// carriage (<c>ResolvedNetTarget</c> on the Task-2 call nodes <c>IRCall</c> /
-    /// <c>IRInstanceMethodCall</c> / <c>IRBaseMethodCall</c>, and since Task 7a on
-    /// <c>IRNewObject</c> / <c>IRFieldAccess</c> / <c>IRFieldStore</c>) whose
-    /// <c>NetCategory</c> is NOT natively handled ({<c>NativeOwned</c>, <c>Bridged</c>}).
-    /// Never the reference closure: used-only is what keeps the shim, and therefore the AOT
-    /// publish, small.</para>
+    /// costs a proxy slot — and collects the descriptor of every node carrying non-null,
+    /// EXACT carriage (<c>ResolvedNetTarget</c> on <c>IRCall</c> / <c>IRInstanceMethodCall</c>
+    /// from Task 2, plus <c>IRNewObject</c> / <c>IRFieldAccess</c> / <c>IRFieldStore</c> from
+    /// Task 7a — the five node types the C++ lowering has arms for) whose <c>NetCategory</c>
+    /// is NOT natively handled ({<c>NativeOwned</c>, <c>Bridged</c>}). Never the reference
+    /// closure: used-only is what keeps the shim, and therefore the AOT publish, small.</para>
     ///
     /// <para><b>⚠ "Resolved" does NOT imply "annotated" — this collector sees exactly what
     /// carries carriage, nothing more.</b> The analyzer's probe deliberately suppresses
@@ -179,6 +178,24 @@ namespace BasicLang.Net
             || category == BoundaryTypeCategory.Bridged;
 
         /// <summary>
+        /// Whether one node's carriage contributes to the surface: resolved, not natively
+        /// handled, and — since P2a-2 Task 7a — EXACT.
+        ///
+        /// <para><b>The exactness condition is defence in depth for §12.4.</b> A name-only
+        /// descriptor (first name match in metadata order, no overload probe) can never be
+        /// LOWERED — <c>CppCodeGenerator</c> refuses it — so collecting one would mint a proxy
+        /// slot and a shim export for a member no call site reaches, and could name the wrong
+        /// overload while doing it. Today that cannot happen on the build path for a structural
+        /// reason (<c>GenerateSplit</c> runs, and throws, before <c>NetProxyEmitter.Emit</c>),
+        /// which means the invariant rests on CALL ORDER. This check moves it onto the DATA, so
+        /// a future reordering — or any caller that collects without generating, as the tests
+        /// and the phase-3 IntelliSense path do — cannot quietly break it.</para>
+        /// </summary>
+        private static bool IsCollectable(
+            NetMemberDescriptor target, bool exact, BoundaryTypeCategory category) =>
+            target != null && exact && !IsNativelyHandled(category);
+
+        /// <summary>
         /// Visits one instruction, its structured children (<see cref="IRTryCatch"/> holds
         /// nested instruction lists — the one structured statement, mirroring
         /// <c>CppCapabilityChecker.CheckInstruction</c>'s recursion; loop and branch bodies are
@@ -197,35 +214,39 @@ namespace BasicLang.Net
             if (instruction == null || !visited.Add(instruction))
                 return;
 
+            // The node types are exactly the FIVE the C++ lowering has an arm for. Adding one
+            // here without a lowering arm is the hazard IRBaseMethodCall's deletion comment
+            // records: a member would reach the surface (a proxy slot AND a shim export) while
+            // its call site fell through to legacy emission with no exactness gate.
             switch (instruction)
             {
-                case IRCall call when call.ResolvedNetTarget != null
-                                      && !IsNativelyHandled(call.NetCategory):
+                case IRCall call when IsCollectable(call.ResolvedNetTarget,
+                                          call.ResolvedNetTargetIsExact, call.NetCategory):
                     AddMember(call.ResolvedNetTarget, members, seenMangled);
                     break;
-                case IRInstanceMethodCall instanceCall when instanceCall.ResolvedNetTarget != null
-                                      && !IsNativelyHandled(instanceCall.NetCategory):
+                case IRInstanceMethodCall instanceCall when IsCollectable(
+                                          instanceCall.ResolvedNetTarget,
+                                          instanceCall.ResolvedNetTargetIsExact,
+                                          instanceCall.NetCategory):
                     AddMember(instanceCall.ResolvedNetTarget, members, seenMangled);
-                    break;
-                case IRBaseMethodCall baseCall when baseCall.ResolvedNetTarget != null
-                                      && !IsNativelyHandled(baseCall.NetCategory):
-                    AddMember(baseCall.ResolvedNetTarget, members, seenMangled);
                     break;
                 // P2a-2 Task 7a: the three shapes the lowering added. A construction carries
                 // its resolved ctor; a member READ carries the property/field descriptor (the
                 // getter-shaped slot); a member WRITE carries the synthesized set_X accessor
                 // (NetAccessorSynthesis — stamped by IRBuilder, the single synthesis point, so
                 // collecting the stamp verbatim keeps §12.4's slots ≡ exports).
-                case IRNewObject construction when construction.ResolvedNetTarget != null
-                                      && !IsNativelyHandled(construction.NetCategory):
+                case IRNewObject construction when IsCollectable(
+                                          construction.ResolvedNetTarget,
+                                          construction.ResolvedNetTargetIsExact,
+                                          construction.NetCategory):
                     AddMember(construction.ResolvedNetTarget, members, seenMangled);
                     break;
-                case IRFieldAccess read when read.ResolvedNetTarget != null
-                                      && !IsNativelyHandled(read.NetCategory):
+                case IRFieldAccess read when IsCollectable(read.ResolvedNetTarget,
+                                          read.ResolvedNetTargetIsExact, read.NetCategory):
                     AddMember(read.ResolvedNetTarget, members, seenMangled);
                     break;
-                case IRFieldStore write when write.ResolvedNetTarget != null
-                                      && !IsNativelyHandled(write.NetCategory):
+                case IRFieldStore write when IsCollectable(write.ResolvedNetTarget,
+                                          write.ResolvedNetTargetIsExact, write.NetCategory):
                     AddMember(write.ResolvedNetTarget, members, seenMangled);
                     break;
             }

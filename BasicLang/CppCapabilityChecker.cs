@@ -55,12 +55,35 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
     /// </summary>
     public class CppCapabilityException : Exception
     {
+        /// <summary>
+        /// The capability checker's own blob code (D-P3: positionless, one BL6001 per build).
+        /// </summary>
+        public const string DefaultDiagnosticCode = "BL6001";
+
         public IReadOnlyList<string> Diagnostics { get; }
 
+        /// <summary>
+        /// The BL code <c>CppProjectBuilder</c> REPORTS this refusal under. Defaults to
+        /// <see cref="DefaultDiagnosticCode"/> — the checker's blob — and is overridden by the
+        /// P2a-2 Task-7a lowering refusals, which are §11.4-coded findings (BL6017 for the
+        /// name-only gate, BL6019 for an unmarshalable shape) that merely happen to travel on
+        /// this exception. Carrying the code STRUCTURALLY rather than in the message text is
+        /// what stops a user from seeing "BL6001" over text that names another code.
+        /// </summary>
+        public string DiagnosticCode { get; }
+
         public CppCapabilityException(List<string> diagnostics)
+            : this(diagnostics, DefaultDiagnosticCode)
+        {
+        }
+
+        public CppCapabilityException(List<string> diagnostics, string diagnosticCode)
             : base("C++ backend: unsupported feature(s):\n  " + string.Join("\n  ", diagnostics))
         {
             Diagnostics = diagnostics;
+            DiagnosticCode = string.IsNullOrEmpty(diagnosticCode)
+                ? DefaultDiagnosticCode
+                : diagnosticCode;
         }
     }
 

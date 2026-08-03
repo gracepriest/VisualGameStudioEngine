@@ -2907,10 +2907,13 @@ namespace BasicLang.Compiler.IR
                 // stamp, which is what keeps §12.4's slots ≡ exports). The analyzer records
                 // property/field annotations as EXACT (no overload axis), so a non-exact
                 // record here can only be a foreign shape — left unstamped.
+                // The Parameters.Count == 0 clause keeps INDEXERS away from the synthesis
+                // point (which refuses them): §8.5's get_Item/set_Item pair is Task 9's.
                 if (_semanticAnalyzer.NetMemberAnnotations.TryGetValue(memberExpr, out var netWrite)
                     && netWrite.Exact
                     && (netWrite.Member.Kind == BasicLang.Net.NetMemberCategory.Property
-                        || netWrite.Member.Kind == BasicLang.Net.NetMemberCategory.Field))
+                        || netWrite.Member.Kind == BasicLang.Net.NetMemberCategory.Field)
+                    && netWrite.Member.Parameters.Count == 0)
                 {
                     fieldStore.ResolvedNetTarget =
                         BasicLang.Net.NetAccessorSynthesis.SetterFor(netWrite.Member);
@@ -3259,10 +3262,14 @@ namespace BasicLang.Compiler.IR
             // P2a-2 Task 7a: a .NET PROPERTY/FIELD read carries its descriptor (the
             // getter-shaped slot) into IR. Gated to those two kinds on purpose: a METHOD
             // annotation on a bare member access (a method-group reference) is not a read
-            // and must not make this node lower through a proxy.
+            // and must not make this node lower through a proxy. An INDEXER (a Property
+            // WITH parameters — DescribeMember records its indices) is excluded too: its
+            // get_Item/set_Item pair is §8.5 / Task 9 work, and stamping it here would hand
+            // the lowering a descriptor whose declared parameters no call site fills.
             if (_semanticAnalyzer.NetMemberAnnotations.TryGetValue(node, out var netRead)
                 && (netRead.Member.Kind == BasicLang.Net.NetMemberCategory.Property
-                    || netRead.Member.Kind == BasicLang.Net.NetMemberCategory.Field))
+                    || netRead.Member.Kind == BasicLang.Net.NetMemberCategory.Field)
+                && netRead.Member.Parameters.Count == 0)
             {
                 fieldAccess.ResolvedNetTarget = netRead.Member;
                 fieldAccess.ResolvedNetTargetIsExact = netRead.Exact;
@@ -3377,10 +3384,35 @@ namespace BasicLang.Compiler.IR
                     // Check if it's a .NET type (contains dot or is known .NET type name)
                     bool isNetType = objVar.Name.Contains('.') || IsKnownNetStaticType(objVar.Name);
 
-                    // It's a static call if:
-                    // - It matches a class name exactly AND is not a local/param, OR
-                    // - It's a .NET type
-                    isStaticCall = (exactClassMatch && !isLocalOrParam) || isNetType;
+                    // A DECLARED LOCAL OR PARAMETER IS NEVER A TYPE NAME — the guard applies to
+                    // BOTH sources of type-ness, not just the class-name one.
+                    //
+                    // It used to read `(exactClassMatch && !isLocalOrParam) || isNetType`, which
+                    // let isNetType bypass the guard entirely. IsKnownNetStaticType answers TRUE
+                    // for ANY PascalCase identifier once the unit has a .NET `Using` (its
+                    // imported-namespace heuristic), so on the real CLI/IDE path — where
+                    // ConfigureModuleSystem populates CurrentUnit — `Dim Rx As New Regex("a+")`
+                    // followed by `Rx.IsMatch("aaa")` routed the INSTANCE call into the fused
+                    // static arm, discarding the receiver expression. Pre-P2a-2 that produced a
+                    // bogus `Rx.IsMatch(...)` free-function call; with .NET lowering live it
+                    // reached BuildNetProxyCall with an instance descriptor and no receiver.
+                    // A local always shadows a type name in VB, so this is also just correct.
+                    isStaticCall = (exactClassMatch || isNetType) && !isLocalOrParam;
+                }
+
+                // P2a-2 Task 7a: the ANALYZER'S DESCRIPTOR IS AUTHORITATIVE about static-ness —
+                // it comes from real overload resolution, while the routing above is a
+                // name-shape heuristic. An instance member can only be reached through a
+                // receiver, so a non-static annotation forces the instance arm regardless of
+                // what the identifier looked like. (The converse needs no handling: VB's
+                // shared-through-instance leniency lands a STATIC descriptor on the instance
+                // arm, and the lowering drops the phantom receiver by reading IsStatic.)
+                if (isStaticCall
+                    && _semanticAnalyzer.NetMemberAnnotations.TryGetValue(memberExpr, out var netShape)
+                    && !netShape.Member.IsStatic
+                    && netShape.Member.Kind != BasicLang.Net.NetMemberCategory.Constructor)
+                {
+                    isStaticCall = false;
                 }
 
                 if (isStaticCall && obj is IRVariable staticVar)

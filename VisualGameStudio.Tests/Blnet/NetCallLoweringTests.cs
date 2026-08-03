@@ -227,9 +227,10 @@ public class NetCallLoweringTests
         Assert.That(cpp, Does.Contain("BasicLang::net::bl_net_System_Convert_ToBase64String"),
             "the Nothing-argument call must RESOLVE (the probe's null spelling) and lower "
             + "to a ToBase64String proxy:\n" + cpp);
-        Assert.That(cpp, Does.Contain("(BasicLang::blnet::NetRef())"),
+        Assert.That(cpp, Does.Contain("(BasicLang::NetRef())"),
             "§8.2/§8.3: Nothing crosses a handle slot as the 0-handle — an empty NetRef, "
-            + "never a Table lookup:\n" + cpp);
+            + "never a Table lookup. ONE spelling everywhere (M3): the generator names this "
+            + "type BasicLang::NetRef, matching MapType's declaration form:\n" + cpp);
     }
 
     [Test]
@@ -294,6 +295,154 @@ public class NetCallLoweringTests
             "…and the DateTime RETURN reconstructs through the inverse converter:\n" + cpp);
         Assert.That(cpp, Does.Contain("BasicLang::DateTime u"),
             "the inferred local types as the native DateTime value:\n" + cpp);
+    }
+
+    /// <summary>
+    /// §8.3's <c>Char</c> row, OUTBOUND: BasicLang's native Char is ONE byte, .NET's is a
+    /// UTF-16 code unit, so the call site zero-extends. The <c>unsigned char</c> hop is
+    /// load-bearing — a bare cast of a NEGATIVE <c>char</c> (any byte ≥ 0x80 on a signed-char
+    /// platform) sign-extends to 0xFFxx and hands .NET a wrong code unit, which is exactly the
+    /// silently-wrong-value class §12.1 exists to catch.
+    /// </summary>
+    [Test]
+    public void CharArgument_ZeroExtendsOntoTheUtf16Wire()
+    {
+        var cpp = CompileToCpp("""
+            Module M
+             Sub Main()
+              Dim c As Char = "A"c
+              Dim n = Convert.ToInt32(c)
+              Console.WriteLine(n)
+             End Sub
+            End Module
+            """);
+
+        var toInt32 = Winner("System.Convert", NetCallForm.Static, "ToInt32", "System.Char");
+        Assert.That(cpp, Does.Contain(
+                ProxyCall(toInt32) + "(static_cast<uint16_t>(static_cast<unsigned char>(c)))"),
+            "a Char argument must zero-extend through `unsigned char` onto the uint16_t wire "
+            + "(§8.3) — a direct cast sign-extends bytes >= 0x80:\n" + cpp);
+    }
+
+    /// <summary>
+    /// §8.3's <c>Char</c> row, INBOUND — and §14.10's SHIPPED DIVERGENCE: a .NET code unit
+    /// above U+00FF cannot fit the 1-byte native Char, so the narrowing is lossy. The
+    /// expected emission below IS that documented divergence, pinned so it stays a decision
+    /// rather than an accident; the compiler reports BL6019 where the value is statically
+    /// known, and Task 13's parity program documents the runtime behavior.
+    /// </summary>
+    [Test]
+    public void CharReturn_NarrowsWithTheDocumentedDivergence()
+    {
+        var cpp = CompileToCpp("""
+            Module M
+             Sub Main()
+              Dim back = Convert.ToChar(66)
+              Console.WriteLine(back)
+             End Sub
+            End Module
+            """);
+
+        var toChar = Winner("System.Convert", NetCallForm.Static, "ToChar", "System.Int32");
+        Assert.That(cpp, Does.Contain("= static_cast<char>(" + ProxyCall(toChar) + "(66))"),
+            "a Char return narrows the uint16_t wire to the 1-byte native Char (§14.10's "
+            + "documented lossy divergence):\n" + cpp);
+        Assert.That(cpp, Does.Contain("char back"),
+            "the inferred local types as the native Char:\n" + cpp);
+    }
+
+    [Test]
+    public void TimeSpanArgument_CrossesThroughToNetTimespan()
+    {
+        var cpp = CompileToCpp("""
+            Module M
+             Sub Main()
+              Dim ts As TimeSpan = TimeSpan.FromSeconds(1)
+              Thread.Sleep(ts)
+              Console.WriteLine("done")
+             End Sub
+            End Module
+            """);
+
+        var sleep = Winner("System.Threading.Thread", NetCallForm.Static, "Sleep",
+                           "System.TimeSpan");
+        Assert.That(cpp, Does.Contain(ProxyCall(sleep) + "(BasicLang::net::to_net_timespan(ts))"),
+            "§6.4: a TimeSpan argument crosses through Task 6's converter as int64 ticks, "
+            + "never as a handle (the P1 six must never become handles):\n" + cpp);
+        Assert.That(cpp, Does.Not.Contain(ProxyCall(sleep) + "(ts)"),
+            "…and never raw — the wire is ticks, not the native struct:\n" + cpp);
+    }
+
+    /// <summary>
+    /// The inbound §6.4 TimeSpan direction, reached through a STATIC FIELD read — which also
+    /// pins that a field access lowers through its (receiver-less) slot.
+    /// </summary>
+    [Test]
+    public void TimeSpanReturn_ReconstructsThroughFromNetTimespan()
+    {
+        var cpp = CompileToCpp("""
+            Module M
+             Sub Main()
+              Dim ts = Timeout.InfiniteTimeSpan
+              Console.WriteLine(ts.Ticks)
+             End Sub
+            End Module
+            """);
+
+        var field = SharedResolver.Value.GetMembers("System.Threading.Timeout")
+            .Single(m => m.Name == "InfiniteTimeSpan" && m.Kind == NetMemberCategory.Field);
+        Assert.That(field.IsStatic, Is.True, "fixture guard: a STATIC field");
+        Assert.That(cpp, Does.Contain(
+                "BasicLang::net::from_net_timespan(" + ProxyCall(field) + "())"),
+            "a TimeSpan result reconstructs through the inverse converter, and a static "
+            + "field's slot takes no receiver:\n" + cpp);
+        Assert.That(cpp, Does.Contain("BasicLang::TimeSpan ts"),
+            "the inferred local types as the native TimeSpan value:\n" + cpp);
+    }
+
+    /// <summary>
+    /// Item 1 of the spec review: a lowering refusal is a §11.4-coded finding, and the CODE
+    /// must travel STRUCTURALLY — <c>CppProjectBuilder</c> reports
+    /// <c>CppCapabilityException.DiagnosticCode</c>, so a refusal that merely wrote "BL6019"
+    /// into its message text would surface to the user as BL6001 over BL6019 prose.
+    ///
+    /// <para>The shape has to be one the CAPABILITY CHECKER passes — it runs first and owns
+    /// BL6001 — so a native <c>Byte()</c> against a <c>System.Byte[]</c> parameter is used:
+    /// every declared type is mappable, the call resolves exactly, and the refusal is the
+    /// lowering's own (§8.6 outbound copy, Task 10).</para>
+    /// </summary>
+    [Test]
+    public void LoweringRefusal_CarriesItsRealDiagnosticCode()
+    {
+        var (analyzer, module) = BuildIR("""
+            Module M
+             Sub Main()
+              Dim data(3) As Byte
+              Dim s = Convert.ToBase64String(data, 0, 2)
+              Console.WriteLine(s)
+             End Sub
+            End Module
+            """);
+        Assert.That(analyzer.NetDiagnostics, Is.Empty,
+            "guard: the analyzer must PASS this shape — the refusal under test belongs to the "
+            + "generator. Got: " + string.Join(" | ",
+                analyzer.NetDiagnostics.Select(d => d.Code + ": " + d.Message)));
+
+        var ex = Assert.Throws<CppCapabilityException>(() =>
+            new CppCodeGenerator(new CppCodeGenOptions { GenerateComments = false })
+                .Generate(module));
+
+        Assert.That(ex!.DiagnosticCode, Is.EqualTo("BL6019"),
+            "an unmarshalable-shape refusal must REPORT as BL6019 (§11.4). "
+            + "CppProjectBuilder reads DiagnosticCode; leaving it at the BL6001 default while "
+            + "the message says otherwise is a support trap.");
+        Assert.That(ex.Message, Does.Contain("ToBase64String"),
+            "the message must name the offending member");
+        Assert.That(ex.Message, Does.Not.Contain("BL6019:"),
+            "the code travels structurally — repeating it in the text is how the two get to "
+            + "disagree");
+        Assert.That(CppCapabilityException.DefaultDiagnosticCode, Is.EqualTo("BL6001"),
+            "guard: the checker's own positionless blob keeps BL6001 (D-P3)");
     }
 
     [Test]

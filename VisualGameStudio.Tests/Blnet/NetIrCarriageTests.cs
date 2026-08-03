@@ -431,15 +431,22 @@ public class NetIrCarriageTests
               .Single(c => c.MethodName == methodName);
 
     /// <summary>
-    /// The Task-2 round trip for the two new node types, mirror of
+    /// The Task-2 round trip for <see cref="IRInstanceMethodCall"/>, mirror of
     /// <see cref="OptimizerPreservesTheResolvedNetTargetAndCategoryMarker"/> — and the same
-    /// honesty note applies: measured at the Task-2 commit, IROptimizer.cs constructs NEITHER
-    /// node type anywhere (zero `new IRInstanceMethodCall` / `new IRBaseMethodCall` sites), so
-    /// both survive today by aliasing and this is the regression guard for the day a pass
-    /// starts rebuilding them.
+    /// honesty note applies: measured at the Task-2 commit, IROptimizer.cs constructs the node
+    /// type nowhere (zero `new IRInstanceMethodCall` sites), so it survives today by aliasing
+    /// and this is the regression guard for the day a pass starts rebuilding it.
+    ///
+    /// <para><b>The BASE-call half was deleted in P2a-2 Task 7a</b> along with
+    /// <see cref="IRBaseMethodCall"/>'s carriage fields: a base call is only ever
+    /// <c>MyBase.Method(...)</c>, and since the flip a native <c>Inherits</c> of a .NET class
+    /// stays checker-rejected, so a .NET base call is unreachable by construction. The fields
+    /// were a latent hazard, not dead weight — the collector had an arm for them while the C++
+    /// lowering had none, so any future stamp would have surfaced a member (proxy slot + shim
+    /// export) whose call site fell through to legacy emission with no exactness gate.</para>
     /// </summary>
     [Test]
-    public void OptimizerPreservesCarriageOnInstanceAndBaseMethodCalls()
+    public void OptimizerPreservesCarriageOnInstanceMethodCalls()
     {
         var module = new IRModule("InstanceCarriageModule");
         var main = new IRFunction("Main", VoidType);
@@ -451,20 +458,13 @@ public class NetIrCarriageTests
         instanceCall.ResolvedNetTarget = RegexInstanceIsMatchDescriptor();
         instanceCall.NetCategory = BoundaryTypeCategory.ManagedOwned;
 
-        var baseCall = new IRBaseMethodCall("_tmp_base", "IsMatch", BoolType);
-        baseCall.Arguments.Add(new IRConstant("x", StringType));
-        baseCall.ResolvedNetTarget = RegexInstanceIsMatchDescriptor();
-        baseCall.NetCategory = BoundaryTypeCategory.ManagedOwned;
-
         entry.AddInstruction(instanceCall);
-        entry.AddInstruction(baseCall);
         entry.AddInstruction(new IRReturn());
         main.Blocks.Add(entry);
         main.EntryBlock = entry;
         module.Functions.Add(main);
 
         var expectedInstanceTarget = instanceCall.ResolvedNetTarget;
-        var expectedBaseTarget = baseCall.ResolvedNetTarget;
 
         var pipeline = new OptimizationPipeline();
         pipeline.AddStandardPasses();
@@ -479,26 +479,19 @@ public class NetIrCarriageTests
         Assert.That(instanceAfter.NetCategory, Is.EqualTo(BoundaryTypeCategory.ManagedOwned),
             "The optimizer dropped an instance call's boundary category marker. FIX THE "
             + "OPTIMIZER (BasicLang/IROptimizer.cs), not this test.");
-
-        var baseAfter = FindBaseCall(module, "IsMatch");
-        Assert.That(baseAfter.ResolvedNetTarget, Is.EqualTo(expectedBaseTarget),
-            "The optimizer dropped a base call's resolved .NET target. FIX THE OPTIMIZER "
-            + "(BasicLang/IROptimizer.cs), not this test.");
-        Assert.That(baseAfter.NetCategory, Is.EqualTo(BoundaryTypeCategory.ManagedOwned),
-            "The optimizer dropped a base call's boundary category marker. FIX THE OPTIMIZER "
-            + "(BasicLang/IROptimizer.cs), not this test.");
     }
 
     /// <summary>
-    /// The clone path with teeth, for the two new node types: the instance and base calls sit
-    /// inside a small inlineable helper, so <c>FunctionInliningPass.CloneAndRemap</c> processes
-    /// every instruction of the helper body. Both node types fall through that switch's
-    /// <c>default: return inst;</c> arm — adding a case there that rebuilds either node without
-    /// carrying the two fields turns THIS test red (verified by mutation at the Task-2 commit:
-    /// a deliberately-dropping <c>case IRInstanceMethodCall</c> made it fail).
+    /// The clone path with teeth, for <see cref="IRInstanceMethodCall"/>: the call sits inside
+    /// a small inlineable helper, so <c>FunctionInliningPass.CloneAndRemap</c> processes every
+    /// instruction of the helper body. The node type falls through that switch's
+    /// <c>default: return inst;</c> arm — adding a case there that rebuilds it without carrying
+    /// the two fields turns THIS test red (verified by mutation at the Task-2 commit: a
+    /// deliberately-dropping <c>case IRInstanceMethodCall</c> made it fail). The base-call half
+    /// went with Task 7a's carriage deletion — see the sibling test's remarks.
     /// </summary>
     [Test]
-    public void AggressivePipelinePreservesInstanceAndBaseCallCarriageThroughTheInliningClonePath()
+    public void AggressivePipelinePreservesInstanceCallCarriageThroughTheInliningClonePath()
     {
         var target = RegexInstanceIsMatchDescriptor();
 
@@ -514,12 +507,6 @@ public class NetIrCarriageTests
         instanceCall.ResolvedNetTarget = target;
         instanceCall.NetCategory = BoundaryTypeCategory.ManagedOwned;
         helperEntry.AddInstruction(instanceCall);
-
-        var baseCall = new IRBaseMethodCall("_tmp_base", "IsMatch", BoolType);
-        baseCall.ResolvedNetTarget = target;
-        baseCall.NetCategory = BoundaryTypeCategory.ManagedOwned;
-        helperEntry.AddInstruction(baseCall);
-
         helperEntry.AddInstruction(new IRReturn());
         helper.Blocks.Add(helperEntry);
         helper.EntryBlock = helperEntry;
@@ -557,15 +544,6 @@ public class NetIrCarriageTests
             + "across (spec §8.5).");
         Assert.That(inlinedInstance.NetCategory, Is.EqualTo(BoundaryTypeCategory.ManagedOwned),
             "Inlining rebuilt an instance call and dropped NetCategory. FIX THE OPTIMIZER's clone "
-            + "path (FunctionInliningPass.CloneAndRemap, BasicLang/IROptimizer.cs).");
-
-        var inlinedBase = mainInstructions.OfType<IRBaseMethodCall>()
-                                          .Single(c => c.MethodName == "IsMatch");
-        Assert.That(inlinedBase.ResolvedNetTarget, Is.EqualTo(target),
-            "Inlining rebuilt a base call and dropped ResolvedNetTarget. FIX THE OPTIMIZER's "
-            + "clone path (FunctionInliningPass.CloneAndRemap, BasicLang/IROptimizer.cs).");
-        Assert.That(inlinedBase.NetCategory, Is.EqualTo(BoundaryTypeCategory.ManagedOwned),
-            "Inlining rebuilt a base call and dropped NetCategory. FIX THE OPTIMIZER's clone "
             + "path (FunctionInliningPass.CloneAndRemap, BasicLang/IROptimizer.cs).");
     }
 
@@ -706,13 +684,14 @@ public class NetIrCarriageTests
             "A plain user-defined instance call acquired a resolved .NET target. FIX whatever "
             + "populates ResolvedNetTarget: user-defined receivers must never resolve.");
 
-        var baseCall = FindBaseCall(module, "Speak");
-        Assert.That(baseCall.NetCategory, Is.EqualTo(BoundaryTypeCategory.Unknown),
-            "A MyBase call came out of IRBuilder marked as something other than Unknown. FIX "
-            + "IRBaseMethodCall (BasicLang/IRNodes.cs): NetCategory must be INITIALIZED to "
-            + "BoundaryTypeCategory.Unknown (NativeOwned is the enum's implicit default).");
-        Assert.That(baseCall.ResolvedNetTarget, Is.Null,
-            "A MyBase call acquired a resolved .NET target. No production writer exists for "
-            + "IRBaseMethodCall.ResolvedNetTarget in Task 2; nothing may set it.");
+        // The MyBase call still has to EXIST (the fixture's shape depends on it), but it
+        // carries no .NET fields at all since P2a-2 Task 7a deleted them — a base call's
+        // receiver is the enclosing class's base, and a native `Inherits` of a .NET class is
+        // checker-rejected, so a .NET base call is unreachable by construction. This assert is
+        // what keeps the fixture honest about that shape still being produced.
+        Assert.That(FindBaseCall(module, "Speak"), Is.Not.Null,
+            "guard: the MyBase.Speak() call must still lower to an IRBaseMethodCall — if this "
+            + "shape moved to another node type, re-derive the Task-7a reasoning about which "
+            + "node types may carry .NET carriage before adding fields anywhere.");
     }
 }

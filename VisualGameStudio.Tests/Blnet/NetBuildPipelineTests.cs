@@ -388,6 +388,55 @@ public class NetBuildPipelineTests
     }
 
     /// <summary>
+    /// P2a-2 Task 7a, C1 REGRESSION — <b>the entry point the emit-level fixtures cannot
+    /// see.</b> They build IR via <c>new IRBuilder(analyzer)</c> with no
+    /// <c>ConfigureModuleSystem</c>, so <c>CurrentUnit</c> is null and
+    /// <c>IsKnownNetStaticType</c>'s imported-namespace heuristic is DEAD there. On this path
+    /// (and the CLI's) <c>_currentUnit</c> is populated, that heuristic answers TRUE for any
+    /// PascalCase identifier once the unit has a .NET <c>Using</c>, and the old routing
+    /// condition let it bypass the local/parameter guard — so a plain instance call on a
+    /// PascalCase-named local was routed to the FUSED STATIC arm with its receiver discarded.
+    /// The lowering then met an instance descriptor with no receiver and failed the build,
+    /// telling the user a valid program was a compiler-internal fault.
+    ///
+    /// <para>CLAUDE.md's "test BOTH entry points" rule, in one test: the program below must
+    /// BUILD, and its emitted C++ must pass the receiver handle to the instance proxy.</para>
+    /// </summary>
+    [Test]
+    public void InstanceCallOnAPascalCaseLocal_UnderANetUsing_RoutesThroughTheReceiver()
+    {
+        var files = new Dictionary<string, string>
+        {
+            ["Program.bas"] = """
+                Using System.Text.RegularExpressions
+
+                Module M
+                 Sub Main()
+                  Dim Rx As New Regex("a+")
+                  Dim ok = Rx.IsMatch("aaa")
+                  Console.WriteLine(ok)
+                 End Sub
+                End Module
+                """,
+        };
+
+        var (result, _) = Emit(files);
+
+        AssertNoErrors(result, "instance call on a PascalCase local under a .NET Using");
+
+        // Scan every emitted file rather than guessing a name: the split's naming rule keys
+        // off the MODULE name ("M"), not the .bas file name.
+        var generated = N(string.Join("\n",
+            Directory.EnumerateFiles(ObjGenDir).OrderBy(p => p, StringComparer.Ordinal)
+                     .Select(File.ReadAllText)));
+        Assert.That(generated, Does.Match(@"BasicLang::net::bl_net_\w*Regex_IsMatch\w*\(Rx, ""aaa""\)"),
+            "the instance call must pass its RECEIVER to the proxy. Routing it to the fused "
+            + "static arm discards the receiver expression — which is how a valid program came "
+            + "to fail with a 'compiler-internal' message. FIX IRBuilder's isStaticCall "
+            + "condition (a declared local is never a type name), not this test:\n" + generated);
+    }
+
+    /// <summary>
     /// P2a-2 Task 7a: <c>NetProxyEmitter</c>'s <c>NotSupportedException</c> (a ByRef
     /// handle/String parameter — §8.3 pins ByRef slots only for by-value scalars) became
     /// REACHABLE once real surfaces exist, and the §11.4 contract is a BL6019 diagnostic,

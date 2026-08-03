@@ -553,7 +553,11 @@ namespace BasicLang.Compiler.ProjectSystem
                 }
                 catch (CppCapabilityException ex)
                 {
-                    Fail(result, "BL6001", ex.Message, project.FilePath);
+                    // The CODE comes off the exception (P2a-2 Task 7a): the checker's own blob
+                    // stays BL6001 (D-P3), while a lowering refusal reports its real §11.4 code
+                    // — BL6017/BL6019. Hard-coding BL6001 here showed users one code over text
+                    // that named another.
+                    Fail(result, ex.DiagnosticCode, ex.Message, project.FilePath);
                     return outcome;
                 }
                 catch (ArgumentException ex)

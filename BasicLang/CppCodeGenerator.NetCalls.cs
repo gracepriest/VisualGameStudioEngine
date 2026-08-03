@@ -36,11 +36,19 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
     public partial class CppCodeGenerator
     {
         /// <summary>
-        /// True when the module being generated draws a non-empty .NET surface — decided by
-        /// the SAME walk the phase-3 collector uses (<see cref="NetSurfaceCollector"/>), so
-        /// the header includes and the emitted proxy artifacts can never disagree about
-        /// whether the boundary exists. Drives the two conditional includes; stays false for
-        /// every existing program (the standing inertness rule).
+        /// True when THE WHOLE COMPILATION draws a non-empty .NET surface — decided by the
+        /// SAME walk the phase-3 collector uses (<see cref="NetSurfaceCollector"/>), so the
+        /// header includes and the emitted proxy artifacts can never disagree about whether
+        /// the boundary exists. Stays false for every existing program (the standing
+        /// inertness rule).
+        ///
+        /// <para><b>Granularity is PROJECT-WIDE, not per-module</b>, and deliberately so:
+        /// <see cref="DetectNetSurface"/> runs once over the COMBINED module (both emission
+        /// modes), while <see cref="EmitNetBoundaryIncludes"/> runs per emitted header. Split
+        /// emission has exactly one aggregate header anyway, so no per-module header is
+        /// affected; and matching the collector's input exactly is what keeps "the includes
+        /// exist iff the artifacts exist" true — a per-module recomputation could answer
+        /// false for a module that references a .NET-typed value produced elsewhere.</para>
         /// </summary>
         private bool _moduleUsesNetSurface;
 
@@ -100,19 +108,22 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private static void RequireExactNetTarget(NetMemberDescriptor target, bool exact)
         {
             if (exact) return;
-            throw new CppCapabilityException(new List<string>
-            {
-                $"BL6017: .NET member '{target.DeclaringTypeFullName}.{target.Name}' was "
-                + "resolved by name only — its overload identity is unverified, and lowering "
-                + "it could call the wrong overload (the Task-7a name-only gate; a silent "
-                + "lowering here would be a miscompile). The analyzer normally reports this "
-                + "shape at its source position; reaching this guard means a call shape "
-                + "bypassed the overload probe."
-            });
+            throw NetLoweringRefusal("BL6017",
+                $".NET member '{target.DeclaringTypeFullName}.{target.Name}' was resolved by "
+                + "name only — its overload identity is unverified, and lowering it could call "
+                + "the wrong overload (the Task-7a name-only gate; a silent lowering here would "
+                + "be a miscompile). The analyzer normally reports this shape at its source "
+                + "position; reaching this guard means a call shape bypassed the overload probe.");
         }
 
-        private static CppCapabilityException NetLoweringRefusal(string message) =>
-            new CppCapabilityException(new List<string> { message });
+        /// <summary>
+        /// A lowering refusal, carrying its §11.4 <paramref name="code"/> STRUCTURALLY —
+        /// <c>CppProjectBuilder</c> reports <see cref="CppCapabilityException.DiagnosticCode"/>,
+        /// so the message text must NOT repeat it (that mismatch is what made users see BL6001
+        /// over BL6019 text).
+        /// </summary>
+        private static CppCapabilityException NetLoweringRefusal(string code, string message) =>
+            new CppCapabilityException(new List<string> { message }, code);
 
         /// <summary>
         /// The proxy-call expression: <c>BasicLang::net::&lt;mangled&gt;(receiver?, args…)</c>.
@@ -128,8 +139,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var parameters = target.Parameters;
             if (arguments.Count != parameters.Count)
             {
-                throw NetLoweringRefusal(
-                    $"BL6019: '{targetDisplay}' resolved with "
+                throw NetLoweringRefusal("BL6019",
+                    $"'{targetDisplay}' resolved with "
                     + parameters.Count.ToString(CultureInfo.InvariantCulture)
                     + " declared parameter(s) but the call site supplies "
                     + arguments.Count.ToString(CultureInfo.InvariantCulture)
@@ -147,13 +158,19 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // carry a static winner (handled above by hasReceiver = false — the receiver
                 // expression is a variable reference with no effects to lose). Here the
                 // winner is an instance member: the receiver must be a handle.
+                // INTERNAL INVARIANT, not a user-facing failure mode: IRBuilder routes by the
+                // descriptor's static-ness (its C1 fix), so an instance member always arrives
+                // with its receiver. If this ever fires it is a compiler bug — refusing is
+                // still right (a receiver-less instance proxy call would not compile), but the
+                // shape to fix is the ROUTING, never the user's program.
                 if (receiver == null)
-                    throw NetLoweringRefusal(
-                        $"BL6017: instance member '{targetDisplay}' reached the lowering with "
-                        + "no receiver value — compiler-internal; report this program shape.");
+                    throw NetLoweringRefusal("BL6017",
+                        $"internal: instance member '{targetDisplay}' reached the lowering with "
+                        + "no receiver value. This is a compiler routing defect (IRBuilder's "
+                        + "static-vs-instance call arm), not a problem with the program.");
                 if (!IsNetRefBacked(receiver))
-                    throw NetLoweringRefusal(
-                        $"BL6019: the receiver of '{targetDisplay}' (BasicLang type "
+                    throw NetLoweringRefusal("BL6019",
+                        $"the receiver of '{targetDisplay}' (BasicLang type "
                         + $"'{receiver.Type?.Name}') is not a handle-backed .NET value — only "
                         + "ManagedOwned-typed values (Regex/Uri/Stream/FileInfo/DirectoryInfo) "
                         + "can receive .NET instance calls under P2a.");
@@ -189,11 +206,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var position = (index + 1).ToString(CultureInfo.InvariantCulture);
 
             if (parameter.RefKind != NetRefKind.None)
-                throw NetLoweringRefusal(
-                    $"BL6019: '{targetDisplay}': parameter {position} ('{parameter}') is "
-                    + $"passed {parameter.RefKind.ToString().ToLowerInvariant()} — ref/out "
-                    + "parameters have no wire form at the native boundary yet (spec §8.3 "
-                    + "pointer slots).");
+                throw NetLoweringRefusal("BL6019",
+                    $"'{targetDisplay}': parameter {position} ('{parameter}') is passed "
+                    + $"{parameter.RefKind.ToString().ToLowerInvariant()} — ref/out parameters "
+                    + "have no wire form at the native boundary yet (spec §8.3 pointer slots).");
 
             var isNullConstant = argument is IRConstant { Value: null };
             var paramType = parameter.TypeFullName;
@@ -207,8 +223,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                         return EmitConstant(stringConstant);   // a literal IS a const char*
                     if (string.Equals(argument.Type?.Name, "String", StringComparison.OrdinalIgnoreCase))
                         return "(" + GetValueName(argument) + ").c_str()";
-                    throw NetLoweringRefusal(
-                        $"BL6019: '{targetDisplay}': argument {position} (BasicLang type "
+                    throw NetLoweringRefusal("BL6019",
+                        $"'{targetDisplay}': argument {position} (BasicLang type "
                         + $"'{argument.Type?.Name}') cannot cross a String slot — pass a "
                         + "String value or literal (spec §8.3).");
 
@@ -229,10 +245,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             }
 
             if (NetMarshalTable.MultiSlotConversionPairs.Contains(paramType))
-                throw NetLoweringRefusal(
-                    $"BL6019: '{targetDisplay}': parameter {position} has type '{paramType}', "
-                    + "whose §6.4 wire form is not a single slot — it is not lowered at the "
-                    + "native boundary yet.");
+                throw NetLoweringRefusal("BL6019",
+                    $"'{targetDisplay}': parameter {position} has type '{paramType}', whose "
+                    + "§6.4 wire form is not a single slot — it is not lowered at the native "
+                    + "boundary yet.");
 
             if (NetMarshalTable.IsSingleSlotValue(paramType))
                 return GetValueName(argument);   // numeric scalars pass by value
@@ -241,13 +257,17 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // NetRef-backed value passes through (genuinely free). A NATIVE value here —
             // an array against byte[], a std::string against Object, a collection against
             // IEnumerable — has no handle to pass: §8.6's outbound copy is Task 10.
+            // ONE spelling everywhere the generator names this type: `BasicLang::NetRef`,
+            // matching MapType's declaration form. `BasicLang::blnet::NetRef` is the same type
+            // (the blnet namespace re-exports it with a using-declaration), but two spellings
+            // for one type in generated code is a reader trap.
             if (isNullConstant)
-                return "BasicLang::blnet::NetRef()";
+                return "BasicLang::NetRef()";
             if (IsNetRefBacked(argument))
                 return GetValueName(argument);
 
-            throw NetLoweringRefusal(
-                $"BL6019: '{targetDisplay}': argument {position} (BasicLang type "
+            throw NetLoweringRefusal("BL6019",
+                $"'{targetDisplay}': argument {position} (BasicLang type "
                 + $"'{argument.Type?.Name}') is not a handle-backed .NET value, but parameter "
                 + $"{position} has reference type '{paramType}' — a native value crossing "
                 + "into a .NET reference slot is §8.6 outbound-copy territory, which is not "
@@ -298,9 +318,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             }
 
             if (NetMarshalTable.MultiSlotConversionPairs.Contains(resultType))
-                throw NetLoweringRefusal(
-                    $"BL6019: '{targetDisplay}' returns '{resultType}', whose §6.4 wire form "
-                    + "is not a single slot — it is not lowered at the native boundary yet.");
+                throw NetLoweringRefusal("BL6019",
+                    $"'{targetDisplay}' returns '{resultType}', whose §6.4 wire form is not a "
+                    + "single slot — it is not lowered at the native boundary yet.");
 
             if (NetMarshalTable.IsSingleSlotValue(resultType))
             {
@@ -319,20 +339,20 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // descriptor, so a mismatch means an untyped destination (e.g. a legacy
                 // Object-typed shape) and must refuse, not degrade.
                 if (!IsNetRefBacked(resultNode))
-                    throw NetLoweringRefusal(
-                        $"BL6019: the result of '{targetDisplay}' is a .NET object handle, "
-                        + $"but the destination (BasicLang type '{resultNode.Type?.Name}') is "
-                        + "not NetRef-backed — declare the receiving variable as the "
-                        + "ManagedOwned type the member returns.");
+                    throw NetLoweringRefusal("BL6019",
+                        $"the result of '{targetDisplay}' is a .NET object handle, but the "
+                        + $"destination (BasicLang type '{resultNode.Type?.Name}') is not "
+                        + "NetRef-backed — declare the receiving variable as the ManagedOwned "
+                        + "type the member returns.");
                 WriteLine($"{destination} = {expression};");
                 return;
             }
 
-            throw NetLoweringRefusal(
-                $"BL6019: '{targetDisplay}' returns '{resultType}', which has no native "
-                + "representation under P2a — a result must be a §8.3/§6.4 value, String, or "
-                + "one of the handle-backed registry types (Regex/Uri/Stream/FileInfo/"
-                + "DirectoryInfo). Consuming arbitrary .NET objects lands with §8.5.");
+            throw NetLoweringRefusal("BL6019",
+                $"'{targetDisplay}' returns '{resultType}', which has no native representation "
+                + "under P2a — a result must be a §8.3/§6.4 value, String, or one of the "
+                + "handle-backed registry types (Regex/Uri/Stream/FileInfo/DirectoryInfo). "
+                + "Consuming arbitrary .NET objects lands with §8.5.");
         }
 
         /// <summary>
