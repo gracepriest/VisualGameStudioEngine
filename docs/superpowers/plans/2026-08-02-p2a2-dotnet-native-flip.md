@@ -858,6 +858,39 @@ the value-type set from the `ITypeSymbol` the COLLECTOR holds, which `NetShimGen
 parameter docs already call the only thing that can really know. Until then 7b-I7's key poisoning
 bounds the damage: the answer reports INCOMPLETE, so the wrong shim is never cached.
 
+### Task 8b: `TypeName` generic-arity fix — **HARD BLOCKER for Task 9**
+
+Found by Task 8's Step-0 `ValueTypeReceiverNames` test (7b-I8), which existed for exactly this.
+
+**The bug:** `NetTypeResolver.TypeName` drops a CONTAINING generic's arity, so
+`List<T>.Enumerator` spells `System.Collections.Generic.List.Enumerator` — a name its own
+`Lookup` returns **NotFound** for (the metadata form is ``List`1+Enumerator``). The collector
+admits `GetEnumerator()` regardless. Task 9 hits it twice: the value-type-receiver set answers
+"reference type" for every enumerator struct (⇒ §8.5's mutate-the-temporary **infinite
+`MoveNext`, with no diagnostic**), and a qualified spelling would emit invalid C#.
+
+**Why Task 8 didn't fix it:** `TypeName` feeds `NetNameMangler`, so changing it MOVES EXPORT
+NAMES — a §12.4 identity change, not a behavior-preserving Step-0 edit. Currently bounded by
+7b-I7's key poisoning (a wrong shim can never be cached), which is containment, not a fix.
+
+**Scope:** correct the nested-generic spelling; decide and document whether mangled names change
+(they will for any nested-generic member — check whether any is in a surface today, and whether
+`NetShimCache`'s template identity absorbs it); re-run the §12.4 slots≡exports invariants, the
+mangler determinism/collision tests, and the frozen P0 16. Add a `List<T>.Enumerator` resolution
+test AND a receiver-set test proving it now answers "value type".
+
+### Task 8c: the four remaining §6.4 rows + enum arguments — **blocks Task 13 program #1**
+
+Detailed designs are recorded in the plan above (commit `c29b4ca`): three distinct
+complications (arity>1 scalars via out-references returning `void`; direction-dependent C type
+at arity 1 for Guid — the same shape String already has; one-way StringBuilder), the managed-side
+traps (`DecimalFromWire` takes `int`; `DateTimeOffsetToWire`'s two `out`s force STATEMENTS in an
+expression-shaped `EmitWrapper`), and the `CsTypeFor`/`WireShapeSurface` rows the drift oracle
+needs or it stays blind. **Enum is worse than originally framed and was MEASURED:** `FileMode.Open`
+types as `Object` and lowers to nothing, so descriptor carriage alone would turn today's precise
+refusal into a broken program — the missing piece is enum-member-constant lowering in the front
+end. May run any time before Task 13; does not block Task 9.
+
 ### Task 9: §8.5 — consuming handle-represented collections
 
 **Files:**
