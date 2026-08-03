@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -799,6 +800,196 @@ public class NetShimPhaseTests
             + "keying them apart costs a needless ~27 s cold publish. De-duplicate on the KEY side.");
     }
 
+    // =====================================================================================
+    // 7. §8.5's value-type receivers: the derivation itself (P2a-2 Task-8 Step 0, 7b-I8).
+    // =====================================================================================
+
+    private static NetMemberDescriptor Instance(string declaringType, string name) =>
+        new(name, declaringType, NetMemberCategory.Method, isStatic: false, arity: 0,
+            "System.Void", Array.Empty<NetParameterDescriptor>());
+
+    /// <summary>
+    /// <b>The path with the most expensive failure modes in this pipeline had no test at all.</b>
+    /// <c>ValueTypeReceiverNames</c> decides which receivers the generated shim reaches through
+    /// <c>Unsafe.Unbox&lt;T&gt;</c>; get it wrong on a struct and the shim either fails to
+    /// compile (CS0445, if the member is a property SET) or compiles and mutates the temporary
+    /// the unboxing produced — §8.5's <c>MoveNext</c>-forever loop, which is not a diagnostic.
+    ///
+    /// <para>It is a BY-NAME lookup, which is what makes it fragile: the spelling comes from
+    /// <c>NetTypeResolver.TypeName</c> and has to round-trip back through
+    /// <c>TypeSymbol</c>. Nested generic enumerators (<c>List&lt;T&gt;.Enumerator</c>,
+    /// <c>Dictionary&lt;K,V&gt;.Enumerator</c>) are the highest-risk spellings on that path AND
+    /// the ones Tasks 9/10 bring in, so they are asserted here rather than discovered there.</para>
+    ///
+    /// <para>Static members and constructors contribute NO receiver — a static call has none and
+    /// a constructor's export returns the object rather than receiving one — so a value type
+    /// reached only that way must not appear.</para>
+    /// </summary>
+    [Test]
+    public void ValueTypeReceiverNames_IdentifiesFrameworkStructsAndNotClasses()
+    {
+        var surface = new NetSurface(
+            new[]
+            {
+                Instance("System.DateTime", "ToLocalTime"),                 // struct
+                Instance("System.Text.RegularExpressions.Regex", "IsMatch"),// class
+                new NetMemberDescriptor(
+                    "Now", "System.DateTime", NetMemberCategory.Property, isStatic: true,
+                    arity: 0, "System.DateTime", Array.Empty<NetParameterDescriptor>()),
+                new NetMemberDescriptor(
+                    ".ctor", "System.Guid", NetMemberCategory.Constructor, isStatic: false,
+                    arity: 0, "System.Void", Array.Empty<NetParameterDescriptor>()),
+            },
+            Array.Empty<string>());
+
+        var (names, complete) = CppProjectBuilder.ValueTypeReceiverNames(
+            surface, () => NetStubHarness.SharedResolver.Value);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(complete, Is.True,
+                "every receiver in this surface is a real framework type, so the resolver must "
+                + "have answered for all of them. An incomplete answer poisons the shim cache "
+                + "key (7b-I7), so a false 'incomplete' costs a ~25 s publish on every build.");
+            Assert.That(names, Is.EquivalentTo(new[] { "System.DateTime" }),
+                "the value-type receiver set is wrong. A STRUCT missing from it means the shim "
+                + "reaches it through an unboxing cast: a property SET is then CS0445 (the whole "
+                + "shim fails to compile) and a mutating method silently mutates the temporary — "
+                + "§8.5's infinite MoveNext. A CLASS present in it is the opposite bug: "
+                + "Unsafe.Unbox on a reference type. Static members and constructors contribute "
+                + "no receiver at all — a static call has none, and a constructor's export "
+                + "RETURNS the object rather than receiving one.");
+        });
+    }
+
+    /// <summary>
+    /// ⛔ <b>A HARD Task-9 PREREQUISITE, found by adding this fixture (P2a-2 Task-8 Step 0,
+    /// 7b-I8) and pinned here rather than left to be discovered as an infinite loop.</b>
+    ///
+    /// <para><c>NetTypeResolver.TypeName</c> builds a nested type's spelling from
+    /// <c>QualifiedName</c>, which walks containing types by NAME and drops their generic
+    /// arity — so <c>List&lt;T&gt;.Enumerator</c> spells
+    /// <c>System.Collections.Generic.List.Enumerator</c>, while the metadata name its own
+    /// <c>Lookup</c> needs is <c>System.Collections.Generic.List`1+Enumerator</c>. Verified
+    /// both ways in this test: the produced spelling does NOT resolve, the metadata form does.
+    /// The surface collector admits <c>GetEnumerator()</c> quite happily (the nested type has
+    /// arity 0 of its own, so the open-type-parameter check never fires), so the descriptor is
+    /// real and reaches the generator.</para>
+    ///
+    /// <para><b>Two consequences, and Task 9 hits both.</b> (1) The receiver lookup answers
+    /// "not a value type" for every enumerator struct, so the shim reaches it through
+    /// <c>((List&lt;int&gt;.Enumerator)o!)</c> — §8.5's mutate-the-temporary
+    /// <c>MoveNext</c>-forever loop, which is not a diagnostic. (2)
+    /// <c>NetShimGenerator.Qualified</c> would emit
+    /// <c>global::System.Collections.Generic.List.Enumerator</c>, which is not valid C# either.
+    /// The fix belongs with §8.5: either teach <c>TypeName</c>/<c>CandidateMetadataNames</c> the
+    /// arity form, or derive the value-type set from the <c>ITypeSymbol</c> the COLLECTOR
+    /// already holds (which <c>NetShimGenerator.Emit</c>'s own parameter docs call the only
+    /// thing that can really know). Flip this test when it lands.</para>
+    ///
+    /// <para>Until then the 7b-I7 poisoning is what keeps the damage bounded: the answer is
+    /// INCOMPLETE, so a wrong shim can never be committed to the cache and hit forever.</para>
+    /// </summary>
+    [Test]
+    public void ValueTypeReceiverNames_CannotSeeANestedGenericStruct_Task9Prerequisite()
+    {
+        var resolver = NetStubHarness.SharedResolver.Value;
+
+        // Derived, not hard-coded: this test is about a spelling round-tripping through the
+        // resolver, so both halves must come from the resolver itself.
+        var getEnumerator = resolver.GetMembers("System.Collections.Generic.List`1")
+            .FirstOrDefault(m => m.Name == "GetEnumerator" && m.Parameters.Count == 0);
+        Assert.That(getEnumerator, Is.Not.Null,
+            "fixture provenance: List<T>.GetEnumerator() must be in the collected surface, or "
+            + "this test is no longer describing the shape Task 9 will hit.");
+        var enumeratorSpelling = getEnumerator!.TypeFullName;
+
+        var surface = new NetSurface(
+            new[] { Instance(enumeratorSpelling, "MoveNext") }, Array.Empty<string>());
+        var (names, complete) = CppProjectBuilder.ValueTypeReceiverNames(
+            surface, () => resolver);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                resolver.ResolveTypeDetailed(enumeratorSpelling).Outcome,
+                Is.EqualTo(NetTypeLookupOutcome.NotFound),
+                $"'{enumeratorSpelling}' is what NetTypeResolver.TypeName produced for "
+                + "List<T>.Enumerator, and its own Lookup cannot resolve it. If this now "
+                + "RESOLVES, the arity round-trip was fixed — flip this whole test to assert "
+                + "that the enumerator IS reported as a value type.");
+            Assert.That(
+                resolver.ResolveTypeDetailed("System.Collections.Generic.List`1+Enumerator").Outcome,
+                Is.EqualTo(NetTypeLookupOutcome.Resolved),
+                "the METADATA spelling resolves, which is what makes this a naming defect rather "
+                + "than a missing framework reference.");
+            Assert.That(names, Is.Empty,
+                "today the enumerator struct is invisible to the receiver set — §8.5's infinite "
+                + "MoveNext, waiting for Task 9.");
+            Assert.That(complete, Is.False,
+                "and it MUST at least report incomplete, so the wrong shim is never cached "
+                + "(7b-I7). If this goes true while the lookup still fails, the poisoning was "
+                + "removed and the bug became permanent.");
+        });
+    }
+
+    /// <summary>
+    /// The poisoning half (7b-I7). A receiver the resolver cannot answer for must report
+    /// INCOMPLETE rather than silently reading as "reference type" — that answer decides shim
+    /// CONTENT, is outside §10.2's cache key, and framework paths are deliberately excluded from
+    /// the key, so a wrong-but-compiling shim would be committed and hit forever. The cache is
+    /// allowed to be absent, never allowed to be wrong.
+    /// </summary>
+    [Test]
+    public void ValueTypeReceiverNames_ReportsIncomplete_WhenAReceiverDoesNotResolve()
+    {
+        var surface = new NetSurface(
+            new[] { Instance("No.Such.Namespace.MissingReceiver", "Frob") },
+            Array.Empty<string>());
+
+        var (names, complete) = CppProjectBuilder.ValueTypeReceiverNames(
+            surface, () => NetStubHarness.SharedResolver.Value);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(complete, Is.False,
+                "an unresolvable receiver must POISON the answer. Treating it as a reference "
+                + "type is the silent degradation: if it was really a struct, the committed shim "
+                + "is wrong and every later build hits it.");
+            Assert.That(names, Is.Empty,
+                "an unresolvable receiver must not be guessed INTO the value-type set either.");
+        });
+    }
+
+    /// <summary>
+    /// A surface with no instance receivers at all is COMPLETE, not incomplete: there is nothing
+    /// to be wrong about, and answering "incomplete" would poison the cache key for every
+    /// static-only surface — a permanent ~25 s tax on a program that never boxes a receiver.
+    /// </summary>
+    [Test]
+    public void ValueTypeReceiverNames_WithNoReceivers_IsCompleteAndEmpty()
+    {
+        var surface = new NetSurface(
+            new[]
+            {
+                new NetMemberDescriptor(
+                    "Escape", "System.Text.RegularExpressions.Regex", NetMemberCategory.Method,
+                    isStatic: true, arity: 0, "System.String",
+                    new[] { new NetParameterDescriptor(NetRefKind.None, "System.String") }),
+            },
+            Array.Empty<string>());
+
+        var (names, complete) = CppProjectBuilder.ValueTypeReceiverNames(surface, () => null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(complete, Is.True,
+                "no receivers means nothing to resolve, so the answer is complete even with no "
+                + "resolver at all — otherwise every static-only surface pays a needless publish.");
+            Assert.That(names, Is.Empty);
+        });
+    }
+
     /// <summary>
     /// The other half: de-duplicating must not erase the component. Two surfaces with genuinely
     /// different declarations still key apart — otherwise the "fix" above would be a false-hit
@@ -879,6 +1070,71 @@ public class NetShimPipelineTests
     private void Write(string name, string content) =>
         File.WriteAllText(Path.Combine(_dir, name), content);
 
+    // -------------------------------------------------------------------------------------
+    // Shared builds (P2a-2 Task-8 Step 0, 7b-I9).
+    // -------------------------------------------------------------------------------------
+
+    /// <summary>A program built once and reusable by any test in this fixture.</summary>
+    internal sealed record SharedBuild(
+        string Directory, CppProjectBuildResult Result, TimeSpan Elapsed);
+
+    private static readonly ConcurrentDictionary<string, Lazy<SharedBuild>> SharedBuilds =
+        new(StringComparer.Ordinal);
+
+    private static readonly ConcurrentBag<string> SharedDirs = new();
+
+    /// <summary>
+    /// Builds <paramref name="files"/> as <paramref name="projectName"/> ONCE per distinct
+    /// (name, item group, sources) tuple and hands every later caller the same result.
+    ///
+    /// <para><b>Why this affordance exists, and why the obvious alternative does not work.</b>
+    /// This fixture's cost is strictly linear: a fresh directory and a real
+    /// <c>dotnet publish</c> per test (~11-27 s measured), five today and one more per scenario
+    /// as Tasks 9-12 land. Sharing a DIRECTORY would not help — §10.2's cache key hashes the
+    /// mangled member set, so a different program is a guaranteed miss — which leaves exactly
+    /// one lever: FEWER, RICHER programs, several assertions per publish. That is what this
+    /// makes possible; without it every new scenario is another 25 s whether or not it needed
+    /// its own program.</para>
+    ///
+    /// <para>Deliberately NOT <c>_dir</c>-scoped: <c>[SetUp]</c>/<c>[TearDown]</c> give each
+    /// test a fresh directory and delete it, which is right for tests that assert on
+    /// <c>obj/gen</c> state and fatal to a shared artifact. These live in their own directories,
+    /// cleaned in <see cref="OneTimeTearDown"/>. Tests that must observe a build HAPPENING —
+    /// the cold/warm cache pair above all — keep using <see cref="Build"/>.</para>
+    /// </summary>
+    private static SharedBuild BuildOnce(
+        string projectName, IReadOnlyDictionary<string, string> files, string itemGroupXml = "")
+    {
+        var key = projectName + " " + itemGroupXml + " "
+                  + string.Join(" ", files.OrderBy(f => f.Key, StringComparer.Ordinal)
+                      .Select(f => f.Key + "" + f.Value));
+
+        return SharedBuilds.GetOrAdd(key, _ => new Lazy<SharedBuild>(() =>
+        {
+            var dir = NetShimPipelineFixture.NewTempDir("blnet-shared5-");
+            SharedDirs.Add(dir);
+            foreach (var file in files)
+                File.WriteAllText(Path.Combine(dir, file.Key), file.Value);
+
+            var projectPath = NetShimPipelineFixture.WriteProject(dir, projectName, itemGroupXml);
+            var stopwatch = Stopwatch.StartNew();
+            var result = CppProjectBuilder.Build(ProjectFile.Load(projectPath), "Release");
+            stopwatch.Stop();
+            TestContext.Out.WriteLine(
+                $"{projectName}: shared build took {stopwatch.Elapsed.TotalSeconds:F1}s");
+            foreach (var message in result.Messages)
+                TestContext.Out.WriteLine("  " + message);
+            return new SharedBuild(dir, result, stopwatch.Elapsed);
+        })).Value;
+    }
+
+    [OneTimeTearDown]
+    public void OneTimeTearDown()
+    {
+        foreach (var dir in SharedDirs)
+            NetShimPipelineFixture.TryDeleteDir(dir);
+    }
+
     private static void AssertBuilt(CppProjectBuildResult result, string label)
     {
         Assert.That(result.Success, Is.True,
@@ -901,26 +1157,37 @@ public class NetShimPipelineTests
     /// <para>The second line is not decoration: <c>IsMatch("bbb")</c> must be FALSE, which is what
     /// separates "the boundary works" from "the boundary returns a constant".</para>
     /// </summary>
+    /// <summary>
+    /// THE milestone program. Shared through <c>BuildOnce</c> so later scenarios can assert on
+    /// it without paying a second publish — the "fewer, richer programs" lever §10.2's key
+    /// leaves as the only one.
+    /// </summary>
+    internal static readonly IReadOnlyDictionary<string, string> MilestoneSources =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["Program.bas"] = """
+                Using System.Text.RegularExpressions
+
+                Module Program
+                 Sub Main()
+                  Dim Rx As New Regex("^a+$")
+                  If Rx.IsMatch("aaa") Then
+                   Console.WriteLine("True")
+                  Else
+                   Console.WriteLine("False")
+                  End If
+                  Console.WriteLine(Rx.IsMatch("bbb"))
+                 End Sub
+                End Module
+                """,
+        };
+
     [Test]
     public void Milestone_ANativeProgramCallsDotNet_AndPrintsTheResult()
     {
-        Write("Program.bas", """
-            Using System.Text.RegularExpressions
-
-            Module Program
-             Sub Main()
-              Dim Rx As New Regex("^a+$")
-              If Rx.IsMatch("aaa") Then
-               Console.WriteLine("True")
-              Else
-               Console.WriteLine("False")
-              End If
-              Console.WriteLine(Rx.IsMatch("bbb"))
-             End Sub
-            End Module
-            """);
-
-        var (result, elapsed) = Build("Milestone");
+        var built = BuildOnce("Milestone", MilestoneSources);
+        var result = built.Result;
+        var elapsed = built.Elapsed;
         AssertBuilt(result, "the milestone program");
 
         var shim = Path.Combine(

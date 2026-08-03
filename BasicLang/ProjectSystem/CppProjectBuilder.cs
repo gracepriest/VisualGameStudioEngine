@@ -75,6 +75,16 @@ namespace BasicLang.Compiler.ProjectSystem
 
         /// <summary>A shim was generated and published, and the cache entry committed.</summary>
         Published,
+
+        /// <summary>
+        /// Phase 5 ran and FAILED — the shim could not be written, the publish failed, or ILC
+        /// reported a BL6020 error. Distinct from <see cref="NotReached"/>, whose contract is
+        /// "EmitCore returned before reaching the gate": leaving a phase-5 failure reported as
+        /// NotReached made that docstring false, and made the enum unable to describe the one
+        /// outcome most worth naming. Nothing branches on it (the failure is already on
+        /// <c>result.Diagnostics</c>) — it exists so the enum is total.
+        /// </summary>
+        Failed,
     }
 
     public sealed class CppProjectBuildResult
@@ -213,8 +223,14 @@ namespace BasicLang.Compiler.ProjectSystem
             result.Messages.Add($"Output: {request.OutputPath}");
 
             // ---- Phase 7 (spec §10.1): deploy ----
-            // Checked here rather than per-DLL: a half-deployed output dir next to a linked exe
-            // is worse than a fully deployed one, and the copies are milliseconds.
+            // Cancellation is checked here rather than per-DLL: on a build that is going to
+            // SUCCEED, a half-deployed output dir next to a linked exe is worse than a fully
+            // deployed one, and the copies are milliseconds. That reasoning is about CANCELLING
+            // a healthy build and does not extend to a FAILING one — the shim deploy below
+            // returns early on failure, deliberately: "fully deployed" is neither achievable nor
+            // desirable once the build is fatally broken, and the likeliest trigger (the previous
+            // exe still running) would otherwise bury the BL6006 under a cascade of
+            // "warning: could not deploy" lines naming DLLs that were never the problem.
             Checkpoint(cancellationToken, CppBuildPhase.Deploy);
 
             // ---- .NET shim deploy (spec §10.4) ----
@@ -1005,6 +1021,9 @@ namespace BasicLang.Compiler.ProjectSystem
                         safeProject, surface, netReferences, netResolverFactory,
                         compilation, declaredProvenance, toolchain, outcome, result))
                 {
+                    // Named rather than left at NotReached, whose contract is "returned BEFORE
+                    // the gate" — it reached the gate and failed inside it.
+                    outcome.PhaseFive = NetShimPhaseOutcome.Failed;
                     return outcome;   // Completed stays false — the failure is already recorded.
                 }
                 // §10.3, the far side of the long operation. `dotnet publish` is a child process
@@ -1176,7 +1195,16 @@ namespace BasicLang.Compiler.ProjectSystem
                 toolchain?.DisplayName ?? string.Empty,
                 NetShimCache.ProbeSdkIdentity(projectDir) ?? string.Empty);
 
-            var key = NetShimCache.KeyFor(surface, referencePaths, environment);
+            // Derived BEFORE the cache probe, not with the generate step, because it POISONS
+            // the key: this set decides shim content, sits outside §10.2's key, and degrades
+            // silently (see ValueTypeReceiverNames). An incomplete answer must neither trust a
+            // stored entry nor commit a new one — "absent, never wrong".
+            var (valueTypeReceivers, receiversComplete) =
+                ValueTypeReceiverNames(surface, netResolverFactory);
+
+            var key = receiversComplete
+                ? NetShimCache.KeyFor(surface, referencePaths, environment)
+                : null;
             var hit = NetShimCache.TryGetHit(projectDir, configuration, key);
             if (hit != null)
             {
@@ -1195,8 +1223,8 @@ namespace BasicLang.Compiler.ProjectSystem
                 shimDir, NetShimGenerator.ProjectFileName(NetShimGenerator.ShimAssemblyName(safeProject)));
             try
             {
-                NetShimGenerator.WriteTo(shimDir, surface, safeProject, referencePaths,
-                    ValueTypeReceiverNames(surface, netResolverFactory));
+                NetShimGenerator.WriteTo(
+                    shimDir, surface, safeProject, referencePaths, valueTypeReceivers);
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException
                                                         || ex is ArgumentException
@@ -1276,8 +1304,9 @@ namespace BasicLang.Compiler.ProjectSystem
             {
                 result.Messages.Add(
                     "warning: the .NET shim cache entry could not be written, so every build will "
-                    + "re-publish the shim (~25 s). Usually the .NET SDK is not on PATH, or one of "
-                    + "the project's <Reference> assemblies could not be read.");
+                    + "re-publish the shim (~25 s). Usually the .NET SDK is not on PATH, one of "
+                    + "the project's <Reference> assemblies could not be read, or a .NET type the "
+                    + "surface uses as a receiver could not be resolved.");
             }
 
             outcome.ShimDllPath = publish.DllPath;
@@ -1289,7 +1318,8 @@ namespace BasicLang.Compiler.ProjectSystem
         /// <summary>
         /// The surface's VALUE-type receivers (spec §8.5) — the declaring types of non-static,
         /// non-constructor members that are structs or enums, which the shim must reach through
-        /// <c>Unsafe.Unbox&lt;T&gt;</c> rather than an unboxing cast.
+        /// <c>Unsafe.Unbox&lt;T&gt;</c> rather than an unboxing cast — together with whether the
+        /// answer is COMPLETE.
         ///
         /// <para>Answered from the resolver rather than guessed from a name: a
         /// <see cref="NetMemberDescriptor"/> carries no value-type flag, and getting this wrong is
@@ -1297,12 +1327,28 @@ namespace BasicLang.Compiler.ProjectSystem
         /// unboxing produced (§8.5's infinite-<c>MoveNext</c> failure), and a property SET through
         /// one is a hard CS0445 that makes the whole shim fail to compile.</para>
         ///
+        /// <para><b>Why <c>Complete</c> exists (P2a-2 Task-8 Step 0, 7b-I7).</b> This set
+        /// determines shim CONTENT but is not part of §10.2's cache key, and it degrades
+        /// SILENTLY: <c>TypeSymbol(name)</c> answers null for a name the resolver cannot
+        /// resolve, which reads as "reference type". Reference-closure failures are protected by
+        /// accident (an unreadable assembly also fails <c>TryReadMvid</c>, so the key is null
+        /// anyway) — but FRAMEWORK paths are deliberately excluded from the key, so a framework
+        /// STRUCT receiver that fails to resolve once would yield a wrong-but-COMPILING shim
+        /// that is then <c>Commit</c>ed and hit forever. That violates the stated invariant that
+        /// the cache may be ABSENT but never WRONG, so an incomplete answer poisons the key.</para>
+        ///
         /// <para>Costs nothing new: any surface non-empty enough to reach phase 5 already forced
         /// the resolver, in the analyzer's probe or in the collector's <c>&lt;NetProxy&gt;</c>
-        /// expansion. A resolver that cannot answer contributes nothing, which degrades to
-        /// "reference type" — the pre-existing behavior.</para>
+        /// expansion, and <c>NetTypeResolver</c> caches every lookup.</para>
+        ///
+        /// <para><c>internal</c> rather than private so the derivation can be pinned without a
+        /// publish — the same seam-for-testability precedent as
+        /// <see cref="MergeAotDiagnostics"/>. Its failure modes (CS0445; §8.5's
+        /// mutate-the-temporary infinite <c>MoveNext</c>) are the most expensive in this
+        /// pipeline, and it is a BY-NAME lookup, which makes nested generic spellings such as
+        /// <c>List&lt;T&gt;.Enumerator</c> the highest-risk input.</para>
         /// </summary>
-        private static IReadOnlyCollection<string> ValueTypeReceiverNames(
+        internal static (IReadOnlyCollection<string> Names, bool Complete) ValueTypeReceiverNames(
             NetSurface surface, Func<NetTypeResolver> netResolverFactory)
         {
             var receivers = new HashSet<string>(StringComparer.Ordinal);
@@ -1312,20 +1358,28 @@ namespace BasicLang.Compiler.ProjectSystem
                 if (!string.IsNullOrEmpty(member.DeclaringTypeFullName))
                     receivers.Add(member.DeclaringTypeFullName);
             }
-            if (receivers.Count == 0 || netResolverFactory == null)
-                return Array.Empty<string>();
+            if (receivers.Count == 0)
+                return (Array.Empty<string>(), true);   // nothing to be wrong about
 
-            var resolver = netResolverFactory();
+            var resolver = netResolverFactory?.Invoke();
             if (resolver == null)
-                return Array.Empty<string>();
+                return (Array.Empty<string>(), false);
 
             var valueTypes = new List<string>();
+            var complete = true;
             foreach (var name in receivers)
             {
-                if (resolver.TypeSymbol(name)?.IsValueType == true)
+                var symbol = resolver.TypeSymbol(name);
+                if (symbol == null)
+                {
+                    // Not "assume reference type and move on": that is the silent degradation.
+                    complete = false;
+                    continue;
+                }
+                if (symbol.IsValueType)
                     valueTypes.Add(name);
             }
-            return valueTypes;
+            return (valueTypes, complete);
         }
 
         /// <summary>

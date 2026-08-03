@@ -17,130 +17,31 @@ namespace VisualGameStudio.Tests.Blnet;
 /// lowered proxy calls execute against a test-emitted FAKE <c>g_net</c> (the P0 harness
 /// trick — no shim, no AOT publish; phase 5 goes live in 7b).
 ///
-/// <para><b>The harness shape.</b> The real <c>blnet_startup.g.cpp</c> is EXCLUDED from the
-/// translation-unit set; a per-test <c>stub.g.cpp</c> takes its place, defining
-/// <c>g_net</c>, filling the slots with recording C++ lambdas (canned statuses/values,
-/// printf to stdout so ordering interleaves verifiably with program output — C++ streams
-/// are stdio-synchronized by default), and filling the minimal <c>g_shim</c> members the
-/// runtime paths under test touch (<c>free_</c> for string-return ownership,
-/// <c>last_error</c> for the NetException chain). Slot names are re-derived per test from
-/// the SAME seams production uses (resolver descriptors → <see cref="NetNameMangler"/>),
-/// so a mangling or overload-selection drift breaks the C++ COMPILE — which is exactly the
-/// proxy-name-mismatch pin.</para>
+/// <para><b>The harness itself lives in <see cref="NetStubHarness"/></b> (Task-8 Step 0, I5)
+/// — shared, because Tasks 9/10/11 all need run-level proofs and a copied harness drifts.
+/// This fixture is the SCENARIOS.</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
 public class NetProxyStubRunTests
 {
-    private static readonly Lazy<NetTypeResolver> SharedResolver =
-        new(() => NetTypeResolver.Create(NetTypeResolverTestRefs.FrameworkPaths));
+    private static readonly Lazy<NetTypeResolver> SharedResolver = NetStubHarness.SharedResolver;
 
-    private const string RegexFullName = "System.Text.RegularExpressions.Regex";
+    private const string RegexFullName = NetStubHarness.RegexFullName;
 
-    private static (string exe, string argsTemplate) RequireCompiler()
-    {
-        var compiler = CppCompile.FindRunCompiler();
-        if (compiler == null)
-            Assert.Ignore("No C++ compiler available for run tests.");
-        return compiler!.Value;
-    }
-
-    // ------------------------------------------------------------------------------------
-    // Harness
-    // ------------------------------------------------------------------------------------
-
-    private static (string Cpp, NetSurface Surface) CompileWithSurface(string source)
-    {
-        var parser = new Parser(new Lexer(source).Tokenize());
-        var ast = parser.Parse();
-        Assert.That(parser.Errors, Is.Empty,
-            "parse errors:\n" + string.Join("\n", parser.Errors.Select(e => e.Message)));
-
-        var analyzer = new SemanticAnalyzer();
-        analyzer.ConfigureNetResolution(() => SharedResolver.Value, nativeBackend: true);
-        Assert.That(analyzer.Analyze(ast), Is.True,
-            "semantic errors:\n" + string.Join("\n", analyzer.Errors.Select(e => e.Message)));
-        Assert.That(analyzer.NetDiagnostics, Is.Empty,
-            "unexpected findings: " + string.Join(" | ",
-                analyzer.NetDiagnostics.Select(d => d.Code + ": " + d.Message)));
-
-        var module = new IRBuilder(analyzer).Build(ast, "TestModule");
-        var cpp = new CppCodeGenerator(new CppCodeGenOptions { GenerateComments = false })
-            .Generate(module);
-        var surface = NetSurfaceCollector.Collect(
-            new[] { module }, null, () => SharedResolver.Value,
-            new List<NetReferenceDiagnostic>());
-        Assert.That(surface.IsNonEmpty, Is.True, "the program under test must draw a surface");
-        return (cpp, surface);
-    }
-
-    /// <summary>
-    /// One stub slot: the mangled name plus the full C++ lambda text (its signature must
-    /// match the slot's C ABI — a mismatch fails the compile, which is the pin).
-    /// </summary>
-    private sealed record StubSlot(string SlotName, string Lambda);
+    private static (string Cpp, NetSurface Surface) CompileWithSurface(string source) =>
+        NetStubHarness.CompileWithSurface(source);
 
     private static string StubTranslationUnit(
-        IEnumerable<StubSlot> slots, string shimSetup = "")
-    {
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine("#include \"blnet.h\"");
-        sb.AppendLine("#include \"blnet_runtime.hpp\"   /* g_shim — the members the stub fills */");
-        sb.AppendLine("#include \"blnet_bindings.g.hpp\"");
-        sb.AppendLine("#include <cstdio>");
-        sb.AppendLine("#include <cstdlib>");
-        sb.AppendLine("#include <cstring>");
-        sb.AppendLine();
-        sb.AppendLine("/* THE definition the bindings header declares extern; the REAL");
-        sb.AppendLine("   blnet_startup.g.cpp is excluded from this build on purpose. */");
-        sb.AppendLine("BlnetProxyTable g_net{};");
-        sb.AppendLine();
-        sb.AppendLine("static char* stub_strdup(const char* s) {");
-        sb.AppendLine("    size_t n = std::strlen(s) + 1;");
-        sb.AppendLine("    char* p = (char*)std::malloc(n);");
-        sb.AppendLine("    std::memcpy(p, s, n);");
-        sb.AppendLine("    return p;");
-        sb.AppendLine("}");
-        sb.AppendLine();
-        sb.AppendLine("namespace {");
-        sb.AppendLine("struct StubInit {");
-        sb.AppendLine("    StubInit() {");
-        if (!string.IsNullOrEmpty(shimSetup))
-            sb.AppendLine(shimSetup);
-        foreach (var slot in slots)
-            sb.AppendLine($"        g_net.{slot.SlotName} = {slot.Lambda};");
-        sb.AppendLine("    }");
-        sb.AppendLine("};");
-        sb.AppendLine("StubInit g_stub_init;");
-        sb.AppendLine("} /* anonymous namespace */");
-        return sb.ToString();
-    }
+        IEnumerable<NetStubHarness.StubSlot> slots, string shimSetup = "") =>
+        NetStubHarness.StubTranslationUnit(slots, shimSetup);
 
-    private static string RunWithStub(string cpp, NetSurface surface, string stubTu)
-    {
-        var compiler = RequireCompiler();
-        var artifacts = NetProxyEmitter.Emit(surface, "Stub.dll");
-        var files = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var kv in artifacts)
-        {
-            if (kv.Key == NetProxyEmitter.StartupFileName)
-                continue;   // the stub replaces the real startup TU
-            files[kv.Key] = kv.Value;
-        }
-        files["prog.g.cpp"] = cpp;
-        files["stub.g.cpp"] = stubTu;
-        return CppCompile.CompileAndRunFiles(
-            files, new[] { "prog.g.cpp", "stub.g.cpp" }, compiler);
-    }
+    private static string RunWithStub(string cpp, NetSurface surface, string stubTu) =>
+        NetStubHarness.RunWithStub(cpp, surface, stubTu);
 
     private static NetMemberDescriptor Winner(
-        string typeFullName, NetCallForm form, string member, params string[] args)
-    {
-        var result = SharedResolver.Value.ResolveOverload(typeFullName, form, member, args);
-        Assert.That(result.Outcome, Is.EqualTo(NetOverloadOutcome.Resolved),
-            $"fixture provenance: {typeFullName}.{member}({string.Join(", ", args)}) must resolve");
-        return result.Member!;
-    }
+        string typeFullName, NetCallForm form, string member, params string[] args) =>
+        NetStubHarness.Winner(typeFullName, form, member, args);
 
     // ====================================================================================
     // 1. The sequence proof: ctor → instance → static, arguments and the receiver handle.
@@ -176,17 +77,17 @@ public class NetProxyStubRunTests
                 // §8.2: the ctor export hands back a fresh handle — 42 here, and the
                 // instance call receiving self=42 is the proof the handle FLOWED from the
                 // ctor result into the receiver NetRef.
-                new StubSlot(ctor,
+                new NetStubHarness.StubSlot(ctor,
                     "[](const char* a0, uint64_t* result) -> int32_t {"
                     + " std::printf(\"CALL ctor(%s)\\n\", a0); *result = 42; return 0; }"),
-                new StubSlot(isMatch,
+                new NetStubHarness.StubSlot(isMatch,
                     "[](uint64_t self, const char* a0, int32_t* result) -> int32_t {"
                     + " std::printf(\"CALL IsMatch(self=%llu,%s)\\n\","
                     + " (unsigned long long)self, a0); *result = 1; return 0; }"),
                 // P0 string ownership: the callee hands back an allocated buffer; the
                 // proxy copies it and frees through g_shim.free_ — the FREE line is the
                 // ownership proof.
-                new StubSlot(escape,
+                new NetStubHarness.StubSlot(escape,
                     "[](const char* a0, char** result) -> int32_t {"
                     + " std::printf(\"CALL Escape(%s)\\n\", a0);"
                     + " *result = stub_strdup(\"ESCAPED\"); return 0; }"),
@@ -238,11 +139,11 @@ public class NetProxyStubRunTests
         var stub = StubTranslationUnit(
             new[]
             {
-                new StubSlot(ctor,
+                new NetStubHarness.StubSlot(ctor,
                     "[](const char*, uint64_t* result) -> int32_t { *result = 7; return 0; }"),
                 // Status 5 = BLNET_E_MANAGED_EXCEPTION territory; the exact value is
                 // irrelevant — any non-OK status must route through NetCheckTyped.
-                new StubSlot(isMatch,
+                new NetStubHarness.StubSlot(isMatch,
                     "[](uint64_t, const char*, int32_t*) -> int32_t { return 5; }"),
             },
             shimSetup:
@@ -295,7 +196,7 @@ public class NetProxyStubRunTests
 
         var stub = StubTranslationUnit(new[]
         {
-            new StubSlot(convert,
+            new NetStubHarness.StubSlot(convert,
                 "[](uint64_t a0, uint64_t* result) -> int32_t {"
                 + " std::printf(\"DT:%016llx\\n\", (unsigned long long)a0);"
                 + $" *result = {planted.ToString(System.Globalization.CultureInfo.InvariantCulture)}ULL;"
@@ -337,11 +238,11 @@ public class NetProxyStubRunTests
 
         var stub = StubTranslationUnit(new[]
         {
-            new StubSlot(setter,
+            new NetStubHarness.StubSlot(setter,
                 "[](uint64_t self, int64_t a0) -> int32_t {"
                 + " std::printf(\"SET(self=%llu,%lld)\\n\","
                 + " (unsigned long long)self, (long long)a0); return 0; }"),
-            new StubSlot(getter,
+            new NetStubHarness.StubSlot(getter,
                 "[](uint64_t self, int64_t* result) -> int32_t {"
                 + " std::printf(\"GET(self=%llu)\\n\", (unsigned long long)self);"
                 + " *result = 99; return 0; }"),
@@ -384,7 +285,7 @@ public class NetProxyStubRunTests
         // by convention.
         var stub = StubTranslationUnit(new[]
         {
-            new StubSlot(escape + "_wrong",
+            new NetStubHarness.StubSlot(escape + "_wrong",
                 "[](const char*, char** result) -> int32_t {"
                 + " *result = stub_strdup(\"x\"); return 0; }"),
         });

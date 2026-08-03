@@ -232,6 +232,17 @@ namespace BasicLang.Compiler.CodeGen.Net
         /// create <paramref name="shimDir"/>. Directory creation lives INSIDE the non-empty
         /// branch for exactly that reason; hoisting it out as a precondition silently breaks
         /// P2a-1's inertness claim.</para>
+        ///
+        /// <para><b>Stale compilable files are PRUNED, not left</b> (P2a-2 Task-8 Step 0,
+        /// 7b-I6). The shim csproj is an SDK project rooted here, so it globs <c>**/*.cs</c> —
+        /// any orphan left behind by an earlier build is COMPILED INTO the shim. Latent while
+        /// the emitted file set was fixed; Tasks 9/10/11 make it surface-dependent (per-element
+        /// array helpers, per-delegate dispatchers), so a removed member's orphaned
+        /// <c>.g.cs</c> would keep its wrapper alive against a member the surface no longer
+        /// has. Only TOP-LEVEL <c>.cs</c>/<c>.csproj</c> are considered, which is what keeps
+        /// <c>obj/</c> and <c>bin/</c> (the publish's own working state) untouched. A delete
+        /// that fails propagates: the caller reports BL6006, which is right — a shim compiled
+        /// with an orphan is a wrong shim, and building it anyway is the failure this prevents.</para>
         /// </summary>
         internal static IReadOnlyList<string> WriteTo(
             string shimDir,
@@ -248,6 +259,7 @@ namespace BasicLang.Compiler.CodeGen.Net
                 return Array.Empty<string>();
 
             Directory.CreateDirectory(shimDir);
+            PruneStaleArtifacts(shimDir, files.Keys);
             var written = new List<string>(files.Count);
             foreach (var name in files.Keys.OrderBy(n => n, StringComparer.Ordinal))
             {
@@ -256,6 +268,35 @@ namespace BasicLang.Compiler.CodeGen.Net
                 written.Add(path);
             }
             return written;
+        }
+
+        /// <summary>
+        /// Deletes top-level <c>*.cs</c>/<c>*.csproj</c> in <paramref name="shimDir"/> that are
+        /// not in <paramref name="keep"/>. See <see cref="WriteTo"/> for why an orphan here is
+        /// not cosmetic — the SDK globs this directory.
+        ///
+        /// <para>The extension filter is the safety property: it means this can only ever
+        /// remove files whose presence would CHANGE what the shim compiles to. Anything else a
+        /// user or tool left here (a log, a marker, a <c>.props</c> the publish reads) is not
+        /// ours to delete, and <c>obj/</c>/<c>bin/</c> are out of reach because the enumeration
+        /// is deliberately non-recursive.</para>
+        /// </summary>
+        private static void PruneStaleArtifacts(string shimDir, IEnumerable<string> keep)
+        {
+            var expected = new HashSet<string>(keep, StringComparer.OrdinalIgnoreCase);
+            foreach (var path in Directory.EnumerateFiles(shimDir))
+            {
+                var name = Path.GetFileName(path);
+                if (expected.Contains(name)) continue;
+
+                var extension = Path.GetExtension(name);
+                if (!string.Equals(extension, ".cs", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(extension, ".csproj", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                File.Delete(path);
+            }
         }
 
         // ------------------------------------------------------------------------------

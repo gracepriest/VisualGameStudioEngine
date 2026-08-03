@@ -30,11 +30,13 @@ namespace VisualGameStudio.Tests.Blnet;
 [TestFixture]
 public class NetCallLoweringTests
 {
-    /// <summary>One resolver for the fixture — construction reads ~170 assemblies.</summary>
-    private static readonly Lazy<NetTypeResolver> SharedResolver =
-        new(() => NetTypeResolver.Create(NetTypeResolverTestRefs.FrameworkPaths));
+    /// <summary>
+    /// The ASSEMBLY-wide resolver (<see cref="NetStubHarness"/>) — construction reads ~170
+    /// assemblies, so every fixture keeping its own paid that again.
+    /// </summary>
+    private static readonly Lazy<NetTypeResolver> SharedResolver = NetStubHarness.SharedResolver;
 
-    private const string RegexFullName = "System.Text.RegularExpressions.Regex";
+    private const string RegexFullName = NetStubHarness.RegexFullName;
 
     // ------------------------------------------------------------------------------------
     // Helpers
@@ -85,14 +87,10 @@ public class NetCallLoweringTests
     private static string ProxyCall(NetMemberDescriptor member) =>
         "BasicLang::net::" + NetNameMangler.Mangle(member);
 
+    /// <summary>Fixture provenance — the one copy lives in <see cref="NetStubHarness"/>.</summary>
     private static NetMemberDescriptor Winner(
-        string typeFullName, NetCallForm form, string member, params string[] args)
-    {
-        var result = SharedResolver.Value.ResolveOverload(typeFullName, form, member, args);
-        Assert.That(result.Outcome, Is.EqualTo(NetOverloadOutcome.Resolved),
-            $"fixture provenance: {typeFullName}.{member}({string.Join(", ", args)}) must resolve");
-        return result.Member!;
-    }
+        string typeFullName, NetCallForm form, string member, params string[] args) =>
+        NetStubHarness.Winner(typeFullName, form, member, args);
 
     // ====================================================================================
     // The core shapes (plan Step 1)
