@@ -532,8 +532,13 @@ round trip).
   `String` → UTF-8 `const char*` (borrow — the proxy copies); P1 `NativeOwned` values through
   Task 6's converters; `Nothing` → 0-handle (never `Table`-reaching, §8.2); returned strings
   arrive via the transfer buffer and become `BasicLang::String` with `blnet_free`.
-- Properties: `get_X`/`set_X` proxy pairs (Roslyn descriptors already model accessors as
-  methods via `CandidateMembers`).
+- Properties: ⛔ **CORRECTED after implementation (2026-08-03)** — Roslyn does NOT model
+  accessors as separate methods; `GetMembers` returns ONE member per property. 7a therefore uses
+  the property descriptor itself AS the getter slot and synthesizes ONLY the setter
+  (`NetAccessorSynthesis`, single synthesis point) — one export per read-only property instead
+  of two. Task 9's indexer work must reuse that synthesis point, not re-derive the wrong
+  assumption. Scope also grew beyond the plan's three node types: `IRFieldAccess`/`IRFieldStore`
+  lower too, so §8.3 work now has FIVE arms to extend.
 - **This task is emit-level only** — generated C++ is asserted textually and compiled against a
   STUB `blnet_bindings` (a test-emitted fake `g_net` whose slots are C++ lambdas recording
   calls), the same trick the P0 harness uses. No AOT publish in this task's tests.
@@ -650,6 +655,40 @@ inbound narrows with the §14.10 divergence documented at the lowering site; `re
 
 **Steps:**
 
+- [ ] **Step 0 (MECHANICAL, do these FIRST — Task-7a quality review; all behavior-preserving,
+  all cheaper now than after four §6.4 rows and this task's arms land):**
+  - **I4 — emission shape:** `BuildNetProxyCall` returns a bare expression string, so no
+    marshaling decision can emit statements. THIS task needs `int32_t tmp = n; proxy(&tmp);
+    n = tmp;`; Task 10 needs copy-out/release; Task 11 needs thunk register/unregister. Change
+    `MarshalNetArgument` to return `NetArgEmission { Prologue, Expression, Epilogue }`,
+    accumulate in `BuildNetProxyCall`, emit prologue → call → epilogue in `EmitNetResult`.
+    All current emissions have empty prologue/epilogue ⇒ behavior-preserving, covered by the
+    existing 21 tests.
+  - **I2 — one row table:** the §8.3 rows now live in FIVE encodings (two maps in
+    `NetMarshalTable`, `NetProxyEmitter.WireOf`, `NetShimGenerator.WireOf`, and the two
+    hard-coded switches in `CppCodeGenerator.NetCalls.cs`), only 3↔4 tied by a test. Introduce
+    one `NetWireRow` per row (`BlSpelling, CsSpelling, CWire, CsWire, ToNetExpr, FromNetExpr,
+    IsMultiSlot`) in `NetMarshalTable` and project all consumers from it. Minimum viable: move
+    the two call-site switches onto the table — a row present in the emitters but missing at
+    the call site is a SILENT wire mismatch, not a compile error.
+  - **I5 — extract the stub harness:** `CompileWithSurface`/`StubSlot`/`StubTranslationUnit`/
+    `RunWithStub`/`Winner` are private to `NetProxyStubRunTests` and `Winner` is ALREADY
+    duplicated into `NetCallLoweringTests`. Move to a shared `NetStubHarness.cs` (with
+    `SharedResolver`/`RequireCompiler` — each fixture currently pays its own ~170-assembly
+    resolver build). Tasks 9/10/11 all need run-level proofs.
+  - **M1 — carriage interface:** six node types × three .NET fields is past the payoff point.
+    `internal interface INetCarrying { ResolvedNetTarget; NetCategory; ResolvedNetTargetIsExact }`
+    (auto-properties satisfy it as-is) collapses the collector's six `case` arms into one and
+    gives the optimizer comments a single anchor.
+  - **M2 — capability env:** `NetMarshalTable.TryMapArgumentType` is a 5-param method re-passing
+    two delegates through two recursion sites; this task adds a THIRD judgment (enum underlying
+    type). Wrap them in a `readonly struct NetTypeEnvironment` constructed once in the analyzer.
+    Also make `ArgumentSpellings` private (its ordering rules — the `Object` exclusion and
+    user-defined-before-metadata — are load-bearing and invisible from the raw map).
+  - **I3 — extend the drift oracle:** add DateTime (and TimeSpan) members to
+    `NetProxyEmitterTests.SixShapeSurface()` and bump its count guard — the cross-emitter
+    signature oracle is currently BLIND to the two rows 7a added, i.e. blind to exactly the
+    class of row this task adds four more of.
 - [ ] **Step 1:** red tests: `Integer.TryParse("42", n)` shape (out slot) through the stub
   runtime; a mutable-struct property set through a boxed receiver (the CS0445 shape) — assert
   the generated C# uses `Unsafe.Unbox`; `Char` narrowing emit; `Span<char>` overload use → BL6019.
