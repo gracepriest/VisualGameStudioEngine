@@ -2208,11 +2208,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
             return null;
         }
 
-        #region P2a-1 spec §6.5 — warning-only .NET name resolution
+        #region Spec §6.5 — .NET name resolution (native errors / C# warnings per §6.3)
 
         /// <summary>
-        /// Supplies the .NET type resolver. WARNING-ONLY in P2a-1: nothing this enables can fail a
-        /// build. §6.3's native-error behavior lands in P2a-2.
+        /// Supplies the .NET type resolver. Severity follows §6.3's backend split (see
+        /// <see cref="NetWarning"/>): with this ONE-argument overload the analyzer defaults
+        /// to the NATIVE backend, so everything the probes report is a build error.
+        /// (Historical: P2a-1 shipped this warning-only on every path; the P2a-2 flip,
+        /// 2026-08-02, promoted the native row.)
         /// </summary>
         /// <param name="resolverFactory">
         /// Memoized by the caller and invoked at most once per analyzer, and only if the unit
@@ -2812,9 +2815,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// BL6024 (spec §15.5 decision / §14.13): a .NET-annotated call inside a generic
         /// BasicLang body, NATIVE PATH ONLY — BasicLang generics emit real C++ templates, so the
         /// set of .NET instantiations cannot be enumerated at phase 3 and no proxy can be
-        /// generated for the call. Warning in this task; the Task-5 flip promotes it.
+        /// generated for the call. A build ERROR since the P2a-2 flip (native-only, so
+        /// <see cref="NetWarning"/>'s severity split always answers error here).
         /// Fired wherever an annotation is recorded; <see cref="NetWarning"/>'s de-dup keeps one
-        /// finding per site.
+        /// finding per site. The CONSTRUCTOR half is
+        /// <see cref="ProbeNetConstructorInGenericBody"/>.
         /// </summary>
         private void WarnNetCallInGenericBody(string typeFullName, string memberName, int line, int column)
         {

@@ -221,8 +221,13 @@ namespace BasicLang.Net
             new NetReferenceDiagnostic("BL6021",
                 $"Reference '{path}' could not be read as .NET metadata and will be ignored for "
                 + $".NET type resolution: {reason}",
-                // A WARNING: the reference may be irrelevant to everything this program does, and
-                // P2a-1 is warning-only throughout. Task 8/13 decide how this surfaces.
+                // Deliberately still a WARNING after the P2a-2 flip promoted the other
+                // BL6021s: this fires for a file that RESOLVED on disk but is not readable
+                // managed metadata (a native DLL beside the exe is the common case), and the
+                // program may never name a type from it — resolution degrades gracefully to
+                // "contributes no types", and anything the program actually needed then draws
+                // its own hard BL6016 at the use site. Erroring here would fail builds over
+                // references they never touch.
                 IsWarning: true);
 
         /// <summary>

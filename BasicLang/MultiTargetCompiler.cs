@@ -105,8 +105,9 @@ namespace BasicLang.Compiler.Driver
                 // Phase 3: Semantic Analysis
                 Console.Write("Phase 3: Semantic Analysis... ");
                 var semanticAnalyzer = new SemanticAnalyzer();
-                // P2a-2 Task 4 (spec §6.3): warning-only .NET resolution — the enumerated
-                // P2a-1 deferral for this driver. The backend flag selects the evidence bar.
+                // Spec §6.3: the backend flag selects the evidence bar AND the severity —
+                // native findings are errors since the P2a-2 flip (the gate below stops this
+                // driver before codegen); C#-path findings stay warnings.
                 semanticAnalyzer.ConfigureNetResolution(
                     NetResolver,
                     nativeBackend: string.Equals(targetBackend, "cpp", StringComparison.OrdinalIgnoreCase));

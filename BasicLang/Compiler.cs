@@ -643,10 +643,11 @@ namespace BasicLang.Compiler
                 // end-to-end through this method and holds the canary that says when the
                 // divergence has eased. Wire nothing here until every pin in that fixture passes
                 // over the wired configuration UNMODIFIED.
-                // P2a-2 Task 4 (§6.3): the backend flag selects the evidence bar — real §6.5
-                // resolution for bare names on the native path, the legacy System.-rooted bar on
-                // the C# path — and gates BL6024 (native-only). Severity is warning-only on BOTH
-                // backends until the Task-5 flip.
+                // §6.3's backend split: the flag selects the evidence bar — real §6.5
+                // resolution for bare names on the native path, the legacy System.-rooted bar
+                // on the C# path — gates BL6024 (native-only), and since the P2a-2 flip
+                // selects SEVERITY: native findings are IsWarning:false build errors, C#
+                // findings stay warnings (late-csc behavior preserved).
                 analyzer.ConfigureNetResolution(
                     _options.NetResolverFactory,
                     nativeBackend: string.Equals(_options.TargetBackend, "cpp",

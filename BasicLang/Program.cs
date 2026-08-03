@@ -1046,10 +1046,11 @@ namespace BasicLang.Compiler.Driver
                 }
             }
 
-            // P2a-2 Task 4 (spec §6.3): single-file compiles resolve against the shared
-            // framework closure alone (there is no project to declare references). Warning-only
-            // on the C# backend; --target=cpp gets the native evidence bar through the analyzer's
-            // backend flag, still warning-only until the flip.
+            // Spec §6.3: single-file compiles resolve against the shared framework closure
+            // alone (there is no project to declare references). The analyzer's backend flag
+            // splits behavior: --target=cpp gets the native evidence bar and ERROR-severity
+            // findings (enforced by the fail gate below — the .NET channel is off AllErrors,
+            // so Success cannot see it); the C# backend keeps warnings.
             options.EnableNetResolution();
 
             // Create compiler and compile

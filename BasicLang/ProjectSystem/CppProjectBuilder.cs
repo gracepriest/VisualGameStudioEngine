@@ -387,13 +387,13 @@ namespace BasicLang.Compiler.ProjectSystem
                 });
                 compilation = compiler.CompileProjectFiles(blSources);
 
-                // P2a-1 §6.5: the analyzer's .NET findings. MERGED into the closure's existing
-                // bag — not a third channel — because IntelliSenseEmitterTests pins
+                // The analyzer's §6.5 findings. MERGED into the closure's existing bag — not
+                // a third channel — because IntelliSenseEmitterTests pins
                 // outcome.NetReferences.Diagnostics as the complete record. Merged before the
                 // failure return so a unit that failed for an unrelated reason still carries
-                // them. The error count is 0 while the analyzer's findings stay warning-only
-                // (P2a-2 Task 4 keeps them warnings on both backends); Task 5's severity flip
-                // arms the failure return below.
+                // them. Since the P2a-2 flip (§6.3) this is the native path's build-breaking
+                // channel: every finding arrives IsWarning:false, MergeNetDiagnostics routes
+                // it through Fail(), and the returned error count arms the abort below.
                 var analyzerNetErrors = MergeNetDiagnostics(
                     compilation.NetDiagnostics, ref netReferences, outcome, result,
                     project.FilePath, forIntelliSense);
@@ -413,8 +413,11 @@ namespace BasicLang.Compiler.ProjectSystem
                                       // obj/gen clean, which is what preserves stale headers.
                 }
 
-                // Unreachable while every analyzer .NET finding is a warning; the P2a-2 flip
-                // (Task 5) makes BL6016/17/18/19/23/24 native errors and arms this return.
+                // The flip's fail-fast (§6.3/D-P3): a program with .NET errors
+                // (BL6016/17/18/19/23/24) stops HERE — the capability checker and codegen
+                // never run on it, which is what keeps resolved-.NET shapes out of the
+                // checker's BL6001 string blob. Pinned by
+                // NetInertnessTests.NetFindingsAreNativeErrors_FailingTheBuild.
                 if (analyzerNetErrors > 0)
                     return outcome;   // Completed stays false; Fail already set Success = false.
 
