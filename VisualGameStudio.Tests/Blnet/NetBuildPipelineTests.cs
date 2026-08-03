@@ -116,7 +116,7 @@ public class NetBuildPipelineTests
     /// standalone <c>Sub Main</c>, so <c>emitMain</c> is true.</item>
     /// <item><c>BasicLangRuntime.g.h</c>.</item>
     /// </list>
-    /// Five names are conspicuously ABSENT — <see cref="NetProxyEmitter"/>'s — and that absence
+    /// Six names are conspicuously ABSENT — <see cref="NetProxyEmitter"/>'s — and that absence
     /// is the whole point.
     /// </summary>
     private static readonly string[] ExpectedGeneratedFileNames =
@@ -236,7 +236,8 @@ public class NetBuildPipelineTests
         Assert.That(GeneratedFileNames(), Is.EqualTo(ExpectedGeneratedFileNames.OrderBy(n => n, StringComparer.Ordinal)),
             "obj/gen no longer holds exactly the file set GenerateSplit's naming rule produces. "
             + "If EXTRA names appeared and they are NetProxyEmitter's (blnet.h, blnet_runtime.hpp, "
-            + "blnet_bindings.g.hpp, blnet_proxies.g.hpp, blnet_startup.g.cpp), the §9.5 merge in "
+            + "blnet_marshal.hpp, blnet_bindings.g.hpp, blnet_proxies.g.hpp, blnet_startup.g.cpp), "
+            + "the §9.5 merge in "
             + "CppProjectBuilder.EmitCore has lost its surface gate and is emitting .NET artifacts "
             + "for a project with no .NET at all — fix EmitCore, not this list. If names are "
             + "MISSING, the merged write dropped split.Files. If the names merely CHANGED, "
@@ -339,7 +340,7 @@ public class NetBuildPipelineTests
 
         Assert.Multiple(() =>
         {
-            // The artifact set is NetProxyEmitter's five and ONLY those: with no .bas files there
+            // The artifact set is NetProxyEmitter's six and ONLY those: with no .bas files there
             // is no split at all, so anything else here came from somewhere it should not have.
             Assert.That(GeneratedFileNames(), Is.EqualTo(new[]
                 {
@@ -348,6 +349,7 @@ public class NetBuildPipelineTests
                     NetProxyEmitter.StartupFileName,
                     NetProxyEmitter.ContractHeaderFileName,
                     NetProxyEmitter.RuntimeHeaderFileName,
+                    NetProxyEmitter.MarshalHeaderFileName,   // §6.4 conversion pairs (P2a-2 Task 6)
                 }.OrderBy(n => n, StringComparer.Ordinal)),
                 "A pure-C++ project with a .NET surface did not get exactly NetProxyEmitter's "
                 + "artifact set in obj/gen. If it got NOTHING, the obj/gen write is still gated on "
@@ -402,6 +404,7 @@ public class NetBuildPipelineTests
             {
                 NetProxyEmitter.ContractHeaderFileName,
                 NetProxyEmitter.RuntimeHeaderFileName,
+                NetProxyEmitter.MarshalHeaderFileName,   // §6.4 conversion pairs (P2a-2 Task 6)
                 NetProxyEmitter.BindingsFileName,
                 NetProxyEmitter.ProxiesFileName,
                 NetProxyEmitter.StartupFileName,

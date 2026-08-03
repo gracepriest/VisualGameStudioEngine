@@ -80,6 +80,101 @@ public static class ShimAbi { public const int AbiVersion = ";
 ";
 
         /// <summary>
+        /// Complete <c>BlnetMarshal.cs</c> text — spec §6.4's conversion pairs, MANAGED side
+        /// (P2a-2 Task 6). Static helpers the generated <c>Exports.g.cs</c> wrappers call (from
+        /// Task 7a on) to reconstruct the six P1 <c>NativeOwned</c> value types from their wire
+        /// forms and to flatten results back. The wire forms are the P1 native layouts VERBATIM
+        /// (see <c>CppNetMarshal</c>, the native half); the bit positions on the two sides are
+        /// pinned against the same hard-coded .NET-computed vectors by
+        /// <c>NetConversionPairTests</c>, because a disagreement is a silently wrong value.
+        /// <para/>
+        /// Lives in <see cref="BlnetShimSources"/> rather than being generator-emitted so
+        /// <c>NetShimCache.TemplateIdentity</c> hashes it as fixed template text — editing a
+        /// conversion invalidates every cached shim, which is correct since the shim content
+        /// changes. Unlike the three files above it is NOT byte-pinned to a hand-shim copy
+        /// (the hand shim predates the conversion pairs), so it may evolve freely.
+        /// </summary>
+        public static string MarshalCs => MarshalCsText;
+
+        private const string MarshalCsText = @"// BlnetMarshal.cs — GENERATED (spliced from BasicLang BlnetShimSources.MarshalCs).
+// Do not edit; edits are lost on the next build. Spec §6.4: conversion pairs for the
+// six P1 NativeOwned value types. Wire forms are the P1 native layouts verbatim; the
+// native mirror is blnet_marshal.hpp (CppNetMarshal.cs), and NetConversionPairTests
+// pins both sides to the same .NET-computed bit vectors.
+//
+// Direction convention (the shim's point of view): *FromWire reconstructs the real
+// .NET value from what the native side sent; *ToWire flattens a .NET result for the
+// trip back. Explicit usings on purpose — this file is also compiled by raw Roslyn
+// in tests, where MSBuild's ImplicitUsings do not exist.
+#nullable enable
+using System;
+using System.Text;
+
+namespace BlnetTestShim;
+
+public static class BlnetMarshal
+{
+    // ---- DateTime <-> uint64 dateData: ticks in the low 62 bits | kind in the top 2
+    // (DateTimeKind's own numbering). Equals DateTime.ToBinary() for Utc/Unspecified;
+    // for Local the wire is the RAW pair — ToBinary's UTC adjustment is
+    // serialization-only, which is why this uses the (long, DateTimeKind) constructor
+    // and NEVER DateTime.FromBinary (FromBinary would shift Local ticks by the zone).
+    private const ulong DateTimeTicksMask = 0x3FFFFFFFFFFFFFFFUL;
+
+    public static DateTime DateTimeFromWire(ulong dateData) =>
+        // The ctor rejects kind values outside Unspecified/Utc/Local (top bits 3).
+        new DateTime((long)(dateData & DateTimeTicksMask), (DateTimeKind)(dateData >> 62));
+
+    public static ulong DateTimeToWire(DateTime value) =>
+        (ulong)value.Ticks | ((ulong)(uint)value.Kind << 62);
+
+    // ---- TimeSpan <-> int64 ticks. ----
+    public static TimeSpan TimeSpanFromWire(long ticks) => new TimeSpan(ticks);
+
+    public static long TimeSpanToWire(TimeSpan value) => value.Ticks;
+
+    // ---- Decimal <-> the decimal.GetBits quad {lo, mid, hi, flags}: 96-bit
+    // magnitude, flags = scale (0-28) in bits 16-23 | sign in bit 31. The int[]
+    // constructor validates the flag bits exactly like the native from_net_decimal.
+    // ToWire is GetBits VERBATIM — a .NET negative zero keeps its sign flag here and
+    // is canonicalized to +0 on the native side (the documented P1 divergence). ----
+    public static decimal DecimalFromWire(int lo, int mid, int hi, int flags) =>
+        new decimal(new[] { lo, mid, hi, flags });
+
+    public static int[] DecimalToWire(decimal value) => decimal.GetBits(value);
+
+    // ---- Guid <-> the 16 Guid.ToByteArray() bytes (a, b, c little-endian, then the
+    // trailing 8 verbatim — .NET's mixed-endian order, which the byte[] constructor
+    // reverses exactly). ----
+    public static Guid GuidFromWire(byte[] bytes) => new Guid(bytes);
+
+    public static byte[] GuidToWire(Guid value) => value.ToByteArray();
+
+    // ---- DateTimeOffset <-> {utcTicks, offsetMinutes}: the P1 native fields
+    // verbatim. .NET's constructor takes CLOCK ticks, so reconstruction adds the
+    // offset back onto the UTC instant; the constructor then validates both the
+    // offset (+/-14:00) and the resulting instant. ----
+    public static DateTimeOffset DateTimeOffsetFromWire(long utcTicks, short offsetMinutes) =>
+        new DateTimeOffset(
+            utcTicks + offsetMinutes * TimeSpan.TicksPerMinute,
+            new TimeSpan(offsetMinutes * TimeSpan.TicksPerMinute));
+
+    public static void DateTimeOffsetToWire(
+        DateTimeOffset value, out long utcTicks, out short offsetMinutes)
+    {
+        utcTicks = value.UtcTicks;
+        offsetMinutes = (short)(value.Offset.Ticks / TimeSpan.TicksPerMinute);
+    }
+
+    // ---- StringBuilder: crosses BY VALUE as String, ONE direction only (§6.4's
+    // table) — there is deliberately no StringBuilderToWire. A null wire string is
+    // Nothing and stays null (never an empty StringBuilder). ----
+    public static StringBuilder? StringBuilderFromWire(string? value) =>
+        value is null ? null : new StringBuilder(value);
+}
+";
+
+        /// <summary>
         /// <c>HandleTable.g.cs</c> verbatim. MUST stay byte-identical to
         /// <c>VisualGameStudio.Tests/TestAssets/BlnetTestShim/HandleTable.cs</c>.
         /// </summary>

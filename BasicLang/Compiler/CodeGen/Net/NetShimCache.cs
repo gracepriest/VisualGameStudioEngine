@@ -303,7 +303,7 @@ namespace BasicLang.Compiler.CodeGen.Net
 
         /// <summary>
         /// Key component 3: everything that decides what the shim's FIXED half looks like —
-        /// <see cref="BlnetContract.AbiVersion"/>, the three <see cref="BlnetShimSources"/> texts
+        /// <see cref="BlnetContract.AbiVersion"/>, the four <see cref="BlnetShimSources"/> texts
         /// (hashed, so this stays short), and the compiler assembly's own MVID.
         ///
         /// <para>Returned RAW rather than pre-hashed so a test can assert that each input is
@@ -316,6 +316,7 @@ namespace BasicLang.Compiler.CodeGen.Net
                 .Append(FieldSeparator).Append(Sha256Hex(BlnetShimSources.HandleTable))
                 .Append(FieldSeparator).Append(Sha256Hex(BlnetShimSources.BlnetStatusCs))
                 .Append(FieldSeparator).Append(Sha256Hex(BlnetShimSources.ShimAbiCs))
+                .Append(FieldSeparator).Append(Sha256Hex(BlnetShimSources.MarshalCs))
                 .Append(FieldSeparator).Append(CompilerAssemblyMvid)
                 .ToString();
 

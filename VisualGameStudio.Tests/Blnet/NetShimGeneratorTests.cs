@@ -318,7 +318,7 @@ public class NetShimGeneratorTests
     }
 
     [Test]
-    public void NonEmptySurfaceEmitsTheProjectPlusFourSources()
+    public void NonEmptySurfaceEmitsTheProjectPlusFiveSources()
     {
         var files = NetShimGenerator.Emit(OneMemberSurface(), SafeProject);
 
@@ -329,8 +329,10 @@ public class NetShimGeneratorTests
             NetShimGenerator.HandleTableFileName,
             NetShimGenerator.StatusFileName,
             NetShimGenerator.ShimAbiFileName,
+            NetShimGenerator.MarshalFileName,
         }), "The shim's file set changed. §8.1's inventory is: the csproj, the generated "
-          + "Exports.g.cs, and the three fixed scaffolding files that come from BlnetShimSources.");
+          + "Exports.g.cs, and the fixed scaffolding files that come from BlnetShimSources "
+          + "(three hand-shim-pinned ones plus §6.4's BlnetMarshal.cs, P2a-2 Task 6).");
     }
 
     /// <summary>
@@ -354,6 +356,11 @@ public class NetShimGeneratorTests
                 Is.EqualTo(N(BlnetShimSources.BlnetStatusCs)));
             Assert.That(N(files[NetShimGenerator.ShimAbiFileName]),
                 Is.EqualTo(N(BlnetShimSources.ShimAbiCs)));
+            Assert.That(N(files[NetShimGenerator.MarshalFileName]),
+                Is.EqualTo(N(BlnetShimSources.MarshalCs)),
+                "BlnetMarshal.cs is not BlnetShimSources.MarshalCs verbatim — §6.4's managed "
+                + "conversions must have exactly one source of truth (NetConversionPairTests "
+                + "pins the vectors against that constant, not against a re-emission).");
         });
     }
 

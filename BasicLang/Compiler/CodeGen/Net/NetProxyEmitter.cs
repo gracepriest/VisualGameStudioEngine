@@ -83,6 +83,18 @@ namespace BasicLang.Compiler.CodeGen.Net
         /// <summary>P0's header-only native runtime — spliced verbatim from <see cref="BlnetRuntimeSources"/>.</summary>
         internal const string RuntimeHeaderFileName = "blnet_runtime.hpp";
 
+        /// <summary>
+        /// Spec §6.4's conversion pairs, native side — spliced verbatim from
+        /// <see cref="CppNetMarshal"/>. Constant text (hence no <c>.g.</c> infix, like the two P0
+        /// headers), but SURFACE-KEYED like everything here: the converters only have call sites
+        /// inside proxy invocations, and carrying them in this set — rather than the
+        /// always-emitted runtime preamble — is what keeps the flip's emission-identity claim
+        /// intact for programs with no .NET surface. NOT included by the other artifacts: it
+        /// requires the P1 BCL types, which only a generated program TU has in scope
+        /// (include-order contract on <see cref="CppNetMarshal"/>).
+        /// </summary>
+        internal const string MarshalHeaderFileName = "blnet_marshal.hpp";
+
         /// <summary>The transport seam: <c>BlnetProxyTable</c> + <c>g_net</c> + the startup declarations.</summary>
         internal const string BindingsFileName = "blnet_bindings.g.hpp";
 
@@ -141,6 +153,7 @@ namespace BasicLang.Compiler.CodeGen.Net
             {
                 [ContractHeaderFileName] = BlnetRuntimeSources.BlnetHeader,
                 [RuntimeHeaderFileName] = BlnetRuntimeSources.BlnetRuntime,
+                [MarshalHeaderFileName] = CppNetMarshal.GuardedSource,
                 [BindingsFileName] = EmitBindingsText(surface, plans),
                 [ProxiesFileName] = EmitProxies(surface, plans),
                 [StartupFileName] = EmitStartup(surface, plans, shimModuleFileName),

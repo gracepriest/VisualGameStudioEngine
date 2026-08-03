@@ -11,7 +11,7 @@ namespace BasicLang.Compiler.CodeGen.Net
 {
     /// <summary>
     /// Emits the MANAGED half of the .NET boundary for one project (spec §8.1–§8.2): the shim
-    /// <c>.csproj</c> and <c>Exports.g.cs</c>, plus the three fixed scaffolding files spliced
+    /// <c>.csproj</c> and <c>Exports.g.cs</c>, plus the four fixed scaffolding files spliced
     /// from <see cref="BlnetShimSources"/>. <see cref="NetProxyEmitter"/> emits the native half;
     /// the two are held together by §12.4 — one <see cref="NetNameMangler"/> output is
     /// simultaneously the proxy-table slot, this shim's <c>EntryPoint</c> string, and the name of
@@ -122,6 +122,15 @@ namespace BasicLang.Compiler.CodeGen.Net
         internal const string ShimAbiFileName = "ShimAbi.cs";
 
         /// <summary>
+        /// Spliced from <see cref="BlnetShimSources.MarshalCs"/> — spec §6.4's conversion pairs,
+        /// managed side (P2a-2 Task 6). Carries no <c>.g.</c> infix for the same CS8669 reason as
+        /// its three siblings; unlike them it is not byte-pinned to a hand-shim copy (the hand
+        /// shim predates the conversion pairs) and instead carries its own <c>#nullable</c>
+        /// directive and explicit usings (a raw Roslyn compile has no ImplicitUsings).
+        /// </summary>
+        internal const string MarshalFileName = "BlnetMarshal.cs";
+
+        /// <summary>
         /// The shim project's file name. <c>dotnet publish -p:NativeLib=Shared</c> names its
         /// native output after the PROJECT, and <see cref="NetShimPublisher.ExpectedDllPath"/>
         /// re-derives it the same way, so this basename is what
@@ -176,6 +185,7 @@ namespace BasicLang.Compiler.CodeGen.Net
                 [HandleTableFileName] = BlnetShimSources.HandleTable,
                 [StatusFileName] = BlnetShimSources.BlnetStatusCs,
                 [ShimAbiFileName] = BlnetShimSources.ShimAbiCs,
+                [MarshalFileName] = BlnetShimSources.MarshalCs,
             };
         }
 

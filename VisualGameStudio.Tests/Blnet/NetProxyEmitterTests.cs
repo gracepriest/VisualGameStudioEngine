@@ -152,19 +152,20 @@ public class NetProxyEmitterTests
     // ---- §9.1's artifact set ------------------------------------------------------------
 
     /// <summary>
-    /// §9.1 lists six <c>obj/gen</c> entries; five are FILES and the sixth is the
-    /// <c>shim/</c> DIRECTORY, which belongs to phase 5 (<c>NetShimGenerator</c>, plan Task 14)
+    /// §9.1's <c>obj/gen</c> FILE entries plus <c>blnet_marshal.hpp</c> (§6.4's conversion
+    /// pairs, P2a-2 Task 6 — constant text, surface-keyed like the rest of the set). The
+    /// <c>shim/</c> DIRECTORY belongs to phase 5 (<c>NetShimGenerator</c>, plan Task 14)
     /// and is deliberately not produced here — §10.1 requires phases 1-4 to give full C++
     /// IntelliSense without ever publishing a shim.
     /// </summary>
     internal static readonly string[] ExpectedArtifacts =
     {
-        "blnet.h", "blnet_runtime.hpp", "blnet_bindings.g.hpp",
+        "blnet.h", "blnet_runtime.hpp", "blnet_marshal.hpp", "blnet_bindings.g.hpp",
         "blnet_proxies.g.hpp", "blnet_startup.g.cpp",
     };
 
     [Test]
-    public void NonEmptySurfaceEmitsExactlyTheFiveNativeArtifacts()
+    public void NonEmptySurfaceEmitsExactlyTheSixNativeArtifacts()
     {
         var files = NetProxyEmitter.Emit(SixShapeSurface(), Module);
 

@@ -396,6 +396,10 @@ public class NetShimCacheTests
             Assert.That(identity, Does.Contain(Sha256Hex(BlnetShimSources.ShimAbiCs)),
                 "BlnetShimSources.ShimAbiCs is missing from the shim template identity. Fix "
                 + "NetShimCache.TemplateIdentity.");
+            Assert.That(identity, Does.Contain(Sha256Hex(BlnetShimSources.MarshalCs)),
+                "BlnetShimSources.MarshalCs is missing from the shim template identity — editing "
+                + "a §6.4 conversion would then hit the cache and ship a shim whose bit layouts "
+                + "disagree with the native side. Fix NetShimCache.TemplateIdentity.");
             Assert.That(identity,
                 Does.Contain(typeof(NetShimCache).Assembly.ManifestModule.ModuleVersionId.ToString("N")),
                 "The compiler assembly's own MVID is missing from the shim template identity — "
