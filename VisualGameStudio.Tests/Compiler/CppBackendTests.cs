@@ -282,11 +282,13 @@ End Module";
     }
 
     [Test]
-    public void Cpp_InterfaceReturn_FuncOfUnmappedArg_ThrowsCapabilityError()
+    public void Cpp_InterfaceReturn_FuncOfManagedOwnedArg_MapsToFunctionOfNetRef()
     {
-        // Func itself maps to std::function, but its Regex generic argument is
-        // unmapped and must be recursed into and rejected. (Re-pinned from DateTime
-        // to Regex by the P1 Task 10 flip — DateTime is NativeOwned now.)
+        // P2a-2 THE FLIP (D-P7): Func maps to std::function and its ManagedOwned Regex
+        // result type COMPOSES through MapType to the NetRef handle — zero extra mapping
+        // code. (Pre-flip pin: the recursed generic argument was rejected as unmapped.
+        // The recursion itself is still pinned by the KeyValuePair/Nullable rejections
+        // above — those stay genuinely unmapped.)
         var source = @"
 Interface IFoo
     Function GetVal() As Func(Of Regex)
@@ -296,12 +298,10 @@ Module Test
     End Sub
 End Module";
 
-        var ex = Assert.Throws<CppCapabilityException>(() =>
-        {
-            var output = CompileToCpp(source, out var errors);
-            Assert.That(errors, Is.Empty, "expected capability exception, got pipeline errors: " + string.Join("; ", errors));
-        });
-        Assert.That(ex.Message, Does.Contain("Regex"));
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("std::function<BasicLang::NetRef()>"),
+            "Func(Of Regex) must compose to std::function over the NetRef handle:\n" + output);
     }
 
     [Test]

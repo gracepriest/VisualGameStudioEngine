@@ -1123,15 +1123,18 @@ End Sub");
     /// LEAK CLOSURE (spec §4.1): a Rejected type used ONLY in expression position never
     /// declares a typed slot, so CheckType never saw it and the construction reached
     /// codegen as an undefined C++ type name (BL6006-class raw failure).
+    /// (Re-pinned from Regex to Object by the P2a-2 flip — Regex is ManagedOwned now and
+    /// its construction is accepted; Object is the one permanently Rejected name, so it
+    /// carries the leak-closure scenario from here on.)
     /// </summary>
     [Test]
     public void RejectedTypeInExpressionPosition_IsRejectedCleanly()
     {
         var ex = AssertRejected(@"
 Sub Main()
-    Console.WriteLine(New Regex(""x""))
+    Console.WriteLine(New Object())
 End Sub");
-        Assert.That(ex.Message, Does.Contain("Regex").And.Contain("no C++ mapping"));
+        Assert.That(ex.Message, Does.Contain("Object").And.Contain("no C++ mapping"));
     }
 
     /// <summary>

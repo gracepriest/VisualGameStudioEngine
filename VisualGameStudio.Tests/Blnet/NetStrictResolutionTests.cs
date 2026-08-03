@@ -17,8 +17,10 @@ using NUnit.Framework;
 namespace VisualGameStudio.Tests.Blnet;
 
 /// <summary>
-/// P2a-2 Task 4 — strict resolution, warning-only on BOTH backends (§6.3's severity split is
-/// Task 5's flip; nothing here may fail a build).
+/// P2a-2 Task 4 — strict resolution. (Severity note: Task 4 shipped everything
+/// warning-only; the Task-5 flip promoted the native path to §6.3's error row, so the
+/// severity assertions below pin IsWarning:false on native findings while the C#-path
+/// tests stay warning/silent.)
 ///
 /// <para><b>The argument side (§6.5).</b> A call whose callee the member probe RESOLVED is
 /// judged by REAL C# overload resolution (<c>NetTypeResolver.ResolveOverload</c> — its first
@@ -219,8 +221,8 @@ public class NetStrictResolutionTests
             + "BL6018, never BL6017. Got: "
             + string.Join(" | ", analyzer.NetDiagnostics.Select(d => d.Code + ": " + d.Message)));
         Assert.That(bl6018[0].Message, Does.Contain("Boom"));
-        Assert.That(bl6018[0].IsWarning, Is.True,
-            "SEVERITY DISCIPLINE: everything stays IsWarning until the Task-5 flip.");
+        Assert.That(bl6018[0].IsWarning, Is.False,
+            "P2a-2 THE FLIP: native findings are ERRORS (§6.3's native row).");
     }
 
     [Test]
@@ -241,7 +243,8 @@ public class NetStrictResolutionTests
         Assert.That(bl6017[0].Message, Does.Contain("System.String"),
             "the message must name the argument types the call presented");
         Assert.That(bl6017[0].Message, Does.Contain("ToBase64String"));
-        Assert.That(bl6017[0].IsWarning, Is.True);
+        // P2a-2 THE FLIP: native findings are errors.
+        Assert.That(bl6017[0].IsWarning, Is.False);
     }
 
     [Test]
@@ -266,7 +269,8 @@ public class NetStrictResolutionTests
             + ".NET argument. Got: "
             + string.Join(" | ", analyzer.NetDiagnostics.Select(d => d.Code + ": " + d.Message)));
         Assert.That(bl6019[0].Message, Does.Contain("Player"));
-        Assert.That(bl6019[0].IsWarning, Is.True);
+        // P2a-2 THE FLIP: native findings are errors.
+        Assert.That(bl6019[0].IsWarning, Is.False);
         Assert.That(FindingCodes(analyzer), Does.Not.Contain("BL6017"),
             "the user-class case must not ALSO be misreported as a failed overload match");
     }
@@ -353,8 +357,8 @@ public class NetStrictResolutionTests
             + "C++ templates, so the instantiation set is unknowable at phase 3 (§15.5/§14.13). Got: "
             + string.Join(" | ", analyzer.NetDiagnostics.Select(d => d.Code + ": " + d.Message)));
         Assert.That(bl6024[0].Message, Does.Contain("ReadAllText"));
-        Assert.That(bl6024[0].IsWarning, Is.True,
-            "SEVERITY DISCIPLINE: BL6024 is a warning until the Task-5 flip.");
+        Assert.That(bl6024[0].IsWarning, Is.False,
+            "P2a-2 THE FLIP: BL6024 is a native ERROR (§6.3's native row).");
     }
 
     [Test]
@@ -417,10 +421,11 @@ public class NetStrictResolutionTests
         var bl6016 = native.NetDiagnostics.Where(d => d.Code == "BL6016").ToList();
         Assert.That(bl6016, Has.Count.EqualTo(1),
             "on the NATIVE path a bare name no user channel claimed and the closure cannot "
-            + "resolve is a real finding (warning here, error at the Task-5 flip). Got: "
+            + "resolve is a real finding (an ERROR since the Task-5 flip). Got: "
             + string.Join(" | ", native.NetDiagnostics.Select(d => d.Code + ": " + d.Message)));
         Assert.That(bl6016[0].Message, Does.Contain("ZzqNotARealTypeAnywhere"));
-        Assert.That(bl6016[0].IsWarning, Is.True);
+        // P2a-2 THE FLIP: native findings are errors.
+        Assert.That(bl6016[0].IsWarning, Is.False);
 
         var csharp = Analyze(source, nativeBackend: false);
         Assert.That(FindingCodes(csharp), Is.Empty,
@@ -689,8 +694,9 @@ public class NetStrictResolutionTests
             "the message must name the offending TFM");
         Assert.That(tfmFindings[0].Message, Does.Contain("net8.0"),
             "…and the shim's pinned TFM, so the fix is actionable");
-        Assert.That(tfmFindings[0].IsWarning, Is.True,
-            "SEVERITY DISCIPLINE: warning until the Task-5 flip");
+        Assert.That(tfmFindings[0].IsWarning, Is.False,
+            "P2a-2 THE FLIP (Flag-1 decision): the TFM BL6021 is an ERROR — see the "
+            + "decision comment at the NetReferenceResolver site");
         Assert.That(closure.AssemblyPaths, Has.Count.EqualTo(1),
             "guard: the reference RESOLVED — D-P2 is about a resolved-but-too-new assembly");
     }

@@ -65,7 +65,7 @@ public class NetReferenceResolverTests
     }
 
     [Test]
-    public void ProjectReference_IsABL6021_WARNING_WithTheDocumentedWorkaround()
+    public void ProjectReference_IsABL6021_ERROR_WithTheDocumentedWorkaround()
     {
         var project = new ProjectFile { Backend = "cpp" };
         project.ProjectReferences.Add("..\\Sibling\\Sibling.blproj");
@@ -74,11 +74,12 @@ public class NetReferenceResolverTests
 
         var diag = result.Diagnostics.Single();
         Assert.That(diag.Code, Is.EqualTo("BL6021"));
-        Assert.That(diag.IsWarning, Is.True,
-            "MUST be a warning in P2a-1. The IDE writes <ProjectReference> into native projects " +
-            "itself — 'Add Project Reference' has NO backend filter " +
-            "(SolutionExplorerViewModel.cs:625-627 -> :689). An error here breaks projects the " +
-            "IDE creates and falsifies this plan's inertness claim. P2a-2 promotes it.");
+        // P2a-2 THE FLIP promoted this from the P2a-1 warning: a silently-ignored
+        // reference element is a lie about the build, and the error names the fix.
+        Assert.That(diag.IsWarning, Is.False,
+            "An ERROR since the P2a-2 flip (plan Task 5 item 4). The P2a-1 IDE concern " +
+            "('Add Project Reference' has no backend filter) is resolved BY reporting — " +
+            "the message tells the user exactly what to do instead.");
         Assert.That(diag.Message, Does.Contain("HintPath"),
             "The message must name the <Reference>+<HintPath> workaround (spec §5, §14.9) — " +
             "cross-project compilation does not exist on any build path.");

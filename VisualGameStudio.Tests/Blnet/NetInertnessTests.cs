@@ -395,59 +395,53 @@ public class NetInertnessTests
             Assert.That(result.Diagnostics.Select(d => d.Code), Does.Contain("BL6016"),
                 "The analyzer's .NET findings are not reaching result.Diagnostics, so a user would "
                 + "never see them. Check the CppDiagnostic emission block in CppProjectBuilder.");
-            Assert.That(result.Diagnostics.Where(d => d.Code == "BL6016").All(d => d.IsWarning), Is.True,
-                "A P2a-1 .NET finding was emitted as an ERROR. Every one of them is IsWarning: "
-                + "true until the P2a-2 flip — Fail() would force Success = false.");
+            // P2a-2 THE FLIP: native findings are ERRORS (spec §6.3's native row) —
+            // MergeNetDiagnostics routes IsWarning:false through Fail().
+            Assert.That(result.Diagnostics.Where(d => d.Code == "BL6016").All(d => !d.IsWarning),
+                Is.True,
+                "A native BL6016 was emitted as a WARNING. Since the P2a-2 flip the native "
+                + "backend hard-errors on an unresolved .NET type — a warning here would let "
+                + "the build limp on to raw C++ failure.");
         });
     }
 
     /// <summary>
-    /// The warning-only contract, asserted through the real builder.
-    /// <c>Analyze()</c> and <c>CompilationResult.HasErrors</c> now count only
-    /// <c>ErrorSeverity.Error</c> entries (analyzer warnings are non-fatal), so a
-    /// Warning-severity entry on <c>AllErrors</c> no longer fails a build. The .NET findings
-    /// still live on their own list because they are typed <c>NetReferenceDiagnostic</c>s
-    /// (code + message + IsWarning) surfaced through
-    /// <c>CppEmitOutcome.NetReferences.Diagnostics</c> — their own channel with their own
-    /// rendering — not because <c>AllErrors</c> would make them fatal.
-    ///
-    /// <para><b>The probe program DOES fail to build — for a PRE-EXISTING reason that has nothing
-    /// to do with P2a-1.</b> <c>CppCapabilityChecker</c> has always rejected an unmappable type in
-    /// a local's declared position ("no C++ mapping exists for this type"), and it still does. What
-    /// this test pins is that none of the P2a-1 finding codes is among the ERRORS: BL6016 appears
-    /// only as a warning, so it contributes nothing to the failure and would leave a build that
-    /// had no other problem succeeding.</para>
+    /// P2a-2 THE FLIP: the severity contract inverts on the native path — §6.5 findings are
+    /// build ERRORS (spec §6.3's native row), routed through <c>MergeNetDiagnostics</c>'
+    /// <c>Fail()</c> arm, and <c>EmitCore</c> STOPS at the analyzer merge (D-P3: a program
+    /// with .NET errors never reaches the checker or codegen, so the old "no C++ mapping"
+    /// sanity companion is structurally unreachable here now). The C# backend's warning row
+    /// is pinned by <c>NetFlipTests.UnresolvableSystemType_StaysAWarningOnTheCSharpBackend</c>.
+    /// (Pre-flip this test was <c>NetFindingsAreNeverErrors</c> — deliberately churned HERE
+    /// and nowhere else, per the plan's standing inertness rule.)
     /// </summary>
     [Test]
-    public void NetFindingsAreNeverErrors()
+    public void NetFindingsAreNativeErrors_FailingTheBuild()
     {
         var (result, outcome) =
             EmitViaBuilder(new Dictionary<string, string> { ["Main.bas"] = UnresolvableNetTypeProgram });
 
         var errorCodes = result.Diagnostics.Where(d => !d.IsWarning).Select(d => d.Code).ToList();
 
-        Assert.That(errorCodes.Intersect(NetFindingCodes), Is.Empty,
-            "A P2a-1 .NET finding was emitted as an ERROR: "
-            + string.Join(" | ", result.Diagnostics.Where(d => !d.IsWarning)
-                                       .Where(d => NetFindingCodes.Contains(d.Code))
-                                       .Select(d => d.Code + ": " + d.Message))
-            + ". P2a-1 is warning-only — §6.3's native-error behavior lands in P2a-2. Findings must "
-            + "not reach CompilationResult.AllErrors or go through Fail(): they are typed "
-            + "NetReferenceDiagnostics with their own channel and rendering (and Fail() would "
-            + "still force Success = false).");
+        Assert.That(errorCodes, Does.Contain("BL6016"),
+            "The native BL6016 must go through Fail() and surface as an ERROR diagnostic. Got "
+            + "errors: " + string.Join(" | ", result.Diagnostics.Where(d => !d.IsWarning)
+                                             .Select(d => d.Code + ": " + d.Message)));
+
+        Assert.That(result.Success, Is.False,
+            "An unresolvable .NET type must FAIL a native build after the flip (§6.3).");
 
         Assert.That(outcome.NetReferences!.Diagnostics.Where(d => NetFindingCodes.Contains(d.Code)),
-            Is.All.Matches<NetReferenceDiagnostic>(d => d.IsWarning),
-            "A P2a-1 .NET finding is marked as an error on the closure. Every one of them is "
-            + "IsWarning: true until the P2a-2 flip.");
+            Is.All.Matches<NetReferenceDiagnostic>(d => !d.IsWarning),
+            "Native findings must be IsWarning:false on the closure channel too — the IDE's "
+            + "Error List severity comes from this bit.");
 
-        // Sanity: the pre-existing capability rejection is what actually failed this build. If it
-        // stops firing, this test is no longer distinguishing "warning" from "the only error".
+        // Sanity (the flip's D-P3 half): the build stopped AT the analyzer merge — the
+        // checker never ran, so its "no C++ mapping" blob must NOT appear alongside.
         Assert.That(TranspileErrors(result),
-            Has.Some.Contains("no C++ mapping exists for this type"),
-            "The pre-existing CppCapabilityChecker rejection no longer fires for an unmappable "
-            + "local. That is a change in behavior this task did not intend — investigate before "
-            + "adjusting this assertion.");
+            Has.None.Contains("no C++ mapping exists for this type"),
+            "EmitCore continued past the analyzer's .NET errors into the capability checker. "
+            + "The flip's contract is fail-fast at the merge (analyzerNetErrors > 0 returns).");
     }
 
     /// <summary>
@@ -481,12 +475,17 @@ public class NetInertnessTests
     }
 
     /// <summary>
-    /// The bare spelling, for the record: it must also stay silent, but for a DIFFERENT reason
-    /// (the evidence gate, not the arity mapping). Kept separate so the two are not confused.
+    /// The bare spelling, for the record: it must also stay silent — since Task 4 replaced
+    /// the native evidence bar with real §6.5 resolution (and the Task-5 flip made findings
+    /// errors), the reason is that these RESOLVE through the ambient
+    /// System.Collections.Generic by arity, exactly like the qualified spellings above.
+    /// Kept separate so a regression in the ambient set is not confused with one in the
+    /// arity mapping. (Re-pinned to resolved behavior at the P2a-2 flip; the pre-Task-4
+    /// name was BareUnclaimedGenericsAreBelowTheEvidenceBar.)
     /// </summary>
     [TestCase("Queue(Of Integer)")]
     [TestCase("SortedDictionary(Of Integer, String)")]
-    public void BareUnclaimedGenericsAreBelowTheEvidenceBar(string typeSpelling)
+    public void BareUnclaimedGenericsResolveThroughTheAmbientSet(string typeSpelling)
     {
         var source = $"""
             Module M

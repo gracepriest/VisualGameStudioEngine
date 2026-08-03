@@ -448,26 +448,24 @@ public class CppProjectCliBuildTests
     }
 
     [Test]
-    public void NativeProject_WithProjectReference_StillBuilds()
+    public void NativeProject_WithProjectReference_FailsWithBL6021_NamingTheWorkaround()
     {
+        // P2a-2 THE FLIP (plan Task 5 item 4): promoted from the P2a-1 warning. Reference
+        // resolution is phase 1 and returns before the toolchain gate, so this whole test
+        // is now machine-independent — no toolchain conditional needed.
         var project = MakeCppProjectWithProjectReference("..\\Sibling\\Sibling.blproj");
 
         var result = CppProjectBuilder.Build(project, "Release");
 
-        // Machine-independent half — the severity, which is the part that matters.
-        Assert.That(result.Diagnostics.Single(d => d.Code == "BL6021").IsWarning, Is.True,
-            "MUST stay a warning in P2a-1. The IDE writes <ProjectReference> into native "
-            + "projects with no backend filter (SolutionExplorerViewModel 'Add Project "
-            + "Reference'), and such projects build on master. Fix NetReferenceResolver, not "
-            + "this test — P2a-2 is where it is promoted to an error.");
-
-        if (CppToolchain.Find() == null)
-            Assert.Ignore("No C++ toolchain available; the severity assertion above still ran");
-
-        Assert.That(result.Success, Is.True,
-            "INERTNESS GATE. The IDE writes <ProjectReference> into native projects with no "
-            + "backend filter, and such projects build on master. If this fails, P2a-1 is not "
-            + "inert.\n" + result.RawToolchainOutput + "\n"
+        var diag = result.Diagnostics.Single(d => d.Code == "BL6021");
+        Assert.That(diag.IsWarning, Is.False,
+            "An ERROR since the P2a-2 flip — a silently-ignored <ProjectReference> was the "
+            + "P2a-1 compromise; the error names the <Reference>+<HintPath> workaround.");
+        Assert.That(diag.Message, Does.Contain("HintPath"),
+            "The message must keep naming the workaround — that is what resolves the "
+            + "'IDE creates such projects' concern.");
+        Assert.That(result.Success, Is.False,
+            "A native project with a <ProjectReference> must FAIL after the flip:\n"
             + string.Join("\n", result.Diagnostics.Select(CppDiagnosticsParser.FormatNormalized)));
     }
 

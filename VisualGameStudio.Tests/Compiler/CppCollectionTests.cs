@@ -191,17 +191,24 @@ End Sub";
     }
 
     [Test]
-    public void Cpp_ListOfUnmappedType_StillRejected()
+    public void Cpp_ListOfManagedOwnedType_MapsToListOfNetRef()
     {
-        // Generic args are still capability-checked. Re-pinned to Regex by the P1
-        // Task 10 flip: DateTime is NativeOwned now, so the REMAINING reject list
-        // (Object/Regex/Uri/Stream/FileInfo/DirectoryInfo — P2 territory) carries
-        // this scenario shape.
+        // P2a-2 THE FLIP (D-P7): Regex is ManagedOwned now, and a ManagedOwned generic
+        // argument composes through MapType with zero extra mapping code — the element
+        // is the always-emitted BasicLang::NetRef handle. (Pre-flip pin: rejected as an
+        // unmapped .NET type.) An Object element would still reject — Object stays
+        // permanently Rejected.
         var source = @"
 Sub Main()
     Dim d As New List(Of Regex)()
 End Sub";
-        Assert.Throws<CppCapabilityException>(() => CompileToCpp(source, out _));
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("std::shared_ptr<BasicLang::List<BasicLang::NetRef>>"),
+            "the declaration must compose: List wrapper (reference semantics) over the NetRef handle");
+        Assert.That(output, Does.Contain("std::make_shared<BasicLang::List<BasicLang::NetRef>>"));
+        Assert.That(output, Does.Contain("class NetRef"),
+            "the always-emitted runtime must carry the NetRef definition (D-P7)");
     }
 
     [Test]
@@ -1047,64 +1054,76 @@ End Sub";
     }
 
     [Test]
-    public void Cpp_ModuleGlobalUnmappedType_StillRejected()
+    public void Cpp_ModuleGlobalManagedOwnedType_DeclaresNetRef()
     {
-        // A file-scope `Dim g As Regex` global (unmapped .NET type) must still
-        // trip the C++ capability checker — the globals position was previously
-        // unchecked and would have bypassed the rejection. (Re-pinned from
-        // DateTime to Regex by the P1 Task 10 flip.)
+        // P2a-2 THE FLIP (D-P7): a file-scope `Dim g As Regex` global is a DECLARATION
+        // position — it lowers to the null-slot-safe BasicLang::NetRef handle (handle 0,
+        // no shim needed). (Pre-flip pin: the globals position rejected the unmapped
+        // .NET type.)
         var source = @"
 Dim g As Regex
 Sub Main()
 End Sub";
-        Assert.Throws<CppCapabilityException>(() => CompileToCpp(source, out _));
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("BasicLang::NetRef g"),
+            "a module-global ManagedOwned declaration must be a NetRef:\n" + output);
     }
 
     [Test]
-    public void Cpp_InterfaceMethodUnmappedReturnType_StillRejected()
+    public void Cpp_InterfaceMethodManagedOwnedReturnType_MapsToNetRef()
     {
-        // A pure interface method signature carries no impl body, so nothing lowers
-        // into module.Functions — the capability checker must walk interface method
-        // signatures directly, or a `Function Foo() As Regex` on an interface
-        // degrades to a raw C++ compiler error instead of a clean BasicLang diagnostic.
-        // (Re-pinned from DateTime to Regex by the P1 Task 10 flip.)
+        // P2a-2 THE FLIP (D-P7): a pure interface signature returning a ManagedOwned
+        // type is a declaration position — the abstract method returns the NetRef
+        // handle. (Pre-flip pin: the interface-signature walk rejected Regex; the WALK
+        // itself is still load-bearing for genuinely unmapped types — see the
+        // KeyValuePair/Nullable rejections in CppBackendTests.)
         var source = @"
 Interface IThing
     Function Foo() As Regex
 End Interface
 Sub Main()
 End Sub";
-        Assert.Throws<CppCapabilityException>(() => CompileToCpp(source, out _));
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("BasicLang::NetRef Foo"),
+            "an interface method returning a ManagedOwned type must return NetRef:\n" + output);
     }
 
     [Test]
-    public void Cpp_RejectedLocal_StillRejected()
+    public void Cpp_ManagedOwnedLocal_MapsToNetRef()
     {
-        // Stream is NOT mapped by CppTypeMapper — it must be rejected cleanly. If it
-        // were (wrongly) categorized Bridged in BoundaryTypeRegistry it would pass the
-        // check and then MapType would emit a bare, UNDEFINED C++ type `Stream` (silent
-        // miscompile). Re-pinned from Decimal to Stream by the P1 Task 10 flip —
-        // Decimal is NativeOwned now and lowers to BasicLang::Decimal.
+        // P2a-2 THE FLIP (D-P7): Stream is ManagedOwned — a local declaration is a
+        // NetRef handle. (Pre-flip pin: rejected. The anti-miscompile concern the old
+        // pin carried — a bare, undefined C++ `Stream` leaking through — is now held by
+        // the assertion that the emitted type is EXACTLY BasicLang::NetRef.)
         var source = @"
 Sub Main()
     Dim x As Stream
 End Sub";
-        Assert.Throws<CppCapabilityException>(() => CompileToCpp(source, out _));
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("BasicLang::NetRef x"),
+            "a ManagedOwned local must declare as NetRef:\n" + output);
+        Assert.That(output, Does.Not.Contain(" Stream x"),
+            "the bare undefined C++ type name must never leak into the emission");
     }
 
     [Test]
-    public void Cpp_InterfaceMethodRejectedReturnType_StillRejected()
+    public void Cpp_InterfaceMethodManagedOwnedStreamReturn_MapsToNetRef()
     {
-        // Same, in an interface signature position (M1 context): Stream has no C++
-        // mapping, so a `Function Balance() As Stream` on an interface must reject
-        // cleanly. (Re-pinned from Decimal to Stream by the P1 Task 10 flip.)
+        // P2a-2 THE FLIP (D-P7): same as the Regex interface-return pin above, on the
+        // second flipped name — Stream. (Pre-flip pin: rejected in signature position.)
         var source = @"
 Interface IMoney
     Function Balance() As Stream
 End Interface
 Sub Main()
 End Sub";
-        Assert.Throws<CppCapabilityException>(() => CompileToCpp(source, out _));
+        var output = CompileToCpp(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("BasicLang::NetRef Balance"),
+            "an interface method returning ManagedOwned Stream must return NetRef:\n" + output);
     }
 
     // ========================================================================

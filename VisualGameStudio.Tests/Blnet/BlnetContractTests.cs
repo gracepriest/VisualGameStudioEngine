@@ -186,15 +186,21 @@ public class BoundaryTypeRegistryTests
             Is.EqualTo(BasicLang.BoundaryTypeCategory.Bridged));
 
     /// <summary>
-    /// The POST-P1 reject list: the six native BCL types and SByte moved out
-    /// (P1 Task 10 flip); what remains is P2 territory (Object's void* erasure
-    /// is unsound; Regex/Uri/Stream/FileInfo/DirectoryInfo need the managed shim).
+    /// The POST-FLIP reject list (P2a-2 Task 5): Object alone. The five former
+    /// P2-territory names (Regex/Uri/Stream/FileInfo/DirectoryInfo) moved to
+    /// ManagedOwned at the flip; Object's void* erasure stays permanently unsound.
     /// </summary>
-    [TestCase("Object")] [TestCase("Regex")]
-    [TestCase("Uri")] [TestCase("Stream")] [TestCase("FileInfo")] [TestCase("DirectoryInfo")]
+    [TestCase("Object")]
     public void TodaysRejectList_IsRejected(string name) =>
         Assert.That(BasicLang.BoundaryTypeRegistry.Categorize(name),
             Is.EqualTo(BasicLang.BoundaryTypeCategory.Rejected));
+
+    /// <summary>P2a-2 THE FLIP (spec §11.4): the five curated shim-routed names.</summary>
+    [TestCase("Regex")] [TestCase("Uri")] [TestCase("Stream")]
+    [TestCase("FileInfo")] [TestCase("DirectoryInfo")]
+    public void TheFlippedFive_AreManagedOwned(string name) =>
+        Assert.That(BasicLang.BoundaryTypeRegistry.Categorize(name),
+            Is.EqualTo(BasicLang.BoundaryTypeCategory.ManagedOwned));
 
     /// <summary>Spec §2: the six P1 types are NativeOwned (pure C++, never a handle).</summary>
     [TestCase("DateTime")] [TestCase("TimeSpan")] [TestCase("Guid")]
@@ -215,8 +221,10 @@ public class BoundaryTypeRegistryTests
 
     [Test]
     public void CategorizeIsCaseInsensitive() =>
+        // ManagedOwned since the P2a-2 flip (was Rejected) — the case-insensitivity is
+        // what is under test, not the category.
         Assert.That(BasicLang.BoundaryTypeRegistry.Categorize("regex"),
-            Is.EqualTo(BasicLang.BoundaryTypeCategory.Rejected));
+            Is.EqualTo(BasicLang.BoundaryTypeCategory.ManagedOwned));
 
     /// <summary>
     /// Task 10 rider (b): a leading `System.` qualifier normalizes away, mirroring
@@ -228,7 +236,9 @@ public class BoundaryTypeRegistryTests
     [TestCase("System.DateTime", BasicLang.BoundaryTypeCategory.NativeOwned)]
     [TestCase("System.Text.StringBuilder", BasicLang.BoundaryTypeCategory.NativeOwned)]
     [TestCase("System.Object", BasicLang.BoundaryTypeCategory.Rejected)]
-    [TestCase("System.Text.RegularExpressions.Regex", BasicLang.BoundaryTypeCategory.Rejected)]
+    // ManagedOwned since the P2a-2 flip (was Rejected) — the qualified-name
+    // normalization is what is under test.
+    [TestCase("System.Text.RegularExpressions.Regex", BasicLang.BoundaryTypeCategory.ManagedOwned)]
     [TestCase("System.Int32", BasicLang.BoundaryTypeCategory.Unknown)] // .NET CLR spelling is not a BL name
     public void QualifiedSystemName_NormalizesToTheSameCategory(
         string name, BasicLang.BoundaryTypeCategory expected) =>
@@ -248,9 +258,15 @@ public class BoundaryTypeRegistryTests
                 "DateTime", "TimeSpan", "Guid", "StringBuilder", "Decimal", "DateTimeOffset"
             }));
 
-    /// <summary>ManagedOwned is P2 territory — still empty after the P1 flip.</summary>
+    /// <summary>
+    /// P2a-2 THE FLIP: ManagedOwned holds exactly the five curated names. The registry
+    /// stays a static simple-name-keyed table by design (spec §11.4) — arbitrary resolved
+    /// .NET types are Unknown here and handle-represented by §8.3's rule, so this set
+    /// must never grow per-project.
+    /// </summary>
     [Test]
-    public void ManagedOwned_StillEmpty() =>
+    public void ManagedOwned_HoldsExactlyTheFlippedFive() =>
         Assert.That(BasicLang.BoundaryTypeRegistry.NamesInCategory(
-            BasicLang.BoundaryTypeCategory.ManagedOwned), Is.Empty);
+                BasicLang.BoundaryTypeCategory.ManagedOwned),
+            Is.EquivalentTo(new[] { "Regex", "Uri", "Stream", "FileInfo", "DirectoryInfo" }));
 }

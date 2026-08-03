@@ -53,10 +53,9 @@ namespace BasicLang
 
         private static readonly HashSet<string> Rejected = new(StringComparer.OrdinalIgnoreCase)
         {
-            // P2 territory. Object stays permanently Rejected (void* erasure is unsound);
-            // the rest need the managed shim.
+            // Object stays permanently Rejected (void* erasure is unsound). The five former
+            // P2-territory names moved to ManagedOwned at the P2a-2 flip (spec §11.4).
             "Object",
-            "Regex", "Uri", "Stream", "FileInfo", "DirectoryInfo"
         };
 
         /// <summary>
@@ -69,7 +68,21 @@ namespace BasicLang
             "DateTime", "TimeSpan", "Guid", "StringBuilder", "Decimal", "DateTimeOffset"
         };
 
-        private static readonly HashSet<string> ManagedOwned = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>
+        /// P2a-2 THE FLIP (spec §11.4): the five curated GC-heap names cross the boundary as
+        /// generation-tagged handles (<c>BasicLang::NetRef</c> at every declaration position —
+        /// CppCodeGenerator.MapType keys off this category). The registry stays a static,
+        /// curated, simple-name-keyed table BY DESIGN: arbitrary resolved .NET types remain
+        /// <see cref="BoundaryTypeCategory.Unknown"/> here and are handle-represented by spec
+        /// §8.3's wire-form rule through <c>NetTypeResolver</c>. §12.4 invariants (held by
+        /// NetFlipTests): ManagedOwned ∩ Rejected = ∅ (<see cref="Categorize"/> checks
+        /// ManagedOwned first, so an overlap would resolve silently), and every name here —
+        /// and no other registry name — maps to <c>NetRef</c>.
+        /// </summary>
+        private static readonly HashSet<string> ManagedOwned = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "Regex", "Uri", "Stream", "FileInfo", "DirectoryInfo"
+        };
 
         public static BoundaryTypeCategory Categorize(string typeName)
         {

@@ -33,8 +33,15 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         public static string BlnetHeader =>
             Header1 + BlnetContract.GenerateStatusHeader() + Header2 + BlnetContract.GenerateCoreExportHeader();
 
-        /// <summary>Complete <c>blnet_runtime.hpp</c> text.</summary>
-        public static string BlnetRuntime => Runtime;
+        /// <summary>
+        /// Complete <c>blnet_runtime.hpp</c> text. Since the P2a-2 flip (D-P7) the
+        /// <c>NetRef</c> class DEFINITION is spliced from <see cref="CppNetRefRuntime"/> —
+        /// the same constant the always-emitted generated runtime splices — at file scope,
+        /// before the <c>blnet</c> namespace opens; the namespace re-exports it and binds
+        /// its hooks to <c>g_shim</c>. One definition, two headers, include-guard dedup.
+        /// </summary>
+        public static string BlnetRuntime =>
+            RuntimeHead + CppNetRefRuntime.GuardedSource + RuntimeBody;
 
         /// <summary><c>blnet.h</c> — everything before the generated status section.</summary>
         private const string Header1 = @"/* blnet.h — .NET⇄native boundary contract v1 (spec 2026-07-26). */
@@ -82,8 +89,8 @@ typedef struct BlnetNativeVtable {
 /* Shim exports (managed side). Native code binds these by name. */
 ";
 
-        /// <summary><c>blnet_runtime.hpp</c> — complete text.</summary>
-        private const string Runtime = @"/* blnet_runtime.hpp — native-side runtime of the boundary contract v1. Header-only C++20. */
+        /// <summary><c>blnet_runtime.hpp</c> — everything before the D-P7 NetRef splice.</summary>
+        private const string RuntimeHead = @"/* blnet_runtime.hpp — native-side runtime of the boundary contract v1. Header-only C++20. */
 #pragma once
 #include ""blnet.h""
 #include <atomic>
@@ -96,6 +103,10 @@ typedef struct BlnetNativeVtable {
 #include <string>
 #include <vector>
 
+";
+
+        /// <summary><c>blnet_runtime.hpp</c> — everything after the D-P7 NetRef splice.</summary>
+        private const string RuntimeBody = @"
 namespace BasicLang { namespace blnet {
 
 /* ---- Shim binding (filled by the host: harness now, generated startup in P2) ---- */
@@ -128,25 +139,32 @@ inline void NetCheck(int32_t status) {
     throw std::runtime_error(msg);
 }
 
-/* ---- C2: NetRef — RAII over a managed handle (shared_ptr custom-deleter pattern,
-   mirroring the collection layer's reference semantics) ---- */
-class NetRef {
-    std::shared_ptr<void> ref_;
-public:
-    NetRef() = default;
-    /* Takes ownership of one table reference (fresh handles are born refcount 1). */
-    explicit NetRef(blnet_handle h)
-        : ref_(h ? std::shared_ptr<void>(reinterpret_cast<void*>(h),
-              [](void* p) { if (g_shim.release) g_shim.release(reinterpret_cast<blnet_handle>(p)); })
-                 : nullptr) {}
-    blnet_handle get() const { return reinterpret_cast<blnet_handle>(ref_.get()); }
-    explicit operator bool() const { return static_cast<bool>(ref_); }
-    /* A new INDEPENDENT NetRef for the same object goes through blnet_addref. */
-    static NetRef Duplicate(const NetRef& other) {
-        if (other && g_shim.addref) NetCheck(g_shim.addref(other.get()));
-        return NetRef(other.get());
-    }
-};
+/* ---- C2: NetRef. The class DEFINITION moved to the always-emitted BasicLang runtime at
+   the P2a-2 flip (D-P7: generated declaration positions hold a NetRef with no shim
+   present) and is spliced ABOVE this namespace from the same single source, behind an
+   include guard — a TU that sees both this header and a generated runtime header gets
+   exactly one definition. This namespace re-exports the name (BasicLang::blnet::NetRef
+   stays a valid spelling for the harness, proxies and P2b) and binds the class's
+   addref/release hooks to g_shim, preserving the original semantics exactly:
+   destruction releases when a shim is bound (release status deliberately ignored, as
+   before), Duplicate does a CHECKED addref (NetCheck throws on failure), and both no-op
+   on handle 0 / unbound shim. Binding happens in a static initializer so hand-written
+   hosts (the conformance harness fills g_shim directly, never calling blnet_bind_core)
+   get working hooks without a call-site change; the wrappers read g_shim at CALL time,
+   so initialization order vs g_shim is immaterial. ---- */
+using ::BasicLang::NetRef;
+
+inline void netref_addref_via_shim(std::uint64_t h) { if (g_shim.addref) NetCheck(g_shim.addref(h)); }
+inline void netref_release_via_shim(std::uint64_t h) { if (g_shim.release) g_shim.release(h); }
+namespace detail {
+    struct NetRefHookBinder {
+        NetRefHookBinder() {
+            ::BasicLang::g_netref_addref = &netref_addref_via_shim;
+            ::BasicLang::g_netref_release = &netref_release_via_shim;
+        }
+    };
+    inline NetRefHookBinder g_netref_hook_binder;
+}
 
 /* ---- C5: callback table (generation-tagged, mirrors C2) ---- */
 using NativeCallbackFn = std::function<int32_t(const uint64_t* args, int32_t argc, uint64_t* result)>;

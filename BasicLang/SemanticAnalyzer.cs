@@ -2248,12 +2248,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
-        /// P2a-1's warning-only findings, kept OUT of <see cref="Errors"/>.
+        /// The §6.5 findings, kept OUT of <see cref="Errors"/>.
         ///
         /// <para>These are typed diagnostics (code + message + IsWarning), not
         /// <see cref="SemanticError"/>s: the caller routes them into
         /// <c>CppEmitOutcome.NetReferences.Diagnostics</c>, which <c>CppProjectBuilder</c>
-        /// renders as non-failing <c>CppDiagnostic { IsWarning = true }</c>. Keeping them off
+        /// renders per severity — since the P2a-2 flip, native-path findings are
+        /// <c>IsWarning: false</c> and fail the build through <c>MergeNetDiagnostics</c>'
+        /// <c>Fail()</c> arm; C#-path findings stay warnings (§6.3). Keeping them off
         /// <see cref="Errors"/> keeps that channel — and its per-code rendering — intact.</para>
         ///
         /// <para>(Historical note: this separation originally also carried the load of keeping
@@ -2271,7 +2273,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
         {
             if (!_netReportedFindings.Add(code + "|" + message)) return;
             var where = line > 0 ? $" (line {line.ToString(CultureInfo.InvariantCulture)})" : string.Empty;
-            _netDiagnostics.Add(new NetReferenceDiagnostic(code, message + where, IsWarning: true));
+            // P2a-2 THE FLIP (spec §6.3): on the NATIVE backend every §6.5 finding this
+            // method emits (BL6016/17/18/19/23/24) is a build ERROR — the backend cannot
+            // emit a proxy for an unresolved member, so a warning would defer the failure
+            // to raw C++. CppProjectBuilder's MergeNetDiagnostics routes IsWarning:false
+            // through Fail(). The C# backend keeps §6.3's warning row (late-csc behavior),
+            // which is what lets valid programs behave identically on both backends while
+            // only BROKEN programs differ in how early they are caught.
+            _netDiagnostics.Add(new NetReferenceDiagnostic(
+                code, message + where, IsWarning: !_netNativeBackend));
         }
 
         /// <summary>
@@ -2817,6 +2827,58 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 + "cannot be enumerated at build time — .NET member calls are not supported "
                 + "inside generic bodies on the native backend (spec §14.13). Move the call to a "
                 + "non-generic method.",
+                line, column);
+        }
+
+        /// <summary>
+        /// P2a-2 Task 5, Flag 2: BL6024's CONSTRUCTOR half. Pre-flip, `New Regex(...)` inside
+        /// a generic body was covered by the checker's IRNewObject rejection (Regex was
+        /// Rejected); the flip removes that rejection, and <see cref="WarnNetCallInGenericBody"/>
+        /// fires only on member-access annotations — so without this probe a ManagedOwned (or
+        /// any resolved-.NET) construction inside a BL generic body would hand Task 7a a .NET
+        /// call inside a C++ template. Same trigger discipline as the type-reference probe:
+        /// claimed names, user-defined types, foreign types and NativeOwned/Bridged registry
+        /// names are never judged; an unresolvable name is silent here (the type-reference
+        /// probe owns BL6016). Native path only, like the member half.
+        /// </summary>
+        private void ProbeNetConstructorInGenericBody(TypeInfo type, int line, int column)
+        {
+            if (_netResolverFactory == null) return;
+            if (!_netNativeBackend) return;
+            var name = type?.Name;
+            if (string.IsNullOrEmpty(name)) return;
+            if (name.IndexOf("::", StringComparison.Ordinal) >= 0) return;   // foreign C++
+            if (!IsInsideGenericBody()) return;
+
+            var genericCount = type.GenericArguments?.Count ?? 0;
+            if (NetClaimPredicate.IsClaimedTypeName(name, genericCount)) return;
+            if (IsUserDefinedTypeName(name)) return;
+
+            // The 12 CppExceptionTypes names lower NATIVELY (`Throw New ArgumentException(x)`
+            // → std::runtime_error, no proxy, template-safe) — judging them would put a
+            // false BUILD BREAK on a valid generic body. Same exemption CheckType grants.
+            if (BasicLang.Compiler.CodeGen.CPlusPlus.CppExceptionTypes.IsNetException(name)) return;
+
+            var category = BoundaryTypeRegistry.Categorize(name);
+            if (category == BoundaryTypeCategory.NativeOwned
+                || category == BoundaryTypeCategory.Bridged)
+            {
+                return;   // native constructions — legal in a template
+            }
+
+            string fullName = null;
+            if (category != BoundaryTypeCategory.ManagedOwned
+                && ResolveNetType(name, genericCount, out fullName) != NetTypeLookupOutcome.Resolved)
+            {
+                return;
+            }
+
+            NetWarning("BL6024",
+                $"'New {fullName ?? name}' constructs a .NET object inside a generic BasicLang "
+                + "body. BasicLang generics compile to real C++ templates, so .NET "
+                + "instantiations cannot be enumerated at build time — .NET constructions are "
+                + "not supported inside generic bodies on the native backend (spec §14.13). "
+                + "Move the construction to a non-generic method.",
                 line, column);
         }
 
@@ -6904,6 +6966,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     }
                 }
             }
+
+            // P2a-2 Task 5, Flag 2: a .NET construction inside a generic body is BL6024
+            // (native path only) — the checker rejection that used to cover it left with
+            // the registry flip. The resolved TypeInfo carries name + generic arity; a
+            // null type (unresolved) is the type-reference probe's BL6016, not ours.
+            ProbeNetConstructorInGenericBody(type, node.Line, node.Column);
 
             SetNodeType(node, type);
         }

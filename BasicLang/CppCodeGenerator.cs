@@ -331,6 +331,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // Catch), not surface-level, so the declaration must always exist
             // (split-mode counterpart: EmitRuntimeHeader in CppCodeGenerator.Split.cs).
             SpliceRuntimeSource(CppNetExceptionRuntime.Source);
+
+            // D-P7 NetRef (P2a-2 flip): UNCONDITIONAL in both modes — ManagedOwned
+            // declaration positions lower to BasicLang::NetRef even with an empty surface,
+            // so the type must always exist. Include-guarded and self-including; shared
+            // verbatim with blnet_runtime.hpp (single definition).
+            SpliceRuntimeSource(CppNetRefRuntime.GuardedSource);
         }
 
         /// <summary>
@@ -505,6 +511,22 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     return $"{type.Name}<{string.Join(", ", type.GenericArguments.Select(MapType))}>{suffix}";
                 return type.Name + suffix;
             }
+            // P2a-2 THE FLIP (spec §11.4 / D-P7): ManagedOwned names are generation-tagged
+            // handles at every DECLARATION position — the always-emitted BasicLang::NetRef
+            // RAII type. Checked BEFORE the collection/Func branches so composition does the
+            // rest with zero extra mapping code: List(Of Regex) recurses to
+            // BasicLang::List<BasicLang::NetRef>, Func(Of Regex) to
+            // std::function<BasicLang::NetRef()>. Declaration-level only — call lowering is
+            // Task 7a. Scoped to REGISTRY names (§12.4): arbitrary resolved .NET types are
+            // Unknown to the registry and get their handle form from §8.3's rule later.
+            // A user type shadowing one of these names is a checker conflict (rename), so
+            // this remap can never capture a user class.
+            if (type.Name != null
+                && BoundaryTypeRegistry.Categorize(type.Name) == BoundaryTypeCategory.ManagedOwned)
+            {
+                return "BasicLang::NetRef";
+            }
+
             // Everyday collections -> BasicLang wrappers wrapped in std::shared_ptr. .NET
             // List/Dictionary/HashSet are REFERENCE types: ByVal params alias, `Dim b = a`
             // aliases, field stores alias, and `[=]` lambda capture copies the (shared) pointer.
@@ -829,7 +851,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 "decimal" => "BasicLang::Decimal",
                 "datetimeoffset" => "BasicLang::DateTimeOffset",
                 "stringbuilder" => "std::shared_ptr<BasicLang::StringBuilder>",
-                _ => SanitizeName(typeName)
+                // P2a-2 THE FLIP (D-P7): the name-string route (delegate parameters) maps
+                // ManagedOwned names to the NetRef handle, mirroring MapType — without this
+                // a `Delegate Sub F(r As Regex)` parameter emitted a bare undefined name.
+                _ => BoundaryTypeRegistry.Categorize(typeName) == BoundaryTypeCategory.ManagedOwned
+                    ? "BasicLang::NetRef"
+                    : SanitizeName(typeName)
             };
         }
 

@@ -145,9 +145,17 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // remap the user's `Class Guid` to BasicLang::Guid (constructing the runtime
             // type, losing every user member). BasicLang has no namespaces to disambiguate
             // with, so the only honest answer is a rename request.
+            // P2a-2 THE FLIP extends the same rider to ManagedOwned names: post-flip a
+            // `Class Regex` would silently remap to BasicLang::NetRef (MapType keys off the
+            // registry BEFORE user types) — the identical silent-miscompile shape.
             foreach (var name in _userDefinedNames)
-                if (BoundaryTypeRegistry.Categorize(name) == BoundaryTypeCategory.NativeOwned)
+            {
+                var shadowCategory = BoundaryTypeRegistry.Categorize(name);
+                if (shadowCategory == BoundaryTypeCategory.NativeOwned)
                     diags.Add($"'{name}' conflicts with a native BCL type on the C++ backend — rename the type");
+                else if (shadowCategory == BoundaryTypeCategory.ManagedOwned)
+                    diags.Add($"'{name}' conflicts with a .NET type name reserved at the native boundary — rename the type");
+            }
 
             var globalNames = module.GlobalVariables?.Values.Select(g => g.Name) ?? Enumerable.Empty<string>();
             // Both the qualified name the IR carries ("M.CStr") and its unqualified last
@@ -201,6 +209,23 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (module.Classes != null)
                 foreach (var cls in module.Classes.Values)
                 {
+                    // P2a-2 THE FLIP, step 2a: native `Inherits` of a .NET class stays
+                    // rejected. CheckType's new ManagedOwned acceptance is DECLARATION-level
+                    // (a value slot holding a NetRef handle); a BASE-CLASS position is not —
+                    // `class MyStream : public NetRef` would compile to nonsense, and an
+                    // unguarded flip would have made exactly that emission legal. (An
+                    // arbitrary .NET base — `Inherits Form` under a Using — is Unknown to
+                    // the registry and still dies as an undefined C++ base name; this arm
+                    // gives the five curated names the clean diagnostic.)
+                    if (!string.IsNullOrEmpty(cls.BaseClass)
+                        && BoundaryTypeRegistry.Categorize(cls.BaseClass)
+                           == BoundaryTypeCategory.ManagedOwned)
+                    {
+                        diags.Add($"'{cls.Name}' Inherits .NET type '{cls.BaseClass}' — a native " +
+                                  "class cannot inherit from a .NET class on the C++ backend; " +
+                                  "hold it in a field instead");
+                    }
+
                     // Class field types.
                     if (cls.Fields != null)
                         foreach (var fld in cls.Fields)
@@ -350,9 +375,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     var newCategory = BoundaryTypeRegistry.Categorize(no.ClassName);
                     if (newCategory == BoundaryTypeCategory.Rejected)
                     {
-                        // LEAK CLOSURE (spec §4.1): `Console.WriteLine(New Regex("x"))` never
-                        // declares a Regex-typed position, so CheckType never saw it and the
-                        // construction reached codegen as an undefined C++ type.
+                        // LEAK CLOSURE (spec §4.1): `Console.WriteLine(New Object())` never
+                        // declares an Object-typed position, so CheckType never saw it and the
+                        // construction reached codegen as an undefined C++ type. Post-flip
+                        // (P2a-2, spec §11.4) only Object remains Rejected; a ManagedOwned
+                        // `New Regex("x")` falls through ACCEPTED — its ctor lowers to a
+                        // NetRef-returning proxy (Task 7a), and inside a BL generic body the
+                        // analyzer's BL6024 ctor probe covers the shape this arm used to.
                         diags.Add($".NET type '{no.ClassName}' (New expression in '{funcName}') — " +
                                   "no C++ mapping exists for this type");
                     }
@@ -623,6 +652,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // primitive-kind one silently miscompiles. A user-defined type SHADOWING one
             // of these names is caught by the conflict diagnostic in Check().
             if (category == BoundaryTypeCategory.NativeOwned) return;
+            // P2a-2 THE FLIP (spec §11.4): ManagedOwned names are legal in every DECLARATION
+            // position — MapType lowers them (and their generic-argument/Func/array
+            // compositions, which recursed above) to the always-emitted BasicLang::NetRef
+            // handle (D-P7). Inheritance is NOT a declaration position: a ManagedOwned BASE
+            // class is rejected separately in Check() (a class cannot derive from a handle).
+            if (category == BoundaryTypeCategory.ManagedOwned) return;
             if (CppExceptionTypes.IsNetException(name)) return; // mapped to std::runtime_error
             if (name.Equals("Task", StringComparison.OrdinalIgnoreCase)) return; // BasicLang::Task<T>
             if (name.Equals("IEnumerable", StringComparison.OrdinalIgnoreCase)

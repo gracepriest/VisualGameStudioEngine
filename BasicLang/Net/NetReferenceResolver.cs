@@ -306,12 +306,14 @@ namespace BasicLang.Net
             }
 
             // ---- 3. <ProjectReference> ----
-            // A WARNING in P2a-1, promoted to an error at the P2a-2 flip. The IDE writes this
-            // element into native projects itself — "Add Project Reference" is gated only on
-            // HasSolution && IsProject && Projects.Count >= 2 with NO backend filter
-            // (SolutionExplorerViewModel.cs:625-627 -> :689) — and such a project builds fine on
-            // master because CppProjectBuilder reads no reference item today. Making it an error
-            // here would break projects the IDE itself creates.
+            // Promoted WARNING → ERROR at the P2a-2 flip (spec §5 / plan Task 5 item 4). The
+            // P2a-1 concern — the IDE writes this element into native projects itself ("Add
+            // Project Reference" has no backend filter, SolutionExplorerViewModel.cs) — is
+            // resolved BY reporting: a real error that names the <Reference>+<HintPath>
+            // workaround is strictly more honest than a build that silently ignores the
+            // element. Only the native path surfaces these diagnostics (the C# path's
+            // EnableNetResolution consumes the closure's paths and discards its diagnostics —
+            // reference errors are csc's to report there).
             foreach (var include in project.ProjectReferences)
             {
                 diagnostics.Add(new NetReferenceDiagnostic("BL6021",
@@ -319,15 +321,25 @@ namespace BasicLang.Net
                     + "is ignored. Cross-project compilation does not exist on any BasicLang build "
                     + "path — reference the sibling project's BUILT assembly with <Reference> plus "
                     + "<HintPath> instead.",
-                    IsWarning: true));
+                    IsWarning: false));
             }
 
             // ---- 4. D-P2 (spec §15.11): shim TFM vs newer references ----
             // The AOT shim stays pinned net8.0, and a net8.0 project cannot reference a
             // net9.0+ assembly — the shim's csc would answer NU1201/CS0012 late and unreadably.
             // Say it here instead, per resolved DECLARED assembly (the framework set is by
-            // definition the running runtime's own and never judged). WARNING in Task 4 —
-            // severity stays warning-only on both backends until the Task-5 flip.
+            // definition the running runtime's own and never judged).
+            //
+            // P2a-2 Task 5, Flag-1 DECISION: promoted WARNING → ERROR here, unconditionally,
+            // rather than surface-gated at phase 5 (Task 7b). Rationale: (a) it matches the
+            // severity of every sibling BL6021 in this method — an unresolvable <HintPath>
+            // already fails the build even when the reference is never used, and a
+            // resolved-but-unusable reference is the same defect; (b) post-flip the native
+            // path is committed to the net8.0 shim, so the reference is guaranteed-broken the
+            // moment any surface exists and pointless when none does; (c) a surface gate
+            // would make the diagnostic appear and disappear with unrelated source edits.
+            // Only the native path surfaces closure diagnostics (see the <ProjectReference>
+            // note above), so the C# backend is untouched.
             foreach (var path in assemblies)
             {
                 var tfm = TryReadTargetFramework(path);
@@ -338,7 +350,7 @@ namespace BasicLang.Net
                         + "AOT shim is pinned to. The generated shim cannot reference it, so "
                         + "native .NET access to its types will fail at publish. Retarget the "
                         + "assembly to net8.0 or lower, or drop the reference.",
-                        IsWarning: true));
+                        IsWarning: false));
                 }
             }
 
