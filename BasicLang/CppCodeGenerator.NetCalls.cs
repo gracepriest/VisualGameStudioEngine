@@ -99,10 +99,76 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             RequireExactNetTarget(target, exact);
 
-            var expression = BuildNetProxyCall(target, receiver, arguments);
-            EmitNetResult(resultNode, target, expression);
+            EmitNetResult(resultNode, target, BuildNetProxyCall(target, receiver, arguments));
             return true;
         }
+
+        /// <summary>
+        /// One argument's contribution to a proxy call: the expression(s) that occupy its wire
+        /// slot(s), plus any statements that must run BEFORE the call and any that must run
+        /// AFTER it.
+        ///
+        /// <para><b>Why a bare expression was not enough.</b> §8.3's <c>ref</c>/<c>out</c> row
+        /// is a pointer slot, which lowers to <c>int32_t t = n; proxy(&amp;t); n = t;</c> — a
+        /// prologue and an epilogue around one call. §8.6's outbound collection copy (Task 10)
+        /// needs a copy-out plus a release, and §8.4's callbacks (Task 11) need a register plus
+        /// an unregister. All three are statements, and a function returning a string can only
+        /// ever produce sub-expressions.</para>
+        ///
+        /// <para><see cref="Expressions"/> is a LIST because a §6.4 multi-slot pair occupies
+        /// several wire slots from one BasicLang argument (Decimal's four <c>GetBits</c> words,
+        /// DateTimeOffset's declared scalar pair). Ordinary rows contribute exactly one.</para>
+        /// </summary>
+        private readonly struct NetArgEmission
+        {
+            private NetArgEmission(
+                IReadOnlyList<string> expressions,
+                IReadOnlyList<string> prologue,
+                IReadOnlyList<string> epilogue)
+            {
+                Expressions = expressions;
+                Prologue = prologue ?? Array.Empty<string>();
+                Epilogue = epilogue ?? Array.Empty<string>();
+            }
+
+            internal IReadOnlyList<string> Expressions { get; }
+            internal IReadOnlyList<string> Prologue { get; }
+            internal IReadOnlyList<string> Epilogue { get; }
+
+            /// <summary>A row that needs no statements — every §8.3 by-value row.</summary>
+            internal static NetArgEmission Value(string expression) =>
+                new(new[] { expression }, null, null);
+
+            internal static NetArgEmission Statements(
+                IReadOnlyList<string> expressions,
+                IReadOnlyList<string> prologue = null,
+                IReadOnlyList<string> epilogue = null) =>
+                new(expressions, prologue, epilogue);
+        }
+
+        /// <summary>
+        /// A whole proxy call, accumulated from its arguments: the statements that must precede
+        /// it, the call expression itself, and the statements that must follow it.
+        /// <see cref="EmitNetResult"/> writes them in that order, and computes the result
+        /// statement (which may REFUSE) before writing anything — a refusal must never leave a
+        /// half-emitted prologue behind.
+        /// </summary>
+        private sealed class NetCallEmission
+        {
+            internal List<string> Prologue { get; } = new List<string>();
+            internal string Expression { get; set; }
+            internal List<string> Epilogue { get; } = new List<string>();
+        }
+
+        /// <summary>
+        /// Mints a unique temporary name for a marshaling prologue. Per-GENERATOR rather than
+        /// per-call: two proxy calls in one C++ scope would otherwise both declare
+        /// <c>blnet_t0</c> and the second is a redefinition error.
+        /// </summary>
+        private int _netTempSequence;
+
+        private string NextNetTemp() =>
+            "blnet_t" + (_netTempSequence++).ToString(CultureInfo.InvariantCulture);
 
         /// <summary>The name-only gate. See the class remarks.</summary>
         private static void RequireExactNetTarget(NetMemberDescriptor target, bool exact)
@@ -130,9 +196,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// Marshaling per §8.3 happens argument-by-argument here; the proxy converts nothing
         /// the call site can express (it stays include-free of the P1 types).
         /// </summary>
-        private string BuildNetProxyCall(
+        private NetCallEmission BuildNetProxyCall(
             NetMemberDescriptor target, IRValue receiver, IReadOnlyList<IRValue> arguments)
         {
+            var emission = new NetCallEmission();
             var targetDisplay = target.DeclaringTypeFullName + "."
                 + (target.Kind == NetMemberCategory.Constructor ? "New" : target.Name);
 
@@ -178,10 +245,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             }
 
             for (var i = 0; i < parameters.Count; i++)
-                callArgs.Add(MarshalNetArgument(targetDisplay, parameters[i], i, arguments[i]));
+            {
+                var argument = MarshalNetArgument(targetDisplay, parameters[i], i, arguments[i]);
+                emission.Prologue.AddRange(argument.Prologue);
+                callArgs.AddRange(argument.Expressions);
+                emission.Epilogue.AddRange(argument.Epilogue);
+            }
 
-            return "BasicLang::net::" + NetNameMangler.Mangle(target)
-                   + "(" + string.Join(", ", callArgs) + ")";
+            emission.Expression = "BasicLang::net::" + NetNameMangler.Mangle(target)
+                                  + "(" + string.Join(", ", callArgs) + ")";
+            return emission;
         }
 
         /// <summary>True when the value's declared type lowers to <c>BasicLang::NetRef</c>.</summary>
@@ -200,7 +273,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// Table-reaching); a handle slot takes a <c>NetRef</c>-backed value. Everything
         /// else refuses with the §8.3 row that owns it.
         /// </summary>
-        private string MarshalNetArgument(
+        private NetArgEmission MarshalNetArgument(
             string targetDisplay, NetParameterDescriptor parameter, int index, IRValue argument)
         {
             var position = (index + 1).ToString(CultureInfo.InvariantCulture);
@@ -214,44 +287,51 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var isNullConstant = argument is IRConstant { Value: null };
             var paramType = parameter.TypeFullName;
 
-            switch (paramType)
+            // §8.3's by-value rows, projected from NetMarshalTable.WireRows — the SAME table
+            // NetProxyEmitter.WireOf and NetShimGenerator.WireOf project from. A row that
+            // exists in the emitters but not here is a SILENT wire mismatch (the emitters
+            // would declare, say, a uint16_t slot while the call site passes a handle), which
+            // is why the branch is a table lookup and not a switch over spellings.
+            if (NetMarshalTable.TryGetWireRow(paramType, out var row))
             {
-                case "System.String":
-                    if (isNullConstant)
-                        return "nullptr";   // §8.2: Nothing crosses as the null wire form
-                    if (argument is IRConstant { Value: string } stringConstant)
-                        return EmitConstant(stringConstant);   // a literal IS a const char*
-                    if (string.Equals(argument.Type?.Name, "String", StringComparison.OrdinalIgnoreCase))
-                        return "(" + GetValueName(argument) + ").c_str()";
-                    throw NetLoweringRefusal("BL6019",
-                        $"'{targetDisplay}': argument {position} (BasicLang type "
-                        + $"'{argument.Type?.Name}') cannot cross a String slot — pass a "
-                        + "String value or literal (spec §8.3).");
+                switch (row.Shape)
+                {
+                    case NetWireShape.String:
+                        if (isNullConstant)
+                            return NetArgEmission.Value("nullptr");   // §8.2: Nothing is the null wire form
+                        if (argument is IRConstant { Value: string } stringConstant)
+                            return NetArgEmission.Value(EmitConstant(stringConstant));  // a literal IS a const char*
+                        if (string.Equals(argument.Type?.Name, "String", StringComparison.OrdinalIgnoreCase))
+                            return NetArgEmission.Value("(" + GetValueName(argument) + ").c_str()");
+                        throw NetLoweringRefusal("BL6019",
+                            $"'{targetDisplay}': argument {position} (BasicLang type "
+                            + $"'{argument.Type?.Name}') cannot cross a String slot — pass a "
+                            + "String value or literal (spec §8.3).");
 
-                case "System.Boolean":
-                    return GetValueName(argument);   // proxy parameter is bool
+                    case NetWireShape.Char:
+                        // §8.3: outbound zero-extends the 1-byte native Char onto the UTF-16
+                        // wire. The `unsigned char` hop is LOAD-BEARING and not a stylistic
+                        // double cast: plain `char` is signed on this backend, so a bare
+                        // static_cast<uint16_t> SIGN-EXTENDS every byte >= 0x80 into 0xFFxx.
+                        // (The §14.10 divergence lives on the INBOUND side.)
+                        return NetArgEmission.Value(
+                            "static_cast<uint16_t>(static_cast<unsigned char>("
+                            + GetValueName(argument) + "))");
 
-                case "System.Char":
-                    // §8.3: outbound zero-extends the 1-byte native Char onto the UTF-16
-                    // wire (the §14.10 divergence lives on the INBOUND side).
-                    return "static_cast<uint16_t>(static_cast<unsigned char>("
-                           + GetValueName(argument) + "))";
+                    case NetWireShape.Boolean:   // the proxy parameter is C++ bool
+                    case NetWireShape.Scalar:    // numeric scalars pass by value
+                        return NetArgEmission.Value(GetValueName(argument));
 
-                case "System.DateTime":
-                    return "BasicLang::net::to_net_datetime(" + GetValueName(argument) + ")";
-
-                case "System.TimeSpan":
-                    return "BasicLang::net::to_net_timespan(" + GetValueName(argument) + ")";
+                    case NetWireShape.Conversion:
+                        if (row.IsMultiSlot)
+                            throw NetLoweringRefusal("BL6019",
+                                $"'{targetDisplay}': parameter {position} has type "
+                                + $"'{paramType}', whose §6.4 wire form is not a single slot — "
+                                + "it is not lowered at the native boundary yet.");
+                        return NetArgEmission.Value(
+                            row.NativeToNet + "(" + GetValueName(argument) + ")");
+                }
             }
-
-            if (NetMarshalTable.MultiSlotConversionPairs.Contains(paramType))
-                throw NetLoweringRefusal("BL6019",
-                    $"'{targetDisplay}': parameter {position} has type '{paramType}', whose "
-                    + "§6.4 wire form is not a single slot — it is not lowered at the native "
-                    + "boundary yet.");
-
-            if (NetMarshalTable.IsSingleSlotValue(paramType))
-                return GetValueName(argument);   // numeric scalars pass by value
 
             // Everything else in §8.3 is a HANDLE slot: Nothing crosses as handle 0, and a
             // NetRef-backed value passes through (genuinely free). A NATIVE value here —
@@ -262,9 +342,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // (the blnet namespace re-exports it with a using-declaration), but two spellings
             // for one type in generated code is a reader trap.
             if (isNullConstant)
-                return "BasicLang::NetRef()";
+                return NetArgEmission.Value("BasicLang::NetRef()");
             if (IsNetRefBacked(argument))
-                return GetValueName(argument);
+                return NetArgEmission.Value(GetValueName(argument));
 
             throw NetLoweringRefusal("BL6019",
                 $"'{targetDisplay}': argument {position} (BasicLang type "
@@ -283,7 +363,24 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// DateTime/TimeSpan through the inverse converters; handles into a
         /// <c>NetRef</c>-typed destination). Results this task cannot represent refuse.
         /// </summary>
-        private void EmitNetResult(IRValue resultNode, NetMemberDescriptor target, string expression)
+        private void EmitNetResult(
+            IRValue resultNode, NetMemberDescriptor target, NetCallEmission emission)
+        {
+            // Computed BEFORE anything is written: every arm below can REFUSE, and a refusal
+            // that had already emitted the argument prologue would leave dangling temporaries
+            // in a translation unit the build is about to reject anyway — but it would also
+            // make the failure look like a codegen bug rather than the §8.3 gap it is.
+            var statement = NetResultStatement(resultNode, target, emission.Expression);
+
+            foreach (var line in emission.Prologue) WriteLine(line);
+            WriteLine(statement);
+            foreach (var line in emission.Epilogue) WriteLine(line);
+        }
+
+        /// <summary>The single statement carrying <paramref name="expression"/>. See
+        /// <see cref="EmitNetResult"/> for why it is computed before emission.</summary>
+        private string NetResultStatement(
+            IRValue resultNode, NetMemberDescriptor target, string expression)
         {
             var targetDisplay = target.DeclaringTypeFullName + "."
                 + (target.Kind == NetMemberCategory.Constructor ? "New" : target.Name);
@@ -295,40 +392,35 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 : target.TypeFullName;
 
             if (string.Equals(resultType, "System.Void", StringComparison.Ordinal))
-            {
-                WriteLine(expression + ";");
-                return;
-            }
+                return expression + ";";
 
             var destination = GetValueName(resultNode);
 
-            switch (resultType)
+            // Same NetMarshalTable.WireRows projection the argument side uses — one table, so
+            // a row can never be carried outbound and dropped inbound.
+            if (NetMarshalTable.TryGetWireRow(resultType, out var row))
             {
-                case "System.DateTime":
-                    WriteLine($"{destination} = BasicLang::net::from_net_datetime({expression});");
-                    return;
-                case "System.TimeSpan":
-                    WriteLine($"{destination} = BasicLang::net::from_net_timespan({expression});");
-                    return;
-                case "System.Char":
-                    // §14.10 shipped divergence: a code unit above U+00FF cannot fit the
-                    // 1-byte native Char — the narrowing is lossy and documented.
-                    WriteLine($"{destination} = static_cast<char>({expression});");
-                    return;
-            }
+                switch (row.Shape)
+                {
+                    case NetWireShape.Char:
+                        // §14.10 shipped divergence: a code unit above U+00FF cannot fit the
+                        // 1-byte native Char — the narrowing is lossy and documented.
+                        return $"{destination} = static_cast<char>({expression});";
 
-            if (NetMarshalTable.MultiSlotConversionPairs.Contains(resultType))
-                throw NetLoweringRefusal("BL6019",
-                    $"'{targetDisplay}' returns '{resultType}', whose §6.4 wire form is not a "
-                    + "single slot — it is not lowered at the native boundary yet.");
+                    case NetWireShape.Conversion:
+                        if (row.IsMultiSlot)
+                            throw NetLoweringRefusal("BL6019",
+                                $"'{targetDisplay}' returns '{resultType}', whose §6.4 wire "
+                                + "form is not a single slot — it is not lowered at the native "
+                                + "boundary yet.");
+                        return $"{destination} = {row.NativeFromNet}({expression});";
 
-            if (NetMarshalTable.IsSingleSlotValue(resultType))
-            {
-                // Boolean, the numeric scalars, String (std::string IS BasicLang::String on
-                // this backend — the proxy already copied out of the transfer buffer and
-                // freed it with blnet_free).
-                WriteLine($"{destination} = {expression};");
-                return;
+                    default:
+                        // Boolean, the numeric scalars, String (std::string IS
+                        // BasicLang::String on this backend — the proxy already copied out of
+                        // the transfer buffer and freed it with blnet_free).
+                        return $"{destination} = {expression};";
+                }
             }
 
             if (BoundaryTypeRegistry.Categorize(resultType) == BoundaryTypeCategory.ManagedOwned
@@ -344,8 +436,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                         + $"destination (BasicLang type '{resultNode.Type?.Name}') is not "
                         + "NetRef-backed — declare the receiving variable as the ManagedOwned "
                         + "type the member returns.");
-                WriteLine($"{destination} = {expression};");
-                return;
+                return $"{destination} = {expression};";
             }
 
             throw NetLoweringRefusal("BL6019",
@@ -366,11 +457,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             RequireExactNetTarget(store.ResolvedNetTarget, store.ResolvedNetTargetIsExact);
 
-            var expression = BuildNetProxyCall(
+            var emission = BuildNetProxyCall(
                 store.ResolvedNetTarget,
                 store.ResolvedNetTarget.IsStatic ? null : store.Object,
                 new[] { store.Value });
-            WriteLine(expression + ";");
+            foreach (var line in emission.Prologue) WriteLine(line);
+            WriteLine(emission.Expression + ";");
+            foreach (var line in emission.Epilogue) WriteLine(line);
             return true;
         }
     }

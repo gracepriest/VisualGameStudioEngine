@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using BasicLang.Compiler.SemanticAnalysis;
 
 namespace BasicLang.Net
@@ -13,6 +14,57 @@ namespace BasicLang.Net
     /// </summary>
     internal delegate NetTypeLookupOutcome NetTypeSpellingResolver(
         string name, int genericArgumentCount, out string fullName);
+
+    /// <summary>
+    /// HOW a §8.3/§6.4 row crosses, as opposed to WHAT it crosses as. The distinction the
+    /// consumers actually branch on: a <see cref="Scalar"/> passes through untouched, a
+    /// <see cref="Boolean"/> re-widths (C++ <c>bool</c> ↔ <c>int32</c>), a <see cref="Char"/>
+    /// re-widths AND carries §14.10's lossy inbound narrowing, a <see cref="String"/> has
+    /// direction-dependent ownership, and a <see cref="Conversion"/> row is a §6.4 pair whose
+    /// value must pass through a named converter on both sides.
+    /// </summary>
+    internal enum NetWireShape { Scalar, Boolean, Char, String, Conversion }
+
+    /// <summary>
+    /// ONE row of spec §8.3 (plus §6.4's conversion pairs) — the P2a-2 Task-8 Step-0
+    /// consolidation.
+    ///
+    /// <para><b>Why one row type exists at all.</b> Before this, the same rows lived in five
+    /// independent encodings: <see cref="NetMarshalTable.ArgumentSpellings"/>, the reverse
+    /// spelling map, <c>NetProxyEmitter.WireOf</c> (C), <c>NetShimGenerator.WireOf</c> (C#),
+    /// and two hard-coded <c>switch</c> statements in <c>CppCodeGenerator.NetCalls.cs</c>.
+    /// Only the two emitters were tied together by a test. A row present in the emitters but
+    /// MISSING at the call site is not a compile error — it is a silent wire mismatch, which
+    /// is the one failure mode this boundary cannot afford. The call site now projects from
+    /// here, so adding a row in one place is what makes it exist.</para>
+    ///
+    /// <para><b><see cref="IsMultiSlot"/> is a property of the WIRE, not of the value.</b>
+    /// Decimal is four scalars, Guid is sixteen bytes, DateTimeOffset is the declared scalar
+    /// pair (never the padded struct — <c>blnet_marshal.hpp</c>'s ABI note), and StringBuilder
+    /// is directional (to-net only). They are still §6.4 pairs and must never degrade to the
+    /// handle row: a §6.4 value that becomes a handle is a silently wrong program.</para>
+    /// </summary>
+    /// <param name="NetFullName">The metadata full name this row is keyed by.</param>
+    /// <param name="BasicLangSpelling">
+    /// The CANONICAL BasicLang spelling. Not a mechanical inverse of
+    /// <see cref="NetMarshalTable.ArgumentSpellings"/>, which is not injective (<c>Byte</c> and
+    /// <c>UByte</c> both spell <c>System.Byte</c>).
+    /// </param>
+    /// <param name="NativeToNet">
+    /// The native (C++) outbound converter's fully-qualified name, or null when the row needs
+    /// none. <c>blnet_marshal.hpp</c> owns the definitions.
+    /// </param>
+    /// <param name="NativeFromNet">
+    /// The native inbound converter, or null when the row has NO inbound direction —
+    /// StringBuilder, whose §6.4 table row is explicitly one-way.
+    /// </param>
+    internal sealed record NetWireRow(
+        string NetFullName,
+        string BasicLangSpelling,
+        NetWireShape Shape,
+        bool IsMultiSlot = false,
+        string NativeToNet = null,
+        string NativeFromNet = null);
 
     /// <summary>
     /// THE §8.3+§6.4 argument-admissibility projection (P2a-2 Task 7a's carry-forward lift):
@@ -63,75 +115,111 @@ namespace BasicLang.Net
             };
 
         /// <summary>
-        /// The REVERSE projection: the BasicLang spelling of a .NET metadata full name, for the
-        /// §8.3/§6.4 rows that have one. Not a mechanical inverse of
-        /// <see cref="ArgumentSpellings"/> — that map is not injective (<c>Byte</c> and
-        /// <c>UByte</c> both spell <c>System.Byte</c>), so each row here names the CANONICAL
-        /// BasicLang spelling. Used by the analyzer to type resolved-member RESULTS
-        /// (<c>Dim ok = r.IsMatch("x")</c> → Boolean — lifting the flip's documented
-        /// Object-degrade) and consulted by the lowering for representable returns. A full
-        /// name outside this table has no by-value native representation: it is either a
-        /// handle (NetRef) or not yet lowerable.
+        /// THE §8.3 + §6.4 row table, keyed by metadata full name — the single source every
+        /// consumer projects from (see <see cref="NetWireRow"/> for why one table exists).
+        /// Consumers: <c>NetProxyEmitter.WireOf</c> (the C column),
+        /// <c>NetShimGenerator.WireOf</c> (the C# column), <c>CppCodeGenerator.NetCalls</c>
+        /// (the call site), and the analyzer's §8.3 gate.
+        ///
+        /// <para>A full name ABSENT from this table has no by-value representation: it is
+        /// either a handle (<c>NetRef</c>) or not lowerable at all. That default is the safe
+        /// one — a handle is opaque, so being wrong about a type's shape costs a missing
+        /// convenience, never a misinterpreted 64 bits.</para>
         /// </summary>
-        private static readonly IReadOnlyDictionary<string, string> BasicLangSpellings =
-            new Dictionary<string, string>(StringComparer.Ordinal)
+        internal static readonly IReadOnlyDictionary<string, NetWireRow> WireRows =
+            new Dictionary<string, NetWireRow>(StringComparer.Ordinal)
             {
-                ["System.Int32"] = "Integer",
-                ["System.Int64"] = "Long",
-                ["System.Int16"] = "Short",
-                ["System.Byte"] = "Byte",
-                ["System.SByte"] = "SByte",
-                ["System.UInt16"] = "UShort",
-                ["System.UInt32"] = "UInteger",
-                ["System.UInt64"] = "ULong",
-                ["System.Single"] = "Single",
-                ["System.Double"] = "Double",
-                ["System.Boolean"] = "Boolean",
-                ["System.Char"] = "Char",
-                ["System.String"] = "String",
-                ["System.Decimal"] = "Decimal",
-                ["System.DateTime"] = "DateTime",
-                ["System.TimeSpan"] = "TimeSpan",
-                ["System.Guid"] = "Guid",
-                ["System.DateTimeOffset"] = "DateTimeOffset",
-                ["System.Text.StringBuilder"] = "StringBuilder",
+                // §8.3's by-value rows.
+                ["System.Boolean"] = new("System.Boolean", "Boolean", NetWireShape.Boolean),
+                ["System.SByte"] = new("System.SByte", "SByte", NetWireShape.Scalar),
+                ["System.Byte"] = new("System.Byte", "Byte", NetWireShape.Scalar),
+                ["System.Int16"] = new("System.Int16", "Short", NetWireShape.Scalar),
+                ["System.UInt16"] = new("System.UInt16", "UShort", NetWireShape.Scalar),
+                ["System.Int32"] = new("System.Int32", "Integer", NetWireShape.Scalar),
+                ["System.UInt32"] = new("System.UInt32", "UInteger", NetWireShape.Scalar),
+                ["System.Int64"] = new("System.Int64", "Long", NetWireShape.Scalar),
+                ["System.UInt64"] = new("System.UInt64", "ULong", NetWireShape.Scalar),
+                ["System.Single"] = new("System.Single", "Single", NetWireShape.Scalar),
+                ["System.Double"] = new("System.Double", "Double", NetWireShape.Scalar),
+                ["System.Char"] = new("System.Char", "Char", NetWireShape.Char),
+                ["System.String"] = new("System.String", "String", NetWireShape.String),
+
+                // §6.4's conversion pairs. Converter names are blnet_marshal.hpp's
+                // (CppNetMarshal.cs) verbatim — the ONE place they are spelled for the
+                // lowering, so a rename there cannot leave a call site emitting a
+                // now-nonexistent function.
+                ["System.DateTime"] = new(
+                    "System.DateTime", "DateTime", NetWireShape.Conversion,
+                    NativeToNet: "BasicLang::net::to_net_datetime",
+                    NativeFromNet: "BasicLang::net::from_net_datetime"),
+                ["System.TimeSpan"] = new(
+                    "System.TimeSpan", "TimeSpan", NetWireShape.Conversion,
+                    NativeToNet: "BasicLang::net::to_net_timespan",
+                    NativeFromNet: "BasicLang::net::from_net_timespan"),
+                ["System.Decimal"] = new(
+                    "System.Decimal", "Decimal", NetWireShape.Conversion, IsMultiSlot: true,
+                    NativeToNet: "BasicLang::net::to_net_decimal",
+                    NativeFromNet: "BasicLang::net::from_net_decimal"),
+                ["System.Guid"] = new(
+                    "System.Guid", "Guid", NetWireShape.Conversion, IsMultiSlot: true,
+                    NativeToNet: "BasicLang::net::to_net_guid",
+                    NativeFromNet: "BasicLang::net::from_net_guid"),
+                ["System.DateTimeOffset"] = new(
+                    "System.DateTimeOffset", "DateTimeOffset", NetWireShape.Conversion,
+                    IsMultiSlot: true,
+                    NativeToNet: "BasicLang::net::to_net_datetimeoffset",
+                    NativeFromNet: "BasicLang::net::from_net_datetimeoffset"),
+                // DIRECTIONAL: §6.4's table gives StringBuilder a to-net direction only, so
+                // NativeFromNet is null ON PURPOSE and a StringBuilder RESULT must refuse.
+                // to_net_stringbuilder's absence of an inverse is pinned by a fast test.
+                ["System.Text.StringBuilder"] = new(
+                    "System.Text.StringBuilder", "StringBuilder", NetWireShape.Conversion,
+                    IsMultiSlot: true,
+                    NativeToNet: "BasicLang::net::to_net_stringbuilder",
+                    NativeFromNet: null),
             };
 
-        /// <summary>See <see cref="BasicLangSpellings"/>.</summary>
+        /// <summary>The <see cref="WireRows"/> row for a full name, or false.</summary>
+        internal static bool TryGetWireRow(string netTypeFullName, out NetWireRow row)
+        {
+            row = null;
+            return !string.IsNullOrEmpty(netTypeFullName)
+                   && WireRows.TryGetValue(netTypeFullName, out row);
+        }
+
+        /// <summary>
+        /// The REVERSE projection: the CANONICAL BasicLang spelling of a .NET metadata full
+        /// name, for the §8.3/§6.4 rows that have one. Used by the analyzer to type
+        /// resolved-member RESULTS (<c>Dim ok = r.IsMatch("x")</c> → Boolean — lifting the
+        /// flip's documented Object-degrade) and consulted by the lowering for representable
+        /// returns. A full name outside <see cref="WireRows"/> has no by-value native
+        /// representation: it is either a handle (NetRef) or not yet lowerable.
+        /// </summary>
         internal static bool TryGetBasicLangSpelling(string netTypeFullName, out string basicLangName)
         {
-            basicLangName = null;
-            return !string.IsNullOrEmpty(netTypeFullName)
-                   && BasicLangSpellings.TryGetValue(netTypeFullName, out basicLangName);
+            basicLangName = TryGetWireRow(netTypeFullName, out var row) ? row.BasicLangSpelling : null;
+            return basicLangName != null;
         }
 
         /// <summary>
         /// The §6.4 pairs whose WIRE form is not one scalar slot: Decimal (the four-field
         /// GetBits quad), Guid (16 bytes), DateTimeOffset (the DECLARED scalar pair —
         /// blnet_marshal.hpp's ABI note), StringBuilder (directional — to-net only, as
-        /// String). Their to_net_*/from_net_* converters exist (Task 6), but the two
-        /// emitters plan one wire slot per parameter, so until Task 8's §8.3 drift
-        /// completion adds multi-slot/directional machinery these are REFUSED at resolved
-        /// call sites (BL6019 naming the parameter) rather than silently crossing as the
-        /// handle row — a §6.4 value must never become a handle.
+        /// String). Projected from <see cref="WireRows"/> rather than re-listed, so the two
+        /// cannot disagree about which rows are multi-slot.
         /// </summary>
         internal static readonly IReadOnlyCollection<string> MultiSlotConversionPairs =
-            new HashSet<string>(StringComparer.Ordinal)
-            {
-                "System.Decimal",
-                "System.Guid",
-                "System.DateTimeOffset",
-                "System.Text.StringBuilder",
-            };
+            new HashSet<string>(
+                WireRows.Values.Where(r => r.IsMultiSlot).Select(r => r.NetFullName),
+                StringComparer.Ordinal);
 
         /// <summary>
         /// True when a resolved member RESULT (or by-value parameter) of this full name has a
-        /// native by-value representation Task 7a's lowering can carry across one wire slot:
-        /// the §8.3 scalar/String rows plus the single-slot §6.4 pairs (DateTime, TimeSpan).
+        /// native by-value representation the lowering can carry across ONE wire slot: the
+        /// §8.3 scalar/String rows plus the single-slot §6.4 pairs (DateTime, TimeSpan).
         /// </summary>
         internal static bool IsSingleSlotValue(string netTypeFullName) =>
-            TryGetBasicLangSpelling(netTypeFullName, out _)
-            && !MultiSlotConversionPairs.Contains(netTypeFullName);
+            TryGetWireRow(netTypeFullName, out var row) && !row.IsMultiSlot;
 
         /// <summary>
         /// §6.5's admissible argument set — §8.3's rows plus §6.4's conversion pairs — projected
