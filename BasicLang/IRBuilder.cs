@@ -2907,13 +2907,13 @@ namespace BasicLang.Compiler.IR
                 // stamp, which is what keeps §12.4's slots ≡ exports). The analyzer records
                 // property/field annotations as EXACT (no overload axis), so a non-exact
                 // record here can only be a foreign shape — left unstamped.
-                // The Parameters.Count == 0 clause keeps INDEXERS away from the synthesis
-                // point (which refuses them): §8.5's get_Item/set_Item pair is Task 9's.
+                // HasSynthesizableSetter keeps INDEXERS away from the synthesis point (which
+                // refuses them): §8.5's get_Item/set_Item pair is Task 9's. ONE copy of that
+                // predicate — the analyzer's refusal and §11.3's attribution ask the same
+                // question, and the three disagreeing is a shim that fails to compile.
                 if (_semanticAnalyzer.NetMemberAnnotations.TryGetValue(memberExpr, out var netWrite)
                     && netWrite.Exact
-                    && (netWrite.Member.Kind == BasicLang.Net.NetMemberCategory.Property
-                        || netWrite.Member.Kind == BasicLang.Net.NetMemberCategory.Field)
-                    && netWrite.Member.Parameters.Count == 0)
+                    && BasicLang.Net.NetAccessorSynthesis.HasSynthesizableSetter(netWrite.Member))
                 {
                     fieldStore.ResolvedNetTarget =
                         BasicLang.Net.NetAccessorSynthesis.SetterFor(netWrite.Member);

@@ -337,7 +337,7 @@ public class NetBuildPipelineTests
     [Test]
     public void NonEmptySurfaceWithNoBasSources_EmitsTheProxyArtifactsAndLinksTheStartupTu()
     {
-        var (result, outcome) = Emit(PureCppProject(), surfaceOverride: NetProxyEmitterTests.SixShapeSurface());
+        var (result, outcome) = Emit(PureCppProject(), surfaceOverride: NetProxyEmitterTests.WireShapeSurface());
 
         AssertNoErrors(result, "non-empty surface + zero .bas sources");
         Assert.That(outcome.Completed, Is.True, "EmitCore did not reach the compile-database write.");
@@ -717,7 +717,7 @@ public class NetBuildPipelineTests
         Directory.CreateDirectory(objGen);
 
         var artifacts = NetProxyEmitter.Emit(
-            NetProxyEmitterTests.SixShapeSurface(), NetProxyEmitterTests.Module);
+            NetProxyEmitterTests.WireShapeSurface(), NetProxyEmitterTests.Module);
         Assert.That(artifacts, Is.Not.Empty, "The oracle produced no artifacts, so it proves nothing.");
         foreach (var kv in artifacts)
             File.WriteAllText(Path.Combine(objGen, kv.Key), kv.Value);

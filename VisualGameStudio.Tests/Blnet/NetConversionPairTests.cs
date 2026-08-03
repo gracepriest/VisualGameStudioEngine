@@ -355,7 +355,7 @@ public class NetConversionPairTests
     [Test]
     public void MarshalHeaderIsCarriedSurfaceKeyedAndVerbatim()
     {
-        var files = NetProxyEmitter.Emit(NetProxyEmitterTests.SixShapeSurface(), NetProxyEmitterTests.Module);
+        var files = NetProxyEmitter.Emit(NetProxyEmitterTests.WireShapeSurface(), NetProxyEmitterTests.Module);
 
         Assert.Multiple(() =>
         {

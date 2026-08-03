@@ -67,6 +67,71 @@ namespace BasicLang.Net
         string NativeFromNet = null);
 
     /// <summary>
+    /// The environment-specific JUDGMENTS <see cref="NetMarshalTable"/> cannot make for itself,
+    /// bundled (P2a-2 Task-8 Step 0, M2).
+    ///
+    /// <para><b>Why a struct and not three parameters.</b> The projection recurses — arrays and
+    /// generic type arguments both re-enter <see cref="NetMarshalTable.TryMapArgumentType"/> —
+    /// so every capability had to be threaded through every recursion site by hand, and each
+    /// new judgment widened the signature at four call sites at once. Task 8 adds the THIRD
+    /// (an enum's underlying integral type, which §8.3's "enum → underlying integral" row needs
+    /// and which no consumer can recover from a type NAME). Constructed ONCE per analyzer,
+    /// which also stops the per-call method-group delegate allocation the old signature forced.</para>
+    ///
+    /// <para><b>Deliberately not defaultable.</b> A <c>default(NetTypeEnvironment)</c> carries
+    /// null capabilities, and a projection that silently answered "not user-defined, does not
+    /// resolve, not an enum" for everything would degrade every judgment to its most permissive
+    /// answer. <see cref="RequireComplete"/> is the same guard the old null checks were, moved
+    /// where it cannot be forgotten by a new consumer.</para>
+    /// </summary>
+    /// <param name="ResolveEnumUnderlyingType">
+    /// The metadata full name of an enum's underlying integral type (<c>System.Int32</c> for
+    /// <c>FileMode</c>), or null when the name is not an enum. §8.3's enum row.
+    /// </param>
+    internal readonly struct NetTypeEnvironment
+    {
+        private readonly Func<string, bool> _isUserDefinedTypeName;
+        private readonly NetTypeSpellingResolver _resolveNetType;
+        private readonly Func<string, string> _resolveEnumUnderlyingType;
+
+        internal NetTypeEnvironment(
+            Func<string, bool> isUserDefinedTypeName,
+            NetTypeSpellingResolver resolveNetType,
+            Func<string, string> resolveEnumUnderlyingType)
+        {
+            _isUserDefinedTypeName = isUserDefinedTypeName;
+            _resolveNetType = resolveNetType;
+            _resolveEnumUnderlyingType = resolveEnumUnderlyingType;
+        }
+
+        /// <summary>See the type remarks — a defaulted environment must never be consumed.</summary>
+        internal void RequireComplete()
+        {
+            if (_isUserDefinedTypeName == null || _resolveNetType == null
+                || _resolveEnumUnderlyingType == null)
+            {
+                throw new InvalidOperationException(
+                    "NetTypeEnvironment was consumed without its capabilities. A defaulted "
+                    + "environment would answer every judgment permissively — construct it from "
+                    + "the analyzer's IsUserDefinedTypeName / ResolveNetType / "
+                    + "NetEnumUnderlyingTypeFullName.");
+            }
+        }
+
+        /// <summary>User-declared class / structure / interface lookup (scope, global, project).</summary>
+        internal bool IsUserDefinedTypeName(string name) => _isUserDefinedTypeName(name);
+
+        /// <summary>.NET name resolution in the caller's namespace context (§6.5's binding order).</summary>
+        internal NetTypeLookupOutcome ResolveNetType(
+            string name, int genericArgumentCount, out string fullName) =>
+            _resolveNetType(name, genericArgumentCount, out fullName);
+
+        /// <summary>§8.3's enum row: the underlying integral, or null for a non-enum.</summary>
+        internal string ResolveEnumUnderlyingType(string netTypeFullName) =>
+            _resolveEnumUnderlyingType(netTypeFullName);
+    }
+
+    /// <summary>
     /// THE §8.3+§6.4 argument-admissibility projection (P2a-2 Task 7a's carry-forward lift):
     /// which BasicLang static types are admissible .NET arguments, and how each is spelled in
     /// C# type syntax — <c>NetTypeResolver.ResolveOverload</c>'s argument grammar.
@@ -78,17 +143,26 @@ namespace BasicLang.Net
     /// <c>SemanticAnalyzer</c> it could only be re-derived; here it is consumed. Behavior is
     /// IDENTICAL to the pre-lift analyzer code (<c>NetStrictResolutionTests</c> is the proof).</para>
     ///
-    /// <para>Environment-specific judgments stay with the caller, injected as capabilities:
-    /// user-declared-type lookup (scope/global/project channels) and .NET name resolution
-    /// (<c>Using</c> directives + the ambient set). This type owns only the projection.</para>
+    /// <para>Environment-specific judgments stay with the caller, injected as one
+    /// <see cref="NetTypeEnvironment"/>: user-declared-type lookup (scope/global/project
+    /// channels), .NET name resolution (<c>Using</c> directives + the ambient set), and §8.3's
+    /// enum underlying-integral lookup. This type owns only the projection.</para>
     /// </summary>
     internal static class NetMarshalTable
     {
         /// <summary>
         /// §8.3's by-value rows + §6.4's conversion pairs, as C# spellings. Everything else
         /// either resolves from metadata, is user-defined (BL6019), or is left untyped.
+        ///
+        /// <para><b>PRIVATE, and that is not tidiness.</b> Two of this map's properties are
+        /// load-bearing and invisible from the raw dictionary: it is deliberately NOT injective
+        /// (<c>Byte</c> and <c>UByte</c> both spell <c>System.Byte</c> — take the reverse
+        /// direction from <see cref="TryGetBasicLangSpelling"/>, never by inverting this), and
+        /// it is only ever consulted AFTER <c>Object</c> has been excluded and BEFORE the
+        /// user-defined-type check, an ordering <see cref="TryMapArgumentType"/> owns. A caller
+        /// reading the map directly would silently skip both.</para>
         /// </summary>
-        internal static readonly IReadOnlyDictionary<string, string> ArgumentSpellings =
+        private static readonly IReadOnlyDictionary<string, string> ArgumentSpellings =
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 ["Integer"] = "System.Int32",
@@ -226,18 +300,16 @@ namespace BasicLang.Net
         /// onto C# type spellings. False means "do not ask": <paramref name="isUserDefined"/>
         /// distinguishes the BL6019 case (a user-declared class/structure/interface) from the
         /// silent leave-name-only cases. Moved VERBATIM from
-        /// <c>SemanticAnalyzer.TryMapNetArgumentType</c> (P2a-2 Task 4); the two capability
-        /// parameters are the judgments that could not move with it.
+        /// <c>SemanticAnalyzer.TryMapNetArgumentType</c> (P2a-2 Task 4);
+        /// <paramref name="environment"/> carries the judgments that could not move with it.
         /// </summary>
         internal static bool TryMapArgumentType(
             TypeInfo type,
-            Func<string, bool> isUserDefinedTypeName,
-            NetTypeSpellingResolver resolveNetType,
+            in NetTypeEnvironment environment,
             out string spelling,
             out bool isUserDefined)
         {
-            if (isUserDefinedTypeName == null) throw new ArgumentNullException(nameof(isUserDefinedTypeName));
-            if (resolveNetType == null) throw new ArgumentNullException(nameof(resolveNetType));
+            environment.RequireComplete();
 
             spelling = null;
             isUserDefined = false;
@@ -265,8 +337,7 @@ namespace BasicLang.Net
             if (type.Kind == TypeKind.Array)
             {
                 if (type.ArrayRank > 1) return false;
-                if (!TryMapArgumentType(type.ElementType, isUserDefinedTypeName, resolveNetType,
-                        out var element, out isUserDefined))
+                if (!TryMapArgumentType(type.ElementType, environment, out var element, out isUserDefined))
                     return false;
                 spelling = element + "[]";
                 return true;
@@ -281,7 +352,7 @@ namespace BasicLang.Net
             // A user-declared type is checked BEFORE metadata resolution: `Class Timer` must
             // answer "user-defined" even though System.Threading.Timer would resolve — the
             // ambient-collision trap NetInertnessTests pins.
-            if (isUserDefinedTypeName(type.Name))
+            if (environment.IsUserDefinedTypeName(type.Name))
             {
                 isUserDefined = type.Kind == TypeKind.Class || type.Kind == TypeKind.Structure
                                 || type.Kind == TypeKind.Interface;
@@ -291,7 +362,7 @@ namespace BasicLang.Net
             // A .NET-typed value (`Dim st As Stream` passed along): resolve the spelling the
             // same way the receiver resolved.
             var genericCount = type.GenericArguments?.Count ?? 0;
-            if (resolveNetType(type.Name, genericCount, out var fullName)
+            if (environment.ResolveNetType(type.Name, genericCount, out var fullName)
                 != NetTypeLookupOutcome.Resolved)
             {
                 return false;
@@ -309,8 +380,7 @@ namespace BasicLang.Net
             var argSpellings = new List<string>(genericCount);
             foreach (var typeArg in type.GenericArguments)
             {
-                if (!TryMapArgumentType(typeArg, isUserDefinedTypeName, resolveNetType,
-                        out var argSpelling, out _))
+                if (!TryMapArgumentType(typeArg, environment, out var argSpelling, out _))
                     return false;
                 argSpellings.Add(argSpelling);
             }

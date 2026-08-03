@@ -441,6 +441,24 @@ namespace BasicLang.Net
         internal INamedTypeSymbol TypeSymbol(string fullName) => Lookup(fullName).Symbol;
 
         /// <summary>
+        /// The metadata full name of an ENUM's underlying integral type
+        /// (<c>System.Int32</c> for <c>System.IO.FileMode</c>), or null when
+        /// <paramref name="fullName"/> does not resolve or is not an enum.
+        ///
+        /// <para>Spec §8.3's "enums → underlying integral" row. This is the ONE piece of
+        /// information that row needs and that neither emitter can recover, because both see
+        /// only a type NAME — which is exactly why an enum-typed parameter had no wire form
+        /// and was refused. Answered from Roslyn here and carried on the descriptor.</para>
+        /// </summary>
+        internal string EnumUnderlyingTypeFullName(string fullName)
+        {
+            var symbol = Lookup(fullName).Symbol;
+            return symbol is { TypeKind: TypeKind.Enum, EnumUnderlyingType: { } underlying }
+                ? TypeName(underlying)
+                : null;
+        }
+
+        /// <summary>
         /// True when <paramref name="fullName"/> resolves and derives from
         /// <c>System.Exception</c> (or IS it). Spec §11.1's ladder-trigger completion (P2a-2
         /// Task 4): a catch clause whose type resolves as a .NET exception gets a

@@ -166,10 +166,10 @@ namespace BasicLang.Net
                 yield return new KeyValuePair<string, NetWrapperOrigin>(
                     NetNameMangler.Mangle(member), origin);
 
-                // The write half. SetterFor refuses indexers (§8.5 is Task 9's), so the same
-                // Parameters.Count == 0 clause IRBuilder uses before synthesizing guards it here.
-                if ((member.Kind == NetMemberCategory.Property || member.Kind == NetMemberCategory.Field)
-                    && member.Parameters.Count == 0)
+                // The write half. SetterFor refuses indexers (§8.5 is Task 9's), so the SAME
+                // predicate IRBuilder uses before synthesizing — and the analyzer uses before
+                // refusing — guards it here (NetAccessorSynthesis owns the one copy).
+                if (NetAccessorSynthesis.HasSynthesizableSetter(member))
                 {
                     yield return new KeyValuePair<string, NetWrapperOrigin>(
                         NetNameMangler.Mangle(NetAccessorSynthesis.SetterFor(member)), origin);

@@ -197,7 +197,7 @@ public class NetShimGeneratorTests
     [Test]
     public void ExportSignaturesMatchTheProxyTableSlotSignatures()
     {
-        var surface = NetProxyEmitterTests.SixShapeSurface();
+        var surface = NetProxyEmitterTests.WireShapeSurface();
         var slots = ParseSlotSignatures(N(NetProxyEmitter.EmitBindings(surface).Text));
         var exports = ParseExportSignatures(N(NetShimGenerator.EmitExports(surface)));
 

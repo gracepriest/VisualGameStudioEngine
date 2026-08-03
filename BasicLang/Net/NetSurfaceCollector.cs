@@ -229,41 +229,22 @@ namespace BasicLang.Net
             if (instruction == null || !visited.Add(instruction))
                 return;
 
-            // The node types are exactly the FIVE the C++ lowering has an arm for. Adding one
-            // here without a lowering arm is the hazard IRBaseMethodCall's deletion comment
-            // records: a member would reach the surface (a proxy slot AND a shim export) while
-            // its call site fell through to legacy emission with no exactness gate.
-            switch (instruction)
+            // The carriers are exactly the FIVE node types the C++ lowering has an arm for
+            // (IRCall, IRInstanceMethodCall, IRNewObject, IRFieldAccess, IRFieldStore — a
+            // construction carries its resolved ctor; a member READ carries the property/field
+            // descriptor, i.e. the getter-shaped slot; a member WRITE carries the synthesized
+            // set_X accessor from NetAccessorSynthesis, collected verbatim so §12.4's
+            // slots ≡ exports holds). Asked through INetCarrying rather than five near-identical
+            // `case` arms: making a SIXTH node type carry .NET resolution without giving the
+            // lowering an arm for it is the hazard IRBaseMethodCall's deletion comment records —
+            // the member would reach the surface (a proxy slot AND a shim export) while its call
+            // site fell through to legacy emission with no exactness gate. The interface makes
+            // that a deliberate act on the node rather than an omission here.
+            if (instruction is INetCarrying carrying
+                && IsCollectable(carrying.ResolvedNetTarget, carrying.ResolvedNetTargetIsExact,
+                                 carrying.NetCategory))
             {
-                case IRCall call when IsCollectable(call.ResolvedNetTarget,
-                                          call.ResolvedNetTargetIsExact, call.NetCategory):
-                    AddMember(call.ResolvedNetTarget, members, seenMangled);
-                    break;
-                case IRInstanceMethodCall instanceCall when IsCollectable(
-                                          instanceCall.ResolvedNetTarget,
-                                          instanceCall.ResolvedNetTargetIsExact,
-                                          instanceCall.NetCategory):
-                    AddMember(instanceCall.ResolvedNetTarget, members, seenMangled);
-                    break;
-                // P2a-2 Task 7a: the three shapes the lowering added. A construction carries
-                // its resolved ctor; a member READ carries the property/field descriptor (the
-                // getter-shaped slot); a member WRITE carries the synthesized set_X accessor
-                // (NetAccessorSynthesis — stamped by IRBuilder, the single synthesis point, so
-                // collecting the stamp verbatim keeps §12.4's slots ≡ exports).
-                case IRNewObject construction when IsCollectable(
-                                          construction.ResolvedNetTarget,
-                                          construction.ResolvedNetTargetIsExact,
-                                          construction.NetCategory):
-                    AddMember(construction.ResolvedNetTarget, members, seenMangled);
-                    break;
-                case IRFieldAccess read when IsCollectable(read.ResolvedNetTarget,
-                                          read.ResolvedNetTargetIsExact, read.NetCategory):
-                    AddMember(read.ResolvedNetTarget, members, seenMangled);
-                    break;
-                case IRFieldStore write when IsCollectable(write.ResolvedNetTarget,
-                                          write.ResolvedNetTargetIsExact, write.NetCategory):
-                    AddMember(write.ResolvedNetTarget, members, seenMangled);
-                    break;
+                AddMember(carrying.ResolvedNetTarget, members, seenMangled);
             }
 
             if (instruction is IRTryCatch tryCatch)

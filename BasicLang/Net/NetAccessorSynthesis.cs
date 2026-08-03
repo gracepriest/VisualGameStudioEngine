@@ -27,6 +27,34 @@ namespace BasicLang.Net
         internal const string SetterPrefix = "set_";
 
         /// <summary>
+        /// True when a WRITE to <paramref name="member"/> can synthesize a <c>set_X</c>
+        /// descriptor — i.e. exactly when <see cref="SetterFor"/> will not throw: a property or
+        /// field with NO parameters.
+        ///
+        /// <para><b>P2a-2 Task-8 Step 0 (7b-I5): this predicate was spelled in three places,
+        /// and the three had to agree.</b> <c>IRBuilder</c> PRODUCES the stamp,
+        /// <c>NetAstAnnotations.CallSiteOrigins</c> ATTRIBUTES it (§11.3 tier 1), and
+        /// <c>SemanticAnalyzer.RefuseWriteToUnsettableNetMember</c> REFUSES the unsettable case.
+        /// Each carried its own copy of the same three clauses.</para>
+        ///
+        /// <para><b>The <c>Parameters.Count == 0</c> clause IS the indexer refusal</b>, and it
+        /// is the reason this is worth one shared predicate rather than three tidy copies.
+        /// §8.5's <c>get_Item</c>/<c>set_Item</c> pair lands in Task 9, which will relax this
+        /// rule; relaxing the producer and the attributor but MISSING the analyzer copy re-opens
+        /// exactly the failure Task 7b closed — a write to a read-only indexer sails past the
+        /// positioned BL6017, mints a <c>set_Item</c> export, and dies as a CS0200/CS1546 inside
+        /// generated C# after the ~27 s AOT publish. One predicate makes that a single edit.</para>
+        ///
+        /// <para>Says nothing about whether the write is LEGAL — that is
+        /// <see cref="NetMemberDescriptor.IsSettable"/>, a separate question the analyzer asks
+        /// on top of this one.</para>
+        /// </summary>
+        internal static bool HasSynthesizableSetter(NetMemberDescriptor member) =>
+            member != null
+            && (member.Kind == NetMemberCategory.Property || member.Kind == NetMemberCategory.Field)
+            && member.Parameters.Count == 0;
+
+        /// <summary>
         /// The synthesized <c>set_X</c> accessor-method descriptor for a property or field
         /// write. Throws for other member kinds — a caller asking for a "setter" of a method
         /// is a logic error, not a degradable input.

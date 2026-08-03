@@ -743,23 +743,30 @@ public class NetShimPhaseTests
               Dim p1 = st.Position
               Dim p2 = st.Position
               Dim p3 = st.Position
+              Dim p4 = st.Position + st.Position
              End Sub
             End Module
             """);
 
-        var lines = analyzer.NetCallSiteOrigins("Probe.bas", lineOffset: 0)
-            .Select(o => o.Value.Line).ToList();
+        // (Line, Column), not just Line: line 7 carries TWO reads, so the secondary key is the
+        // only thing ordering that pair. With three reads on three distinct lines the
+        // comparator's Column clause never executes and deleting it leaves the test green.
+        var positions = analyzer.NetCallSiteOrigins("Probe.bas", lineOffset: 0)
+            .Select(o => (o.Value.Line, o.Value.Column)).ToList();
 
         Assert.Multiple(() =>
         {
-            Assert.That(lines, Is.Not.Empty,
-                "the three property reads recorded no annotations, so this proves nothing.");
-            Assert.That(lines, Is.Ordered,
+            Assert.That(positions, Is.Not.Empty,
+                "the four property-read statements recorded no annotations, so this proves nothing.");
+            Assert.That(positions.Count(p => p.Line == 7), Is.GreaterThanOrEqualTo(2),
+                "the two-reads-on-one-line pair is what exercises the Column tiebreak; if line 7 "
+                + "contributed fewer than two entries the secondary key is still unproven.");
+            Assert.That(positions, Is.Ordered,
                 "CallSiteOrigins must yield in (Line, Column) order. Straight off the "
                 + "reference-keyed dictionary the order is address-derived, and the last writer "
                 + "into a last-write-wins map then changes between identical builds. Got: "
-                + string.Join(", ", lines));
-            Assert.That(lines.Last(), Is.EqualTo(6),
+                + string.Join(", ", positions));
+            Assert.That(positions.Last().Line, Is.EqualTo(7),
                 "the LAST entry must be the last call site in the file — that is the stated rule "
                 + "the provenance map's last-write-wins semantics turn into the blamed line.");
         });

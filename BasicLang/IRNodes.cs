@@ -566,11 +566,41 @@ namespace BasicLang.Compiler.IR
     // ============================================================================
     // Function Operations
     // ============================================================================
-    
+
+    /// <summary>
+    /// P2a-2 Task-8 Step 0 (M1) — the .NET CARRIAGE an IR node can hold: the resolved member,
+    /// its receiver's boundary category, and whether the descriptor's signature identity is
+    /// exact. FIVE node types carry the trio (<see cref="IRCall"/>,
+    /// <see cref="IRInstanceMethodCall"/>, <see cref="IRNewObject"/>,
+    /// <see cref="IRFieldAccess"/>, <see cref="IRFieldStore"/>) — exactly the five the C++
+    /// lowering has an arm for.
+    ///
+    /// <para><b>What this buys.</b> <c>NetSurfaceCollector</c> collapses five near-identical
+    /// <c>case</c> arms into one, and the optimizer's "carry the carriage across" obligation
+    /// (<c>NetIrCarriageTests</c>) gets a single anchor to name instead of a per-node-type
+    /// list that a sixth carrier would silently fall off.</para>
+    ///
+    /// <para><b>Implemented EXPLICITLY on every carrier, deliberately.</b> The three
+    /// auto-properties are <c>internal</c> — "carriage adds nothing to the compiler's public
+    /// API" — and an internal member cannot implicitly implement an (implicitly public)
+    /// interface member. Making them public to satisfy the interface would widen the API this
+    /// interface exists to keep narrow, so each carrier forwards instead.</para>
+    ///
+    /// <para>Read-only: this is a QUERY seam for consumers that do not care which node type
+    /// they have. Producers (<c>IRBuilder</c>, the optimizer's clone paths) keep writing the
+    /// concrete node's settable properties, which is where the per-node documentation lives.</para>
+    /// </summary>
+    internal interface INetCarrying
+    {
+        BasicLang.Net.NetMemberDescriptor ResolvedNetTarget { get; }
+        BoundaryTypeCategory NetCategory { get; }
+        bool ResolvedNetTargetIsExact { get; }
+    }
+
     /// <summary>
     /// Function call: result = call function(args)
     /// </summary>
-    public class IRCall : IRValue
+    public class IRCall : IRValue, INetCarrying
     {
         public string FunctionName { get; set; }
         public List<IRValue> Arguments { get; set; }
@@ -634,6 +664,11 @@ namespace BasicLang.Compiler.IR
         /// name-only gate). Defaults false: absent carriage is never trusted.
         /// </summary>
         internal bool ResolvedNetTargetIsExact { get; set; }
+
+        // INetCarrying, explicitly — see the interface for why forwarding beats going public.
+        BasicLang.Net.NetMemberDescriptor INetCarrying.ResolvedNetTarget => ResolvedNetTarget;
+        BoundaryTypeCategory INetCarrying.NetCategory => NetCategory;
+        bool INetCarrying.ResolvedNetTargetIsExact => ResolvedNetTargetIsExact;
 
         public IRCall(string resultName, string functionName, TypeInfo returnType)
             : base(resultName, returnType)
@@ -1545,7 +1580,7 @@ namespace BasicLang.Compiler.IR
     /// <summary>
     /// Represents a new object instantiation: new ClassName(args)
     /// </summary>
-    public class IRNewObject : IRValue
+    public class IRNewObject : IRValue, INetCarrying
     {
         public string ClassName { get; set; }
         public List<IRValue> Arguments { get; set; }
@@ -1571,6 +1606,11 @@ namespace BasicLang.Compiler.IR
         /// <summary>See <see cref="IRCall.ResolvedNetTargetIsExact"/> — the name-only gate.</summary>
         internal bool ResolvedNetTargetIsExact { get; set; }
 
+        // INetCarrying, explicitly — see the interface for why forwarding beats going public.
+        BasicLang.Net.NetMemberDescriptor INetCarrying.ResolvedNetTarget => ResolvedNetTarget;
+        BoundaryTypeCategory INetCarrying.NetCategory => NetCategory;
+        bool INetCarrying.ResolvedNetTargetIsExact => ResolvedNetTargetIsExact;
+
         public IRNewObject(string resultName, string className, TypeInfo type)
             : base(resultName, type)
         {
@@ -1589,7 +1629,7 @@ namespace BasicLang.Compiler.IR
     /// <summary>
     /// Represents a method call on an object instance: obj.Method(args)
     /// </summary>
-    public class IRInstanceMethodCall : IRValue
+    public class IRInstanceMethodCall : IRValue, INetCarrying
     {
         public IRValue Object { get; set; }
         public string MethodName { get; set; }
@@ -1637,6 +1677,11 @@ namespace BasicLang.Compiler.IR
 
         /// <summary>See <see cref="IRCall.ResolvedNetTargetIsExact"/> — the name-only gate.</summary>
         internal bool ResolvedNetTargetIsExact { get; set; }
+
+        // INetCarrying, explicitly — see the interface for why forwarding beats going public.
+        BasicLang.Net.NetMemberDescriptor INetCarrying.ResolvedNetTarget => ResolvedNetTarget;
+        BoundaryTypeCategory INetCarrying.NetCategory => NetCategory;
+        bool INetCarrying.ResolvedNetTargetIsExact => ResolvedNetTargetIsExact;
 
         public IRInstanceMethodCall(string resultName, IRValue obj, string methodName, TypeInfo returnType)
             : base(resultName, returnType)
@@ -1697,7 +1742,7 @@ namespace BasicLang.Compiler.IR
     /// <summary>
     /// Represents a field access on an object: obj.Field
     /// </summary>
-    public class IRFieldAccess : IRValue
+    public class IRFieldAccess : IRValue, INetCarrying
     {
         public IRValue Object { get; set; }
         public string FieldName { get; set; }
@@ -1721,6 +1766,11 @@ namespace BasicLang.Compiler.IR
         /// <summary>See <see cref="IRCall.ResolvedNetTargetIsExact"/> — the name-only gate.</summary>
         internal bool ResolvedNetTargetIsExact { get; set; }
 
+        // INetCarrying, explicitly — see the interface for why forwarding beats going public.
+        BasicLang.Net.NetMemberDescriptor INetCarrying.ResolvedNetTarget => ResolvedNetTarget;
+        BoundaryTypeCategory INetCarrying.NetCategory => NetCategory;
+        bool INetCarrying.ResolvedNetTargetIsExact => ResolvedNetTargetIsExact;
+
         public IRFieldAccess(string resultName, IRValue obj, string fieldName, TypeInfo type)
             : base(resultName, type)
         {
@@ -1735,7 +1785,7 @@ namespace BasicLang.Compiler.IR
     /// <summary>
     /// Represents a field store operation: obj.Field = value
     /// </summary>
-    public class IRFieldStore : IRInstruction
+    public class IRFieldStore : IRInstruction, INetCarrying
     {
         public IRValue Object { get; set; }
         public string FieldName { get; set; }
@@ -1761,6 +1811,11 @@ namespace BasicLang.Compiler.IR
 
         /// <summary>See <see cref="IRCall.ResolvedNetTargetIsExact"/> — the name-only gate.</summary>
         internal bool ResolvedNetTargetIsExact { get; set; }
+
+        // INetCarrying, explicitly — see the interface for why forwarding beats going public.
+        BasicLang.Net.NetMemberDescriptor INetCarrying.ResolvedNetTarget => ResolvedNetTarget;
+        BoundaryTypeCategory INetCarrying.NetCategory => NetCategory;
+        bool INetCarrying.ResolvedNetTargetIsExact => ResolvedNetTargetIsExact;
 
         public IRFieldStore(IRValue obj, string fieldName, IRValue value)
         {

@@ -2962,14 +2962,32 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>True when the metadata full name resolves as a .NET enum.</summary>
-        private bool IsNetEnumTypeName(string fullName)
+        private bool IsNetEnumTypeName(string fullName) =>
+            NetEnumUnderlyingTypeFullName(fullName) != null;
+
+        /// <summary>
+        /// §8.3's enum row, as a capability: the metadata full name of an enum's UNDERLYING
+        /// integral type (<c>System.Int32</c> for <c>System.IO.FileMode</c>), or null when
+        /// <paramref name="fullName"/> is not a resolvable .NET enum.
+        ///
+        /// <para>Neither emitter can recover this from a type NAME — which is precisely why
+        /// enum-typed parameters had no wire form and refused — so the analyzer, which holds
+        /// the resolver, answers it and it travels on the descriptor. Also the enum-ness
+        /// predicate itself (<see cref="IsNetEnumTypeName"/>), so "is it an enum" and "what
+        /// does it cross as" can never disagree.</para>
+        /// </summary>
+        private string NetEnumUnderlyingTypeFullName(string fullName)
         {
-            if (string.IsNullOrEmpty(fullName)) return false;
+            if (string.IsNullOrEmpty(fullName)) return null;
             var resolver = NetResolver();
-            if (resolver == null) return false;
+            if (resolver == null) return null;
             var lookup = resolver.ResolveTypeDetailed(fullName);
-            return lookup.Outcome == NetTypeLookupOutcome.Resolved
-                   && lookup.Type?.Kind == NetTypeCategory.Enum;
+            if (lookup.Outcome != NetTypeLookupOutcome.Resolved
+                || lookup.Type?.Kind != NetTypeCategory.Enum)
+            {
+                return null;
+            }
+            return resolver.EnumUnderlyingTypeFullName(fullName);
         }
 
         /// <summary>
@@ -3013,8 +3031,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             var member = annotation.Member;
             if (!annotation.Exact) return;
-            if (member.Kind != NetMemberCategory.Property && member.Kind != NetMemberCategory.Field) return;
-            if (member.Parameters.Count > 0) return;   // an indexer — NetAccessorSynthesis's own refusal
+            // The SAME predicate IRBuilder uses before stamping the synthesized set_X and
+            // NetAstAnnotations uses before attributing it — one copy, in NetAccessorSynthesis.
+            // Its Parameters.Count == 0 clause is the indexer refusal (§8.5 / Task 9), and this
+            // is the copy whose omission would re-open the CS0200-after-27s failure.
+            if (!NetAccessorSynthesis.HasSynthesizableSetter(member)) return;
             if (member.IsSettable) return;
 
             NetErrorNativeOnly("BL6017",
@@ -3043,8 +3064,19 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// class/structure/interface) from the silent leave-name-only cases.
         /// </summary>
         private bool TryMapNetArgumentType(TypeInfo type, out string spelling, out bool isUserDefined) =>
-            NetMarshalTable.TryMapArgumentType(
-                type, IsUserDefinedTypeName, ResolveNetType, out spelling, out isUserDefined);
+            NetMarshalTable.TryMapArgumentType(type, NetTypeEnv, out spelling, out isUserDefined);
+
+        /// <summary>
+        /// The three capabilities <see cref="NetMarshalTable"/>'s projection needs from this
+        /// analyzer, built ONCE (P2a-2 Task-8 Step 0, M2). Lazily, not in the constructor: the
+        /// three delegates capture <c>this</c> and every compilation that never touches .NET —
+        /// which is all of them without a <c>NetResolverFactory</c> — must not pay for them.
+        /// </summary>
+        private NetTypeEnvironment? _netTypeEnvironment;
+
+        private NetTypeEnvironment NetTypeEnv =>
+            _netTypeEnvironment ??= new NetTypeEnvironment(
+                IsUserDefinedTypeName, ResolveNetType, NetEnumUnderlyingTypeFullName);
 
         /// <summary>True for the `Nothing` literal (§6.5: participates as a null literal).</summary>
         private static bool IsNothingLiteral(ExpressionNode node) =>

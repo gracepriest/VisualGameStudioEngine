@@ -39,12 +39,22 @@ public class NetProxyEmitterTests
         new(name, declaringType, kind, isStatic, 0, type, parameters);
 
     /// <summary>
-    /// One member per wire shape the emitter distinguishes: a bool return, a String return, a
-    /// handle return via a constructor, a void return, a ByRef scalar, and a property. A
-    /// single-member surface would leave most of the emitter unexecuted while still passing
-    /// every "does it emit the artifacts" assertion.
+    /// THE cross-emitter drift oracle's surface: one member per wire shape the emitters
+    /// distinguish — a bool return, a String return, a handle return via a constructor, a void
+    /// return, a ByRef scalar, a property (handle-shaped enum result), and the §6.4 conversion
+    /// pairs. A single-member surface would leave most of the emitter unexecuted while still
+    /// passing every "does it emit the artifacts" assertion.
+    ///
+    /// <para><b>Every §8.3/§6.4 row this fixture omits is a row the drift oracle is BLIND to.</b>
+    /// <c>NetShimGeneratorTests.ExportSignaturesMatchTheProxyTableSlotSignatures</c> is the only
+    /// thing holding the C and C# wire tables together, and it can only compare the shapes this
+    /// surface actually contains — so the DateTime/TimeSpan rows Task 7a added went unchecked
+    /// until Task 8's Step 0 put them here. Adding a row to
+    /// <c>NetMarshalTable.WireRows</c> without adding a member here re-opens exactly that gap.
+    /// (Renamed from <c>SixShapeSurface</c> in Task-8 Step 0: the count is a moving target as
+    /// §8.3 rows land, and <see cref="ShapeCount"/> is what keeps it honest.)</para>
     /// </summary>
-    internal static NetSurface SixShapeSurface() => new(
+    internal static NetSurface WireShapeSurface() => new(
         new[]
         {
             Member("IsMatch", "System.Text.RegularExpressions.Regex", NetMemberCategory.Method,
@@ -59,8 +69,24 @@ public class NetProxyEmitterTests
                    false, "System.Void", P("System.Int32", NetRefKind.Ref)),
             Member("Options", "System.Text.RegularExpressions.Regex", NetMemberCategory.Property,
                    false, "System.Text.RegularExpressions.RegexOptions"),
+            // §6.4's single-slot conversion pairs (P2a-2 Task 7a). Both DIRECTIONS on each:
+            // the wire scalar appears as a parameter and as a result, which is what makes the
+            // signature oracle compare CsParamType and CsOutType rather than only one of them.
+            Member("AddDays", "System.DateTime", NetMemberCategory.Method,
+                   false, "System.DateTime", P("System.Double")),
+            Member("Subtract", "System.DateTime", NetMemberCategory.Method,
+                   false, "System.TimeSpan", P("System.DateTime")),
+            Member("Add", "System.TimeSpan", NetMemberCategory.Method,
+                   false, "System.TimeSpan", P("System.TimeSpan")),
         },
         new[] { "System.Text.RegularExpressions.Regex" });
+
+    /// <summary>
+    /// How many distinct slots <see cref="WireShapeSurface"/> contributes. Named rather than
+    /// inlined so a fixture change updates ONE number and every count guard follows — a guard
+    /// that silently tracked the fixture would assert nothing.
+    /// </summary>
+    internal const int ShapeCount = 9;
 
     internal static NetSurface OneMemberSurface() => new(
         new[]
@@ -167,7 +193,7 @@ public class NetProxyEmitterTests
     [Test]
     public void NonEmptySurfaceEmitsExactlyTheSixNativeArtifacts()
     {
-        var files = NetProxyEmitter.Emit(SixShapeSurface(), Module);
+        var files = NetProxyEmitter.Emit(WireShapeSurface(), Module);
 
         Assert.That(files.Keys, Is.EquivalentTo(ExpectedArtifacts),
             "The obj/gen artifact set drifted from spec §9.1. If a file was added or renamed, "
@@ -181,7 +207,7 @@ public class NetProxyEmitterTests
         var dir = TempDir();
         try
         {
-            var written = NetProxyEmitter.WriteTo(dir, SixShapeSurface(), Module);
+            var written = NetProxyEmitter.WriteTo(dir, WireShapeSurface(), Module);
 
             Assert.Multiple(() =>
             {
@@ -200,7 +226,7 @@ public class NetProxyEmitterTests
     [Test]
     public void OnlyTheStartupFileIsATranslationUnit()
     {
-        Assert.That(NetProxyEmitter.TranslationUnitFileNames(SixShapeSurface()),
+        Assert.That(NetProxyEmitter.TranslationUnitFileNames(WireShapeSurface()),
             Is.EqualTo(new[] { "blnet_startup.g.cpp" }),
             "The generated .NET artifact set has exactly one TU. If that changes, plan Task 13's "
             + "generatedTus union must change with it or the new TU is emitted and never linked.");
@@ -214,7 +240,7 @@ public class NetProxyEmitterTests
     [Test]
     public void ContractHeadersAreSplicedVerbatimFromBlnetRuntimeSources()
     {
-        var files = NetProxyEmitter.Emit(SixShapeSurface(), Module);
+        var files = NetProxyEmitter.Emit(WireShapeSurface(), Module);
 
         Assert.Multiple(() =>
         {
@@ -239,11 +265,11 @@ public class NetProxyEmitterTests
     [Test]
     public void EveryProxyBodyHoldsACallScopeAndGuardsItsSlot()
     {
-        var surface = SixShapeSurface();
+        var surface = WireShapeSurface();
         var proxies = N(NetProxyEmitter.Emit(surface, Module)["blnet_proxies.g.hpp"]);
         var slots = NetProxyEmitter.EmitBindings(surface).SlotNames;
 
-        Assert.That(slots, Has.Count.EqualTo(6), "the fixture surface lost a shape");
+        Assert.That(slots, Has.Count.EqualTo(ShapeCount), "the fixture surface lost a shape");
 
         Assert.Multiple(() =>
         {
@@ -281,7 +307,7 @@ public class NetProxyEmitterTests
     [Test]
     public void NetCheckSitsOutsideTheCallScope()
     {
-        var surface = SixShapeSurface();
+        var surface = WireShapeSurface();
         var proxies = N(NetProxyEmitter.Emit(surface, Module)["blnet_proxies.g.hpp"]);
 
         Assert.Multiple(() =>
@@ -310,7 +336,7 @@ public class NetProxyEmitterTests
     [Test]
     public void ProxiesPumpOnlyAtTheOutermostReturn()
     {
-        var surface = SixShapeSurface();
+        var surface = WireShapeSurface();
         var proxies = N(NetProxyEmitter.Emit(surface, Module)["blnet_proxies.g.hpp"]);
 
         Assert.Multiple(() =>
@@ -336,7 +362,7 @@ public class NetProxyEmitterTests
     [Test]
     public void BindingsStartupAndProxiesAgreeOnEverySlotName()
     {
-        var surface = SixShapeSurface();
+        var surface = WireShapeSurface();
         var files = NetProxyEmitter.Emit(surface, Module);
         var bindings = N(files["blnet_bindings.g.hpp"]);
         var startup = N(files["blnet_startup.g.cpp"]);
@@ -387,7 +413,7 @@ public class NetProxyEmitterTests
     [Test]
     public void StartupCarriesTheFourNormativeFailureMessages()
     {
-        var startup = N(NetProxyEmitter.Emit(SixShapeSurface(), Module)["blnet_startup.g.cpp"]);
+        var startup = N(NetProxyEmitter.Emit(WireShapeSurface(), Module)["blnet_startup.g.cpp"]);
 
         Assert.Multiple(() =>
         {
@@ -405,7 +431,7 @@ public class NetProxyEmitterTests
     [Test]
     public void StartupPerformsTheTwoArgumentHandshakeAgainstTheContractVersion()
     {
-        var startup = N(NetProxyEmitter.Emit(SixShapeSurface(), Module)["blnet_startup.g.cpp"]);
+        var startup = N(NetProxyEmitter.Emit(WireShapeSurface(), Module)["blnet_startup.g.cpp"]);
 
         Assert.Multiple(() =>
         {
@@ -430,7 +456,7 @@ public class NetProxyEmitterTests
     [Test]
     public void StartupOwnershipIsAStaticInitializerObject()
     {
-        var startup = N(NetProxyEmitter.Emit(SixShapeSurface(), Module)["blnet_startup.g.cpp"]);
+        var startup = N(NetProxyEmitter.Emit(WireShapeSurface(), Module)["blnet_startup.g.cpp"]);
 
         Assert.Multiple(() =>
         {
@@ -502,7 +528,7 @@ public class NetProxyEmitterTests
     [Test]
     public void WireFormsFollowTheMarshalingTable()
     {
-        var surface = SixShapeSurface();
+        var surface = WireShapeSurface();
         var bindings = N(NetProxyEmitter.Emit(surface, Module)["blnet_bindings.g.hpp"]);
         var slots = NetProxyEmitter.EmitBindings(surface).SlotNames;
 
@@ -584,7 +610,7 @@ public class NetProxyEmitterCompileTests
     {
         if (_compiler is null) Assert.Ignore("No C++ compiler available");
 
-        var files = ArtifactsPlus(NetProxyEmitterTests.SixShapeSurface(), """
+        var files = ArtifactsPlus(NetProxyEmitterTests.WireShapeSurface(), """
             #include "blnet_proxies.g.hpp"
             #include <cstdio>
             BlnetProxyTable g_net{};
@@ -656,7 +682,7 @@ public class NetProxyEmitterCompileTests
         if (_compiler is null) Assert.Ignore("No C++ compiler available");
 
         const string missing = "NoSuchBlnetShim.Net.dll";
-        var files = ArtifactsPlus(NetProxyEmitterTests.SixShapeSurface(), """
+        var files = ArtifactsPlus(NetProxyEmitterTests.WireShapeSurface(), """
             #include <cstdio>
             int main() { std::printf("reached-main"); return 0; }
             """, missing);
