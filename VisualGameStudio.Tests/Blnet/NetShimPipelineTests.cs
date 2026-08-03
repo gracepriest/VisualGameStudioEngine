@@ -1131,7 +1131,11 @@ public class NetShimPipelineTests
     [OneTimeTearDown]
     public void OneTimeTearDown()
     {
-        foreach (var dir in SharedDirs)
+        // The memo is cleared with the directories, not left behind: a retained entry would
+        // point at a deleted directory, and a second run of this fixture in the same process
+        // would hand it out as a successful build with no executable on disk.
+        SharedBuilds.Clear();
+        while (SharedDirs.TryTake(out var dir))
             NetShimPipelineFixture.TryDeleteDir(dir);
     }
 

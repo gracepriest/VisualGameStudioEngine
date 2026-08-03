@@ -684,6 +684,69 @@ inbound narrows with the §14.10 divergence documented at the lowering site; `re
   Needs underlying-type carriage in the descriptor + both emitters. `File.Open(p, FileMode.Open)`
   is the canonical shape and is currently a precise refusal, not a miscompile.
 
+> ### ⛔ CARRIED FORWARD out of Task 8 (2026-08-03) — the two items above did NOT land
+>
+> Everything else in Task 8 shipped. These two are deferred with the design worked out and
+> **measured**, so the next session starts from here rather than re-deriving it. Both remain
+> PRECISE REFUSALS today (positioned BL6019), never miscompiles, and both are still Task 13's
+> blockers.
+>
+> **A. The four §6.4 rows — "multi-slot" is THREE different complications, not one.**
+> The seam is ready (`NetArgEmission {Prologue, Expressions, Epilogue}` exists and
+> `Expressions` is already a LIST for exactly this), but the emitters plan one C slot per
+> parameter and one `result` out-pointer, and the four rows break that in three distinct ways:
+> - **arity > 1, scalar slots** — Decimal (`uint32_t` ×4, the `GetBits` quad) and
+>   DateTimeOffset (`int64_t utcTicks`, `int16_t offsetMinutes` — the DECLARED scalar pair;
+>   `NetDateTimeOffsetWire` is `{int64,int16}` = sizeof 16 with 6 bytes of padding and must
+>   NEVER cross by value). Parameter side is easy with the emission shape: prologue
+>   `auto t = to_net_decimal(x);`, expressions `t.lo, t.mid, t.hi, t.flags`. The RESULT side is
+>   the real work — one `result` out-pointer becomes several. **Cheapest shape found: give the
+>   proxy OUT-REFERENCES for the result slots and return `void`** (`inline void slot(args…,
+>   uint32_t& r_lo, …)`), then the call site does prologue-declare → call → `dest =
+>   from_net_decimal(r_lo, …)`. This avoids inventing POD wire structs in the proxies header,
+>   which would need layout agreement with `blnet_marshal.hpp` — a header the proxies header
+>   deliberately cannot include (the P1 include-order contract).
+> - **direction-dependent C type, arity 1** — Guid. `const uint8_t*` in / `uint8_t*` out
+>   (a pointer to 16 bytes, exactly what `to_net_guid(v, out[16])` / `from_net_guid(in[16])`
+>   already take). This is the SAME shape String already has, not a new one. Do **not** pack it
+>   into two `uint64_t`: that makes the wire host-endian-dependent, and the managed side would
+>   have to reverse it identically.
+> - **one-way** — StringBuilder. Crosses as the String wire, to-net only; a StringBuilder
+>   RESULT must keep refusing (`NetWireRow.NativeFromNet` is null for it ON PURPOSE, and
+>   `NetConversionPairTests` pins the absence on both sides). Call site wants a prologue temp
+>   (`std::string t = to_net_stringbuilder(x);` then `t.c_str()`) rather than `.c_str()` on a
+>   temporary.
+>
+> Managed side per row (all already exist in `BlnetShimSources.MarshalCs`): `DecimalFromWire`
+> takes **`int`**, not `uint` — cast at the call site; `DecimalToWire` returns `int[]` and
+> `DateTimeOffsetToWire` has two `out` parameters, so the shim's RESULT direction needs
+> STATEMENTS, not just an expression (`EmitWrapper` is expression-shaped today);
+> `GuidFromWire`/`GuidToWire` are `byte[]`-based (`new ReadOnlySpan<byte>(a0, 16).ToArray()`
+> inline avoids touching the byte-pinned `Prologue` const).
+>
+> `NetShimGeneratorTests.ExportSignaturesMatchTheProxyTableSlotSignatures` compares POSITIONALLY
+> by (type, name), so multi-slot works there for free **provided both emitters emit the same
+> slot names in the same order** — add `CsTypeFor` rows for `uint32_t`→`uint`, `int16_t`→`short`,
+> `const uint8_t*`/`uint8_t*`→`byte*`. And add members for all four rows to
+> `NetProxyEmitterTests.WireShapeSurface` (+ `ShapeCount`) or the oracle stays blind to them,
+> which is the exact gap Step 0's I3 just closed for DateTime/TimeSpan.
+>
+> **B. Enum arguments — the plan's framing above is INCOMPLETE, measured.** Underlying-type
+> carriage in the descriptor + both emitters is necessary but **not sufficient**: there is no
+> enum VALUE to pass. Probed on this tree —
+> ```
+> Dim m = FileMode.Open      →  BL6001: 'Object' (local 'm' in 'Main') — 'Object' has no C++ mapping
+> ```
+> `TryTypeNetEnumArgument` produces a SPELLING for overload resolution and records no
+> annotation, so `FileMode.Open` types as `Object` and lowers to nothing at all. Un-refusing
+> enum PARAMETERS without fixing this turns a precise refusal into a broken program. The
+> missing piece is enum-member-constant lowering: expose the member's constant from the
+> resolver (`GetMembers` gives fields but not values), type the member access as the underlying
+> BasicLang integral, and stamp the constant so `IRBuilder` emits an `IRConstant`. Only then do
+> the descriptor carriage and the two emitter arms have anything to carry.
+> `NetTypeResolver.EnumUnderlyingTypeFullName` and the `NetTypeEnvironment` capability slot for
+> it landed in Task 8's Step 0 (M2) and are ready for it.
+
 **Steps:**
 
 - [ ] **Step 0 (MECHANICAL, do these FIRST — Task-7a quality review; all behavior-preserving,
@@ -770,6 +833,30 @@ inbound narrows with the §14.10 divergence documented at the lowering site; `re
   is the SCALAR pair, declared in the marshal header). Also adopt the `(void)r.ClockDateTime();`
   range-check idiom in native `from_net_datetimeoffset` next time the marshal header is touched.
 - [ ] **Step 3:** fast subset; commit (`feat(p2a2): ref/out slots, boxed receivers, Char`).
+
+**Task 8 outcome (2026-08-03).** Step 0 landed COMPLETE — all eleven items, in three commits
+(`fd5599b` I4+I2, `74a157d` M1+M2+7b-I5+I3, `c6866ed` I5+7b-I6/I7/I8/I9 plus the three Task-7b
+final-review trivia). The feature landed as `7ae95a5` (ref/out pointer slots + the Char ≥0x80 run
+proof) and `7b197e6` (ref-struct BL6019 + the CS0445 mutation oracle + §8.3's drift test + the
+`ClockDateTime` range check). The four §6.4 rows and enum arguments are CARRIED FORWARD — see
+the blockquote above for the measured designs.
+
+⛔ **Found by Step 0's 7b-I8 and owed to TASK 9:** `NetTypeResolver.TypeName` builds a nested
+type's spelling from `QualifiedName`, which walks containing types by NAME and **drops their
+generic arity** — `List<T>.Enumerator` spells `System.Collections.Generic.List.Enumerator`,
+while the metadata name its own `Lookup` needs is
+`System.Collections.Generic.List`1+Enumerator`. Verified both ways
+(`ValueTypeReceiverNames_CannotSeeANestedGenericStruct_Task9Prerequisite`), and the collector
+admits `GetEnumerator()` quite happily because the nested type has arity 0 of its OWN so the
+open-type-parameter check never fires. Task 9 hits it twice: the value-type receiver set answers
+"reference type" for every enumerator struct, so the shim casts instead of `Unsafe.Unbox` and
+§8.5's mutate-the-temporary `MoveNext`-forever loop appears with **no diagnostic**; and
+`NetShimGenerator.Qualified` would emit `global::System.Collections.Generic.List.Enumerator`,
+which is not valid C#. Fix either by teaching `TypeName`/`CandidateMetadataNames` the arity form
+(⚠ `TypeName` feeds `NetNameMangler`, so this MOVES export names — §12.4 identity) or by deriving
+the value-type set from the `ITypeSymbol` the COLLECTOR holds, which `NetShimGenerator.Emit`'s own
+parameter docs already call the only thing that can really know. Until then 7b-I7's key poisoning
+bounds the damage: the answer reports INCOMPLETE, so the wrong shim is never cached.
 
 ### Task 9: §8.5 — consuming handle-represented collections
 
