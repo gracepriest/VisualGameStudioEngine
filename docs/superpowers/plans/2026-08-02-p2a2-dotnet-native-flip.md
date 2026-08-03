@@ -556,6 +556,10 @@ round trip).
 - [ ] **Step 1:** red emit tests: static `Regex.IsMatch("a","b")` → proxy call with two UTF-8
   args; instance `r.IsMatch("x")` → receiver handle + arg; `New Regex("p")` → ctor proxy into a
   `NetRef` local; property get/set; `Nothing` argument → `NetRef()` (0-handle).
+  Task-5 review carry-forwards to fold into this fixture: a direct BL6023-native-error pin
+  (currently covered only transitively via the shared seam), and coverage for the ctor probe's
+  resolved-ARBITRARY-name arm (`New FileStream(...)` in a generic body → BL6024 — the
+  ManagedOwned arm is mutation-killed, this arm has zero coverage).
 - [ ] **Step 2:** implement the lowering arm. Green.
 - [ ] **Step 3:** stub-runtime run tests: `CompileAndRun` with the fake `g_net` — the recorded
   call sequence and arguments match; a non-OK status from the stub surfaces as a catchable
