@@ -579,6 +579,14 @@ namespace BasicLang.Compiler.ProjectSystem
             // marshaling at the boundary", §11.4) — a diagnostic, never a crash. Reaching it
             // needs a <NetProxy>-declared member the §7.2 omission filter admitted (a BL call
             // site with a ByRef winner is refused by the analyzer first).
+            //
+            // The code is SPELLED HERE rather than read off the exception (contrast the
+            // CppCapabilityException arm above, which reports ex.DiagnosticCode): this is a
+            // plain NotSupportedException carrying no code, and the emitter has exactly ONE
+            // throw site, so BL6019 is exhaustive for it. Unifying the two channels means
+            // giving that throw a code-bearing type — deliberately not done here, because
+            // Task 8 REPLACES the throw with real ByRef wire forms and the ceremony would be
+            // deleted in the same breath.
             IReadOnlyDictionary<string, string> netArtifacts;
             try
             {

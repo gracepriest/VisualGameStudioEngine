@@ -432,8 +432,11 @@ public class NetBuildPipelineTests
         Assert.That(generated, Does.Match(@"BasicLang::net::bl_net_\w*Regex_IsMatch\w*\(Rx, ""aaa""\)"),
             "the instance call must pass its RECEIVER to the proxy. Routing it to the fused "
             + "static arm discards the receiver expression — which is how a valid program came "
-            + "to fail with a 'compiler-internal' message. FIX IRBuilder's isStaticCall "
-            + "condition (a declared local is never a type name), not this test:\n" + generated);
+            + "to fail with a 'compiler-internal' message. FIX IRBuilder's static-vs-instance "
+            + "routing, not this test — and look at the DESCRIPTOR CROSS-CHECK first (the "
+            + "`!netShape.Member.IsStatic` arm): `_locals` is vestigial, so the isStaticCall "
+            + "name-shape guard covers PARAMETERS only and a Dim'd local like `Rx` is caught "
+            + "by the cross-check alone:\n" + generated);
     }
 
     /// <summary>

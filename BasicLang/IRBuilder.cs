@@ -3384,19 +3384,29 @@ namespace BasicLang.Compiler.IR
                     // Check if it's a .NET type (contains dot or is known .NET type name)
                     bool isNetType = objVar.Name.Contains('.') || IsKnownNetStaticType(objVar.Name);
 
-                    // A DECLARED LOCAL OR PARAMETER IS NEVER A TYPE NAME — the guard applies to
-                    // BOTH sources of type-ness, not just the class-name one.
-                    //
-                    // It used to read `(exactClassMatch && !isLocalOrParam) || isNetType`, which
-                    // let isNetType bypass the guard entirely. IsKnownNetStaticType answers TRUE
-                    // for ANY PascalCase identifier once the unit has a .NET `Using` (its
+                    // A declared name is never a type name, so the guard applies to BOTH
+                    // sources of type-ness, not just the class-name one. It used to read
+                    // `(exactClassMatch && !isLocalOrParam) || isNetType`, which let isNetType
+                    // bypass the guard entirely — and IsKnownNetStaticType answers TRUE for ANY
+                    // PascalCase identifier once the unit has a .NET `Using` (its
                     // imported-namespace heuristic), so on the real CLI/IDE path — where
                     // ConfigureModuleSystem populates CurrentUnit — `Dim Rx As New Regex("a+")`
                     // followed by `Rx.IsMatch("aaa")` routed the INSTANCE call into the fused
                     // static arm, discarding the receiver expression. Pre-P2a-2 that produced a
                     // bogus `Rx.IsMatch(...)` free-function call; with .NET lowering live it
                     // reached BuildNetProxyCall with an instance descriptor and no receiver.
-                    // A local always shadows a type name in VB, so this is also just correct.
+                    //
+                    // ⚠ HOW MUCH THIS LINE ACTUALLY COVERS, measured — do not overestimate it:
+                    // `_locals` IS VESTIGIAL. Nothing ever adds an entry for a declared
+                    // variable; its only writes are the two lambda-context restore loops, each
+                    // fed by a `savedLocals` copy of the (empty) dictionary. So
+                    // `_locals.ContainsKey(...)` is permanently false and isLocalOrParam
+                    // reduces to "is a PARAMETER of the current function". A DIM'D LOCAL — the
+                    // C1 shape above — is NOT caught here; it is caught by the descriptor
+                    // cross-check immediately below, which is the AUTHORITATIVE layer for
+                    // locals. Do not "simplify away" that check on the strength of this line.
+                    // (Fixing `_locals`, or deleting it, is separate work: it would also revive
+                    // the dead lambda capture-detection loop it feeds.)
                     isStaticCall = (exactClassMatch || isNetType) && !isLocalOrParam;
                 }
 
@@ -3407,6 +3417,13 @@ namespace BasicLang.Compiler.IR
                 // what the identifier looked like. (The converse needs no handling: VB's
                 // shared-through-instance leniency lands a STATIC descriptor on the instance
                 // arm, and the lowering drops the phantom receiver by reading IsStatic.)
+                //
+                // ⚠ THIS IS THE LOAD-BEARING LAYER FOR THE C1 SHAPE, not a belt-and-braces
+                // second opinion: `_locals` is vestigial (see above), so the name-shape guard
+                // catches PARAMETERS only and a `Dim`'d local named like a type reaches here
+                // still marked static. Removing this check re-breaks
+                // NetBuildPipelineTests.InstanceCallOnAPascalCaseLocal_UnderANetUsing_… —
+                // verified by mutation, which reproduced the original C1 failure exactly.
                 if (isStaticCall
                     && _semanticAnalyzer.NetMemberAnnotations.TryGetValue(memberExpr, out var netShape)
                     && !netShape.Member.IsStatic
