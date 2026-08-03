@@ -830,6 +830,13 @@ so arbitrary unmapped names in delegate params stop reaching raw C++.
 ### Task 12: §12.3 generated-shim conformance suite
 
 **Files:**
+⛔ **Task-7b review finding — BlnetGenLib MUST be compiled against the net8.0 REFERENCE pack**
+(reuse `NetShimPipelineFixture.ReferencePackAssemblies`). Built against the shared framework's
+implementation assemblies it carries a direct `System.Private.CoreLib` reference and every use
+of its types inside the generated shim is **CS0012** — the whole conformance suite would fail
+for a reason unrelated to conformance. (Same root as the recorded latent asymmetry: the analyzer
+resolves against implementation assemblies while the shim compiles against reference assemblies.)
+
 - Create: `VisualGameStudio.Tests/TestAssets/BlnetGenLib/` (purpose-built C# library:
   instance/static/ctors/properties/**an indexer-bearing type** (§12.3's "indexer read/write on a
   user type")/overloads/generics/inheritance/every §8.3 row/throwing members/delegate-taking
