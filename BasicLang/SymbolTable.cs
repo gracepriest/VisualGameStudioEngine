@@ -31,6 +31,33 @@ public class TypeInfo
         // A ::-qualified suffix for a foreign C++ type that follows its generic args,
         // e.g. "::iterator" in std::vector(Of Integer)::iterator -> std::vector<int32_t>::iterator.
         public string ForeignSuffix { get; set; }
+
+        /// <summary>
+        /// P2a-2 Task 9 (spec §8.5) — <b>THE CATEGORY MARKER</b>. Non-null means this BasicLang
+        /// type is a HANDLE-REPRESENTED .NET value (§8.3's "reference type → <c>uint64_t</c>
+        /// handle" row): the string is <c>NetTypeResolver.TypeName</c>'s C# spelling of the .NET
+        /// type (<c>System.Collections.Generic.List&lt;System.Int32&gt;</c>,
+        /// <c>System.Int32[]</c>), which is the form the resolver both PRODUCES and RESOLVES
+        /// (Task 8b's round trip) and the form <c>NetShimGenerator.Qualified</c> can emit.
+        ///
+        /// <para><b>Why a marker and not a name test — §8.5, verbatim: "Managed vs native
+        /// <c>List</c> must not be decided by name."</b> A .NET method returning
+        /// <c>List&lt;int&gt;</c> gives a BasicLang type whose <c>Name</c> IS <c>"List"</c> and
+        /// whose <c>Kind</c> for <c>int[]</c> IS <see cref="TypeKind.Array"/> — the two spellings
+        /// <c>CppCodeGenerator.MapType</c> lowers to <c>std::shared_ptr&lt;BasicLang::List&lt;…&gt;&gt;</c>
+        /// and <c>std::vector&lt;…&gt;</c>. Declaring a managed handle as either of those is the
+        /// WILD POINTER §8.5 exists to prevent: the 64-bit handle would be reinterpreted as a
+        /// native object pointer. <c>MapType</c>, <c>BareCollectionType</c> and
+        /// <c>IsCollectionType</c> therefore test THIS FIELD FIRST and answer
+        /// <c>BasicLang::NetRef</c>/null/false before either branch can run.</para>
+        ///
+        /// <para>Distinct from the <c>BoundaryTypeRegistry.ManagedOwned</c> remap in
+        /// <c>MapType</c> (the P2a-2 flip's D-P7 arm), which is keyed on the five REGISTRY names
+        /// and stays scoped to them per §12.4. This field carries the same answer for the
+        /// arbitrary resolved .NET types §11.4 leaves <c>Unknown</c> to the registry by design.</para>
+        /// </summary>
+        public string NetHandleTypeFullName { get; set; }
+
         public Dictionary<string, Symbol> Members { get; set; }
 
         public TypeInfo(string name, TypeKind kind)

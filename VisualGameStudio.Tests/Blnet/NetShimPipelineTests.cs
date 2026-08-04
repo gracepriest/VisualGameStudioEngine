@@ -69,6 +69,23 @@ internal static class NetShimPipelineFixture
                 public int Value { get; set; }
                 public int Twice() => Value * 2;
             }
+
+            /// <summary>
+            /// P2a-2 Task 9 (spec §8.5). <c>Numbers()</c> returns a CONCRETE
+            /// <c>List&lt;int&gt;</c> on purpose: its enumerator is a MUTABLE STRUCT, so a shim
+            /// that reached it through the concrete <c>GetEnumerator()</c> and unboxed with a
+            /// cast would mutate a temporary — <c>MoveNext</c> true forever, element 0 forever,
+            /// an INFINITE LOOP with no diagnostic. A .NET array and an iterator-produced
+            /// <c>IEnumerable&lt;T&gt;</c> (a class) both PASS with that bug present, which is
+            /// why this member exists and returns a List.
+            /// </summary>
+            public static class Bag
+            {
+                public static System.Collections.Generic.List<int> Numbers() =>
+                    new System.Collections.Generic.List<int> { 10, 20, 30 };
+
+                public static int[] Values() => new[] { 7, 8, 9 };
+            }
         }
         """;
 
@@ -1335,6 +1352,63 @@ public class NetShimPipelineTests
             + "the last-error TYPE field the ';'-separated inheritance chain, most-derived first, "
             + "and NetCheckTyped matches ELEMENTS of it — with only ex.GetType().FullName the "
             + "clause never matches and the exception escapes Main entirely.");
+    }
+
+    // =====================================================================================
+    // §8.5 — consuming handle-represented collections, on a REAL shim (P2a-2 Task 9 Step 3).
+    // =====================================================================================
+
+    /// <summary>
+    /// <b>The mandatory concrete-<c>List&lt;T&gt;</c> proof.</b> §8.5's mutable-struct-enumerator
+    /// hazard has no diagnostic: if the generated shim reached <c>List&lt;int&gt;</c>'s own
+    /// struct-returning <c>GetEnumerator()</c> and unboxed it with a cast, <c>MoveNext</c> would
+    /// mutate the TEMPORARY produced by the unboxing conversion — the box untouched, true
+    /// forever, <c>Current</c> element 0 forever. <b>This test would then HANG rather than
+    /// fail</b>, which is exactly why it exists: §12.3's two obvious cases (a .NET array; an
+    /// <c>IEnumerable&lt;T&gt;</c> from a compiler-generated iterator, which is a CLASS) both
+    /// PASS with the bug present. Driving the loop through
+    /// <c>IEnumerable&lt;T&gt;</c>/<c>IEnumerator&lt;T&gt;</c> is what makes the enumerator
+    /// arrive as an interface reference to the box, so the mutation lands where it must.
+    ///
+    /// <para>The same program carries §8.5's array rows: <c>Vals(0)</c> reads through the
+    /// synthetic <c>bl_net_…get_Item</c> export (a .NET array exposes no indexer in metadata at
+    /// all, and <c>Array.GetValue(int)</c> is not a fallback — it returns <c>Object</c>, which is
+    /// permanently <c>Rejected</c>), and <c>Vals(0) = 42</c> writes through the synthetic
+    /// <c>set_Item</c>. The read-back is what proves the write reached the MANAGED array rather
+    /// than a native copy: §8.6 row 1 says an inferred <c>Dim a = obj.GetValues()</c> keeps the
+    /// HANDLE, so there is no <c>std::vector</c> anywhere to absorb it.</para>
+    /// </summary>
+    [Test]
+    public void Section85_ConcreteListIteratesAndANetArrayRoundTrips()
+    {
+        var probe = NetShimPipelineFixture.EmitProbeAssembly(_dir);
+        Write("Program.bas", """
+            Using Aot.Probe
+
+            Module Program
+             Sub Main()
+              Dim Nums = Bag.Numbers()
+              For Each N In Nums
+               Console.WriteLine(N)
+              Next
+              Dim Vals = Bag.Values()
+              Console.WriteLine(Vals(0))
+              Vals(0) = 42
+              Console.WriteLine(Vals(0))
+             End Sub
+            End Module
+            """);
+
+        var (result, _) = Build("Section85", NetShimPipelineFixture.ReferenceItemGroup(probe));
+        AssertBuilt(result, "the §8.5 collection-consumption program");
+
+        Assert.That(NetShimPipelineFixture.Run(result.ExecutablePath!),
+            Is.EqualTo("10\n20\n30\n7\n42\n"),
+            "10/20/30 is the CONCRETE List(Of Integer) iterating to completion with the right "
+            + "elements — the boxed-mutable-struct guard. (With that bug the program prints 10 "
+            + "forever and this test hangs instead of failing.) 7 then 42 is the .NET array "
+            + "round trip through §8.5's synthetic get_Item/set_Item exports; a 7 on the second "
+            + "line would mean the write went to a native copy of a handle that never had one.");
     }
 
     // =====================================================================================

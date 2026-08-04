@@ -590,9 +590,29 @@ namespace BasicLang.Compiler.CodeGen.Net
 
             var target = plan.HasReceiver ? Receiver(member, valueTypes) : declaring;
 
-            // A Property WITH parameters is an indexer; §8.5 expects the collector to hand
-            // indexers over as get_Item/set_Item methods, but shaping it here costs nothing and
-            // is the only spelling that could compile if one arrives as a Property.
+            // §8.5's SYNTHESIZED shapes, asked rather than guessed (NetSyntheticKind). These
+            // come FIRST because two of them would otherwise be claimed by the shape tests
+            // below: an array's set_Item IS a void method named set_… and would be spelled
+            // `a.Item = i, v` — uncompilable C#, and only by luck rather than by design.
+            switch (member.Synthesis)
+            {
+                case NetSyntheticKind.ArrayGet:
+                    return target + "[" + args + "]";
+                case NetSyntheticKind.ArraySet:
+                case NetSyntheticKind.Setter when plan.Parameters.Count > 1:
+                    // Indices…, value — the parameter order NetAccessorSynthesis.SetterFor and
+                    // ArraySetFor both build, and the order IsSyntheticSetterShape's "last
+                    // parameter is the value" rule was written for.
+                    return target + "[" + string.Join(", ",
+                               plan.Parameters.Take(plan.Parameters.Count - 1).Select(Argument))
+                           + "] = " + Argument(plan.Parameters[plan.Parameters.Count - 1]);
+                case NetSyntheticKind.ArrayLength:
+                    return target + ".Length";
+            }
+
+            // A Property WITH parameters is an indexer — the shape §8.5's get_Item row lowers
+            // to. The collector hands one over as the Property descriptor the resolver already
+            // records index parameters on, so this arm is the READ half of the pair.
             if (member.Kind == NetMemberCategory.Property && plan.Parameters.Count > 0)
                 return target + "[" + args + "]";
 
@@ -601,9 +621,9 @@ namespace BasicLang.Compiler.CodeGen.Net
 
             // Task 7a: a synthesized set_X accessor (NetAccessorSynthesis — how IRBuilder
             // stamps a property/field WRITE) spells as an assignment: C# cannot call an
-            // accessor by its metadata name (CS0571). See IsSyntheticSetterShape's caveat
-            // about foreign metadata declaring an ordinary method named set_X — that shape
-            // fails to compile in csc, loudly, never silently calling the wrong member.
+            // accessor by its metadata name (CS0571). Still SHAPE-matched here so a descriptor
+            // built before NetSyntheticKind existed (every hand-written test surface) keeps its
+            // spelling; Synthesis is the authoritative answer when it is set.
             if (NetAccessorSynthesis.IsSyntheticSetterShape(member))
                 return target + "." + member.Name.Substring(NetAccessorSynthesis.SetterPrefix.Length)
                        + " = " + args;

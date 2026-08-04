@@ -501,6 +501,21 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         {
             if (type == null) return base.MapType(type);
             if (type.Kind == TypeKind.TypeParameter) return SanitizeName(type.Name);
+
+            // P2a-2 Task 9 (spec §8.5) — THE CATEGORY MARKER, TESTED FIRST. ORDER IS THE WHOLE
+            // POINT and is pinned by a mutation test
+            // (NetCollectionConsumptionTests.TheManagedMarkerMustPrecedeTheArrayAndCollectionBranches):
+            // a handle-represented .NET List(Of Integer) has Name == "List" and a .NET Int32()
+            // has Kind == Array, so BOTH the collection branch below and the array branch
+            // immediately below would claim them — declaring a 64-bit GCHandle as
+            // std::shared_ptr<BasicLang::List<int32_t>> / std::vector<int32_t>. That is the WILD
+            // POINTER §8.5 exists to prevent: the handle would be dereferenced as a native object
+            // pointer. BareCollectionType and IsCollectionType carry the same test for the same
+            // reason — the consumer sites (IRIndexerAccess/IRIndexerStore/IRForEach) merely
+            // consume whatever declaration this produces, so fixing them alone fixes nothing.
+            if (type.NetHandleTypeFullName != null)
+                return "BasicLang::NetRef";
+
             // VB arrays lower to std::vector<T>: an assignable/copyable value type (unlike a
             // C array, which cannot be assigned or returned). Route the element type through
             // the mapper so `Integer` becomes int32_t instead of leaking verbatim into C++.
@@ -621,6 +636,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private string BareCollectionType(TypeInfo type)
         {
             if (type?.Name == null) return null;
+            // §8.5's category marker, tested BEFORE the name tests. A handle-represented .NET
+            // List(Of Integer) is spelled "List" and would otherwise produce the pointee type of
+            // a native collection that does not exist — see MapType for the full rationale.
+            if (type.NetHandleTypeFullName != null) return null;
             if (string.Equals(type.Name, "List", StringComparison.OrdinalIgnoreCase) && type.GenericArguments?.Count > 0)
                 return $"BasicLang::List<{MapType(type.GenericArguments[0])}>";
             if (string.Equals(type.Name, "Dictionary", StringComparison.OrdinalIgnoreCase) && type.GenericArguments?.Count > 1)
@@ -638,6 +657,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// </summary>
         private static bool IsCollectionType(TypeInfo type)
         {
+            // §8.5's category marker, tested BEFORE the name tests: a handle-represented .NET
+            // collection is NOT a native shared_ptr collection, so it must not get -> member
+            // access, pointer-deref indexing, range-for iteration or a nullptr default. See
+            // MapType for why deciding this by name is the wild pointer.
+            if (type?.NetHandleTypeFullName != null) return false;
             var n = type?.Name;
             return n != null
                 && (string.Equals(n, "List", StringComparison.OrdinalIgnoreCase)
@@ -3963,6 +3987,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         public override void Visit(IRForEach forEach)
         {
+            // §8.5's handle-represented collection: driven through IEnumerable<T>/IEnumerator<T>.
+            if (TryLowerNetForEach(forEach))
+                return;
+
             // C++ range-based for loop
             var elemType = MapType(forEach.ElementType);
             var varName = SanitizeName(forEach.VariableName);
@@ -3991,6 +4019,17 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         public override void Visit(IRIndexerAccess indexer)
         {
+            // §8.5: a handle-represented collection lowers to the synthetic array getter or the
+            // real get_Item indexer, never to native pointer indexing. IsCollectionType /
+            // MapType already refuse to declare such a value as a native collection (the
+            // marker-first rule), so this arm cannot be reached with a native receiver.
+            if (TryLowerNetInvocation(
+                    indexer, indexer.ResolvedNetTarget, indexer.ResolvedNetTargetIsExact,
+                    indexer.NetCategory, indexer.Collection, indexer.Indices))
+            {
+                return;
+            }
+
             var collection = GetValueName(indexer.Collection);
             var indices = string.Join("][", indexer.Indices.Select(i => GetValueName(i)));
             var result = GetValueName(indexer);
@@ -4012,6 +4051,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         public override void Visit(IRIndexerStore indexerStore)
         {
+            // §8.5's WRITE half: the synthesized set_Item(index…, value) accessor. The value is
+            // the LAST argument — the order NetAccessorSynthesis builds and the shim's
+            // `target[i] = v` spelling depends on.
+            if (TryLowerNetIndexerStore(indexerStore))
+                return;
+
             var collection = GetValueName(indexerStore.Collection);
             var indices = string.Join("][", indexerStore.Indices.Select(i => GetValueName(i)));
             var value = GetValueName(indexerStore.Value);
@@ -4081,6 +4126,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private string GetDefaultValue(TypeInfo type)
         {
             if (type == null) return "{}";
+
+            // §8.5's category marker, tested BEFORE the name switch — for the same reason
+            // MapType tests it first. A handle-represented .NET String() is NAMED "String" and
+            // would otherwise be initialized to `""`, i.e. a std::string initializer on a
+            // BasicLang::NetRef. `{}` is the empty handle, which is what Nothing crosses as
+            // (§8.2's handle 0).
+            if (type.NetHandleTypeFullName != null) return "{}";
 
             var typeName = type.Name?.ToLower() ?? "";
 

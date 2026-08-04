@@ -43,6 +43,54 @@ namespace BasicLang.Net
     internal enum NetRefKind { None, Ref, Out, In, RefReadOnly }
 
     /// <summary>
+    /// P2a-2 Task 9 (spec §8.5) — whether a descriptor names a REAL metadata member or one the
+    /// compiler SYNTHESIZED, and which shape it synthesized.
+    ///
+    /// <para><b>Why intent is carried rather than guessed.</b>
+    /// <see cref="NetAccessorSynthesis.IsSyntheticSetterShape"/> recognized a synthesized setter
+    /// by its SHAPE (a void method named <c>set_X</c>), and its own remarks record the hole that
+    /// leaves: metadata from another compiler may declare an ordinary method called
+    /// <c>set_X</c>, and the shim would then spell it as an assignment. Task 9 adds three more
+    /// synthesized shapes whose spellings are not merely different but UNRELATED to their names
+    /// (<c>a[i]</c>, <c>a[i] = v</c>, <c>a.Length</c> for members called <c>get_Item</c> /
+    /// <c>set_Item</c> / <c>get_Length</c>), so shape matching would have to guess three more
+    /// times. The generator ASKS instead.</para>
+    ///
+    /// <para><b>Deliberately NOT part of the CLR signature</b>, exactly like
+    /// <see cref="NetMemberDescriptor.IsSettable"/>: it is absent from
+    /// <see cref="NetNameMangler"/>'s <c>CanonicalIdentity</c> and from
+    /// <c>NetTypeResolver</c>'s duplicate-collapse key, so adding it moves NO export name.
+    /// Identity is already unique without it — a synthesized array accessor's declaring type is
+    /// an ARRAY spelling (<c>System.Int32[]</c>), which <c>DescribeMember</c> can never
+    /// produce.</para>
+    /// </summary>
+    internal enum NetSyntheticKind
+    {
+        /// <summary>A real metadata member.</summary>
+        None,
+
+        /// <summary>
+        /// <c>set_X(value)</c> for a property/field write, or <c>set_Item(index…, value)</c> for
+        /// an indexer write. Spelled as an ASSIGNMENT — C# cannot call an accessor by its
+        /// metadata name (CS0571).
+        /// </summary>
+        Setter,
+
+        /// <summary>
+        /// <c>get_Item(int32)</c> on a <c>T[]</c>. §8.5: .NET arrays expose NO indexer in
+        /// metadata, and <c>Array.GetValue(int)</c> is not a fallback — it returns
+        /// <c>Object</c>, which is permanently <c>Rejected</c>.
+        /// </summary>
+        ArrayGet,
+
+        /// <summary><c>set_Item(int32, T)</c> on a <c>T[]</c>.</summary>
+        ArraySet,
+
+        /// <summary><c>get_Length()</c> on a <c>T[]</c>.</summary>
+        ArrayLength,
+    }
+
+    /// <summary>
     /// Why a type lookup answered the way it did.
     ///
     /// <para><b>The three cases must stay distinct.</b>
@@ -192,7 +240,8 @@ namespace BasicLang.Net
             int arity,
             string typeFullName,
             IReadOnlyList<NetParameterDescriptor> parameters,
-            bool isSettable = true)
+            bool isSettable = true,
+            NetSyntheticKind synthesis = NetSyntheticKind.None)
         {
             Name = name;
             DeclaringTypeFullName = declaringTypeFullName;
@@ -202,6 +251,7 @@ namespace BasicLang.Net
             TypeFullName = typeFullName;
             Parameters = parameters;
             IsSettable = isSettable;
+            Synthesis = synthesis;
         }
 
         /// <summary>
@@ -275,6 +325,14 @@ namespace BasicLang.Net
         /// they did before this bit existed.</para>
         /// </summary>
         public bool IsSettable { get; }
+
+        /// <summary>
+        /// P2a-2 Task 9: whether this descriptor names a real metadata member or a shape the
+        /// compiler synthesized, and which. See <see cref="NetSyntheticKind"/> for why intent is
+        /// carried rather than recovered from the member's name, and why it is deliberately not
+        /// part of the CLR signature identity (so it moves no export name).
+        /// </summary>
+        public NetSyntheticKind Synthesis { get; }
 
         /// <summary>Parameter types only, for callers that do not care how they are passed.</summary>
         public IEnumerable<string> ParameterTypeFullNames => Parameters.Select(p => p.TypeFullName);

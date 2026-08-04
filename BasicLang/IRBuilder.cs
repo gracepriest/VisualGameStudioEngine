@@ -2453,6 +2453,73 @@ namespace BasicLang.Compiler.IR
             _currentBlock = endBlock;
         }
 
+        // ------------------------------------------------------------------------------
+        // P2a-2 Task 9 (spec §8.5) — the two indexer producers. Both ask
+        // SemanticAnalyzer.NetIndexerFor for the descriptor rather than deriving one: the
+        // analyzer holds the resolver, and two derivations of one descriptor drift into two
+        // mangled export names, which breaks §12.4's slots ≡ exports by construction.
+        //
+        // NetCategory is Unknown on purpose. An arbitrary resolved .NET type is Unknown to
+        // BoundaryTypeRegistry BY DESIGN (§11.4), and Unknown is exactly what makes the
+        // lowering's IsNativelyHandledCategory gate answer "route through the shim". Naming
+        // ManagedOwned here would be a lie for every type outside the registry's five.
+        // ------------------------------------------------------------------------------
+
+        private bool TryEmitNetIndexerAccess(
+            TypeInfo collectionType, ExpressionNode collectionExpr, List<ExpressionNode> indices)
+        {
+            var target = _semanticAnalyzer?.NetIndexerFor(collectionType, forWrite: false);
+            if (target == null) return false;
+
+            collectionExpr.Accept(this);
+            var collection = _expressionResult;
+
+            // Typed from the DESCRIPTOR's result type, never from the legacy element inference:
+            // an Object-typed destination lowers to void*, and assigning an int32_t proxy
+            // result into it is invalid C++ (and for a handle element, unsound).
+            var elementType = _semanticAnalyzer.NetTypeInfoForResult(target.TypeFullName)
+                              ?? _semanticAnalyzer.GetNodeType(collectionExpr)?.ElementType
+                              ?? new TypeInfo("Object", TypeKind.Class);
+            var access = new IRIndexerAccess(
+                _currentFunction.GetNextTempName(), collection, elementType)
+            {
+                ResolvedNetTarget = target,
+                ResolvedNetTargetIsExact = true,
+                NetCategory = BoundaryTypeCategory.Unknown,
+            };
+            foreach (var index in indices)
+            {
+                index.Accept(this);
+                access.Indices.Add(_expressionResult);
+            }
+            EmitInstruction(access);
+            _expressionResult = access;
+            return true;
+        }
+
+        private bool TryEmitNetIndexerStore(
+            TypeInfo collectionType, ExpressionNode collectionExpr,
+            List<ExpressionNode> indices, IRValue value)
+        {
+            var target = _semanticAnalyzer?.NetIndexerFor(collectionType, forWrite: true);
+            if (target == null) return false;
+
+            collectionExpr.Accept(this);
+            var store = new IRIndexerStore(_expressionResult, value)
+            {
+                ResolvedNetTarget = target,
+                ResolvedNetTargetIsExact = true,
+                NetCategory = BoundaryTypeCategory.Unknown,
+            };
+            foreach (var index in indices)
+            {
+                index.Accept(this);
+                store.Indices.Add(_expressionResult);
+            }
+            EmitInstruction(store);
+            return true;
+        }
+
         public void Visit(ForEachLoopNode node)
         {
             TrackSourceLine(node);
@@ -2475,6 +2542,16 @@ namespace BasicLang.Compiler.IR
 
             // Emit IRForEach instruction
             var forEach = new IRForEach(node.Variable, elemType, collection, bodyBlock, endBlock);
+
+            // P2a-2 Task 9 (§8.5): a For Each over a HANDLE-represented .NET collection carries
+            // the four IEnumerable<T>/IEnumerator<T> members the analyzer resolved. Absent for
+            // every native collection, which is every program that existed before this.
+            if (_semanticAnalyzer?.NetEnumerations != null
+                && _semanticAnalyzer.NetEnumerations.TryGetValue(node, out var enumeration))
+            {
+                forEach.NetEnumeration = enumeration;
+            }
+
             EmitInstruction(forEach);
 
             // Body block
@@ -2933,7 +3010,14 @@ namespace BasicLang.Compiler.IR
                 // per-collection write semantics (e.g. Dictionary insert-or-update). Otherwise
                 // it's a raw array store via element pointer.
                 var arrayType = _semanticAnalyzer.GetNodeType(arrayExpr.Array);
-                if (arrayType != null && IsIndexableGenericType(arrayType))
+                // §8.5 FIRST: a handle-represented .NET array/collection is neither a native
+                // shared_ptr collection nor a std::vector — it has no storage to index. Tested
+                // ahead of both branches for the same reason MapType tests the marker first.
+                if (TryEmitNetIndexerStore(arrayType, arrayExpr.Array, arrayExpr.Indices, value))
+                {
+                    // stamped IRIndexerStore emitted
+                }
+                else if (arrayType != null && IsIndexableGenericType(arrayType))
                 {
                     arrayExpr.Array.Accept(this);
                     var collection = _expressionResult;
@@ -2991,7 +3075,11 @@ namespace BasicLang.Compiler.IR
                 // When the callee is an indexable generic collection, lower to IRIndexerStore.
                 // (Without this, such assignments were silently DROPPED — see Spike 1b.)
                 var calleeType = _semanticAnalyzer.GetNodeType(callTarget.Callee);
-                if (calleeType != null && IsIndexableGenericType(calleeType))
+                if (TryEmitNetIndexerStore(calleeType, callTarget.Callee, callTarget.Arguments, value))
+                {
+                    // §8.5 stamped IRIndexerStore emitted — see the ArrayAccess branch above.
+                }
+                else if (calleeType != null && IsIndexableGenericType(calleeType))
                 {
                     callTarget.Callee.Accept(this);
                     var collection = _expressionResult;
@@ -3474,11 +3562,15 @@ namespace BasicLang.Compiler.IR
                         // own effects, which is exactly what an optimizer is entitled to trust.
                         // Read from the descriptor rather than re-derived: it is the same
                         // signature the lowering marshals against.
+                        // P2a-2 Task 9 (7a/8 review I5): the KIND travels alongside, because
+                        // `List<bool>` cannot tell ref from out and CSharpBackend emitted
+                        // `ref x` for a .NET `out` parameter (CS1620).
                         var parameters = call.ResolvedNetTarget?.Parameters;
-                        call.ByRefArguments.Add(
-                            parameters != null && call.Arguments.Count - 1 < parameters.Count
-                            && parameters[call.Arguments.Count - 1].RefKind
-                               != BasicLang.Net.NetRefKind.None);
+                        var refKind = parameters != null && call.Arguments.Count - 1 < parameters.Count
+                            ? parameters[call.Arguments.Count - 1].RefKind
+                            : BasicLang.Net.NetRefKind.None;
+                        call.ByRefArguments.Add(refKind != BasicLang.Net.NetRefKind.None);
+                        call.NetArgumentRefKinds.Add(refKind);
                     }
                     EmitInstruction(call);
                     _expressionResult = call;
@@ -3527,6 +3619,15 @@ namespace BasicLang.Compiler.IR
                 // invalid `MakeList[3]`. Only value receivers (variables/parameters) index.
                 bool calleeIsCallable = symbol != null &&
                     (symbol.Kind == SymbolKind.Function || symbol.Kind == SymbolKind.Subroutine);
+
+                // §8.5 FIRST, ahead of BOTH the raw-array branch and the generic-collection
+                // branch below: a handle-represented .NET array/collection has no native storage
+                // to index, so neither IRGetElementPtr nor a native IRIndexerAccess is sound.
+                if (!calleeIsCallable && node.Arguments.Count > 0
+                    && TryEmitNetIndexerAccess(calleeType, node.Callee, node.Arguments))
+                {
+                    return;
+                }
 
                 // Check if this is actually an array access, not a function call
                 // In VB, arr(i) can be either function call or array indexing

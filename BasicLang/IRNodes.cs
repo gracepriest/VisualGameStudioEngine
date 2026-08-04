@@ -605,6 +605,27 @@ namespace BasicLang.Compiler.IR
         public string FunctionName { get; set; }
         public List<IRValue> Arguments { get; set; }
         public List<bool> ByRefArguments { get; set; }  // Track which arguments are by-ref
+
+        /// <summary>
+        /// P2a-2 Task 9 (Task-8 quality review I5) — HOW each by-ref argument is passed, for a
+        /// call whose target is a resolved .NET member. Parallel to
+        /// <see cref="ByRefArguments"/>, and consulted only where an entry exists.
+        ///
+        /// <para><b>Why <c>List&lt;bool&gt;</c> was not enough.</b> VB has one by-reference
+        /// form and the CLR has three, so a <c>bool</c> cannot tell <c>ref</c> from <c>out</c>.
+        /// <c>CSharpBackend</c> emitted <c>ref x</c> for a .NET <c>out</c> parameter, which is a
+        /// raw <b>CS1620</b> — not a regression (both forms failed before Task 8 populated this
+        /// list at all), but the descriptor now carries the fact, so the backend should not have
+        /// to guess. <c>in</c>/<c>RefReadOnly</c> arguments need no modifier in C# at all.</para>
+        ///
+        /// <para>INTERNAL and <c>NetRefKind</c>-typed deliberately: this is .NET carriage, and
+        /// carriage adds nothing to the compiler's public API (the same rule
+        /// <see cref="ResolvedNetTarget"/> follows). A user function's ByRef argument records
+        /// nothing here and keeps <c>ref</c>, which is VB's only by-reference form.</para>
+        /// </summary>
+        internal List<BasicLang.Net.NetRefKind> NetArgumentRefKinds { get; set; }
+            = new List<BasicLang.Net.NetRefKind>();
+
         public bool IsTailCall { get; set; }
 
         /// <summary>
@@ -921,10 +942,27 @@ namespace BasicLang.Compiler.IR
     /// <summary>
     /// IR Indexer access - represents collection[index] or dictionary[key]
     /// </summary>
-    public class IRIndexerAccess : IRValue
+    public class IRIndexerAccess : IRValue, INetCarrying
     {
         public IRValue Collection { get; set; }
         public List<IRValue> Indices { get; set; }
+
+        /// <summary>
+        /// P2a-2 Task 9 (spec §8.5) CARRIAGE — the .NET member this READ lowers to when the
+        /// collection is a handle: an <c>ArrayGet</c> synthetic for a <c>T[]</c>, or the real
+        /// <c>get_Item</c> indexer property for a collection that declares one — "which the
+        /// collector must collect even though the source never names it".
+        /// Null for every native collection, which is every program that existed before this.
+        /// </summary>
+        internal BasicLang.Net.NetMemberDescriptor ResolvedNetTarget { get; set; }
+
+        internal BoundaryTypeCategory NetCategory { get; set; }
+
+        internal bool ResolvedNetTargetIsExact { get; set; }
+
+        BasicLang.Net.NetMemberDescriptor INetCarrying.ResolvedNetTarget => ResolvedNetTarget;
+        BoundaryTypeCategory INetCarrying.NetCategory => NetCategory;
+        bool INetCarrying.ResolvedNetTargetIsExact => ResolvedNetTargetIsExact;
 
         public IRIndexerAccess(string name, IRValue collection, TypeInfo resultType)
             : base(name, resultType)
@@ -947,11 +985,28 @@ namespace BasicLang.Compiler.IR
     /// Distinct from <see cref="IRArrayStore"/> (raw fixed arrays) so backends can lower the
     /// write faithfully per collection kind (e.g. C++ Dictionary -> .Set(k,v), List -> [i]=v).
     /// </summary>
-    public class IRIndexerStore : IRInstruction
+    public class IRIndexerStore : IRInstruction, INetCarrying
     {
         public IRValue Collection { get; set; }
         public List<IRValue> Indices { get; set; }
         public IRValue Value { get; set; }
+
+        /// <summary>
+        /// P2a-2 Task 9 (spec §8.5) CARRIAGE — the synthesized <c>set_Item(index…, value)</c>
+        /// accessor this WRITE lowers to when the collection is a handle
+        /// (<c>NetAccessorSynthesis.ArraySetFor</c> for a <c>T[]</c>,
+        /// <c>NetAccessorSynthesis.SetterFor</c> over the resolved indexer otherwise). Null for
+        /// every native collection.
+        /// </summary>
+        internal BasicLang.Net.NetMemberDescriptor ResolvedNetTarget { get; set; }
+
+        internal BoundaryTypeCategory NetCategory { get; set; }
+
+        internal bool ResolvedNetTargetIsExact { get; set; }
+
+        BasicLang.Net.NetMemberDescriptor INetCarrying.ResolvedNetTarget => ResolvedNetTarget;
+        BoundaryTypeCategory INetCarrying.NetCategory => NetCategory;
+        bool INetCarrying.ResolvedNetTargetIsExact => ResolvedNetTargetIsExact;
 
         public IRIndexerStore(IRValue collection, IRValue value)
         {
@@ -972,6 +1027,57 @@ namespace BasicLang.Compiler.IR
     /// <summary>
     /// IR ForEach loop - represents iteration over a collection
     /// </summary>
+    /// <summary>
+    /// P2a-2 Task 9 (spec §8.5) — the four .NET members a <c>For Each</c> over a
+    /// HANDLE-represented collection is driven by, obtained and driven <b>through
+    /// <c>IEnumerable&lt;T&gt;</c>/<c>IEnumerator&lt;T&gt;</c></b>.
+    ///
+    /// <para><b>⛔ NEVER the concrete struct-returning <c>GetEnumerator()</c> Roslyn would
+    /// otherwise select.</b> For <c>List&lt;T&gt;</c>, <c>Dictionary&lt;K,V&gt;</c>,
+    /// <c>HashSet&lt;T&gt;</c> and <c>ImmutableArray&lt;T&gt;</c> that enumerator is a MUTABLE
+    /// STRUCT. Boxed into a handle (§8.3), a generated
+    /// <c>((List&lt;int&gt;.Enumerator)o!).MoveNext()</c> mutates the TEMPORARY produced by the
+    /// unboxing conversion; the box is untouched, <c>MoveNext</c> returns true forever and
+    /// <c>Current</c> yields element 0 — an INFINITE LOOP, not a diagnostic. Interface dispatch
+    /// on a boxed value type operates on the box, which is what makes this route correct rather
+    /// than merely conservative.</para>
+    ///
+    /// <para>Carried as a bundle rather than through <c>INetCarrying</c> (which holds ONE
+    /// descriptor) because all four must reach the surface together: a loop whose
+    /// <c>MoveNext</c> export exists and whose <c>Current</c> export does not is a shim that
+    /// fails to link, not a degraded loop.</para>
+    /// </summary>
+    internal sealed class IRNetEnumeration
+    {
+        internal IRNetEnumeration(
+            BasicLang.Net.NetMemberDescriptor getEnumerator,
+            BasicLang.Net.NetMemberDescriptor moveNext,
+            BasicLang.Net.NetMemberDescriptor current,
+            BasicLang.Net.NetMemberDescriptor dispose)
+        {
+            GetEnumerator = getEnumerator;
+            MoveNext = moveNext;
+            Current = current;
+            Dispose = dispose;
+        }
+
+        internal BasicLang.Net.NetMemberDescriptor GetEnumerator { get; }
+        internal BasicLang.Net.NetMemberDescriptor MoveNext { get; }
+        internal BasicLang.Net.NetMemberDescriptor Current { get; }
+        internal BasicLang.Net.NetMemberDescriptor Dispose { get; }
+
+        internal IEnumerable<BasicLang.Net.NetMemberDescriptor> Members
+        {
+            get
+            {
+                yield return GetEnumerator;
+                yield return MoveNext;
+                yield return Current;
+                yield return Dispose;
+            }
+        }
+    }
+
     public class IRForEach : IRInstruction
     {
         public string VariableName { get; set; }
@@ -979,6 +1085,14 @@ namespace BasicLang.Compiler.IR
         public IRValue Collection { get; set; }
         public BasicBlock BodyBlock { get; set; }
         public BasicBlock EndBlock { get; set; }
+
+        /// <summary>
+        /// P2a-2 Task 9 CARRIAGE — non-null when <see cref="Collection"/> is a
+        /// handle-represented .NET collection, holding the four interface members the loop is
+        /// driven by. See <see cref="IRNetEnumeration"/> for why the interfaces are mandatory.
+        /// Null for every native collection, which is every program that existed before this.
+        /// </summary>
+        internal IRNetEnumeration NetEnumeration { get; set; }
 
         public IRForEach(string variableName, TypeInfo elementType, IRValue collection, BasicBlock bodyBlock, BasicBlock endBlock)
         {

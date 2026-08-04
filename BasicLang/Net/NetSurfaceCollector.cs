@@ -247,6 +247,19 @@ namespace BasicLang.Net
                 AddMember(carrying.ResolvedNetTarget, members, seenMangled);
             }
 
+            // P2a-2 Task 9 (§8.5): a For Each over a handle-represented collection carries FOUR
+            // members, not one, so it cannot ride INetCarrying. All four are collected together
+            // — a surface holding MoveNext but not Current is a shim the native side fails to
+            // link against, which is a worse outcome than not lowering the loop at all.
+            // Exactness is not asked here and there is nothing to ask: these descriptors are
+            // SYNTHESIZED against IEnumerable<T>/IEnumerator<T> from the element type the
+            // resolver constructed, never matched by name against an overload set.
+            if (instruction is IRForEach { NetEnumeration: { } enumeration })
+            {
+                foreach (var member in enumeration.Members)
+                    AddMember(member, members, seenMangled);
+            }
+
             if (instruction is IRTryCatch tryCatch)
             {
                 if (tryCatch.TryBlock != null)

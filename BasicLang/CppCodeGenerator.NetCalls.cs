@@ -507,27 +507,135 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 }
             }
 
+            // A HANDLE result (§8.3's reference-type row, "other non-ref value types → handle
+            // (boxed)", and a constructor's created object). P2a-2 Task 9 widened this from the
+            // five ManagedOwned registry names to every handle the ANALYZER typed as one: the
+            // gate is the DESTINATION's representation, not a name list, so the two can never
+            // disagree — SemanticAnalyzer.NetHandleResultTypeInfo decides admissibility once,
+            // from the same §8.3 rules NetSurfaceCollector.FirstUnmarshalable applies to the
+            // surface, and stamps TypeInfo.NetHandleTypeFullName; MapType turns exactly that
+            // into BasicLang::NetRef.
+            if (IsNetRefBacked(resultNode))
+                return $"{destination} = {expression};";
+
             if (BoundaryTypeRegistry.Categorize(resultType) == BoundaryTypeCategory.ManagedOwned
                 || target.Kind == NetMemberCategory.Constructor)
             {
-                // A handle result. The destination must itself be NetRef-backed, or the
-                // assignment would be unsound C++ — the analyzer types these from the same
+                // The result IS a handle but the destination is not NetRef-backed, so the
+                // assignment would be unsound C++. The analyzer types these from the same
                 // descriptor, so a mismatch means an untyped destination (e.g. a legacy
                 // Object-typed shape) and must refuse, not degrade.
-                if (!IsNetRefBacked(resultNode))
-                    throw NetLoweringRefusal("BL6019",
-                        $"the result of '{targetDisplay}' is a .NET object handle, but the "
-                        + $"destination (BasicLang type '{resultNode.Type?.Name}') is not "
-                        + "NetRef-backed — declare the receiving variable as the ManagedOwned "
-                        + "type the member returns.");
-                return $"{destination} = {expression};";
+                throw NetLoweringRefusal("BL6019",
+                    $"the result of '{targetDisplay}' is a .NET object handle, but the "
+                    + $"destination (BasicLang type '{resultNode.Type?.Name}') is not "
+                    + "NetRef-backed — declare the receiving variable as the ManagedOwned "
+                    + "type the member returns.");
             }
 
             throw NetLoweringRefusal("BL6019",
                 $"'{targetDisplay}' returns '{resultType}', which has no native representation "
-                + "under P2a — a result must be a §8.3/§6.4 value, String, or one of the "
-                + "handle-backed registry types (Regex/Uri/Stream/FileInfo/DirectoryInfo). "
-                + "Consuming arbitrary .NET objects lands with §8.5.");
+                + "under P2a — a result must be a §8.3/§6.4 value, String, or a .NET type that "
+                + "can cross as an opaque handle (§8.5). Types §8.3 can never carry are "
+                + "System.Object, a ref struct (Span/ReadOnlySpan), a pointer, and an open "
+                + "generic.");
+        }
+
+        /// <summary>
+        /// P2a-2 Task 9 (spec §8.5) — the <c>IRIndexerStore</c> arm: a WRITE through the
+        /// synthesized <c>set_Item(index…, value)</c> slot. The value goes LAST, which is the
+        /// order <see cref="NetAccessorSynthesis.SetterFor"/> and
+        /// <see cref="NetAccessorSynthesis.ArraySetFor"/> both build and the order the generated
+        /// shim's <c>target[i] = v</c> spelling reads back.
+        /// </summary>
+        private bool TryLowerNetIndexerStore(IRIndexerStore store)
+        {
+            if (store.ResolvedNetTarget == null) return false;
+            if (IsNativelyHandledCategory(store.NetCategory)) return false;
+
+            RequireExactNetTarget(store.ResolvedNetTarget, store.ResolvedNetTargetIsExact);
+
+            var arguments = new List<IRValue>(store.Indices.Count + 1);
+            arguments.AddRange(store.Indices);
+            arguments.Add(store.Value);
+
+            var emission = BuildNetProxyCall(store.ResolvedNetTarget, store.Collection, arguments);
+            foreach (var line in emission.Prologue) WriteLine(line);
+            WriteLine(emission.Expression + ";");
+            foreach (var line in emission.Epilogue) WriteLine(line);
+            return true;
+        }
+
+        /// <summary>
+        /// P2a-2 Task 9 (spec §8.5) — the <c>IRForEach</c> arm for a HANDLE-represented
+        /// collection. Emits the enumerator protocol EXPLICITLY, driven through
+        /// <c>IEnumerable&lt;T&gt;</c>/<c>IEnumerator&lt;T&gt;</c>:
+        ///
+        /// <code>
+        /// {
+        ///     BasicLang::NetRef e = net::GetEnumerator(collection);
+        ///     while (net::MoveNext(e)) { T x = net::Current(e); …body… }
+        ///     net::Dispose(e);
+        /// }
+        /// </code>
+        ///
+        /// <para><b>Why not a range-for over anything.</b> A handle supports no operation the
+        /// surface collector did not emit an export for (§8.5's opening sentence) — there is no
+        /// <c>begin()</c>/<c>end()</c> to find. And the enumerator must be reached through the
+        /// INTERFACE, never through the concrete struct-returning <c>GetEnumerator()</c>: see
+        /// <see cref="IRNetEnumeration"/> for the boxed-mutable-struct infinite loop that
+        /// choice prevents.</para>
+        ///
+        /// <para><b>The braces are load-bearing.</b> The enumerator temporary is scoped to the
+        /// loop so two <c>For Each</c>es in one function do not redeclare it, and so the
+        /// <c>NetRef</c>'s destructor releases the handle even when the body throws — the
+        /// §8.6/§11 "epilogue is success-path only" hazard, answered here with RAII rather than
+        /// a trailing statement, exactly as the plan's emission-seam contract requires.
+        /// <c>Dispose</c> is the MANAGED half and does run on the normal and <c>Exit For</c>
+        /// paths; a <c>Return</c> out of the loop body skips it, which is the same known
+        /// Try/Finally limitation this backend already documents.</para>
+        /// </summary>
+        private bool TryLowerNetForEach(IRForEach forEach)
+        {
+            var enumeration = forEach.NetEnumeration;
+            if (enumeration == null) return false;
+
+            if (!IsNetRefBacked(forEach.Collection))
+                throw NetLoweringRefusal("BL6019",
+                    "internal: a For Each carrying §8.5 enumeration reached the lowering with a "
+                    + $"collection (BasicLang type '{forEach.Collection?.Type?.Name}') that is "
+                    + "not handle-backed. This is a compiler routing defect — the analyzer only "
+                    + "stamps the enumeration onto a handle-represented collection.");
+
+            var collection = GetValueName(forEach.Collection);
+            var enumerator = NextNetTemp();
+            var elementType = MapType(forEach.ElementType);
+            var variable = SanitizeName(forEach.VariableName);
+
+            WriteLine("{");
+            Indent();
+            WriteLine("// §8.5: the enumerator is obtained and driven through IEnumerable<T>/");
+            WriteLine("// IEnumerator<T>, NEVER the concrete struct-returning GetEnumerator() —");
+            WriteLine("// a boxed mutable-struct enumerator would MoveNext() forever (see");
+            WriteLine("// IRNetEnumeration). The NetRef releases the handle on every exit path.");
+            WriteLine($"BasicLang::NetRef {enumerator} = BasicLang::net::"
+                      + NetNameMangler.Mangle(enumeration.GetEnumerator) + $"({collection});");
+            WriteLine($"while (BasicLang::net::{NetNameMangler.Mangle(enumeration.MoveNext)}({enumerator}))");
+            WriteLine("{");
+            Indent();
+            WriteLine($"{elementType} {variable} = BasicLang::net::"
+                      + NetNameMangler.Mangle(enumeration.Current) + $"({enumerator});");
+
+            // Same region contract as the native arm: the whole body region goes inside the loop
+            // braces, and an end-of-iteration branch to EndBlock is `continue;` (the while owns
+            // iteration), never a goto that would leave the loop.
+            EmitInlineRegion(forEach.BodyBlock, forEach.EndBlock, RegionEnd.LoopContinue);
+
+            Unindent();
+            WriteLine("}");
+            WriteLine($"BasicLang::net::{NetNameMangler.Mangle(enumeration.Dispose)}({enumerator});");
+            Unindent();
+            WriteLine("}");
+            return true;
         }
 
         /// <summary>

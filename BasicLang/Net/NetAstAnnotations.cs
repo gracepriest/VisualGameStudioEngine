@@ -166,9 +166,11 @@ namespace BasicLang.Net
                 yield return new KeyValuePair<string, NetWrapperOrigin>(
                     NetNameMangler.Mangle(member), origin);
 
-                // The write half. SetterFor refuses indexers (§8.5 is Task 9's), so the SAME
-                // predicate IRBuilder uses before synthesizing — and the analyzer uses before
-                // refusing — guards it here (NetAccessorSynthesis owns the one copy).
+                // The write half, INCLUDING an indexer's set_Item(index…, value) since Task 9
+                // lifted SetterFor's indexer refusal. The SAME predicate IRBuilder uses before
+                // synthesizing — and the analyzer uses before refusing — guards it here
+                // (NetAccessorSynthesis owns the one copy, which is what made that lift a
+                // single edit).
                 if (NetAccessorSynthesis.HasSynthesizableSetter(member))
                 {
                     yield return new KeyValuePair<string, NetWrapperOrigin>(
@@ -205,6 +207,32 @@ namespace BasicLang.Net
                 return;
 
             _resolvedExceptionTypes[node] = fullName;
+        }
+
+        // ------------------------------------------------------------------
+        // P2a-2 Task 9 — §8.5's enumeration trio per For Each over a HANDLE-represented
+        // collection. Keyed by ForEachLoopNode reference identity, same reason as the two
+        // tables above. Recorded by the analyzer (which holds the resolver and is therefore the
+        // only thing that can construct IEnumerable<T> for the receiver's element type) and
+        // stamped onto IRForEach by IRBuilder.
+        // ------------------------------------------------------------------
+
+        private readonly Dictionary<ForEachLoopNode, BasicLang.Compiler.IR.IRNetEnumeration>
+            _netEnumerations =
+                new Dictionary<ForEachLoopNode, BasicLang.Compiler.IR.IRNetEnumeration>(
+                    ReferenceEqualityComparer.Instance);
+
+        /// <summary>§8.5 enumeration members per For Each node. Read by IRBuilder.</summary>
+        internal IReadOnlyDictionary<ForEachLoopNode, BasicLang.Compiler.IR.IRNetEnumeration>
+            NetEnumerations => _netEnumerations;
+
+        internal void RecordNetEnumeration(
+            ForEachLoopNode node, BasicLang.Compiler.IR.IRNetEnumeration enumeration)
+        {
+            if (node == null || enumeration == null)
+                return;
+
+            _netEnumerations[node] = enumeration;
         }
     }
 }

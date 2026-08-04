@@ -1404,15 +1404,16 @@ namespace BasicLang.Compiler.IR.Optimization
                         : null;
                     return new IRReturn(retVal);
 
-                // NOTE (P2a-1 Task 10; widened P2a-2 Tasks 2/7a): there is deliberately NO case
-                // here for IRCall, IRInstanceMethodCall, IRBaseMethodCall, IRNewObject,
-                // IRFieldAccess or IRFieldStore, and adding one is a breaking change. Falling
-                // through to `default` returns the SAME node, which is what carries
-                // ResolvedNetTarget / NetCategory / ResolvedNetTargetIsExact across inlining —
-                // this is the only clone path any of the six can reach. Any case added here for
-                // one of them MUST copy all three fields; NetIrCarriageTests
-                // (.AggressivePipelinePreservesCarriageThroughTheInliningClonePath and its
-                // siblings) fails if it does not.
+                // NOTE (P2a-1 Task 10; widened P2a-2 Tasks 2/7a, and again by Task 9): there is
+                // deliberately NO case here for IRCall, IRInstanceMethodCall, IRBaseMethodCall,
+                // IRNewObject, IRFieldAccess, IRFieldStore, IRIndexerAccess, IRIndexerStore or
+                // IRForEach, and adding one is a breaking change. Falling through to `default`
+                // returns the SAME node, which is what carries ResolvedNetTarget / NetCategory /
+                // ResolvedNetTargetIsExact — plus Task 9's IRForEach.NetEnumeration bundle and
+                // IRCall.NetArgumentRefKinds — across inlining. This is the only clone path any
+                // of them can reach. Any case added here MUST copy every carriage field;
+                // NetIrCarriageTests (.AggressivePipelinePreservesCarriageThroughTheInliningClonePath
+                // and its siblings) fails if it does not.
                 default:
                     return inst;
             }

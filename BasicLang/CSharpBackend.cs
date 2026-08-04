@@ -3061,12 +3061,27 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 return;
             }
 
-            // Format arguments, adding 'ref' prefix for ByRef parameters
+            // Format arguments, adding the by-reference modifier for ByRef parameters.
+            // P2a-2 Task 9 (Task-8 review I5): a resolved .NET target records the CLR ref-KIND
+            // in NetArgumentRefKinds, because `ByRefArguments` is a List<bool> and cannot tell
+            // `ref` from `out` — emitting `ref x` for an `out` parameter is CS1620. A VB ByRef
+            // argument records nothing there and keeps `ref`, which is VB's only form. `in` /
+            // `RefReadOnly` need no modifier at a C# call site.
             var argExprs = call.Arguments.Select((arg, i) =>
             {
                 var expr = EmitExpression(arg);
                 bool isByRef = call.ByRefArguments != null && i < call.ByRefArguments.Count && call.ByRefArguments[i];
-                return isByRef ? $"ref {expr}" : expr;
+                if (!isByRef) return expr;
+
+                var refKind = call.NetArgumentRefKinds != null && i < call.NetArgumentRefKinds.Count
+                    ? call.NetArgumentRefKinds[i]
+                    : BasicLang.Net.NetRefKind.Ref;
+                return refKind switch
+                {
+                    BasicLang.Net.NetRefKind.Out => $"out {expr}",
+                    BasicLang.Net.NetRefKind.In or BasicLang.Net.NetRefKind.RefReadOnly => expr,
+                    _ => $"ref {expr}",
+                };
             }).ToArray();
 
             var hasReturn = call.Type != null && !call.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);

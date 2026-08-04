@@ -130,6 +130,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
             _netAnnotations.ResolvedExceptionTypes;
 
         /// <summary>
+        /// P2a-2 Task 9 — spec §8.5's enumeration protocol per <c>For Each</c> over a
+        /// HANDLE-represented .NET collection. <see cref="IRBuilder"/> stamps the bundle onto
+        /// <c>IRForEach</c>; the C++ backend emits the explicit
+        /// <c>GetEnumerator</c>/<c>MoveNext</c>/<c>Current</c>/<c>Dispose</c> loop.
+        /// </summary>
+        internal IReadOnlyDictionary<ForEachLoopNode, Compiler.IR.IRNetEnumeration> NetEnumerations =>
+            _netAnnotations.NetEnumerations;
+
+        /// <summary>
         /// P2a-2 Task 4 (§6.3): true when this compilation targets the NATIVE (C++) backend —
         /// which is where §6.5's REAL evidence bar applies (bare unclaimed names are probed
         /// against the resolver) and where BL6024 fires. The C# path retains the narrower
@@ -3041,7 +3050,244 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     lastDot >= 0 ? fullName.Substring(lastDot + 1) : fullName, TypeKind.Class);
             }
 
-            return null;
+            // P2a-2 Task 9 (spec §8.5/§8.3) — the HANDLE row, which is what lifts the flip's
+            // "Consuming arbitrary .NET objects lands with §8.5" refusal. Everything §8.3 does
+            // not give a by-value row is an opaque handle, so `Dim a = obj.GetValues()` keeps
+            // the handle (§8.6's representation table, row 1) instead of degrading to Object and
+            // refusing at codegen.
+            return NetHandleResultTypeInfo(fullName);
+        }
+
+        /// <summary>
+        /// P2a-2 Task 9 (spec §8.5) — the indexer accessor a <c>coll(i)</c> READ (or, with
+        /// <paramref name="forWrite"/>, a <c>coll(i) = v</c> WRITE) on a HANDLE-represented .NET
+        /// collection lowers to, or null when the receiver is not one / declares no usable
+        /// indexer. Read by <c>IRBuilder</c>, which stamps it onto the produced
+        /// <c>IRIndexerAccess</c>/<c>IRIndexerStore</c>.
+        ///
+        /// <para><b>An ARRAY is SYNTHESIZED, never resolved</b> — §8.5: .NET arrays expose no
+        /// indexer in metadata at all, and <c>Array.GetValue(int)</c> is not a fallback because
+        /// it returns <c>Object</c>, which is permanently <c>Rejected</c>. Everything else goes
+        /// through the resolver's CONSTRUCTED indexer, so a <c>List(Of Integer)</c> element
+        /// arrives as <c>System.Int32</c> rather than the definition's open <c>T</c>.</para>
+        ///
+        /// <para>Internal, and answered from the analyzer rather than re-derived in
+        /// <c>IRBuilder</c>, for the reason every other §8.5/§7 answer is: the analyzer holds the
+        /// resolver, and two derivations of one descriptor drift into two different mangled
+        /// export names — a §12.4 slots-≡-exports break by construction.</para>
+        /// </summary>
+        internal NetMemberDescriptor NetIndexerFor(TypeInfo collectionType, bool forWrite)
+        {
+            var fullName = collectionType?.NetHandleTypeFullName;
+            if (string.IsNullOrEmpty(fullName)) return null;
+
+            if (fullName.EndsWith("[]", StringComparison.Ordinal))
+            {
+                var element = fullName.Substring(0, fullName.Length - 2);
+                if (element.EndsWith("]", StringComparison.Ordinal)) return null;
+                return forWrite
+                    ? NetAccessorSynthesis.ArraySetFor(element)
+                    : NetAccessorSynthesis.ArrayGetFor(element);
+            }
+
+            var indexer = NetResolver()?.ConstructedIndexer(fullName);
+            if (indexer == null) return null;
+
+            // The WRITE half is the synthesized set_Item(index…, value); HasSynthesizableSetter
+            // is the one shared predicate (it also gates the analyzer's read-only refusal, which
+            // is what keeps a write to a get-only indexer a positioned BL6017 rather than a
+            // CS0200 in generated C# after the ~27 s AOT publish).
+            if (!forWrite) return indexer;
+            if (!indexer.IsSettable || !NetAccessorSynthesis.HasSynthesizableSetter(indexer))
+                return null;
+            return NetAccessorSynthesis.SetterFor(indexer);
+        }
+
+        /// <summary>
+        /// P2a-2 Task 9 (spec §8.5) — resolves the enumeration protocol for a <c>For Each</c>
+        /// over a HANDLE-represented .NET collection, records the four interface members for
+        /// <c>IRBuilder</c>, and replaces <paramref name="elementType"/> with the CONSTRUCTED
+        /// element type. Returns false (and reports BL6019 on the native path) when the receiver
+        /// implements no generic <c>IEnumerable</c>.
+        ///
+        /// <para><b>Through <c>IEnumerable&lt;T&gt;</c>, never a concrete
+        /// <c>GetEnumerator()</c>.</b> §8.5: for <c>List&lt;T&gt;</c>,
+        /// <c>Dictionary&lt;K,V&gt;</c>, <c>HashSet&lt;T&gt;</c> and
+        /// <c>ImmutableArray&lt;T&gt;</c> the concrete enumerator is a MUTABLE STRUCT, and
+        /// boxing one into a handle makes <c>MoveNext</c> mutate a temporary — an infinite loop
+        /// with no diagnostic. "A type with only a struct enumerator and no <c>IEnumerable</c>
+        /// is BL6019", which is exactly what
+        /// <see cref="NetTypeResolver.EnumerableElementTypeName"/> answering null produces
+        /// here.</para>
+        ///
+        /// <para><b>This is the symbol-carrying seam's one consumer.</b> The element type is a
+        /// property of the CONSTRUCTION (<c>List&lt;System.Int32&gt;</c> ⇒ <c>System.Int32</c>),
+        /// and every by-name door in the resolver answers with the DEFINITION, where it is the
+        /// open <c>T</c>. See <see cref="NetTypeResolver.ConstructedTypeSymbol"/>.</para>
+        /// </summary>
+        private bool ProbeNetEnumeration(
+            ForEachLoopNode node, TypeInfo collectionType, ref TypeInfo elementType)
+        {
+            var receiverFullName = collectionType.NetHandleTypeFullName;
+            var resolver = NetResolver();
+            var elementFullName = resolver?.EnumerableElementTypeName(receiverFullName);
+
+            if (string.IsNullOrEmpty(elementFullName))
+            {
+                NetErrorNativeOnly("BL6019",
+                    $"'For Each' cannot iterate '{receiverFullName}' at the native boundary: it "
+                    + "implements no IEnumerable(Of T). §8.5 drives every managed enumeration "
+                    + "through IEnumerable(Of T)/IEnumerator(Of T) — a type that offers only a "
+                    + "struct-returning GetEnumerator() cannot be iterated, because a boxed "
+                    + "mutable-struct enumerator would loop forever rather than fail. Call a "
+                    + "member that returns an IEnumerable(Of T) instead.",
+                    node.Line, node.Column);
+                return false;
+            }
+
+            var element = NetElementTypeInfo(elementFullName);
+            if (element == null)
+            {
+                NetErrorNativeOnly("BL6019",
+                    $"'For Each' over '{receiverFullName}' binds elements of type "
+                    + $"'{elementFullName}', which has no representation at the native boundary "
+                    + "(spec §8.3). System.Object, a ref struct, a pointer and an open generic "
+                    + "can never cross.",
+                    node.Line, node.Column);
+                return false;
+            }
+
+            elementType = element;
+            _netAnnotations.RecordNetEnumeration(node, new Compiler.IR.IRNetEnumeration(
+                NetAccessorSynthesis.EnumerableGetEnumeratorFor(elementFullName),
+                NetAccessorSynthesis.EnumeratorMoveNext(),
+                NetAccessorSynthesis.EnumeratorCurrentFor(elementFullName),
+                NetAccessorSynthesis.EnumeratorDispose()));
+            return true;
+        }
+
+        /// <summary>
+        /// P2a-2 Task 9 — the BasicLang <see cref="TypeInfo"/> for a .NET value that crosses as
+        /// an opaque HANDLE (§8.3's reference-type row plus "other non-<c>ref</c> value types →
+        /// handle (boxed)"), or null when <paramref name="fullName"/> is one of the shapes §8.3
+        /// cannot carry at all.
+        ///
+        /// <para><b>The admissibility test mirrors
+        /// <c>NetSurfaceCollector.FirstUnmarshalable</c> deliberately</b>, from the one side that
+        /// can only see a NAME: <c>System.Object</c> is permanently <c>Rejected</c> (void*
+        /// erasure is unsound), a <c>ref struct</c> cannot be boxed at all
+        /// (<c>GCHandle.Alloc</c> has nothing to take), a pointer has no handle, and an OPEN
+        /// generic cannot be spelled in a monomorphic C export. Admitting one here would type a
+        /// local as a handle the collector will never mint an export for, turning a positioned
+        /// analyzer answer into a positionless codegen refusal.</para>
+        ///
+        /// <para><b>The <c>Name</c> is deliberately the ordinary short spelling</b> — a
+        /// <c>List&lt;System.Int32&gt;</c> result is named <c>"List"</c>, a
+        /// <c>System.Int32[]</c> result is <see cref="TypeKind.Array"/> with an element type —
+        /// because that is what the rest of the analyzer, the LSP and diagnostics want to show.
+        /// It is precisely why the decision must NOT be made by name downstream: those are the
+        /// two spellings <c>CppCodeGenerator</c> lowers to a native <c>shared_ptr</c> collection
+        /// and a <c>std::vector</c>. <see cref="TypeInfo.NetHandleTypeFullName"/> is the marker
+        /// that overrides both, and the three mapping sites test it first.</para>
+        /// </summary>
+        private TypeInfo NetHandleResultTypeInfo(string fullName)
+        {
+            if (string.IsNullOrEmpty(fullName)) return null;
+            if (fullName.IndexOf('*') >= 0) return null;          // pointer / function pointer
+            if (fullName.IndexOf('`') >= 0) return null;          // raw metadata spelling — not ours
+
+            // An ARRAY is judged by its ELEMENT: an array of an unmarshalable element would hand
+            // out handles no export can ever consume (FirstUnmarshalable's own rule).
+            if (fullName.EndsWith("[]", StringComparison.Ordinal))
+            {
+                var elementFullName = fullName.Substring(0, fullName.Length - 2);
+                if (elementFullName.EndsWith("]", StringComparison.Ordinal))
+                    return null;                                  // rank > 1 / jagged: §8.5 v1 is 1-D
+                var element = NetElementTypeInfo(elementFullName);
+                if (element == null) return null;
+
+                var arrayType = new TypeInfo(element.Name, TypeKind.Array)
+                {
+                    ElementType = element,
+                    ArrayRank = 1,
+                    NetHandleTypeFullName = fullName,
+                };
+                return arrayType;
+            }
+
+            var category = BoundaryTypeRegistry.Categorize(ShortNetName(fullName));
+            if (category == BoundaryTypeCategory.Rejected
+                || category == BoundaryTypeCategory.NativeOwned
+                || category == BoundaryTypeCategory.Bridged)
+            {
+                // Rejected is §8.3's permanent no; the other two are natively represented and
+                // reach their own arms (NetMarshalTable above, or a native lowering) — a handle
+                // for one of them is §6.4's "a native value must never become a handle".
+                return null;
+            }
+
+            var resolver = NetResolver();
+            if (resolver == null) return null;
+
+            var lookup = resolver.ResolveTypeDetailed(fullName);
+            if (lookup.Outcome != NetTypeLookupOutcome.Resolved || lookup.Type == null) return null;
+            if (!lookup.Type.IsPublic) return null;               // CS0122 in the generated shim
+            if (resolver.IsRefLikeType(fullName)) return null;    // §8.3: cannot be boxed
+
+            var handle = new TypeInfo(ShortNetName(fullName), TypeKind.Class)
+            {
+                NetHandleTypeFullName = fullName,
+            };
+            return handle;
+        }
+
+        /// <summary>
+        /// The BasicLang element type for a handle-represented .NET array: a §8.3 by-value row
+        /// keeps its native spelling (an <c>Int32()</c> element is <c>Integer</c>), anything else
+        /// recurses through <see cref="NetHandleResultTypeInfo"/> and becomes a nested handle.
+        /// </summary>
+        /// <summary>
+        /// P2a-2 Task 9 — <see cref="NetElementTypeInfo"/> as an <c>IRBuilder</c> seam. The
+        /// destination of a §8.5 indexer READ must be typed from the DESCRIPTOR's result type,
+        /// not from whatever the legacy element inference produced: an <c>Object</c>-typed
+        /// destination lowers to <c>void*</c>, and assigning an <c>int32_t</c> proxy result into
+        /// it is invalid C++. Answered here so the one admissibility rule (§8.3's rows, then the
+        /// handle row) is applied in exactly one place.
+        /// </summary>
+        internal TypeInfo NetTypeInfoForResult(string netTypeFullName) =>
+            NetElementTypeInfo(netTypeFullName);
+
+        private TypeInfo NetElementTypeInfo(string elementFullName)
+        {
+            if (NetMarshalTable.TryGetBasicLangSpelling(elementFullName, out var basicLangName))
+                return ResolveNetTypeName(basicLangName);
+            return NetHandleResultTypeInfo(elementFullName);
+        }
+
+        /// <summary>
+        /// The last dotted segment of a .NET full name, ignoring anything inside a type-argument
+        /// list — <c>System.Collections.Generic.List&lt;System.Int32&gt;</c> is <c>"List"</c>, not
+        /// <c>"Int32&gt;"</c>. Splitting on the last raw '.' is the bug this avoids.
+        /// </summary>
+        internal static string ShortNetName(string fullName)
+        {
+            if (string.IsNullOrEmpty(fullName)) return fullName;
+
+            // Erase every type-argument list first: a '.' inside one belongs to an ARGUMENT's
+            // namespace, not to this name's own qualification. Splitting on the last raw '.'
+            // answers "Int32>" for List<System.Int32>, which is the bug this exists to avoid.
+            var bare = new System.Text.StringBuilder(fullName.Length);
+            var depth = 0;
+            foreach (var c in fullName)
+            {
+                if (c == '<') { depth++; continue; }
+                if (c == '>') { if (depth > 0) depth--; continue; }
+                if (depth == 0) bare.Append(c);
+            }
+
+            var text = bare.ToString();
+            var lastDot = text.LastIndexOf('.');
+            return lastDot >= 0 ? text.Substring(lastDot + 1) : text;
         }
 
         /// <summary>
@@ -6058,6 +6304,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     elementType = _typeManager.ObjectType;
                 }
+            }
+
+            // P2a-2 Task 9 (spec §8.5): a HANDLE-represented .NET collection is iterated through
+            // IEnumerable<T>/IEnumerator<T>. This runs AFTER the legacy inference above and
+            // OVERRIDES its answer on purpose — the legacy arms key on Kind == Array and on
+            // GenericArguments, and a handle-typed List(Of Integer)/Int32() would otherwise bind
+            // the loop variable from a shape that has no native storage behind it.
+            if (collectionType?.NetHandleTypeFullName != null
+                && ProbeNetEnumeration(node, collectionType, ref elementType))
+            {
+                // elementType was replaced with the constructed element type.
             }
 
             // Set the node type to the element type (used by IRBuilder)

@@ -1003,7 +1003,69 @@ narrower oracle (the six §6.4 rows vs `blnet_marshal.hpp`); Step 2b's actual as
   `SByte`, `Byte`, `Int16`, `UInt16`, `UInt32`, `Int64`, `UInt64`, `Single` were never in it.
   Task 8's review commit closes this one — leave it closed.
 
-### Task 9: §8.5 — consuming handle-represented collections
+### Task 9: §8.5 — consuming handle-represented collections ✅ DONE
+
+> **DONE.** The wild pointer is dead and the boxed mutable-struct enumerator never happens.
+>
+> **The category marker.** `TypeInfo.NetHandleTypeFullName` (the resolver's C# spelling —
+> `System.Collections.Generic.List<System.Int32>`, `System.Int32[]`) is tested FIRST in
+> `MapType`, `BareCollectionType`, `IsCollectionType` **and `GetDefaultValue`** (that fourth
+> site was found by emission, not by reading: a handle-typed `String()` is NAMED `"String"` and
+> was initialized to `""`, a `std::string` initializer on a `BasicLang::NetRef`).
+> **Mutation recorded:** disabling the `MapType` marker arm so the array/collection branches run
+> first turns **5 of 15** new tests red — including both dedicated mutation targets and both
+> end-to-end emit proofs. Restored; suite green again.
+>
+> **The producer.** `SemanticAnalyzer.NetHandleResultTypeInfo` lifts the flip's
+> "Consuming arbitrary .NET objects lands with §8.5" refusal: every §8.3 handle row now types
+> (admissibility mirrors `FirstUnmarshalable` from the name side — `Object`, `ref struct`,
+> pointer, open generic still refuse). `NetResultStatement`'s gate moved from a NAME list to the
+> DESTINATION's representation, so the two can no longer disagree.
+>
+> **For Each is interface-driven, end to end.** `IRNetEnumeration` (a FOUR-member bundle —
+> `IEnumerable<T>.GetEnumerator` / `IEnumerator.MoveNext` / `IEnumerator<T>.Current` /
+> `IDisposable.Dispose`) rides analyzer → `NetAstAnnotations` → `IRForEach` → collector →
+> `CppCodeGenerator`, which emits a braced `while` with an RAII `NetRef` enumerator rather than a
+> range-for. All four interfaces are REFERENCE types, so the shim reaches the BOX and
+> `Unsafe.Unbox` never enters the picture.
+>
+> **The symbol-carrying seam LANDED** and is contained to `NetTypeResolver`:
+> `ConstructedTypeSymbol` (parses the argument list back out of the spelling `TypeName` produced
+> and re-applies `Construct`), `EnumerableElementTypeName`, `ConstructedIndexer`. No change to
+> `NetSurfaceCollector`'s entry contract. The §7.3 construction collision is now REACHABLE and
+> `CollisionFreedomOverTwoConstructionsOfOneNestedGeneric` stays green **for the right reason** —
+> pinned by a new test that drives two constructions through `NetShimGenerator.Plan`'s
+> `seen.Add` and asserts TWO exports survive.
+>
+> **Intent is carried, not guessed.** `NetSyntheticKind` on `NetMemberDescriptor`
+> (`Setter`/`ArrayGet`/`ArraySet`/`ArrayLength`) closes the hole `IsSyntheticSetterShape`'s own
+> caveat records. Deliberately outside `CanonicalIdentity`, so **no export name moved**.
+> `SetterFor`'s indexer refusal is lifted in the one shared predicate, which is what carried the
+> 7b read-only guard along with it.
+>
+> **`ByRefArguments` (review I5): carried, not scoped.** `IRCall.NetArgumentRefKinds` (internal,
+> parallel) lets `CSharpBackend` emit `out` for a .NET `out` and nothing for `in`/`RefReadOnly` —
+> the CS1620 is gone rather than confined to the native path.
+>
+> **Gates:** fast subset **4100/0/1** (from 4085/0/1, +15) · Blnet fast **517/0/0** (from 502) ·
+> four-suite C++ filter **121/0/0** (22 m 38 s) · frozen P0 **16/16** · `NetShimPipelineTests`
+> Integration **6/6** — including the mandatory
+> `Section85_ConcreteListIteratesAndANetArrayRoundTrips`, which publishes a real AOT shim and
+> prints `10 20 30 7 42`: a CONCRETE `List(Of Integer)` iterating to completion with the right
+> elements, plus the array read/write round trip. With the boxed-struct bug that test HANGS
+> rather than fails, which is the whole reason it is not the array test.
+>
+> ⚠ **Known scope limit, not a gap in this task:** an arbitrary .NET type in DECLARATION position
+> (`Dim b As New Bag()` for a non-registry type) is still BL6001 "no C++ mapping exists" —
+> `MapType`'s handle arm for a NAMED type is still scoped to the `ManagedOwned` five per §12.4,
+> and the marker only reaches INFERRED types. The §8.5 integration program therefore reaches its
+> collections through STATIC members. Widening declaration-position .NET types is its own
+> decision (it touches `ResolveTypeReference` and the §12.4 registry-scoping invariant) and
+> belongs with §8.6/Task 10 or later, not here.
+>
+> ⚠ **`get_Length` is synthesized and spelled but has no producer** — `arr.Length` on a
+> handle-typed array does not route to it yet (the member-access path is not §8.5-aware). The
+> indexer pair and the enumeration protocol both have producers and are proven end to end.
 
 **Files:**
 - Modify: `BasicLang/Net/NetSurfaceCollector.cs` (synthetic exports: `bl_net_Array_Get__<T>__int32`

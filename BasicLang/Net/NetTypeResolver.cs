@@ -797,6 +797,200 @@ namespace BasicLang.Net
             return -1;
         }
 
+        // ------------------------------------------------------------------
+        // P2a-2 Task 9 — THE SYMBOL-CARRYING SEAM (spec §8.5; the plan's architectural-input
+        // blockquote).
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// The CONSTRUCTED symbol for a C# type spelling — <c>List&lt;System.Int32&gt;</c> as the
+        /// <c>List&lt;Int32&gt;</c> instantiation, not the <c>List&lt;T&gt;</c> definition
+        /// <see cref="ResolveTypeDetailed"/> answers with.
+        ///
+        /// <para><b>Why this seam had to exist.</b> Everything else in this class is reached BY
+        /// NAME, and a name resolves to the DEFINITION — <see cref="Lookup"/> goes through
+        /// <c>GetTypeByMetadataName</c>, and a metadata name cannot express a construction
+        /// (<c>List`1</c> says nothing about <c>&lt;Int32&gt;</c>). That is the right answer for
+        /// every question asked through a name (existence, accessibility, kind, members), which
+        /// is why it was never a problem before. §8.5 asks a question it is the WRONG answer
+        /// for: "what does <c>For Each x In someNetList</c> bind <c>x</c> to?" The definition
+        /// says <c>T</c> — an open type parameter with no wire form — while the construction
+        /// says <c>System.Int32</c>. So the argument list is parsed back out of the spelling
+        /// <see cref="TypeName"/> produced and re-applied with
+        /// <see cref="INamedTypeSymbol.Construct(ITypeSymbol[])"/>.</para>
+        ///
+        /// <para><b>Round-trip safe by construction:</b> the arguments are resolved through the
+        /// same <see cref="Lookup"/> that accepts this class's own spellings (Task 8b), so a
+        /// name this class PRODUCES is a name it CONSTRUCTS. Returns null rather than guessing
+        /// when the spelling is not well-formed, when an argument does not resolve, or when the
+        /// arity does not match the definition — a wrong construction here would type a loop
+        /// variable as the wrong element type, which is a silently wrong program.</para>
+        ///
+        /// <para>⚠ <b>This seam is what makes §7.3's construction collision REACHABLE.</b>
+        /// <c>List&lt;int&gt;.Enumerator.MoveNext</c> and
+        /// <c>List&lt;string&gt;.Enumerator.MoveNext</c> could not previously be spelled at all,
+        /// so <c>NetNameMangler</c>'s collision-freedom over two constructions of one nested
+        /// generic was theoretical (see <c>NetNameManglerTests.
+        /// CollisionFreedomOverTwoConstructionsOfOneNestedGeneric</c>). It is not any more:
+        /// <see cref="TypeName"/> keeps each construction's own argument list, so the two mangle
+        /// apart and <c>NetShimGenerator.Plan</c>'s <c>if (!seen.Add(name)) continue;</c> cannot
+        /// silently drop the second.</para>
+        /// </summary>
+        internal INamedTypeSymbol ConstructedTypeSymbol(string fullName)
+        {
+            if (string.IsNullOrWhiteSpace(fullName)) return null;
+
+            var definition = Lookup(fullName).Symbol;
+            if (definition == null) return null;
+            if (definition.Arity == 0) return definition;
+
+            var open = fullName.IndexOf('<');
+            if (open < 0) return null;                       // arity > 0 but no argument list
+            var end = TypeArgumentListEnd(fullName, open, out var arity);
+            if (end < 0 || arity != definition.Arity) return null;
+
+            var arguments = new List<ITypeSymbol>(arity);
+            foreach (var argument in SplitTypeArguments(fullName, open + 1, end))
+            {
+                var resolved = ResolveArgumentSymbol(argument);
+                if (resolved == null) return null;           // never guess
+                arguments.Add(resolved);
+            }
+
+            try
+            {
+                return definition.OriginalDefinition.Construct(arguments.ToArray());
+            }
+            catch (ArgumentException)
+            {
+                // A constraint violation in a spelling we did not author. Refusing is right —
+                // the caller degrades to "no element type", which is a positioned BL6019.
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// The ELEMENT type of a handle-represented .NET collection — <c>System.Int32</c> for
+        /// <c>List&lt;System.Int32&gt;</c> and for <c>System.Int32[]</c> — read from
+        /// <c>IEnumerable&lt;T&gt;</c>, or null when the type implements no generic
+        /// <c>IEnumerable</c>.
+        ///
+        /// <para><b>Through <c>IEnumerable&lt;T&gt;</c> deliberately, never through a
+        /// <c>GetEnumerator()</c> the type happens to declare</b> — §8.5's mutable-struct
+        /// enumerator rule. A type with only a struct enumerator and no <c>IEnumerable</c>
+        /// answers null here, which the analyzer reports as BL6019 exactly as §8.5 says it
+        /// must.</para>
+        /// </summary>
+        internal string EnumerableElementTypeName(string fullName)
+        {
+            if (string.IsNullOrWhiteSpace(fullName)) return null;
+
+            // An array's element is not reachable through Lookup (GetTypeByMetadataName has no
+            // array syntax) and does not need to be — T[] implements IEnumerable<T> by
+            // definition, so the spelling itself is the answer.
+            if (fullName.EndsWith("[]", StringComparison.Ordinal))
+            {
+                var element = fullName.Substring(0, fullName.Length - 2);
+                return element.EndsWith("]", StringComparison.Ordinal) ? null : element;
+            }
+
+            var symbol = ConstructedTypeSymbol(fullName);
+            if (symbol == null) return null;
+
+            foreach (var candidate in Enumerable.Repeat<INamedTypeSymbol>(symbol, 1).Concat(symbol.AllInterfaces))
+            {
+                if (candidate.OriginalDefinition.SpecialType
+                        == SpecialType.System_Collections_Generic_IEnumerable_T
+                    && candidate.TypeArguments.Length == 1)
+                {
+                    return TypeName(candidate.TypeArguments[0]);
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// The public INDEXER declared on a CONSTRUCTED type, described with the construction's
+        /// types (<c>List&lt;System.Int32&gt;.this[System.Int32]</c> returns <c>System.Int32</c>,
+        /// not the open <c>T</c> the definition would report), or null when the type declares
+        /// none.
+        ///
+        /// <para>Spec §8.5's indexer row: an <c>ArrayAccessExpressionNode</c> on a resolved .NET
+        /// type lowers to <c>get_Item</c>/<c>set_Item</c>, "which the collector must collect even
+        /// though the source never names it". The descriptor is the resolver's ordinary Property
+        /// shape — <see cref="DescribeMember"/> already records an indexer's index parameters,
+        /// which is what stops the duplicate collapse from eating one of two indexers — so
+        /// <c>NetShimGenerator</c>'s existing "Property with parameters ⇒ <c>target[args]</c>"
+        /// arm spells the READ and <see cref="NetAccessorSynthesis.SetterFor"/> builds the WRITE.</para>
+        ///
+        /// <para>Only SINGLE-index indexers are answered. §8.5 v1 has no rule for a multi-index
+        /// indexer, and picking one of several arbitrarily is how a call reaches the wrong
+        /// member; the caller degrades to a positioned refusal instead.</para>
+        /// </summary>
+        internal NetMemberDescriptor ConstructedIndexer(string fullName)
+        {
+            var symbol = ConstructedTypeSymbol(fullName);
+            if (symbol == null) return null;
+
+            for (var type = symbol;
+                 type != null && type.SpecialType != SpecialType.System_Object;
+                 type = type.BaseType)
+            {
+                foreach (var member in type.GetMembers())
+                {
+                    if (member is IPropertySymbol { IsIndexer: true, Parameters.Length: 1 } indexer
+                        && indexer.DeclaredAccessibility == Accessibility.Public)
+                    {
+                        return DescribeMember(indexer);
+                    }
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// One resolved type argument. Accepts this class's own spellings (a nested construction
+        /// recurses through <see cref="ConstructedTypeSymbol"/>) and array spellings.
+        /// </summary>
+        private ITypeSymbol ResolveArgumentSymbol(string spelling)
+        {
+            spelling = spelling.Trim();
+            if (spelling.Length == 0) return null;
+
+            if (spelling.EndsWith("[]", StringComparison.Ordinal))
+            {
+                var element = ResolveArgumentSymbol(spelling.Substring(0, spelling.Length - 2));
+                return element == null ? null : _compilation.CreateArrayTypeSymbol(element);
+            }
+
+            return spelling.IndexOf('<') >= 0
+                ? ConstructedTypeSymbol(spelling)
+                : Lookup(spelling).Symbol;
+        }
+
+        /// <summary>
+        /// The top-level, comma-separated arguments between <paramref name="start"/> and the
+        /// closing <c>&gt;</c> at <paramref name="end"/>. Depth-aware: a nested construction
+        /// carries its own commas (<c>Dictionary&lt;A, List&lt;B, C&gt;&gt;</c>).
+        /// </summary>
+        private static IEnumerable<string> SplitTypeArguments(string spelling, int start, int end)
+        {
+            var depth = 0;
+            var segment = start;
+            for (var i = start; i < end; i++)
+            {
+                var c = spelling[i];
+                if (c == '<') depth++;
+                else if (c == '>') depth--;
+                else if (c == ',' && depth == 0)
+                {
+                    yield return spelling.Substring(segment, i - segment);
+                    segment = i + 1;
+                }
+            }
+            yield return spelling.Substring(segment, end - segment);
+        }
+
         /// <summary>
         /// <c>GetTypeByMetadataName</c> rejects some inputs by throwing rather than answering
         /// null, and the input is user text.
