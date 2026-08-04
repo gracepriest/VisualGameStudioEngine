@@ -538,6 +538,95 @@ public class NetSurfaceCollectorTests
         });
     }
 
+    /// <summary>
+    /// <b>P2a-2 Task 8b review item 3: a type nested in an OPEN generic is unmarshalable through
+    /// its CONTAINER's type parameters, which it declares none of its own copy of.</b>
+    /// <c>List&lt;T&gt;.Enumerator</c> has an empty <c>TypeArguments</c> — the openness hunt used
+    /// to look no further and admitted <c>GetEnumerator()</c>, which then failed inside
+    /// <c>csc</c> on <c>global::…List&lt;T&gt;</c>: positionless, in generated code the user never
+    /// wrote. §7.2's omission rules exist to move exactly that failure earlier, so it is a BL6026
+    /// naming the open parameter instead.
+    ///
+    /// <para>The positive half matters as much as the negative one: this must omit the members
+    /// that cannot be spelled, NOT every member of a generic declared type. <c>Clear()</c> and
+    /// <c>get_Count()</c> mention no type parameter anywhere and must survive — an over-broad
+    /// rule here would empty the surface of every generic <c>&lt;NetProxy&gt;</c> declaration and
+    /// look like a fix.</para>
+    /// </summary>
+    [Test]
+    public void DeclaredOpenGeneric_OmitsMembersTypedByANestedTypeOfItsOwnContainer()
+    {
+        var diagnostics = new List<NetReferenceDiagnostic>();
+        var surface = Collect(
+            project: ProjectDeclaring("System.Collections.Generic.List`1"),
+            diagnostics: diagnostics);
+
+        var names = surface.Members.Select(m => m.Name).ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(names, Does.Not.Contain("GetEnumerator"),
+                "List<T>.GetEnumerator() returns List<T>.Enumerator, whose CONTAINER carries the "
+                + "open T. A monomorphic C export cannot carry it and the shim cannot spell it, "
+                + "so §7.2 must omit the member rather than let csc find out.");
+            Assert.That(diagnostics.Any(d => d.Code == "BL6026" && d.IsWarning
+                    && d.Message.Contains("GetEnumerator")
+                    && d.Message.Contains("'T'")), Is.True,
+                "the omission must be ANNOUNCED, as a warning, naming the member and the open "
+                + "type parameter — a silent drop is the failure mode BL6026 exists for. Got: "
+                + string.Join(" | ", diagnostics.Select(d => d.Code + ": " + d.Message)));
+            Assert.That(names, Does.Contain("Clear"),
+                "and members that mention no type parameter at all must SURVIVE — an over-broad "
+                + "rule would omit every member of every generic <NetProxy> declaration.");
+            Assert.That(diagnostics.Where(d => !d.IsWarning), Is.Empty,
+                "omission is never an error (§11.4): " + string.Join(" | ",
+                    diagnostics.Where(d => !d.IsWarning).Select(d => d.Code + ": " + d.Message)));
+        });
+    }
+
+    /// <summary>
+    /// The other side of the same rule, and the one §8.5 actually needs: a CONSTRUCTED container
+    /// closes the parameter, so <c>List&lt;Int32&gt;.Enumerator</c> stays admissible. If the
+    /// containing-chain walk were written as "any container with type parameters", the value-type
+    /// receiver path Task 8b just fixed would be unreachable — the enumerator could never enter a
+    /// surface at all.
+    /// </summary>
+    [Test]
+    public void AConstructedContainerDoesNotMakeItsNestedTypeUnmarshalable()
+    {
+        var probe = EmitProbeAssembly("BlColCtor" + Guid.NewGuid().ToString("N"), """
+            using System.Collections.Generic;
+            namespace Contoso
+            {
+                public class Closed
+                {
+                    // The return type is List<int>.Enumerator: nested in a generic, but the
+                    // container's single argument is CLOSED.
+                    public List<int>.Enumerator Take() { return new List<int>().GetEnumerator(); }
+                }
+            }
+            """);
+        var resolver = NetTypeResolver.Create(
+            NetTypeResolverTestRefs.FrameworkPaths.Concat(new[] { probe }));
+
+        var diagnostics = new List<NetReferenceDiagnostic>();
+        var surface = Collect(
+            project: ProjectDeclaring("Contoso.Closed"),
+            resolverFactory: () => resolver,
+            diagnostics: diagnostics);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(surface.Members.Select(m => m.Name), Does.Contain("Take"),
+                "a closed container is not an openness problem — §8.3 boxes the struct into a "
+                + "handle like any other value type, and §8.5's Unsafe.Unbox receiver path "
+                + "depends on such a member being collectable at all.");
+            Assert.That(surface.Members.Single(m => m.Name == "Take").TypeFullName,
+                Is.EqualTo("System.Collections.Generic.List<System.Int32>.Enumerator"),
+                "and the spelling carries the CONSTRUCTION — the property §7.3 needs to tell "
+                + "List<int>.Enumerator's members from List<string>.Enumerator's.");
+        });
+    }
+
     // ====================================================================================
     // Decision-path guards (spec-review adjudicated additions beyond the plan text —
     // each of these four arms was added by Task 3 and deserves its own test).

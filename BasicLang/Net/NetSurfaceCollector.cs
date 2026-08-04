@@ -521,6 +521,22 @@ namespace BasicLang.Net
         /// handles no export can ever consume); for a closed generic only OPEN type-parameter
         /// occurrences in its arguments are hunted — <c>List&lt;Object&gt;</c> is itself a
         /// perfectly good handle.</para>
+        ///
+        /// <para><b>The openness hunt walks the CONTAINING chain, not just the type's own
+        /// arguments</b> (P2a-2 Task 8b). <c>List&lt;T&gt;.Enumerator</c> declares no type
+        /// parameters of its OWN, so the loop below saw an empty argument list and admitted it —
+        /// yet the <c>T</c> it inherits from its container is every bit as unspellable in a
+        /// monomorphic C export. The member then reached <c>csc</c> as
+        /// <c>global::…List&lt;T&gt;.Enumerator</c> and failed there, positionless, in generated
+        /// code the user never wrote — the late-failure shape §7.2's omission rules exist to move
+        /// earlier. It is now a positioned BL6026 naming the open parameter instead.</para>
+        ///
+        /// <para>This omits MORE than it did: a <c>&lt;NetProxy Include="System.Collections.
+        /// Generic.List`1" /&gt;</c> surface loses <c>GetEnumerator()</c> (and
+        /// <c>Dictionary`2</c> loses <c>Keys</c>/<c>Values</c>/<c>GetEnumerator</c>) — members
+        /// that could never have compiled. A CONSTRUCTED container is untouched:
+        /// <c>List&lt;Int32&gt;.Enumerator</c> has a closed <c>Int32</c> in the chain and stays
+        /// admissible, which is the shape §8.5's value-type receiver path actually wants.</para>
         /// </summary>
         private static ITypeSymbol FirstUnmarshalable(ITypeSymbol type)
         {
@@ -546,7 +562,7 @@ namespace BasicLang.Net
             if (type is IArrayTypeSymbol array)
                 return FirstUnmarshalable(array.ElementType);
 
-            if (type is INamedTypeSymbol named)
+            for (var named = type as INamedTypeSymbol; named != null; named = named.ContainingType)
             {
                 foreach (var argument in named.TypeArguments)
                 {

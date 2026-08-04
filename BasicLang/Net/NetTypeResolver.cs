@@ -656,8 +656,17 @@ namespace BasicLang.Net
         /// <para><b>Ordering is the safety property.</b> The literal ladder is emitted FIRST and in
         /// full, so a metadata name that genuinely contains angle brackets — every
         /// compiler-generated <c>&lt;&gt;c__DisplayClass</c> — still resolves through its own
-        /// spelling and cannot be displaced by the derived one. The derived form is additive: it
-        /// can turn a NotFound into a Resolved, never a Resolved into something else.</para>
+        /// spelling and cannot be displaced by the derived one: <see cref="LookupUncached"/>'s
+        /// fast path returns on the first candidate that resolves, so an added candidate can never
+        /// change a RESOLVED answer.</para>
+        ///
+        /// <para>It can, however, change a NotFound into either outcome. The MISS path evaluates
+        /// every candidate rather than stopping at the first, precisely so absence and ambiguity
+        /// stay distinguishable — so a derived candidate DECLARED IN TWO ASSEMBLIES makes the
+        /// answer <see cref="NetTypeLookupOutcome.Ambiguous"/> (BL6023, "drop one of the
+        /// references") rather than NotFound (BL6016, "no such type"). That is the more accurate
+        /// of the two diagnostics for a name that genuinely exists twice, and it is the same
+        /// answer the metadata spelling of that type would already have produced.</para>
         ///
         /// <para>Cost runs the right way. The second ladder only exists for a spelling containing
         /// <c>&lt;</c>, and for those it is what makes the FAST path hit at all — every one of them

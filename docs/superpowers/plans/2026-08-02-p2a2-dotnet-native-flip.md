@@ -918,13 +918,29 @@ Found by Task 8's Step-0 `ValueTypeReceiverNames` test (7b-I8), which existed fo
 > Gates: fast 4083/0/1 (from 4078/0/1, +5) · Blnet fast 500/0/0 (from 495) · frozen P0 16/16 ·
 > `NetShimPipelineTests` Integration 5/5 · §12.4 drift suites 98/0/0.
 >
-> ⛔ **Left for Task 9, deliberately not fixed here:** the collector still ADMITS a member whose
-> signature mentions a type nested in an OPEN generic (`List<T>.GetEnumerator()`), because
-> `FirstUnmarshalable` hunts open type parameters only in the type's OWN arguments and
-> `List<T>.Enumerator` has none. Such a member now names a resolvable, correctly-classified type
-> but still emits `global::…List<T>.Enumerator`, which `csc` rejects — loudly, at publish, exactly
-> as before. §8.5 routes `For Each` through `IEnumerable<T>` so Task 9 should not choose that
-> shape; a `<NetProxy Include="System.Collections.Generic.List`1" />` still reaches it.
+> ✅ **Follow-up (review item 3), same task, second commit: open-generic receivers now omit with
+> BL6026 instead of failing in `csc`.** The collector ADMITTED a member whose signature names a
+> type nested in an OPEN generic (`List<T>.GetEnumerator()`), because `FirstUnmarshalable` hunted
+> open type parameters only in the type's OWN arguments and `List<T>.Enumerator` has none — it
+> inherits `T` from its container. It now walks the CONTAINING chain as well, so the member is
+> omitted with a positioned §7.2 BL6026 naming `T`, which is this project's standard over a late
+> csc failure (the 7b read-only-property precedent). A CONSTRUCTED container is untouched:
+> `List<Int32>.Enumerator` has a closed argument in the chain and stays admissible.
+>
+> ⚠ **This changes what a `<NetProxy Include="System.Collections.Generic.List`1" />` surface
+> collects** — `GetEnumerator()` leaves it (and `Dictionary`2` loses `Keys`/`Values`/
+> `GetEnumerator`). Those members could never have compiled: no repo fixture declared one, and
+> the ManagedOwned five are unaffected (0 of 292 members).
+>
+> ⛔ **Mechanism correction to the note this replaces** (the conclusion was right, the reason was
+> not — the original wording is preserved in commit `402de90`'s message and stands as history).
+> `NetShimGenerator.Qualified` is applied to the DECLARING type (`:585`, `:621-625`) and to
+> handle-form PARAMETERS (`:648`) — **never to the return type**. So
+> `List<T>.GetEnumerator()` never emitted `global::…List<T>.Enumerator`; it failed on its own
+> declaring type `global::…List<T>`. The enumerator spelling only reaches `Qualified` when the
+> enumerator's OWN `MoveNext` is collected — which is exactly the §8.5 receiver path Task 8b's
+> resolver fix exists for, and which the containing-chain check above does NOT block (a
+> constructed enumerator stays admissible).
 
 **The bug:** `NetTypeResolver.TypeName` drops a CONTAINING generic's arity, so
 `List<T>.Enumerator` spells `System.Collections.Generic.List.Enumerator` — a name its own
@@ -999,6 +1015,23 @@ narrower oracle (the six §6.4 rows vs `blnet_marshal.hpp`); Step 2b's actual as
   managed-marked types** (the wild-pointer kill — the consumer sites `:3662-3703`/`:3634-3660`
   merely follow), `IRIndexerAccess`/`IRIndexerStore`/`IRForEach` lowering arms for `NetRef`
 - Test: `VisualGameStudio.Tests/Blnet/NetCollectionConsumptionTests.cs` (new)
+
+> ⛔ **ARCHITECTURAL INPUT from Task 8b's review — read before designing this task's collection.**
+> **The surface is collected strictly BY NAME** (`NetSurfaceCollector.cs:~357` →
+> `CandidateMembers(typeName)`), and **a name resolves to the DEFINITION**. So
+> `GetMembers("…List<System.Int32>")` returns descriptors whose declaring type is the OPEN
+> `System.Collections.Generic.List<T>` — no current path can produce a CONSTRUCTED spelling at
+> all. Two consequences for this task:
+> - `List(Of Integer)` work needs a **symbol-carrying collection seam** (construct the
+>   `INamedTypeSymbol`, then describe) rather than the by-name door. Task 8b's per-level
+>   `TypeName` is already the right OUTPUT format for constructed spellings — what's missing is
+>   a way to hand the collector a symbol instead of a string.
+> - Until that seam exists, the construction-collision Task 8b protects against
+>   (`List<int>.Enumerator.MoveNext` vs `List<string>.Enumerator.MoveNext` mangling alike and
+>   the second being silently dropped by `Plan`'s `if (!seen.Add(name)) continue;`) is
+>   *unreachable* — which is why "0 export names moved" was internally consistent. **The moment
+>   this task adds the symbol seam, that collision becomes reachable** and the mangler test
+>   `CollisionFreedomOverTwoConstructionsOfOneNestedGeneric` stops being theoretical.
 
 **The trap this task exists for (spec §8.5, verbatim intent):** implementing only the consumer
 sites and not `MapType`/`BareCollectionType` ships the wild pointer — a managed `List<T>` local
