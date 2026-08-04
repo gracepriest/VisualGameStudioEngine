@@ -318,12 +318,17 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         {
             if (value == null) return null;
 
-            // Keyed on the EMITTED NAME, not on the node being an IRVariable: the optimizer
-            // rewires the name mapping (a call's result node comes out spelled `V`) while leaving
-            // the node's kind and Type alone, so a node-shape test misses exactly the case this
-            // exists for.
-            if (_localCppTypeByName.Count > 0
-                && _localCppTypeByName.TryGetValue(GetValueName(value), out var declared))
+            // Keyed on the value's NAME, not on the node being an IRVariable: the project build
+            // fuses a call into its destination and the result arrives as a non-variable node
+            // carrying `Name = "V"` (the same channel GetValueName's own "honor the destination
+            // name" arm reads). A node-SHAPE test would miss exactly the case this exists for.
+            //
+            // Read straight off the node rather than through GetValueName, which is NOT a pure
+            // lookup on this backend — it mints temp names and even renders whole lambda bodies.
+            // This runs from IsNetRefBacked, i.e. speculatively, on values that may still refuse.
+            if (_localCppTypeByName.Count > 0 && !string.IsNullOrEmpty(value.Name)
+                && !(value is IRConstant)
+                && _localCppTypeByName.TryGetValue(SanitizeName(value.Name), out var declared))
             {
                 return declared;
             }
