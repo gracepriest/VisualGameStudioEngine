@@ -1199,6 +1199,85 @@ back (EXEMPT from the divergence — the parity program depends on this exact sc
   readback visible, by-value mutation NOT visible (both asserted — this is §14.11 pinned early).
 - [ ] **Step 4:** fast subset; commit (`feat(p2a2): §8.6 outbound array copy`).
 
+---
+
+## ⛔ TASK-10 REVIEW FINDINGS (2026-08-04) — fix these FIRST, before Task 11
+
+Task 10 shipped `5844df8` → `c833fde` → `cfb9f34` → `a10a689` (all pushed). Combined review:
+**❌ Issues found — feature correct and well-built, ONE reachable codegen break + doc drift.**
+Everything else verified ✅: the four §8.6 rows, all four BL6019 rows with anti-vacuity partners,
+the §14.11 opposite-directions proof, the RAII/reverse-destruction claim, the M1 three-site
+extraction, all four self-found bug fixes, `NetArrayCopy`'s shape, and no new collector arm.
+
+### 1. BLOCKING — the RAII guard is a block-scope declaration in goto-lowered C++
+
+`CppCodeGenerator.NetCalls.cs:596-600` writes `BasicLang::NetRef blnet_tN = …;` straight into the
+current block. This backend lowers ALL control flow to labels + `goto` in one flat function scope
+(`CppCodeGenerator.cs:2959-3004`, `Visit(IRLabel)` `:3188`, `EmitInlineRegion` `:3862`), so a
+forward `goto` that skips the region **crosses the guard's initialization**. Reproduced by the
+reviewer with g++ 13 `-std=c++20` on real generator output for
+`If N > 0 Then Dim S = Convert.ToBase64String(B)`:
+`error: jump to label 'if0_end' … crosses initialization of 'NetRef blnet_t0'`.
+
+**Pre-existing class, materially widened.** Task 8's ref/out scalar prologue
+(`NetCalls.cs:712`, `int32_t blnet_t0 = n;`) is ill-formed the same way — but that needs a
+`ref`/`out` .NET member, whereas §8.6's copy-in fires on **any by-value native array argument**
+(`Convert.ToBase64String(bytes)` inside an `If` is ordinary code). Every fixture test and the
+Integration pin uses a straight-line `Main`, so nothing catches it.
+
+⚠ **This is the single biggest thing that will fight Task 11** — the Step-0 contract routes
+callback register/unregister into the same prologue slot, and `If x Then list.Sort(AddressOf Cmp)`
+is the natural first delegate program.
+
+**Fix once, at the seam:** have `EmitNetCallStatements` wrap prologue + call + write-back in a
+`{ … }` block (guards then release at the end of the call's own scope — tighter than today, and
+it preserves the reverse-destruction property). Alternative: hoist guard *declarations* into
+`DeclareLocalsAndTemporaries` and emit only the assignment inline. **Add a test with a copy-in
+inside an `If` and inside a loop** — the whole fixture is straight-line today. Fix Task 8's
+scalar prologue in the same change (same hazard, same seam).
+
+### 2. §12.4 exemption text survives in three places (the invariant itself is ✅)
+
+Verified holding: both emitters `.Concat(NetArrayCopy.RequiredExportNames(surface))`,
+`blnet_bind_all` binds them, and both sides derive from one `RequiredForms`. But the old
+"§12.4-exempt" claim is only deleted from `NetArrayCopy.cs:115-120`. Still false in:
+- `NetShimGenerator.cs:66-70` — *"§8.6's array copy helpers and §8.4's delegate dispatcher are
+  NOT emitted … both are §12.4-exempt"*. **False in the file that emits them, and it is what
+  Task 11 will read before deciding how to carry the delegate dispatcher.**
+- `NetShimGeneratorTests.cs:187-190` — the §12.4 drift test's own failure message still teaches
+  the wrong rule, at the exact moment someone is debugging that invariant.
+- **Spec §12.4** (`2026-07-29-p2a-dotnet-access-aot-shim-design.md:1263-1265`) — still carries the
+  exemption as normative text. The deviation is an IMPROVEMENT and belongs in the spec, not only
+  in a code header.
+
+### 3. A false "measured" claim to retract
+
+`NetCalls.cs:304-310` says the `t = call(); v = t;` fusion takes "the whole `CppProjectBuilder` →
+`CompileProjectFiles` path" and that "the fast subject cannot construct the shape". **The plain
+CLI single-file path (`BasicLang.exe file.bas --target=cpp`) runs the same
+`OptimizationPipeline.AddStandardPasses` and fuses it too.** So the shape IS constructible below
+the Integration tier — correct the note and add the cheap fast pin it currently discourages.
+
+### 4. Task-8c friction (record now, act in 8c)
+
+`NetArrayCopy.Forms` is keyed on exact .NET element full name, which cannot express "any enum".
+When 8c lands `enum → underlying integral`, an **enum array** falls through to the handle-element
+BL6019 arm and tells the user their enum "is itself a .NET handle" — wrong explanation for the
+right refusal. Either add an enum arm to the message or give enum arrays a copy form keyed on the
+underlying integral.
+
+### 5. Noted, no action
+
+A guard currently lives to the end of the enclosing block (a handle minted for argument 1 of a
+call at the top of `Main` is held until `Main` returns) — fixed for free by finding 1's braces.
+And `TypeInfo.Equals` now treats a handle array and a native array of the same element as
+identical; the only reachable pairings are assignment/store seams that `NetMaterializedValue`
+covers, because user `Sub`/`Function` array parameters **do not parse** in this compiler today
+(`Sub Take(A As Byte())` → *"Expected ')' after parameters but found LeftParen"*). It becomes a
+hole the day array parameters land.
+
+---
+
 ### Task 11: §8.4 delegates + §11.2 callback exceptions + `AddressOf` lowering
 
 **Files:**
