@@ -1499,8 +1499,28 @@ namespace BasicLang.Compiler
                 var member = new VariableDeclarationNode(Peek().Line, Peek().Column);
                 member.Access = access;
                 member.Name = ConsumeIdentifierLike("Expected member name").Lexeme;
+
+                // A structure member may be an array, exactly like a class field
+                // ("Public Items(2) As Integer"). This site had no dimension parsing at all, so
+                // the declaration failed with "Expected 'As' but found LeftParen".
+                List<ExpressionNode> memberDimensions = null;
+                if (Match(TokenType.LeftParen))
+                    memberDimensions = ParseArrayDimensionList(TokenType.RightParen, ")");
+                else if (Match(TokenType.LeftBracket))
+                    memberDimensions = ParseArrayDimensionList(TokenType.RightBracket, "]");
+
+                if (memberDimensions != null)
+                    RejectChainedArrayDimensions(member.Name);
+
                 Consume(TokenType.As, "Expected 'As'");
                 member.Type = ParseTypeReference();
+
+                if (memberDimensions != null)
+                {
+                    member.Type.IsArray = true;
+                    member.Type.ArrayDimensions = memberDimensions;
+                }
+
                 node.Members.Add(member);
                 SkipNewlines();
             }

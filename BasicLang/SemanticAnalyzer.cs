@@ -4669,8 +4669,35 @@ namespace BasicLang.Compiler.SemanticAnalysis
             foreach (var member in node.Members)
             {
                 var memberType = ResolveTypeReference(member.Type);
+
+                // A SIZED array member of a Structure has no lowering that both backends can
+                // honor, so it is refused rather than allowed to diverge. A struct value is
+                // produced by default-initialization (`Dim g As Bag`), which in .NET means
+                // `default(Bag)` — and `default` bypasses any field initializer, so the array
+                // would be null however it was declared. C# says so outright (CS8983: a struct
+                // with field initializers must declare a constructor), and VB.NET refuses the
+                // same declaration for the same reason. The C++ backend WOULD size it, as a
+                // value std::vector member, which is exactly the silent divergence to avoid.
+                // An UNSIZED member (`Public Items() As Integer`) is an ordinary reference field
+                // and stays legal.
+                if (memberType?.Kind == TypeKind.Array && memberType.ArraySize > 0)
+                {
+                    Error($"Structure member '{member.Name}' cannot declare an array size. A "
+                          + "structure is default-initialized, so the storage would never be "
+                          + "allocated. Declare it unsized ('" + member.Name + "() As "
+                          + (memberType.ElementType?.Name ?? "Object")
+                          + "') and assign it, or use a Class.",
+                          member.Line, member.Column);
+                }
+
                 var memberSymbol = new Symbol(member.Name, SymbolKind.Variable, memberType, member.Line, member.Column);
                 type.Members[member.Name] = memberSymbol;
+                // Record the RESOLVED type on the member node. IRBuilder.Visit(StructureNode)
+                // reads it from here; without it that fallback rebuilt a type from the bare
+                // NAME, which silently discarded every modifier the type reference carried —
+                // so `Public Items() As Integer` became a scalar `int32_t Items`, and the
+                // struct's array member could not be indexed on either backend.
+                SetNodeType(member, memberType);
             }
         }
 

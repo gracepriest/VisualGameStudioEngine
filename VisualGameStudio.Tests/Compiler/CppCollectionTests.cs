@@ -1727,4 +1727,172 @@ End Sub";
             "an unsized declaration must not be given a bogus zero-element allocation:\n" + output);
         Assert.That(CompileRun(output), Is.EqualTo("1\n"));
     }
+
+    // ========================================================================
+    // BUG 7d — ARRAY FIELDS WERE NOT TYPED AS ARRAYS.
+    //
+    //   Class Board
+    //       Public Cells(9) As Integer
+    //   End Class
+    //
+    // emitted `int32_t Cells;` — a SCALAR — so `b.Cells(0)` was
+    // "invalid types 'int32_t {aka int}[int]' for array subscript".
+    //
+    // Root cause: the field branch of the parser recorded ArrayDimensions but never set
+    // IsArray, and ResolveTypeReference only takes its array branch when IsArray is set.
+    // Locals and parameters always set both; fields were the one path that set one half.
+    // Because Kind was not Array, neither the sizing helper nor the element-lvalue path was
+    // ever reached, so fixing the parser alone was not enough — the chain behind it had to
+    // be followed:
+    //
+    //   * the C++ CLASS-MEMBER sites (private/protected/public, plus the out-of-class
+    //     definition for statics) needed their own sizing, since a member cannot borrow the
+    //     local or global declaration site;
+    //   * `obj.Field(i)` lowered as an INSTANCE METHOD CALL — `b->Cells(0)`, calling a
+    //     std::vector — because IRBuilder's array-index branch only covered a bare
+    //     identifier callee;
+    //   * `obj.Field(i) = v` wrote through the materialized field COPY (`t1[0] = 5`), which
+    //     compiles and silently loses the store, exactly like the struct-array-element case
+    //     above. ElementLValue re-derives the field so read and write agree by construction.
+    // ========================================================================
+
+    [Test]
+    public void Cpp_ArrayField_IsTypedAsArrayAndSized_CompileAndRun()
+    {
+        var source = @"
+Class Board
+    Public Cells(9) As Integer
+End Class
+
+Module Program
+    Sub Main()
+        Dim b As New Board()
+        b.Cells(0) = 5
+        b.Cells(8) = 7
+        Console.WriteLine(b.Cells(0) + b.Cells(8))
+        Console.WriteLine(b.Cells.Length)
+    End Sub
+End Module";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("std::vector<int32_t> Cells = std::vector<int32_t>(9)"),
+            "the field must be declared as a SIZED array, not a scalar:\n" + output);
+        Assert.That(output, Does.Not.Contain("int32_t Cells;"),
+            "the scalar declaration is the bug:\n" + output);
+        // Writing index 8 of a 9-element field: an unsized member corrupts the heap here.
+        Assert.That(CompileRun(output), Is.EqualTo("12\n9\n"));
+    }
+
+    /// <summary>
+    /// The write must reach the OBJECT, not the copy the field read materialized. `b.Cells(0)`
+    /// lowers through an IRFieldAccess that copies the whole std::vector, so `t1[0] = 5` both
+    /// compiles and silently discards the store — a wrong answer, not a build failure. Pinned by
+    /// the emitted lvalue AND by running it.
+    /// </summary>
+    [Test]
+    public void Cpp_ArrayField_Write_ReachesTheObject_NotACopy()
+    {
+        var source = @"
+Class Board
+    Public Cells(4) As Integer
+End Class
+
+Module Program
+    Sub Main()
+        Dim b As New Board()
+        b.Cells(2) = 42
+        Console.WriteLine(b.Cells(2))
+    End Sub
+End Module";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("b->Cells[2] = 42"),
+            "the store must target the field lvalue, not a copied temporary:\n" + output);
+        Assert.That(CompileRun(output), Is.EqualTo("42\n"));
+    }
+
+    [Test]
+    public void Cpp_PrivateArrayField_ConstSized_UsedFromMethods_CompileAndRun()
+    {
+        // A Const-sized PRIVATE field, read and written unqualified from inside the class:
+        // a different emission site (private members) and a different receiver shape (implicit
+        // this) from the public/external case above.
+        var source = @"
+Const SLOTS As Integer = 4
+
+Class Board
+    Private Scratch(SLOTS) As Integer
+
+    Sub Seed()
+        Scratch(3) = 99
+    End Sub
+
+    Function Peek() As Integer
+        Return Scratch(3)
+    End Function
+End Class
+
+Module Program
+    Sub Main()
+        Dim b As New Board()
+        b.Seed()
+        Console.WriteLine(b.Peek())
+    End Sub
+End Module";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("std::vector<int32_t> Scratch = std::vector<int32_t>(4)"), output);
+        Assert.That(CompileRun(output), Is.EqualTo("99\n"));
+    }
+
+    /// <summary>
+    /// A SIZED array member of a Structure is refused. A struct value is produced by
+    /// default-initialization, and .NET's `default(T)` bypasses field initializers, so the
+    /// storage would never exist however it was declared — C# says so outright (CS8983) and
+    /// VB.NET refuses the same declaration. The C++ backend WOULD happily size a value
+    /// std::vector member, so without this the two backends disagree silently.
+    /// </summary>
+    [Test]
+    public void SizedArrayMemberOfStructure_IsRefused()
+    {
+        var source = @"
+Structure Bag
+    Public Items(2) As Integer
+End Structure
+
+Sub Main()
+    Dim g As Bag
+End Sub";
+        CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Not.Empty);
+        Assert.That(string.Join("; ", errors), Does.Contain("cannot declare an array size"));
+    }
+
+    /// <summary>
+    /// ANTI-VACUITY PARTNER: an UNSIZED structure member is an ordinary reference field and
+    /// must keep working — it is assigned real storage from outside. Also pins the fix that
+    /// made a structure member's resolved type reach the IR at all (it used to be rebuilt from
+    /// the bare type NAME, which discarded the array-ness).
+    /// </summary>
+    [Test]
+    public void UnsizedArrayMemberOfStructure_CompilesAndRuns()
+    {
+        var source = @"
+Structure Bag
+    Public Items() As Integer
+End Structure
+
+Sub Main()
+    Dim g As Bag
+    Dim src(3) As Integer
+    src(1) = 8
+    g.Items = src
+    Console.WriteLine(g.Items(1))
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("std::vector<int32_t> Items"),
+            "the member must be typed as an array, not rebuilt as a scalar from its name:\n" + output);
+        Assert.That(CompileRun(output), Is.EqualTo("8\n"));
+    }
 }
