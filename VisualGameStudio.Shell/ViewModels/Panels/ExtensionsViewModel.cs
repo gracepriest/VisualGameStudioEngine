@@ -26,6 +26,15 @@ public partial class ExtensionsViewModel : ViewModelBase, IDisposable
     private const string OpenVsxSearchUrl = "https://open-vsx.org/api/-/search";
     private const string OpenVsxApiUrl = "https://open-vsx.org/api";
 
+    // Open VSX responds in camelCase; System.Text.Json matches property names
+    // case-sensitively by default, so every search result was silently dropped
+    // (Deserialize returned a non-null object with a null Extensions list, so
+    // nothing threw and the panel reported "No extensions found").
+    private static readonly JsonSerializerOptions _jsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
     private readonly System.Timers.Timer _searchDebounceTimer;
     private CancellationTokenSource? _searchCts;
 
@@ -421,7 +430,7 @@ public partial class ExtensionsViewModel : ViewModelBase, IDisposable
             var url = $"{OpenVsxSearchUrl}?query={Uri.EscapeDataString(query)}&size=30&sortBy={sortBy}&sortOrder={sortOrder}";
 
             var response = await _httpClient.GetStringAsync(url, token);
-            var searchResult = JsonSerializer.Deserialize<OpenVsxSearchResult>(response);
+            var searchResult = JsonSerializer.Deserialize<OpenVsxSearchResult>(response, _jsonOptions);
 
             if (token.IsCancellationRequested) return;
 
@@ -485,7 +494,7 @@ public partial class ExtensionsViewModel : ViewModelBase, IDisposable
         {
             var url = $"{OpenVsxApiUrl}/{extension.Publisher}/{extension.Name}";
             var response = await _httpClient.GetStringAsync(url);
-            var detail = JsonSerializer.Deserialize<OpenVsxExtensionDetail>(response);
+            var detail = JsonSerializer.Deserialize<OpenVsxExtensionDetail>(response, _jsonOptions);
 
             if (detail != null)
             {
