@@ -427,8 +427,8 @@ namespace BasicLang.Compiler.CodeGen.Net
             foreach (var form in NetArrayCopy.RequiredForms(surface))
             {
                 L(sb, "    /* §8.6 outbound copy for " + Comment(form.ArrayFullName) + " */");
-                L(sb, "    int32_t (BLNET_CALL *" + form.NewExportName + ")(int32_t count, const "
-                      + form.CWireIn + "* src, uint64_t* result);");
+                L(sb, "    int32_t (BLNET_CALL *" + form.NewExportName + ")(int32_t count, "
+                      + form.CSourcePointer + " src, uint64_t* result);");
                 L(sb, "    int32_t (BLNET_CALL *" + form.ReadExportName + ")(uint64_t self, "
                       + "int32_t capacity, " + form.CWireOut + "* dst, int32_t* result);");
             }

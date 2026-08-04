@@ -665,6 +665,13 @@ public class NetOutboundCopyTests
         {
             foreach (var form in NetArrayCopy.Forms)
             {
+                // A generated header must not warn. Prefixing `const` onto a row whose wire
+                // element is ALREADY a pointer produces `const const char**` — a duplicate
+                // cv-qualifier that MSVC reports as C4114 and clang/gcc flag too, out of a header
+                // the user cannot edit and fatal under -Werror.
+                Assert.That(form.CSourcePointer, Does.Not.Contain("const const"),
+                    $"§8.6 form '{form.Suffix}' emits a duplicate const in its copy-in buffer "
+                    + $"parameter: '{form.CSourcePointer}'.");
                 Assert.That(widths.ContainsKey(form.CWireIn), Is.True,
                     $"§8.6 form '{form.Suffix}' declares an inbound wire element "
                     + $"'{form.CWireIn}' with no known C# counterpart — NetShimGenerator.CsPointer "

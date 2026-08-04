@@ -71,6 +71,25 @@ namespace BasicLang.Net
 
         /// <summary>The <c>T[]</c> metadata spelling this row copies.</summary>
         internal string ArrayFullName => ElementFullName + "[]";
+
+        /// <summary>
+        /// The complete C spelling of the copy-IN buffer parameter — read-only, one indirection
+        /// above <see cref="CWireIn"/>.
+        ///
+        /// <para><b>Not <c>"const " + CWireIn + "*"</c>, which is why this is a member and not a
+        /// string concat at the emitter.</b> For the String row <see cref="CWireIn"/> is already
+        /// <c>const char*</c>, and prefixing another <c>const</c> yields
+        /// <c>const const char**</c> — a DUPLICATE cv-qualifier. It means the right thing and it
+        /// compiles, but MSVC reports C4114 ("same type qualifier used more than once") and
+        /// clang/gcc have their own duplicate-decl-specifier warning, so every user building a
+        /// String-array surface would get a warning out of a generated header they cannot edit —
+        /// fatal under <c>-Werror</c>. The const goes on the OUTER pointer instead:
+        /// <c>const char* const*</c>, which is also the more accurate type.</para>
+        /// </summary>
+        internal string CSourcePointer =>
+            CWireIn.EndsWith("*", StringComparison.Ordinal)
+                ? CWireIn + " const*"
+                : "const " + CWireIn + "*";
     }
 
     /// <summary>
