@@ -29,8 +29,9 @@ public class NetProxyStubRunTests
 
     private const string RegexFullName = NetStubHarness.RegexFullName;
 
-    private static (string Cpp, NetSurface Surface) CompileWithSurface(string source) =>
-        NetStubHarness.CompileWithSurface(source);
+    private static (string Cpp, NetSurface Surface) CompileWithSurface(
+        string source, bool optimize = false) =>
+        NetStubHarness.CompileWithSurface(source, optimize);
 
     private static string StubTranslationUnit(
         IEnumerable<NetStubHarness.StubSlot> slots, string shimSetup = "") =>
@@ -306,6 +307,58 @@ public class NetProxyStubRunTests
             + "the second line means the write-back was dropped — the proxy wrote its temporary "
             + "and nothing copied it out, or the call site passed a copy instead of the "
             + "variable. Nothing else about this program would go red for either bug.");
+    }
+
+    /// <summary>
+    /// The SAME out-parameter scenario through the OPTIMIZER — the repo law that codegen is
+    /// validated through the optimizer and the CLI, not only through the non-optimizing helper.
+    /// The program is shaped to make the optimizer's copy facts matter: <c>n</c> is given a
+    /// value the ByRef call then overwrites, and the result is READ through a comparison rather
+    /// than printed, so a stale copy changes the BRANCH rather than the spelling.
+    /// </summary>
+    [Test]
+    [Ignore("PRE-EXISTING optimizer bug, chipped as task_807f81e3. VERIFIED by running this "
+            + "test un-ignored on 2026-08-03: it prints 'TRYPARSE(42)\\nSTALE\\n' where "
+            + "'TRYPARSE(42)\\nFRESH\\n' is correct. Note WHAT that proves — the call happened "
+            + "and the out slot carried 42 (TRYPARSE printed, and the un-optimized twin above "
+            + "passes); it is the SUBSEQUENT read that is wrong, because CopyPropagationPass "
+            + "does not kill copy facts on a ByRef write, so `n` keeps the fact from `Dim n = 0` "
+            + "and `If n = 42` folds against the stale 0. NOT a Task-8 regression and NOT "
+            + "specific to .NET calls — user ByRef Subs hit it the same way. Un-ignore when the "
+            + "chip lands; this test is its oracle.")]
+    public void OutParameter_SurvivesTheOptimizer()
+    {
+        var (cpp, surface) = CompileWithSurface("""
+            Module M
+             Sub Main()
+              Dim n = 0
+              Dim ok = Int32.TryParse("42", n)
+              If n = 42 Then
+               Console.WriteLine("FRESH")
+              Else
+               Console.WriteLine("STALE")
+              End If
+             End Sub
+            End Module
+            """, optimize: true);
+
+        var tryParse = NetNameMangler.Mangle(
+            Winner("System.Int32", NetCallForm.Static, "TryParse",
+                   "System.String", "System.Int32"));
+
+        var stub = StubTranslationUnit(new[]
+        {
+            new NetStubHarness.StubSlot(tryParse,
+                "[](const char* a0, int32_t* a1, int32_t* result) -> int32_t {"
+                + " std::printf(\"TRYPARSE(%s)\\n\", a0);"
+                + " *a1 = 42; *result = 1; return 0; }"),
+        });
+
+        Assert.That(RunWithStub(cpp, surface, stub).Replace("\r\n", "\n"),
+            Is.EqualTo("TRYPARSE(42)\nFRESH\n"),
+            "the value written through the out slot must survive optimization. 'STALE' means a "
+            + "pass kept a copy fact for `n` across a call that writes it — see the Ignore "
+            + "reason and chip task_807f81e3.");
     }
 
     // ====================================================================================

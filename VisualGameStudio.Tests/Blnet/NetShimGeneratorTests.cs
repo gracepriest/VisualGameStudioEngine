@@ -418,6 +418,64 @@ public class NetShimGeneratorTests
         finally { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
     }
 
+    /// <summary>
+    /// <b>7b-I6: the shim csproj is an SDK project rooted in <c>obj/gen/shim</c>, so it globs
+    /// <c>**/*.cs</c> — an orphan left by an earlier build is COMPILED INTO the shim.</b>
+    /// Latent while the emitted file set was fixed; Tasks 9/10/11 make it surface-dependent
+    /// (per-element array helpers, per-delegate dispatchers), so a removed member's orphaned
+    /// wrapper would keep compiling against a member the surface no longer has.
+    ///
+    /// <para>The two negative assertions are the ones with teeth. <c>obj/</c> holds the
+    /// publish's own working state and is where a recursive delete would do real damage; a
+    /// <c>.log</c> stands for everything a user or tool may legitimately leave here. The
+    /// extension filter plus a NON-recursive enumeration is what keeps both safe, and both
+    /// would go red if either property were relaxed.</para>
+    /// </summary>
+    [Test]
+    public void WriteToPrunesStaleSourcesButLeavesEverythingElse()
+    {
+        var dir = TempDir();
+        try
+        {
+            Directory.CreateDirectory(dir);
+            var orphanSource = Path.Combine(dir, "Exports.Removed.g.cs");
+            var orphanProject = Path.Combine(dir, "Stale.Blnet.csproj");
+            var keepLog = Path.Combine(dir, "publish.log");
+            var objDir = Path.Combine(dir, "obj");
+            Directory.CreateDirectory(objDir);
+            var keepObj = Path.Combine(objDir, "project.assets.json");
+
+            File.WriteAllText(orphanSource, "// a wrapper for a member the surface no longer has");
+            File.WriteAllText(orphanProject, "<Project/>");
+            File.WriteAllText(keepLog, "not ours to delete");
+            File.WriteAllText(keepObj, "{}");
+
+            NetShimGenerator.WriteTo(dir, OneMemberSurface(), SafeProject);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(File.Exists(orphanSource), Is.False,
+                    "a stale *.g.cs survived. The SDK globs this directory, so it would be "
+                    + "compiled into the shim — a wrapper for a member the surface no longer "
+                    + "contains.");
+                Assert.That(File.Exists(orphanProject), Is.False,
+                    "a stale *.csproj survived. Two project files in one directory is an "
+                    + "ambiguous publish, and the wrong one may name the wrong AssemblyName — "
+                    + "which is the file blnet_startup.g.cpp loads by BARE NAME.");
+                Assert.That(File.Exists(keepLog), Is.True,
+                    "the prune deleted a non-source file. It must only ever remove files whose "
+                    + "presence CHANGES what the shim compiles to; anything else here is not "
+                    + "ours.");
+                Assert.That(File.Exists(keepObj), Is.True,
+                    "the prune reached into obj/ — the publish's own working state. The "
+                    + "enumeration is deliberately NON-recursive for exactly this reason.");
+                Assert.That(File.Exists(Path.Combine(dir, NetShimGenerator.ExportsFileName)),
+                    Is.True, "…and it still wrote the real artifact set.");
+            });
+        }
+        finally { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
+    }
+
     [Test]
     public void NonEmptySurfaceEmitsTheProjectPlusFiveSources()
     {

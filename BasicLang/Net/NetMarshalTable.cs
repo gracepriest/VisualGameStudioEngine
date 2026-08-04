@@ -59,9 +59,26 @@ namespace BasicLang.Net
     /// StringBuilder, whose §6.4 table row is explicitly one-way.
     /// </param>
     /// <param name="CWire">
-    /// The C spelling of this row's single wire slot — what a call site must declare to hold
-    /// the value across a §8.3 POINTER SLOT (<c>ref</c>/<c>out</c>). Null for the rows that do
-    /// not have one scalar slot (String, and every multi-slot §6.4 pair).
+    /// The C ABI spelling of this row's single wire slot — the same string
+    /// <c>NetProxyEmitter.WireOf</c> puts in its <c>CType</c> column, tied to it row by row by
+    /// <c>NetProxyEmitterTests.EveryWireRowsCTypeMatchesTheEmittedSlot</c>. Null for the rows
+    /// that do not have ONE by-value slot: String (two, with opposite ownership per direction)
+    /// and every multi-slot §6.4 pair.
+    ///
+    /// <para><b>Its PRESENCE and its VALUE are used for different things, and only the presence
+    /// is universal.</b> Presence answers "does this row have a single by-value wire slot?",
+    /// which is the §8.3 ByRef gate in both the analyzer and the lowering. The VALUE is read
+    /// only by the ByRef path's converted-temporary arm — Char and the single-slot §6.4 pairs —
+    /// where the proxy's C++ parameter type happens to be this same string.</para>
+    ///
+    /// <para><b>⚠ It is NOT, in general, the type a C++ temporary must be declared as.</b>
+    /// <c>Boolean</c> is the row where the two diverge: it crosses the ABI as <c>int32_t</c>
+    /// (a C++ <c>bool</c> is not blittable for <c>[UnmanagedCallersOnly]</c>) while
+    /// <c>NetProxyEmitter</c> shapes its ByRef parameter as <c>bool&amp;</c>. Nothing binds an
+    /// <c>int32_t</c> temporary to that, which is exactly why the lowering's Scalar/Boolean arm
+    /// hands over the native variable and RETURNS before the temporary path. A future
+    /// generalization that needs the bindable type must take the proxy's C++ parameter type,
+    /// never this.</para>
     /// </param>
     internal sealed record NetWireRow(
         string NetFullName,

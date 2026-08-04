@@ -78,6 +78,19 @@ public class NetProxyEmitterTests
                    false, "System.TimeSpan", P("System.DateTime")),
             Member("Add", "System.TimeSpan", NetMemberCategory.Method,
                    false, "System.TimeSpan", P("System.TimeSpan")),
+            // The NINE §8.3 by-value rows the fixture omitted until the Task-8 review — every
+            // one of them invisible to the C-vs-C# signature oracle, including System.Char,
+            // the row Task 8 itself worked on. One member carries them all as parameters; the
+            // Char RESULT direction is carried by the member below, because a result travels
+            // through CsOutType and a parameter through CsParamType and Char is the row where
+            // the managed spelling (`char`) differs from BOTH (`ushort` on the wire).
+            Member("EveryScalarRow", "MyLib.Widen", NetMemberCategory.Method,
+                   true, "System.Void",
+                   P("System.SByte"), P("System.Byte"), P("System.Int16"), P("System.UInt16"),
+                   P("System.UInt32"), P("System.Int64"), P("System.UInt64"), P("System.Single"),
+                   P("System.Char")),
+            Member("ToChar", "MyLib.Widen", NetMemberCategory.Method,
+                   true, "System.Char", P("System.Int32")),
         },
         new[] { "System.Text.RegularExpressions.Regex" });
 
@@ -86,7 +99,41 @@ public class NetProxyEmitterTests
     /// inlined so a fixture change updates ONE number and every count guard follows — a guard
     /// that silently tracked the fixture would assert nothing.
     /// </summary>
-    internal const int ShapeCount = 9;
+    internal const int ShapeCount = 11;
+
+    /// <summary>
+    /// <b>The row-by-row tie between <c>NetMarshalTable.WireRows</c>' <c>CWire</c> column and
+    /// the C types <see cref="NetProxyEmitter"/> actually declares.</b> Three encodings of §8.3
+    /// exist (the row table, the C emitter, the C# emitter); the signature oracle in
+    /// <c>NetShimGeneratorTests</c> holds the two EMITTERS together, and this holds the row
+    /// table to the C one — otherwise the call site could declare a ByRef temporary of a type
+    /// the proxy never took.
+    ///
+    /// <para>Asserted over <see cref="WireShapeSurface"/>, which is why that fixture carrying
+    /// every row matters twice over.</para>
+    /// </summary>
+    [Test]
+    public void EveryWireRowsCTypeMatchesTheEmittedSlot()
+    {
+        var bindings = N(NetProxyEmitter.EmitBindings(WireShapeSurface()).Text);
+        var covered = BasicLang.Net.NetMarshalTable.WireRows.Values
+            .Where(r => !string.IsNullOrEmpty(r.CWire))
+            .ToList();
+
+        Assert.Multiple(() =>
+        {
+            foreach (var row in covered)
+            {
+                Assert.That(bindings, Does.Contain(row.CWire + " "),
+                    $"NetMarshalTable's row for '{row.NetFullName}' declares its wire slot as "
+                    + $"'{row.CWire}', but no slot in the emitted BlnetProxyTable is spelled "
+                    + "that way. The call site declares a ByRef temporary of exactly this type "
+                    + "(§8.3's pointer slot), so a disagreement here is a temporary that either "
+                    + "fails to bind or silently changes width. Fix whichever side is wrong — "
+                    + "they are two separate tables of the same spec rows.");
+            }
+        });
+    }
 
     internal static NetSurface OneMemberSurface() => new(
         new[]

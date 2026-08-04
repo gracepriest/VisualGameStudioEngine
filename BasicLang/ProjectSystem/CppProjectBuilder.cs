@@ -739,9 +739,16 @@ namespace BasicLang.Compiler.ProjectSystem
             // CppCapabilityException arm above, which reports ex.DiagnosticCode): this is a
             // plain NotSupportedException carrying no code, and the emitter has exactly ONE
             // throw site, so BL6019 is exhaustive for it. Unifying the two channels means
-            // giving that throw a code-bearing type — deliberately not done here, because
-            // Task 8 REPLACES the throw with real ByRef wire forms and the ceremony would be
-            // deleted in the same breath.
+            // giving that throw a code-bearing type — deliberately not done.
+            //
+            // P2a-2 Task 8 did NOT delete this throw (an earlier version of this comment said
+            // it would). Task 8 lowered §8.3's ref/out pointer slots for the by-value SCALAR
+            // rows plus Char and the single-slot §6.4 pairs — the shapes NetProxyEmitter
+            // already emitted — and put a POSITIONED BL6019 in front of the two it still
+            // refuses (ByRef String, ByRef handle: §8.3 leaves their ownership unspecified and
+            // guessing is a double release). So this stays the residual, POSITIONLESS channel
+            // for the one route that bypasses the analyzer: a <NetProxy>-declared member the
+            // §7.2 omission filter admitted. Task 8c owns the remaining wire forms.
             IReadOnlyDictionary<string, string> netArtifacts;
             try
             {

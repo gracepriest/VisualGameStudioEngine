@@ -726,10 +726,14 @@ inbound narrows with the §14.10 divergence documented at the lowering site; `re
 >
 > `NetShimGeneratorTests.ExportSignaturesMatchTheProxyTableSlotSignatures` compares POSITIONALLY
 > by (type, name), so multi-slot works there for free **provided both emitters emit the same
-> slot names in the same order** — add `CsTypeFor` rows for `uint32_t`→`uint`, `int16_t`→`short`,
-> `const uint8_t*`/`uint8_t*`→`byte*`. And add members for all four rows to
-> `NetProxyEmitterTests.WireShapeSurface` (+ `ShapeCount`) or the oracle stays blind to them,
-> which is the exact gap Step 0's I3 just closed for DateTime/TimeSpan.
+> slot names in the same order**. ⚠ **Correction (Task-8 review): only ONE `CsTypeFor` row is
+> actually missing.** `uint32_t`→`uint` (`NetShimGeneratorTests.cs:527`), `int16_t`→`short`
+> (`:524`) and `uint8_t*`→`byte*` (via the trailing-`*` fallback at `:534`) all EXIST — do not
+> go looking for them. Only **`const uint8_t*`** needs adding: `const ` has no general strip,
+> which is why `const char*` is a hand-written special case at `:532`. And add members for all
+> four rows to `NetProxyEmitterTests.WireShapeSurface` (+ `ShapeCount`) or the oracle stays blind
+> to them, which is the exact gap Step 0's I3 closed for DateTime/TimeSpan — and which Task 8's
+> own review found still open for NINE more rows (see Task 8c's step list).
 >
 > **B. Enum arguments — the plan's framing above is INCOMPLETE, measured.** Underlying-type
 > carriage in the descriptor + both emitters is necessary but **not sufficient**: there is no
@@ -834,12 +838,27 @@ inbound narrows with the §14.10 divergence documented at the lowering site; `re
   range-check idiom in native `from_net_datetimeoffset` next time the marshal header is touched.
 - [ ] **Step 3:** fast subset; commit (`feat(p2a2): ref/out slots, boxed receivers, Char`).
 
-**Task 8 outcome (2026-08-03).** Step 0 landed COMPLETE — all eleven items, in three commits
+**Task 8 outcome (2026-08-03).** Step 0 landed all eleven items, in three commits
 (`fd5599b` I4+I2, `74a157d` M1+M2+7b-I5+I3, `c6866ed` I5+7b-I6/I7/I8/I9 plus the three Task-7b
-final-review trivia). The feature landed as `7ae95a5` (ref/out pointer slots + the Char ≥0x80 run
-proof) and `7b197e6` (ref-struct BL6019 + the CS0445 mutation oracle + §8.3's drift test + the
-`ClockDateTime` range check). The four §6.4 rows and enum arguments are CARRIED FORWARD — see
-the blockquote above for the measured designs.
+final-review trivia). ⚠ **NINE of the eleven were behavior-preserving; two were deliberate
+BEHAVIOR CHANGES** — sanctioned by this plan, but they are not "no observable difference" and a
+bisect should know it: **7b-I6** now DELETES stale top-level `*.cs`/`*.csproj` from
+`obj/gen/shim` that previously survived a rebuild, and **7b-I7** adds a new never-cache path
+(an unresolvable receiver poisons §10.2's key, so such a project re-publishes every build).
+
+The feature landed as `7ae95a5` (ref/out pointer slots + the Char ≥0x80 run proof) and `7b197e6`
+(ref-struct BL6019 + the CS0445 mutation oracle + the `ClockDateTime` range check).
+
+⚠ **Step 2b's drift test did NOT land, despite `7b197e6`'s subject line saying "§8.3's drift
+test".** What shipped is `EverySection64Row_MatchesTheNativeConverterItNames` — a real oracle,
+but a NARROWER one: it ties `NetMarshalTable.WireRows`' six §6.4 rows to the converters
+`blnet_marshal.hpp` defines, plus `OnlySingleSlotByValueRows_CarryACallSiteWireType` and the
+cross-reference comments in both emitter tables. **Step 2b asked for something else**: "every
+signature type the collector ADMITS (`FirstUnmarshalable` returns null) gets a wire form from
+BOTH emitters." `FirstUnmarshalable` appears in no test at all. That half moved to **Task 8c**.
+
+The four §6.4 rows and enum arguments are CARRIED FORWARD — see the blockquote above and
+Task 8c for the measured designs.
 
 ⛔ **Found by Step 0's 7b-I8 and owed to TASK 9:** `NetTypeResolver.TypeName` builds a nested
 type's spelling from `QualifiedName`, which walks containing types by NAME and **drops their
@@ -873,6 +892,21 @@ admits `GetEnumerator()` regardless. Task 9 hits it twice: the value-type-receiv
 NAMES — a §12.4 identity change, not a behavior-preserving Step-0 edit. Currently bounded by
 7b-I7's key poisoning (a wrong shim can never be cached), which is containment, not a fix.
 
+⚠ **The blast radius is WIDER than the nested case, and the containment is NARROWER than it
+sounds. Both were verified, not assumed:**
+- **Any generic receiver poisons the key today, not just a nested one.** `TypeName` spells a
+  constructed generic as `System.Collections.Generic.List<System.Int32>`, and
+  `ResolveTypeDetailed` answers **NotFound** for that too (lookup goes through
+  `GetTypeByMetadataName`, which wants ``List`1``). So a program whose surface has ANY
+  generic-typed receiver reports INCOMPLETE and pays an unconditional **~25 s publish on every
+  build, forever** — a standing performance cliff, not just a Task-9 correctness risk.
+- **7b-I7 covers RECEIVERS ONLY.** A nested generic appearing solely as a PARAMETER or RESULT
+  type is never looked up by `ValueTypeReceiverNames`, so it does not poison anything; it fails
+  loudly later, in `csc`, on the emitted `global::…List.Enumerator` spelling.
+- **It bounds PERSISTENCE, not the failure.** The wrong shim is still generated, published,
+  deployed and RUN — freshly, every build. "Never cached" means the mistake is not made
+  permanent, not that it is not made.
+
 **Scope:** correct the nested-generic spelling; decide and document whether mangled names change
 (they will for any nested-generic member — check whether any is in a surface today, and whether
 `NetShimCache`'s template identity absorbs it); re-run the §12.4 slots≡exports invariants, the
@@ -890,6 +924,23 @@ needs or it stays blind. **Enum is worse than originally framed and was MEASURED
 types as `Object` and lowers to nothing, so descriptor carriage alone would turn today's precise
 refusal into a broken program — the missing piece is enum-member-constant lowering in the front
 end. May run any time before Task 13; does not block Task 9.
+
+**Also inherited from Task 8's Step 2b — the drift test that did NOT land.** Task 8 shipped a
+narrower oracle (the six §6.4 rows vs `blnet_marshal.hpp`); Step 2b's actual ask is still open:
+
+- [ ] **The admissibility⇄wire-form tie.** Assert that every signature type
+  `NetSurfaceCollector.FirstUnmarshalable` ADMITS gets a real wire form from BOTH emitters.
+  `FirstUnmarshalable` is referenced by no test today. Note the shape of the claim: because both
+  `WireOf`s default to Handle, "gets a wire form" is trivially true — so the test worth writing
+  is the CONTRAPOSITIVE pair. (1) Every type the collector REJECTS (pointer, open type
+  parameter, `Object`, `ref struct`, error type) must be unreachable as a slot — drive a surface
+  containing one and assert the collector drops it before either emitter sees it. (2) Every
+  §8.3 row that is NOT the handle default must be admitted. Otherwise a row silently demoted to
+  Handle — the exact §6.4 "a native value must never become a handle" failure — still passes.
+- [ ] **`WireShapeSurface` is blind to nine §8.3 rows** and its own docstring states the rule it
+  breaks. Task 8 added `System.Char` coverage to the LOWERING but not to the drift oracle;
+  `SByte`, `Byte`, `Int16`, `UInt16`, `UInt32`, `Int64`, `UInt64`, `Single` were never in it.
+  Task 8's review commit closes this one — leave it closed.
 
 ### Task 9: §8.5 — consuming handle-represented collections
 
@@ -921,6 +972,22 @@ present — the CONCRETE `List<T>` iteration test is mandatory.
   call — terminates with correct elements (the mutable-struct-enumerator guard); array
   read/write round-trip.
 - [ ] **Step 4:** fast subset; commit (`feat(p2a2): §8.5 collection consumption`).
+
+> ⛔ **EMISSION-SEAM CONTRACT — decide this BEFORE building on `NetArgEmission` (Task-8 quality
+> review I1).** `EmitNetResult` writes prologue → call → epilogue as straight-line C++, and the
+> call statement contains `NetCheckTyped`, **which throws**. So **`Epilogue` is SUCCESS-PATH
+> ONLY**: a thrown managed exception skips every epilogue line. That is *correct* for ref/out
+> write-back (.NET wouldn't write back either) and is why nothing is broken today — but §8.6's
+> copy-out/release and §8.4's delegate register/unregister are exactly the statements that MUST
+> run on the throwing path, and a leak-on-exception discovered in Task 11 is the expensive way to
+> learn this. Secondary: epilogues currently append in argument order, while releases want
+> REVERSE order. **Required disposition before this task emits its first release:** document
+> `Epilogue` as success-path-only AND add an RAII slot (a guard object emitted in the prologue
+> whose destructor does the release), rather than extending the epilogue list. Also fold in
+> quality-review M1 while you are there: the three-part write loop is duplicated verbatim in
+> `EmitNetResult` and `EmitNetFieldStore` — extract one `EmitNetCallStatements(...)` so this
+> change is made once and the compute-before-write ordering becomes structural rather than
+> conventional.
 
 ### Task 10: §8.6 — native collections crossing outbound
 

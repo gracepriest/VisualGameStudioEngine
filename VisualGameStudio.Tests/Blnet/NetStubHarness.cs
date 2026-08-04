@@ -82,7 +82,19 @@ internal static class NetStubHarness
     /// seams, asserting the program is clean and actually draws a surface (a program that draws
     /// none would run the stub against nothing and prove nothing).
     /// </summary>
-    internal static (string Cpp, NetSurface Surface) CompileWithSurface(string source)
+    /// <param name="optimize">
+    /// Run <c>OptimizationPipeline.AddStandardPasses</c> before codegen and before collecting
+    /// the surface — the CLI-equivalent path, and the repo law that codegen is validated
+    /// through the optimizer and not only through the non-optimizing helper.
+    ///
+    /// <para><b>Default false is a real choice, not laziness.</b> The surface is collected from
+    /// the OPTIMIZED IR in production (a call the optimizer deleted must not cost a proxy
+    /// slot), so an optimizing run is the more faithful one — but the optimizer can also delete
+    /// the very call a stub scenario is asserting on, turning a genuine regression into a
+    /// vacuous pass. Scenarios opt in where the optimizer is part of what is under test.</para>
+    /// </param>
+    internal static (string Cpp, NetSurface Surface) CompileWithSurface(
+        string source, bool optimize)
     {
         var parser = new Parser(new Lexer(source).Tokenize());
         var ast = parser.Parse();
@@ -98,6 +110,14 @@ internal static class NetStubHarness
                 analyzer.NetDiagnostics.Select(d => d.Code + ": " + d.Message)));
 
         var module = new IRBuilder(analyzer).Build(ast, "TestModule");
+
+        if (optimize)
+        {
+            var pipeline = new BasicLang.Compiler.IR.Optimization.OptimizationPipeline();
+            pipeline.AddStandardPasses();
+            pipeline.Run(module);
+        }
+
         var cpp = new CppCodeGenerator(new CppCodeGenOptions { GenerateComments = false })
             .Generate(module);
         var surface = NetSurfaceCollector.Collect(
