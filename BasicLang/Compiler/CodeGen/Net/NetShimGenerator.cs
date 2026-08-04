@@ -376,7 +376,12 @@ namespace BasicLang.Compiler.CodeGen.Net
         internal static IReadOnlyList<string> SurfaceDerivedExportNames(NetSurface surface)
         {
             if (surface == null) throw new ArgumentNullException(nameof(surface));
-            return Plan(surface).Select(p => p.ExportName).ToList();
+            return Plan(surface).Select(p => p.ExportName)
+                // §8.6's copy helpers are ORDINARY exports, appended from the SAME function
+                // NetProxyEmitter appends its slots from — which is what makes §12.4's
+                // "slots ≡ exports" a consequence of calling one thing twice.
+                .Concat(NetArrayCopy.RequiredExportNames(surface))
+                .ToList();
         }
 
         /// <summary>
@@ -466,9 +471,118 @@ namespace BasicLang.Compiler.CodeGen.Net
                 L(sb, "    // " + Comment(plan.Member.ToString()));
                 EmitWrapper(sb, plan, valueTypes);
             }
+
+            var arrayForms = NetArrayCopy.RequiredForms(surface);
+            if (arrayForms.Count > 0)
+            {
+                L(sb, "");
+                L(sb, "    // ---- §8.6 outbound array copy helpers ----");
+                foreach (var form in arrayForms)
+                    EmitArrayCopyHelpers(sb, form);
+            }
             L(sb, "}");
             return sb.ToString();
         }
+
+        // ------------------------------------------------------------------------------
+        // §8.6 — the outbound array copy helpers.
+        // ------------------------------------------------------------------------------
+
+        /// <summary>
+        /// The managed half of one element wire form's copy pair. Shaped exactly like every
+        /// other export — <c>[UnmanagedCallersOnly]</c>, blittable arguments, a status return and
+        /// a non-throwing <c>try</c>/<c>Fail</c> body — because they ARE ordinary exports; see
+        /// <see cref="NetArrayCopy"/> for why making them a side channel would have punched a
+        /// hole in §12.4.
+        ///
+        /// <para><b>The readback's capacity/length protocol.</b> <c>*result</c> is always the
+        /// array's REAL length and elements are written only up to <c>capacity</c>, so a caller
+        /// with no idea how long the array is (every <c>out</c> slot) probes with capacity 0 and
+        /// then reads. Writing beyond the caller's buffer would be a heap overflow in native
+        /// memory, so the clamp is load-bearing, not defensive.</para>
+        ///
+        /// <para><b>A null array is length 0, not a crash.</b> <c>self</c> may legitimately be
+        /// handle 0 (§8.2's <c>Nothing</c>) or hold a null <c>ref</c> slot the callee never
+        /// assigned; both answer length 0 and write nothing, which materializes as an empty
+        /// native vector — the same value BasicLang gives an unassigned array.</para>
+        /// </summary>
+        private static void EmitArrayCopyHelpers(StringBuilder sb, NetArrayCopyForm form)
+        {
+            var element = Qualified(form.ElementFullName);
+            var array = element + "[]";
+            var wireIn = CsPointer(form.CWireIn);
+            var wireOut = CsPointer(form.CWireOut);
+
+            L(sb, "");
+            L(sb, "    // §8.6 copy-IN: " + form.ArrayFullName + " from a native buffer.");
+            L(sb, "    " + UnmanagedCallersOnly(form.NewExportName));
+            L(sb, "    public static int " + form.NewExportName
+                  + "(int count, " + wireIn + "* src, ulong* result)");
+            L(sb, "    {");
+            L(sb, "        try");
+            L(sb, "        {");
+            L(sb, "            if (count < 0) return (int)BlnetStatus.BLNET_E_MANAGED_EXCEPTION;");
+            L(sb, "            var a_ = new " + element + "[count];");
+            L(sb, "            for (var i_ = 0; i_ < count; i_++)");
+            L(sb, "                a_[i_] = " + string.Format(CultureInfo.InvariantCulture,
+                      form.CsFromWire, "src[i_]") + ";");
+            L(sb, "            *result = ToHandle(a_);");
+            L(sb, "            return (int)BlnetStatus.BLNET_OK;");
+            L(sb, "        }");
+            L(sb, "        catch (Exception ex) { return Fail(ex); }");
+            L(sb, "    }");
+
+            L(sb, "");
+            L(sb, "    // §8.6 readback: " + form.ArrayFullName + " into a native buffer.");
+            L(sb, "    // *result is ALWAYS the real length; at most `capacity` elements are written.");
+            L(sb, "    " + UnmanagedCallersOnly(form.ReadExportName));
+            L(sb, "    public static int " + form.ReadExportName
+                  + "(ulong self, int capacity, " + wireOut + "* dst, int* result)");
+            L(sb, "    {");
+            L(sb, "        try");
+            L(sb, "        {");
+            EmitHandleDecode(sb, "self", "self_", "st_self");
+            L(sb, "            var a_ = self_ as " + array + ";");
+            L(sb, "            var n_ = a_ is null ? 0 : a_.Length;");
+            L(sb, "            if (result != null) *result = n_;");
+            L(sb, "            if (dst != null && a_ is not null)");
+            L(sb, "            {");
+            L(sb, "                var take_ = capacity < n_ ? capacity : n_;");
+            L(sb, "                for (var i_ = 0; i_ < take_; i_++)");
+            L(sb, "                    dst[i_] = " + string.Format(CultureInfo.InvariantCulture,
+                      form.CsToWire, "a_[i_]") + ";");
+            L(sb, "            }");
+            L(sb, "            return (int)BlnetStatus.BLNET_OK;");
+            L(sb, "        }");
+            L(sb, "        catch (Exception ex) { return Fail(ex); }");
+            L(sb, "    }");
+        }
+
+        /// <summary>
+        /// The C# spelling of a §8.6 wire element type. The table carries C spellings (they are
+        /// what <c>NetProxyEmitter</c> puts in the slot signature); this is the one place the
+        /// two alphabets meet, and it THROWS on an unknown row rather than guessing — a wrong
+        /// element width here is a silent buffer misread on both sides of the ABI.
+        /// </summary>
+        private static string CsPointer(string cWireElement) => cWireElement switch
+        {
+            "int8_t" => "sbyte",
+            "uint8_t" => "byte",
+            "int16_t" => "short",
+            "uint16_t" => "ushort",
+            "int32_t" => "int",
+            "uint32_t" => "uint",
+            "int64_t" => "long",
+            "uint64_t" => "ulong",
+            "float" => "float",
+            "double" => "double",
+            "const char*" or "char*" => "byte*",
+            _ => throw new InvalidOperationException(
+                $"NetArrayCopy declares wire element '{cWireElement}', which NetShimGenerator has "
+                + "no C# spelling for. The two halves of a §8.6 copy must agree on the element "
+                + "WIDTH exactly — a mismatch is a silent buffer misread across the ABI, not a "
+                + "compile error. Add the row here when you add it to NetArrayCopy.Forms."),
+        };
 
         /// <summary>
         /// P0's seven, driven off <see cref="BlnetContract.CoreExportNames"/> rather than a list
@@ -508,24 +622,39 @@ namespace BasicLang.Compiler.CodeGen.Net
 
             // §8.2's guarded decode. Handle 0 means Nothing and must never reach the table:
             // HandleTable.Validate rejects index 0, so an unconditional TryGet would report
-            // BLNET_E_STALE_HANDLE for every null.
+            // BLNET_E_STALE_HANDLE for every null. A ByRef handle slot (§8.6's ref/out array
+            // row) arrives as a POINTER, so the guard reads through it.
             if (plan.HasReceiver)
                 EmitHandleDecode(sb, "self", "self_", "st_self");
             foreach (var p in plan.Parameters.Where(p => p.Wire.Kind == WireKind.Handle))
-                EmitHandleDecode(sb, p.Name, p.Local, "st_" + p.Name);
+                EmitHandleDecode(sb, p.ByRef ? "(*" + p.Name + ")" : p.Name, p.Local, "st_" + p.Name);
 
             // ByRef slots arrive as pointers; C# needs a real variable to pass ref/out/in.
+            // The handle row needs a SECOND, TYPED local: the decode above produced an `object?`,
+            // and `ref object` does not bind to a `ref T[]` parameter (CS1503). `out` does not
+            // read the caller's value at all, matching .NET.
             foreach (var p in plan.Parameters.Where(p => p.ByRef))
-                L(sb, "            " + p.Wire.CsManagedType + " " + p.Local + " = "
-                      + (p.Descriptor.RefKind == NetRefKind.Out
-                          ? "default"
-                          : FromWire(p.Wire, "*" + p.Name)) + ";");
+            {
+                if (p.Wire.Kind == WireKind.Handle)
+                    L(sb, "            " + Qualified(p.Descriptor.TypeFullName) + " " + p.RefLocal
+                          + " = " + (p.Descriptor.RefKind == NetRefKind.Out
+                              ? "default!"
+                              : "(" + Qualified(p.Descriptor.TypeFullName) + ")" + p.Local + "!") + ";");
+                else
+                    L(sb, "            " + p.Wire.CsManagedType + " " + p.Local + " = "
+                          + (p.Descriptor.RefKind == NetRefKind.Out
+                              ? "default"
+                              : FromWire(p.Wire, "*" + p.Name)) + ";");
+            }
 
             var call = Invocation(plan, valueTypes);
             L(sb, "            " + (plan.Return.Kind == WireKind.Void ? call : "var rv_ = " + call) + ";");
 
             foreach (var p in plan.Parameters.Where(p => p.ByRef))
-                L(sb, "            *" + p.Name + " = " + ToWire(p.Wire, p.Local) + ";");
+                L(sb, "            *" + p.Name + " = "
+                      + (p.Wire.Kind == WireKind.Handle
+                          ? "ToHandle(" + p.RefLocal + ")"
+                          : ToWire(p.Wire, p.Local)) + ";");
 
             switch (plan.Return.Kind)
             {
@@ -647,12 +776,17 @@ namespace BasicLang.Compiler.CodeGen.Net
         private static string Argument(ParameterPlan p)
         {
             if (p.ByRef)
+            {
+                // The handle row passes the TYPED local (§8.6's ref/out array), every other row
+                // the wire-converted one — see EmitWrapper for why they are different variables.
+                var local = p.Wire.Kind == WireKind.Handle ? p.RefLocal : p.Local;
                 return p.Descriptor.RefKind switch
                 {
-                    NetRefKind.Out => "out " + p.Local,
-                    NetRefKind.Ref => "ref " + p.Local,
-                    _ => "in " + p.Local,      // In / RefReadOnly
+                    NetRefKind.Out => "out " + local,
+                    NetRefKind.Ref => "ref " + local,
+                    _ => "in " + local,        // In / RefReadOnly
                 };
+            }
 
             return p.Wire.Kind switch
             {
@@ -1005,6 +1139,13 @@ namespace BasicLang.Compiler.CodeGen.Net
 
             /// <summary>The managed local: the decoded handle, or the ByRef temporary.</summary>
             internal string Local { get; }
+
+            /// <summary>
+            /// The TYPED ByRef local for §8.6's ref/out HANDLE row — <c>Local</c> holds the
+            /// decoded <c>object?</c>, which cannot be passed as <c>ref T[]</c> (CS1503), so the
+            /// two cannot be one variable.
+            /// </summary>
+            internal string RefLocal => Local + "_";
 
             internal bool ByRef => Descriptor.RefKind != NetRefKind.None;
         }

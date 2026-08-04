@@ -85,6 +85,43 @@ internal static class NetShimPipelineFixture
                     new System.Collections.Generic.List<int> { 10, 20, 30 };
 
                 public static int[] Values() => new[] { 7, 8, 9 };
+
+                // ---- P2a-2 Task 10 (spec §8.6 / §14.11) ----
+                // Sum reads the copy-in; Bump and Fill are the TWO HALVES of the §14.11
+                // divergence and must sit side by side, because the whole point is that they
+                // behave DIFFERENTLY: Bump mutates a by-value array (the caller's std::vector
+                // never sees it) while Fill replaces a `ref` array (the caller reads it back).
+                public static int Sum(int[] values)
+                {
+                    var total = 0;
+                    foreach (var v in values) total += v;
+                    return total;
+                }
+
+                public static void Bump(int[] values)
+                {
+                    for (var i = 0; i < values.Length; i++) values[i] += 100;
+                }
+
+                public static void Fill(ref int[] values) => values = new[] { 4, 5, 6 };
+
+                public static string[] Names() => new[] { "ay", "bee" };
+
+                public static string Join(string[] parts) => string.Join("-", parts);
+
+                // The §8.6 REFUSAL rows need members a native argument actually BINDS to — a
+                // shape overload resolution rejects outright draws BL6017 ("no matching
+                // overload") and never reaches the §8.6 gate at all.
+                //   Count   — a native collection/array against a non-array slot
+                //   CountRx — an element type that is itself a .NET handle
+                public static int Count(System.Collections.Generic.IEnumerable<int> items)
+                {
+                    var n = 0;
+                    foreach (var _ in items) n++;
+                    return n;
+                }
+
+                public static int CountRx(System.Text.RegularExpressions.Regex[] rx) => rx.Length;
             }
         }
         """;
@@ -1429,6 +1466,89 @@ public class NetShimPipelineTests
             + "pair — a 7 on that second line would mean the write went to a native copy of a "
             + "handle that never had one. The trailing 3 is Vals.Length routing to §8.5's "
             + "synthesized get_Length instead of `.size()` on a BasicLang::NetRef.");
+    }
+
+    // =====================================================================================
+    // §8.6 + §14.11 — native collections crossing outbound, BOTH halves of the divergence.
+    // =====================================================================================
+
+    /// <summary>
+    /// <b>P2a-2 Task 10's mandatory proof (spec §8.6, §14.11).</b> A native BasicLang
+    /// <c>Integer()</c> crosses outbound by copy, a .NET callee sums it, and the two halves of
+    /// the §14.11 divergence are asserted IN ONE PROGRAM: the by-value mutation is NOT visible to
+    /// the caller's <c>std::vector</c>, and the <c>ref</c>-slot replacement IS.
+    ///
+    /// <para><b>Why both halves have to be in one program.</b> A divergence tested only in the
+    /// direction that diverges cannot tell "correctly one-way" from "the write-back is broken
+    /// everywhere" — the by-value assertion alone passes just as happily against a lowering that
+    /// never reads anything back. Together they pin the SCOPING, which is the thing §12.1's
+    /// parity program (Task 13) depends on: without it, program 4 has two different correct
+    /// expected outputs and cannot be authored.</para>
+    ///
+    /// <para><b>Every observation goes back through the boundary, and that is deliberate.</b>
+    /// <c>Bag.Sum(A)</c> re-copies the caller's CURRENT vector each time, so 6 → 6 → 15 is an
+    /// unambiguous reading of the native side. It also routes around a pre-existing C++ backend
+    /// break that has nothing to do with this task: reading a native array element
+    /// (<c>Dim X = A(0)</c>) emits <c>int32_t t = &amp;A[0];</c> and does not compile
+    /// (chip <c>task_c8c3eac9</c>; <c>For Each</c> over the same array is fine). Using the
+    /// boundary as the oracle is the stronger assertion anyway — a two-way copy would print
+    /// <b>306</b>, not a subtly wrong element.</para>
+    ///
+    /// <para><b>This is also the ONLY pin for the declaration-authority rule</b>
+    /// (<c>CppCodeGenerator.EffectiveCppType</c>). The project build fuses a call's NetRef temp
+    /// into the declared local, leaving one IR value that claims the handle type and one C++
+    /// declaration that says <c>std::vector</c>; measured, neither <c>Generate</c> nor
+    /// <c>GenerateSplit</c> with the standard passes reproduces it, so the fast subset cannot
+    /// construct the shape. Lines 4 and 5 are what go red if that rule regresses.</para>
+    ///
+    /// <para>The last two lines carry the <c>String</c> element form through BOTH directions in
+    /// one hop — <c>Names()</c> materializes a managed <c>String[]</c> into a declared native
+    /// array (§8.6 row 2, per-element transfer buffers freed by the proxy), and <c>Join</c>
+    /// copies that array straight back in (row 3, borrowed <c>const char*</c>s). <c>String</c> is
+    /// the one form whose per-element ownership differs by direction, so a form-table error there
+    /// is a leak or a wild pointer rather than a wrong number.</para>
+    /// </summary>
+    [Test]
+    public void Section86_ByValueCopyIsOneWay_ButARefSlotReadsBack()
+    {
+        var probe = NetShimPipelineFixture.EmitProbeAssembly(_dir);
+        Write("Program.bas", """
+            Using Aot.Probe
+
+            Module Program
+             Sub Main()
+              Dim A() As Integer = {1, 2, 3}
+              Console.WriteLine(Bag.Sum(A))
+              Bag.Bump(A)
+              Console.WriteLine(Bag.Sum(A))
+              Bag.Fill(A)
+              Console.WriteLine(Bag.Sum(A))
+              Dim V() As Integer = Bag.Values()
+              Console.WriteLine(Bag.Sum(V))
+              Dim N() As String = Bag.Names()
+              Console.WriteLine(Bag.Join(N))
+             End Sub
+            End Module
+            """);
+
+        var (result, _) = Build("Section86", NetShimPipelineFixture.ReferenceItemGroup(probe));
+        AssertBuilt(result, "the §8.6 outbound-copy program");
+
+        Assert.That(NetShimPipelineFixture.Run(result.ExecutablePath!),
+            Is.EqualTo("6\n6\n15\n24\nay-bee\n"),
+            "Line 1 (6) is §8.6 row 3: the native {1,2,3} reached .NET by copy — a 0 here means "
+            + "the copy-in never happened and Sum saw an empty array.\n"
+            + "Line 2 (6) is §14.11's DIVERGENCE: Bump added 100 to every element of the MANAGED "
+            + "copy, and the caller's std::vector must not see it. 306 means the by-value copy "
+            + "became two-way, which would make Task 13's parity program unauthorable.\n"
+            + "Line 3 (15) is §14.11's EXEMPTION: Fill replaced the array through a `ref` slot "
+            + "and the caller read it back ({4,5,6}). A 6 here means the write-back is missing — "
+            + "and note that lines 2 and 3 fail in OPPOSITE directions, which is why both are "
+            + "asserted.\n"
+            + "Line 4 (24) is §8.6 row 2: Bag.Values()'s managed {7,8,9} materialized into a "
+            + "DECLARED native array and crossed back out.\n"
+            + "Line 5 (ay-bee) is the String element form in both directions — row 2 out of "
+            + "Names() with per-element blnet_free, then row 3 back in through Join.");
     }
 
     // =====================================================================================

@@ -69,6 +69,77 @@ internal static class NetStubHarness
         SharedResolver.Value.GetMembers(typeFullName)
             .Single(m => m.Name == memberName && m.Kind == kind);
 
+    /// <summary>
+    /// Compiles a complete generated shim — <c>Exports.g.cs</c> plus the four spliced scaffolding
+    /// files — with raw Roslyn. This is the ~25 s AOT publish's compile step, available in
+    /// milliseconds, so "does the generated C# compile at all" stops being a question only the
+    /// Integration fixture can answer.
+    ///
+    /// <para><c>allowUnsafe</c> and the global usings mirror the properties
+    /// <see cref="NetShimGenerator.EmitProject"/> writes (§8.1): every export signature is a
+    /// pointer signature, and <c>HandleTable.cs</c> names <c>List&lt;T&gt;</c>/<c>Stack&lt;T&gt;</c>
+    /// /LINQ with no <c>using</c> of its own. A raw compile has no <c>ImplicitUsings</c>, so the
+    /// csproj's own property has to be reproduced here or the scaffolding fails for a reason that
+    /// has nothing to do with what is under test.</para>
+    ///
+    /// <para><b>Lives here since P2a-2 Task 10.</b> It was private to
+    /// <c>NetShimGeneratorTests</c>, and Task 10 became the second fixture that needs it (§8.6's
+    /// per-element format strings and the ref-array wrapper are both "does this generate valid
+    /// C#" questions). A copied compile harness drifts — the same argument that moved
+    /// <see cref="Winner"/> and the stub runtime here.</para>
+    /// </summary>
+    /// <param name="extraReferences">
+    /// Assemblies beyond the framework closure the generated shim needs to see — a fixture's own
+    /// probe library, whose members the surface names. They must have been compiled against the
+    /// SAME reference set used here, or every use of their types is CS0012.
+    /// </param>
+    internal static IReadOnlyList<Microsoft.CodeAnalysis.Diagnostic> CompileShim(
+        string exports, IEnumerable<string>? extraReferences = null)
+    {
+        const string globals = """
+            global using System;
+            global using System.Collections.Generic;
+            global using System.IO;
+            global using System.Linq;
+            global using System.Threading;
+            global using System.Threading.Tasks;
+            """;
+        var parse = new Microsoft.CodeAnalysis.CSharp.CSharpParseOptions(
+            Microsoft.CodeAnalysis.CSharp.LanguageVersion.Latest);
+        var sources = new[]
+        {
+            globals, exports, BlnetShimSources.HandleTable, BlnetShimSources.BlnetStatusCs,
+            BlnetShimSources.ShimAbiCs, BlnetShimSources.MarshalCs,
+        };
+        var compilation = Microsoft.CodeAnalysis.CSharp.CSharpCompilation.Create(
+            "BlnetShimCompileProbe",
+            sources.Select(s => Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(s, parse)),
+            NetTypeResolverTestRefs.FrameworkPaths
+                .Concat(extraReferences ?? Enumerable.Empty<string>())
+                .Select(p => Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(p)),
+            new Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions(
+                Microsoft.CodeAnalysis.OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true));
+
+        using var ms = new System.IO.MemoryStream();
+        return compilation.Emit(ms).Diagnostics
+            .Where(d => d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error).ToList();
+    }
+
+    /// <summary><see cref="CompileShim"/> with the assertion every caller writes anyway.</summary>
+    internal static void AssertShimCompiles(string exports, string because) =>
+        AssertShimCompiles(null, exports, because);
+
+    /// <inheritdoc cref="AssertShimCompiles(string, string)"/>
+    internal static void AssertShimCompiles(
+        IEnumerable<string>? extraReferences, string exports, string because)
+    {
+        var errors = CompileShim(exports, extraReferences);
+        Assert.That(errors, Is.Empty,
+            because + "\nThese are the errors the ~25 s AOT publish would have reported against a "
+            + "file under obj/gen/shim that the user never wrote:\n"
+            + string.Join("\n", errors) + "\n\n" + exports);
+    }
+
     internal static (string exe, string argsTemplate) RequireCompiler()
     {
         var compiler = CppCompile.FindRunCompiler();

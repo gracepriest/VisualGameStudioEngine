@@ -295,44 +295,12 @@ public class NetShimGeneratorTests
         Array.Empty<string>());
 
     /// <summary>
-    /// Compiles a complete generated shim — <c>Exports.g.cs</c> plus the four spliced
-    /// scaffolding files — with raw Roslyn. This is the ~25 s AOT publish's compile step,
-    /// available in milliseconds, so "does the generated C# compile at all" stops being a
-    /// question only the Integration fixture can answer.
-    ///
-    /// <para><c>allowUnsafe</c> and the global usings mirror the properties
-    /// <see cref="NetShimGenerator.EmitProject"/> writes (§8.1): every export signature is a
-    /// pointer signature, and <c>HandleTable.cs</c> names <c>List&lt;T&gt;</c>/<c>Stack&lt;T&gt;</c>
-    /// /LINQ with no <c>using</c> of its own. A raw compile has no <c>ImplicitUsings</c>, so the
-    /// csproj's own property has to be reproduced here or the scaffolding fails for a reason
-    /// that has nothing to do with what is under test.</para>
+    /// The shared shim-compile harness — the ~25 s AOT publish's compile step in milliseconds.
+    /// Moved to <see cref="NetStubHarness.CompileShim"/> in P2a-2 Task 10, when §8.6 became the
+    /// second consumer; kept as a one-line delegation so the call sites below read unchanged.
     /// </summary>
-    private static IReadOnlyList<Diagnostic> CompileShim(string exports)
-    {
-        const string globals = """
-            global using System;
-            global using System.Collections.Generic;
-            global using System.IO;
-            global using System.Linq;
-            global using System.Threading;
-            global using System.Threading.Tasks;
-            """;
-        var parse = new CSharpParseOptions(LanguageVersion.Latest);
-        var sources = new[]
-        {
-            globals, exports, BlnetShimSources.HandleTable, BlnetShimSources.BlnetStatusCs,
-            BlnetShimSources.ShimAbiCs, BlnetShimSources.MarshalCs,
-        };
-        var compilation = CSharpCompilation.Create(
-            "BlnetShimCompileProbe",
-            sources.Select(s => CSharpSyntaxTree.ParseText(s, parse)),
-            NetTypeResolverTestRefs.FrameworkPaths.Select(p => MetadataReference.CreateFromFile(p)),
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true));
-
-        using var ms = new MemoryStream();
-        return compilation.Emit(ms).Diagnostics
-            .Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
-    }
+    private static IReadOnlyList<Diagnostic> CompileShim(string exports) =>
+        NetStubHarness.CompileShim(exports);
 
     /// <summary>
     /// <b>The §8.5 mutation oracle, and the reason <c>Unsafe.Unbox</c> is a RULE rather than an

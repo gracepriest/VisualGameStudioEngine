@@ -56,6 +56,15 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private readonly HashSet<string> _frameworkFunctionsUsed;
         private IRModule _module;
 
+        /// <summary>
+        /// The C++ type each LOCAL was actually declared with, captured by
+        /// <see cref="DeclareLocalsAndTemporaries"/>. Read by the §8.6 lowering through
+        /// <c>EffectiveCppType</c> — see its remarks for why the declaration, not the IR node's
+        /// type, is the authority once the optimizer has fused a temp into a local.
+        /// </summary>
+        private readonly Dictionary<string, string> _localCppTypeByName =
+            new Dictionary<string, string>(StringComparer.Ordinal);
+
         public override string BackendName => "C++";
         public override TargetPlatform Target => TargetPlatform.Cpp;
 
@@ -1543,10 +1552,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private void DeclareLocalsAndTemporaries(IRFunction function)
         {
             // Declare local variables
+            _localCppTypeByName.Clear();
             foreach (var local in function.LocalVariables)
             {
                 var localType = MapType(local.Type);
                 var localName = SanitizeName(local.Name);
+                _localCppTypeByName[localName] = localType;
                 if (localType != "void")
                 {
                     // Foreign ::-qualified types (e.g. std::mutex) are opaque: default-construct
@@ -1969,7 +1980,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         
         public override void Visit(IRAssignment assignment)
         {
-            var value = GetValueName(assignment.Value);
+            // §8.6 row 2: a handle array assigned into a DECLARED native array materializes by
+            // copy. Every other pairing returns the value name unchanged.
+            var value = NetMaterializedValue(assignment.Value, assignment.Target?.Type);
             var target = GetValueName(assignment.Target);
 
             WriteLine($"{ForeignInitDeclPrefix(assignment.Target?.Name)}{target} = {value};");
@@ -1999,7 +2012,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         
         public override void Visit(IRStore store)
         {
-            var value = GetValueName(store.Value);
+            // §8.6 row 2, same seam as Visit(IRAssignment): the DECLARED destination decides
+            // whether a handle array materializes. An alloca address is a POINTER to the local's
+            // storage, so the destination type is its element.
+            var destination = store.Address?.Type;
+            if (destination?.Kind == TypeKind.Pointer && destination.ElementType != null)
+                destination = destination.ElementType;
+            var value = NetMaterializedValue(store.Value, destination);
 
             // For IRVariable addresses (local variables), emit as simple assignment
             if (store.Address is IRVariable variable)

@@ -2908,6 +2908,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     return true;
                 }
 
+                // §8.6's outbound copy, analyzer half — the rows v1 has no copy for, reported
+                // at the ARGUMENT's position instead of as the generator's positionless refusal.
+                if (ReportUncopyableNativeCollectionArgument(
+                        target, parameter, position, callArguments[i], line, column))
+                {
+                    return true;
+                }
+
                 if (NetMarshalTable.MultiSlotConversionPairs.Contains(parameter.TypeFullName))
                 {
                     NetWarning("BL6019",
@@ -2957,8 +2965,20 @@ namespace BasicLang.Compiler.SemanticAnalysis
         {
             var passing = parameter.RefKind.ToString().ToLowerInvariant();
 
-            if (!NetMarshalTable.TryGetWireRow(parameter.TypeFullName, out var row)
-                || row.IsMultiSlot || string.IsNullOrEmpty(row.CWire))
+            // §8.6 row 4 — a ref/out ARRAY slot is the ONE specified widening of the rule below,
+            // and it is admitted here rather than exempted downstream. The ownership objection
+            // the message names does not apply: the handle in the slot is one the CALLER minted
+            // (bl_net_array_new_… copies a std::vector in at refcount 1), so writing a new handle
+            // over it releases something the caller owns. §8.6 also makes ref/out the EXEMPTION
+            // from §14.11's one-way divergence — refusing it here would make §12.1's parity
+            // program unauthorable. The argument-must-be-a-variable rule below still applies, so
+            // this admits the shape without skipping the check that has nothing to do with it.
+            if (NetArrayCopy.TryGetFormForArray(parameter.TypeFullName, out _))
+            {
+                if (argument is IdentifierExpressionNode) return false;
+            }
+            else if (!NetMarshalTable.TryGetWireRow(parameter.TypeFullName, out var row)
+                     || row.IsMultiSlot || string.IsNullOrEmpty(row.CWire))
             {
                 NetWarning("BL6019",
                     $"'{target}': parameter {position} ('{parameter}') is passed {passing} and "
@@ -2983,6 +3003,131 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// P2a-2 Task 10 (spec §8.6) — the outbound-copy refusals, at the ARGUMENT's position.
+        /// True when a finding was reported.
+        ///
+        /// <para><b>What this judges, and what it deliberately does not.</b> Only arguments whose
+        /// static type is a NATIVE BasicLang collection — a <c>std::vector&lt;T&gt;</c> array or
+        /// a <c>shared_ptr&lt;BasicLang::List/Dictionary/HashSet&gt;</c>. Those are the values
+        /// §8.6 exists for: they have no <c>GCHandle</c> and no handle, so a reference slot can
+        /// only receive them by COPY, and v1 copies exactly one shape. A HANDLE-represented value
+        /// that merely happens to be spelled <c>List</c> or to have <c>Kind == Array</c> is
+        /// already a handle and passes through untouched — which is why every test below asks
+        /// <see cref="TypeInfo.NetHandleTypeFullName"/> first and never a type NAME (§8.5's
+        /// by-name hazard, in the analyzer this time).</para>
+        ///
+        /// <para><b>The v1 admitted row, stated once:</b> a one-dimensional native array whose
+        /// element is a §8.3 by-value row or <c>String</c>
+        /// (<see cref="NetArrayCopy.Forms"/>), against a parameter of the CORRESPONDING
+        /// <c>T[]</c> type. Everything else — <c>List</c>/<c>Dictionary</c>/<c>HashSet</c>
+        /// outbound, nested element types (<c>List(Of List(Of Integer))</c>, jagged arrays),
+        /// element types that are themselves handles, and a simple array against a
+        /// non-array parameter such as <c>IEnumerable(Of Integer)</c> — is BL6019 naming the
+        /// parameter and the offending type.</para>
+        ///
+        /// <para><b>Nothing is untouched.</b> A <c>Nothing</c> argument has no native collection
+        /// type at all and crosses as handle 0 (§8.2), so it never reaches these tests.</para>
+        /// </summary>
+        private bool ReportUncopyableNativeCollectionArgument(
+            string target, NetParameterDescriptor parameter, string position,
+            ExpressionNode argument, int line, int column)
+        {
+            var argumentType = GetNodeType(argument);
+            if (argumentType == null) return false;
+            if (argumentType.NetHandleTypeFullName != null) return false;   // already a handle
+
+            var argumentLine = argument?.Line ?? line;
+            var argumentColumn = argument?.Column ?? column;
+
+            if (IsNativeCollectionTypeName(argumentType.Name))
+            {
+                NetWarning("BL6019",
+                    $"'{target}': argument {position} is a BasicLang "
+                    + $"'{argumentType.Name}', which has no .NET handle and no §8.6 v1 copy — "
+                    + $"parameter {position} has type '{parameter.TypeFullName}'. Only a "
+                    + "one-dimensional ARRAY of a simple element type (a §8.3 by-value row, or "
+                    + "String) is copied outbound. Build the value as an array, or obtain the "
+                    + "collection from .NET so it is already a handle.",
+                    argumentLine, argumentColumn);
+                return true;
+            }
+
+            if (argumentType.Kind != TypeKind.Array) return false;
+
+            // A native array. It can only cross into a T[] slot, and only for a v1 element.
+            var parameterType = parameter.TypeFullName ?? string.Empty;
+            if (!parameterType.EndsWith("[]", StringComparison.Ordinal))
+            {
+                NetWarning("BL6019",
+                    $"'{target}': argument {position} is a native BasicLang array, but parameter "
+                    + $"{position} has type '{parameterType}'. §8.6 copies a native array in only "
+                    + "against a matching one-dimensional T[] parameter — a native array is a "
+                    + "std::vector with no handle, so an interface, Array or Object slot has "
+                    + "nothing to receive. Use an overload that declares an array parameter.",
+                    argumentLine, argumentColumn);
+                return true;
+            }
+
+            if (!NetArrayCopy.TryGetFormForArray(parameterType, out var form))
+            {
+                // The parameter IS an array, so the offending type is its ELEMENT: a nested
+                // array (jagged / rank > 1), a collection, or a type that is itself a handle.
+                NetWarning("BL6019",
+                    $"'{target}': parameter {position} has type '{parameterType}', whose element "
+                    + "type has no §8.6 v1 copy — the copy is available only for a SIMPLE element "
+                    + "(a §8.3 by-value row, or String). Nested element types such as "
+                    + "List(Of List(Of Integer)) or a jagged array, and element types that are "
+                    + "themselves .NET handles, have no per-element wire form. Pass a "
+                    + "one-dimensional array of a simple type, or call a member that builds the "
+                    + "collection on the .NET side.",
+                    argumentLine, argumentColumn);
+                return true;
+            }
+
+            NetMarshalTable.TryGetBasicLangSpelling(form.ElementFullName, out var expected);
+            var elementName = argumentType.ArrayRank > 1 ? null : argumentType.ElementType?.Name;
+            if (elementName == null
+                || argumentType.ElementType.Kind == TypeKind.Array
+                || argumentType.ElementType.NetHandleTypeFullName != null
+                || expected == null
+                || !string.Equals(elementName, expected, StringComparison.OrdinalIgnoreCase))
+            {
+                NetWarning("BL6019",
+                    $"'{target}': argument {position} is a native array of "
+                    + $"'{DescribeArrayElement(argumentType)}', which cannot cross into parameter "
+                    + $"{position} of type '{parameterType}'. §8.6 copies element by element and "
+                    + "cannot convert between representations, so the element types must "
+                    + $"correspond exactly — this parameter needs '{expected ?? form.ElementFullName}'.",
+                    argumentLine, argumentColumn);
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// The BasicLang collections the C++ backend lowers as
+        /// <c>shared_ptr&lt;BasicLang::…&gt;</c>. Kept in step with
+        /// <c>CppCodeGenerator.IsCollectionType</c>, which is the site that decides the
+        /// representation; this is the analyzer's read of the same three names.
+        /// </summary>
+        private static bool IsNativeCollectionTypeName(string name) =>
+            name != null
+            && (string.Equals(name, "List", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(name, "Dictionary", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(name, "HashSet", StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>A native array's element, phrased for a BL6019 message.</summary>
+        private static string DescribeArrayElement(TypeInfo arrayType)
+        {
+            if (arrayType.ArrayRank > 1)
+                return arrayType.ArrayRank.ToString(CultureInfo.InvariantCulture) + "-dimensional";
+            var element = arrayType.ElementType;
+            if (element == null) return "unknown";
+            return element.Kind == TypeKind.Array ? element.Name + "()" : element.Name;
         }
 
         /// <summary>
@@ -3236,12 +3381,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 var element = NetElementTypeInfo(elementFullName);
                 if (element == null) return null;
 
-                var arrayType = new TypeInfo(element.Name, TypeKind.Array)
-                {
-                    ElementType = element,
-                    ArrayRank = 1,
-                    NetHandleTypeFullName = fullName,
-                };
+                // Through the PRODUCTION array factory, not hand-rolled (P2a-2 Task 10). Task 9
+                // built this TypeInfo directly and named it after the ELEMENT ("Byte"), while
+                // every declared BasicLang array is named by _typeManager.CreateArrayType
+                // ("Byte[]"). TypeInfo.Equals compares Name, so the two spellings made a handle
+                // array and a native array of the same element NON-equal — and §8.6 row 2
+                // (`Dim a() As Byte = obj.GetValues()`) failed semantic analysis with "cannot
+                // assign value of type 'Byte' to variable of type 'Byte[]'" before any lowering
+                // could run. Identity comes from the factory; the MARKER below is the only thing
+                // that distinguishes the two representations, which is the §8.5 rule restated.
+                var arrayType = _typeManager.CreateArrayType(element, rank: 1);
+                arrayType.NetHandleTypeFullName = fullName;
                 return arrayType;
             }
 

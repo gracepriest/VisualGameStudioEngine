@@ -71,9 +71,16 @@ namespace BasicLang.Compiler.CodeGen.Net
     /// <c>[UnmanagedCallersOnly]</c> forbids generic type parameters (§8.2), so only a
     /// CONSTRUCTED instantiation is exportable. The descriptor carries arity but not type
     /// arguments.</description></item>
-    /// <item><description><b>Arrays and collections crossing outbound (§8.6)</b> need generated
-    /// shim copy helpers, which are <c>NetShimGenerator</c>'s.</description></item>
     /// </list>
+    ///
+    /// <para><b>§8.6's outbound array copy (P2a-2 Task 10) is NOT in that list — it is emitted
+    /// here.</b> <see cref="NetArrayCopy.RequiredForms"/> yields one element wire form per array
+    /// type in the surface's signatures, and each contributes two ORDINARY proxy-table slots
+    /// (<c>bl_net_array_new_…</c>, <c>bl_net_array_read_…</c>) plus their typed C++ proxies. They
+    /// are ordinary slots on purpose: as a side channel they would have been exempt from §12.4's
+    /// slots-≡-exports set comparison, which is the one invariant holding the two halves of this
+    /// boundary together. <see cref="NetShimGenerator"/> derives its export set from the SAME
+    /// function, so the two agree by construction.</para>
     /// </summary>
     internal static class NetProxyEmitter
     {
@@ -211,7 +218,9 @@ namespace BasicLang.Compiler.CodeGen.Net
             var plans = Plan(surface);
             return new NetBindingsResult(
                 EmitBindingsText(surface, plans),
-                plans.Select(p => p.SlotName).ToList());
+                plans.Select(p => p.SlotName)
+                    .Concat(NetArrayCopy.RequiredExportNames(surface))
+                    .ToList());
         }
 
         // ------------------------------------------------------------------------------
@@ -256,7 +265,8 @@ namespace BasicLang.Compiler.CodeGen.Net
             foreach (var p in member.Parameters ?? Array.Empty<NetParameterDescriptor>())
             {
                 var wire = WireOf(p.TypeFullName);
-                if (p.RefKind != NetRefKind.None && wire.Kind != WireKind.Scalar)
+                if (p.RefKind != NetRefKind.None && wire.Kind != WireKind.Scalar
+                    && !NetArrayCopy.TryGetFormForArray(p.TypeFullName, out _))
                 {
                     // Loud rather than wrong. §8.3 says "ref/out -> pointer slot" and stops
                     // there; for a handle that leaves ownership undefined (writing back a NEW
@@ -271,6 +281,14 @@ namespace BasicLang.Compiler.CodeGen.Net
                         + "is unspecified. Specify it in §8.3 and extend NetProxyEmitter.WireOf "
                         + "— do not widen this check.");
                 }
+                // The ONE widening, and it is specified: §8.6's `ref`/`out` array slot. The
+                // ownership objection above does not apply, because the caller MINTED the
+                // incoming handle itself (bl_net_array_new_… copies a std::vector in at
+                // refcount 1) rather than borrowing one the callee might hand straight back.
+                // Writing a new handle over it therefore releases something this frame owns,
+                // which is the definition of well-defined. §8.6 also makes ref/out the EXEMPTION
+                // from §14.11's one-way divergence, so the write-back is not an optimisation —
+                // the whole row exists to carry it.
                 parameters.Add(new ParameterPlan(p, wire, index++));
             }
 
@@ -406,6 +424,14 @@ namespace BasicLang.Compiler.CodeGen.Net
                 L(sb, "    /* " + Comment(plan.Member.ToString()) + " */");
                 L(sb, "    int32_t (BLNET_CALL *" + plan.SlotName + ")(" + CSignature(plan) + ");");
             }
+            foreach (var form in NetArrayCopy.RequiredForms(surface))
+            {
+                L(sb, "    /* §8.6 outbound copy for " + Comment(form.ArrayFullName) + " */");
+                L(sb, "    int32_t (BLNET_CALL *" + form.NewExportName + ")(int32_t count, const "
+                      + form.CWireIn + "* src, uint64_t* result);");
+                L(sb, "    int32_t (BLNET_CALL *" + form.ReadExportName + ")(uint64_t self, "
+                      + "int32_t capacity, " + form.CWireOut + "* dst, int32_t* result);");
+            }
             L(sb, "};");
             L(sb, "");
             L(sb, "/* Defined in " + StartupFileName + ". Every slot is null until blnet_bind_all runs;");
@@ -453,6 +479,12 @@ namespace BasicLang.Compiler.CodeGen.Net
             L(sb, "#include \"" + BindingsFileName + "\"");
             L(sb, "#include <stdexcept>");
             L(sb, "#include <string>");
+            // §8.6's copy proxies take and return std::vector — the native representation of a
+            // BasicLang array (CppCodeGenerator.MapType). Unconditional rather than gated on the
+            // helper set: this header is not part of the emission-identity claim (it only exists
+            // for a NON-empty surface at all), and a conditional include is a way for a
+            // helper-free surface to compile while a helper-bearing one does not.
+            L(sb, "#include <vector>");
             L(sb, "");
             L(sb, "namespace BasicLang { namespace net {");
             L(sb, "");
@@ -475,9 +507,120 @@ namespace BasicLang.Compiler.CodeGen.Net
                 L(sb, "/* " + Comment(plan.Member.ToString()) + " */");
                 EmitProxyBody(sb, plan);
             }
+            foreach (var form in NetArrayCopy.RequiredForms(surface))
+                EmitArrayCopyProxies(sb, form);
             L(sb, "");
             L(sb, "}} /* namespace BasicLang::net */");
             return sb.ToString();
+        }
+
+        // ------------------------------------------------------------------------------
+        // §8.6 — the outbound array copy proxies.
+        // ------------------------------------------------------------------------------
+
+        /// <summary>
+        /// The two typed C++ proxies for one element wire form. They take and return
+        /// <c>std::vector&lt;native&gt;</c> — the native representation of a BasicLang array —
+        /// so a call site emits exactly ONE line per copy and every awkward detail lives here,
+        /// generated once, instead of being re-emitted per call site:
+        ///
+        /// <list type="bullet">
+        /// <item><description><b>The staging buffer.</b> <c>std::vector&lt;bool&gt;</c> is the C++
+        /// BITSET specialization and has no <c>.data()</c> at all, and <c>Char</c>/<c>String</c>
+        /// convert per element. Staging unconditionally keeps ONE shape for thirteen rows; for
+        /// the ten where native and wire coincide it is a plain copy.</description></item>
+        /// <item><description><b>Two calls for a readback, and the ORDER of the second one's
+        /// steps.</b> The length is not knowable in advance (an <c>out</c> slot's callee decides
+        /// it), so the first call probes with a null buffer. In the second, the convert-and-free
+        /// loop runs BEFORE <c>NetCheckTyped</c> — for <c>String</c> the buffer holds
+        /// <c>blnet_alloc</c>'d elements, and checking first would leak every one of them on the
+        /// managed-exception path. Zero-initialising the buffer is what makes running the loop
+        /// on a failed call safe.</description></item>
+        /// <item><description><b>The empty-array guard.</b> <c>.data()</c> on an empty vector may
+        /// legitimately be null, and passing count 0 with a null pointer is the shape the shim
+        /// expects — spelled explicitly rather than relying on it.</description></item>
+        /// </list>
+        ///
+        /// <para>Both bodies carry §9.2's full protocol — slot guard, <c>BlnetCallScope</c>,
+        /// <c>NetCheckTyped</c> outside the scope, depth-0 <c>blnet_pump</c> — because they ARE
+        /// boundary calls. A copy helper that skipped the scope would misdispatch callbacks
+        /// exactly as a member proxy would.</para>
+        /// </summary>
+        private static void EmitArrayCopyProxies(StringBuilder sb, NetArrayCopyForm form)
+        {
+            var newName = form.NewExportName;
+            var readName = form.ReadExportName;
+            var vector = "std::vector<" + form.NativeElement + ">";
+
+            L(sb, "");
+            L(sb, "/* §8.6 copy-IN: a native " + vector + " becomes a managed "
+                  + Comment(form.ArrayFullName) + " handle. ONE-WAY for a by-value argument");
+            L(sb, "   (§14.11) — the callee's mutations land in the managed copy, not here. */");
+            L(sb, "inline BasicLang::blnet::NetRef " + newName + "(const " + vector + "& src) {");
+            L(sb, "    BlnetRequireSlot(g_net." + newName + " != nullptr, \"" + newName + "\");");
+            L(sb, "    std::vector<" + form.CWireIn + "> blnet_buf;");
+            L(sb, "    blnet_buf.reserve(src.size());");
+            L(sb, "    for (const auto& blnet_e : src)");
+            L(sb, "        blnet_buf.push_back(" + string.Format(CultureInfo.InvariantCulture,
+                      form.CppToWire, "blnet_e") + ");");
+            L(sb, "    uint64_t blnet_result = 0;");
+            L(sb, "    int32_t blnet_status;");
+            L(sb, "    {");
+            L(sb, "        BasicLang::blnet::BlnetCallScope blnet_scope;");
+            L(sb, "        blnet_status = g_net." + newName + "(");
+            L(sb, "            static_cast<int32_t>(blnet_buf.size()),");
+            L(sb, "            blnet_buf.empty() ? nullptr : blnet_buf.data(), &blnet_result);");
+            L(sb, "    }");
+            L(sb, "    BasicLang::blnet::NetCheckTyped(blnet_status);");
+            L(sb, "    if (BasicLang::blnet::g_call_depth == 0) (void)BasicLang::blnet::blnet_pump();");
+            L(sb, "    /* §8.3: a returned reference type is born at refcount 1 and ownership");
+            L(sb, "       transfers to this NetRef — which is the call site's RAII release slot. */");
+            L(sb, "    return BasicLang::blnet::NetRef(blnet_result);");
+            L(sb, "}");
+
+            L(sb, "");
+            L(sb, "/* §8.6 readback: the managed " + Comment(form.ArrayFullName)
+                  + " behind `self` becomes a fresh " + vector + ". */");
+            L(sb, "inline " + vector + " " + readName + "(const BasicLang::blnet::NetRef& self) {");
+            L(sb, "    BlnetRequireSlot(g_net." + readName + " != nullptr, \"" + readName + "\");");
+            L(sb, "    int32_t blnet_len = 0;");
+            L(sb, "    int32_t blnet_status;");
+            L(sb, "    {");
+            L(sb, "        /* Length probe: capacity 0 / null buffer writes nothing and reports the");
+            L(sb, "           array's real length, which an `out` slot's caller cannot know. */");
+            L(sb, "        BasicLang::blnet::BlnetCallScope blnet_scope;");
+            L(sb, "        blnet_status = g_net." + readName + "(self.get(), 0, nullptr, &blnet_len);");
+            L(sb, "    }");
+            L(sb, "    BasicLang::blnet::NetCheckTyped(blnet_status);");
+            L(sb, "    " + vector + " blnet_out;");
+            L(sb, "    if (blnet_len > 0) {");
+            L(sb, "        /* Value-initialised, so the loop below is safe to run even when the");
+            L(sb, "           second call failed part-way through. */");
+            L(sb, "        std::vector<" + form.CWireOut + "> blnet_buf(static_cast<size_t>(blnet_len));");
+            L(sb, "        {");
+            L(sb, "            BasicLang::blnet::BlnetCallScope blnet_scope;");
+            L(sb, "            blnet_status = g_net." + readName
+                  + "(self.get(), blnet_len, blnet_buf.data(), &blnet_len);");
+            L(sb, "        }");
+            L(sb, "        blnet_out.reserve(blnet_buf.size());");
+            L(sb, "        for (auto& blnet_e : blnet_buf) {");
+            L(sb, "            blnet_out.push_back(" + string.Format(CultureInfo.InvariantCulture,
+                      form.CppFromWire, "blnet_e") + ");");
+            if (form.ReadElementIsOwned)
+            {
+                L(sb, "            /* P0 string ownership, per element: the shim handed back");
+                L(sb, "               blnet_alloc'd buffers and the receiver frees them. Freed HERE,");
+                L(sb, "               before NetCheckTyped, so a managed exception on the second call");
+                L(sb, "               cannot leak the elements it did manage to write. */");
+                L(sb, "            if (blnet_e && BasicLang::blnet::g_shim.free_)");
+                L(sb, "                BasicLang::blnet::g_shim.free_(blnet_e);");
+            }
+            L(sb, "        }");
+            L(sb, "        BasicLang::blnet::NetCheckTyped(blnet_status);");
+            L(sb, "    }");
+            L(sb, "    if (BasicLang::blnet::g_call_depth == 0) (void)BasicLang::blnet::blnet_pump();");
+            L(sb, "    return blnet_out;");
+            L(sb, "}");
         }
 
         private static void EmitProxyBody(StringBuilder sb, SlotPlan plan)
@@ -486,7 +629,7 @@ namespace BasicLang.Compiler.CodeGen.Net
             if (plan.HasReceiver) cppArgs.Add("const BasicLang::blnet::NetRef& self");
             foreach (var p in plan.Parameters)
                 cppArgs.Add(p.ByRef
-                    ? p.Wire.CppParamType + "& " + p.Name
+                    ? CppByRefParamType(p.Wire) + " " + p.Name
                     : p.Wire.CppParamType + " " + p.Name);
 
             L(sb, "inline " + plan.Return.CppReturnType + " " + plan.SlotName
@@ -556,15 +699,36 @@ namespace BasicLang.Compiler.CodeGen.Net
             L(sb, "}");
         }
 
+        /// <summary>
+        /// The C++ spelling of a BY-REFERENCE parameter. Not <c>CppParamType + "&amp;"</c> for
+        /// the handle row: that is <c>const NetRef&amp;</c>, and appending another <c>&amp;</c>
+        /// yields <c>const NetRef&amp; &amp;</c> — reference collapsing makes it
+        /// <c>const NetRef&amp;</c> again, so the parameter would silently stay READ-ONLY and the
+        /// §8.6 write-back would fail to compile (or, worse, bind a temporary). §8.6's ref/out
+        /// array row needs a mutable <c>NetRef&amp;</c>.
+        /// </summary>
+        private static string CppByRefParamType(WireForm wire) =>
+            wire.Kind == WireKind.Handle
+                ? "BasicLang::blnet::NetRef&"
+                : wire.CppParamType + "&";
+
         /// <summary>C++ value to wire value. Only <c>Boolean</c> actually converts.</summary>
         private static string ToWire(WireForm wire, string expression) =>
             wire.Kind == WireKind.Handle ? expression + ".get()"
             : wire.CppParamType == "bool" ? "(" + expression + " ? 1 : 0)"
             : expression;
 
-        /// <summary>Wire value back to C++ value, for ByRef write-back and scalar returns.</summary>
+        /// <summary>
+        /// Wire value back to C++ value, for ByRef write-back and scalar returns. The handle arm
+        /// is reached only by §8.6's ref/out array row: assigning a fresh <c>NetRef</c> over the
+        /// parameter releases the handle this frame minted and takes ownership of whatever the
+        /// callee left in the slot — including the SAME array re-handled, which is two table
+        /// references to one object and therefore two independent releases, not a double free.
+        /// </summary>
         private static string FromWire(WireForm wire, string expression) =>
-            wire.CppReturnType == "bool" ? expression + " != 0" : expression;
+            wire.Kind == WireKind.Handle ? "BasicLang::blnet::NetRef(" + expression + ")"
+            : wire.CppReturnType == "bool" ? expression + " != 0"
+            : expression;
 
         // ------------------------------------------------------------------------------
         // blnet_startup.g.cpp — §9.3's startup contract.
@@ -615,13 +779,14 @@ namespace BasicLang.Compiler.CodeGen.Net
             L(sb, "");
             L(sb, "} /* anonymous namespace */");
             L(sb, "");
+            var arrayHelpers = NetArrayCopy.RequiredExportNames(surface);
             L(sb, "void blnet_bind_all(void* module) {");
-            if (plans.Count == 0)
+            if (plans.Count == 0 && arrayHelpers.Count == 0)
                 L(sb, "    (void)module; /* the surface contributed no callable members */");
-            foreach (var plan in plans)
+            foreach (var slot in plans.Select(p => p.SlotName).Concat(arrayHelpers))
             {
-                L(sb, "    g_net." + plan.SlotName + " = reinterpret_cast<decltype(g_net." + plan.SlotName + ")>(");
-                L(sb, "        BasicLang::blnet::blnet_get_symbol(module, \"" + plan.SlotName + "\"));");
+                L(sb, "    g_net." + slot + " = reinterpret_cast<decltype(g_net." + slot + ")>(");
+                L(sb, "        BasicLang::blnet::blnet_get_symbol(module, \"" + slot + "\"));");
             }
             L(sb, "}");
             L(sb, "");

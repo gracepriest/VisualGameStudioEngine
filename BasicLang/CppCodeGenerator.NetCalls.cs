@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using BasicLang.Compiler.IR;
+using BasicLang.Compiler.SemanticAnalysis;   // TypeInfo / TypeKind — §8.6's native-vs-handle test
 using BasicLang.Net;
 
 namespace BasicLang.Compiler.CodeGen.CPlusPlus
@@ -288,10 +289,138 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             return emission;
         }
 
+        /// <summary>
+        /// The C++ type a value ACTUALLY has in the emitted code — the DECLARATION when the value
+        /// is a named local, <see cref="MapType"/> of its IR type otherwise.
+        ///
+        /// <para><b>Why the declaration has to win, measured rather than assumed.</b> The full
+        /// PROJECT build fuses <c>t = call(); v = t;</c> into <c>v = call();</c> and leaves the
+        /// result node spelled <c>v</c> while its IR <c>Type</c> is still the call's. For
+        /// <c>Dim V() As Integer = obj.GetValues()</c> that is one IR value saying "handle array"
+        /// against one C++ declaration saying <c>std::vector&lt;int32_t&gt;</c>; asking
+        /// <see cref="MapType"/> alone then emits <c>V = &lt;NetRef&gt;;</c> followed by
+        /// <c>V = read(V);</c> — two hard C++ errors in generated code the user never wrote.
+        ///
+        /// <para><b>Reproduction is narrower than "the optimizer", measured:</b> neither
+        /// <c>Generate</c> nor <c>GenerateSplit</c> with <c>AddStandardPasses</c> run directly
+        /// over an <c>IRBuilder</c> module produces the fusion — both keep the temp. It takes the
+        /// whole <c>CppProjectBuilder</c> → <c>Compiler.CompileProjectFiles</c> path. That is why
+        /// the pin for this is an Integration test
+        /// (<c>NetShimPipelineTests.Section86_ByValueCopyIsOneWay_ButARefSlotReadsBack</c>) and
+        /// not a fast one: the fast subject cannot construct the shape. It is also precisely the
+        /// hazard the repo law about testing BOTH entry points exists for — a fix verified only
+        /// through the test helper still breaks the CLI and the IDE.</para>
+        ///
+        /// <para>It is also the right rule on its own terms: §8.6 row 2 says the DECLARATION is
+        /// what decides whether a .NET array materializes by copy.</para>
+        /// </summary>
+        private string EffectiveCppType(IRValue value)
+        {
+            if (value == null) return null;
+
+            // Keyed on the EMITTED NAME, not on the node being an IRVariable: the optimizer
+            // rewires the name mapping (a call's result node comes out spelled `V`) while leaving
+            // the node's kind and Type alone, so a node-shape test misses exactly the case this
+            // exists for.
+            if (_localCppTypeByName.Count > 0
+                && _localCppTypeByName.TryGetValue(GetValueName(value), out var declared))
+            {
+                return declared;
+            }
+            return value.Type == null ? null : MapType(value.Type);
+        }
+
         /// <summary>True when the value's declared type lowers to <c>BasicLang::NetRef</c>.</summary>
         private bool IsNetRefBacked(IRValue value) =>
-            value?.Type != null
-            && string.Equals(MapType(value.Type), "BasicLang::NetRef", StringComparison.Ordinal);
+            string.Equals(EffectiveCppType(value), "BasicLang::NetRef", StringComparison.Ordinal);
+
+        /// <summary>
+        /// Spec §8.6 row 2 — <c>Dim a() As Integer = obj.GetValues()</c>. The expression for
+        /// <paramref name="value"/> as seen by an assignment into
+        /// <paramref name="destinationType"/>: normally just its name, but a HANDLE array landing
+        /// in a DECLARED NATIVE array materializes by copy — a one-way snapshot into the
+        /// <c>std::vector</c>.
+        ///
+        /// <para><b>Row 1 is the default and stays untouched.</b> An INFERRED
+        /// <c>Dim a = obj.GetValues()</c> types the local as the handle array itself
+        /// (<c>TypeInfo.NetHandleTypeFullName</c> set), so both sides are <c>NetRef</c>, the test
+        /// below does not fire, and there is no copy — indexing and iteration go through §8.5's
+        /// synthetic exports. The DECLARATION is the only thing that asks for a copy, which is
+        /// exactly the distinction §8.6's table draws.</para>
+        ///
+        /// <para><b>Why the guard is the DESTINATION marker rather than the source shape.</b> A
+        /// handle <c>System.Int32[]</c> and a native <c>Integer()</c> have the same
+        /// <c>Name</c>/<c>Kind</c>/<c>ElementType</c> — the marker is the only difference — so a
+        /// name- or kind-based test here would either copy every array or none. It is the same
+        /// by-name hazard §8.5 records for <c>MapType</c>, at the one site that survives it.</para>
+        /// </summary>
+        private string NetMaterializedValue(IRValue value, TypeInfo destinationType)
+        {
+            var expression = GetValueName(value);
+
+            var source = value?.Type;
+            if (destinationType == null) return expression;
+
+            // The INVERSE pairing, reachable since the two representations became type-identical
+            // (they differ only by the marker): a NATIVE array assigned into a HANDLE-typed
+            // variable. §8.6's table has no row for it — copying IN on a bare assignment would
+            // silently mint a handle nothing asked for — so it refuses here rather than emitting
+            // `NetRef = std::vector`, a C++ error in generated code the user never wrote.
+            if (destinationType.NetHandleTypeFullName != null
+                && destinationType.Kind == TypeKind.Array
+                && source?.Kind == TypeKind.Array
+                && source.NetHandleTypeFullName == null
+                && !IsNetRefBacked(value))
+            {
+                throw NetLoweringRefusal("BL6019",
+                    "a native BasicLang array cannot be assigned into a variable holding a "
+                    + $"handle-represented '{destinationType.NetHandleTypeFullName}'. §8.6 copies "
+                    + "a native array outbound only as a CALL ARGUMENT; an assignment has no "
+                    + "boundary to cross. Declare the destination as a native array (with '()') "
+                    + "so the .NET array materializes into it instead.");
+            }
+
+            if (source?.NetHandleTypeFullName == null) return expression;
+
+            // The DECLARATION is the authority on both sides (see EffectiveCppType): once the
+            // optimizer has fused a NetRef temp into a native-array local, the IR node still
+            // claims the handle type while the emitted variable is a std::vector. Reading the
+            // marker alone here would emit `V = bl_net_array_read_int32(V)` — a readback of the
+            // vector itself, which is what the project build (optimizer on, split emission)
+            // actually produced before this guard existed.
+            if (!IsNetRefBacked(value)) return expression;
+
+            if (destinationType.Kind != TypeKind.Array) return expression;
+            if (destinationType.NetHandleTypeFullName != null) return expression;   // handle -> handle
+            if (destinationType.ElementType == null) return expression;
+
+            // Only a .NET ARRAY can materialize into a native array. Anything else landing here
+            // is a program the analyzer should already have rejected; leave it alone so the
+            // failure keeps whatever diagnostic it already had.
+            if (!source.NetHandleTypeFullName.EndsWith("[]", StringComparison.Ordinal))
+                return expression;
+
+            // Same re-derivation guard as the argument side: the table's NativeElement column and
+            // the live MapType are separate code, and a divergence must not reach the C++
+            // compiler as a std::vector<> mismatch in generated code. REFUSING rather than
+            // returning the value unchanged is the point — `std::vector<X> a = <NetRef>;` is a
+            // C++ error in generated code the user never wrote, which is the late-failure shape
+            // this whole pipeline exists to move earlier.
+            if (!NetArrayCopy.TryGetFormForArray(source.NetHandleTypeFullName, out var form)
+                || !string.Equals(MapType(destinationType.ElementType), form.NativeElement,
+                                  StringComparison.Ordinal))
+            {
+                throw NetLoweringRefusal("BL6019",
+                    $"'{source.NetHandleTypeFullName}' cannot be materialized into the declared "
+                    + $"native array (element C++ type '{MapType(destinationType.ElementType)}'): "
+                    + "§8.6 copies a .NET array into a BasicLang array only for a SIMPLE element "
+                    + "type (a §8.3 by-value row, or String) that corresponds exactly. Declare "
+                    + "the variable without '()' to keep the .NET array as a handle and index it "
+                    + "through §8.5 instead.");
+            }
+
+            return "BasicLang::net::" + form.ReadExportName + "(" + expression + ")";
+        }
 
         /// <summary>
         /// One argument, marshaled per its DECLARED parameter's §8.3 row. The rows this task
@@ -362,9 +491,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             }
 
             // Everything else in §8.3 is a HANDLE slot: Nothing crosses as handle 0, and a
-            // NetRef-backed value passes through (genuinely free). A NATIVE value here —
-            // an array against byte[], a std::string against Object, a collection against
-            // IEnumerable — has no handle to pass: §8.6's outbound copy is Task 10.
+            // NetRef-backed value passes through (genuinely free).
             // ONE spelling everywhere the generator names this type: `BasicLang::NetRef`,
             // matching MapType's declaration form. `BasicLang::blnet::NetRef` is the same type
             // (the blnet namespace re-exports it with a using-declaration), but two spellings
@@ -374,13 +501,113 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (IsNetRefBacked(argument))
                 return NetArgEmission.Value(GetValueName(argument));
 
+            // §8.6 row 3: a NATIVE array against a T[] parameter COPIES IN. Reached only after
+            // the handle test above, which is the representation rule stated once — a value that
+            // already IS a handle is never copied, whatever its declared shape.
+            if (TryMarshalNetArrayArgument(
+                    targetDisplay, paramType, position, argument, byRef: false, out var copyIn))
+            {
+                return copyIn;
+            }
+
             throw NetLoweringRefusal("BL6019",
                 $"'{targetDisplay}': argument {position} (BasicLang type "
                 + $"'{argument.Type?.Name}') is not a handle-backed .NET value, but parameter "
-                + $"{position} has reference type '{paramType}' — a native value crossing "
-                + "into a .NET reference slot is §8.6 outbound-copy territory, which is not "
-                + "lowered at the native boundary yet. Pass Nothing or a ManagedOwned-typed "
-                + "value.");
+                + $"{position} has reference type '{paramType}'. §8.6 copies a native value in "
+                + "only for a one-dimensional array of a SIMPLE element type (a §8.3 by-value "
+                + "row, or String) against a matching T[] parameter; List/Dictionary/HashSet, "
+                + "nested element types and handle element types have no v1 copy. Pass Nothing, "
+                + "a .NET-typed value, or a simple array.");
+        }
+
+        /// <summary>
+        /// Spec §8.6 rows 3 and 4 — a NATIVE BasicLang array crossing OUTBOUND, by copy.
+        ///
+        /// <para><b>The representation rule, restated at the one place that could break it.</b>
+        /// A .NET <c>T[]</c> VALUE is always a handle; copying happens ONLY when a native array
+        /// (a <c>std::vector&lt;T&gt;</c> — no <c>GCHandle</c>, no handle) is on the other side.
+        /// Both callers therefore test <see cref="IsNetRefBacked"/> FIRST and reach this only
+        /// when the argument genuinely has no handle. Getting that order wrong would copy an
+        /// array that was already managed, silently detaching the callee's view from the
+        /// caller's.</para>
+        ///
+        /// <para><b>The RAII slot (the plan's emission-seam contract).</b> The prologue declares
+        /// a <c>BasicLang::NetRef</c> holding the freshly-minted array handle. Its
+        /// <c>shared_ptr</c> deleter calls <c>blnet_release</c> when the enclosing C++ scope
+        /// unwinds — on the throwing path too, which a trailing release statement would miss
+        /// because <c>NetCheckTyped</c> throws from inside the call statement. Multiple array
+        /// arguments declare multiple guards front-to-back and C++ destroys them back-to-front,
+        /// which is exactly the reverse release order the contract asks for, at no cost.</para>
+        ///
+        /// <para><b>The native element type is RE-DERIVED, not trusted.</b>
+        /// <see cref="NetArrayCopyForm.NativeElement"/> records what <see cref="MapType"/> is
+        /// expected to produce, and the two are compared here. They are separate code — the
+        /// table is a hand-written row, <c>MapType</c> is the live mapper — so a divergence would
+        /// otherwise emit a call to a proxy whose <c>std::vector&lt;…&gt;</c> parameter does not
+        /// match the argument, and the failure would land in the C++ compiler on generated code
+        /// rather than here.</para>
+        ///
+        /// <para><b>§14.11, precisely scoped.</b> For <paramref name="byRef"/> = false the copy
+        /// is ONE-WAY: mutations the .NET callee makes are invisible to the caller's
+        /// <c>std::vector</c>, where the C# backend WOULD see them. That is the shipped
+        /// divergence. A <c>ref</c>/<c>out</c> slot is EXEMPT — it emits a write-back — which is
+        /// what lets §12.1's parity program have one correct expected output instead of two.</para>
+        /// </summary>
+        private bool TryMarshalNetArrayArgument(
+            string targetDisplay, string paramType, string position, IRValue argument,
+            bool byRef, out NetArgEmission emission)
+        {
+            emission = default;
+
+            if (!NetArrayCopy.TryGetFormForArray(paramType, out var form)) return false;
+
+            var argumentType = argument?.Type;
+            if (argumentType == null
+                || argumentType.Kind != TypeKind.Array
+                || argumentType.NetHandleTypeFullName != null      // already a handle — never copy
+                || argumentType.ArrayRank > 1
+                || argumentType.ElementType == null)
+            {
+                return false;
+            }
+
+            var nativeElement = MapType(argumentType.ElementType);
+            if (!string.Equals(nativeElement, form.NativeElement, StringComparison.Ordinal))
+            {
+                throw NetLoweringRefusal("BL6019",
+                    $"'{targetDisplay}': argument {position} is a native array of "
+                    + $"'{argumentType.ElementType.Name}' (C++ '{nativeElement}') but parameter "
+                    + $"{position} is '{paramType}', whose §8.6 copy expects "
+                    + $"'{form.NativeElement}' elements. The element types must correspond "
+                    + "exactly — §8.6 copies element by element and cannot convert between "
+                    + "representations.");
+            }
+
+            var guard = NextNetTemp();
+            var native = GetValueName(argument);
+
+            // THE RAII SLOT. `BasicLang::NetRef` (never the blnet:: re-export — one spelling in
+            // generated code) owns the minted handle for the rest of the enclosing scope.
+            var prologue = new[]
+            {
+                "BasicLang::NetRef " + guard + " = BasicLang::net::"
+                + form.NewExportName + "(" + native + ");",
+            };
+
+            emission = byRef
+                ? NetArgEmission.Statements(
+                    new[] { guard },
+                    prologue,
+                    // SUCCESS-PATH ONLY, and right that way: a managed throw means the callee
+                    // wrote nothing back, so neither do we. §8.6's ref/out EXEMPTION from
+                    // §14.11 lives on this line — delete it and the by-value divergence
+                    // silently swallows a ref slot.
+                    writeBack: new[]
+                    {
+                        native + " = BasicLang::net::" + form.ReadExportName + "(" + guard + ");",
+                    })
+                : NetArgEmission.Statements(new[] { guard }, prologue);
+            return true;
         }
 
         /// <summary>
@@ -414,6 +641,17 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         {
             var paramType = parameter.TypeFullName;
             var passing = parameter.RefKind.ToString().ToLowerInvariant();
+
+            // §8.6 row 4 — a ref/out ARRAY slot: copies in AND reads back. Handled before the
+            // by-value-scalar gate below, which would otherwise refuse it for having no single
+            // wire slot. The ownership objection that gate names does not apply here: the handle
+            // in the slot is one this frame MINTED, not one it borrowed.
+            if (argument is IRVariable
+                && TryMarshalNetArrayArgument(
+                    targetDisplay, paramType, position, argument, byRef: true, out var byRefArray))
+            {
+                return byRefArray;
+            }
 
             if (!NetMarshalTable.TryGetWireRow(paramType, out var row)
                 || row.IsMultiSlot || string.IsNullOrEmpty(row.CWire))
@@ -559,6 +797,20 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                         // the transfer buffer and freed it with blnet_free).
                         return $"{destination} = {expression};";
                 }
+            }
+
+            // §8.6 row 2, AT THE CALL SITE. `Dim V() As Integer = obj.GetValues()` normally
+            // lowers as `t = call(); V = t;` and the store materializes — but the optimizer fuses
+            // that pair into `V = call();`, and then this is the only place the copy can happen.
+            // The DECLARATION decides, which is row 2's own rule (see EffectiveCppType). The call
+            // expression is a NetRef prvalue and the readback proxy takes `const NetRef&`, so the
+            // handle lives exactly as long as the full-expression that consumes it.
+            if (NetArrayCopy.TryGetFormForArray(resultType, out var arrayForm)
+                && string.Equals(EffectiveCppType(resultNode),
+                                 "std::vector<" + arrayForm.NativeElement + ">",
+                                 StringComparison.Ordinal))
+            {
+                return $"{destination} = BasicLang::net::{arrayForm.ReadExportName}({expression});";
             }
 
             // A HANDLE result (§8.3's reference-type row, "other non-ref value types → handle
