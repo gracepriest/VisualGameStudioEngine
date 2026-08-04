@@ -339,6 +339,8 @@ public partial class MainWindowViewModel : ViewModelBase
     public TypeHierarchyViewModel TypeHierarchy { get; }
     public ThreadsViewModel Threads { get; }
     public TimelineViewModel Timeline { get; }
+    public ExtensionsViewModel Extensions { get; }
+    public ProblemsViewModel Problems { get; }
 
     private readonly Dictionary<string, CodeEditorDocumentViewModel> _openDocuments = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Action> _documentCleanupActions = new(StringComparer.OrdinalIgnoreCase);
@@ -413,6 +415,8 @@ public partial class MainWindowViewModel : ViewModelBase
         TypeHierarchyViewModel typeHierarchy,
         ThreadsViewModel threads,
         TimelineViewModel timeline,
+        ExtensionsViewModel extensions,
+        ProblemsViewModel problems,
         Documents.WelcomeDocumentViewModel welcomeDocument,
         ProjectSystem.Services.ClangdInstaller clangdInstaller,
         ProjectSystem.Services.LldbDapInstaller lldbDapInstaller)
@@ -493,6 +497,15 @@ public partial class MainWindowViewModel : ViewModelBase
         TypeHierarchy = typeHierarchy;
         Threads = threads;
         Timeline = timeline;
+        Extensions = extensions;
+        Problems = problems;
+
+        // The panel's Open VSX install path needs IExtensionService to discover and activate
+        // what it just unpacked. ExtensionsViewModel keeps a parameterless ctor for the
+        // designer, so the service arrives through this post-construction hand-off rather
+        // than through DI; without the call, Install downloads and extracts but never
+        // activates.
+        extensions.SetExtensionService(extensionService);
 
         // Wire the welcome/start page buttons. The DI container builds the
         // singleton WelcomeDocumentViewModel with no callbacks; without this
@@ -512,7 +525,7 @@ public partial class MainWindowViewModel : ViewModelBase
                 "Clone Repository is not available yet — open a folder and use the Git panel instead.", "info"));
 
         // Setup dock layout
-        _dockFactory.SetViewModels(solutionExplorer, outputPanel, errorList, callStack, variables, breakpoints, findInFiles, terminal, gitChanges, gitBranches, gitStash, gitBlame, watch, immediateWindow, documentOutline, bookmarks, threads: threads, timeline: timeline, callHierarchy: CallHierarchy);
+        _dockFactory.SetViewModels(solutionExplorer, outputPanel, errorList, callStack, variables, breakpoints, findInFiles, terminal, gitChanges, gitBranches, gitStash, gitBlame, watch, immediateWindow, documentOutline, bookmarks, extensions: extensions, problems: problems, threads: threads, timeline: timeline, callHierarchy: CallHierarchy);
         Layout = _dockFactory.CreateLayout();
         _dockFactory.InitLayout(Layout);
 
@@ -897,6 +910,7 @@ public partial class MainWindowViewModel : ViewModelBase
             {
                 _diagnosticsAggregator.SetFileDiagnostics(filePath, e.Diagnostics);
                 ErrorList.UpdateDiagnostics(_diagnosticsAggregator.GetSnapshot());
+                Problems.ReplaceAllDiagnostics(_diagnosticsAggregator.GetSnapshot());
             }
 
             // Reset error cycling index when diagnostics change
@@ -1400,6 +1414,7 @@ public partial class MainWindowViewModel : ViewModelBase
         // wipe another's (per-file aggregation keeps them isolated; see DiagnosticsAggregatorTests).
         _diagnosticsAggregator.Clear();
         ErrorList.UpdateDiagnostics(_diagnosticsAggregator.GetSnapshot());
+        Problems.ReplaceAllDiagnostics(_diagnosticsAggregator.GetSnapshot());
     }
 
     /// <summary>
@@ -1664,6 +1679,7 @@ public partial class MainWindowViewModel : ViewModelBase
         // but coexist with LSP diagnostics instead of clobbering them.
         _diagnosticsAggregator.SetBuildDiagnostics(result.Diagnostics);
         ErrorList.UpdateDiagnostics(_diagnosticsAggregator.GetSnapshot());
+        Problems.ReplaceAllDiagnostics(_diagnosticsAggregator.GetSnapshot());
 
         // Reset error cycling index when diagnostics change
         _currentDiagnosticIndex = -1;
