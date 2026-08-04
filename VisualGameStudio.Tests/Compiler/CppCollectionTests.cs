@@ -1593,4 +1593,225 @@ End Sub";
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
         Assert.That(CompileRun(output), Is.EqualTo("ay-bee\n"));
     }
+
+    // ========================================================================
+    // REGRESSION: STRENGTH REDUCTION dropped its consumers' use-update.
+    //
+    // Root cause (IROptimizer.StrengthReductionPass.ReduceStrength): rewriting
+    // `x * 2` into `x << 1` REPLACES block.Instructions[i] with a brand-new
+    // IRBinaryOp object. Consumers elsewhere in the function still referenced the
+    // DISCARDED multiply. ConstantFoldingPass had always called ReplaceAllReferences
+    // for exactly this reason; strength reduction never did.
+    //
+    // Why it produced non-compiling C++ rather than merely stale code: backends name
+    // temporaries by OBJECT IDENTITY (ICodeGenerator.GetValueName keys _valueNames on
+    // the value instance and mints a fresh t{N} for an instance it has not seen), so
+    // the orphaned consumer rendered an identifier that was never declared and never
+    // assigned:
+    //         t0 = v << 1;
+    //         return t1;        // g++: 't1' was not declared in this scope
+    // The replacement DOES carry the original's Name, which is precisely why this hid
+    // for so long — the emitted assignment looks correct; only the identity differs.
+    //
+    // MEASURED BOUNDARY — exactly the shift-rewritten shapes broke:
+    //     Return v * 2      BROKEN        Return v * 3      ok
+    //     Return v * 4      BROKEN        Return v + 1      ok
+    //     Return v * 2 + 1  BROKEN
+    // The `* 3` / `+ 1` rows are kept below as anti-vacuity partners: they must pass
+    // both before and after the fix, so a green suite cannot come from the reduction
+    // silently not running.
+    //
+    // These MUST run through CompileToCppOptimized — the non-optimizing CompileToCpp
+    // helper never runs the pass, so the bug vanishes there. Each asserts on RUN
+    // OUTPUT, and the headline test also pins that the shift really is emitted, so
+    // "fixing" this by disabling strength reduction fails the suite.
+    //
+    // C#-backend note: the C# backend renders operand trees INLINE rather than through
+    // named temps, so an orphaned reference still rendered structurally — it silently
+    // emitted the UN-reduced `v * 2` instead. Same root cause, no visible symptom.
+    // ========================================================================
+
+    [Test]
+    public void Cpp_StrengthReducedMultiply_ReturnConsumer_CompileAndRun()
+    {
+        // The reported repro. Before the fix: `t0 = v << 1; return t1;` (t1 undeclared).
+        var source = @"
+Function F(v As Integer) As Integer
+    Return v * 2
+End Function
+
+Sub Main()
+    Console.WriteLine(F(10))
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        // The reduction must actually have fired — otherwise this test is vacuous.
+        // Matched precisely: a bare "<<" also occurs all over the emitted BCL prelude
+        // and in every `cout << ...`, which would make this guard vacuous.
+        Assert.That(output, Does.Contain("= v << 1"),
+            "strength reduction must still rewrite * 2 into a shift:\n" + output);
+        Assert.That(CompileRun(output), Is.EqualTo("20\n"));
+    }
+
+    [Test]
+    public void Cpp_StrengthReducedMultiply_NestedBinaryOperandConsumer_CompileAndRun()
+    {
+        // The reduced value feeds another IRBinaryOp: `t1 = t2 + 1` with t2 undeclared.
+        var source = @"
+Function F(v As Integer) As Integer
+    Return v * 2 + 1
+End Function
+
+Sub Main()
+    Console.WriteLine(F(10))
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("21\n"));
+    }
+
+    [Test]
+    public void Cpp_StrengthReducedMultiply_CallArgumentConsumer_CompileAndRun()
+    {
+        // The reduced value is an IRCall argument: `t0 = G(t1)` with t1 undeclared.
+        var source = @"
+Function G(a As Integer) As Integer
+    Return a
+End Function
+
+Sub Main()
+    Dim v As Integer = 10
+    Console.WriteLine(G(v * 2))
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("20\n"));
+    }
+
+    [Test]
+    public void Cpp_StrengthReducedMultiply_ComparisonConsumer_CompileAndRun()
+    {
+        // The reduced value feeds an IRCompare driving a branch: `t0 = t1 > 15`.
+        var source = @"
+Function F(v As Integer) As String
+    If v * 2 > 15 Then
+        Return ""big""
+    End If
+    Return ""small""
+End Function
+
+Sub Main()
+    Console.WriteLine(F(10))
+    Console.WriteLine(F(2))
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("big\nsmall\n"));
+    }
+
+    [Test]
+    public void Cpp_StrengthReducedMultiply_FieldStoreConsumer_CompileAndRun()
+    {
+        // IRFieldStore.Value is the reduced value: `b->Value = t2` with t2 undeclared.
+        // This consumer was NOT covered by ConstantFoldingPass's original helper either.
+        var source = @"
+Class Box
+    Public Value As Integer
+End Class
+
+Function F(v As Integer) As Integer
+    Dim b As New Box()
+    b.Value = v * 2
+    Return b.Value
+End Function
+
+Sub Main()
+    Console.WriteLine(F(10))
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("20\n"));
+    }
+
+    [Test]
+    public void Cpp_StrengthReducedMultiply_IndexerArgumentConsumer_CompileAndRun()
+    {
+        // The reduced value is an IRIndexerAccess index — also uncovered by the
+        // original helper, so it needed the widened node coverage, not just the call.
+        var source = @"
+Function F(v As Integer) As Integer
+    Dim nums As New List(Of Integer)()
+    For i As Integer = 0 To 40
+        nums.Add(i * 100)
+    Next
+    Return nums(v * 2)
+End Function
+
+Sub Main()
+    Console.WriteLine(F(10))
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("2000\n"));
+    }
+
+    [Test]
+    public void Cpp_StrengthReducedMultiply_AssignmentConsumer_CompileAndRun()
+    {
+        // The one shape that always WORKED, kept to pin why: for `Dim x = v * 2` the
+        // IRBuilder names the multiply after its destination, so the instruction itself
+        // carries "x" and no separate consumer object exists to orphan. It is the
+        // named-destination path that hid the bug from assignment-shaped programs.
+        var source = @"
+Function F(v As Integer) As Integer
+    Dim x As Integer = v * 2
+    Return x
+End Function
+
+Sub Main()
+    Console.WriteLine(F(10))
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("x = v << 1"),
+            "the reduction should write straight into the named destination:\n" + output);
+        Assert.That(CompileRun(output), Is.EqualTo("20\n"));
+    }
+
+    [Test]
+    public void Cpp_NonPowerOfTwoMultiply_NotReduced_CompileAndRun()
+    {
+        // ANTI-VACUITY partner: `* 3` is not a power of two, so no rewrite happens and
+        // no consumer is ever orphaned. Passed before the fix and must keep passing.
+        var source = @"
+Function F(v As Integer) As Integer
+    Return v * 3
+End Function
+
+Sub Main()
+    Console.WriteLine(F(10))
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("= v * 3"),
+            "a non-power-of-two multiply must survive as a multiply:\n" + output);
+        Assert.That(CompileRun(output), Is.EqualTo("30\n"));
+    }
+
+    [Test]
+    public void Cpp_AdditionInReturn_NotReduced_CompileAndRun()
+    {
+        // ANTI-VACUITY partner: addition is never strength-reduced.
+        var source = @"
+Function F(v As Integer) As Integer
+    Return v + 1
+End Function
+
+Sub Main()
+    Console.WriteLine(F(10))
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("11\n"));
+    }
 }
