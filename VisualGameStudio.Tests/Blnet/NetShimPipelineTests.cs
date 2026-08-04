@@ -1370,13 +1370,27 @@ public class NetShimPipelineTests
     /// <c>IEnumerable&lt;T&gt;</c>/<c>IEnumerator&lt;T&gt;</c> is what makes the enumerator
     /// arrive as an interface reference to the box, so the mutation lands where it must.
     ///
-    /// <para>The same program carries §8.5's array rows: <c>Vals(0)</c> reads through the
-    /// synthetic <c>bl_net_…get_Item</c> export (a .NET array exposes no indexer in metadata at
-    /// all, and <c>Array.GetValue(int)</c> is not a fallback — it returns <c>Object</c>, which is
-    /// permanently <c>Rejected</c>), and <c>Vals(0) = 42</c> writes through the synthetic
-    /// <c>set_Item</c>. The read-back is what proves the write reached the MANAGED array rather
-    /// than a native copy: §8.6 row 1 says an inferred <c>Dim a = obj.GetValues()</c> keeps the
-    /// HANDLE, so there is no <c>std::vector</c> anywhere to absorb it.</para>
+    /// <para>The same program carries the rest of §8.5's table, each through its PRODUCTION
+    /// path rather than a hand-built descriptor:</para>
+    /// <list type="bullet">
+    /// <item><description><b>The real indexer row.</b> <c>Nums(0)</c> / <c>Nums(0) = 99</c> go
+    /// through <c>NetTypeResolver.ConstructedIndexer</c> — the CONSTRUCTED
+    /// <c>List&lt;Int32&gt;.this[Int32]</c>, so the element arrives as <c>System.Int32</c> and
+    /// not the definition's open <c>T</c>. This is the only end-to-end exercise of that seam;
+    /// the array rows below are synthesized and would not touch it.</description></item>
+    /// <item><description><b>The synthetic array rows.</b> <c>Vals(0)</c> reads through §8.5's
+    /// synthesized <c>get_Item</c> (a .NET array exposes no indexer in metadata at all, and
+    /// <c>Array.GetValue(int)</c> is not a fallback — it returns <c>Object</c>, which is
+    /// permanently <c>Rejected</c>) and <c>Vals(0) = 42</c> writes through <c>set_Item</c>. The
+    /// read-back proves the write reached the MANAGED array rather than a native copy: §8.6 row
+    /// 1 keeps the HANDLE for an inferred <c>Dim a = obj.GetValues()</c>, so there is no
+    /// <c>std::vector</c> anywhere to absorb it.</description></item>
+    /// <item><description><b><c>Vals.Length</c>.</b> A handle <c>System.String[]</c> is
+    /// <c>TypeInfo(Name: "String", Kind: Array)</c>, so BOTH branches of
+    /// <c>CppCodeGenerator</c>'s name/<c>Kind</c>-keyed <c>.Length</c> arm claimed it and
+    /// emitted <c>.length()</c>/<c>.size()</c> on a <c>BasicLang::NetRef</c>. It now routes to
+    /// the synthesized <c>get_Length</c> export.</description></item>
+    /// </list>
     /// </summary>
     [Test]
     public void Section85_ConcreteListIteratesAndANetArrayRoundTrips()
@@ -1391,10 +1405,14 @@ public class NetShimPipelineTests
               For Each N In Nums
                Console.WriteLine(N)
               Next
+              Console.WriteLine(Nums(0))
+              Nums(0) = 99
+              Console.WriteLine(Nums(0))
               Dim Vals = Bag.Values()
               Console.WriteLine(Vals(0))
               Vals(0) = 42
               Console.WriteLine(Vals(0))
+              Console.WriteLine(Vals.Length)
              End Sub
             End Module
             """);
@@ -1403,12 +1421,14 @@ public class NetShimPipelineTests
         AssertBuilt(result, "the §8.5 collection-consumption program");
 
         Assert.That(NetShimPipelineFixture.Run(result.ExecutablePath!),
-            Is.EqualTo("10\n20\n30\n7\n42\n"),
+            Is.EqualTo("10\n20\n30\n10\n99\n7\n42\n3\n"),
             "10/20/30 is the CONCRETE List(Of Integer) iterating to completion with the right "
             + "elements — the boxed-mutable-struct guard. (With that bug the program prints 10 "
-            + "forever and this test hangs instead of failing.) 7 then 42 is the .NET array "
-            + "round trip through §8.5's synthetic get_Item/set_Item exports; a 7 on the second "
-            + "line would mean the write went to a native copy of a handle that never had one.");
+            + "forever and this test HANGS instead of failing.) 10 then 99 is the REAL indexer "
+            + "row through NetTypeResolver.ConstructedIndexer; 7 then 42 the synthetic array "
+            + "pair — a 7 on that second line would mean the write went to a native copy of a "
+            + "handle that never had one. The trailing 3 is Vals.Length routing to §8.5's "
+            + "synthesized get_Length instead of `.size()` on a BasicLang::NetRef.");
     }
 
     // =====================================================================================

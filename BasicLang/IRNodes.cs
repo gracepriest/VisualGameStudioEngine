@@ -570,10 +570,18 @@ namespace BasicLang.Compiler.IR
     /// <summary>
     /// P2a-2 Task-8 Step 0 (M1) — the .NET CARRIAGE an IR node can hold: the resolved member,
     /// its receiver's boundary category, and whether the descriptor's signature identity is
-    /// exact. FIVE node types carry the trio (<see cref="IRCall"/>,
+    /// exact. <b>SEVEN</b> node types carry the trio (<see cref="IRCall"/>,
     /// <see cref="IRInstanceMethodCall"/>, <see cref="IRNewObject"/>,
-    /// <see cref="IRFieldAccess"/>, <see cref="IRFieldStore"/>) — exactly the five the C++
-    /// lowering has an arm for.
+    /// <see cref="IRFieldAccess"/>, <see cref="IRFieldStore"/>, and — since Task 9 (§8.5) —
+    /// <see cref="IRIndexerAccess"/> and <see cref="IRIndexerStore"/>) — exactly the seven the
+    /// C++ lowering has an arm for.
+    ///
+    /// <para><b><see cref="IRForEach"/> is the deliberate exception</b>, and it is why this
+    /// count is worth stating rather than implying: §8.5's enumeration needs FOUR descriptors
+    /// (<c>GetEnumerator</c>/<c>MoveNext</c>/<c>Current</c>/<c>Dispose</c>) and this interface
+    /// holds one, so it carries an <see cref="IRNetEnumeration"/> bundle instead and the surface
+    /// collector handles it in its own arm. Making it implement this interface by naming one of
+    /// the four would collect one export and leave the loop unlinkable.</para>
     ///
     /// <para><b>What this buys.</b> <c>NetSurfaceCollector</c> collapses five near-identical
     /// <c>case</c> arms into one, and the optimizer's "carry the carriage across" obligation
@@ -1025,9 +1033,6 @@ namespace BasicLang.Compiler.IR
     }
 
     /// <summary>
-    /// IR ForEach loop - represents iteration over a collection
-    /// </summary>
-    /// <summary>
     /// P2a-2 Task 9 (spec §8.5) — the four .NET members a <c>For Each</c> over a
     /// HANDLE-represented collection is driven by, obtained and driven <b>through
     /// <c>IEnumerable&lt;T&gt;</c>/<c>IEnumerator&lt;T&gt;</c></b>.
@@ -1078,6 +1083,9 @@ namespace BasicLang.Compiler.IR
         }
     }
 
+    /// <summary>
+    /// IR ForEach loop - represents iteration over a collection.
+    /// </summary>
     public class IRForEach : IRInstruction
     {
         public string VariableName { get; set; }

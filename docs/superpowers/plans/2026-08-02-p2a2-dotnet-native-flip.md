@@ -1032,10 +1032,27 @@ narrower oracle (the six §6.4 rows vs `blnet_marshal.hpp`); Step 2b's actual as
 > **The symbol-carrying seam LANDED** and is contained to `NetTypeResolver`:
 > `ConstructedTypeSymbol` (parses the argument list back out of the spelling `TypeName` produced
 > and re-applies `Construct`), `EnumerableElementTypeName`, `ConstructedIndexer`. No change to
-> `NetSurfaceCollector`'s entry contract. The §7.3 construction collision is now REACHABLE and
-> `CollisionFreedomOverTwoConstructionsOfOneNestedGeneric` stays green **for the right reason** —
-> pinned by a new test that drives two constructions through `NetShimGenerator.Plan`'s
-> `seen.Add` and asserts TWO exports survive.
+> `NetSurfaceCollector`'s entry contract.
+>
+> ⚠ **Precisely what became reachable (review item 8a):** CONSTRUCTED spellings *in general*.
+> The new test drives `IEnumerable<Int32>` vs `IEnumerable<String>` — two constructions of ONE
+> generic — through `NetShimGenerator.Plan`'s `if (!seen.Add(name)) continue;` and asserts TWO
+> exports survive. That is a real collision axis that did not exist before. The NESTED-generic
+> shape `CollisionFreedomOverTwoConstructionsOfOneNestedGeneric` actually names
+> (`List<int>.Enumerator` vs `List<string>.Enumerator`) **stays theoretical**: Task 9 never
+> spells a type nested inside a generic — the enumeration goes through the INTERFACES, whose
+> declaring types are top-level — and review item 2's guard now makes `ConstructedTypeSymbol`
+> refuse the open nested shape outright.
+>
+> ⛔ **Review item 2, and why the obvious guard was wrong.** `ConstructedTypeSymbol`'s arity-0
+> early return silently answered OPEN: a type nested in a generic declares no arguments of its
+> own, so `List<T>.Enumerator` has `Arity == 0` and was returned unchanged. `ConstructedIndexer`
+> would then have described an open-T indexer → wrong descriptor → wrong export → CS0246/CS0012
+> after a ~25 s publish. **A round-trip test does not catch it** — measured, not assumed:
+> `TypeName` spells `List<T>.Enumerator` back byte-identically, because the spelling is faithful,
+> it is merely open. The guard is an OPENNESS walk over the containing chain (the same shape
+> `FirstUnmarshalable` uses), with the round trip kept alongside for the other way in — a
+> spelling `Lookup` accepts but `TypeName` would not produce.
 >
 > **Intent is carried, not guessed.** `NetSyntheticKind` on `NetMemberDescriptor`
 > (`Setter`/`ArrayGet`/`ArraySet`/`ArrayLength`) closes the hole `IsSyntheticSetterShape`'s own
@@ -1045,7 +1062,16 @@ narrower oracle (the six §6.4 rows vs `blnet_marshal.hpp`); Step 2b's actual as
 >
 > **`ByRefArguments` (review I5): carried, not scoped.** `IRCall.NetArgumentRefKinds` (internal,
 > parallel) lets `CSharpBackend` emit `out` for a .NET `out` and nothing for `in`/`RefReadOnly` —
-> the CS1620 is gone rather than confined to the native path.
+> the CS1620 is gone rather than confined to the native path. Pinned by
+> `ANetOutParameterEmitsOutNotRefOnTheCSharpBackend`, which also pins that a VB user call (no
+> entry recorded) still emits `ref`.
+>
+> ⚠ **I5 is closed for ONE call shape of two (review item 5).** `ByRefArguments` is populated
+> only on the FUSED static arm (`IRBuilder.cs:~3561`); `IRInstanceMethodCall` carries no
+> `ByRefArguments` list at all, so `r.TryGet(out x)` on a resolved .NET instance member still
+> reaches neither backend's by-reference path. The native side refuses such shapes anyway
+> (`MarshalNetByRefArgument`), so this is a C#-backend gap rather than a miscompile — but it is
+> the remaining half of I5 and belongs with whichever task first lowers a ByRef instance call.
 >
 > **Gates:** fast subset **4100/0/1** (from 4085/0/1, +15) · Blnet fast **517/0/0** (from 502) ·
 > four-suite C++ filter **121/0/0** (22 m 38 s) · frozen P0 **16/16** · `NetShimPipelineTests`
@@ -1063,13 +1089,32 @@ narrower oracle (the six §6.4 rows vs `blnet_marshal.hpp`); Step 2b's actual as
 > decision (it touches `ResolveTypeReference` and the §12.4 registry-scoping invariant) and
 > belongs with §8.6/Task 10 or later, not here.
 >
-> ⚠ **`get_Length` is synthesized and spelled but has no producer** — `arr.Length` on a
-> handle-typed array does not route to it yet (the member-access path is not §8.5-aware). The
-> indexer pair and the enumeration protocol both have producers and are proven end to end.
+> ✅ **`arr.Length` — review item 1, fixed. The original note ("no producer") UNDERSTATED it: it
+> MIS-ROUTED.** `Visit(IRFieldAccess)`'s `.Length` arm is name/`Kind`-keyed and did not consult
+> the marker, and a handle `System.String[]` is `TypeInfo(Name: "String", Kind: Array)` — so
+> BOTH of that arm's branches claimed it and emitted `parts.length()` / `parts.size()` on a
+> `BasicLang::NetRef`. It is the very next thing a user writes after `parts(0)`. Now:
+> `SemanticAnalyzer.NetArrayLengthFor` stamps §8.5's synthesized `get_Length` onto the node
+> (there is no annotation to find — a .NET array declares no members in metadata at all, which
+> is why §8.5 synthesizes them), and the marker is additionally tested BEFORE every name/`Kind`-
+> keyed arm in `Visit(IRFieldAccess)` so any OTHER member on a handle receiver is a loud BL6019
+> instead of native code over a handle. `ModuleUsesCollections` is also name-keyed and is
+> deliberately left alone — it decides only whether to splice the collection runtime preamble,
+> so a false positive costs an unused preamble, never a wild pointer; a comment records that.
+
+> 📎 **Naming note on the bullet below (review item 8b).** The literal spellings
+> `bl_net_Array_Get__<T>__int32` / `_Set` / `_Length` do NOT exist as export names and never
+> could: §7.3 makes `NetNameMangler` the single naming scheme, and it derives every name from
+> (declaring type, kind, name, static-ness, arity, parameters) plus a SHA-256 suffix. The three
+> synthetics are ordinary descriptors on a `T[]` declaring type, so they mangle like everything
+> else — e.g. `bl_net_System_Int32___get_Item__System_Int32_<16 hex>`. The spec's spelling is
+> indicative shape, exactly as §4.2's `Regex_Match__string` example already is (the mangler's own
+> header, design decision 6, records that it is not a binding format).
 
 **Files:**
-- Modify: `BasicLang/Net/NetSurfaceCollector.cs` (synthetic exports: `bl_net_Array_Get__<T>__int32`
-  /`_Set`/`_Length` per used element type; `get_Item`/`set_Item` collection for indexer access;
+- Modify: `BasicLang/Net/NetSurfaceCollector.cs` (synthetic exports: an array Get/Set/Length
+  trio per used element type — spelled by the mangler, see the note above; `get_Item`/`set_Item`
+  collection for indexer access;
   `IEnumerable<T>`/`IEnumerator<T>` members for `For Each` — obtained through the INTERFACE,
   never the concrete struct enumerator), `NetShimGenerator.cs` (synthetic export bodies),
   `BasicLang/CppCodeGenerator.cs`: **`MapType` `:500-504` + `BareCollectionType` `:577-587` +

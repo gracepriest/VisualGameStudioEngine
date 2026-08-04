@@ -302,6 +302,124 @@ public class NetIrCarriageTests
         Assert.That(inlinedWrite.ResolvedNetTargetIsExact, Is.True);
     }
 
+    /// <summary>
+    /// P2a-2 Task 9 widened the carriage again — to <see cref="IRIndexerAccess"/>,
+    /// <see cref="IRIndexerStore"/> and <see cref="IRForEach"/>'s four-member
+    /// <c>NetEnumeration</c> bundle. <c>IROptimizer</c>'s clone-path comment claims
+    /// "NetIrCarriageTests fails if it does not"; before this test that claim was FALSE for all
+    /// three (the fixture covered only the original five node types), which is exactly the
+    /// drift <c>INetCarrying</c>'s own remarks say the interface exists to prevent.
+    ///
+    /// <para>Same teeth as its two siblings: all three ride through
+    /// <c>FunctionInliningPass.CloneAndRemap</c> inside an inlined helper, so any future
+    /// <c>case</c> added there that rebuilds one without copying its carriage goes red. Losing
+    /// the <c>IRForEach</c> bundle in particular does not degrade to a slow loop — it degrades
+    /// to a RANGE-FOR over a <c>BasicLang::NetRef</c>, which is the §8.5 wild pointer.</para>
+    /// </summary>
+    [Test]
+    public void AggressivePipelinePreservesTask9CarriageOnTheCollectionNodeTypes()
+    {
+        const string ListOfInt = "System.Collections.Generic.List<System.Int32>";
+        var intType = new TypeInfo("Integer", TypeKind.Primitive);
+        var handleList = new TypeInfo("List", TypeKind.Class)
+        {
+            NetHandleTypeFullName = ListOfInt,
+        };
+
+        var getItem = new NetMemberDescriptor(
+            "Item", ListOfInt, NetMemberCategory.Property, isStatic: false, arity: 0,
+            "System.Int32",
+            new List<NetParameterDescriptor> { new(NetRefKind.None, "System.Int32") });
+        var setItem = NetAccessorSynthesis.SetterFor(getItem);
+        var enumeration = new IRNetEnumeration(
+            NetAccessorSynthesis.EnumerableGetEnumeratorFor("System.Int32"),
+            NetAccessorSynthesis.EnumeratorMoveNext(),
+            NetAccessorSynthesis.EnumeratorCurrentFor("System.Int32"),
+            NetAccessorSynthesis.EnumeratorDispose());
+
+        var module = new IRModule("CarriageInline9Module");
+
+        var helper = new IRFunction("Helper", VoidType);
+        var helperEntry = new BasicBlock("entry");
+        var collection = new IRVariable("nums", handleList);
+
+        var read = new IRIndexerAccess("_tmp_item", collection, intType)
+        {
+            ResolvedNetTarget = getItem,
+            ResolvedNetTargetIsExact = true,
+            NetCategory = BoundaryTypeCategory.Unknown,
+        };
+        read.Indices.Add(new IRConstant(0, intType));
+
+        var write = new IRIndexerStore(collection, new IRConstant(9, intType))
+        {
+            ResolvedNetTarget = setItem,
+            ResolvedNetTargetIsExact = true,
+            NetCategory = BoundaryTypeCategory.Unknown,
+        };
+        write.Indices.Add(new IRConstant(0, intType));
+
+        // A For Each needs its own body/end blocks; the helper stays inlineable because both
+        // are empty apart from the terminator the builder would add.
+        var body = new BasicBlock("foreach0.body");
+        var end = new BasicBlock("foreach0.end");
+        var loop = new IRForEach("n", intType, collection, body, end)
+        {
+            NetEnumeration = enumeration,
+        };
+
+        helperEntry.AddInstruction(read);
+        helperEntry.AddInstruction(write);
+        helperEntry.AddInstruction(loop);
+        helperEntry.AddInstruction(new IRReturn());
+        helper.Blocks.Add(helperEntry);
+        helper.EntryBlock = helperEntry;
+        module.Functions.Add(helper);
+
+        var main = new IRFunction("Main", VoidType);
+        var mainEntry = new BasicBlock("entry");
+        mainEntry.AddInstruction(new IRCall("_tmp_helper", "Helper", VoidType));
+        mainEntry.AddInstruction(new IRReturn());
+        main.Blocks.Add(mainEntry);
+        main.EntryBlock = mainEntry;
+        module.Functions.Add(main);
+
+        var pipeline = new OptimizationPipeline();
+        pipeline.AddAggressivePasses();
+        pipeline.Run(module);
+
+        var mainInstructions = module.Functions
+                                     .Single(f => f.Name == "Main")
+                                     .Blocks.SelectMany(b => b.Instructions)
+                                     .ToList();
+
+        var inlinedRead = mainInstructions.OfType<IRIndexerAccess>().SingleOrDefault();
+        Assert.That(inlinedRead, Is.Not.Null,
+            "guard: FunctionInliningPass did not inline Helper — the clone path was never "
+            + "exercised (see the companion tests' fixture notes)");
+        Assert.Multiple(() =>
+        {
+            Assert.That(inlinedRead!.ResolvedNetTarget, Is.EqualTo(getItem),
+                "the clone path dropped IRIndexerAccess.ResolvedNetTarget — FIX THE OPTIMIZER. "
+                + "Without it `nums(0)` falls back to native pointer indexing on a handle.");
+            Assert.That(inlinedRead.ResolvedNetTargetIsExact, Is.True);
+
+            var inlinedWrite = mainInstructions.OfType<IRIndexerStore>().SingleOrDefault();
+            Assert.That(inlinedWrite, Is.Not.Null, "guard: the write was not inlined");
+            Assert.That(inlinedWrite!.ResolvedNetTarget, Is.EqualTo(setItem),
+                "the clone path dropped IRIndexerStore.ResolvedNetTarget (the synthesized "
+                + "set_Item descriptor) — FIX THE OPTIMIZER");
+            Assert.That(inlinedWrite.ResolvedNetTargetIsExact, Is.True);
+
+            var inlinedLoop = mainInstructions.OfType<IRForEach>().SingleOrDefault();
+            Assert.That(inlinedLoop, Is.Not.Null, "guard: the loop was not inlined");
+            Assert.That(inlinedLoop!.NetEnumeration, Is.SameAs(enumeration),
+                "the clone path dropped IRForEach.NetEnumeration — FIX THE OPTIMIZER. This one "
+                + "does not degrade gracefully: without the bundle the loop lowers as a C++ "
+                + "range-for over a BasicLang::NetRef, i.e. §8.5's wild pointer.");
+        });
+    }
+
     // ------------------------------------------------------------------------------------
     // Population on the real IRBuilder path — the non-vacuous half.
     // ------------------------------------------------------------------------------------

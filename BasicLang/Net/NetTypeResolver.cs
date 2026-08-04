@@ -842,7 +842,31 @@ namespace BasicLang.Net
 
             var definition = Lookup(fullName).Symbol;
             if (definition == null) return null;
-            if (definition.Arity == 0) return definition;
+
+            if (definition.Arity == 0)
+            {
+                // ⛔ Arity 0 does NOT mean "already closed" — a type NESTED in a generic
+                // declares none of its own. `List<System.Int32>.Enumerator` resolves through the
+                // metadata form `List`1+Enumerator` to a symbol whose Arity is 0, so returning
+                // it unchecked would hand back `List<T>.Enumerator` — an OPEN type — from a
+                // method whose contract is "construct, or answer null; never guess" (P2a-2
+                // Task-9 review item 2). `EnumerableElementTypeName` degrades to null on that,
+                // but `ConstructedIndexer` would describe an open-T indexer: a wrong descriptor,
+                // a wrong export, and CS0246/CS0012 inside generated C# AFTER the ~25 s AOT
+                // publish — precisely the late-failure class this seam exists to remove.
+                //
+                // ⚠ A ROUND-TRIP TEST IS NOT ENOUGH, and measuring said so: TypeName spells
+                // `List<T>.Enumerator` back byte-identically, because the spelling is FAITHFUL —
+                // it is just open. Openness is the actual property, so it is what gets tested.
+                // The round trip is kept alongside it because it catches the other way in: a
+                // caller passing a spelling Lookup accepts but TypeName would not produce
+                // (a metadata `Outer+Inner`, a `List`1`), where "the symbol I got back is the
+                // one this name means" is no longer guaranteed.
+                if (ContainsOpenTypeParameter(definition)) return null;
+                return string.Equals(TypeName(definition), fullName, StringComparison.Ordinal)
+                    ? definition
+                    : null;
+            }
 
             var open = fullName.IndexOf('<');
             if (open < 0) return null;                       // arity > 0 but no argument list
@@ -907,6 +931,56 @@ namespace BasicLang.Net
                 }
             }
             return null;
+        }
+
+        /// <summary>
+        /// True when any level of <paramref name="type"/>'s CONTAINING chain still carries an
+        /// unsubstituted type parameter. The chain — not just the type's own arguments — for the
+        /// same reason <c>NetSurfaceCollector.FirstUnmarshalable</c> walks it:
+        /// <c>List&lt;T&gt;.Enumerator</c> declares no arguments of its OWN and inherits its
+        /// <c>T</c> from its container, which is every bit as unspellable in a monomorphic C
+        /// export.
+        /// </summary>
+        private static bool ContainsOpenTypeParameter(INamedTypeSymbol type)
+        {
+            for (var level = type; level != null; level = level.ContainingType)
+            {
+                foreach (var argument in level.TypeArguments)
+                {
+                    if (FirstOpenTypeParameter(argument) != null)
+                        return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// An open type parameter anywhere inside <paramref name="type"/>, or null. Mirrors
+        /// <c>NetSurfaceCollector.FirstOpenTypeParameter</c>; the two are deliberately separate
+        /// because that one is the §7.2 admissibility filter over Roslyn symbols the collector
+        /// already holds, and this one is the seam's own "never guess" guard.
+        /// </summary>
+        private static ITypeSymbol FirstOpenTypeParameter(ITypeSymbol type)
+        {
+            switch (type)
+            {
+                case ITypeParameterSymbol parameter:
+                    return parameter;
+                case IArrayTypeSymbol array:
+                    return FirstOpenTypeParameter(array.ElementType);
+                case IPointerTypeSymbol pointer:
+                    return FirstOpenTypeParameter(pointer.PointedAtType);
+                case INamedTypeSymbol named:
+                    foreach (var argument in named.TypeArguments)
+                    {
+                        var open = FirstOpenTypeParameter(argument);
+                        if (open != null)
+                            return open;
+                    }
+                    return null;
+                default:
+                    return null;
+            }
         }
 
         /// <summary>

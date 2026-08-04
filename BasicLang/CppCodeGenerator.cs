@@ -360,6 +360,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             bool IsColl(TypeInfo t)
             {
                 if (t == null) return false;
+                // Deliberately NOT marker-guarded (§8.5), unlike MapType/BareCollectionType/
+                // IsCollectionType/GetDefaultValue: this decides only whether to SPLICE the
+                // collection runtime preamble, so a handle-represented List(Of Integer)
+                // answering true costs an unused preamble, never a wild pointer. Guarding it
+                // would be a behaviour change with no failure mode behind it, and the preamble
+                // is emitted unconditionally often enough that a false positive is invisible.
                 // Case-insensitive: BasicLang is VB-style and TypeInfo.Name preserves source
                 // casing, so `list`/`LIST` must match the same as `List`.
                 if (string.Equals(t.Name, "List", StringComparison.OrdinalIgnoreCase)
@@ -3555,6 +3561,28 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             {
                 WriteLine($"{result} = BasicLang::{BclCanonicalName(staticRecv.Name)}::{staticMember.CppName ?? staticMember.MemberName}();");
                 return;
+            }
+
+            // §8.5's category marker, tested BEFORE every name/Kind-keyed arm below — the same
+            // marker-first rule MapType/BareCollectionType/IsCollectionType follow, and for the
+            // same reason (P2a-2 Task-9 review item 1). A handle-represented System.String[] is
+            // TypeInfo(Name: "String", Kind: Array), so BOTH branches of the `.Length` arm below
+            // claimed it and emitted `.length()` / `.size()` on a BasicLang::NetRef.
+            //
+            // `arr.Length` itself never reaches here — IRBuilder stamps §8.5's synthesized
+            // get_Length accessor onto the node (SemanticAnalyzer.NetArrayLengthFor) and the
+            // .NET arm above lowers it. What reaches here is every OTHER member on a handle
+            // receiver, and a handle supports no operation the surface collector emitted an
+            // export for. Refusing is the whole point: the alternative is C++ that either does
+            // not compile or, worse, reinterprets a 64-bit GCHandle as an object pointer.
+            if (fieldAccess.Object?.Type?.NetHandleTypeFullName is { } handleReceiver)
+            {
+                throw NetLoweringRefusal("BL6019",
+                    $"'{fieldAccess.FieldName}' cannot be read from '{handleReceiver}' at the "
+                    + "native boundary: the value is an opaque .NET handle, and a handle supports "
+                    + "only the operations §8.5 emits an export for (indexing, iteration, and an "
+                    + "array's Length). Assign it to a variable of a type the native side owns, "
+                    + "or call a member that returns a §8.3 value.");
             }
 
             // .NET-surface shim — the raw emission below would produce an

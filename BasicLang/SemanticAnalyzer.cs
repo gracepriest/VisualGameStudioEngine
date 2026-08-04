@@ -3059,6 +3059,36 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
+        /// P2a-2 Task 9 (spec §8.5), review item 1 — the synthesized <c>get_Length</c> accessor
+        /// for <c>arr.Length</c> on a HANDLE-represented .NET array, or null for every other
+        /// receiver/member pair.
+        ///
+        /// <para><b>Why there is nothing to look up.</b> A .NET array declares no members in
+        /// metadata — that is the whole reason §8.5 synthesizes its accessors — so the member
+        /// probe records no annotation for <c>arr.Length</c> and <c>IRBuilder</c> has nothing to
+        /// stamp. Without this the access fell through to <c>CppCodeGenerator</c>'s
+        /// name/<c>Kind</c>-keyed <c>.Length</c> arm, which is exactly the by-name decision §8.5
+        /// forbids: a handle <c>System.String[]</c> is <c>TypeInfo(Name: "String", Kind: Array)</c>,
+        /// so BOTH that arm's branches claimed it and emitted <c>.length()</c>/<c>.size()</c> on
+        /// a <c>BasicLang::NetRef</c>.</para>
+        ///
+        /// <para>Multi-dimensional arrays answer null deliberately: §8.5 v1 is one-dimensional,
+        /// and <c>Length</c> on a rank-2 array is the FLATTENED count, which is not what the
+        /// synthesized one-index accessors describe.</para>
+        /// </summary>
+        internal NetMemberDescriptor NetArrayLengthFor(TypeInfo receiverType, string memberName)
+        {
+            var fullName = receiverType?.NetHandleTypeFullName;
+            if (string.IsNullOrEmpty(fullName)) return null;
+            if (!fullName.EndsWith("[]", StringComparison.Ordinal)) return null;
+            if (!string.Equals(memberName, "Length", StringComparison.OrdinalIgnoreCase)) return null;
+
+            var element = fullName.Substring(0, fullName.Length - 2);
+            if (element.EndsWith("]", StringComparison.Ordinal)) return null;
+            return NetAccessorSynthesis.ArrayLengthFor(element);
+        }
+
+        /// <summary>
         /// P2a-2 Task 9 (spec §8.5) — the indexer accessor a <c>coll(i)</c> READ (or, with
         /// <paramref name="forWrite"/>, a <c>coll(i) = v</c> WRITE) on a HANDLE-represented .NET
         /// collection lowers to, or null when the receiver is not one / declares no usable

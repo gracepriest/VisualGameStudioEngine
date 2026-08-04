@@ -589,10 +589,21 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// loop so two <c>For Each</c>es in one function do not redeclare it, and so the
         /// <c>NetRef</c>'s destructor releases the handle even when the body throws — the
         /// §8.6/§11 "epilogue is success-path only" hazard, answered here with RAII rather than
-        /// a trailing statement, exactly as the plan's emission-seam contract requires.
-        /// <c>Dispose</c> is the MANAGED half and does run on the normal and <c>Exit For</c>
-        /// paths; a <c>Return</c> out of the loop body skips it, which is the same known
-        /// Try/Finally limitation this backend already documents.</para>
+        /// a trailing statement, exactly as the plan's emission-seam contract requires. The
+        /// managed <c>Dispose</c> is a trailing STATEMENT and therefore success-path only: it
+        /// runs when the loop ends normally, and a <c>Return</c> out of the body skips it — the
+        /// same known limitation this backend already documents for <c>Return</c> inside a
+        /// <c>Try</c>. The native handle is released either way.</para>
+        ///
+        /// <para><b><c>Exit For</c> does not reach it, and does not exit either — that is
+        /// PRE-EXISTING and shared with the native <c>For Each</c> arm.</b>
+        /// <c>IRBuilder.Visit(ForEachLoopNode)</c> pushes
+        /// <c>LoopContext(endBlock, endBlock)</c>, so a loop's BREAK target and its CONTINUE
+        /// target are the same block, and <see cref="RegionEnd.LoopContinue"/> lowers every
+        /// branch to it as <c>continue;</c>. An <c>Exit For</c> in a <c>For Each</c> therefore
+        /// starts the next iteration on this backend rather than leaving the loop. Faithfully
+        /// reproduced here rather than silently diverging from the arm beside it; the lowering
+        /// itself is chipped separately (<c>task_4cc381f1</c>).</para>
         /// </summary>
         private bool TryLowerNetForEach(IRForEach forEach)
         {

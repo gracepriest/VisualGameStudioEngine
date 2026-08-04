@@ -3366,6 +3366,19 @@ namespace BasicLang.Compiler.IR
                     ? BoundaryTypeRegistry.Categorize(receiverTypeName)
                     : BoundaryTypeCategory.Unknown;
             }
+            else if (_semanticAnalyzer.NetArrayLengthFor(
+                         _semanticAnalyzer.GetNodeType(node.Object), node.MemberName) is { } arrayLength)
+            {
+                // P2a-2 Task-9 review item 1: `arr.Length` on a HANDLE-represented .NET array.
+                // There is no annotation to find — a .NET array declares no members in metadata
+                // at all (which is why §8.5 synthesizes the accessor), so the probe records
+                // nothing and this used to fall through to CppCodeGenerator's name/Kind-keyed
+                // `.Length` arm and emit `parts.size()` on a BasicLang::NetRef. It is the very
+                // next thing a user writes after `parts(0)`.
+                fieldAccess.ResolvedNetTarget = arrayLength;
+                fieldAccess.ResolvedNetTargetIsExact = true;
+                fieldAccess.NetCategory = BoundaryTypeCategory.Unknown;
+            }
 
             EmitInstruction(fieldAccess);
 

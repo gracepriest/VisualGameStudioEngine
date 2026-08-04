@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using BasicLang.Compiler;
+using BasicLang.Compiler.CodeGen;
 using BasicLang.Compiler.CodeGen.CPlusPlus;
 using BasicLang.Compiler.CodeGen.Net;
 using BasicLang.Compiler.IR;
@@ -409,6 +410,127 @@ public class NetCollectionConsumptionTests
         Assert.That(cpp, Does.Contain("BasicLang::net::" + NetNameMangler.Mangle(arrayGet)),
             "`parts(0)` lowers to §8.5's synthetic array getter, not to native pointer "
             + "indexing:\n" + cpp);
+    }
+
+    [Test]
+    public void ArrayLengthRoutesToTheSyntheticExportRatherThanTheNameKeyedArm()
+    {
+        // Review item 1. A handle System.String[] is TypeInfo(Name: "String", Kind: Array), so
+        // BOTH branches of CppCodeGenerator's name/Kind-keyed `.Length` arm claimed it and
+        // emitted `.length()` / `.size()` on a BasicLang::NetRef. There is no annotation to
+        // find either — a .NET array declares no members in metadata at all, which is exactly
+        // why §8.5 synthesizes the accessor.
+        var cpp = CompileToCpp("""
+            Module M
+             Sub Main()
+              Dim r As New Regex("a+")
+              Dim parts = r.Split("a-b-c")
+              Console.WriteLine(parts.Length)
+             End Sub
+            End Module
+            """);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cpp, Does.Contain("BasicLang::net::" + NetNameMangler.Mangle(
+                    NetAccessorSynthesis.ArrayLengthFor("System.String"))));
+            Assert.That(cpp, Does.Not.Contain("parts.size()"),
+                "the std::vector spelling — the Kind == Array branch claiming a handle.");
+            Assert.That(cpp, Does.Not.Contain("parts.length()"),
+                "the std::string spelling — the Name == \"String\" branch claiming a handle. "
+                + "Both branches matched, which is why a marker guard and a producer were "
+                + "needed rather than either alone.");
+        });
+    }
+
+    [Test]
+    public void AnyOtherMemberOnAHandleReceiverRefusesRatherThanEmittingNativeCode()
+    {
+        // The marker guard behind the producer: `arr.Length` routes, everything else must
+        // REFUSE. A handle supports only the operations §8.5 emits an export for, and the
+        // alternative to refusing is C++ that either does not compile or reinterprets a
+        // 64-bit GCHandle as an object pointer.
+        var ex = Assert.Throws<CppCapabilityException>(() => CompileToCpp("""
+            Module M
+             Sub Main()
+              Dim r As New Regex("a+")
+              Dim parts = r.Split("a-b-c")
+              Console.WriteLine(parts.Rank)
+             End Sub
+            End Module
+            """));
+
+        Assert.That(ex!.DiagnosticCode, Is.EqualTo("BL6019"));
+        Assert.That(string.Join(" ", ex.Diagnostics), Does.Contain("System.String[]"),
+            "the message must name the handle type the member was read from.");
+    }
+
+    [Test]
+    public void ConstructedTypeSymbolRefusesATypeNestedInAnOpenGeneric()
+    {
+        // Review item 2. `List<T>.Enumerator` resolves through the metadata form
+        // `List`1+Enumerator` to a symbol whose OWN Arity is 0 — so an arity-0 early return
+        // hands back an OPEN type from a method whose contract is "construct, or answer null;
+        // never guess". EnumerableElementTypeName degrades to null on that, but
+        // ConstructedIndexer would describe an open-T indexer: a wrong descriptor, a wrong
+        // export, and CS0246/CS0012 inside generated C# AFTER the ~25 s AOT publish.
+        //
+        // ⚠ A round-trip test alone does NOT catch this, and that was measured rather than
+        // assumed: TypeName spells `List<T>.Enumerator` back byte-identically, because the
+        // spelling is FAITHFUL — it is just open. Openness is the property, so it is the test.
+        var resolver = SharedResolver.Value;
+        const string openNested = "System.Collections.Generic.List<T>.Enumerator";
+
+        Assert.That(resolver.ResolveType(openNested), Is.Not.Null,
+            "guard: the spelling must still RESOLVE, or this test proves nothing about the "
+            + "arity-0 path — it would be passing for lack of a symbol.");
+        Assert.That(NetTypeResolver.TypeName(resolver.TypeSymbol(openNested)),
+            Is.EqualTo(openNested),
+            "guard: and it must round-trip, so this test cannot pass for the WRONG reason "
+            + "(a spelling mismatch) instead of the openness one.");
+        Assert.That(resolver.ConstructedTypeSymbol(openNested), Is.Null,
+            "an open nested generic must not be answered as though it were constructed.");
+
+        // A genuinely non-generic type still round-trips, so the guard is not a blanket refusal.
+        Assert.That(resolver.ConstructedTypeSymbol("System.Text.StringBuilder"), Is.Not.Null);
+    }
+
+    [Test]
+    public void ANetOutParameterEmitsOutNotRefOnTheCSharpBackend()
+    {
+        // Task-8 quality review I5. ByRefArguments is a List<bool> and cannot tell ref from
+        // out, so CSharpBackend emitted `ref x` for a .NET `out` — a raw CS1620.
+        // NetArgumentRefKinds carries the CLR kind alongside.
+        var intType = new TypeInfo("Integer", TypeKind.Primitive);
+        var call = new IRCall("_tmp", "Probe.TryGet", new TypeInfo("Boolean", TypeKind.Primitive));
+        call.Arguments.Add(new IRVariable("n", intType));
+        call.ByRefArguments.Add(true);
+        call.NetArgumentRefKinds.Add(NetRefKind.Out);
+
+        Assert.That(EmitCSharp(call), Does.Contain("out n"),
+            "a .NET `out` parameter must be spelled `out`; `ref n` is CS1620.");
+
+        // A VB user function records nothing in NetArgumentRefKinds and keeps `ref`, which is
+        // VB's only by-reference form — the fallback must not have moved.
+        var userCall = new IRCall("_tmp2", "UserSub", new TypeInfo("Void", TypeKind.Void));
+        userCall.Arguments.Add(new IRVariable("m", intType));
+        userCall.ByRefArguments.Add(true);
+
+        Assert.That(EmitCSharp(userCall), Does.Contain("ref m"));
+    }
+
+    /// <summary>A one-call module rendered by the C# backend.</summary>
+    private static string EmitCSharp(IRCall call)
+    {
+        var module = new IRModule("RefKindModule");
+        var main = new IRFunction("Main", new TypeInfo("Void", TypeKind.Void));
+        var entry = new BasicBlock("entry");
+        entry.AddInstruction(call);
+        entry.AddInstruction(new IRReturn());
+        main.Blocks.Add(entry);
+        main.EntryBlock = entry;
+        module.Functions.Add(main);
+        return new BasicLang.Compiler.CodeGen.CSharp.ImprovedCSharpCodeGenerator().Generate(module);
     }
 
     [Test]

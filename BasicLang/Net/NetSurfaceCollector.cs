@@ -229,12 +229,16 @@ namespace BasicLang.Net
             if (instruction == null || !visited.Add(instruction))
                 return;
 
-            // The carriers are exactly the FIVE node types the C++ lowering has an arm for
-            // (IRCall, IRInstanceMethodCall, IRNewObject, IRFieldAccess, IRFieldStore — a
-            // construction carries its resolved ctor; a member READ carries the property/field
-            // descriptor, i.e. the getter-shaped slot; a member WRITE carries the synthesized
-            // set_X accessor from NetAccessorSynthesis, collected verbatim so §12.4's
-            // slots ≡ exports holds). Asked through INetCarrying rather than five near-identical
+            // The carriers are exactly the SEVEN node types the C++ lowering has an arm for
+            // (IRCall, IRInstanceMethodCall, IRNewObject, IRFieldAccess, IRFieldStore, and —
+            // since Task 9 (§8.5) — IRIndexerAccess and IRIndexerStore: a construction carries
+            // its resolved ctor; a member READ carries the property/field descriptor, i.e. the
+            // getter-shaped slot; a member WRITE carries the synthesized set_X accessor from
+            // NetAccessorSynthesis, collected verbatim so §12.4's slots ≡ exports holds; an
+            // indexer READ carries get_Item or §8.5's synthetic array getter and a WRITE its
+            // set_Item counterpart). IRForEach is handled in its own arm BELOW because it
+            // carries FOUR descriptors and this interface holds one.
+            // Asked through INetCarrying rather than seven near-identical
             // `case` arms: making a SIXTH node type carry .NET resolution without giving the
             // lowering an arm for it is the hazard IRBaseMethodCall's deletion comment records —
             // the member would reach the surface (a proxy slot AND a shim export) while its call
