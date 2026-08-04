@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using BasicLang.Net;
+using Microsoft.CodeAnalysis;   // ITypeSymbol — the TypeName seam's input (§7.3 collision pin)
 using NUnit.Framework;
 
 namespace VisualGameStudio.Tests.Blnet;
@@ -150,6 +151,56 @@ public class NetNameManglerTests
             "Recalculate share a short type name and an otherwise identical signature. A " +
             "mangler keyed on the SHORT declaring-type name would collide them into one export " +
             "slot. NetNameMangler must incorporate the FULLY-QUALIFIED declaring type.");
+    }
+
+    /// <summary>
+    /// <b>The collision §7.3 lost to a naming defect, and P2a-2 Task 8b restored (regression
+    /// pin).</b> <c>NetTypeResolver.QualifiedName</c> used to walk containing types by NAME, so
+    /// <c>List&lt;int&gt;.Enumerator</c> and <c>List&lt;string&gt;.Enumerator</c> BOTH spelled
+    /// <c>System.Collections.Generic.List.Enumerator</c>. Two genuinely different declaring types
+    /// arriving at the mangler as one string is not a mangler bug — it hashes what it is handed —
+    /// which is exactly why the guarantee has to be pinned at this seam: <c>MoveNext()</c> on the
+    /// two differs in NOTHING else (same kind, name, static-ness, arity, empty parameter list), so
+    /// one export slot would have served both and <c>NetShimGenerator.Plan</c>'s de-dup would have
+    /// silently DROPPED the second — §12.4's "a call silently reaches the wrong member".
+    ///
+    /// <para>Both spellings are produced by the resolver, never typed here: a metadata name cannot
+    /// express a constructed generic (<c>List`1</c> says nothing about its argument), so there is
+    /// no by-name entry point that could reach either one — hence <c>TypeName</c>'s internal test
+    /// seam.</para>
+    /// </summary>
+    [Test]
+    public void CollisionFreedomOverTwoConstructionsOfOneNestedGeneric()
+    {
+        var resolver = FrameworkOnly();
+        var list = resolver.TypeSymbol("System.Collections.Generic.List`1");
+        var int32 = resolver.TypeSymbol("System.Int32");
+        var @string = resolver.TypeSymbol("System.String");
+        Assert.That(new object?[] { list, int32, @string }, Has.None.Null,
+            "fixture provenance: the framework closure must supply List`1, Int32 and String.");
+
+        string EnumeratorOf(ITypeSymbol argument) =>
+            NetTypeResolver.TypeName(
+                list!.Construct(argument).GetTypeMembers("Enumerator").Single());
+
+        var ofInt = EnumeratorOf(int32!);
+        var ofString = EnumeratorOf(@string!);
+
+        var a = Member(ofInt, "MoveNext", 0);
+        var b = Member(ofString, "MoveNext", 0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ofInt, Is.EqualTo("System.Collections.Generic.List<System.Int32>.Enumerator"));
+            Assert.That(ofString, Is.EqualTo("System.Collections.Generic.List<System.String>.Enumerator"));
+            Assert.That(IndependentSignatureKey(a), Is.Not.EqualTo(IndependentSignatureKey(b)),
+                "fixture guard: if the two declaring-type spellings ever merge again, the oracle "
+                + "sees one member and this test can no longer prove anything — that merge IS the "
+                + "regression, so it must fail HERE rather than pass vacuously below.");
+            Assert.That(NetNameMangler.Mangle(a), Is.Not.EqualTo(NetNameMangler.Mangle(b)),
+                "two distinct nested generics must not mangle alike (§7.3: collision-free over "
+                + "the FULLY-QUALIFIED declaring type).");
+        });
     }
 
     [Test]

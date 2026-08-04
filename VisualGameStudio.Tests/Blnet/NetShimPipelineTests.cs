@@ -863,35 +863,36 @@ public class NetShimPhaseTests
     }
 
     /// <summary>
-    /// ⛔ <b>A HARD Task-9 PREREQUISITE, found by adding this fixture (P2a-2 Task-8 Step 0,
-    /// 7b-I8) and pinned here rather than left to be discovered as an infinite loop.</b>
+    /// <b>The HARD Task-9 prerequisite, now LANDED (P2a-2 Task 8b).</b> Written by Task 8's
+    /// Step 0 (7b-I8) asserting the BUG from both directions — the produced spelling was
+    /// <c>NotFound</c>, only the metadata form resolved — and FLIPPED here, which is what its
+    /// own failure message asked whoever fixed the arity round-trip to do.
     ///
-    /// <para><c>NetTypeResolver.TypeName</c> builds a nested type's spelling from
-    /// <c>QualifiedName</c>, which walks containing types by NAME and drops their generic
-    /// arity — so <c>List&lt;T&gt;.Enumerator</c> spells
-    /// <c>System.Collections.Generic.List.Enumerator</c>, while the metadata name its own
-    /// <c>Lookup</c> needs is <c>System.Collections.Generic.List`1+Enumerator</c>. Verified
-    /// both ways in this test: the produced spelling does NOT resolve, the metadata form does.
-    /// The surface collector admits <c>GetEnumerator()</c> quite happily (the nested type has
-    /// arity 0 of its own, so the open-type-parameter check never fires), so the descriptor is
-    /// real and reaches the generator.</para>
+    /// <para><c>NetTypeResolver.QualifiedName</c> used to walk containing types by NAME, which
+    /// dropped a containing generic's arity AND its arguments: <c>List&lt;T&gt;.Enumerator</c>
+    /// spelled <c>System.Collections.Generic.List.Enumerator</c>, a name the resolver's own
+    /// <c>Lookup</c> could not resolve. Every level now carries its own type-argument list, and
+    /// <c>CandidateMetadataNames</c> derives the metadata form
+    /// (<c>System.Collections.Generic.List`1+Enumerator</c>) back out of it — so a name the
+    /// resolver PRODUCES is a name the resolver RESOLVES.</para>
     ///
-    /// <para><b>Two consequences, and Task 9 hits both.</b> (1) The receiver lookup answers
-    /// "not a value type" for every enumerator struct, so the shim reaches it through
-    /// <c>((List&lt;int&gt;.Enumerator)o!)</c> — §8.5's mutate-the-temporary
-    /// <c>MoveNext</c>-forever loop, which is not a diagnostic. (2)
-    /// <c>NetShimGenerator.Qualified</c> would emit
-    /// <c>global::System.Collections.Generic.List.Enumerator</c>, which is not valid C# either.
-    /// The fix belongs with §8.5: either teach <c>TypeName</c>/<c>CandidateMetadataNames</c> the
-    /// arity form, or derive the value-type set from the <c>ITypeSymbol</c> the COLLECTOR
-    /// already holds (which <c>NetShimGenerator.Emit</c>'s own parameter docs call the only
-    /// thing that can really know). Flip this test when it lands.</para>
+    /// <para><b>Why this one test is worth a fixture of its own.</b> The surface collector admits
+    /// <c>GetEnumerator()</c> quite happily (the nested type has arity 0 of its OWN, so the
+    /// open-type-parameter check never fires), so the descriptor is real and reaches the
+    /// generator. With the enumerator invisible to this derivation the shim reached it through
+    /// <c>((List&lt;int&gt;.Enumerator)o!)</c> instead of <c>Unsafe.Unbox</c> — §8.5's
+    /// mutate-the-temporary <c>MoveNext</c>-forever loop, which is an INFINITE LOOP WITH NO
+    /// DIAGNOSTIC, and the one failure in this pipeline that no gate downstream can see. Task 9
+    /// collects <c>GetEnumerator()</c> the moment it implements <c>For Each</c>.</para>
     ///
-    /// <para>Until then the 7b-I7 poisoning is what keeps the damage bounded: the answer is
-    /// INCOMPLETE, so a wrong shim can never be committed to the cache and hit forever.</para>
+    /// <para>(§8.5 also routes <c>For Each</c> through <c>IEnumerable&lt;T&gt;</c> rather than the
+    /// concrete struct-returning overload, so Task 9 should not reach this shape by its own
+    /// choice — but "the correct lowering avoids it" is not a reason for the derivation
+    /// underneath to answer wrongly when it does arrive, from a <c>&lt;NetProxy&gt;</c>
+    /// declaration or anywhere else.)</para>
     /// </summary>
     [Test]
-    public void ValueTypeReceiverNames_CannotSeeANestedGenericStruct_Task9Prerequisite()
+    public void ValueTypeReceiverNames_SeesANestedGenericStruct_TheTask9Prerequisite()
     {
         var resolver = NetStubHarness.SharedResolver.Value;
 
@@ -911,25 +912,34 @@ public class NetShimPhaseTests
 
         Assert.Multiple(() =>
         {
+            Assert.That(enumeratorSpelling,
+                Is.EqualTo("System.Collections.Generic.List<T>.Enumerator"),
+                "the produced spelling is C# TYPE SYNTAX, per level — NetShimGenerator.Qualified "
+                + "emits it after a bare 'global::' prefix, so a metadata spelling ('List`1+"
+                + "Enumerator') would not compile. The literal is pinned beside the derived value "
+                + "on purpose: this is the exact string the mangler hashes (§7.3) and the shim "
+                + "casts through.");
             Assert.That(
                 resolver.ResolveTypeDetailed(enumeratorSpelling).Outcome,
-                Is.EqualTo(NetTypeLookupOutcome.NotFound),
-                $"'{enumeratorSpelling}' is what NetTypeResolver.TypeName produced for "
-                + "List<T>.Enumerator, and its own Lookup cannot resolve it. If this now "
-                + "RESOLVES, the arity round-trip was fixed — flip this whole test to assert "
-                + "that the enumerator IS reported as a value type.");
+                Is.EqualTo(NetTypeLookupOutcome.Resolved),
+                $"'{enumeratorSpelling}' is what NetTypeResolver.TypeName produces for "
+                + "List<T>.Enumerator, and its own Lookup must resolve it. If this goes back to "
+                + "NotFound the arity round-trip regressed, and §8.5's infinite MoveNext comes "
+                + "back with it.");
             Assert.That(
                 resolver.ResolveTypeDetailed("System.Collections.Generic.List`1+Enumerator").Outcome,
                 Is.EqualTo(NetTypeLookupOutcome.Resolved),
-                "the METADATA spelling resolves, which is what makes this a naming defect rather "
-                + "than a missing framework reference.");
-            Assert.That(names, Is.Empty,
-                "today the enumerator struct is invisible to the receiver set — §8.5's infinite "
-                + "MoveNext, waiting for Task 9.");
-            Assert.That(complete, Is.False,
-                "and it MUST at least report incomplete, so the wrong shim is never cached "
-                + "(7b-I7). If this goes true while the lookup still fails, the poisoning was "
-                + "removed and the bug became permanent.");
+                "the METADATA spelling keeps working — the C# form is an ADDITIONAL accepted "
+                + "spelling, not a replacement; <NetProxy Include=\"…List`1+Enumerator\" /> and "
+                + "every caller that already holds a metadata name must keep resolving.");
+            Assert.That(names, Is.EquivalentTo(new[] { enumeratorSpelling }),
+                "the enumerator struct MUST be in the value-type receiver set, or the shim "
+                + "reaches it through an unboxing cast and §8.5's MoveNext-forever loop is back "
+                + "— an infinite loop with no diagnostic, which no gate downstream can see.");
+            Assert.That(complete, Is.True,
+                "and the answer is now COMPLETE, so §10.2's cache key is no longer poisoned by "
+                + "this shape (7b-I7's containment did its job and is no longer load-bearing "
+                + "here). A false 'incomplete' costs a ~25 s publish on every build.");
         });
     }
 

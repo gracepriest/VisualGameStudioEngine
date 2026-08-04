@@ -860,7 +860,8 @@ BOTH emitters." `FirstUnmarshalable` appears in no test at all. That half moved 
 The four §6.4 rows and enum arguments are CARRIED FORWARD — see the blockquote above and
 Task 8c for the measured designs.
 
-⛔ **Found by Step 0's 7b-I8 and owed to TASK 9:** `NetTypeResolver.TypeName` builds a nested
+⛔ **Found by Step 0's 7b-I8 and owed to TASK 9** — ✅ **FIXED by Task 8b below; kept for the
+record.** `NetTypeResolver.TypeName` builds a nested
 type's spelling from `QualifiedName`, which walks containing types by NAME and **drops their
 generic arity** — `List<T>.Enumerator` spells `System.Collections.Generic.List.Enumerator`,
 while the metadata name its own `Lookup` needs is
@@ -877,9 +878,53 @@ the value-type set from the `ITypeSymbol` the COLLECTOR holds, which `NetShimGen
 parameter docs already call the only thing that can really know. Until then 7b-I7's key poisoning
 bounds the damage: the answer reports INCOMPLETE, so the wrong shim is never cached.
 
-### Task 8b: `TypeName` generic-arity fix — **HARD BLOCKER for Task 9**
+### Task 8b: `TypeName` generic-arity fix — **HARD BLOCKER for Task 9** ✅ DONE
 
 Found by Task 8's Step-0 `ValueTypeReceiverNames` test (7b-I8), which existed for exactly this.
+
+> **DONE.** `QualifiedName` now spells EVERY nesting level with its own type-argument list
+> (`System.Collections.Generic.List<T>.Enumerator`) — the same per-level shape `ReceiverSyntax`
+> already built for the overload probe — and `CandidateMetadataNames` derives the metadata form
+> (`List`1+Enumerator`) back out of it, so **a name the resolver PRODUCES is a name it RESOLVES**.
+> The two spellings are deliberately different strings and both are pinned: the C# form is what
+> `csc` accepts behind `NetShimGenerator`'s `global::` and what §7.3 must hash (a metadata name
+> cannot express a CONSTRUCTED generic, so it would merge `List<int>.Enumerator` with
+> `List<string>.Enumerator` into one export slot); the metadata form is what
+> `GetTypeByMetadataName` wants. A constructed generic therefore resolves to its DEFINITION —
+> correct for every question asked through a name (existence, accessibility, kind, members,
+> value-type-ness), and the reason the mangler keeps the spelling rather than re-deriving it.
+>
+> **Export-name analysis (measured at `9bb301c`, not argued).** A mangled name can only move when
+> the DECLARING type or a PARAMETER type is nested inside a generic — the return type is in
+> neither `CanonicalIdentity` nor the stem. Over the ManagedOwned five (292 members) and the
+> 43-type mangler corpus (3,079 members): **0 export names move**; 7 RETURN spellings change
+> (`List<T>.GetEnumerator`, `Dictionary`'s `GetEnumerator`/`Keys`/`Values`, `HashSet`/`Queue`/
+> `Stack` `GetEnumerator`). The `<NetProxy>`/wire-shape fixtures are hand-built over
+> `MyLib.Widget`-style names with no generics at all. So §12.4 identity is UNCHANGED for every
+> surface that exists today — no churn commit was needed. Had one moved, `NetShimCache`'s key
+> hashes the mangled member set (component 2), so a moved name is a MISS, never a stale hit.
+>
+> **The publish cliff is gone too.** Same measurement: of 49 distinct declaring-type spellings the
+> corpus produces, **8 were `NotFound`** — every generic one (`List<T>`, `Dictionary<TKey,
+> TValue>`, `HashSet<T>`, `Queue<T>`, `Stack<T>`, `Task<TResult>`, `Nullable<T>`,
+> `ValueTuple<T1, T2>`) — each of which made `ValueTypeReceiverNames` report INCOMPLETE and nulled
+> §10.2's key: an unconditional ~25 s publish on every build. Now 0.
+>
+> Tests: `NetShimPipelineTests.ValueTypeReceiverNames_SeesANestedGenericStruct_TheTask9Prerequisite`
+> (the flipped 7b-I8 pin), `NetTypeResolverTests.NestedGenericSpellingRoundTripsBackThroughLookup`
+> / `ADoublyNestedGenericSpellingAlsoRoundTrips` / `EveryDeclaringTypeSpellingTheResolverProducesResolvesBack`
+> / `AConstructedGenericResolvesToItsDefinition`,
+> `NetNameManglerTests.CollisionFreedomOverTwoConstructionsOfOneNestedGeneric`.
+> Gates: fast 4083/0/1 (from 4078/0/1, +5) · Blnet fast 500/0/0 (from 495) · frozen P0 16/16 ·
+> `NetShimPipelineTests` Integration 5/5 · §12.4 drift suites 98/0/0.
+>
+> ⛔ **Left for Task 9, deliberately not fixed here:** the collector still ADMITS a member whose
+> signature mentions a type nested in an OPEN generic (`List<T>.GetEnumerator()`), because
+> `FirstUnmarshalable` hunts open type parameters only in the type's OWN arguments and
+> `List<T>.Enumerator` has none. Such a member now names a resolvable, correctly-classified type
+> but still emits `global::…List<T>.Enumerator`, which `csc` rejects — loudly, at publish, exactly
+> as before. §8.5 routes `For Each` through `IEnumerable<T>` so Task 9 should not choose that
+> shape; a `<NetProxy Include="System.Collections.Generic.List`1" />` still reaches it.
 
 **The bug:** `NetTypeResolver.TypeName` drops a CONTAINING generic's arity, so
 `List<T>.Enumerator` spells `System.Collections.Generic.List.Enumerator` — a name its own

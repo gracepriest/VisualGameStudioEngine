@@ -2,8 +2,10 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 
@@ -244,9 +246,12 @@ namespace BasicLang.Net
         /// diagnostics.
         ///
         /// <para><b>Accepted spellings.</b> A metadata name is accepted verbatim
-        /// (<c>Outer+Inner</c>, <c>List`1</c>), and a nested type may also be spelled with dots
+        /// (<c>Outer+Inner</c>, <c>List`1</c>), a nested type may also be spelled with dots
         /// (<c>System.Environment.SpecialFolder</c>) because BasicLang source has no <c>+</c>
-        /// syntax and can produce no other form.</para>
+        /// syntax and can produce no other form, and — since P2a-2 Task 8b — this class's OWN
+        /// C# spelling is accepted too (<c>List&lt;System.Int32&gt;</c>,
+        /// <c>List&lt;T&gt;.Enumerator</c>), because <see cref="TypeName"/> hands that form to
+        /// callers who then look it up again. See <see cref="CandidateMetadataNames"/>.</para>
         ///
         /// <para><b>Generic arity is required and never guessed.</b>
         /// <c>System.Collections.Generic.List`1</c> resolves;
@@ -255,9 +260,12 @@ namespace BasicLang.Net
         /// <c>Func`1</c>…<c>Func`17</c>, so there is no arity to fall back to and guessing one
         /// would fabricate a binding, which is the precise failure this class exists to remove.
         /// Every caller that can reach here parsed <c>List(Of Integer)</c> and therefore knows the
-        /// arity. (Consequence: <see cref="NetTypeDescriptor.FullName"/> does not round-trip through
-        /// this method for a generic type — it reports <c>List&lt;T&gt;</c>, the readable form,
-        /// because its consumers are diagnostics and the mangler, not this lookup.)</para>
+        /// arity. A C# spelling states its arity through the argument COUNT, so
+        /// <c>List&lt;System.Int32&gt;</c> is not a guess — but the count is all that survives the
+        /// translation, so a CONSTRUCTED generic resolves to its DEFINITION
+        /// (<see cref="NetTypeDescriptor.FullName"/> then reports <c>List&lt;T&gt;</c>, not
+        /// <c>List&lt;System.Int32&gt;</c>). Everything this class answers about a type — existence,
+        /// accessibility, kind, members — is a property of the definition.</para>
         ///
         /// <para><b><see cref="NetTypeDescriptor.IsPublic"/> is EFFECTIVE accessibility.</b> A
         /// public type nested inside an internal one reports false, because a shim that references
@@ -636,10 +644,42 @@ namespace BasicLang.Net
         /// itself, then progressively more of its trailing dots reinterpreted as nested-type
         /// separators (<c>a.b.c</c> → <c>a.b+c</c> → <c>a+b+c</c>). Rightmost first, because the
         /// leading segments are far more likely to be a namespace.
+        ///
+        /// <para><b>Then the same ladder again over the C#-generic spelling's metadata form</b>
+        /// (P2a-2 Task 8b), so that a name <see cref="TypeName"/> PRODUCES is a name this class
+        /// RESOLVES: <c>System.Collections.Generic.List&lt;System.Int32&gt;.Enumerator</c> reaches
+        /// <c>GetTypeByMetadataName</c> as <c>System.Collections.Generic.List`1+Enumerator</c>.
+        /// Without it every generic-typed receiver — nested or not — was NotFound, which the
+        /// §8.5 receiver derivation reports as INCOMPLETE, which nulls §10.2's cache key: an
+        /// unconditional ~25 s AOT publish on EVERY build of such a program, forever.</para>
+        ///
+        /// <para><b>Ordering is the safety property.</b> The literal ladder is emitted FIRST and in
+        /// full, so a metadata name that genuinely contains angle brackets — every
+        /// compiler-generated <c>&lt;&gt;c__DisplayClass</c> — still resolves through its own
+        /// spelling and cannot be displaced by the derived one. The derived form is additive: it
+        /// can turn a NotFound into a Resolved, never a Resolved into something else.</para>
+        ///
+        /// <para>Cost runs the right way. The second ladder only exists for a spelling containing
+        /// <c>&lt;</c>, and for those it is what makes the FAST path hit at all — every one of them
+        /// used to fall through to the miss path, which scans every referenced assembly per
+        /// candidate at ~17 ms. A spelling that still misses now pays that scan twice over; it is
+        /// memoized like any other answer.</para>
         /// </summary>
         private static IReadOnlyList<string> CandidateMetadataNames(string fullName)
         {
-            var candidates = new List<string> { fullName };
+            var candidates = new List<string>();
+            AddNestingLadder(candidates, fullName);
+
+            var metadataForm = MetadataFormOfGenericSpelling(fullName);
+            if (metadataForm != null)
+                AddNestingLadder(candidates, metadataForm);
+
+            return candidates;
+        }
+
+        private static void AddNestingLadder(List<string> candidates, string fullName)
+        {
+            candidates.Add(fullName);
             var chars = fullName.ToCharArray();
             for (var i = chars.Length - 1; i > 0; i--)
             {
@@ -648,7 +688,104 @@ namespace BasicLang.Net
                 chars[i] = '+';
                 candidates.Add(new string(chars));
             }
-            return candidates;
+        }
+
+        /// <summary>
+        /// <paramref name="spelling"/> rewritten from C# generic syntax into a metadata name —
+        /// <c>Ns.Outer&lt;A, B&gt;.Inner</c> → <c>Ns.Outer`2+Inner</c> — or <b>null</b> when it
+        /// carries no type-argument list (nothing to translate) or is not well-formed enough to
+        /// translate confidently.
+        ///
+        /// <para>Only the argument COUNT survives, because that is all a metadata name can carry:
+        /// <c>List&lt;System.Int32&gt;</c> and <c>List&lt;T&gt;</c> both resolve to the
+        /// <c>List`1</c> DEFINITION. That is the right answer for every question asked through a
+        /// name here — existence, accessibility, value-type-ness, members — all of which are
+        /// properties of the definition. It is deliberately NOT enough to distinguish two
+        /// constructions, which is exactly why <see cref="TypeName"/> keeps the C# form as the
+        /// spelling it hands to the mangler.</para>
+        ///
+        /// <para>A dot AFTER a type-argument list is nesting, unconditionally — C# has no namespace
+        /// inside a constructed type — so those become <c>+</c> here rather than being left to the
+        /// progressive ladder to guess. Leading dots stay dots and keep their ladder, since a
+        /// namespace and an outer type are still indistinguishable there.</para>
+        ///
+        /// <para>Array and pointer spellings (<c>List&lt;System.Int32&gt;[]</c>) translate into a
+        /// candidate that simply does not resolve, which is what they do today as well —
+        /// <c>GetTypeByMetadataName</c> has no array syntax — so they are not special-cased.</para>
+        /// </summary>
+        private static string MetadataFormOfGenericSpelling(string spelling)
+        {
+            if (spelling.IndexOf('<') < 0)
+                return null;
+
+            var metadata = new StringBuilder(spelling.Length);
+            var sawTypeArguments = false;
+
+            for (var i = 0; i < spelling.Length; i++)
+            {
+                var c = spelling[i];
+                if (c == '.')
+                {
+                    metadata.Append(sawTypeArguments ? '+' : '.');
+                    continue;
+                }
+                if (c == '>')
+                    return null;            // unbalanced — do not guess
+                if (c != '<')
+                {
+                    metadata.Append(c);
+                    continue;
+                }
+
+                var end = TypeArgumentListEnd(spelling, i, out var arity);
+                if (end < 0)
+                    return null;            // unterminated — do not guess
+
+                metadata.Append('`').Append(arity.ToString(CultureInfo.InvariantCulture));
+                sawTypeArguments = true;
+                i = end;
+            }
+
+            return metadata.ToString();
+        }
+
+        /// <summary>
+        /// The index of the <c>&gt;</c> closing the list that opens at <paramref name="start"/>,
+        /// and how many arguments it holds; -1 when it never closes. Depth-aware, because an
+        /// argument can be generic itself and carry its own commas
+        /// (<c>List&lt;Dictionary&lt;A, B&gt;&gt;</c> is arity ONE).
+        /// </summary>
+        private static int TypeArgumentListEnd(string spelling, int start, out int arity)
+        {
+            arity = 0;
+            var depth = 0;
+            var sawArgumentText = false;
+
+            for (var i = start; i < spelling.Length; i++)
+            {
+                var c = spelling[i];
+                if (c == '<')
+                {
+                    depth++;
+                    continue;
+                }
+                if (c == '>')
+                {
+                    depth--;
+                    if (depth != 0)
+                        continue;
+                    // An EMPTY list is arity 0 rather than 1 — `<>` is not a type argument, it is
+                    // the leading pair of a compiler-generated name that reached here by accident.
+                    arity = sawArgumentText ? arity + 1 : 0;
+                    return i;
+                }
+                if (depth == 1 && c == ',')
+                    arity++;
+                else if (depth >= 1 && !char.IsWhiteSpace(c))
+                    sawArgumentText = true;
+            }
+
+            return -1;
         }
 
         /// <summary>
@@ -689,8 +826,29 @@ namespace BasicLang.Net
         /// </list>
         /// <para>Both matter twice over: as §7.3 export names, and as components of the signature
         /// key <see cref="CandidateMembers"/> collapses on.</para>
+        ///
+        /// <para><b>The spelling is C# TYPE SYNTAX, not a metadata name</b> — <c>Outer&lt;A&gt;.Inner</c>,
+        /// never <c>Outer`1+Inner</c>. Forced from two directions at once and the two agree:
+        /// <c>NetShimGenerator.Qualified</c> emits this string after a bare <c>global::</c> prefix,
+        /// so it has to be something <c>csc</c> accepts; and a metadata name cannot express a
+        /// CONSTRUCTED generic at all (<c>List`1</c> says nothing about <c>&lt;System.Int32&gt;</c>),
+        /// so it would erase a distinction §7.3 needs — <c>List&lt;int&gt;.Enumerator.MoveNext()</c>
+        /// and <c>List&lt;string&gt;.Enumerator.MoveNext()</c> are two members that must not share
+        /// one export slot. <see cref="ReceiverSyntax"/> already builds exactly this shape for the
+        /// overload probe; the lookup side meets it in <see cref="CandidateMetadataNames"/>, which
+        /// derives the metadata form back out of it, so <b>a name this method PRODUCES is a name
+        /// <see cref="Lookup"/> RESOLVES</b>. That round trip is the property P2a-2 Task 8b existed
+        /// to restore, and it is asserted in both directions
+        /// (<c>NetTypeResolverTests.NestedGenericSpellingRoundTripsBackThroughLookup</c>).</para>
         /// </summary>
-        private static string TypeName(ITypeSymbol type)
+        /// <remarks>
+        /// INTERNAL rather than private purely as a test seam: §7.3's collision-freedom claim is
+        /// about the STRING this produces for two distinct constructed nesting levels
+        /// (<c>List&lt;int&gt;.Enumerator</c> vs <c>List&lt;string&gt;.Enumerator</c>), and neither
+        /// is reachable through a by-NAME entry point — a metadata name cannot spell either one.
+        /// Same seam-for-testability precedent as <c>CppProjectBuilder.ValueTypeReceiverNames</c>.
+        /// </remarks>
+        internal static string TypeName(ITypeSymbol type)
         {
             if (type is IArrayTypeSymbol array)
                 return TypeName(array.ElementType) + "[" + new string(',', Math.Max(0, array.Rank - 1)) + "]";
@@ -710,22 +868,40 @@ namespace BasicLang.Net
                 if (named.SpecialType == SpecialType.System_UIntPtr)
                     return "System.UIntPtr";
 
-                var name = QualifiedName(named);
-                return named.TypeArguments.Length == 0
-                    ? name
-                    : name + "<" + string.Join(", ", named.TypeArguments.Select(TypeName)) + ">";
+                return QualifiedName(named);
             }
 
             // Type parameters, dynamic, function pointers: nothing to normalize.
             return type.ToDisplayString(FullNameFormat);
         }
 
-        /// <summary>Namespace + containing types + name, with no type-argument list.</summary>
+        /// <summary>
+        /// Namespace + containing types + name, with EVERY level carrying its own type-argument
+        /// list: <c>System.Collections.Generic.List&lt;System.Int32&gt;.Enumerator</c>.
+        ///
+        /// <para><b>Walking the containing chain by <c>type.Name</c> dropped the containing
+        /// generic's arity AND its arguments</b>, which spelled <c>List&lt;T&gt;.Enumerator</c> as
+        /// <c>System.Collections.Generic.List.Enumerator</c> — a name this class's own
+        /// <see cref="Lookup"/> answered <see cref="NetTypeLookupOutcome.NotFound"/> for, and which
+        /// <c>NetShimGenerator</c> would have emitted as the uncompilable
+        /// <c>global::System.Collections.Generic.List.Enumerator</c>. Two things then went wrong
+        /// silently rather than loudly (P2a-2 Task 8b): the §8.5 value-type receiver set, which is a
+        /// BY-NAME lookup, answered "reference type" for every enumerator struct — so the shim
+        /// reached it through an unboxing cast and <c>MoveNext</c> mutated the temporary FOREVER,
+        /// with no diagnostic — and two constructions of one nested type mangled to a single §7.3
+        /// export name, which §12.4 makes a wrong-member call rather than a build error.</para>
+        ///
+        /// <para>Arity is carried by the ARGUMENTS, not by a <c>`n</c> suffix, because this is a C#
+        /// spelling (see <see cref="TypeName"/>); <see cref="CandidateMetadataNames"/> converts one
+        /// into the other. Roslyn's <see cref="INamedTypeSymbol.TypeArguments"/> is per-symbol — a
+        /// nested type does NOT repeat its container's arguments — which is the same per-segment
+        /// shape metadata names use, so the two forms translate level for level.</para>
+        /// </summary>
         private static string QualifiedName(INamedTypeSymbol named)
         {
             var parts = new List<string>();
             for (var type = named; type != null; type = type.ContainingType)
-                parts.Insert(0, type.Name);
+                parts.Insert(0, Segment(type));
 
             var containingNamespace = named.ContainingNamespace;
             if (containingNamespace != null && !containingNamespace.IsGlobalNamespace)
@@ -733,6 +909,12 @@ namespace BasicLang.Net
 
             return string.Join(".", parts);
         }
+
+        /// <summary>One nesting level: its name plus its OWN type arguments, if any.</summary>
+        private static string Segment(INamedTypeSymbol type) =>
+            type.TypeArguments.Length == 0
+                ? type.Name
+                : type.Name + "<" + string.Join(", ", type.TypeArguments.Select(TypeName)) + ">";
 
         // ------------------------------------------------------------------
         // Description

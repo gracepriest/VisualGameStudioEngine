@@ -189,6 +189,201 @@ public class NetTypeResolverTests
             "System.Func has no zero-arity form to fall back on.");
     }
 
+    /// <summary>
+    /// <b>P2a-2 Task 8b — the produced spelling and the resolvable spelling are the same string.</b>
+    /// <c>QualifiedName</c> used to walk containing types by NAME, dropping a containing generic's
+    /// arity and arguments: <c>List&lt;T&gt;.Enumerator</c> came out as
+    /// <c>System.Collections.Generic.List.Enumerator</c>, which this resolver's own
+    /// <c>Lookup</c> answered NotFound for. That was a HARD Task-9 blocker rather than a cosmetic
+    /// defect, because the §8.5 value-type receiver set is a BY-NAME lookup: an enumerator struct
+    /// that fails to resolve reads as a reference type, the shim reaches it through an unboxing
+    /// cast, and <c>MoveNext</c> mutates the temporary forever with no diagnostic.
+    ///
+    /// <para>Both directions are asserted, and every input is DERIVED from the resolver rather
+    /// than typed in — a test that spells the name itself would pass while the producer emitted
+    /// something else entirely.</para>
+    /// </summary>
+    [Test]
+    public void NestedGenericSpellingRoundTripsBackThroughLookup()
+    {
+        var resolver = FrameworkOnly();
+
+        var getEnumerator = resolver.GetMembers("System.Collections.Generic.List`1")
+            .FirstOrDefault(m => m.Name == "GetEnumerator" && m.Parameters.Count == 0);
+        Assert.That(getEnumerator, Is.Not.Null,
+            "fixture provenance: List<T>.GetEnumerator() must be in the §7.2 surface, or this "
+            + "test is no longer exercising the shape Task 9 collects.");
+        var produced = getEnumerator!.TypeFullName;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(produced, Is.EqualTo("System.Collections.Generic.List<T>.Enumerator"),
+                "the spelling is C# type syntax with EVERY level carrying its own type-argument "
+                + "list. NetShimGenerator.Qualified emits this string after a bare 'global::', so "
+                + "a metadata spelling would not compile; and it is what NetNameMangler hashes, "
+                + "so dropping the containing arity merged two constructed nestings into one "
+                + "export name (§7.3/§12.4).");
+            Assert.That(resolver.ResolveTypeDetailed(produced).Outcome,
+                Is.EqualTo(NetTypeLookupOutcome.Resolved),
+                "a name this resolver PRODUCES must be a name it RESOLVES — CandidateMetadataNames "
+                + "derives 'System.Collections.Generic.List`1+Enumerator' from it. Without that, "
+                + "CppProjectBuilder.ValueTypeReceiverNames cannot see a single enumerator struct.");
+            Assert.That(resolver.ResolveType(produced)!.FullName, Is.EqualTo(produced),
+                "and the round trip is EXACT for an open generic: describe(resolve(produce(x))) "
+                + "== produce(x).");
+            Assert.That(
+                resolver.ResolveTypeDetailed("System.Collections.Generic.List`1+Enumerator").Outcome,
+                Is.EqualTo(NetTypeLookupOutcome.Resolved),
+                "the metadata form keeps working: the C# form is an ADDITIONAL accepted spelling, "
+                + "not a replacement. <NetProxy Include=\"…List`1+Enumerator\" /> still resolves.");
+        });
+    }
+
+    /// <summary>
+    /// The same round trip two levels deep, where the arity sits on the OUTERMOST segment and the
+    /// two inner ones have none — <c>Dictionary`2+KeyCollection+Enumerator</c>. Pinned separately
+    /// because a fix that special-cased "the immediate container" would pass the one-level test
+    /// and still spell this one wrong.
+    /// </summary>
+    [Test]
+    public void ADoublyNestedGenericSpellingAlsoRoundTrips()
+    {
+        var resolver = FrameworkOnly();
+
+        var keys = resolver.GetMembers("System.Collections.Generic.Dictionary`2")
+            .FirstOrDefault(m => m.Name == "Keys");
+        Assert.That(keys, Is.Not.Null, "fixture provenance: Dictionary<K,V>.Keys must be in the surface.");
+        var keyCollection = keys!.TypeFullName;
+
+        var keyEnumerator = resolver.GetMembers(keyCollection)
+            .FirstOrDefault(m => m.Name == "GetEnumerator" && m.Parameters.Count == 0);
+        Assert.That(keyEnumerator, Is.Not.Null,
+            $"'{keyCollection}' must itself resolve well enough to report members — that is the "
+            + "one-level round trip already carrying the two-level one.");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(keyCollection,
+                Is.EqualTo("System.Collections.Generic.Dictionary<TKey, TValue>.KeyCollection"));
+            Assert.That(keyEnumerator!.TypeFullName,
+                Is.EqualTo("System.Collections.Generic.Dictionary<TKey, TValue>.KeyCollection.Enumerator"),
+                "every level carries its own arguments, and only the level that HAS type "
+                + "parameters carries any.");
+            Assert.That(resolver.ResolveTypeDetailed(keyEnumerator.TypeFullName).Outcome,
+                Is.EqualTo(NetTypeLookupOutcome.Resolved),
+                "which must translate to Dictionary`2+KeyCollection+Enumerator — a dot AFTER a "
+                + "type-argument list is nesting unconditionally, since C# has no namespace "
+                + "inside a constructed type.");
+        });
+    }
+
+    /// <summary>
+    /// <b>The standing ~25 s publish cliff this fix removes, measured rather than argued.</b>
+    /// Every DECLARING type spelling the resolver hands out is a name something later looks
+    /// straight back up: <c>CppProjectBuilder.ValueTypeReceiverNames</c> does exactly that for
+    /// every non-static member's declaring type, and one unresolvable answer makes the whole
+    /// derivation report INCOMPLETE, which nulls §10.2's cache key — an unconditional AOT publish
+    /// on EVERY build of that program, forever (7b-I7).
+    ///
+    /// <para>Measured at <c>9bb301c</c> over this exact list: 3079 members, 49 distinct declaring
+    /// types, of which <b>8 were NotFound</b> — every generic one
+    /// (<c>List&lt;T&gt;</c>, <c>Dictionary&lt;TKey, TValue&gt;</c>, <c>HashSet&lt;T&gt;</c>,
+    /// <c>Queue&lt;T&gt;</c>, <c>Stack&lt;T&gt;</c>, <c>Task&lt;TResult&gt;</c>,
+    /// <c>Nullable&lt;T&gt;</c>, <c>ValueTuple&lt;T1, T2&gt;</c>), because
+    /// <c>GetTypeByMetadataName</c> wants <c>List`1</c> and was never handed it. So the blast
+    /// radius was WIDER than the nested case that named this task.</para>
+    /// </summary>
+    [Test]
+    public void EveryDeclaringTypeSpellingTheResolverProducesResolvesBack()
+    {
+        var resolver = FrameworkOnly();
+        string[] types =
+        {
+            "System.Collections.Generic.List`1", "System.Collections.Generic.Dictionary`2",
+            "System.Collections.Generic.HashSet`1", "System.Collections.Generic.Queue`1",
+            "System.Collections.Generic.Stack`1", "System.Threading.Tasks.Task`1",
+            "System.Nullable`1", "System.ValueTuple`2",
+            // Two non-generic controls: the sweep must not pass by accident on a set that
+            // happens to contain no generics at all.
+            "System.Text.RegularExpressions.Regex", "System.IO.FileStream",
+        };
+
+        var declaring = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var type in types)
+        {
+            var members = resolver.GetMembers(type);
+            Assert.That(members, Is.Not.Empty, $"fixture provenance: '{type}' reported no members.");
+            foreach (var member in members)
+                declaring.Add(member.DeclaringTypeFullName);
+        }
+
+        var unresolvable = declaring
+            .Where(d => resolver.ResolveTypeDetailed(d).Outcome != NetTypeLookupOutcome.Resolved)
+            .OrderBy(d => d, StringComparer.Ordinal)
+            .ToList();
+
+        // The eight that were NotFound at 9bb301c, re-derived here rather than trusted: if the
+        // sweep stopped covering them it would pass while proving nothing.
+        string[] measuredRegressors =
+        {
+            "System.Collections.Generic.List<T>",
+            "System.Collections.Generic.Dictionary<TKey, TValue>",
+            "System.Collections.Generic.HashSet<T>",
+            "System.Collections.Generic.Queue<T>",
+            "System.Collections.Generic.Stack<T>",
+            "System.Threading.Tasks.Task<TResult>",
+            "System.Nullable<T>",
+            "System.ValueTuple<T1, T2>",
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(declaring, Is.SupersetOf(measuredRegressors),
+                "fixture provenance: these are the eight declaring-type spellings measured as "
+                + "NotFound at 9bb301c. A sweep that no longer produces them is no longer "
+                + "covering the shapes this fix is about.");
+            Assert.That(declaring.Count, Is.GreaterThanOrEqualTo(12),
+                $"only {declaring.Count} distinct declaring types (14 when this landed) — too "
+                + "few for this list to prove anything; investigate before trusting the zero "
+                + "below.");
+            Assert.That(unresolvable, Is.Empty,
+                "these declaring-type spellings do not resolve back through the resolver that "
+                + "produced them. Each one makes ValueTypeReceiverNames report INCOMPLETE for any "
+                + "surface that touches it, which nulls the shim cache key and costs a ~25 s "
+                + "publish on every build — and, if the type is a mutable struct, silently picks "
+                + "the unboxing cast over Unsafe.Unbox (§8.5).");
+        });
+    }
+
+    /// <summary>
+    /// The divergence, stated explicitly so it cannot become an accident: a CONSTRUCTED generic
+    /// resolves to its DEFINITION, because a metadata name cannot carry type arguments at all.
+    /// Everything this resolver answers through a name — existence, accessibility, kind, members,
+    /// value-type-ness — is a property of the definition, so that is the correct answer; it is
+    /// also precisely why <c>TypeName</c> keeps the C# form for the MANGLER, which must tell
+    /// <c>List&lt;int&gt;.Enumerator</c> from <c>List&lt;string&gt;.Enumerator</c> (§7.3).
+    /// </summary>
+    [Test]
+    public void AConstructedGenericResolvesToItsDefinition()
+    {
+        var resolver = FrameworkOnly();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                resolver.ResolveTypeDetailed("System.Collections.Generic.List<System.Int32>").Outcome,
+                Is.EqualTo(NetTypeLookupOutcome.Resolved),
+                "the argument COUNT states the arity, so this is not the guessing that "
+                + "GenericTypeRequiresItsMetadataArity_AndTheAritylessNameIsNotFound forbids.");
+            Assert.That(
+                resolver.ResolveType("System.Collections.Generic.List<System.Int32>")!.FullName,
+                Is.EqualTo("System.Collections.Generic.List<T>"),
+                "and it lands on the definition — the construction cannot survive a metadata "
+                + "name. A caller that needs to tell two constructions apart must keep the "
+                + "spelling, not re-derive it from the resolved symbol.");
+        });
+    }
+
     [Test]
     public void NonPublicTypeResolvesButReportsItsAccessibility()
     {
