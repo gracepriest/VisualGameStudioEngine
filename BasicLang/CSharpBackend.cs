@@ -358,7 +358,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                                     }
                                     else
                                     {
-                                        WriteLine($"{accessMod} static {type} {name};");
+                                        // A module-level fixed-size array allocates here for the
+                                        // same reason a local does — left bare it is a null
+                                        // reference, and the first `g(0) = …` throws.
+                                        var sized = SizedArrayInitializer(globalVar.Type);
+                                        WriteLine(sized != null
+                                            ? $"{accessMod} static {type} {name} = {sized};"
+                                            : $"{accessMod} static {type} {name};");
                                     }
                                 }
                                 WriteLine();
@@ -958,7 +964,11 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 var staticMod = field.IsStatic ? "static " : "";
                 var type = MapType(field.Type);
                 var name = SanitizeName(field.Name);
-                var init = field.Initializer is IRConstant c ? $" = {EmitConstant(c)}" : "";
+                // An explicit initializer wins; otherwise a fixed-size array field allocates,
+                // like every other declaration site (`Public Cells(9) As Integer`).
+                var init = field.Initializer is IRConstant c
+                    ? $" = {EmitConstant(c)}"
+                    : SizedArrayInitializer(field.Type) is string sized ? $" = {sized}" : "";
                 WriteLine($"{access} {staticMod}{type} {name}{init};");
             }
 
@@ -1445,18 +1455,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 if (declared.Add(varName))
                 {
                     var csharpType = MapType(localVar.Type);
-                    string defaultValue;
-
-                    // Check if this is an array with a specific size
-                    if (localVar.Type?.Kind == TypeKind.Array && localVar.Type.ArraySize > 0)
-                    {
-                        var elementType = MapType(localVar.Type.ElementType);
-                        defaultValue = $"new {elementType}[{localVar.Type.ArraySize}]";
-                    }
-                    else
-                    {
-                        defaultValue = GetDefaultValue(localVar.Type);
-                    }
+                    var defaultValue = SizedArrayInitializer(localVar.Type)
+                                       ?? GetDefaultValue(localVar.Type);
 
                     WriteLine($"{csharpType} {varName} = {defaultValue};");
                 }
@@ -3798,6 +3798,38 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
 
             return type.IsNullable ? $"{type.Name}?" : type.Name;
+        }
+
+        /// <summary>
+        /// The storage initializer for a FIXED-SIZE array declaration (<c>new int[3]</c>,
+        /// <c>new int[4, 3]</c>), or <c>null</c> when the declaration is not one — callers then
+        /// fall back to their own default.
+        ///
+        /// <para><b>Shared by locals, module-level globals AND class fields deliberately.</b>
+        /// Only the LOCALS loop used to size arrays, so a module-level <c>Dim g(4) As Integer</c>
+        /// or a field <c>Public Cells(9) As Integer</c> emitted a bare <c>int[] g;</c> — null at
+        /// run time, NullReferenceException on the first index. The C++ backend hit the identical
+        /// split and fixed it by routing every declaration site through one helper
+        /// (<c>CppCodeGenerator.SizedArrayInitializer</c>); this is its counterpart, and the two
+        /// read the same <see cref="TypeInfo.ArrayDimensionSizes"/> so the backends cannot
+        /// disagree about the element count.</para>
+        ///
+        /// <para>Every dimension must have a known size. A partially-sized declaration has no
+        /// meaning to allocate, so it falls through to the default rather than guessing.</para>
+        /// </summary>
+        private string SizedArrayInitializer(TypeInfo type)
+        {
+            if (type?.Kind != TypeKind.Array || type.ElementType == null) return null;
+
+            var sizes = type.ArrayDimensionSizes;
+            if (sizes.Count == 0) return null;
+            foreach (var size in sizes)
+                if (size <= 0) return null;
+
+            // C# spells a multi-dimensional array rectangularly — `new int[4, 3]` indexed
+            // `a[i, j]`, which is exactly what EmitExpression already emits for a multi-index
+            // IRGetElementPtr.
+            return $"new {MapType(type.ElementType)}[{string.Join(", ", sizes)}]";
         }
 
         private string GetDefaultValue(TypeInfo type)

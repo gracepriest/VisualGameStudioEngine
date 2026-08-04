@@ -967,25 +967,19 @@ namespace BasicLang.Compiler
                     var token = Peek();
                     var name = Advance().Lexeme;
 
-                    // Parse array dimensions if present (support both [] and () syntax)
-                    var arrayDimensions = new List<int>();
+                    // Parse array dimensions if present (support both [] and () syntax).
+                    // This site used to have its own cut-down parser that accepted at most ONE
+                    // integer literal, so `Public Grid(4, 3) As Integer` could not be written and
+                    // `Public Cells(N) As Integer` silently lost its size. It shares the one
+                    // declaration-site helper now.
+                    List<ExpressionNode> arrayDimensions = null;
                     if (Match(TokenType.LeftParen))
-                    {
-                        // VB-style array: items(100)
-                        if (Check(TokenType.IntegerLiteral))
-                        {
-                            arrayDimensions.Add(int.Parse(Advance().Value.ToString()));
-                        }
-                        Consume(TokenType.RightParen, "Expected ')' after array dimension");
-                    }
-                    while (Match(TokenType.LeftBracket))
-                    {
-                        if (Check(TokenType.IntegerLiteral))
-                        {
-                            arrayDimensions.Add(int.Parse(Advance().Value.ToString()));
-                        }
-                        Consume(TokenType.RightBracket, "Expected ']' after array dimension");
-                    }
+                        arrayDimensions = ParseArrayDimensionList(TokenType.RightParen, ")");
+                    else if (Match(TokenType.LeftBracket))
+                        arrayDimensions = ParseArrayDimensionList(TokenType.RightBracket, "]");
+
+                    if (arrayDimensions != null)
+                        RejectChainedArrayDimensions(name);
 
                     Consume(TokenType.As, "Expected 'As' in field declaration");
 
@@ -997,9 +991,16 @@ namespace BasicLang.Compiler
                         IsStatic = isStatic
                     };
 
-                    // Add array dimensions to type
-                    if (arrayDimensions.Count > 0)
+                    // Add array dimensions to type.
+                    // IsArray IS THE LOAD-BEARING HALF. Recording the dimensions without it left
+                    // the resolved TypeInfo a SCALAR (ResolveTypeReference only takes its array
+                    // branch when IsArray is set), so `Public Cells(9) As Integer` emitted
+                    // `int32_t Cells;` and every `b.Cells(0)` was an invalid subscript on an int.
+                    // Locals (ParseVariableDeclaration) and parameters (ParseParameter) always set
+                    // both; fields were the one path that set only one.
+                    if (arrayDimensions != null)
                     {
+                        field.Type.IsArray = true;
                         field.Type.ArrayDimensions = arrayDimensions;
                     }
 
@@ -2156,30 +2157,13 @@ namespace BasicLang.Compiler
 
             // Check for array brackets before 'As'
             bool isArray = false;
-            List<int> arrayDimensions = new List<int>();
+            List<ExpressionNode> arrayDimensions = new List<ExpressionNode>();
 
-            while (Match(TokenType.LeftBracket))
+            if (Match(TokenType.LeftBracket))
             {
                 isArray = true;
-
-                if (!Check(TokenType.RightBracket))
-                {
-                    var sizeExpr = ParseExpression();
-                    if (sizeExpr is LiteralExpressionNode literal && literal.Value is int size)
-                    {
-                        arrayDimensions.Add(size);
-                    }
-                    else
-                    {
-                        arrayDimensions.Add(-1); // Dynamic size
-                    }
-                }
-                else
-                {
-                    arrayDimensions.Add(-1); // No size specified
-                }
-
-                Consume(TokenType.RightBracket, "Expected ']'");
+                arrayDimensions = ParseArrayDimensionList(TokenType.RightBracket, "]");
+                RejectChainedArrayDimensions(node.Name);
             }
 
             Consume(TokenType.As, "Expected 'As'");
@@ -2196,7 +2180,7 @@ namespace BasicLang.Compiler
             if (node.IsParamArray && !node.Type.IsArray)
             {
                 node.Type.IsArray = true;
-                node.Type.ArrayDimensions = new List<int> { -1 };
+                node.Type.ArrayDimensions = new List<ExpressionNode> { null };
             }
 
             // Default value (required for Optional, not allowed for ParamArray)
@@ -2216,6 +2200,75 @@ namespace BasicLang.Compiler
         // ====================================================================
         // Variable Declarations
         // ====================================================================
+
+        /// <summary>
+        /// Parses the dimension list of an array DECLARATION, with the opening bracket already
+        /// consumed, and returns one entry per dimension — the size expression as written, or
+        /// <c>null</c> for a dimension left empty (<c>Dim a() As Integer</c>). The count is the
+        /// array's RANK.
+        ///
+        /// <para>ONE helper for all three declaration sites — locals/globals (<c>Dim</c>), fields,
+        /// and parameters — because they are one grammar and had drifted into three: the field
+        /// site accepted at most a single INTEGER LITERAL, the parameter site accepted only the
+        /// bracket spelling, and none of them accepted the comma list that
+        /// <c>Dim g(4, 3) As Integer</c> needs.</para>
+        ///
+        /// <para><b>Dimensions are comma-separated, not chained.</b> The previous loop closed the
+        /// bracket and then re-opened it, so it accepted <c>Dim a(2)(3)</c> and rejected
+        /// <c>Dim a(2, 3)</c> — exactly backwards. The chained spelling is rejected by the caller
+        /// (see <see cref="RejectChainedArrayDimensions"/>) rather than left to lower silently:
+        /// it used to reach codegen carrying only its FIRST size and no rank, so it emitted a flat
+        /// one-dimensional array for a declaration that reads as two-dimensional.</para>
+        /// </summary>
+        /// <param name="closeToken">The matching closer for the bracket already consumed.</param>
+        /// <param name="closeStr">Spelling of that closer, for the diagnostic.</param>
+        private List<ExpressionNode> ParseArrayDimensionList(TokenType closeToken, string closeStr)
+        {
+            var dimensions = new List<ExpressionNode>();
+
+            // An immediately-closing bracket is ONE unspecified dimension ("Dim a() As Integer"),
+            // not zero: the declaration is still an array, just unsized.
+            if (Check(closeToken))
+            {
+                dimensions.Add(null);
+                Consume(closeToken, $"Expected '{closeStr}'");
+                return dimensions;
+            }
+
+            do
+            {
+                // An empty slot inside the list keeps that dimension unspecified while still
+                // declaring the rank: "Dim a(,) As Integer" is a 2-D array of unknown size.
+                if (Check(TokenType.Comma) || Check(closeToken))
+                    dimensions.Add(null);
+                else
+                    dimensions.Add(ParseExpression());
+            } while (Match(TokenType.Comma));
+
+            Consume(closeToken, $"Expected '{closeStr}'");
+            return dimensions;
+        }
+
+        /// <summary>
+        /// Refuses the chained array-dimension spelling <c>Dim a(2)(3)</c> / <c>Dim a[2][3]</c>.
+        /// Rank is declared with a comma list; a second bracket pair after the first is not a
+        /// second dimension in this language and must not be quietly accepted, because everything
+        /// downstream reads a single dimension list.
+        /// </summary>
+        private void RejectChainedArrayDimensions(string name)
+        {
+            if (!Check(TokenType.LeftParen) && !Check(TokenType.LeftBracket))
+                return;
+
+            var open = Peek();
+            var openStr = open.Type == TokenType.LeftParen ? "(" : "[";
+            var closeStr = open.Type == TokenType.LeftParen ? ")" : "]";
+            throw new ParseException(
+                $"Unexpected '{openStr}' after the array dimensions of '{name}'. Declare rank with a "
+                + $"comma list — 'Dim {name}(4, 3) As Integer' — not chained brackets "
+                + $"('{name}(4){openStr}3{closeStr}').",
+                open, "Replace the chained brackets with a single comma-separated dimension list");
+        }
 
         private StatementNode ParseVariableDeclaration(bool requireDim = true)
         {
@@ -2247,37 +2300,14 @@ namespace BasicLang.Compiler
                 var isVBStyle = Previous().Type == TokenType.LeftParen;
                 var closeToken = isVBStyle ? TokenType.RightParen : TokenType.RightBracket;
                 var closeStr = isVBStyle ? ")" : "]";
-                var reopenToken = isVBStyle ? TokenType.LeftParen : TokenType.LeftBracket;
-                
-                var arrayType = new TypeReference("Array");
-                arrayType.IsArray = true;
 
-                do
-                {
-                    if (!Check(closeToken))
-                    {
-                        var sizeExpr = ParseExpression();
-                        if (sizeExpr is LiteralExpressionNode literal && literal.Value is int size)
-                        {
-                            arrayType.ArrayDimensions.Add(size);
-                        }
-                        else
-                        {
-                            arrayType.ArrayDimensions.Add(-1); // Dynamic size
-                        }
-                    }
-                    else
-                    {
-                        arrayType.ArrayDimensions.Add(-1); // No size specified
-                    }
-
-                    Consume(closeToken, $"Expected '{closeStr}'");
-                } while (Match(reopenToken));
+                var dimensions = ParseArrayDimensionList(closeToken, closeStr);
+                RejectChainedArrayDimensions(node.Name);
 
                 Consume(TokenType.As, "Expected 'As'");
                 var elementType = ParseTypeReference();
                 elementType.IsArray = true;
-                elementType.ArrayDimensions = arrayType.ArrayDimensions;
+                elementType.ArrayDimensions = dimensions;
                 node.Type = elementType;
             }
             else if (Check(TokenType.Assignment))

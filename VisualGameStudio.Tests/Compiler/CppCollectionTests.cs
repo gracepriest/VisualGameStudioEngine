@@ -1593,4 +1593,138 @@ End Sub";
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
         Assert.That(CompileRun(output), Is.EqualTo("ay-bee\n"));
     }
+
+    // ========================================================================
+    // BUG 7c — A SIZE THAT IS NOT AN INTEGER LITERAL (the hole 8be3fe5 documented).
+    //
+    // The parser recorded a dimension only when it was already an integer literal and
+    // collapsed everything else to a -1 "dynamic size" sentinel, which reached
+    // TypeInfo.ArraySize as "unsized". Both backends then emitted an EMPTY array for a
+    // program that immediately indexed it, and BOTH compiled clean:
+    //
+    //   Const N As Integer = 5 : Dim a(N) As Integer : a(0) = 1
+    //     C++  -> std::vector<int32_t> a = {};  then a[0] = 1   (ACCESS_VIOLATION)
+    //     C#   -> int[] a = default!;           then a[0] = 1   (NullReferenceException)
+    //
+    // That is silent memory corruption, not a missing feature, and it shipped: the
+    // SpaceShooter sample declares `Dim bulletX(MAX_BULLETS) As Single`.
+    //
+    // The fix is in the FRONT END — dimensions are carried to the analyzer as EXPRESSIONS
+    // and folded (SemanticAnalyzer.TryFoldConstantInt) where constants are known — so both
+    // backends are fixed by one change and cannot drift. A size that genuinely will not
+    // fold is REFUSED (there is no run-time-sizing fallback: ReDim is not implemented), and
+    // the refusal tests below have anti-vacuity partners so they cannot pass by refusing
+    // everything.
+    // ========================================================================
+
+    [Test]
+    public void Cpp_ConstSizedArray_Allocates_CompileAndRun()
+    {
+        // Writes the LAST valid slot: an unsized vector corrupts the heap here rather
+        // than printing 5.
+        var source = @"
+Const N As Integer = 5
+
+Sub Main()
+    Dim a(N) As Integer
+    a(4) = 40
+    Console.WriteLine(a.Length)
+    Console.WriteLine(a(4))
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("std::vector<int32_t>(5)"),
+            "a Const-sized array must carry its size like a literal-sized one:\n" + output);
+        Assert.That(CompileRun(output), Is.EqualTo("5\n40\n"));
+    }
+
+    [Test]
+    public void Cpp_ConstExpressionSizedArray_Allocates_CompileAndRun()
+    {
+        // Arithmetic over constants folds too — `K * 2` is as compile-time-known as `6`.
+        var source = @"
+Const K As Integer = 3
+
+Sub Main()
+    Dim b(K * 2) As Integer
+    b(5) = 7
+    Console.WriteLine(b.Length)
+    Console.WriteLine(b(5))
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("std::vector<int32_t>(6)"), output);
+        Assert.That(CompileRun(output), Is.EqualTo("6\n7\n"));
+    }
+
+    [Test]
+    public void Cpp_ModuleLevelConstSizedArray_Allocates_CompileAndRun()
+    {
+        // Globals are emitted by a different site than locals — the exact split that made
+        // the literal-size fix incomplete the first time. Pinned separately on purpose.
+        var source = @"
+Const K As Integer = 3
+
+Module Program
+    Dim g(K) As Integer
+    Sub Main()
+        g(2) = 11
+        Console.WriteLine(g.Length)
+        Console.WriteLine(g(2))
+    End Sub
+End Module";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("std::vector<int32_t>(3)"), output);
+        Assert.That(CompileRun(output), Is.EqualTo("3\n11\n"));
+    }
+
+    [Test]
+    public void ArraySize_ThatIsNotCompileTimeConstant_IsRefused()
+    {
+        // A local variable is not a constant. Refusing is the whole point: this shape used
+        // to compile to an empty array and then corrupt memory on the first write.
+        var source = @"
+Sub Main()
+    Dim n As Integer = 5
+    Dim a(n) As Integer
+    a(0) = 1
+End Sub";
+        CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Not.Empty, "a run-time array size must not compile silently");
+        Assert.That(string.Join("; ", errors), Does.Contain("compile-time constant"));
+    }
+
+    [Test]
+    public void ArraySize_ThatIsNegative_IsRefused()
+    {
+        var source = @"
+Sub Main()
+    Dim a(-1) As Integer
+End Sub";
+        CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Not.Empty);
+        Assert.That(string.Join("; ", errors), Does.Contain("cannot be negative"));
+    }
+
+    /// <summary>
+    /// ANTI-VACUITY PARTNER for the two refusals above: an EMPTY dimension is not a missing
+    /// size to complain about, it is a deliberately unsized array declaration
+    /// (<c>Dim a() As Integer</c>). If the refusal ever widened to cover this, every program
+    /// that declares an array without sizing it would stop compiling.
+    /// </summary>
+    [Test]
+    public void UnsizedArrayDeclaration_IsStillAccepted()
+    {
+        var source = @"
+Sub Main()
+    Dim a() As Integer
+    Console.WriteLine(1)
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Not.Contain("std::vector<int32_t>(0)"),
+            "an unsized declaration must not be given a bogus zero-element allocation:\n" + output);
+        Assert.That(CompileRun(output), Is.EqualTo("1\n"));
+    }
 }

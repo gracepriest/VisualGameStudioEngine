@@ -710,8 +710,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (typeRef.IsArray)
             {
                 var elementType = ResolveSiblingSignatureTypeName(typeRef.Name);
-                int arraySize = typeRef.ArrayDimensions.Count > 0 ? typeRef.ArrayDimensions[0] : 0;
-                return _typeManager.CreateArrayType(elementType, typeRef.ArrayDimensions.Count, arraySize);
+                // report: false — a sibling's own compilation reports its diagnostics, and this
+                // path deliberately never accuses the current unit (see the method summary).
+                return _typeManager.CreateArrayType(
+                    elementType, ResolveArrayDimensionSizes(typeRef, report: false));
             }
 
             if (typeRef.GenericArguments.Count > 0)
@@ -1992,9 +1994,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     Error($"Unknown type '{typeRef.Name}'", 0, 0);
                     return _typeManager.ObjectType;
                 }
-                // Get the array size from the first dimension (for 1D arrays)
-                int arraySize = typeRef.ArrayDimensions.Count > 0 ? typeRef.ArrayDimensions[0] : 0;
-                return _typeManager.CreateArrayType(elementType, typeRef.ArrayDimensions.Count, arraySize);
+                return _typeManager.CreateArrayType(
+                    elementType, ResolveArrayDimensionSizes(typeRef, report: true));
             }
 
             // Handle generic types
@@ -2063,6 +2064,159 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
 
             return type;
+        }
+
+        /// <summary>
+        /// Array-size expressions already reported as non-constant, by reference identity.
+        /// <see cref="ResolveTypeReference"/> can run over the same declaration more than once
+        /// (signature pre-passes, re-analysis), and one bad declaration must produce one
+        /// diagnostic, not one per visit.
+        /// </summary>
+        private readonly HashSet<ExpressionNode> _reportedNonConstantArraySizes =
+            new HashSet<ExpressionNode>();
+
+        /// <summary>
+        /// Folds a declaration's dimension list into per-dimension element counts, one entry per
+        /// dimension (0 = that dimension was declared empty, e.g. <c>Dim a() As Integer</c>).
+        ///
+        /// <para>THIS IS WHERE A SIZE BECOMES A NUMBER. Sizes reach here as expressions because
+        /// the parser cannot evaluate them (<c>Const N As Integer = 5</c> is not known until
+        /// constants are in scope), and a size that never becomes a number is the memory-safety
+        /// bug this fixes: <c>TypeInfo.ArraySize</c> stayed 0, so both backends emitted an EMPTY
+        /// array for a program that indexes it — <c>std::vector&lt;int32_t&gt; a = {}</c> then
+        /// <c>a[0] = 1</c> (access violation under C++), <c>int[] a = default!</c> then
+        /// <c>a[0] = 1</c> (NullReferenceException under C#). Both compiled clean.</para>
+        ///
+        /// <para>A size expression that will not fold is therefore REFUSED rather than dropped.
+        /// There is no run-time-sizing fallback to fall back to: <c>ReDim</c> is not implemented
+        /// (it lowers to a call to a function that does not exist), so an unfoldable size has no
+        /// correct lowering at all and a diagnostic is the only honest answer.</para>
+        /// </summary>
+        /// <param name="report">
+        /// False on the sibling-signature path, which must never accuse the current unit.
+        /// </param>
+        private List<int> ResolveArrayDimensionSizes(TypeReference typeRef, bool report)
+        {
+            var sizes = new List<int>();
+            if (typeRef?.ArrayDimensions == null) return sizes;
+
+            foreach (var dimension in typeRef.ArrayDimensions)
+            {
+                // An empty dimension is legitimately unsized: `Dim a() As Integer` declares an
+                // array variable that something else (an assignment) supplies storage for.
+                if (dimension == null)
+                {
+                    sizes.Add(0);
+                    continue;
+                }
+
+                if (TryFoldConstantInt(dimension, out var size))
+                {
+                    if (size < 0)
+                    {
+                        if (report && _reportedNonConstantArraySizes.Add(dimension))
+                            Error($"Array size cannot be negative (got {size})",
+                                  dimension.Line, dimension.Column);
+                        sizes.Add(0);
+                    }
+                    else
+                    {
+                        sizes.Add(size);
+                    }
+                    continue;
+                }
+
+                if (report && _reportedNonConstantArraySizes.Add(dimension))
+                {
+                    Error("Array size must be a compile-time constant (an integer literal, a "
+                          + "Const, or arithmetic over them). A size computed at run time cannot "
+                          + "be declared this way, and ReDim is not supported.",
+                          dimension.Line, dimension.Column);
+                }
+                sizes.Add(0);
+            }
+
+            return sizes;
+        }
+
+        /// <summary>
+        /// Folds an expression to a compile-time integer, or returns false when it does not fold.
+        /// Deliberately small: integer literals, references to a <c>Const</c> that itself folded,
+        /// unary +/-, and the integer arithmetic/shift operators over those. Anything else — a
+        /// variable, a call, a floating-point value — is not constant and must not be guessed at,
+        /// because the only consumer bakes the result into a storage declaration.
+        /// </summary>
+        private bool TryFoldConstantInt(ExpressionNode expr, out int value)
+        {
+            value = 0;
+            switch (expr)
+            {
+                case LiteralExpressionNode literal:
+                    return TryConvertConstantToInt(literal.Value, out value);
+
+                case IdentifierExpressionNode identifier:
+                {
+                    var symbol = _currentScope?.Resolve(identifier.Name);
+                    if (symbol == null || !symbol.IsConstant || symbol.ConstantValue == null)
+                        return false;
+                    return TryConvertConstantToInt(symbol.ConstantValue, out value);
+                }
+
+                case UnaryExpressionNode unary when unary.Operator is "-" or "+":
+                {
+                    if (!TryFoldConstantInt(unary.Operand, out var operand)) return false;
+                    value = unary.Operator == "-" ? -operand : operand;
+                    return true;
+                }
+
+                case BinaryExpressionNode binary:
+                {
+                    if (!TryFoldConstantInt(binary.Left, out var left)) return false;
+                    if (!TryFoldConstantInt(binary.Right, out var right)) return false;
+                    switch (binary.Operator)
+                    {
+                        case "+": value = left + right; return true;
+                        case "-": value = left - right; return true;
+                        case "*": value = left * right; return true;
+                        // Both division spellings truncate here: the result is an element count,
+                        // and `/` on two integer constants cannot yield a fractional size.
+                        case "/":
+                        case "\\": if (right == 0) return false; value = left / right; return true;
+                        case "%":
+                        case "Mod": if (right == 0) return false; value = left % right; return true;
+                        case "<<":
+                        case "Shl": value = left << right; return true;
+                        case ">>":
+                        case "Shr": value = left >> right; return true;
+                        default: return false;
+                    }
+                }
+
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>
+        /// Narrows a folded constant to <see cref="int"/>. Integral types convert when they fit;
+        /// floating-point and everything else do not convert at all, since an array size written
+        /// as <c>2.5</c> is a mistake to report, not a value to round.
+        /// </summary>
+        private static bool TryConvertConstantToInt(object constant, out int value)
+        {
+            value = 0;
+            switch (constant)
+            {
+                case int i: value = i; return true;
+                case short s: value = s; return true;
+                case byte b: value = b; return true;
+                case sbyte sb: value = sb; return true;
+                case ushort us: value = us; return true;
+                case long l when l >= int.MinValue && l <= int.MaxValue: value = (int)l; return true;
+                case uint u when u <= int.MaxValue: value = (int)u; return true;
+                case ulong ul when ul <= int.MaxValue: value = (int)ul; return true;
+                default: return false;
+            }
         }
 
         /// <summary>
@@ -4897,6 +5051,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             var symbol = new Symbol(node.Name, SymbolKind.Constant, constType, node.Line, node.Column);
             symbol.IsConstant = true;
+            // Record the folded value so later declarations can consume it — `Dim a(N) As Integer`
+            // needs N's value at analysis time to size the array. Best-effort: a constant whose
+            // initializer does not fold simply has no value here, and a use that REQUIRES one
+            // reports at the use site (where the diagnostic can point at the failing expression).
+            if (node.Value != null && TryFoldConstantInt(node.Value, out var constantInt))
+                symbol.ConstantValue = constantInt;
 
             if (!_currentScope.Define(symbol))
             {

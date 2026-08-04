@@ -22,7 +22,33 @@ public class TypeInfo
         public List<TypeInfo> TupleElementTypes { get; set; } // For tuples
         public List<string> TupleElementNames { get; set; } // For named tuple elements
         public int ArrayRank { get; set; } // Number of dimensions
-        public int ArraySize { get; set; } // Size of array (for fixed-size arrays)
+
+        /// <summary>
+        /// Element count PER DIMENSION for a fixed-size array, in declaration order; an entry of
+        /// 0 means that dimension's size is unknown (it was declared empty, as in
+        /// <c>Dim a() As Integer</c>). Empty for anything that is not a sized array declaration.
+        ///
+        /// <para>This is the single storage for array sizing — <see cref="ArraySize"/> is a view
+        /// over its first entry, so the long-standing rank-1 readers (the C# backend's
+        /// <c>new int[n]</c> and the C++ backend's <c>SizedArrayInitializer</c>) keep working
+        /// unchanged and cannot drift from the per-dimension list.</para>
+        /// </summary>
+        public List<int> ArrayDimensionSizes { get; } = new List<int>();
+
+        /// <summary>
+        /// Size of the FIRST dimension (for fixed-size arrays); 0 when unsized. A view over
+        /// <see cref="ArrayDimensionSizes"/> rather than a second field, so a rank-1 array has
+        /// exactly one place its size can live.
+        /// </summary>
+        public int ArraySize
+        {
+            get => ArrayDimensionSizes.Count > 0 ? ArrayDimensionSizes[0] : 0;
+            set
+            {
+                if (ArrayDimensionSizes.Count == 0) ArrayDimensionSizes.Add(value);
+                else ArrayDimensionSizes[0] = value;
+            }
+        }
         public bool IsPointer { get; set; }
         public bool IsNullable { get; set; }
         public bool IsFixedLengthString { get; set; }
@@ -234,6 +260,16 @@ public class TypeInfo
         public TypeInfo Type { get; set; }
         public Scope DeclaringScope { get; set; }
         public bool IsConstant { get; set; }
+
+        /// <summary>
+        /// The folded compile-time value of a <see cref="SymbolKind.Constant"/>, when it folded to
+        /// one; null otherwise. Recorded so a later declaration can USE it — an array size is the
+        /// first consumer (<c>Const N As Integer = 5</c> then <c>Dim a(N) As Integer</c>), and it
+        /// has to be known during semantic analysis because the element count is baked into the
+        /// declaration each backend emits.
+        /// </summary>
+        public object ConstantValue { get; set; }
+
         public bool IsDefined { get; set; }
         public int Line { get; set; }
         public int Column { get; set; }
@@ -555,6 +591,26 @@ public class TypeInfo
                 ArrayRank = rank,
                 ArraySize = size
             };
+
+            return arrayType;
+        }
+
+        /// <summary>
+        /// Creates an array type from its per-dimension element counts (0 = that dimension's size
+        /// is unknown). The rank is the number of dimensions, so rank and sizes cannot disagree —
+        /// which is what a multi-dimensional declaration needs the backends to be able to trust
+        /// when they size the storage.
+        /// </summary>
+        public TypeInfo CreateArrayType(TypeInfo elementType, List<int> dimensionSizes)
+        {
+            var arrayType = new TypeInfo($"{elementType.Name}[]", TypeKind.Array)
+            {
+                ElementType = elementType,
+                ArrayRank = dimensionSizes?.Count ?? 0
+            };
+
+            if (dimensionSizes != null)
+                arrayType.ArrayDimensionSizes.AddRange(dimensionSizes);
 
             return arrayType;
         }
