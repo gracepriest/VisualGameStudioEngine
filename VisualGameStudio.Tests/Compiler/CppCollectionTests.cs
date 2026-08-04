@@ -1431,4 +1431,166 @@ End Sub";
         // Contains(q)=true(1), Contains(other)=false(0), IndexOf(q)=0.
         Assert.That(CompileRun(output), Is.EqualTo("1\n0\n0\n"));
     }
+
+    // ========================================================================
+    // BUG 7 — PLAIN FIXED-SIZE ARRAYS (chip task_c8c3eac9). Two independent defects,
+    // both on the most ordinary shape in the language (`Dim a(3) As Integer`):
+    //
+    //   7a  DECLARATION NEVER ALLOCATED. The C++ local emitter answered
+    //       GetDefaultValue -> `{}` for any array, so `std::vector<int32_t> a = {};`
+    //       default-constructed EMPTY while the C# backend emitted `new int[3]`.
+    //       Every index was then out of bounds.
+    //
+    //   7b  INDEXING EMITTED NON-COMPILING C++. IRBuilder builds an IRGetElementPtr
+    //       carrying the ELEMENT type, and the backend materialized it as
+    //       `t = &a[0];` — an `int32_t*` assigned to an `int32_t`
+    //       ("invalid conversion from 'int*' to 'int32_t'"). It fired on EVERY
+    //       indexed read and write; the write path then ignored the dead temp and
+    //       re-derived `a[0] = v` itself, so only reads showed the second half
+    //       (`t4 = *t3;`, dereferencing a pointer never materialized).
+    //
+    // Why it survived: `For Each` never builds a GEP (it iterates the vector
+    // directly), and the shipped samples only write through arrays. Surfacing it
+    // needs a plain indexed READ.
+    //
+    // These run through CompileToCppOptimized — the CLI/IDE path — per the repo rule
+    // that codegen is validated through the optimizer, not only the bare helper.
+    // ========================================================================
+
+    [Test]
+    public void Cpp_FixedSizeArray_AllocatesAndIndexes_CompileAndRun()
+    {
+        // Writes the LAST valid slot and reads every slot back. If the vector were still
+        // default-constructed empty this is out-of-bounds rather than 60.
+        var source = @"
+Sub Main()
+    Dim a(3) As Integer
+    a(0) = 10
+    a(1) = 20
+    a(2) = 30
+    Console.WriteLine(a(0) + a(1) + a(2))
+    Console.WriteLine(a.Length)
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        // 7a: the declaration carries the size (was `= {}`).
+        Assert.That(output, Does.Contain("std::vector<int32_t>(3)"));
+        // 7b: no address of an element is ever taken or dereferenced.
+        Assert.That(output, Does.Not.Contain("&a["));
+        Assert.That(CompileRun(output), Is.EqualTo("60\n3\n"));
+    }
+
+    [Test]
+    public void Cpp_FixedSizeArray_IndexInsideIfAndLoop_CompileAndRun()
+    {
+        // The backend flattens control flow to labels + goto in ONE function scope, so an
+        // indexed read inside a branch or loop body is the shape most likely to break if
+        // element access ever reintroduces a block-scoped declaration.
+        var source = @"
+Sub Main()
+    Dim a(3) As Integer
+    a(0) = 10
+    a(1) = 20
+    a(2) = 30
+    Dim total As Integer = 0
+    For i As Integer = 0 To 2
+        total = total + a(i)
+    Next
+    Console.WriteLine(total)
+    If a(2) > a(0) Then
+        Console.WriteLine(a(2) - a(0))
+    End If
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("60\n20\n"));
+    }
+
+    [Test]
+    public void Cpp_FixedSizeArray_BracketSyntax_LowersIdenticallyToParen()
+    {
+        // `Dim a[3]` and `Dim a(3)` are two spellings of ONE grammar (Parser: "support both
+        // [] (C#-style) and () (VB-style) syntax"), so they must not drift into two lowerings.
+        const string body = @"
+    a(0) = 10
+    a(1) = 20
+    Console.WriteLine(a(0) + a(1))
+End Sub";
+        var paren = CompileToCppOptimized("\nSub Main()\n    Dim a(3) As Integer" + body, out var e1);
+        var bracket = CompileToCppOptimized("\nSub Main()\n    Dim a[3] As Integer" + body, out var e2);
+        Assert.That(e1, Is.Empty, string.Join("; ", e1));
+        Assert.That(e2, Is.Empty, string.Join("; ", e2));
+        Assert.That(bracket, Is.EqualTo(paren));
+        Assert.That(CompileRun(paren), Is.EqualTo("30\n"));
+    }
+
+    /// <summary>
+    /// A MODULE-LEVEL fixed-size array allocates too. Globals are emitted by a different site
+    /// than locals, and the first cut of this fix touched only the locals loop — which, because
+    /// the indexing half had just removed the compile error that masked it, turned this program
+    /// from "does not build" into "builds and access-violates". Found by adversarial review.
+    /// </summary>
+    [Test]
+    public void Cpp_ModuleLevelFixedSizeArray_Allocates_CompileAndRun()
+    {
+        var source = @"
+Module Program
+    Dim g(4) As Integer
+    Sub Main()
+        g(0) = 3
+        g(3) = 4
+        Console.WriteLine(g(0) + g(3))
+    End Sub
+End Module";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("std::vector<int32_t>(4)"),
+            "a module-level array must carry its size like a local one:\n" + output);
+        // Writing index 3 of a 4-element global: an unsized global corrupts the heap here.
+        Assert.That(CompileRun(output), Is.EqualTo("7\n"));
+    }
+
+    /// <summary>
+    /// Writing a FIELD of a struct array element must reach the array, not a copy.
+    /// <c>pts(0).X = 5</c> lowers through an IRLoad that materializes <c>t1 = pts[0];</c>, so
+    /// writing <c>t1.X</c> lost the store silently — C++ printed 0 where C# printed 5. A wrong
+    /// answer is worse than the compile error it replaced, so this is pinned by RUNNING it and
+    /// by cross-checking the value the C# backend produces for the same program.
+    /// </summary>
+    [Test]
+    public void Cpp_StructArrayElement_FieldWrite_ReachesTheArray_CompileAndRun()
+    {
+        var source = @"
+Structure Point
+    Public X As Integer
+End Structure
+
+Sub Main()
+    Dim pts(3) As Point
+    pts(0).X = 5
+    pts(1).X = 9
+    Console.WriteLine(pts(0).X + pts(1).X)
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("pts[0].X = 5"),
+            "the write must target the element lvalue, not a copied temporary:\n" + output);
+        Assert.That(CompileRun(output), Is.EqualTo("14\n"));
+    }
+
+    [Test]
+    public void Cpp_FixedSizeArray_OfString_CompileAndRun()
+    {
+        // A non-primitive element type takes the same sized-construction path.
+        var source = @"
+Sub Main()
+    Dim s(2) As String
+    s(0) = ""ay""
+    s(1) = ""bee""
+    Console.WriteLine(s(0) & ""-"" & s(1))
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("ay-bee\n"));
+    }
 }

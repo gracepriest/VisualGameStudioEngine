@@ -185,7 +185,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 {
                     var type = MapType(globalVar.Type);
                     var name = SanitizeName(globalVar.Name);
-                    WriteLine($"{type} {name} = {{}};");
+                    // A module-level fixed-size array allocates here for the same reason a local
+                    // does; `{}` stays the default for everything else (globals have never gone
+                    // through GetDefaultValue, and routing them there now would change every
+                    // non-array global's initializer).
+                    var init = SizedArrayInitializer(globalVar.Type, type) ?? "{}";
+                    WriteLine($"{type} {name} = {init};");
                 }
                 WriteLine();
             }
@@ -1549,6 +1554,42 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             _ => null
         };
 
+        /// <summary>
+        /// The storage initializer for a FIXED-SIZE array declaration, or <c>null</c> when the
+        /// declaration is not one — callers then fall back to their own default.
+        ///
+        /// <para>A `Dim a(3) As Integer` must ALLOCATE, exactly as the C# backend does at its
+        /// mirroring site (`new int[3]`, <c>CSharpBackend.cs:1451</c>). Left to the plain default
+        /// an array becomes <c>{}</c> — a vector default-constructed EMPTY — and every subsequent
+        /// index is out of bounds: silent garbage on a read, heap corruption on a write. The size
+        /// is read from the same <see cref="TypeInfo.ArraySize"/> the C# backend uses, so the two
+        /// backends cannot drift on the element count.</para>
+        ///
+        /// <para><b>Shared by locals AND globals deliberately.</b> The first version of this fix
+        /// lived inline in the locals loop, which left module-level `Dim g(4)` unsized — and
+        /// because the indexing half of the fix removed the compile error that used to mask it,
+        /// that program went from "does not build" to "builds and access-violates". One helper,
+        /// both sites.</para>
+        ///
+        /// <para><see cref="MapType"/> tests <c>NetHandleTypeFullName</c> FIRST, so a
+        /// handle-represented .NET array arrives here already spelled <c>BasicLang::NetRef</c> and
+        /// must NOT be sized — it owns no native storage. Requiring the <c>std::vector</c>
+        /// lowering keeps <c>T(n)</c> to the one shape where it means anything.</para>
+        ///
+        /// <para>⚠ <b>Known hole:</b> only a size the PARSER kept as an integer literal is
+        /// available here. `Dim a(N)` for a `Const N`, or any expression, is recorded as -1
+        /// (<c>Parser.cs:2266</c>) and still produces an empty vector. The real fix is to
+        /// preserve the constant through to <see cref="TypeInfo.ArraySize"/>; until then that
+        /// shape is unsized.</para>
+        /// </summary>
+        private string SizedArrayInitializer(TypeInfo type, string mappedType) =>
+            type?.Kind == TypeKind.Array
+            && type.ArraySize > 0
+            && mappedType != null
+            && mappedType.StartsWith("std::vector<", StringComparison.Ordinal)
+                ? $"{mappedType}({type.ArraySize})"
+                : null;
+
         private void DeclareLocalsAndTemporaries(IRFunction function)
         {
             // Declare local variables
@@ -1579,7 +1620,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     }
                     else
                     {
-                        var defaultVal = GetDefaultValue(local.Type);
+                        var defaultVal = SizedArrayInitializer(local.Type, localType)
+                                         ?? GetDefaultValue(local.Type);
                         WriteLine($"{localType} {localName} = {defaultVal};");
                     }
                 }
@@ -1593,6 +1635,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var tempsByType = _allTemporaries
                 .Where(t => t.Type?.Name != "Void" && MapType(t.Type) != "void")
                 .Where(t => t.Type?.Kind != TypeKind.Foreign)
+                // A GEP is folded into its use site and emits no assignment, so declaring its
+                // temp would leave a never-written variable typed as the ELEMENT rather than a
+                // pointer — dead, and misleading to anyone reading the generated source.
+                .Where(t => t is not IRGetElementPtr)
                 .Where(t => !CppExceptionTypes.IsNetException(t.Type?.Name))
                 // §11.1: a `<catchVar>.Message` read lowers to
                 // BasicLang::String(v.what()) — its temp must be std::string
@@ -2004,9 +2050,18 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         
         public override void Visit(IRLoad load)
         {
-            var address = GetValueName(load.Address);
             var result = GetValueName(load);
-            
+
+            // Reading an array element: the address operand is a FOLDED GEP (it emitted
+            // nothing), so read the element lvalue directly. Dereferencing here would deref a
+            // pointer temp that was never materialized — the second half of the same defect.
+            if (load.Address is IRGetElementPtr gep)
+            {
+                WriteLine($"{result} = {ElementLValue(gep)};");
+                return;
+            }
+
+            var address = GetValueName(load.Address);
             WriteLine($"{result} = *{address};");
         }
         
@@ -2041,12 +2096,15 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return;
             }
 
-            // Array element store
+            // Array element store — the same folded GEP the read path uses. This previously
+            // applied only Indices[0] while the read path applied them all; routing both through
+            // ElementLValue makes them agree by construction. NB that asymmetry was LATENT, not
+            // a live bug: a multi-index array cannot currently be declared at all (`Dim g(4, 3)`
+            // does not parse — Parser.cs:2255 loops on repeated `(`, not on commas), so no
+            // program could reach it. It is fixed here so it stays fixed if multi-dim lands.
             if (store.Address is IRGetElementPtr gep)
             {
-                var baseExpr = GetValueName(gep.BasePointer);
-                var index = GetValueName(gep.Indices[0]);
-                WriteLine($"{baseExpr}[{index}] = {value};");
+                WriteLine($"{ElementLValue(gep)} = {value};");
                 return;
             }
 
@@ -3095,21 +3153,40 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // Memory allocation handled in declarations
         }
         
+        /// <summary>
+        /// Renders a GEP as the C++ element LVALUE (<c>base[i]</c>, <c>base[i][j]</c>) rather
+        /// than as an address. Shared by the two consumers — <see cref="Visit(IRLoad)"/> and
+        /// <see cref="Visit(IRStore)"/> — so a read and a write of the same element can never
+        /// disagree about how many indices they apply.
+        /// </summary>
+        private string ElementLValue(IRGetElementPtr gep) =>
+            GetValueName(gep.BasePointer)
+            + string.Concat(gep.Indices.Select(i => $"[{GetValueName(i)}]"));
+
+        /// <summary>
+        /// The element LVALUE behind an array-element READ (an <see cref="IRLoad"/> over a folded
+        /// GEP), or <c>null</c> for anything else. Lets a caller that needs to WRITE THROUGH the
+        /// read — a field store on a struct element — reach the array instead of the copy the
+        /// load materialized. See <see cref="Visit(IRFieldStore)"/> for why this is opt-in per
+        /// call site rather than applied to every load.
+        /// </summary>
+        private string ElementLValueOfArrayRead(IRValue value) =>
+            value is IRLoad load && load.Address is IRGetElementPtr gep
+                ? ElementLValue(gep)
+                : null;
+
         public override void Visit(IRGetElementPtr gep)
         {
-            var basePtr = GetValueName(gep.BasePointer);
-            var result = GetValueName(gep);
-            
-            if (gep.Indices.Count == 1)
-            {
-                var index = GetValueName(gep.Indices[0]);
-                WriteLine($"{result} = &{basePtr}[{index}];");
-            }
-            else
-            {
-                var indices = string.Join("][", gep.Indices.Select(GetValueName));
-                WriteLine($"{result} = &{basePtr}[{indices}];");
-            }
+            // A GEP is an ADDRESS COMPUTATION, not a value, and this backend has nowhere to
+            // put one: IRBuilder constructs it with the ELEMENT type (both at
+            // Visit(ArrayAccessExpressionNode) and at the array-store site), so the temp is
+            // declared `int32_t` while `&base[i]` is an `int32_t*`. Materializing it emitted
+            // `t = &a[0];` — C++ that has never compiled ("invalid conversion from 'int*' to
+            // 'int32_t'"), on EVERY indexed read and write.
+            //
+            // Nothing actually wants the address. Both consumers want the element itself, so
+            // the GEP is folded at its use site via ElementLValue and emits nothing here.
+            // Its temp is likewise not declared (see DeclareLocalsAndTemporaries).
         }
         
         public override void Visit(IRCast cast)
@@ -3667,7 +3744,17 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // synthesized set_X accessor slot (stamped by IRBuilder).
             if (TryLowerNetFieldStore(fieldStore)) return;
 
-            var obj = GetValueName(fieldStore.Object);
+            // `pts(0).X = 5` on an array of STRUCTS. The receiver arrives as an IRLoad over a
+            // folded GEP, and that load materializes a COPY (`t1 = pts[0];`) — writing the field
+            // of the copy leaves the array untouched, so the program silently prints the old
+            // value where the C# backend prints the new one. Re-derive the element LVALUE so the
+            // write lands in the array, which is exactly what the C# backend does by inlining an
+            // IRLoad to its address expression (CSharpBackend.cs:2771-2779) instead of copying.
+            // Scoped to the RECEIVER of a field store on purpose: aliasing every element read
+            // would be wrong the moment an index variable changes between the read and its use.
+            // Classes are unaffected either way — a shared_ptr copy still aliases one object.
+            var obj = ElementLValueOfArrayRead(fieldStore.Object)
+                      ?? GetValueName(fieldStore.Object);
             var op = MemberAccessOp(fieldStore.Object);
             var fieldName = SanitizeName(fieldStore.FieldName);
             var value = GetValueName(fieldStore.Value);
