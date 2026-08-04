@@ -1260,9 +1260,18 @@ In P1's style — cheap tests that fail loudly when two things drift apart:
 - mangling is deterministic and collision-free over an overload set **and over fully-qualified
   declaring types** (§7.3)
 - the generated proxy table's slot list ≡ the **surface-derived** subset of the shim's export
-  list. *(Scoped deliberately: the shim also exports P0's seven core names and §8.6's array copy
-  helpers, none of which are `BlnetProxyTable` slots — an unscoped equality is false by
-  construction. §8.1's inventory names all three groups.)*
+  list. *(Scoped deliberately: the shim also exports P0's seven core names, which are not
+  `BlnetProxyTable` slots — an unscoped equality is false by construction. §8.1's inventory names
+  the groups.)*
+
+  > **Amended 2026-08-04 (P2a-2 Task 10 shipped).** This bullet originally listed **§8.6's array
+  > copy helpers** alongside P0's core names as a second exempt group. **They are not exempt.**
+  > The helpers are ordinary `BlnetProxyTable` slots *and* ordinary shim exports, and both
+  > emitters derive their name sets from one `NetArrayCopy.RequiredForms(surface)` — so §12.4
+  > holds for them **by construction**, which is strictly stronger than the exemption this
+  > paragraph used to grant. The deviation is an improvement and is recorded here, normatively,
+  > rather than only in a code header. Task 11 must not reach for "§12.4-exempt" when deciding
+  > how to carry §8.4's delegate dispatcher.
 - for every name in `ManagedOwned`, codegen's type mapping yields the handle representation
   (`NetRef`), and no other registry name does. *(Scoped to registry names deliberately —
   arbitrary resolved .NET types are handle-represented by §8.3's rule and are `Unknown` to the

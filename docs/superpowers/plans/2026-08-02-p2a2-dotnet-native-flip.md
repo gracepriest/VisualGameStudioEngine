@@ -1219,11 +1219,9 @@ reviewer with g++ 13 `-std=c++20` on real generator output for
 `If N > 0 Then Dim S = Convert.ToBase64String(B)`:
 `error: jump to label 'if0_end' … crosses initialization of 'NetRef blnet_t0'`.
 
-**Pre-existing class, materially widened.** Task 8's ref/out scalar prologue
-(`NetCalls.cs:712`, `int32_t blnet_t0 = n;`) is ill-formed the same way — but that needs a
-`ref`/`out` .NET member, whereas §8.6's copy-in fires on **any by-value native array argument**
-(`Convert.ToBase64String(bytes)` inside an `If` is ordinary code). Every fixture test and the
-Integration pin uses a straight-line `Main`, so nothing catches it.
+**Pre-existing class, materially widened.** §8.6's copy-in fires on **any by-value native array
+argument** (`Convert.ToBase64String(bytes)` inside an `If` is ordinary code). Every fixture test
+and the Integration pin uses a straight-line `Main`, so nothing catches it.
 
 ⚠ **This is the single biggest thing that will fight Task 11** — the Step-0 contract routes
 callback register/unregister into the same prologue slot, and `If x Then list.Sort(AddressOf Cmp)`
@@ -1233,8 +1231,30 @@ is the natural first delegate program.
 `{ … }` block (guards then release at the end of the call's own scope — tighter than today, and
 it preserves the reverse-destruction property). Alternative: hoist guard *declarations* into
 `DeclareLocalsAndTemporaries` and emit only the assignment inline. **Add a test with a copy-in
-inside an `If` and inside a loop** — the whole fixture is straight-line today. Fix Task 8's
-scalar prologue in the same change (same hazard, same seam).
+inside an `If` and inside a loop** — the whole fixture is straight-line today.
+
+#### ✅ RESOLVED 2026-08-04 — and one claim above was too broad
+
+`EmitNetCallStatements` now braces the region **when, and only when, there is a prologue** (no
+prologue means no declaration, so no jump can cross anything, and unconditional braces would have
+churned every existing expected-output). The C++ rule was re-proved against this backend's exact
+`If` lowering — `if (c) { goto L; } else { goto E; } L: ; Guard g(1); goto E; E: ;` — with
+g++ 14.2: `error: jump to label 'E' … crosses initialization`, and the braced form compiles.
+
+⛔ **Correction to the sentence this block replaced.** It claimed Task 8's ref/out scalar prologue
+(`NetCalls.cs:712`) "is ill-formed the same way". **Measured: it is not, for the row that was
+named.** A plain `Integer` ByRef emits **no prologue at all** — §8.3's pointer slot hands the
+proxy the native local directly (`…TryParse("42", n)`), because for that row the native variable
+already IS an lvalue of the wire type. Only rows whose native representation DIFFERS from the wire
+(Char, §6.4's pairs) reach `MarshalNetScalarByRef` and emit `int32_t blnet_t0{};`. The seam fix
+covers those for free — they share `Prologue` — but the "Task 8 is broken too" framing was wrong
+and should not be carried into Task 11's planning.
+
+**Tests:** `NetOutboundCopyTests.Row3_CopyInInsideABranch_IsBraceScopedForGotoLowering` pins the
+braced region for both an `If` and a loop, and **fails when the brace is disabled** (verified by
+mutation). `NetProxyStubRunTests.OutParameter_InsideBranchAndLoop_WritesBackEveryIteration` is
+kept as branch/loop write-back coverage with a comment recording that it canNOT catch the goto
+regression, for the reason above — it was written believing it could.
 
 ### 2. §12.4 exemption text survives in three places (the invariant itself is ✅)
 

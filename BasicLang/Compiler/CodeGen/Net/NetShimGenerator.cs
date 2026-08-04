@@ -63,11 +63,15 @@ namespace BasicLang.Compiler.CodeGen.Net
     /// <para><b>Known gaps — all of them the surface collector's, none shipping behavior in
     /// P2a-1 (nothing populates a surface):</b></para>
     /// <list type="bullet">
-    /// <item><description><b>§8.6's array copy helpers and §8.4's delegate dispatcher are NOT
-    /// emitted.</b> Both need information a <see cref="NetMemberDescriptor"/> does not carry —
-    /// an array's ELEMENT type and a parameter's delegate-ness — and both are §12.4-exempt (they
-    /// are not <c>BlnetProxyTable</c> slots). Emitting thirteen speculative, uncalled and
-    /// untestable array helpers into every shim would be worse than the honest gap.</description></item>
+    /// <item><description><b>§8.4's delegate dispatcher is NOT emitted.</b> It needs information
+    /// a <see cref="NetMemberDescriptor"/> does not carry (a parameter's delegate-ness).
+    /// <para>⛔ <b>§8.6's array copy helpers ARE emitted, and they are NOT §12.4-exempt.</b> This
+    /// bullet used to claim both — that claim died with Task 10. The helpers are ordinary slots
+    /// AND ordinary exports, and both this generator and <c>NetProxyEmitter</c> derive their name
+    /// sets from the SAME <c>NetArrayCopy.RequiredForms(surface)</c>, which is exactly what makes
+    /// §12.4 (slots ≡ exports) hold for them by construction rather than by exemption. Task 11
+    /// should read this before deciding how to carry the delegate dispatcher: "§12.4-exempt" is
+    /// not an available answer.</para></description></item>
     /// <item><description><b>Property/field SETTERS.</b> Mirrors
     /// <see cref="NetProxyEmitter"/> exactly: one slot per descriptor, shaped as the getter. §8.5
     /// already implies the fix — the collector hands accessors over as members.</description></item>

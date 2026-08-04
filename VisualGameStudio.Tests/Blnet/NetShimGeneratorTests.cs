@@ -186,8 +186,13 @@ public class NetShimGeneratorTests
 
         Assert.That(slots, Is.EquivalentTo(exports),
             "Spec §12.4. Scoped to SURFACE-DERIVED exports deliberately — the shim also exports P0's "
-            + "seven core names and §8.6's array copy helpers, which are not BlnetProxyTable slots, so "
-            + "an unscoped equality is false by construction.");
+            + "seven core names, which are not BlnetProxyTable slots, so an unscoped equality is "
+            + "false by construction.\n"
+            + "NOTE (Task 10): §8.6's array copy helpers are NOT an exemption here — this message "
+            + "used to list them as one. They are slots AND exports, both derived from a single "
+            + "NetArrayCopy.RequiredForms(surface), so they are INCLUDED on both sides and §12.4 "
+            + "holds for them by construction. If this assertion fails over an array helper, the "
+            + "bug is real drift between the two emitters, not a missing exemption.");
     }
 
     /// <summary>

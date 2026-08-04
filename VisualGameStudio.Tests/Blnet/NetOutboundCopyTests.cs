@@ -332,6 +332,65 @@ public class NetOutboundCopyTests
     }
 
     /// <summary>
+    /// ⛔ The copy-in guard must be BRACE-SCOPED, because this backend flattens all control flow
+    /// to labels + <c>goto</c> in one function scope: an unbraced
+    /// <c>BasicLang::NetRef t0 = …;</c> emitted inside an <c>If</c> is a declaration the
+    /// branch's own forward jump crosses, and C++ rejects the translation unit outright
+    /// ("jump to label 'if0_end' crosses initialization of 'NetRef t0'").
+    ///
+    /// <para>Every other §8.6 fixture places its call at straight-line statement level, so this
+    /// is the shape that pins the region. The run-level proof of the same seam lives in
+    /// <c>NetProxyStubRunTests.ArgumentPrologue_InsideBranchAndLoop_CompilesUnderGotoLowering</c>;
+    /// this one keeps §8.6's own row honest without paying for a compile.</para>
+    /// </summary>
+    [Test]
+    public void Row3_CopyInInsideABranch_IsBraceScopedForGotoLowering()
+    {
+        var form = Form("System.Byte");
+
+        var cpp = CompileToCpp("""
+            Module M
+             Sub Main()
+              Dim B(2) As Byte
+              Dim Go As Boolean = True
+              If Go Then
+               Dim S = Convert.ToBase64String(B)
+               Console.WriteLine(S)
+              End If
+             End Sub
+            End Module
+            """, optimize: true);
+
+        Assert.That(cpp, Does.Match(
+                @"\{\s*BasicLang::NetRef blnet_t\d+ = BasicLang::net::"
+                + form.NewExportName + @"\(B\);"),
+            "the copy-in guard must open its own brace-scoped region. Unbraced, the enclosing "
+            + "If's `goto` crosses this initialization and the emitted C++ does not compile — "
+            + "and the guard would also outlive the call it belongs to:\n" + cpp);
+
+        // A loop has a different label topology (a back-edge as well as a forward exit), so it
+        // gets its own pin rather than riding on the branch case.
+        var looped = CompileToCpp("""
+            Module M
+             Sub Main()
+              Dim B(2) As Byte
+              For I As Integer = 0 To 1
+               Dim S = Convert.ToBase64String(B)
+               Console.WriteLine(S)
+              Next
+             End Sub
+            End Module
+            """, optimize: true);
+
+        Assert.That(looped, Does.Match(
+                @"\{\s*BasicLang::NetRef blnet_t\d+ = BasicLang::net::"
+                + form.NewExportName + @"\(B\);"),
+            "the same region must be braced inside a loop body — and per-call scoping is also "
+            + "what lets the guard release at the end of each ITERATION instead of accumulating "
+            + "one live handle per iteration until the function returns:\n" + looped);
+    }
+
+    /// <summary>
     /// ROW 4 — a <c>ref</c>/<c>out</c> array slot copies in AND reads back. §8.6 makes this row
     /// the EXEMPTION from §14.11, so the write-back is the feature, not an optimisation.
     /// </summary>

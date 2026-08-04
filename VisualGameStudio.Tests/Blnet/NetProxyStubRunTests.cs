@@ -310,6 +310,68 @@ public class NetProxyStubRunTests
     }
 
     /// <summary>
+    /// The same out-parameter call moved INSIDE a branch and a loop — the shape the Task-10
+    /// review flagged for the goto-lowering hazard.
+    ///
+    /// <para><b>Recorded because it is the NEGATIVE result, and the negative result is the
+    /// useful one.</b> A plain <c>Integer</c> ByRef row emits <b>no prologue at all</b>: §8.3's
+    /// pointer slot hands the proxy the native local directly (<c>…TryParse("42", n)</c>),
+    /// because for that row the native variable ALREADY is an lvalue of the wire type. With no
+    /// declaration between the label and the jump there is nothing for a <c>goto</c> to cross,
+    /// so this shape was never broken and this test cannot fail for the reason it looks like it
+    /// tests. It is kept as a coverage pin for branch/loop write-back, and the comment stands so
+    /// the next author does not mistake it for the goto regression test.</para>
+    ///
+    /// <para>The rows that DO emit a prologue are the ones whose native representation differs
+    /// from their wire — Char, §6.4's pairs — and §8.6's array copy-in guard. The braced-region
+    /// pin for those lives in
+    /// <c>NetOutboundCopyTests.Row3_CopyInInsideABranch_IsBraceScopedForGotoLowering</c>, which
+    /// does fail when the region is unbraced.</para>
+    /// </summary>
+    [Test]
+    public void OutParameter_InsideBranchAndLoop_WritesBackEveryIteration()
+    {
+        var (cpp, surface) = CompileWithSurface("""
+            Module M
+             Sub Main()
+              Dim n As Integer
+              Dim go As Boolean = True
+              If go Then
+               Dim ok = Int32.TryParse("42", n)
+               Console.WriteLine(n)
+              End If
+              For i As Integer = 0 To 1
+               Dim ok2 = Int32.TryParse("42", n)
+               Console.WriteLine(n)
+              Next
+             End Sub
+            End Module
+            """);
+
+        var tryParse = NetNameMangler.Mangle(
+            Winner("System.Int32", NetCallForm.Static, "TryParse",
+                   "System.String", "System.Int32"));
+
+        var stub = StubTranslationUnit(new[]
+        {
+            new NetStubHarness.StubSlot(tryParse,
+                "[](const char* a0, int32_t* a1, int32_t* result) -> int32_t {"
+                + " std::printf(\"TRYPARSE(%s)\\n\", a0);"
+                + " *a1 = 42; *result = 1; return 0; }"),
+        });
+
+        var output = RunWithStub(cpp, surface, stub);
+
+        Assert.That(output.Replace("\r\n", "\n"), Is.EqualTo(
+            "TRYPARSE(42)\n42\n"
+            + "TRYPARSE(42)\n42\n"
+            + "TRYPARSE(42)\n42\n"),
+            "an out slot inside a branch or a loop must write back on EVERY iteration — a "
+            + "lowering that hoisted the write-back out of the loop would print 42 once and 0 "
+            + "after.");
+    }
+
+    /// <summary>
     /// The SAME out-parameter scenario through the OPTIMIZER — the repo law that codegen is
     /// validated through the optimizer and the CLI, not only through the non-optimizing helper.
     /// The program is shaped to make the optimizer's copy facts matter: <c>n</c> is given a

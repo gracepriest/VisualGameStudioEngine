@@ -301,15 +301,25 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// <see cref="MapType"/> alone then emits <c>V = &lt;NetRef&gt;;</c> followed by
         /// <c>V = read(V);</c> — two hard C++ errors in generated code the user never wrote.
         ///
-        /// <para><b>Reproduction is narrower than "the optimizer", measured:</b> neither
-        /// <c>Generate</c> nor <c>GenerateSplit</c> with <c>AddStandardPasses</c> run directly
-        /// over an <c>IRBuilder</c> module produces the fusion — both keep the temp. It takes the
-        /// whole <c>CppProjectBuilder</c> → <c>Compiler.CompileProjectFiles</c> path. That is why
-        /// the pin for this is an Integration test
-        /// (<c>NetShimPipelineTests.Section86_ByValueCopyIsOneWay_ButARefSlotReadsBack</c>) and
-        /// not a fast one: the fast subject cannot construct the shape. It is also precisely the
-        /// hazard the repo law about testing BOTH entry points exists for — a fix verified only
-        /// through the test helper still breaks the CLI and the IDE.</para>
+        /// <para><b>Where the fusion comes from.</b> Neither <c>Generate</c> nor
+        /// <c>GenerateSplit</c> with <c>AddStandardPasses</c> run directly over an
+        /// <c>IRBuilder</c> module produces it — both keep the temp — so the fast test subjects
+        /// do not exhibit it. The pin for this therefore lives in an Integration test
+        /// (<c>NetShimPipelineTests.Section86_ByValueCopyIsOneWay_ButARefSlotReadsBack</c>),
+        /// which is the shape that needs live .NET resolution anyway.</para>
+        ///
+        /// <para>⛔ <b>An earlier version of this comment claimed the fusion "takes the whole
+        /// CppProjectBuilder → CompileProjectFiles path" and that "the fast subject cannot
+        /// construct the shape", labelled as measured. That was wrong and is retracted.</b> The
+        /// plain CLI single-file path performs the fusion too — <c>BasicLang.exe f.bas
+        /// --target=cpp</c> on <c>Dim v As Integer = F()</c> emits <c>v = F();</c> with no
+        /// intermediate temp. What the Integration test uniquely supplies is .NET RESOLUTION,
+        /// not the fusion. The distinction matters because "only the project path can build this
+        /// shape" would send the next author looking in the wrong component.</para>
+        ///
+        /// <para>It remains precisely the hazard the repo law about testing BOTH entry points
+        /// exists for — a fix verified only through the test helper still breaks the CLI and the
+        /// IDE.</para>
         ///
         /// <para>It is also the right rule on its own terms: §8.6 row 2 says the DECLARATION is
         /// what decides whether a .NET array materializes by copy.</para>
@@ -753,9 +763,46 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         {
             var statement = callStatement();
 
+            // ⛔ THE BRACES ARE LOAD-BEARING — and only when there IS a prologue, because only a
+            // prologue DECLARES anything.
+            //
+            // This backend flattens ALL control flow to labels + `goto` inside ONE flat function
+            // scope (see EmitInlineRegion). A prologue line like §8.6's
+            // `BasicLang::NetRef t0 = net::New_…(a);` is therefore a declaration-with-initializer
+            // sitting in the same scope as every label in the function — so ANY forward `goto`
+            // emitted for an enclosing `If`/loop jumps ACROSS its initialization, which C++
+            // forbids outright:
+            //
+            //     error: jump to label 'if0_end' crosses initialization of 'NetRef t0'
+            //
+            // i.e. `If x Then list.Sort(arr)` — a §8.6 copy-in anywhere inside a branch or loop —
+            // emitted C++ that did not compile. Every fixture for this seam is straight-line,
+            // which is why the whole suite stayed green over it. The same hazard covers Task 8's
+            // scalar ref/out prologue and Task 11's callback register/unregister slot, since all
+            // three share this one seam.
+            //
+            // A brace-enclosed region fixes it for all of them at once: a goto only ever targets
+            // labels at the OUTER level (the region contains none of its own), so no jump can
+            // cross into the middle of it. It also TIGHTENS the RAII guards — they now release at
+            // the end of the call's own scope rather than the function's — while preserving the
+            // reverse-release ordering that C++'s reverse destruction of automatics gives free.
+            // Same answer, same reasons, as the For Each arm's braces in EmitNetEnumeration.
+            var scoped = emission.Prologue.Count > 0;
+            if (scoped)
+            {
+                WriteLine("{");
+                Indent();
+            }
+
             foreach (var line in emission.Prologue) WriteLine(line);
             WriteLine(statement);
             foreach (var line in emission.WriteBack) WriteLine(line);
+
+            if (scoped)
+            {
+                Unindent();
+                WriteLine("}");
+            }
         }
 
         /// <summary>The single statement carrying <paramref name="expression"/>. See
