@@ -106,34 +106,67 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// <summary>
         /// One argument's contribution to a proxy call: the expression(s) that occupy its wire
         /// slot(s), plus any statements that must run BEFORE the call and any that must run
-        /// AFTER it.
+        /// AFTER it on the SUCCESS path.
         ///
         /// <para><b>Why a bare expression was not enough.</b> §8.3's <c>ref</c>/<c>out</c> row
         /// is a pointer slot, which lowers to <c>int32_t t = n; proxy(&amp;t); n = t;</c> — a
-        /// prologue and an epilogue around one call. §8.6's outbound collection copy (Task 10)
-        /// needs a copy-out plus a release, and §8.4's callbacks (Task 11) need a register plus
-        /// an unregister. All three are statements, and a function returning a string can only
+        /// prologue and a write-back around one call. §8.6's outbound collection copy needs a
+        /// copy-in plus a release, and §8.4's callbacks (Task 11) need a register plus an
+        /// unregister. All of them are statements, and a function returning a string can only
         /// ever produce sub-expressions.</para>
         ///
         /// <para><see cref="Expressions"/> is a LIST because a §6.4 multi-slot pair occupies
         /// several wire slots from one BasicLang argument (Decimal's four <c>GetBits</c> words,
         /// DateTimeOffset's declared scalar pair). Ordinary rows contribute exactly one.</para>
+        ///
+        /// <para>⛔ <b>THE EMISSION-SEAM CONTRACT (P2a-2 Task-10 Step 0; Task-8 review I1).</b>
+        /// <see cref="EmitNetCallStatements"/> writes prologue → call → write-back as
+        /// STRAIGHT-LINE C++, and the call statement contains <c>NetCheckTyped</c>, <b>which
+        /// throws</b>. Therefore:</para>
+        /// <list type="number">
+        /// <item><description><b><see cref="WriteBack"/> is SUCCESS-PATH ONLY.</b> A thrown
+        /// managed exception skips every line in it. That is CORRECT for the ref/out row it was
+        /// built for — .NET would not write back either — and is why nothing is broken today.
+        /// It is named <c>WriteBack</c> rather than "epilogue" precisely so the next author
+        /// cannot read it as "runs afterwards".</description></item>
+        /// <item><description><b>Anything that MUST run on the throwing path goes in
+        /// <see cref="Prologue"/> as an RAII GUARD</b> — a C++ object whose destructor performs
+        /// the release — never as a trailing statement. §8.6's copy-in guard is a
+        /// <c>BasicLang::NetRef</c> local (see <see cref="MarshalNetArrayArgument"/>): its
+        /// deleter calls <c>blnet_release</c> when the enclosing scope unwinds, exception or
+        /// not. §8.4's callback registration inherits the same slot in Task 11.</description></item>
+        /// <item><description><b>Release ORDER is free, and that is the second reason for
+        /// RAII.</b> Prologue lines accumulate in ARGUMENT order while releases want the
+        /// REVERSE; C++ destroys automatic objects in reverse declaration order, so guards
+        /// declared front-to-back release back-to-front with no list to maintain. A
+        /// hand-rolled epilogue list would have had to be reversed by hand, correctly, forever.</description></item>
+        /// </list>
         /// </summary>
         private readonly struct NetArgEmission
         {
             private NetArgEmission(
                 IReadOnlyList<string> expressions,
                 IReadOnlyList<string> prologue,
-                IReadOnlyList<string> epilogue)
+                IReadOnlyList<string> writeBack)
             {
                 Expressions = expressions;
                 Prologue = prologue ?? Array.Empty<string>();
-                Epilogue = epilogue ?? Array.Empty<string>();
+                WriteBack = writeBack ?? Array.Empty<string>();
             }
 
             internal IReadOnlyList<string> Expressions { get; }
+
+            /// <summary>
+            /// Statements emitted BEFORE the call — including every RAII guard whose destructor
+            /// owns a release. Runs unconditionally. See the type remarks.
+            /// </summary>
             internal IReadOnlyList<string> Prologue { get; }
-            internal IReadOnlyList<string> Epilogue { get; }
+
+            /// <summary>
+            /// SUCCESS-PATH-ONLY statements emitted after the call. A managed throw skips them.
+            /// Never put a release here — see the type remarks.
+            /// </summary>
+            internal IReadOnlyList<string> WriteBack { get; }
 
             /// <summary>A row that needs no statements — every §8.3 by-value row.</summary>
             internal static NetArgEmission Value(string expression) =>
@@ -142,22 +175,20 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             internal static NetArgEmission Statements(
                 IReadOnlyList<string> expressions,
                 IReadOnlyList<string> prologue = null,
-                IReadOnlyList<string> epilogue = null) =>
-                new(expressions, prologue, epilogue);
+                IReadOnlyList<string> writeBack = null) =>
+                new(expressions, prologue, writeBack);
         }
 
         /// <summary>
         /// A whole proxy call, accumulated from its arguments: the statements that must precede
-        /// it, the call expression itself, and the statements that must follow it.
-        /// <see cref="EmitNetResult"/> writes them in that order, and computes the result
-        /// statement (which may REFUSE) before writing anything — a refusal must never leave a
-        /// half-emitted prologue behind.
+        /// it, the call expression itself, and the SUCCESS-PATH-ONLY statements that follow it.
+        /// See <see cref="NetArgEmission"/> for the seam contract both lists obey.
         /// </summary>
         private sealed class NetCallEmission
         {
             internal List<string> Prologue { get; } = new List<string>();
             internal string Expression { get; set; }
-            internal List<string> Epilogue { get; } = new List<string>();
+            internal List<string> WriteBack { get; } = new List<string>();
         }
 
         /// <summary>
@@ -249,7 +280,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 var argument = MarshalNetArgument(targetDisplay, parameters[i], i, arguments[i]);
                 emission.Prologue.AddRange(argument.Prologue);
                 callArgs.AddRange(argument.Expressions);
-                emission.Epilogue.AddRange(argument.Epilogue);
+                emission.WriteBack.AddRange(argument.WriteBack);
             }
 
             emission.Expression = "BasicLang::net::" + NetNameMangler.Mangle(target)
@@ -436,7 +467,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             return NetArgEmission.Statements(
                 new[] { temp },
                 prologue: new[] { row.CWire + " " + temp + (isOut ? "{};" : " = " + inbound + ";") },
-                epilogue: new[] { native + " = " + outbound + ";" });
+                // SUCCESS-PATH ONLY, and correct that way: a managed throw means the callee
+                // wrote nothing, so .NET would not write back either (NetArgEmission's contract).
+                writeBack: new[] { native + " = " + outbound + ";" });
         }
 
         /// <summary>
@@ -448,17 +481,38 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// <c>NetRef</c>-typed destination). Results this task cannot represent refuse.
         /// </summary>
         private void EmitNetResult(
-            IRValue resultNode, NetMemberDescriptor target, NetCallEmission emission)
+            IRValue resultNode, NetMemberDescriptor target, NetCallEmission emission) =>
+            // The Func is not ceremony: it is what makes "compute the statement BEFORE writing
+            // the prologue" STRUCTURAL rather than conventional. See EmitNetCallStatements.
+            EmitNetCallStatements(emission, () => NetResultStatement(resultNode, target, emission.Expression));
+
+        /// <summary>
+        /// THE one place a proxy call becomes C++ statements (P2a-2 Task-10 Step 0, quality
+        /// review M1): prologue → call statement → SUCCESS-PATH-ONLY write-back. Extracted
+        /// because the identical three-part loop was written out at three call sites
+        /// (<see cref="EmitNetResult"/>, <see cref="TryLowerNetFieldStore"/>, and — since Task 9
+        /// — <see cref="TryLowerNetIndexerStore"/>; the Task-8 review counted two because the
+        /// third did not exist yet). Three copies means the seam contract had to be re-obeyed
+        /// three times.
+        ///
+        /// <para><b><paramref name="callStatement"/> is a FACTORY, not a string, and that is the
+        /// point.</b> Every result arm can REFUSE (<see cref="NetLoweringRefusal"/>), and a
+        /// refusal that had already written the argument prologue would leave dangling
+        /// temporaries in a translation unit the build is about to reject anyway — but it would
+        /// also make the failure read as a codegen bug rather than the §8.3 gap it is. Taking
+        /// the factory means "compute before write" is enforced by the shape of this method
+        /// instead of by each caller remembering to order two lines correctly.</para>
+        ///
+        /// <para>For the write-back's success-path-only status and why releases live in the
+        /// prologue as RAII guards instead, see <see cref="NetArgEmission"/>.</para>
+        /// </summary>
+        private void EmitNetCallStatements(NetCallEmission emission, Func<string> callStatement)
         {
-            // Computed BEFORE anything is written: every arm below can REFUSE, and a refusal
-            // that had already emitted the argument prologue would leave dangling temporaries
-            // in a translation unit the build is about to reject anyway — but it would also
-            // make the failure look like a codegen bug rather than the §8.3 gap it is.
-            var statement = NetResultStatement(resultNode, target, emission.Expression);
+            var statement = callStatement();
 
             foreach (var line in emission.Prologue) WriteLine(line);
             WriteLine(statement);
-            foreach (var line in emission.Epilogue) WriteLine(line);
+            foreach (var line in emission.WriteBack) WriteLine(line);
         }
 
         /// <summary>The single statement carrying <paramref name="expression"/>. See
@@ -559,9 +613,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             arguments.Add(store.Value);
 
             var emission = BuildNetProxyCall(store.ResolvedNetTarget, store.Collection, arguments);
-            foreach (var line in emission.Prologue) WriteLine(line);
-            WriteLine(emission.Expression + ";");
-            foreach (var line in emission.Epilogue) WriteLine(line);
+            EmitNetCallStatements(emission, () => emission.Expression + ";");
             return true;
         }
 
@@ -664,9 +716,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 store.ResolvedNetTarget,
                 store.ResolvedNetTarget.IsStatic ? null : store.Object,
                 new[] { store.Value });
-            foreach (var line in emission.Prologue) WriteLine(line);
-            WriteLine(emission.Expression + ";");
-            foreach (var line in emission.Epilogue) WriteLine(line);
+            EmitNetCallStatements(emission, () => emission.Expression + ";");
             return true;
         }
     }
