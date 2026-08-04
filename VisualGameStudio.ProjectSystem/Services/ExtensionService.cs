@@ -354,7 +354,7 @@ public class ExtensionService : IExtensionService
                     _outputService.WriteLine($"[Extensions] Installed: {ext.Name} ({ext.Id} v{ext.Version})", OutputCategory.General);
 
                     // Activate static contributions immediately
-                    LoadContributions(ext);
+                    await LoadContributionsAsync(ext);
 
                     // Mark pure static extensions as active
                     if (string.IsNullOrEmpty(ext.Manifest?.Main))
@@ -472,12 +472,12 @@ public class ExtensionService : IExtensionService
 
     #region Enable / Disable
 
-    public Task<bool> EnableAsync(string extensionId)
+    public async Task<bool> EnableAsync(string extensionId)
     {
         var extension = _extensions.FirstOrDefault(e => e.Id == extensionId);
         if (extension == null)
         {
-            return Task.FromResult(false);
+            return false;
         }
 
         extension.IsEnabled = true;
@@ -486,10 +486,10 @@ public class ExtensionService : IExtensionService
         SaveState();
 
         // Re-activate static contributions
-        LoadContributions(extension);
+        await LoadContributionsAsync(extension);
 
         ExtensionEnabled?.Invoke(this, new ExtensionEventArgs(extension));
-        return Task.FromResult(true);
+        return true;
     }
 
     public Task<bool> DisableAsync(string extensionId)
@@ -550,7 +550,7 @@ public class ExtensionService : IExtensionService
         extension.Status = ExtensionStatus.Activating;
 
         // Load declarative contributions (grammars, themes, snippets, etc.) regardless of host
-        LoadContributions(extension);
+        await LoadContributionsAsync(extension);
 
         // If the extension has a JS entry point, activate it in the extension host
         if (!string.IsNullOrEmpty(extension.Manifest?.Main))
@@ -736,7 +736,7 @@ public class ExtensionService : IExtensionService
             try
             {
                 // Load static contributions (themes, grammars, snippets)
-                LoadContributions(ext);
+                await LoadContributionsAsync(ext);
 
                 // Mark as active if it has no JS entry point (pure static extension)
                 if (string.IsNullOrEmpty(ext.Manifest?.Main))
@@ -907,7 +907,13 @@ public class ExtensionService : IExtensionService
         return extension;
     }
 
-    private void LoadContributions(Extension extension)
+    /// <summary>
+    /// Loads an extension's declarative contributions. Async because the grammar registrar is
+    /// async: this runs on the UI thread (the Extensions panel's Install command is a
+    /// RelayCommand) and the registrar's awaits capture the SynchronizationContext, so blocking
+    /// on it here deadlocked the IDE on the first successful install. Await, never block.
+    /// </summary>
+    private async Task LoadContributionsAsync(Extension extension)
     {
         if (string.IsNullOrEmpty(extension.InstallPath) || !Directory.Exists(extension.InstallPath))
             return;
@@ -920,7 +926,7 @@ public class ExtensionService : IExtensionService
             stats.ThemesLoaded = LoadThemesFromExtension(extension);
 
             // Load grammars and language configurations via TextMateRegistrar
-            stats.GrammarsLoaded = LoadGrammarsFromExtension(extension);
+            stats.GrammarsLoaded = await LoadGrammarsFromExtensionAsync(extension);
 
             // Load snippets
             stats.SnippetsLoaded = LoadSnippetsFromExtension(extension);
@@ -1105,14 +1111,13 @@ public class ExtensionService : IExtensionService
         }
     }
 
-    private int LoadGrammarsFromExtension(Extension extension)
+    private async Task<int> LoadGrammarsFromExtensionAsync(Extension extension)
     {
         if (_textMateRegistrar == null) return 0;
 
         try
         {
-            var task = _textMateRegistrar.RegisterFromExtensionAsync(extension.InstallPath, extension.Id);
-            return task.GetAwaiter().GetResult();
+            return await _textMateRegistrar.RegisterFromExtensionAsync(extension.InstallPath, extension.Id);
         }
         catch (Exception ex)
         {
