@@ -923,7 +923,7 @@ public class ExtensionService : IExtensionService
         try
         {
             // Load themes
-            stats.ThemesLoaded = LoadThemesFromExtension(extension);
+            stats.ThemesLoaded = LoadThemesFromExtension(extension, stats.ThemeFilePaths);
 
             // Load grammars and language configurations via TextMateRegistrar
             stats.GrammarsLoaded = await LoadGrammarsFromExtensionAsync(extension);
@@ -1049,7 +1049,14 @@ public class ExtensionService : IExtensionService
         return count;
     }
 
-    private int LoadThemesFromExtension(Extension extension)
+    /// <summary>
+    /// Parses an extension's contributed themes into TextMate themes and records each theme
+    /// file's absolute path in <paramref name="themeFilePaths"/>. Parsing alone does NOT make a
+    /// theme selectable: the theme registry lives in the Shell, so the paths are surfaced on
+    /// ContributionsLoaded for the Shell to register. Without that the loaded theme object is
+    /// discarded and the count reports work attempted rather than work completed.
+    /// </summary>
+    private int LoadThemesFromExtension(Extension extension, List<string>? themeFilePaths = null)
     {
         if (_textMateService == null) return 0;
 
@@ -1080,6 +1087,11 @@ public class ExtensionService : IExtensionService
 
                 var fullPath = Path.Combine(extension.InstallPath, themePath.TrimStart('/'));
                 if (!File.Exists(fullPath)) continue;
+
+                // Surface the path even if TextMate parsing below fails — the Shell's theme
+                // loader (VsCodeThemeLoader) is a different, more capable parser and may well
+                // handle a file this one chokes on.
+                themeFilePaths?.Add(fullPath);
 
                 try
                 {

@@ -843,6 +843,15 @@ public class ExtensionContributionsLoadedEventArgs : EventArgs
     public int SnippetsLoaded { get; set; }
     public int LanguageConfigsLoaded { get; set; }
 
+    /// <summary>
+    /// Absolute paths of the VS Code theme JSON files this extension contributes.
+    /// The extension service parses themes but cannot register them: the theme registry
+    /// (ThemeManager) lives in the Shell, which references ProjectSystem and not the other
+    /// way round. Carrying the paths on this event lets the Shell do the registration
+    /// without inverting the dependency.
+    /// </summary>
+    public List<string> ThemeFilePaths { get; } = new();
+
     public ExtensionContributionsLoadedEventArgs(Extension extension)
     {
         Extension = extension;

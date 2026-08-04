@@ -666,6 +666,12 @@ public partial class MainWindowViewModel : ViewModelBase
         _extensionService.WebViewCreated += OnExtensionWebViewCreated;
         _extensionService.WebViewHtmlChanged += OnExtensionWebViewHtmlChanged;
 
+        // Register extension-contributed themes with the Shell's theme registry. The extension
+        // service parses themes but cannot register them (ThemeManager lives here, not in
+        // ProjectSystem), so before this an installed theme was counted in the Output log and
+        // then silently dropped — never appearing in Tools > Settings.
+        _extensionService.ContributionsLoaded += OnExtensionContributionsLoaded;
+
         // Load accessibility and zoom settings
         if (_settingsService != null)
         {
@@ -792,6 +798,55 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             System.Diagnostics.Debug.WriteLine($"[TreeView] Refresh failed for {e.ViewId}: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Registers an extension's contributed themes with <see cref="ThemeManager"/> so they appear
+    /// in Tools &gt; Settings alongside built-ins and file-imported themes.
+    ///
+    /// Registration is per-session and deliberately not persisted to
+    /// <c>ThemeManager.ImportedThemesKey</c>: extensions re-publish their contributions on every
+    /// launch, so persisting would duplicate that list and leave dangling entries pointing into
+    /// ~/.vgs/extensions after an uninstall.
+    /// </summary>
+    private void OnExtensionContributionsLoaded(object? sender, ExtensionContributionsLoadedEventArgs e)
+    {
+        if (e.ThemeFilePaths.Count == 0) return;
+
+        var paths = e.ThemeFilePaths.ToList();
+        var extensionName = e.Extension.Name;
+
+        // ThemeManager touches Avalonia's Application.Current, so registration must happen on the
+        // UI thread. Contributions load from a background-capable async path.
+        Avalonia.Threading.Dispatcher.UIThread.Post(async () =>
+        {
+            foreach (var path in paths)
+            {
+                var label = await ThemeManager.LoadVsCodeThemeFileAsync(path);
+                if (label == null)
+                {
+                    _outputService.WriteError(
+                        $"[Extensions] Could not register theme from {extensionName}: {Path.GetFileName(path)}",
+                        OutputCategory.General);
+                    continue;
+                }
+
+                _outputService.WriteLine(
+                    $"[Extensions] Registered theme '{label}' from {extensionName}",
+                    OutputCategory.General);
+
+                // Startup theme resolution runs before extensions are discovered, so a saved
+                // extension theme falls back to a built-in until its extension loads. Re-apply
+                // once the real theme becomes available.
+                var saved = _settingsService?.Get<string>("workbench.colorTheme", "");
+                if (!string.IsNullOrEmpty(saved)
+                    && string.Equals(saved, label, StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(ThemeManager.CurrentTheme, label, StringComparison.OrdinalIgnoreCase))
+                {
+                    ThemeManager.Apply(label);
+                }
+            }
+        });
     }
 
     private void OnExtensionWebViewCreated(object? sender, WebViewCreatedEventArgs e)
