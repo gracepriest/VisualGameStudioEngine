@@ -13,7 +13,11 @@ namespace BasicLang.Compiler.CodeGen
         CSharp,
         Cpp,
         LLVM,
-        MSIL
+        MSIL,
+        // APPEND ONLY — these ordinals are persisted in .blproj <TargetBackend> values.
+        // Inserting a member above shifts the existing four and silently retargets
+        // every stored project. Pinned by JavaScriptBackendRegistrationTests.
+        JavaScript
     }
 
     /// <summary>
