@@ -24,12 +24,11 @@ public class ExtensionHost : IDisposable
 
     private readonly List<(string extensionId, string extensionPath)> _activeExtensions = new();
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        PropertyNameCaseInsensitive = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-    };
+    // NOTE: a JsonSerializerOptions with CamelCase + PropertyNameCaseInsensitive used to live here,
+    // referenced by nothing. It was System.Text.Json configuration sitting on what was then a
+    // Newtonsoft channel, and it advertised case-INSENSITIVE binding that this wire has never had:
+    // StreamJsonRpc matches named arguments to parameter names EXACTLY and case-sensitively.
+    // Deleted rather than wired up, so nobody infers a tolerance that does not exist.
 
     /// <summary>
     /// Whether the extension host process is running and connected.
@@ -175,9 +174,16 @@ public class ExtensionHost : IDisposable
             _hostProcess.BeginErrorReadLine();
 
             // Set up JSON-RPC over stdin/stdout
+            // The formatter is chosen EXPLICITLY. The no-formatter overload defaults to the
+            // Newtonsoft one, which cannot materialize a System.Text.Json.JsonElement — it yields
+            // default(JsonElement) silently instead of throwing. Every JsonElement parameter and
+            // every JsonElement? result on this channel therefore arrived EMPTY: the diagnostics
+            // payload, workspace/applyEdit, all twelve provider results and both tree-view results.
+            // Nothing failed loudly; the values were simply blank.
             var handler = new HeaderDelimitedMessageHandler(
                 _hostProcess.StandardInput.BaseStream,
-                _hostProcess.StandardOutput.BaseStream);
+                _hostProcess.StandardOutput.BaseStream,
+                new SystemTextJsonFormatter());
 
             _rpc = new JsonRpc(handler);
 
@@ -187,7 +193,7 @@ public class ExtensionHost : IDisposable
             _rpc.AddLocalRpcMethod("outputChannel/create", new Action<string, string>(OnCreateOutputChannel));
             _rpc.AddLocalRpcMethod("outputChannel/append", new Action<string, string>(OnOutputChannelAppend));
             _rpc.AddLocalRpcMethod("statusBar/update", new Action<string, string, string?, string?>(OnSetStatusBarItem));
-            _rpc.AddLocalRpcMethod("languages/registerProvider", new Action<string, string, string?, string?>(OnRegisterProvider));
+            _rpc.AddLocalRpcMethod("languages/registerProvider", new Action<string, string, string, JsonElement, JsonElement>(OnRegisterProvider));
             _rpc.AddLocalRpcMethod("languages/publishDiagnostics", new Action<string, JsonElement, string?>(OnPublishDiagnostics));
             _rpc.AddLocalRpcMethod("treeView/create", new Action<string, string, string?>(OnTreeViewCreate));
             _rpc.AddLocalRpcMethod("treeView/refresh", new Action<string, string?>(OnTreeViewRefresh));
@@ -680,15 +686,40 @@ public class ExtensionHost : IDisposable
         });
     }
 
-    private void OnRegisterProvider(string extensionId, string type, string? selectorJson, string? metadataJson)
+    /// <summary>
+    /// Handles <c>languages/registerProvider</c>. All 30 <c>registerXxxProvider</c> entry points in
+    /// <c>vscode-api/languages.js</c> funnel through this one notification, so nothing an extension
+    /// contributes to the language surface exists until it binds.
+    ///
+    /// <para>The parameter list mirrors <c>languages.js:53-59</c> EXACTLY —
+    /// <c>{ type, id, extensionId, selector, metadata }</c> — because StreamJsonRpc matches named
+    /// arguments to parameter names case-sensitively and by exact spelling. The previous signature
+    /// took four parameters in a different order, naming two of them <c>selectorJson</c> and
+    /// <c>metadataJson</c>, so it never bound: a notification that fails to bind produces no error
+    /// response and no log line anywhere. ⛔ Renaming any parameter here silently unbinds the call
+    /// again, with no compiler error.</para>
+    ///
+    /// <para><paramref name="metadata"/> MUST keep its default: <c>languages.js:58</c> sends
+    /// <c>metadata || undefined</c>, which omits the key entirely, and a required parameter whose
+    /// key is absent fails to bind.</para>
+    ///
+    /// <para><c>selector</c> arrives as a JSON ARRAY of filter objects and <c>metadata</c> as an
+    /// object; both are re-serialised to their raw text because
+    /// <c>ExtensionService.OnProviderRegistered</c> parses them with <c>JsonDocument.Parse</c>.</para>
+    /// </summary>
+    private void OnRegisterProvider(
+        string type, string id, string extensionId,
+        JsonElement selector, JsonElement metadata = default)
     {
-        _outputService.WriteLine($"[ExtensionHost] Provider registered: {type} (by {extensionId})", OutputCategory.General);
+        _outputService.WriteLine(
+            $"[ExtensionHost] Provider registered: {type} (by {extensionId})", OutputCategory.General);
+
         ProviderRegistered?.Invoke(this, new ProviderRegisteredEventArgs
         {
             ExtensionId = extensionId,
             Type = type,
-            SelectorJson = selectorJson,
-            MetadataJson = metadataJson
+            SelectorJson = selector.ValueKind == JsonValueKind.Undefined ? null : selector.GetRawText(),
+            MetadataJson = metadata.ValueKind == JsonValueKind.Undefined ? null : metadata.GetRawText()
         });
     }
 

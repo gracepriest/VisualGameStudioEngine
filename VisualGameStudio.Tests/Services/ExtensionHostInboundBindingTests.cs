@@ -1,0 +1,121 @@
+using System;
+using System.IO;
+using NUnit.Framework;
+
+namespace VisualGameStudio.Tests.Services;
+
+/// <summary>
+/// Guards the JS→C# half of the extension-host contract.
+///
+/// <para>The outbound half was positional-vs-named (fixed in b60aa6e). This half fails differently:
+/// the Node side already sends correct NAMED objects, and StreamJsonRpc binds them to handler
+/// parameters by EXACT, CASE-SENSITIVE NAME. So a handler whose parameter names or arity disagree
+/// simply never binds — and because these are NOTIFICATIONS, no error response is produced and
+/// nothing is logged. The call vanishes.</para>
+///
+/// <para><c>languages/registerProvider</c> is the one that matters most: all 30
+/// <c>registerXxxProvider</c> entry points funnel through it, and until it binds
+/// <c>ProviderRegistered</c> never fires, <c>_extensionProviderLanguages</c> stays empty,
+/// <c>HasExtensionProviders</c> is permanently false, and the IDE never even ASKS an extension for
+/// hover or completion. Every downstream fix is invisible until this one lands.</para>
+/// </summary>
+[TestFixture]
+public class ExtensionHostInboundBindingTests
+{
+    private static string Source(params string[] parts)
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir != null)
+        {
+            var candidate = Path.Combine(dir.FullName, Path.Combine(parts));
+            if (File.Exists(candidate)) return File.ReadAllText(candidate);
+            dir = dir.Parent;
+        }
+        Assert.Fail($"could not locate {Path.Combine(parts)}");
+        return "";
+    }
+
+    private static string HostSource() =>
+        Source("VisualGameStudio.ProjectSystem", "Services", "ExtensionHost.cs");
+
+    /// <summary>
+    /// The handler's parameters must match the five keys languages.js actually sends:
+    /// <c>{ type, id, extensionId, selector, metadata }</c>. The old signature took four
+    /// parameters in a different order with two different names, so it never bound.
+    /// </summary>
+    [Test]
+    public void RegisterProvider_BindsTheShapeTheHostSends()
+    {
+        var src = HostSource();
+
+        Assert.That(src, Does.Not.Contain("new Action<string, string, string?, string?>(OnRegisterProvider)"),
+            "the old 4-parameter registration cannot bind the 5-key notification languages.js sends");
+
+        foreach (var name in new[] { "string type", "string id", "string extensionId" })
+        {
+            Assert.That(src, Does.Contain(name).IgnoreCase,
+                $"OnRegisterProvider must accept '{name}' — StreamJsonRpc binds named arguments by "
+                + "exact parameter name, so a rename silently unbinds the whole call");
+        }
+    }
+
+    /// <summary>
+    /// languages.js sends <c>metadata: metadata || undefined</c>, which OMITS the key entirely when
+    /// there is no metadata. A parameter with no default fails binding when its key is absent — the
+    /// same defect that kills treeView/create — so the metadata parameter must be optional.
+    /// </summary>
+    [Test]
+    public void RegisterProvider_ToleratesAnOmittedMetadataKey()
+    {
+        var src = HostSource();
+        var idx = src.IndexOf("OnRegisterProvider(", StringComparison.Ordinal);
+        Assert.That(idx, Is.GreaterThan(-1), "premise: the handler still exists");
+
+        var signature = src.Substring(idx, Math.Min(400, src.Length - idx));
+        var close = signature.IndexOf(')');
+        Assert.That(close, Is.GreaterThan(-1));
+        signature = signature.Substring(0, close);
+
+        Assert.That(signature, Does.Contain("metadata"),
+            "premise: the handler takes metadata");
+        Assert.That(signature, Does.Contain("= default").Or.Contain("= null"),
+            "metadata must have a default: languages.js omits the key when there is no metadata, "
+            + "and a required parameter whose key is absent fails to bind — silently, because this "
+            + "is a notification");
+    }
+
+    /// <summary>
+    /// The channel is constructed with <c>new HeaderDelimitedMessageHandler(stdin, stdout)</c>, the
+    /// no-formatter overload, which defaults to the NEWTONSOFT formatter. Newtonsoft cannot
+    /// materialize a <c>System.Text.Json.JsonElement</c>: it yields <c>default(JsonElement)</c>
+    /// silently rather than throwing. Every JsonElement parameter and every
+    /// <c>JsonElement?</c> result on this channel therefore arrives EMPTY — which covers the
+    /// diagnostics payload, applyEdit, all 12 provider results and both tree-view results.
+    /// </summary>
+    [Test]
+    public void TheChannelUsesASystemTextJsonFormatter()
+    {
+        var src = HostSource();
+
+        Assert.That(src, Does.Contain("SystemTextJsonFormatter"),
+            "the message handler must be constructed with an explicit SystemTextJsonFormatter; the "
+            + "default is Newtonsoft, which cannot materialize System.Text.Json.JsonElement and "
+            + "silently substitutes an empty one");
+    }
+
+    /// <summary>
+    /// A <c>JsonSerializerOptions</c> configured for camelCase and case-insensitive matching sat in
+    /// this file, unreferenced — System.Text.Json configuration on a Newtonsoft channel. It is
+    /// doubly inert and actively misleading, because the wire binding it appears to describe is
+    /// case-SENSITIVE.
+    /// </summary>
+    [Test]
+    public void NoInertSerializerOptionsAdvertiseCaseInsensitiveBinding()
+    {
+        // Matches the ASSIGNMENT, not the bare identifier: the explanatory comment left in its
+        // place names the setting deliberately, and prose should not fail a test about code.
+        Assert.That(HostSource(), Does.Not.Contain("PropertyNameCaseInsensitive ="),
+            "named-argument binding on this channel is case-SENSITIVE; leaving unreferenced options "
+            + "that claim otherwise invites a rename that silently unbinds a handler");
+    }
+}
