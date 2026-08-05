@@ -170,4 +170,99 @@ public class NetDelegateTests
         Assert.That(result.Member.Parameters[0].TypeFullName,
             Is.EqualTo("System.Threading.ThreadStart"));
     }
+
+    // ------------------------------------------------------------------------------------
+    // Step 3 — ONE shared "required delegate forms" derivation, following the
+    // NetArrayCopy.RequiredForms pattern. Forced by §12.4: the proxy table's slots must EQUAL
+    // the shim's surface-derived exports, and NetShimGenerator.cs:68-74 rules out an exemption
+    // for the delegate dispatcher in as many words. Both emitters must call ONE function, so
+    // "slots ≡ exports" is a consequence of calling it twice rather than a property to re-check.
+    // ------------------------------------------------------------------------------------
+
+    private static NetMemberDescriptor MemberTaking(string name, params string[] parameterTypes) =>
+        new("Contoso.Widget", name, NetMemberCategory.Method, isStatic: true, arity: 0,
+            "System.Void",
+            parameterTypes.Select(t => new NetParameterDescriptor(
+                NetRefKind.None, t, DelegateSignatureFor(t))).ToArray());
+
+    /// <summary>Null for a non-delegate spelling, so these fixtures exercise both arms.</summary>
+    private static string DelegateSignatureFor(string typeFullName) => typeFullName switch
+    {
+        "System.Action" => "System.Void()",
+        "System.Threading.ThreadStart" => "System.Void()",
+        "System.Text.RegularExpressions.MatchEvaluator" =>
+            "System.String(System.Text.RegularExpressions.Match)",
+        _ => null,
+    };
+
+    [Test]
+    public void RequiredForms_YieldsOneFormPerDistinctDelegateInTheSurface()
+    {
+        var surface = new NetSurface(
+            new[]
+            {
+                MemberTaking("A", "System.Action", "System.Int32"),
+                MemberTaking("B", "System.Action"),   // same delegate again — must not duplicate
+                MemberTaking("C", "System.Text.RegularExpressions.MatchEvaluator"),
+            },
+            Array.Empty<string>());
+
+        var forms = NetDelegateDispatch.RequiredForms(surface);
+
+        Assert.That(forms.Select(f => f.DelegateFullName), Is.EquivalentTo(new[]
+        {
+            "System.Action",
+            "System.Text.RegularExpressions.MatchEvaluator",
+        }), "one form per DISTINCT delegate type; non-delegate parameters contribute nothing");
+    }
+
+    [Test]
+    public void RequiredForms_OrderIsDeterministicNotEncounterOrder()
+    {
+        // The emitted export set is part of §10.2's shim cache key. An order that depended on IR
+        // walk order would produce false cache MISSES — a ~27 s republish for an unchanged
+        // surface — and, worse, two orders for one surface break §12.4's set comparison the
+        // moment either emitter is asked to enumerate rather than compare.
+        NetSurface Surface(params string[] order) =>
+            new(order.Select(d => MemberTaking("M" + d, d)).ToArray(), Array.Empty<string>());
+
+        var forwards = NetDelegateDispatch.RequiredExportNames(Surface(
+            "System.Action", "System.Threading.ThreadStart",
+            "System.Text.RegularExpressions.MatchEvaluator"));
+        var backwards = NetDelegateDispatch.RequiredExportNames(Surface(
+            "System.Text.RegularExpressions.MatchEvaluator", "System.Threading.ThreadStart",
+            "System.Action"));
+
+        Assert.That(forwards, Is.Not.Empty);
+        Assert.That(backwards, Is.EqualTo(forwards).AsCollection,
+            "the same surface in a different walk order must produce the SAME export sequence");
+    }
+
+    [Test]
+    public void TwoDelegatesSharingAnInvokeSignature_GetDistinctExports()
+    {
+        // System.Action and System.Threading.ThreadStart are both `void()`. The managed
+        // dispatcher has to construct the RIGHT named delegate, so forms are keyed on the
+        // delegate TYPE, never on its signature — and their exports must not collide.
+        var surface = new NetSurface(
+            new[] { MemberTaking("A", "System.Action", "System.Threading.ThreadStart") },
+            Array.Empty<string>());
+
+        var names = NetDelegateDispatch.RequiredExportNames(surface);
+
+        Assert.That(names.Count, Is.EqualTo(2), "two distinct delegate types, two exports");
+        Assert.That(names.Distinct().Count(), Is.EqualTo(names.Count),
+            "identical invoke signatures must NOT collapse to one export");
+    }
+
+    [Test]
+    public void ASurfaceWithNoDelegates_RequiresNoForms()
+    {
+        var surface = new NetSurface(
+            new[] { MemberTaking("A", "System.Int32", "System.String") },
+            Array.Empty<string>());
+
+        Assert.That(NetDelegateDispatch.RequiredForms(surface), Is.Empty);
+        Assert.That(NetDelegateDispatch.RequiredExportNames(surface), Is.Empty);
+    }
 }
