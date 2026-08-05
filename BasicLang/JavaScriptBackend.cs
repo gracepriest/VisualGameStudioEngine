@@ -160,14 +160,47 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         }
 
         /// <summary>
+        /// Renders a value INLINE, rebuilding its operand tree instead of referring to a name.
+        ///
+        /// <para>Needed for <c>Select Case</c> pattern operands and <c>When</c> guards. IRBuilder
+        /// builds a guard's expression with emission SUPPRESSED, so its nodes never appear in
+        /// any block and no <c>const</c> was ever emitted for them — the ordinary by-name path
+        /// would render an identifier that exists nowhere, giving a ReferenceError from a build
+        /// that succeeded. Range bounds and case constants are NOT suppressed, but rendering
+        /// them inline too costs nothing and keeps one path for all pattern operands.</para>
+        ///
+        /// <para>⛔ Pattern operands carry a NULL Type — the analyzer never visits case
+        /// patterns — so nothing here may consult <c>value.Type</c>.</para>
+        /// </summary>
+        private string ExprInline(IRValue value)
+        {
+            switch (value)
+            {
+                case null: return "null";
+                case IRConstant c: return Constant(c);
+                case IRVariable v: return SanitizeName(v.Name);
+                case IRBinaryOp b: return BinaryExprInline(b);
+                case IRCompare cm: return CompareExprInline(cm);
+                case IRUnaryOp u: return $"({UnaryOpToken(u.Operation)}{ExprInline(u.Operand)})";
+                default:
+                    // A call inside a guard WAS emitted (only the guard's own operator tree is
+                    // suppressed), so the by-name path is right for it.
+                    return Expr(value);
+            }
+        }
+
+        /// <summary>
         /// Renders a binary operation. Every arm is deliberate — an unmapped kind THROWS
         /// rather than falling back to a plausible operator, because the failure mode of a
         /// wrong arm here is a program that runs and computes the wrong number.
         /// </summary>
-        private string BinaryExpr(IRBinaryOp op)
+        private string BinaryExpr(IRBinaryOp op) => RenderBinary(op, Expr);
+        private string BinaryExprInline(IRBinaryOp op) => RenderBinary(op, ExprInline);
+
+        private string RenderBinary(IRBinaryOp op, Func<IRValue, string> render)
         {
-            var l = Expr(op.Left);
-            var r = Expr(op.Right);
+            var l = render(op.Left);
+            var r = render(op.Right);
 
             switch (op.Operation)
             {
@@ -214,23 +247,27 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             }
         }
 
-        private string UnaryExpr(IRUnaryOp op)
+        private string UnaryExpr(IRUnaryOp op) => $"({UnaryOpToken(op.Operation)}{Expr(op.Operand)})";
+
+        private static string UnaryOpToken(UnaryOpKind kind)
         {
-            var v = Expr(op.Operand);
-            switch (op.Operation)
+            switch (kind)
             {
-                case UnaryOpKind.Neg: return $"(-{v})";
-                case UnaryOpKind.Not: return $"(!{v})";
-                case UnaryOpKind.BitwiseNot: return $"(~{v})";
+                case UnaryOpKind.Neg: return "-";
+                case UnaryOpKind.Not: return "!";
+                case UnaryOpKind.BitwiseNot: return "~";
                 default:
-                    throw NotYet($"UnaryOpKind.{op.Operation}");
+                    throw NotYet($"UnaryOpKind.{kind}");
             }
         }
 
-        private string CompareExpr(IRCompare op)
+        private string CompareExpr(IRCompare op) => RenderCompare(op, Expr);
+        private string CompareExprInline(IRCompare op) => RenderCompare(op, ExprInline);
+
+        private string RenderCompare(IRCompare op, Func<IRValue, string> render)
         {
-            var l = Expr(op.Left);
-            var r = Expr(op.Right);
+            var l = render(op.Left);
+            var r = render(op.Right);
             switch (op.Comparison)
             {
                 // === and !==, never == : JS's loose equality would make 0 == "" true, which
@@ -550,8 +587,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     break;   // Visit(IRReturn) already emitted it
                 case null:
                     break;
-                case IRSwitch:
-                    throw NotYet("Select Case (plan task 14 follow-up)");
+                case IRSwitch sw:
+                    EmitSelectCase(sw);
+                    break;
             }
         }
 
@@ -628,6 +666,142 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             {
                 _pendingMerges.Pop();
                 EmitStructured(merge);
+            }
+        }
+
+        /// <summary>
+        /// <c>Select Case</c> lowers to an if/else-if chain over a subject temp — never a JS
+        /// <c>switch</c>. JavaScript's switch has no <c>when</c> guard syntax, and ranges,
+        /// comparisons, type/or/tuple patterns have no <c>case</c> form either; only bare
+        /// constants could map, so one chain is both simpler and correct for every arm.
+        /// </summary>
+        private void EmitSelectCase(IRSwitch sw)
+        {
+            var subject = $"_sel{_selectDepth++}";
+            Line($"const {subject} = {Expr(sw.Value)};");
+
+            // Arms are grouped by TARGET BLOCK IDENTITY: `Case 1, 2, 3` produces three
+            // separate Cases entries all pointing at ONE block, and emitting one arm each
+            // would duplicate the body three times.
+            var arms = new List<(BasicBlock Target, List<string> Tests)>();
+
+            void AddTest(BasicBlock target, string test)
+            {
+                foreach (var arm in arms)
+                {
+                    if (arm.Target == target) { arm.Tests.Add(test); return; }
+                }
+                arms.Add((target, new List<string> { test }));
+            }
+
+            foreach (var (caseValue, target) in sw.Cases ?? new List<(IRValue, BasicBlock)>())
+                AddTest(target, $"{subject} === {ExprInline(caseValue)}");
+
+            foreach (var pattern in sw.PatternCases ?? new List<IRPatternCase>())
+                AddTest(pattern.Target, PatternTest(subject, pattern));
+
+            var first = true;
+            foreach (var (target, tests) in arms)
+            {
+                // "} else if", not "}} else if": this is a nested string INSIDE the
+                // interpolation hole, so brace-doubling does not apply and would emit two.
+                Line($"{(first ? "if" : "} else if")} ({string.Join(" || ", tests)}) {{");
+                first = false;
+                _indentLevel++;
+                _pendingMerges.Push(sw.EndBlock);
+                EmitStructured(target);
+                _pendingMerges.Pop();
+                _indentLevel--;
+            }
+
+            // DefaultTarget is always non-null — IRBuilder creates `switch{N}.default` even
+            // with no `Case Else` and branches it straight to `.end`. Emitting it as a real
+            // `else` is therefore safe and costs one empty block at worst.
+            if (arms.Count > 0)
+            {
+                Line("} else {");
+                _indentLevel++;
+                _pendingMerges.Push(sw.EndBlock);
+                EmitStructured(sw.DefaultTarget);
+                _pendingMerges.Pop();
+                _indentLevel--;
+                Line("}");
+            }
+            else
+            {
+                EmitStructured(sw.DefaultTarget);
+            }
+
+            _selectDepth--;
+            EmitStructured(sw.EndBlock);
+        }
+
+        private int _selectDepth;
+
+        /// <summary>
+        /// The JS test for one pattern arm. Every operand goes through
+        /// <see cref="ExprInline"/>: a <c>When</c> guard's tree was built with emission
+        /// suppressed and exists in no block, so a by-name reference would be undefined.
+        /// </summary>
+        private string PatternTest(string subject, IRPatternCase pattern)
+        {
+            string test;
+            switch (pattern)
+            {
+                case IRConstantPatternCase c:
+                    test = $"{subject} === {ExprInline(c.Value)}";
+                    break;
+
+                // Inclusive at both ends, matching `Case 1 To 10`.
+                case IRRangePatternCase r:
+                    test = $"({subject} >= {ExprInline(r.LowerBound)} && {subject} <= {ExprInline(r.UpperBound)})";
+                    break;
+
+                // Operator is a raw STRING from the parser, not an enum.
+                case IRComparisonPatternCase cmp:
+                    test = $"{subject} {ComparisonPatternOperator(cmp.Operator)} {ExprInline(cmp.CompareValue)}";
+                    break;
+
+                case IRNothingPatternCase:
+                    test = $"({subject} === null || {subject} === undefined)";
+                    break;
+
+                case IROrPatternCase or:
+                    test = "(" + string.Join(" || ",
+                        or.Alternatives.ConvertAll(a => PatternTest(subject, a))) + ")";
+                    break;
+
+                // A bare binding matches anything and binds the subject to a name.
+                case IRBindingPatternCase:
+                    test = "true";
+                    break;
+
+                default:
+                    throw NotYet($"Select Case pattern {pattern.GetType().Name}");
+            }
+
+            if (!string.IsNullOrEmpty(pattern.BindingVariable))
+                Line($"const {SanitizeName(pattern.BindingVariable)} = {subject};");
+
+            // `Case <pattern> When <guard>` — the guard narrows the arm further.
+            if (pattern.WhenGuard != null)
+                test = $"({test} && {ExprInline(pattern.WhenGuard)})";
+
+            return test;
+        }
+
+        private static string ComparisonPatternOperator(string op)
+        {
+            switch (op)
+            {
+                case ">": return ">";
+                case "<": return "<";
+                case ">=": return ">=";
+                case "<=": return "<=";
+                case "=": return "===";
+                case "<>": return "!==";
+                default:
+                    throw NotYet($"Select Case comparison operator '{op}'");
             }
         }
 
