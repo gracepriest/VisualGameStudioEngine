@@ -444,6 +444,55 @@ git commit -m "feat(js): Node execution test harness; extract NodeLocator to sha
 
 Built before the generator grows, so unsupported constructs are refused rather than half-emitted.
 
+### IR-shape recon — MEASURED, not assumed
+
+Every row below was observed by building real modules through Lexer → Parser →
+SemanticAnalyzer → IRBuilder and dumping the result. Do not re-derive these; do not trust
+a remembered shape over this table.
+
+| Feature | How it actually appears | Detectable on the IR? |
+|---|---|---|
+| Method overloading | **Front end rejects it.** `Sub F(a As Integer)` + `Sub F(a As String)` → SemanticAnalyzer error *"Subroutine 'F' is already defined in this scope"*. Same for class methods. | **N/A — the language has no overloading** |
+| `ByRef` | `IRVariable.IsByRef` on `IRFunction.Parameters`. Preserved at all six IRBuilder construction sites. Class methods are flattened into `module.Functions` with the flag intact, so one walk covers them. | ✅ |
+| `Long` | `TypeInfo.Name == "Long"`, `Kind == Primitive`. Survives as a local, a parameter, and a return type. | ✅ |
+| `Char` | `TypeInfo.Name == "Char"`, `Kind == Primitive`. | ✅ |
+| value `Structure` | `IRClass.IsStruct == true` in `module.Classes`. | ✅ |
+| Operator overloading | `IRFunction.Name == "V.op_Addition"` (class-qualified, `op_` prefix) **and** `IRClass.Methods[].Name == "op_Addition"`. | ✅ |
+| .NET BCL type | `TypeInfo.Name == "Stream"`, `Kind == Class`. Note the analyzer is **permissive** — it accepts `Dim s As Stream` with no reference at all, so there is no front-end error to lean on. | ✅ (needs a name list or an "unknown Class not in `module.Classes`" rule) |
+
+**Consequence — Task 6 is deleted, not implemented.** `BL7001` has nothing to reject:
+BasicLang never supported overloading on any backend. Writing the diagnostic would produce
+an arm that can never fire. Task 6 becomes a one-test guard asserting the front end
+rejects it, so the assumption is pinned rather than silently trusted.
+
+**Consequence — the plan's IR-level seam is sound; the spec's pre-IR seam is not needed.**
+The spec said the check must run after semantic analysis and *before* IR construction. The
+measurement says everything except overloading survives into the IR, so calling
+`JsCapabilityChecker.Check(module)` from `Generate` works — and that seam cannot be
+bypassed, because every entry point reaches codegen through it. A separate pre-IR
+invocation would be one more thing a caller can forget to call, which this repo's history
+says is the dominant failure mode.
+
+#### Two traps measured out of the IR
+
+1. **Declaration `SourceLine` is always 0.** `SourceLine` exists only on `IRInstruction`;
+   `IRFunction`, `IRClass`, `IRMethod` and `IRParameter` do not have it at all, and the
+   `IRVariable`s for parameters and locals all report `0`. So a rejection cannot cite a
+   line from the IR — messages must identify the offender by name (*"ByRef parameter 'x'
+   in 'Bump'"*). **Statement-level positions ARE correct** (`IRCall @L2`, `IRBinaryOp @L4`),
+   so Task 26's source maps do have the plumbing they assume; only declarations lack it.
+
+2. **Two classes with the same method name produce two `IRFunction`s with the same
+   unqualified name.** `Class A.F` and `Class B.F` both flatten to `fn 'F'` in
+   `module.Functions` — legal BasicLang. Operators flatten class-qualified (`V.op_Addition`)
+   but ordinary methods do not.
+   - This is why a "duplicate name ⇒ overloading" check would have been wrong.
+   - **Task 17 must not walk `module.Functions` naively** or it emits `function F()` twice
+     and the second silently wins. Use `IRClass.Methods[].Implementation` — an `IRFunction`
+     reference that links the two containers — and filter those implementations out of the
+     top-level walk. Note `IRMethod.Parameters` was observed **empty**; the parameters live
+     on `.Implementation`, so neither container is sufficient alone.
+
 ### Task 5: `JsCapabilityChecker` skeleton + passthrough rejection
 
 **Files:**
@@ -503,7 +552,7 @@ Each follows the identical five steps. Do them one at a time and commit each —
 
 | Task | Code | Rejects | Test source | Message must suggest |
 |---|---|---|---|---|
-| 6 | `BL7001` | method overloading | two `Sub F` with different signatures | "rename one overload" |
+| 6 | ~~`BL7001`~~ | ~~method overloading~~ — **deleted, see recon.** Replace with a guard test asserting the SemanticAnalyzer rejects two same-named subs, so the "no overloading" assumption is pinned rather than assumed. `BL7001` stays unallocated. | two `Sub F` with different signatures | — |
 | 7 | `BL7002` | `ByRef` parameters | `Sub Bump(ByRef x As Integer)` | "return a value instead" |
 | 8 | `BL7003` | `Long` | `Dim n As Long` | "use Integer (Number, exact to 2^53)" |
 | 9 | `BL7004` | `Char` | `Dim c As Char` | "use String" |
