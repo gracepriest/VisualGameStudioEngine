@@ -399,6 +399,28 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         private bool IsUsed(IRValue value) =>
             !string.IsNullOrEmpty(value?.Name) && _usedOperandNames.Contains(value.Name);
 
+        /// <summary>Parameters and locals — names that are already declared in scope.</summary>
+        private HashSet<string> _declaredNames = new HashSet<string>(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Emits a value-producing instruction's result.
+        ///
+        /// <para><b>Why this is not always a <c>const</c>.</b> IRBuilder RENAMES an
+        /// expression's result to the variable it initialises — <c>i = i + 1</c> produces an
+        /// IRBinaryOp whose Name is literally <c>i</c>. Emitting <c>const i = (i + 1)</c>
+        /// declares a NEW binding that shadows the loop variable, and reading <c>i</c> in its
+        /// own initialiser is a temporal-dead-zone ReferenceError. So a result whose name is
+        /// an already-declared local or parameter is an ASSIGNMENT; only genuine SSA temps
+        /// get a fresh <c>const</c>.</para>
+        /// </summary>
+        private void Bind(string name, string expression)
+        {
+            var js = SanitizeName(name);
+            Line(_declaredNames.Contains(name)
+                ? $"{js} = {expression};"
+                : $"const {js} = {expression};");
+        }
+
         private static Exception NotYet(string node) =>
             new NotSupportedException(
                 $"JavaScript backend: {node} lowering is not implemented yet. " +
@@ -417,6 +439,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             CollectUsedOperands(function);
 
+            _currentFunction = function;
+            _emitted.Clear();
+            _loopEnds.Clear();
+            _pendingMerges.Clear();
+
             Line($"function {SanitizeName(function.Name)}({parameters}) {{");
             _indentLevel++;
 
@@ -424,20 +451,215 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // reassigned by IRAssignment. Declaring them here rather than at first assignment
             // matches BasicLang scoping — a `Dim` inside an If branch is visible after it,
             // whereas a JS `let` at the assignment site would not be.
-            foreach (var local in function.LocalVariables ?? new List<IRVariable>())
-                Line($"let {SanitizeName(local.Name)};");
+            _declaredNames = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var p in function.Parameters ?? new List<IRVariable>())
+                _declaredNames.Add(p.Name);
 
-            foreach (var block in function.Blocks)
-                block.Accept(this);
+            foreach (var local in function.LocalVariables ?? new List<IRVariable>())
+            {
+                if (!_declaredNames.Add(local.Name)) continue;
+                Line($"let {SanitizeName(local.Name)};");
+            }
+
+            // EntryBlock-rooted, following terminators — never a walk of function.Blocks.
+            EmitStructured(function.EntryBlock ?? function.Blocks?.FirstOrDefault());
+
             _indentLevel--;
             Line("}");
+            _currentFunction = null;
         }
 
-        public void Visit(BasicBlock block)
+        // ------------------------------------------------------------------
+        // Structured emission
+        //
+        // BasicLang IR is a goto-style CFG; JavaScript has no goto. Emission therefore
+        // starts at EntryBlock and follows TERMINATORS, re-deriving if/else and loops from
+        // the branch graph — it never walks IRFunction.Blocks.
+        //
+        // ⛔ Walking Blocks linearly is not merely untidy, it is WRONG: that list is in
+        // CREATION order, and `if0.end` is created BEFORE `if0.elseif0.then`, so a linear
+        // walk emits the merge block before the ElseIf body. Back-edges have no linear
+        // rendering at all.
+        // ------------------------------------------------------------------
+
+        private readonly HashSet<BasicBlock> _emitted = new HashSet<BasicBlock>();
+
+        /// <summary>Loop exit blocks, innermost last. Membership means `break`.</summary>
+        private readonly Stack<BasicBlock> _loopEnds = new Stack<BasicBlock>();
+
+        /// <summary>
+        /// Merge blocks an ENCLOSING construct will emit once it closes. A branch to one of
+        /// these emits nothing rather than inlining the continuation into the branch body.
+        /// </summary>
+        private readonly Stack<BasicBlock> _pendingMerges = new Stack<BasicBlock>();
+
+        private IRFunction _currentFunction;
+
+        /// <summary>
+        /// A block is a loop header when it is a loop's condition block. Matched on the
+        /// `.cond` SUFFIX — only loops create one.
+        ///
+        /// <para>⛔ Not <c>StartsWith("for.")</c>: the real names are <c>for0.cond</c>, so that
+        /// test is always false. The C# backend carries exactly that dead check.</para>
+        /// </summary>
+        private static bool IsLoopHeader(BasicBlock block) =>
+            block?.Name != null && block.Name.EndsWith(".cond", StringComparison.Ordinal);
+
+        /// <summary>
+        /// The merge block an If converges on: <c>if0.then</c> and <c>if0.elseif1.then</c>
+        /// both belong to <c>if0.end</c>. Derived from the prefix before the FIRST dot, so
+        /// nested ElseIf blocks resolve to the outer If's end.
+        /// </summary>
+        private BasicBlock FindMergeBlock(BasicBlock branchTarget)
+        {
+            var name = branchTarget?.Name;
+            if (name == null || _currentFunction?.Blocks == null) return null;
+
+            var dot = name.IndexOf('.');
+            if (dot <= 0) return null;
+
+            var end = name.Substring(0, dot) + ".end";
+            foreach (var b in _currentFunction.Blocks)
+                if (b.Name == end) return b;
+            return null;
+        }
+
+        private void EmitStructured(BasicBlock block)
+        {
+            if (block == null || _emitted.Contains(block)) return;
+
+            if (IsLoopHeader(block))
+            {
+                _emitted.Add(block);
+                EmitLoop(block);
+                return;
+            }
+
+            _emitted.Add(block);
+            EmitInstructions(block);
+
+            switch (block.GetTerminator())
+            {
+                case IRConditionalBranch cond:
+                    EmitConditional(cond);
+                    break;
+                case IRBranch br:
+                    EmitBranch(br);
+                    break;
+                case IRReturn:
+                    break;   // Visit(IRReturn) already emitted it
+                case null:
+                    break;
+                case IRSwitch:
+                    throw NotYet("Select Case (plan task 14 follow-up)");
+            }
+        }
+
+        /// <summary>
+        /// Emits a block's instructions, skipping terminators — control flow is reconstructed
+        /// structurally and must never be emitted as a statement.
+        /// </summary>
+        private void EmitInstructions(BasicBlock block)
         {
             foreach (var instruction in block.Instructions)
+            {
+                if (instruction is IRBranch || instruction is IRConditionalBranch || instruction is IRSwitch)
+                    continue;
                 instruction.Accept(this);
+            }
         }
+
+        /// <summary>
+        /// Loops emit as <c>while (true) { …condition…; if (!c) break; …body… }</c>.
+        ///
+        /// <para>The condition's INSTRUCTIONS live in the header block and must be
+        /// re-evaluated every iteration. Hoisting them above the loop would run a
+        /// side-effecting condition once and spin forever.</para>
+        /// </summary>
+        private void EmitLoop(BasicBlock header)
+        {
+            var cond = header.GetTerminator() as IRConditionalBranch;
+            if (cond == null) throw NotYet("a loop header with no conditional terminator");
+
+            // A post-test Do…Loop branches into the BODY first, so by the time the header is
+            // reached the body is already emitted and this would produce `while (true) {}` —
+            // an infinite loop at runtime from a build that succeeded. Refuse instead.
+            if (_emitted.Contains(cond.TrueTarget))
+                throw NotYet("post-test Do…Loop (body precedes the condition)");
+
+            Line("while (true) {");
+            _indentLevel++;
+
+            EmitInstructions(header);
+            Line($"if (!{Expr(cond.Condition)}) break;");
+
+            _loopEnds.Push(cond.FalseTarget);
+            EmitStructured(cond.TrueTarget);
+            _loopEnds.Pop();
+
+            _indentLevel--;
+            Line("}");
+
+            EmitStructured(cond.FalseTarget);
+        }
+
+        private void EmitConditional(IRConditionalBranch cond)
+        {
+            var merge = FindMergeBlock(cond.TrueTarget);
+            if (merge != null) _pendingMerges.Push(merge);
+
+            Line($"if ({Expr(cond.Condition)}) {{");
+            _indentLevel++;
+            EmitStructured(cond.TrueTarget);
+            _indentLevel--;
+
+            // No `else` when the false path IS the merge point — that is a bare `If … End If`.
+            if (cond.FalseTarget != null && cond.FalseTarget != merge)
+            {
+                Line("} else {");
+                _indentLevel++;
+                EmitStructured(cond.FalseTarget);
+                _indentLevel--;
+            }
+
+            Line("}");
+
+            if (merge != null)
+            {
+                _pendingMerges.Pop();
+                EmitStructured(merge);
+            }
+        }
+
+        /// <summary>
+        /// An unconditional branch is one of three things, and only IDENTITY tells them apart:
+        /// a loop exit (<c>break</c>), a merge an enclosing construct owns (emit nothing), or
+        /// an ordinary fall-through (emit the target here).
+        ///
+        /// <para>⛔ Never key this on the <c>.end</c> NAME: two sibling loops both produce
+        /// `.end` blocks, and a name test would turn a jump out of one into a `break` of the
+        /// other.</para>
+        /// </summary>
+        private void EmitBranch(IRBranch br)
+        {
+            if (br.Target == null) return;
+
+            if (_loopEnds.Contains(br.Target))
+            {
+                Line("break;");
+                return;
+            }
+
+            if (_pendingMerges.Contains(br.Target)) return;
+
+            EmitStructured(br.Target);
+        }
+
+        /// <summary>
+        /// Not the emission driver — <see cref="EmitStructured"/> is. Kept because
+        /// <see cref="IIRVisitor"/> requires it.
+        /// </summary>
+        public void Visit(BasicBlock block) => EmitInstructions(block);
 
         /// <summary>
         /// A bare constant is never a statement — constants reach output through
@@ -448,11 +670,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         // Value-producing instructions declare their result, and every later reference is by
         // name (see Expr). `const` because the IR is SSA — each temp is assigned exactly once,
         // so a rebind would be a bug worth having the JS engine catch.
-        public void Visit(IRBinaryOp binaryOp) =>
-            Line($"const {SanitizeName(binaryOp.Name)} = {BinaryExpr(binaryOp)};");
+        public void Visit(IRBinaryOp binaryOp) => Bind(binaryOp.Name, BinaryExpr(binaryOp));
 
-        public void Visit(IRUnaryOp unaryOp) =>
-            Line($"const {SanitizeName(unaryOp.Name)} = {UnaryExpr(unaryOp)};");
+        public void Visit(IRUnaryOp unaryOp) => Bind(unaryOp.Name, UnaryExpr(unaryOp));
         public void Visit(IRAssignment assignment) =>
             Line($"{SanitizeName(assignment.Target.Name)} = {Expr(assignment.Value)};");
         public void Visit(IRLoad load) => throw NotYet(nameof(IRLoad));
@@ -475,7 +695,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // result by name. Emitting a bare statement would discard the value and leave
             // every reference pointing at an undeclared identifier.
             if (IsUsed(call))
-                Line($"const {SanitizeName(call.Name)} = {invocation};");
+                Bind(call.Name, invocation);
             else
                 Line($"{invocation};");
         }
@@ -488,8 +708,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         public void Visit(IRAlloca alloca) => throw NotYet(nameof(IRAlloca));
         public void Visit(IRGetElementPtr gep) => throw NotYet(nameof(IRGetElementPtr));
         public void Visit(IRCast cast) => throw NotYet(nameof(IRCast));
-        public void Visit(IRCompare compare) =>
-            Line($"const {SanitizeName(compare.Name)} = {CompareExpr(compare)};");
+        public void Visit(IRCompare compare) => Bind(compare.Name, CompareExpr(compare));
         public void Visit(IRSwitch switchInst) => throw NotYet(nameof(IRSwitch));
         public void Visit(IRLabel label) => throw NotYet(nameof(IRLabel));
         public void Visit(IRComment comment) => throw NotYet(nameof(IRComment));
