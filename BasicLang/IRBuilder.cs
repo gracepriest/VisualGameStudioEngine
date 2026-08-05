@@ -545,6 +545,27 @@ namespace BasicLang.Compiler.IR
                 var typeName = node.Type?.Name ?? "Integer";
                 var typeInfo = _semanticAnalyzer.GetNodeType(node) ?? new TypeInfo(typeName, TypeKind.Primitive);
 
+                // A Const declared INSIDE a procedure is local to that procedure, exactly like
+                // a local Dim. Hoisting it into the module's flat, unqualified, name-keyed
+                // global table silently MERGED distinct constants: the write below is
+                // first-wins, so two procedures each declaring `Const Scale` collapsed into
+                // one, and the second procedure read the first one's value. The build
+                // succeeded and the emitted code compiled — it just computed the wrong
+                // answer.
+                //
+                // Mirrors the local branch of Visit(VariableDeclarationNode): register the
+                // local, then emit an assignment. A Const's value is a constant expression,
+                // which is precisely the case that path materializes via IRAssignment.
+                if (_currentFunction != null)
+                {
+                    var localConst = CreateVariable(node.Name, typeInfo, _nextVersion++);
+                    localConst.IsConst = true;
+                    PushVariableVersion(node.Name, localConst);
+                    _currentFunction.LocalVariables.Add(localConst);
+                    EmitInstruction(new IRAssignment(localConst, value));
+                    return;
+                }
+
                 // Create the constant as a global variable
                 var constVar = new IRVariable(node.Name, typeInfo)
                 {
@@ -555,7 +576,9 @@ namespace BasicLang.Compiler.IR
                     Access = MapAccessModifier(node.Access)
                 };
 
-                // Add to module's global variables
+                // Add to module's global variables. Still first-wins, but at module scope a
+                // repeated name is a genuine redeclaration rather than two independent
+                // constants that merely share a name.
                 if (_module != null && !_module.GlobalVariables.ContainsKey(node.Name))
                 {
                     _module.GlobalVariables[node.Name] = constVar;
