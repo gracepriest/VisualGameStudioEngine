@@ -55,13 +55,20 @@ public class JavaScriptCodeGenTests
     /// <summary>
     /// The whole point of the backend's honesty rule: an IR node with no lowering must
     /// throw, never emit nothing. A silent no-op is indistinguishable from correct
-    /// codegen at build time and shows up as wrong behaviour at runtime.
+    /// codegen at build time and shows up as wrong behaviour at runtime — which is exactly
+    /// how LLVM and MSIL came to drop collection indexed writes.
+    ///
+    /// <para><b>This is a MOVING canary and is meant to be re-pointed.</b> It must always
+    /// name a construct just beyond the implemented frontier, so as Phase 2 lands features
+    /// this test goes green-by-accident and has to be aimed further out. It previously used
+    /// `x = x + 1`, which task 13 implemented. Try/Catch belongs to task 19; when that lands,
+    /// re-point it rather than deleting it — the principle it guards outlives any one node.</para>
     /// </summary>
     [Test]
     public void UnimplementedNode_Throws_RatherThanEmittingNothing()
     {
         var ex = Assert.Catch(() => JsTestSupport.Compile(
-            "Sub Main()\nDim x As Integer = 1\nx = x + 1\nEnd Sub"));
+            "Sub Main()\nTry\nConsole.WriteLine(\"a\")\nCatch e As Exception\nEnd Try\nEnd Sub"));
 
         Assert.That(ex, Is.InstanceOf<System.NotSupportedException>(),
             "unimplemented lowering must surface as NotSupportedException, not silence");

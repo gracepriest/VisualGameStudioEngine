@@ -2,6 +2,7 @@ using System;
 using System.Globalization;
 using System.Text;
 using BasicLang.Compiler.IR;
+using BasicLang.Compiler.SemanticAnalysis;
 
 namespace BasicLang.Compiler.CodeGen.JavaScript
 {
@@ -130,8 +131,110 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     return Constant(c);
                 case IRVariable v:
                     return SanitizeName(v.Name);
+
+                // These are IRValues that ALSO appear as entries in block.Instructions, so
+                // their visitor has already emitted `const <name> = ...`. Referencing them by
+                // name keeps evaluation order intact; re-rendering the operand tree inline
+                // would evaluate side effects twice and, worse, silently drop an optimizer
+                // rewrite that re-pointed the node.
+                case IRBinaryOp b:
+                    return SanitizeName(b.Name);
+                case IRCompare c2:
+                    return SanitizeName(c2.Name);
+                case IRUnaryOp u:
+                    return SanitizeName(u.Name);
+                case IRCall call:
+                    return SanitizeName(call.Name);
+
                 default:
                     throw NotYet(value.GetType().Name + " (as an expression)");
+            }
+        }
+
+        /// <summary>
+        /// Renders a binary operation. Every arm is deliberate — an unmapped kind THROWS
+        /// rather than falling back to a plausible operator, because the failure mode of a
+        /// wrong arm here is a program that runs and computes the wrong number.
+        /// </summary>
+        private string BinaryExpr(IRBinaryOp op)
+        {
+            var l = Expr(op.Left);
+            var r = Expr(op.Right);
+
+            switch (op.Operation)
+            {
+                case BinaryOpKind.Add: return $"({l} + {r})";
+                case BinaryOpKind.Sub: return $"({l} - {r})";
+                case BinaryOpKind.Mul: return $"({l} * {r})";
+                case BinaryOpKind.Div: return $"({l} / {r})";
+
+                // BasicLang `\`. JS has NO integer-division operator — `/` is always floating
+                // point — and .NET truncates TOWARD ZERO. Math.floor is the tempting wrong
+                // answer: it agrees for positives and gives -4 where .NET gives -3.
+                case BinaryOpKind.IntDiv: return $"Math.trunc({l} / {r})";
+
+                // .NET's Mod takes the sign of the DIVIDEND, and so does JS's %. They agree
+                // exactly, so a bare operator is correct here — unlike IntDiv above.
+                case BinaryOpKind.Mod: return $"({l} % {r})";
+
+                // String concatenation is its own kind, so `+` here is never numeric addition
+                // in disguise.
+                case BinaryOpKind.Concat: return $"({l} + {r})";
+
+                case BinaryOpKind.Eq: return $"({l} === {r})";
+                case BinaryOpKind.Ne: return $"({l} !== {r})";
+                case BinaryOpKind.Lt: return $"({l} < {r})";
+                case BinaryOpKind.Le: return $"({l} <= {r})";
+                case BinaryOpKind.Gt: return $"({l} > {r})";
+                case BinaryOpKind.Ge: return $"({l} >= {r})";
+
+                case BinaryOpKind.BitwiseAnd: return $"({l} & {r})";
+                case BinaryOpKind.BitwiseOr: return $"({l} | {r})";
+                case BinaryOpKind.Xor: return $"({l} ^ {r})";
+                case BinaryOpKind.Shl: return $"({l} << {r})";
+                case BinaryOpKind.Shr: return $"({l} >> {r})";
+
+                // ⚠ And/Or are NOT mapped, deliberately. IRNodes.cs groups them under
+                // "Logical (short-circuit)", but VB's `And`/`Or` are NON-short-circuit
+                // (`AndAlso`/`OrElse` are the short-circuiting pair) and are bitwise over
+                // integers. An open chip on the C++ backend records the same ambiguity. Since
+                // `&&` and `&` differ observably — on operand evaluation AND on integers —
+                // guessing would ship silently-wrong output. Throw until the semantics are
+                // settled, exactly as IntDiv was left unmapped before it was measured.
+                default:
+                    throw NotYet($"BinaryOpKind.{op.Operation}");
+            }
+        }
+
+        private string UnaryExpr(IRUnaryOp op)
+        {
+            var v = Expr(op.Operand);
+            switch (op.Operation)
+            {
+                case UnaryOpKind.Neg: return $"(-{v})";
+                case UnaryOpKind.Not: return $"(!{v})";
+                case UnaryOpKind.BitwiseNot: return $"(~{v})";
+                default:
+                    throw NotYet($"UnaryOpKind.{op.Operation}");
+            }
+        }
+
+        private string CompareExpr(IRCompare op)
+        {
+            var l = Expr(op.Left);
+            var r = Expr(op.Right);
+            switch (op.Comparison)
+            {
+                // === and !==, never == : JS's loose equality would make 0 == "" true, which
+                // no BasicLang comparison ever means.
+                case CompareKind.Eq: return $"({l} === {r})";
+                case CompareKind.Ne: return $"({l} !== {r})";
+                case CompareKind.Lt: return $"({l} < {r})";
+                case CompareKind.Le: return $"({l} <= {r})";
+                case CompareKind.Gt: return $"({l} > {r})";
+                case CompareKind.Ge: return $"({l} >= {r})";
+                default:
+                    throw NotYet($"CompareKind.{op.Comparison}");
             }
         }
 
@@ -202,6 +305,27 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         {
             if (string.IsNullOrEmpty(functionName)) throw NotYet("a call with no target name");
 
+            // Conversion builtins are bare names, so they must be intercepted BEFORE the
+            // user-function passthrough below — otherwise `CInt(x)` emits a call to a
+            // function named CInt that exists nowhere.
+            switch (functionName)
+            {
+                // Truncates TOWARD ZERO, matching .NET. Math.round would give 4 for 3.7 and
+                // Math.floor would give -4 for -3.7; only trunc agrees with CInt.
+                case "CInt": return "Math.trunc";
+
+                // Identity under erasure — Integer/Single/Double are all one JS number.
+                // Number() is the identity rename rather than a no-op, so the call shape
+                // stays a call and argument evaluation order is unchanged.
+                case "CDbl":
+                case "CSng": return "Number";
+
+                case "CStr": return "String";
+                case "CBool": return "Boolean";
+
+                // CLng deliberately absent: it converts TO Long, which BL7003 bans.
+            }
+
             if (functionName.IndexOf('.') < 0) return SanitizeName(functionName);
 
             switch (functionName)
@@ -228,6 +352,16 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         // avoid inheriting.
         // ------------------------------------------------------------------
 
+        /// <summary>
+        /// True when a call's result is used, so it must be bound to a name.
+        /// A Sub returns Void and its IRCall carries no usable result.
+        /// </summary>
+        private static bool ProducesValue(IRCall call) =>
+            call.Type != null &&
+            call.Type.Kind != TypeKind.Void &&
+            !string.Equals(call.Type.Name, "Void", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrEmpty(call.Name);
+
         private static Exception NotYet(string node) =>
             new NotSupportedException(
                 $"JavaScript backend: {node} lowering is not implemented yet. " +
@@ -246,6 +380,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             Line($"function {SanitizeName(function.Name)}({parameters}) {{");
             _indentLevel++;
+
+            // Declare user locals up front. `let`, not `const`: unlike SSA temps these are
+            // reassigned by IRAssignment. Declaring them here rather than at first assignment
+            // matches BasicLang scoping — a `Dim` inside an If branch is visible after it,
+            // whereas a JS `let` at the assignment site would not be.
+            foreach (var local in function.LocalVariables ?? new List<IRVariable>())
+                Line($"let {SanitizeName(local.Name)};");
+
             foreach (var block in function.Blocks)
                 block.Accept(this);
             _indentLevel--;
@@ -264,9 +406,16 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// </summary>
         public void Visit(IRConstant constant) => throw NotYet(nameof(IRConstant) + " as a statement");
         public void Visit(IRVariable variable) => throw NotYet(nameof(IRVariable));
-        public void Visit(IRBinaryOp binaryOp) => throw NotYet(nameof(IRBinaryOp));
-        public void Visit(IRUnaryOp unaryOp) => throw NotYet(nameof(IRUnaryOp));
-        public void Visit(IRAssignment assignment) => throw NotYet(nameof(IRAssignment));
+        // Value-producing instructions declare their result, and every later reference is by
+        // name (see Expr). `const` because the IR is SSA — each temp is assigned exactly once,
+        // so a rebind would be a bug worth having the JS engine catch.
+        public void Visit(IRBinaryOp binaryOp) =>
+            Line($"const {SanitizeName(binaryOp.Name)} = {BinaryExpr(binaryOp)};");
+
+        public void Visit(IRUnaryOp unaryOp) =>
+            Line($"const {SanitizeName(unaryOp.Name)} = {UnaryExpr(unaryOp)};");
+        public void Visit(IRAssignment assignment) =>
+            Line($"{SanitizeName(assignment.Target.Name)} = {Expr(assignment.Value)};");
         public void Visit(IRLoad load) => throw NotYet(nameof(IRLoad));
         public void Visit(IRStore store) => throw NotYet(nameof(IRStore));
         public void Visit(IRCall call)
@@ -281,7 +430,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 throw JsCapabilityChecker.ByRefArgumentRejection(call.FunctionName);
 
             var args = string.Join(", ", call.Arguments.ConvertAll(Expr));
-            Line($"{CallTarget(call.FunctionName)}({args});");
+            var invocation = $"{CallTarget(call.FunctionName)}({args})";
+
+            // A call that PRODUCES a value binds it, because Expr(IRCall) refers to the
+            // result by name. Emitting a bare statement would discard the value and leave
+            // every reference pointing at an undeclared identifier.
+            if (ProducesValue(call))
+                Line($"const {SanitizeName(call.Name)} = {invocation};");
+            else
+                Line($"{invocation};");
         }
 
         public void Visit(IRReturn ret) =>
@@ -292,7 +449,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         public void Visit(IRAlloca alloca) => throw NotYet(nameof(IRAlloca));
         public void Visit(IRGetElementPtr gep) => throw NotYet(nameof(IRGetElementPtr));
         public void Visit(IRCast cast) => throw NotYet(nameof(IRCast));
-        public void Visit(IRCompare compare) => throw NotYet(nameof(IRCompare));
+        public void Visit(IRCompare compare) =>
+            Line($"const {SanitizeName(compare.Name)} = {CompareExpr(compare)};");
         public void Visit(IRSwitch switchInst) => throw NotYet(nameof(IRSwitch));
         public void Visit(IRLabel label) => throw NotYet(nameof(IRLabel));
         public void Visit(IRComment comment) => throw NotYet(nameof(IRComment));
