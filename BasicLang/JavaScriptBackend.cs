@@ -259,11 +259,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         public void Visit(IRStore store) => throw NotYet(nameof(IRStore));
         public void Visit(IRCall call)
         {
-            // ByRef has no JS form; JsCapabilityChecker rejects it with BL7002 (plan task 7).
-            // Until that lands, refuse here rather than emitting a by-value call that
-            // compiles and silently discards the write-back.
+            // DEFENCE IN DEPTH — do not delete this now that BL7002 checks declarations.
+            // ByRefArguments has a second source the declaration walk cannot see: a resolved
+            // .NET target carries ref/out in its descriptor (IRBuilder.cs:3585), so no
+            // BasicLang parameter is marked IsByRef and JsCapabilityChecker finds nothing.
+            // Until BL7007 rejects .NET types outright, this is the only thing between such
+            // a call and a by-value emit that silently discards the write-back.
             if (call.ByRefArguments != null && call.ByRefArguments.Contains(true))
-                throw NotYet("ByRef arguments (rejected as BL7002 in plan task 7)");
+                throw JsCapabilityChecker.ByRefArgumentRejection(call.FunctionName);
 
             var args = string.Join(", ", call.Arguments.ConvertAll(Expr));
             Line($"{CallTarget(call.FunctionName)}({args});");

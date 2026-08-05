@@ -111,7 +111,25 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         private static ForeignFeatureException ByRefRejection(string parameterName, string container) =>
             new ForeignFeatureException(
                 $"BL7002: ByRef parameter '{parameterName}' in {container} cannot be lowered to " +
-                "JavaScript. JavaScript has no reference parameters, so a write through a ByRef " +
-                "argument would be invisible to the caller. Return a value instead.");
+                "JavaScript. " + ByRefWhy);
+
+        /// <summary>
+        /// BL7002 raised from a CALL rather than a declaration.
+        ///
+        /// <para>Needed because <c>IRCall.ByRefArguments</c> has a second source the
+        /// declaration walk cannot see: a resolved .NET target carries ref/out in its
+        /// descriptor (<c>IRBuilder.cs:3585</c>), so no BasicLang parameter is ever marked
+        /// <c>IsByRef</c>. Until BL7007 rejects .NET types outright this is the only guard
+        /// on that path, and it must report BL7002 rather than "not implemented yet" —
+        /// ByRef is refused by design, not pending.</para>
+        /// </summary>
+        public static ForeignFeatureException ByRefArgumentRejection(string calleeName) =>
+            new ForeignFeatureException(
+                $"BL7002: the call to '{calleeName}' passes an argument by reference, which " +
+                "cannot be lowered to JavaScript. " + ByRefWhy);
+
+        private const string ByRefWhy =
+            "JavaScript has no reference parameters, so a write through a ByRef argument " +
+            "would be invisible to the caller. Return a value instead.";
     }
 }

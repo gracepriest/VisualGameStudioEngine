@@ -131,6 +131,41 @@ public class JsCapabilityCheckerTests
         Assert.That(ex!.Message, Does.Contain("BL7002"));
     }
 
+    /// <summary>
+    /// The call-site ByRef guard in Visit(IRCall) is defence in depth, NOT dead code, and
+    /// must not be deleted now that BL7002 rejects ByRef declarations.
+    ///
+    /// <para>IRCall.ByRefArguments is populated from TWO sources (IRBuilder.cs): a resolved
+    /// USER function's IsByRef (line 3721), which BL7002 catches at the declaration; and a
+    /// resolved .NET target's RefKind (line 3585), where the by-ref fact lives in the .NET
+    /// descriptor and NO BasicLang declaration carries IsByRef at all. The declaration walk
+    /// cannot see that second channel.</para>
+    ///
+    /// <para>Simulated here by clearing IsByRef on the declaration while leaving the call's
+    /// ByRefArguments set — exactly the shape a .NET ref/out argument produces. Until
+    /// BL7007 rejects .NET types wholesale, this guard is the only thing standing between
+    /// that call and a by-value emit that silently discards the write-back.</para>
+    /// </summary>
+    [Test]
+    public void Js_ByRefAtTheCallSite_IsRejected_EvenWhenTheDeclarationDoesNotSayByRef()
+    {
+        var module = JsTestSupport.BuildModule(
+            "Sub Bump(ByRef x As Integer)\nEnd Sub\n" +
+            "Sub Main()\nDim v As Integer\nBump(v)\nEnd Sub");
+
+        // Strip the declaration-level flag, leaving only the call-site fact.
+        foreach (var f in module.Functions)
+            foreach (var p in f.Parameters)
+                p.IsByRef = false;
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new JavaScriptCodeGenerator().Generate(module));
+
+        Assert.That(ex!.Message, Does.Contain("BL7002"),
+            "a by-ref argument must be refused as BL7002, not reported as an unimplemented " +
+            "feature — it is rejected by design and will never be implemented.");
+    }
+
     /// <summary>A ByVal parameter is ordinary and must not be caught by the ByRef arm.</summary>
     [Test]
     public void Js_ByValParameter_IsNotRejected()
