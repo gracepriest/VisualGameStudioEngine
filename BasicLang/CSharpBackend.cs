@@ -1080,6 +1080,27 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var type = MapType(prop.Type);
             var name = SanitizeName(prop.Name);
 
+            // AUTO-PROPERTY: `Public Property V As Integer` with no Get/Set body reaches the
+            // IR with both accessors null. Falling through would emit `public int V { }` — a
+            // property with no accessors, which does not compile. C# has real auto-property
+            // syntax, so emit that and let the C# compiler own the backing field.
+            if (prop.Getter == null && prop.Setter == null)
+            {
+                // WriteOnly has no auto form: C# requires a get accessor on an
+                // auto-property (CS8051), so `{ set; }` would not compile. Emit an explicit
+                // backing field instead of silently producing a broken file.
+                if (prop.IsWriteOnly)
+                {
+                    var backing = SanitizeName("__" + prop.Name);
+                    WriteLine($"private {staticMod}{type} {backing};");
+                    WriteLine($"{access} {staticMod}{type} {name} {{ set {{ {backing} = value; }} }}");
+                    return;
+                }
+
+                WriteLine($"{access} {staticMod}{type} {name} {{ {(prop.IsReadOnly ? "get;" : "get; set;")} }}");
+                return;
+            }
+
             WriteLine($"{access} {staticMod}{type} {name}");
             WriteLine("{");
             Indent();

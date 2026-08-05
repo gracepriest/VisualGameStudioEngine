@@ -5625,8 +5625,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 Error($"WriteOnly property '{node.Name}' cannot have a getter", node.Line, node.Column);
             }
 
-            // Ensure property has at least one accessor
-            if (node.Getter == null && node.Setter == null)
+            // Ensure property has at least one accessor. An AUTO-PROPERTY is exempt: it has
+            // no accessor block by definition, and each backend supplies the storage itself
+            // (C# auto-property syntax; a C++ data member plus inline accessors).
+            // `Property V As Integer` followed by an explicit `End Property` and nothing else
+            // is still an error — the parser distinguishes the two via IsAuto.
+            if (node.Getter == null && node.Setter == null && !node.IsAuto)
             {
                 Error($"Property '{node.Name}' must have at least one accessor (Get or Set)", node.Line, node.Column);
             }

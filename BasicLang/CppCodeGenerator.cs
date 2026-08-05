@@ -1305,6 +1305,35 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (propType == "std::string" || (prop.Type != null && prop.Type.Kind == TypeKind.Class))
                 returnType = $"const {propType}&";
 
+            // AUTO-PROPERTY: both accessors null. C++ has no property syntax, so emit a real
+            // data member plus inline accessors.
+            //
+            // The DATA MEMBER is not optional: a read of `obj.V` lowers to IRFieldAccess by
+            // NAME (IRBuilder.cs:3348) rather than to a get_V() call, so emitting only the
+            // accessors would leave every call site referring to a member that does not
+            // exist. The ACCESSORS are not optional either: an interface property declares
+            // get_X/set_X as pure virtuals, so a class implementing one must define them.
+            if (prop.Getter == null && prop.Setter == null)
+            {
+                // `inline static`, not bare `static`: a non-const static data member cannot be
+                // initialized in the class body and would otherwise need an out-of-line
+                // definition. inline (C++17, and this backend targets C++20) keeps the
+                // declaration self-contained.
+                var memberMod = prop.IsStatic ? "inline static " : "";
+                WriteLine($"{memberMod}{propType} {propName} = {GetDefaultValue(prop.Type)};");
+                if (!prop.IsWriteOnly)
+                    WriteLine($"{staticMod}{returnType} get_{propName}(){constQualifier} {{ return {propName}; }}");
+                if (!prop.IsReadOnly)
+                {
+                    var autoParamType = propType;
+                    if (propType == "std::string" || (prop.Type != null && prop.Type.Kind == TypeKind.Class))
+                        autoParamType = $"const {propType}&";
+                    WriteLine($"{staticMod}void set_{propName}({autoParamType} value) {{ {propName} = value; }}");
+                }
+                WriteLine();
+                return;
+            }
+
             // Getter - returns const reference for complex types, const method for non-static
             if (prop.Getter != null && !prop.IsWriteOnly)
             {

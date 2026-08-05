@@ -302,6 +302,15 @@ End Namespace";
         var parser = new Parser(tokens);
 
         Assert.DoesNotThrow(() => parser.Parse());
+
+        // DoesNotThrow alone was not enough, and that is how the auto-property gap survived:
+        // Parse() CATCHES ParseException, records the error and Synchronize()s to EOF, so a
+        // source that fails to parse still returns normally — with an empty program. This
+        // test asserted only the absence of a throw while `Public Property Name As String`
+        // was in fact a parse error, and called it "Valid".
+        Assert.That(parser.Errors, Is.Empty,
+            "no throw is not the same as no error: " +
+            string.Join(" | ", parser.Errors.Select(e => e.ToString())));
     }
 
     #endregion
