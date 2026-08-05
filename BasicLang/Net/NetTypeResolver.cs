@@ -1303,8 +1303,33 @@ namespace BasicLang.Net
         private static IReadOnlyList<NetParameterDescriptor> Describe(
             IEnumerable<IParameterSymbol> parameters) =>
             parameters
-                .Select(p => new NetParameterDescriptor(RefKindOf(p.RefKind), TypeName(p.Type)))
+                .Select(p => new NetParameterDescriptor(
+                    RefKindOf(p.RefKind), TypeName(p.Type), DelegateInvokeSignatureOf(p.Type)))
                 .ToList();
+
+        /// <summary>
+        /// P2a-2 Task 11 / decision D-P9: a delegate parameter's <c>Invoke</c> signature rendered
+        /// as <c>Return(Param,Param)</c>, or null when the type is not a delegate.
+        ///
+        /// <para>This is the ONLY place the invoke signature is available — it comes off Roslyn's
+        /// <see cref="INamedTypeSymbol.DelegateInvokeMethod"/>, and neither
+        /// <c>NetShimGenerator</c> (no Roslyn reference) nor <c>NetProxyEmitter</c> (name only)
+        /// can reach it. Rendered through <see cref="TypeName"/> so the spelling matches
+        /// <see cref="NetParameterDescriptor.TypeFullName"/>'s exactly, rather than
+        /// <c>ToDisplayString</c>'s C# shorthand.</para>
+        /// </summary>
+        private static string DelegateInvokeSignatureOf(ITypeSymbol type)
+        {
+            if (type is not INamedTypeSymbol named) return null;
+
+            var invoke = named.DelegateInvokeMethod;
+            if (invoke == null) return null;
+
+            return TypeName(invoke.ReturnType)
+                + "("
+                + string.Join(",", invoke.Parameters.Select(p => TypeName(p.Type)))
+                + ")";
+        }
 
         /// <summary>
         /// Roslyn's <see cref="RefKind"/> mapped onto ours. The default arm covers

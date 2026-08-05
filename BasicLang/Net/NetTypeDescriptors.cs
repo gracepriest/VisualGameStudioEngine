@@ -183,16 +183,48 @@ namespace BasicLang.Net
     internal sealed record NetTypeLookupResult(NetTypeLookupOutcome Outcome, NetTypeDescriptor Type);
 
     /// <summary>
-    /// One parameter: how it is passed, and what type. A record is safe — both members are
-    /// scalars, so value equality is real value equality.
+    /// One parameter: how it is passed, what type, and — for a delegate — what it invokes.
+    /// A record is safe because ALL THREE members are scalars, so value equality is real value
+    /// equality. That constraint is load-bearing, not incidental: a record's synthesized equality
+    /// over an <see cref="IReadOnlyList{T}"/> member degenerates to REFERENCE equality (the trap
+    /// <see cref="NetMemberDescriptor"/> and <c>NetReferenceClosure</c> both document), which is
+    /// why <see cref="DelegateInvokeSignature"/> is a rendered string and not a parameter list.
     /// </summary>
     /// <param name="TypeFullName">
     /// Fully qualified and never a C# keyword or shorthand: <c>System.Int32</c> not <c>int</c>,
     /// <c>System.IntPtr</c> not <c>nint</c>, <c>System.ValueTuple&lt;…&gt;</c> not <c>(…)</c>. See
     /// <c>NetTypeResolver.TypeName</c> for why <c>ToDisplayString</c> alone is not enough.
     /// </param>
-    internal sealed record NetParameterDescriptor(NetRefKind RefKind, string TypeFullName)
+    /// <param name="DelegateInvokeSignature">
+    /// P2a-2 Task 11 / decision D-P9. For a delegate-typed parameter, its <c>Invoke</c> signature
+    /// rendered as <c>Return(Param,Param)</c> in the same fully-qualified spelling as
+    /// <paramref name="TypeFullName"/> — <c>System.String(System.Text.RegularExpressions.Match)</c>
+    /// for a <c>MatchEvaluator</c>. Null for every non-delegate parameter.
+    ///
+    /// <para><b>Why it is carried and not re-derived.</b> §8.4 needs it to compute
+    /// <c>BlnetSlotDesc[]</c> and to build the managed delegate, and NEITHER consumer can recover
+    /// it from a type name: <c>NetShimGenerator</c> imports no <c>Microsoft.CodeAnalysis</c> at all
+    /// and its <c>Emit</c> takes no resolver, while <c>NetProxyEmitter.WireOf</c> sees only a name.
+    /// The one place a descriptor is built from a Roslyn symbol is <c>NetTypeResolver.Describe</c>,
+    /// so that is where this is populated.</para>
+    ///
+    /// <para>⛔ <b>Deliberately absent from <see cref="ToString"/>.</b>
+    /// <c>NetNameMangler.Mangle</c> builds its readable stem from this record's
+    /// <c>ToString()</c> and its hash from <c>CanonicalIdentity</c> (which reads the scalar fields
+    /// explicitly, so it is safe by construction). Letting the signature reach <c>ToString</c>
+    /// would change every mangled export name — and one mangled name is simultaneously the
+    /// proxy-table slot, the shim's <c>EntryPoint</c> string and part of the shim cache key, so a
+    /// live cache would serve shims whose exports no longer match. Pinned by
+    /// <c>NetDelegateTests.CarryingAnInvokeSignature_DoesNotChangeTheMangledExportName</c>.</para>
+    /// </param>
+    internal sealed record NetParameterDescriptor(
+        NetRefKind RefKind,
+        string TypeFullName,
+        string DelegateInvokeSignature = null)
     {
+        /// <summary>True when this parameter's type is a delegate (§8.4).</summary>
+        public bool IsDelegate => DelegateInvokeSignature != null;
+
         public override string ToString() =>
             (RefKind == NetRefKind.None ? "" : RefKind.ToString().ToLowerInvariant() + " ") + TypeFullName;
     }
