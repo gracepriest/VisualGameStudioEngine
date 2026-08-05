@@ -154,6 +154,24 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case IRCall call:
                     return SanitizeName(call.Name);
 
+                // ⛔ A gep is a POINTER, and it is rendered INLINE as an L-value rather than
+                // bound to a temp. Materialising it as a value (`const t1 = a[0];`) makes a
+                // following IRStore write to the TEMP and silently drops the array write —
+                // this repo has already measured that exact bug, where C++ printed 0 where C#
+                // printed 5. Safe to inline because a gep's operands are a base and indices,
+                // with no side effects; do not extend inlining to nodes that have any.
+                case IRGetElementPtr gep:
+                    return ElementAccess(gep);
+                case IRLoad load:
+                    return Expr(load.Address);
+
+                // `.Length` on an array OR a string. The rename to lowercase is MANDATORY:
+                // JavaScript has no `.Length`, and reading it yields `undefined` with no
+                // error, which then propagates as NaN through arithmetic. Matched
+                // case-insensitively, as the C++ backend does.
+                case IRFieldAccess fa when IsLengthAccess(fa):
+                    return $"{Expr(fa.Object)}.length";
+
                 default:
                     throw NotYet(value.GetType().Name + " (as an expression)");
             }
@@ -458,6 +476,44 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 : $"const {js} = {expression};");
         }
 
+        /// <summary>
+        /// The JS allocation for a sized array declaration, or null when the type is not a
+        /// sized array (leave the declaration bare).
+        ///
+        /// <para><b>One helper, three callers.</b> Locals, module globals and class fields all
+        /// declare arrays. The C# backend sized only locals, so a module-level <c>Dim g(4)</c>
+        /// and a field <c>Public Cells(9)</c> emitted bare null references; the C++ backend hit
+        /// the identical split. Everything routes through here.</para>
+        ///
+        /// <para><b><c>.fill()</c> is not cosmetic.</b> <c>new Array(4)</c> is a SPARSE array
+        /// whose holes read as <c>undefined</c> and which iteration treats differently from
+        /// filled slots. BasicLang expects 0 / "" / false per element type.</para>
+        ///
+        /// <para>⚠ <c>ArrayDimensionSizes</c> entries are ELEMENT COUNTS, not upper bounds:
+        /// <c>Dim a(4)</c> is four elements here, matching the C# and C++ backends. That
+        /// diverges from real VB, deliberately and consistently — do not add one.</para>
+        /// </summary>
+        private string ArrayInitializer(TypeInfo type)
+        {
+            if (type == null || type.Kind != TypeKind.Array) return null;
+            if (type.ElementType == null) return null;
+
+            var sizes = type.ArrayDimensionSizes;
+            if (sizes == null || sizes.Count == 0) return null;
+            foreach (var s in sizes) if (s <= 0) return null;
+
+            var element = TypeMapper.GetDefaultValue(type.ElementType);
+            var init = $"new Array({sizes[sizes.Count - 1]}).fill({element})";
+
+            // Build outward from the innermost dimension. Array.from with a FACTORY, never
+            // `new Array(d0).fill(new Array(d1)...)` — fill would share ONE row object across
+            // every row, so a write to one row appears in all of them.
+            for (var d = sizes.Count - 2; d >= 0; d--)
+                init = $"Array.from({{length: {sizes[d]}}}, () => {init})";
+
+            return init;
+        }
+
         private static Exception NotYet(string node) =>
             new NotSupportedException(
                 $"JavaScript backend: {node} lowering is not implemented yet. " +
@@ -495,7 +551,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             foreach (var local in function.LocalVariables ?? new List<IRVariable>())
             {
                 if (!_declaredNames.Add(local.Name)) continue;
-                Line($"let {SanitizeName(local.Name)};");
+
+                // An array's SIZE is not in the instruction stream — Dim a(4) emits only an
+                // IRAlloca with Size == 1. The element count lives on the DECLARATION, so
+                // allocation belongs here.
+                var init = ArrayInitializer(local.Type);
+                Line(init == null
+                    ? $"let {SanitizeName(local.Name)};"
+                    : $"let {SanitizeName(local.Name)} = {init};");
             }
 
             // EntryBlock-rooted, following terminators — never a walk of function.Blocks.
@@ -849,8 +912,28 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         public void Visit(IRUnaryOp unaryOp) => Bind(unaryOp.Name, UnaryExpr(unaryOp));
         public void Visit(IRAssignment assignment) =>
             Line($"{SanitizeName(assignment.Target.Name)} = {Expr(assignment.Value)};");
-        public void Visit(IRLoad load) => throw NotYet(nameof(IRLoad));
-        public void Visit(IRStore store) => throw NotYet(nameof(IRStore));
+        // A load produces no statement — Expr renders it at the use site.
+        public void Visit(IRLoad load) { }
+
+        public void Visit(IRStore store)
+        {
+            // The destination is an L-VALUE expression, not a previously-bound temp.
+            Line($"{Expr(store.Address)} = {Expr(store.Value)};");
+        }
+
+        /// <summary>
+        /// ⛔ Indices NEST as <c>[i][j]</c>. Joining them <c>[i, j]</c> — what the C# backend
+        /// emits for its own target — is VALID JavaScript: the comma operator discards every
+        /// index but the last and evaluates to <c>a[j]</c>. No syntax error, no exception, just
+        /// a silently wrong element.
+        /// </summary>
+        private string ElementAccess(IRGetElementPtr gep)
+        {
+            var sb = new StringBuilder(Expr(gep.BasePointer));
+            foreach (var index in gep.Indices ?? new List<IRValue>())
+                sb.Append('[').Append(Expr(index)).Append(']');
+            return sb.ToString();
+        }
         public void Visit(IRCall call)
         {
             // DEFENCE IN DEPTH — do not delete this now that BL7002 checks declarations.
@@ -879,8 +962,13 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         public void Visit(IRBranch branch) => throw NotYet(nameof(IRBranch));
         public void Visit(IRConditionalBranch condBranch) => throw NotYet(nameof(IRConditionalBranch));
         public void Visit(IRPhi phi) => throw NotYet(nameof(IRPhi));
-        public void Visit(IRAlloca alloca) => throw NotYet(nameof(IRAlloca));
-        public void Visit(IRGetElementPtr gep) => throw NotYet(nameof(IRGetElementPtr));
+        // The array was already allocated at its DECLARATION, where the size lives; this node
+        // carries Size == 1 and nothing useful. The C# backend skips it for the same reason.
+        public void Visit(IRAlloca alloca) { }
+
+        // Emits nothing: the access is rendered inline by Expr, as an L-value. See the
+        // IRGetElementPtr arm there for why binding it to a temp drops writes.
+        public void Visit(IRGetElementPtr gep) { }
         public void Visit(IRCast cast) => throw NotYet(nameof(IRCast));
         public void Visit(IRCompare compare) => Bind(compare.Name, CompareExpr(compare));
         public void Visit(IRSwitch switchInst) => throw NotYet(nameof(IRSwitch));
@@ -893,7 +981,16 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         public void Visit(IRNewObject newObj) => throw NotYet(nameof(IRNewObject));
         public void Visit(IRInstanceMethodCall methodCall) => throw NotYet(nameof(IRInstanceMethodCall));
         public void Visit(IRBaseMethodCall baseCall) => throw NotYet(nameof(IRBaseMethodCall));
-        public void Visit(IRFieldAccess fieldAccess) => throw NotYet(nameof(IRFieldAccess));
+        private static bool IsLengthAccess(IRFieldAccess fa) =>
+            string.Equals(fa?.FieldName, "Length", StringComparison.OrdinalIgnoreCase);
+
+        public void Visit(IRFieldAccess fieldAccess)
+        {
+            // `.Length` is pure and renders inline via Expr. General field access belongs to
+            // class support (plan task 17) and still refuses rather than guessing.
+            if (IsLengthAccess(fieldAccess)) return;
+            throw NotYet(nameof(IRFieldAccess));
+        }
         public void Visit(IRFieldStore fieldStore) => throw NotYet(nameof(IRFieldStore));
         public void Visit(IRTupleElement tupleElement) => throw NotYet(nameof(IRTupleElement));
         public void Visit(IRTryCatch tryCatch) => throw NotYet(nameof(IRTryCatch));
