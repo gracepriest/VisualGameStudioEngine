@@ -58,24 +58,13 @@ public class JsBannedTypeTests
     }
 
     /// <summary>
-    /// BLOCKED BY A PRE-EXISTING COMPILER BUG, not by the JavaScript backend.
-    ///
-    /// <para>A <c>Public Property</c> in a class makes IRBuilder return an ENTIRELY EMPTY
-    /// module — zero functions, zero classes, zero globals — silently discarding every
-    /// sibling declaration including a top-level <c>Sub Main</c>, while
-    /// <c>SemanticAnalyzer.Analyze()</c> still returns true. Measured:</para>
-    /// <code>
-    /// Class C / Public V As Integer      / End Class + Sub Main  -> fns=1 classes=1  OK
-    /// Class C / Public Sub M() End Sub   / End Class + Sub Main  -> fns=2 classes=1  OK
-    /// Class C / Public Property V As Integer / End Class + Sub Main -> fns=0 classes=0  BUG
-    /// </code>
-    ///
-    /// <para>BL7003 already walks <c>module.Classes[].Properties[].Type</c>; there is simply
-    /// no IR for it to walk. Every backend emits an empty program for such a file today.
-    /// Filed as its own task; re-enable this test once IRBuilder keeps the module.</para>
+    /// Was [Ignore]d while a class <c>Property</c> could not parse at all: BasicLang had no
+    /// auto-properties, so <c>Public Property V As Long</c> was a parse error, Parse()
+    /// recovered by discarding the rest of the file, and there was no IR for BL7003's
+    /// <c>Classes[].Properties[].Type</c> walk to find. Auto-properties now exist, so the
+    /// position is live and this asserts the walk really covers it.
     /// </summary>
     [Test]
-    [Ignore("Blocked: a class Property yields an empty IRModule (pre-existing IRBuilder bug, all backends). Re-enable when fixed.")]
     public void Long_AsClassProperty_IsRejected()
     {
         Assert.That(Reject("Class C\nPublic Property V As Long\nEnd Class\nSub Main()\nEnd Sub"),
