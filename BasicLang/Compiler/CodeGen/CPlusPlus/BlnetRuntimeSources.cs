@@ -256,6 +256,56 @@ inline int32_t blnet_callback_release(blnet_callback h) {
     return BLNET_OK;
 }
 
+/* §8.4: a SCOPE-LIFETIME callback registration (P2a-2 Task 11, decision D-P8).
+
+   Why RAII and not a paired register/release call: a delegate argument is registered in the
+   generated call's PROLOGUE, and the write-back that follows the call is SUCCESS-PATH ONLY —
+   NetCheckTyped throws from inside the call statement. A release parked after the call would
+   therefore be skipped whenever the managed callee throws, leaking the callback entry
+   permanently, since the entry is only reclaimed through the freelist in
+   blnet_callback_release. A destructor runs on both paths.
+
+   ⛔ Deliberately NOT NetRef, and the difference is a correctness rule rather than a naming
+   preference. NetRef releases through g_shim.release — the MANAGED object table. A callback
+   handle lives in the NATIVE callback table (detail::g_callbacks) and is freed by
+   blnet_callback_release. Releasing one through the other frees an unrelated managed object
+   AND leaves the callback entry alive: a wrong-table release, not a leak.
+
+   Move-only on purpose. Copying would double-release, and because release bumps the
+   generation and returns the index to the freelist, the second release is either a
+   BLNET_E_STALE_CALLBACK or — once the index has been reused — the destruction of a
+   stranger's callback. */
+class CallbackRef {
+public:
+    CallbackRef() = default;
+
+    CallbackRef(NativeCallbackFn fn, const BlnetSlotDesc* slots, int32_t argc, CallbackFlags flags)
+        : h_(blnet_register_callback(std::move(fn), slots, argc, flags)) {}
+
+    ~CallbackRef() { if (h_ != 0) blnet_callback_release(h_); }
+
+    CallbackRef(const CallbackRef&) = delete;
+    CallbackRef& operator=(const CallbackRef&) = delete;
+
+    CallbackRef(CallbackRef&& other) noexcept : h_(other.h_) { other.h_ = 0; }
+
+    CallbackRef& operator=(CallbackRef&& other) noexcept {
+        if (this != &other) {
+            if (h_ != 0) blnet_callback_release(h_);
+            h_ = other.h_;
+            other.h_ = 0;
+        }
+        return *this;
+    }
+
+    /* The wire value handed to a proxy. Handle 0 is P0's null — a default-constructed guard
+       carries it, which is exactly what Nothing should transmit. */
+    blnet_callback get() const noexcept { return h_; }
+
+private:
+    blnet_callback h_ = 0;
+};
+
 inline void blnet_set_error_hook(void (*hook)(int32_t, const char*)) { detail::g_error_hook = hook; }
 
 /* invoke inline, translating native exceptions per C4 */

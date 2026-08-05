@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using BasicLang.Compiler.CodeGen.CPlusPlus;
 using BasicLang.Compiler.CodeGen.Net;
 using BasicLang.Net;
 using NUnit.Framework;
@@ -378,5 +379,41 @@ public class NetDelegateTests
 
         Assert.That(exports, Does.Match(@"Widget\.Sort\s*\(\s*" + helper + @"\("),
             "the wrapper must pass the delegate built by the dispatcher, not a Table.TryGet cast");
+    }
+
+    // ------------------------------------------------------------------------------------
+    // Step 5a — the callback RAII guard.
+    //
+    // Registration belongs in the call PROLOGUE as an RAII guard (D-P8), never in WriteBack:
+    // WriteBack is skipped whenever NetCheckTyped throws, so a throwing managed callee would
+    // leak the callback entry permanently — the entry is only reclaimed through the freelist
+    // in blnet_callback_release.
+    // ------------------------------------------------------------------------------------
+
+    [Test]
+    public void TheRuntimeShipsACallbackGuard_ReleasingThroughTheCallbackTable()
+    {
+        var runtime = BlnetRuntimeSources.BlnetRuntime;
+
+        Assert.That(runtime, Does.Contain("class CallbackRef"),
+            "§8.4 needs a scope-lifetime holder for a callback handle");
+        Assert.That(runtime, Does.Match(@"~CallbackRef\(\)[^}]*blnet_callback_release"),
+            "the destructor must release through the NATIVE callback table — NOT g_shim.release, "
+            + "which frees a MANAGED object handle and would leave the callback entry alive");
+    }
+
+    [Test]
+    public void TheCallbackGuard_IsNonCopyable()
+    {
+        // A copy would double-release: blnet_callback_release bumps the generation and pushes
+        // the index onto the freelist, so the second release either reports
+        // BLNET_E_STALE_CALLBACK or — worse, after the index is reused — frees a stranger's
+        // callback. Move-only is the only safe shape.
+        var runtime = BlnetRuntimeSources.BlnetRuntime;
+
+        Assert.That(runtime, Does.Match(@"CallbackRef\(const CallbackRef&\)\s*=\s*delete"),
+            "copy construction must be deleted");
+        Assert.That(runtime, Does.Match(@"CallbackRef&\s*operator=\(const CallbackRef&\)\s*=\s*delete"),
+            "copy assignment must be deleted");
     }
 }
