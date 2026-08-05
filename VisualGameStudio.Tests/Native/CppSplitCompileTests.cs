@@ -63,6 +63,55 @@ public class CppSplitCompileTests
         Assert.That(stdout.Trim(), Is.EqualTo("30"));
     }
 
+    /// <summary>
+    /// A module-level FIXED-SIZE array must be allocated by the SPLIT emission too.
+    ///
+    /// <para>The split path has its OWN global-variable site — it emits
+    /// <c>inline T g = …;</c> into the shared header (D3, one definition across all TUs) — and
+    /// it was the one declaration site the shared <c>SizedArrayInitializer</c> never reached.
+    /// Because the single-file CLI never takes this path, the identical program was CORRECT
+    /// through <c>BasicLang.exe file.bas</c> and ACCESS-VIOLATED when built through a
+    /// <c>.blproj</c>: <c>inline std::vector&lt;std::vector&lt;int32_t&gt;&gt; grid = {};</c>,
+    /// then <c>grid[3][2] = 11</c> on an empty vector.</para>
+    ///
+    /// <para>Runs the program rather than only inspecting the emitted text, because an
+    /// unallocated vector is a RUNTIME fault — the C++ compiles either way.</para>
+    /// </summary>
+    [Test]
+    public void Split_ModuleLevelFixedSizeArrays_AreAllocated_CompilesAndRuns()
+    {
+        var compiler = RequireCompiler();
+        var r = Split(emitMain: true,
+            ("Grid.bas",
+                "Module Grid\n" +
+                "    Dim flat(4) As Integer\n" +
+                "    Dim grid(4, 3) As Integer\n" +
+                "    Sub Fill()\n" +
+                "        flat(3) = 6\n" +
+                "        grid(3, 2) = 11\n" +
+                "    End Sub\n" +
+                "    Function Total() As Integer\n" +
+                "        Return flat(3) + grid(3, 2)\n" +
+                "    End Function\n" +
+                "End Module"),
+            ("App.bas",
+                "Sub Main()\n" +
+                "    Fill()\n" +
+                "    PrintLine Total()\n" +
+                "End Sub"));
+
+        // The header must carry the sizes, not `= {}`.
+        var header = r.Files.First(f => f.Key.EndsWith("Game.g.h", StringComparison.OrdinalIgnoreCase)).Value;
+        Assert.That(header, Does.Contain("inline std::vector<int32_t> flat = std::vector<int32_t>(4)"), header);
+        Assert.That(header,
+            Does.Contain("inline std::vector<std::vector<int32_t>> grid = "
+                         + "std::vector<std::vector<int32_t>>(4, std::vector<int32_t>(3))"), header);
+
+        var stdout = CppCompile.CompileAndRunFiles(r.Files, r.TranslationUnitFileNames, compiler);
+
+        Assert.That(stdout.Trim(), Is.EqualTo("17"));
+    }
+
     [Test]
     public void Split_DirectionB_UserCppCallsBasicLang()
     {

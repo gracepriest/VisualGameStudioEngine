@@ -209,7 +209,23 @@ namespace BasicLang.Compiler.AST
         public bool IsTuple { get; set; }
         public bool IsFixedLengthString { get; set; }
         public int FixedStringLength { get; set; }
-        public List<int> ArrayDimensions { get; set; }
+        /// <summary>
+        /// One entry per declared dimension of an array type, holding the SIZE EXPRESSION as
+        /// written (<c>null</c> when the dimension was left empty, as in <c>Dim a() As Integer</c>).
+        /// <see cref="List{T}.Count"/> is therefore the array's RANK.
+        ///
+        /// <para>These are expressions, not integers, because a size is not always known to the
+        /// parser: <c>Const N As Integer = 5</c> followed by <c>Dim a(N) As Integer</c> can only be
+        /// resolved once constants are in scope. The parser used to collapse anything that was not
+        /// an integer literal to a <c>-1</c> "dynamic size" sentinel, which reached
+        /// <c>TypeInfo.ArraySize</c> as "unsized" — and both backends then emitted an EMPTY array
+        /// (<c>std::vector&lt;int32_t&gt; a = {}</c> / <c>int[] a = default!</c>) for a program that
+        /// immediately indexed it. Carrying the expression lets
+        /// <c>SemanticAnalyzer.TryFoldConstantArraySize</c> fold it where constants are known, and
+        /// lets a genuinely non-constant size be REFUSED with a diagnostic instead of silently
+        /// producing memory corruption.</para>
+        /// </summary>
+        public List<ExpressionNode> ArrayDimensions { get; set; }
         public List<TypeReference> GenericArguments { get; set; }
         public List<TypeReference> TupleElementTypes { get; set; }
         public List<string> TupleElementNames { get; set; }
@@ -231,7 +247,7 @@ namespace BasicLang.Compiler.AST
             IsTuple = false;
             IsFixedLengthString = false;
             FixedStringLength = 0;
-            ArrayDimensions = new List<int>();
+            ArrayDimensions = new List<ExpressionNode>();
             GenericArguments = new List<TypeReference>();
             TupleElementTypes = new List<TypeReference>();
             TupleElementNames = new List<string>();
@@ -274,9 +290,17 @@ namespace BasicLang.Compiler.AST
 
             if (IsArray)
             {
-                foreach (var dim in ArrayDimensions)
+                // Render a size only when it is written as a plain integer literal; any other
+                // expression (a Const reference, arithmetic) is left blank rather than guessed at,
+                // since this ToString feeds diagnostics and hover text, not codegen. Dimensions
+                // are comma-separated because that is the declaration syntax they came from
+                // ("Dim g(4, 3) As Integer" -> "Integer[4, 3]").
+                if (ArrayDimensions.Count > 0)
                 {
-                    result += $"[{(dim >= 0 ? dim.ToString() : "")}]";
+                    var rendered = new List<string>();
+                    foreach (var dim in ArrayDimensions)
+                        rendered.Add(dim is LiteralExpressionNode lit && lit.Value is int n ? n.ToString() : "");
+                    result += "[" + string.Join(", ", rendered) + "]";
                 }
             }
 

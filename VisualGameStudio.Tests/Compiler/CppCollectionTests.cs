@@ -52,6 +52,25 @@ namespace VisualGameStudio.Tests.Compiler;
 public class CppCollectionTests
 {
     /// <summary>
+    /// Drains the parser's RECORDED errors into the caller's list, returning true when the
+    /// fixture source did not parse cleanly.
+    ///
+    /// <para>Load-bearing because <see cref="Parser.Parse"/> does not rethrow: it catches each
+    /// <c>ParseException</c>, records it, and resynchronizes so it can report several syntax
+    /// errors at once. A helper that only catches the exception therefore sees NOTHING and goes
+    /// on to analyze a truncated AST — so a test asserting that bad syntax is rejected would pass
+    /// vacuously, and a test with an accidental typo would assert against a program that is not
+    /// the one it looks like. The CLI reads these same recorded errors, which is why a shape can
+    /// fail through `BasicLang.exe` and appear to succeed here.</para>
+    /// </summary>
+    private static bool CollectParseErrors(Parser parser, List<string> errors)
+    {
+        foreach (var error in parser.Errors)
+            errors.Add($"Parse error: {error.Message}");
+        return parser.Errors.Count > 0;
+    }
+
+    /// <summary>
     /// Helper: compile BasicLang source to C++ output string.
     /// Returns null and populates errors list if a pipeline stage fails.
     /// CppCapabilityException from the generator propagates to the caller.
@@ -74,6 +93,11 @@ public class CppCollectionTests
             errors.Add($"Parse error: {ex.Message}");
             return null;
         }
+
+        // Parser.Parse RECOVERS from a ParseException — it records the error and resynchronizes
+        // rather than rethrowing — so catching the exception alone sees nothing and the helper
+        // would happily analyze a TRUNCATED AST. Every syntax error in a fixture was invisible.
+        if (CollectParseErrors(parser, errors)) return null;
 
         var analyzer = new SemanticAnalyzer();
         bool success = analyzer.Analyze(ast);
@@ -111,6 +135,8 @@ public class CppCollectionTests
         ProgramNode ast;
         try { ast = parser.Parse(); }
         catch (Exception ex) { errors.Add($"Parse error: {ex.Message}"); return null; }
+
+        if (CollectParseErrors(parser, errors)) return null;
 
         var analyzer = new SemanticAnalyzer();
         if (!analyzer.Analyze(ast))
@@ -795,6 +821,8 @@ End Sub";
         ProgramNode ast;
         try { ast = parser.Parse(); }
         catch (Exception ex) { errors.Add($"Parse error: {ex.Message}"); return null; }
+
+        if (CollectParseErrors(parser, errors)) return null;
 
         var analyzer = new SemanticAnalyzer();
         if (!analyzer.Analyze(ast))
@@ -2185,5 +2213,484 @@ End Sub";
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
         Assert.That(CompileRun(output), Is.EqualTo("FRESH\n"),
             "'STALE' means a pass kept a copy fact for n across a call that writes it");
+    }
+
+    // ========================================================================
+    // BUG 7c — A SIZE THAT IS NOT AN INTEGER LITERAL (the hole 8be3fe5 documented).
+    //
+    // The parser recorded a dimension only when it was already an integer literal and
+    // collapsed everything else to a -1 "dynamic size" sentinel, which reached
+    // TypeInfo.ArraySize as "unsized". Both backends then emitted an EMPTY array for a
+    // program that immediately indexed it, and BOTH compiled clean:
+    //
+    //   Const N As Integer = 5 : Dim a(N) As Integer : a(0) = 1
+    //     C++  -> std::vector<int32_t> a = {};  then a[0] = 1   (ACCESS_VIOLATION)
+    //     C#   -> int[] a = default!;           then a[0] = 1   (NullReferenceException)
+    //
+    // That is silent memory corruption, not a missing feature, and it shipped: the
+    // SpaceShooter sample declares `Dim bulletX(MAX_BULLETS) As Single`.
+    //
+    // The fix is in the FRONT END — dimensions are carried to the analyzer as EXPRESSIONS
+    // and folded (SemanticAnalyzer.TryFoldConstantInt) where constants are known — so both
+    // backends are fixed by one change and cannot drift. A size that genuinely will not
+    // fold is REFUSED (there is no run-time-sizing fallback: ReDim is not implemented), and
+    // the refusal tests below have anti-vacuity partners so they cannot pass by refusing
+    // everything.
+    // ========================================================================
+
+    [Test]
+    public void Cpp_ConstSizedArray_Allocates_CompileAndRun()
+    {
+        // Writes the LAST valid slot: an unsized vector corrupts the heap here rather
+        // than printing 5.
+        var source = @"
+Const N As Integer = 5
+
+Sub Main()
+    Dim a(N) As Integer
+    a(4) = 40
+    Console.WriteLine(a.Length)
+    Console.WriteLine(a(4))
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("std::vector<int32_t>(5)"),
+            "a Const-sized array must carry its size like a literal-sized one:\n" + output);
+        Assert.That(CompileRun(output), Is.EqualTo("5\n40\n"));
+    }
+
+    [Test]
+    public void Cpp_ConstExpressionSizedArray_Allocates_CompileAndRun()
+    {
+        // Arithmetic over constants folds too — `K * 2` is as compile-time-known as `6`.
+        var source = @"
+Const K As Integer = 3
+
+Sub Main()
+    Dim b(K * 2) As Integer
+    b(5) = 7
+    Console.WriteLine(b.Length)
+    Console.WriteLine(b(5))
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("std::vector<int32_t>(6)"), output);
+        Assert.That(CompileRun(output), Is.EqualTo("6\n7\n"));
+    }
+
+    [Test]
+    public void Cpp_ModuleLevelConstSizedArray_Allocates_CompileAndRun()
+    {
+        // Globals are emitted by a different site than locals — the exact split that made
+        // the literal-size fix incomplete the first time. Pinned separately on purpose.
+        var source = @"
+Const K As Integer = 3
+
+Module Program
+    Dim g(K) As Integer
+    Sub Main()
+        g(2) = 11
+        Console.WriteLine(g.Length)
+        Console.WriteLine(g(2))
+    End Sub
+End Module";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("std::vector<int32_t>(3)"), output);
+        Assert.That(CompileRun(output), Is.EqualTo("3\n11\n"));
+    }
+
+    [Test]
+    public void ArraySize_ThatIsNotCompileTimeConstant_IsRefused()
+    {
+        // A local variable is not a constant. Refusing is the whole point: this shape used
+        // to compile to an empty array and then corrupt memory on the first write.
+        var source = @"
+Sub Main()
+    Dim n As Integer = 5
+    Dim a(n) As Integer
+    a(0) = 1
+End Sub";
+        CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Not.Empty, "a run-time array size must not compile silently");
+        Assert.That(string.Join("; ", errors), Does.Contain("compile-time constant"));
+    }
+
+    [Test]
+    public void ArraySize_ThatIsNegative_IsRefused()
+    {
+        var source = @"
+Sub Main()
+    Dim a(-1) As Integer
+End Sub";
+        CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Not.Empty);
+        Assert.That(string.Join("; ", errors), Does.Contain("cannot be negative"));
+    }
+
+    /// <summary>
+    /// ANTI-VACUITY PARTNER for the two refusals above: an EMPTY dimension is not a missing
+    /// size to complain about, it is a deliberately unsized array declaration
+    /// (<c>Dim a() As Integer</c>). If the refusal ever widened to cover this, every program
+    /// that declares an array without sizing it would stop compiling.
+    /// </summary>
+    [Test]
+    public void UnsizedArrayDeclaration_IsStillAccepted()
+    {
+        var source = @"
+Sub Main()
+    Dim a() As Integer
+    Console.WriteLine(1)
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Not.Contain("std::vector<int32_t>(0)"),
+            "an unsized declaration must not be given a bogus zero-element allocation:\n" + output);
+        Assert.That(CompileRun(output), Is.EqualTo("1\n"));
+    }
+
+    // ========================================================================
+    // BUG 7d — ARRAY FIELDS WERE NOT TYPED AS ARRAYS.
+    //
+    //   Class Board
+    //       Public Cells(9) As Integer
+    //   End Class
+    //
+    // emitted `int32_t Cells;` — a SCALAR — so `b.Cells(0)` was
+    // "invalid types 'int32_t {aka int}[int]' for array subscript".
+    //
+    // Root cause: the field branch of the parser recorded ArrayDimensions but never set
+    // IsArray, and ResolveTypeReference only takes its array branch when IsArray is set.
+    // Locals and parameters always set both; fields were the one path that set one half.
+    // Because Kind was not Array, neither the sizing helper nor the element-lvalue path was
+    // ever reached, so fixing the parser alone was not enough — the chain behind it had to
+    // be followed:
+    //
+    //   * the C++ CLASS-MEMBER sites (private/protected/public, plus the out-of-class
+    //     definition for statics) needed their own sizing, since a member cannot borrow the
+    //     local or global declaration site;
+    //   * `obj.Field(i)` lowered as an INSTANCE METHOD CALL — `b->Cells(0)`, calling a
+    //     std::vector — because IRBuilder's array-index branch only covered a bare
+    //     identifier callee;
+    //   * `obj.Field(i) = v` wrote through the materialized field COPY (`t1[0] = 5`), which
+    //     compiles and silently loses the store, exactly like the struct-array-element case
+    //     above. ElementLValue re-derives the field so read and write agree by construction.
+    // ========================================================================
+
+    [Test]
+    public void Cpp_ArrayField_IsTypedAsArrayAndSized_CompileAndRun()
+    {
+        var source = @"
+Class Board
+    Public Cells(9) As Integer
+End Class
+
+Module Program
+    Sub Main()
+        Dim b As New Board()
+        b.Cells(0) = 5
+        b.Cells(8) = 7
+        Console.WriteLine(b.Cells(0) + b.Cells(8))
+        Console.WriteLine(b.Cells.Length)
+    End Sub
+End Module";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("std::vector<int32_t> Cells = std::vector<int32_t>(9)"),
+            "the field must be declared as a SIZED array, not a scalar:\n" + output);
+        Assert.That(output, Does.Not.Contain("int32_t Cells;"),
+            "the scalar declaration is the bug:\n" + output);
+        // Writing index 8 of a 9-element field: an unsized member corrupts the heap here.
+        Assert.That(CompileRun(output), Is.EqualTo("12\n9\n"));
+    }
+
+    /// <summary>
+    /// The write must reach the OBJECT, not the copy the field read materialized. `b.Cells(0)`
+    /// lowers through an IRFieldAccess that copies the whole std::vector, so `t1[0] = 5` both
+    /// compiles and silently discards the store — a wrong answer, not a build failure. Pinned by
+    /// the emitted lvalue AND by running it.
+    /// </summary>
+    [Test]
+    public void Cpp_ArrayField_Write_ReachesTheObject_NotACopy()
+    {
+        var source = @"
+Class Board
+    Public Cells(4) As Integer
+End Class
+
+Module Program
+    Sub Main()
+        Dim b As New Board()
+        b.Cells(2) = 42
+        Console.WriteLine(b.Cells(2))
+    End Sub
+End Module";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("b->Cells[2] = 42"),
+            "the store must target the field lvalue, not a copied temporary:\n" + output);
+        Assert.That(CompileRun(output), Is.EqualTo("42\n"));
+    }
+
+    [Test]
+    public void Cpp_PrivateArrayField_ConstSized_UsedFromMethods_CompileAndRun()
+    {
+        // A Const-sized PRIVATE field, read and written unqualified from inside the class:
+        // a different emission site (private members) and a different receiver shape (implicit
+        // this) from the public/external case above.
+        var source = @"
+Const SLOTS As Integer = 4
+
+Class Board
+    Private Scratch(SLOTS) As Integer
+
+    Sub Seed()
+        Scratch(3) = 99
+    End Sub
+
+    Function Peek() As Integer
+        Return Scratch(3)
+    End Function
+End Class
+
+Module Program
+    Sub Main()
+        Dim b As New Board()
+        b.Seed()
+        Console.WriteLine(b.Peek())
+    End Sub
+End Module";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("std::vector<int32_t> Scratch = std::vector<int32_t>(4)"), output);
+        Assert.That(CompileRun(output), Is.EqualTo("99\n"));
+    }
+
+    /// <summary>
+    /// A SIZED array member of a Structure is refused. A struct value is produced by
+    /// default-initialization, and .NET's `default(T)` bypasses field initializers, so the
+    /// storage would never exist however it was declared — C# says so outright (CS8983) and
+    /// VB.NET refuses the same declaration. The C++ backend WOULD happily size a value
+    /// std::vector member, so without this the two backends disagree silently.
+    /// </summary>
+    [Test]
+    public void SizedArrayMemberOfStructure_IsRefused()
+    {
+        var source = @"
+Structure Bag
+    Public Items(2) As Integer
+End Structure
+
+Sub Main()
+    Dim g As Bag
+End Sub";
+        CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Not.Empty);
+        Assert.That(string.Join("; ", errors), Does.Contain("cannot declare an array size"));
+    }
+
+    /// <summary>
+    /// ANTI-VACUITY PARTNER: an UNSIZED structure member is an ordinary reference field and
+    /// must keep working — it is assigned real storage from outside. Also pins the fix that
+    /// made a structure member's resolved type reach the IR at all (it used to be rebuilt from
+    /// the bare type NAME, which discarded the array-ness).
+    /// </summary>
+    [Test]
+    public void UnsizedArrayMemberOfStructure_CompilesAndRuns()
+    {
+        var source = @"
+Structure Bag
+    Public Items() As Integer
+End Structure
+
+Sub Main()
+    Dim g As Bag
+    Dim src(3) As Integer
+    src(1) = 8
+    g.Items = src
+    Console.WriteLine(g.Items(1))
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("std::vector<int32_t> Items"),
+            "the member must be typed as an array, not rebuilt as a scalar from its name:\n" + output);
+        Assert.That(CompileRun(output), Is.EqualTo("8\n"));
+    }
+
+    // ========================================================================
+    // BUG 7e — MULTI-DIMENSIONAL ARRAYS.
+    //
+    //   Dim g(4, 3) As Integer     =>  "Error: Expected ')' but found Comma"
+    //
+    // The declaration loop closed its bracket and then looped on a REOPENED one, so it
+    // accepted `Dim a(2)(3)` and rejected `Dim a(4, 3)` — exactly backwards. The chained
+    // spelling it did accept then MIS-LOWERED: only dimension[0] reached the type and
+    // ArrayRank was ignored by both backends, so a declaration that reads as
+    // two-dimensional produced a flat one-dimensional array.
+    //
+    // SCOPE, deliberately bounded: rank > 1 supports DECLARATION and INDEXING WITH ALL
+    // INDICES, which is what the shipped Platformer sample needs (`Dim level(20, 15)`
+    // indexed `level(x, y)` in nested loops). The backends represent it differently on
+    // purpose — C++ nests one std::vector per rank and indexes `g[i][j]` (which
+    // ElementLValue already rendered); C# uses a rectangular `int[,]` indexed `g[i, j]`
+    // (which EmitExpression already rendered). That difference is invisible for
+    // declaration and indexing but NOT for whole-array operations, so `.Length`,
+    // `For Each` and LINQ over a rank > 1 array are REFUSED in the analyzer rather than
+    // left to give the row count on one target and the flattened count on the other.
+    // ========================================================================
+
+    [Test]
+    public void Cpp_TwoDimensionalArray_AllocatesAndIndexes_CompileAndRun()
+    {
+        // Writes and reads the LAST valid cell of both dimensions: if either rank were
+        // unallocated (or the type were flat) this is out of bounds, which
+        // _GLIBCXX_ASSERTIONS turns into an abort rather than a silent wrong answer.
+        var source = @"
+Sub Main()
+    Dim g(2, 3) As Integer
+    g(0, 0) = 7
+    g(1, 2) = 9
+    Console.WriteLine(g(0, 0) + g(1, 2))
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output,
+            Does.Contain("std::vector<std::vector<int32_t>>(2, std::vector<int32_t>(3))"),
+            "both ranks must be allocated, not just the first:\n" + output);
+        Assert.That(output, Does.Contain("g[0][0] = 7"), output);
+        Assert.That(CompileRun(output), Is.EqualTo("16\n"));
+    }
+
+    [Test]
+    public void Cpp_ModuleLevelTwoDimensionalArray_ConstSized_NestedLoops_CompileAndRun()
+    {
+        // The shipped Platformer sample's exact shape: a module-level Const-sized grid
+        // filled and summed through nested loops.
+        //
+        // The LOOP BOUNDS are literals rather than W/H on purpose. A file-level Const is
+        // emitted into a different generated class than the Module that uses it, so a
+        // RUN-TIME reference to one does not resolve (chip task_63ad2174) — a pre-existing
+        // defect unrelated to arrays, and one this test would otherwise trip over while
+        // appearing to be about multi-dimensional arrays. The array SIZES still come from
+        // the Consts, which is the part this test is pinning: those are constant-folded
+        // during analysis and never referenced at run time.
+        var source = @"
+Const W As Integer = 4
+Const H As Integer = 3
+
+Module Program
+    Dim level(W, H) As Integer
+    Sub Main()
+        For x As Integer = 0 To 3
+            For y As Integer = 0 To 2
+                level(x, y) = x * 10 + y
+            Next
+        Next
+        Dim total As Integer = 0
+        For x As Integer = 0 To 3
+            For y As Integer = 0 To 2
+                total = total + level(x, y)
+            Next
+        Next
+        Console.WriteLine(total)
+        Console.WriteLine(level(3, 2))
+    End Sub
+End Module";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output,
+            Does.Contain("std::vector<std::vector<int32_t>>(4, std::vector<int32_t>(3))"), output);
+        Assert.That(CompileRun(output), Is.EqualTo("192\n32\n"));
+    }
+
+    [Test]
+    public void Cpp_ThreeDimensionalArray_CompileAndRun()
+    {
+        // Rank is not special-cased at 2 — the nesting is built from the dimension list.
+        var source = @"
+Sub Main()
+    Dim cube(2, 2, 2) As Integer
+    cube(1, 1, 1) = 5
+    Console.WriteLine(cube(1, 1, 1))
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("cube[1][1][1] = 5"), output);
+        Assert.That(CompileRun(output), Is.EqualTo("5\n"));
+    }
+
+    /// <summary>
+    /// The CHAINED spelling is refused. It used to be the ONLY spelling the declaration loop
+    /// accepted, and it mis-lowered: `Dim a(2)(3)` reached codegen carrying just its first
+    /// size and no rank, so it emitted a flat one-dimensional array for a declaration that
+    /// reads as two-dimensional. Rank is declared with a comma list.
+    /// </summary>
+    [Test]
+    public void ChainedArrayDimensions_AreRefused()
+    {
+        var source = @"
+Sub Main()
+    Dim a(2)(3) As Integer
+End Sub";
+        CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Not.Empty, "the chained spelling must not silently mis-lower");
+        Assert.That(string.Join("; ", errors), Does.Contain("comma list"));
+    }
+
+    [Test]
+    public void IndexCountThatDoesNotMatchRank_IsRefused()
+    {
+        // The paren spelling — the one VB code actually uses — never checked this, so `g(0)`
+        // on a rank-2 array was typed as an element while both backends handed back a ROW.
+        var source = @"
+Sub Main()
+    Dim g(4, 3) As Integer
+    Console.WriteLine(g(0))
+End Sub";
+        CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Not.Empty);
+        Assert.That(string.Join("; ", errors), Does.Contain("expects 2 indices"));
+    }
+
+    [Test]
+    public void WholeArrayOperationsOnMultiDimensionalArray_AreRefused()
+    {
+        // `.Length` is the row count natively and the FLATTENED count on .NET; For Each
+        // yields rows natively and elements on .NET. Both are silent wrong answers on one
+        // target, so both are refused.
+        const string prologue = "\nSub Main()\n    Dim g(4, 3) As Integer\n";
+
+        CompileToCppOptimized(prologue + "    Console.WriteLine(g.Length)\nEnd Sub", out var lengthErrors);
+        Assert.That(string.Join("; ", lengthErrors), Does.Contain("2-dimensional array cannot be used"));
+
+        CompileToCppOptimized(
+            prologue + "    For Each n In g\n        Console.WriteLine(n)\n    Next\nEnd Sub",
+            out var forEachErrors);
+        Assert.That(string.Join("; ", forEachErrors), Does.Contain("2-dimensional array cannot be used"));
+    }
+
+    /// <summary>
+    /// ANTI-VACUITY PARTNER for the three refusals above: a RANK-1 array must keep its whole
+    /// surface — `.Length`, `For Each`, and a single index. If any of those guards widened to
+    /// every array, ordinary one-dimensional code would stop compiling.
+    /// </summary>
+    [Test]
+    public void RankOneArray_KeepsLengthAndForEachAndSingleIndex_CompileAndRun()
+    {
+        var source = @"
+Sub Main()
+    Dim a(3) As Integer
+    a(0) = 1
+    a(1) = 2
+    Console.WriteLine(a.Length)
+    Dim total As Integer = 0
+    For Each n In a
+        total = total + n
+    Next
+    Console.WriteLine(total)
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("3\n3\n"));
     }
 }

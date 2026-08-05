@@ -540,8 +540,18 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // VB arrays lower to std::vector<T>: an assignable/copyable value type (unlike a
             // C array, which cannot be assigned or returned). Route the element type through
             // the mapper so `Integer` becomes int32_t instead of leaking verbatim into C++.
+            //
+            // A MULTI-DIMENSIONAL array nests one vector per rank, which is the shape
+            // ElementLValue already renders (`base[i][j]`). ArrayRank is clamped to at least 1
+            // because plenty of synthesized array TypeInfos (LINQ results, .NET element types)
+            // carry rank 0 and have always meant a single dimension.
             if (type.Kind == TypeKind.Array && type.ElementType != null)
-                return $"std::vector<{MapType(type.ElementType)}>";
+            {
+                var mapped = MapType(type.ElementType);
+                for (var dimension = 0; dimension < Math.Max(1, type.ArrayRank); dimension++)
+                    mapped = $"std::vector<{mapped}>";
+                return mapped;
+            }
             if (type.Kind == TypeKind.Array || type.Kind == TypeKind.Pointer || type.IsPointer)
                 return base.MapType(type);
 
@@ -983,9 +993,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             {
                 var type = MapType(field.Type);
                 var name = SanitizeName(field.Name);
+                // A STATIC array field is sized here rather than in-class (an in-class initializer
+                // on a non-const static is not legal C++), but from the same helper as every
+                // other declaration site.
                 var defaultValue = field.Initializer != null
                     ? (field.Initializer is IRConstant c ? EmitConstant(c) : GetValueName(field.Initializer))
-                    : GetDefaultValue(field.Type);
+                    : SizedArrayInitializer(field.Type, type) ?? GetDefaultValue(field.Type);
 
                 WriteLine($"{prefix}{type} {className}::{name} = {defaultValue};");
             }
@@ -1047,7 +1060,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     var staticMod = field.IsStatic ? "static " : "";
                     var type = MapType(field.Type);
                     var name = SanitizeName(field.Name);
-                    WriteLine($"{staticMod}{type} {name};");
+                    var init = field.IsStatic ? "" : FieldArrayInitializer(field);
+                    WriteLine($"{staticMod}{type} {name}{init};");
                 }
                 Unindent();
                 WriteLine();
@@ -1064,7 +1078,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     var staticMod = field.IsStatic ? "static " : "";
                     var type = MapType(field.Type);
                     var name = SanitizeName(field.Name);
-                    WriteLine($"{staticMod}{type} {name};");
+                    var init = field.IsStatic ? "" : FieldArrayInitializer(field);
+                    WriteLine($"{staticMod}{type} {name}{init};");
                 }
                 Unindent();
                 WriteLine();
@@ -1081,7 +1096,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 var staticMod = field.IsStatic ? "static " : "";
                 var type = MapType(field.Type);
                 var name = SanitizeName(field.Name);
-                WriteLine($"{staticMod}{type} {name};");
+                var init = field.IsStatic ? "" : FieldArrayInitializer(field);
+                WriteLine($"{staticMod}{type} {name}{init};");
             }
 
             if (publicFields.Count > 0)
@@ -1567,36 +1583,70 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// declaration is not one — callers then fall back to their own default.
         ///
         /// <para>A `Dim a(3) As Integer` must ALLOCATE, exactly as the C# backend does at its
-        /// mirroring site (`new int[3]`, <c>CSharpBackend.cs:1451</c>). Left to the plain default
-        /// an array becomes <c>{}</c> — a vector default-constructed EMPTY — and every subsequent
-        /// index is out of bounds: silent garbage on a read, heap corruption on a write. The size
-        /// is read from the same <see cref="TypeInfo.ArraySize"/> the C# backend uses, so the two
-        /// backends cannot drift on the element count.</para>
+        /// mirroring site (`new int[3]`, <c>CSharpBackend.SizedArrayInitializer</c>). Left to the
+        /// plain default an array becomes <c>{}</c> — a vector default-constructed EMPTY — and
+        /// every subsequent index is out of bounds: silent garbage on a read, heap corruption on a
+        /// write. The size is read from the same <see cref="TypeInfo.ArrayDimensionSizes"/> the C#
+        /// backend uses, so the two backends cannot drift on the element count.</para>
         ///
-        /// <para><b>Shared by locals AND globals deliberately.</b> The first version of this fix
-        /// lived inline in the locals loop, which left module-level `Dim g(4)` unsized — and
-        /// because the indexing half of the fix removed the compile error that used to mask it,
-        /// that program went from "does not build" to "builds and access-violates". One helper,
-        /// both sites.</para>
+        /// <para><b>Shared by locals, globals AND class fields deliberately.</b> The first version
+        /// of this fix lived inline in the locals loop, which left module-level `Dim g(4)` unsized
+        /// — and because the indexing half of the fix removed the compile error that used to mask
+        /// it, that program went from "does not build" to "builds and access-violates". Array
+        /// FIELDS (`Public Cells(9) As Integer`) were the third site, reached once the parser
+        /// started typing them as arrays at all. One helper, every site.</para>
         ///
         /// <para><see cref="MapType"/> tests <c>NetHandleTypeFullName</c> FIRST, so a
         /// handle-represented .NET array arrives here already spelled <c>BasicLang::NetRef</c> and
         /// must NOT be sized — it owns no native storage. Requiring the <c>std::vector</c>
         /// lowering keeps <c>T(n)</c> to the one shape where it means anything.</para>
         ///
-        /// <para>⚠ <b>Known hole:</b> only a size the PARSER kept as an integer literal is
-        /// available here. `Dim a(N)` for a `Const N`, or any expression, is recorded as -1
-        /// (<c>Parser.cs:2266</c>) and still produces an empty vector. The real fix is to
-        /// preserve the constant through to <see cref="TypeInfo.ArraySize"/>; until then that
-        /// shape is unsized.</para>
+        /// <para>A MULTI-DIMENSIONAL array sizes every rank at once, using vector's fill
+        /// constructor: <c>Dim g(4, 3)</c> becomes
+        /// <c>std::vector&lt;std::vector&lt;int32_t&gt;&gt;(4, std::vector&lt;int32_t&gt;(3))</c>,
+        /// so all four rows exist before any <c>g[i][j]</c> runs. Every dimension must have a
+        /// known size — a partially-sized declaration has no allocation to emit and falls through
+        /// to the caller's default rather than being half-built.</para>
         /// </summary>
-        private string SizedArrayInitializer(TypeInfo type, string mappedType) =>
-            type?.Kind == TypeKind.Array
-            && type.ArraySize > 0
-            && mappedType != null
-            && mappedType.StartsWith("std::vector<", StringComparison.Ordinal)
-                ? $"{mappedType}({type.ArraySize})"
-                : null;
+        private string SizedArrayInitializer(TypeInfo type, string mappedType)
+        {
+            if (type?.Kind != TypeKind.Array) return null;
+            if (mappedType == null || !mappedType.StartsWith("std::vector<", StringComparison.Ordinal))
+                return null;
+
+            var sizes = type.ArrayDimensionSizes;
+            if (sizes.Count == 0) return null;
+            foreach (var size in sizes)
+                if (size <= 0) return null;
+
+            // Build inside-out: the innermost dimension is a plain sized vector, and each
+            // enclosing dimension fills its slots with a copy of the one below. `innerType`
+            // tracks the type the CURRENT dimension holds, so it grows a vector wrapper per step.
+            var innerType = MapType(type.ElementType);
+            var initializer = $"std::vector<{innerType}>({sizes[sizes.Count - 1]})";
+            for (var dimension = sizes.Count - 2; dimension >= 0; dimension--)
+            {
+                innerType = $"std::vector<{innerType}>";
+                initializer = $"std::vector<{innerType}>({sizes[dimension]}, {initializer})";
+            }
+            return initializer;
+        }
+
+        /// <summary>
+        /// The in-class member initializer for an array FIELD (<c>= std::vector&lt;int32_t&gt;(9)</c>),
+        /// or the empty string when the field is not a sized array. Emitted at the declaration
+        /// because a C++ member has no other place to be given a size, and an empty vector member
+        /// makes every <c>b.Cells(0)</c> an out-of-bounds access.
+        ///
+        /// <para>STATIC members take the out-of-class definition path instead
+        /// (<see cref="EmitStaticMemberInitializationsCore"/>) — an in-class initializer on a
+        /// non-const static is not legal C++, so callers pass only non-static fields here.</para>
+        /// </summary>
+        private string FieldArrayInitializer(IRField field)
+        {
+            var sized = SizedArrayInitializer(field?.Type, MapType(field?.Type));
+            return sized != null ? $" = {sized}" : "";
+        }
 
         private void DeclareLocalsAndTemporaries(IRFunction function)
         {
@@ -3339,8 +3389,29 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// disagree about how many indices they apply.
         /// </summary>
         private string ElementLValue(IRGetElementPtr gep) =>
-            GetValueName(gep.BasePointer)
+            ArrayBaseLValue(gep.BasePointer)
             + string.Concat(gep.Indices.Select(i => $"[{GetValueName(i)}]"));
+
+        /// <summary>
+        /// The C++ LVALUE for the ARRAY a GEP indexes. Normally that is just the value's name, but
+        /// an array FIELD arrives as an <see cref="IRFieldAccess"/> that was materialized into a
+        /// temp — and a <c>std::vector</c> temp is a COPY, so `b.Cells(0) = 5` wrote
+        /// <c>t1[0] = 5</c> and left the object untouched. Re-deriving <c>b-&gt;Cells</c> here
+        /// puts the write back on the field.
+        ///
+        /// <para>This is the field counterpart of <see cref="ElementLValueOfArrayRead"/>, and it
+        /// sits inside <see cref="ElementLValue"/> on purpose so the READ and the WRITE of the
+        /// same element cannot disagree about what they are indexing. Collections are unaffected
+        /// either way — a <c>shared_ptr</c> copy still aliases one object, which is why
+        /// <c>List</c> fields never showed this.</para>
+        /// </summary>
+        private string ArrayBaseLValue(IRValue basePointer) =>
+            basePointer is IRFieldAccess fieldAccess
+            && fieldAccess.Type?.Kind == TypeKind.Array
+            && fieldAccess.Type.NetHandleTypeFullName == null
+                ? $"{GetValueName(fieldAccess.Object)}{MemberAccessOp(fieldAccess.Object)}"
+                  + SanitizeName(fieldAccess.FieldName)
+                : GetValueName(basePointer);
 
         /// <summary>
         /// The element LVALUE behind an array-element READ (an <see cref="IRLoad"/> over a folded
