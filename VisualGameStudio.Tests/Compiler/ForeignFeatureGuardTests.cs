@@ -20,13 +20,16 @@ namespace VisualGameStudio.Tests.Compiler;
 /// and — for LLVM/MSIL — collections, with a CLEAN typed error rather than
 /// silently emitting broken code.
 ///
-/// | Feature                | C++ | C#        | LLVM      | MSIL      |
-/// |------------------------|-----|-----------|-----------|-----------|
-/// | #CppInclude headers    | ✅  | ❌ error  | ❌ error  | ❌ error  |
-/// | :: foreign types       | ✅  | ❌ error  | ❌ error  | ❌ error  |
-/// | Collections (List/...) | ✅  | ✅ native | ❌ error  | ❌ error  |
+/// | Feature                | C++ | C#        | JavaScript | LLVM      | MSIL      |
+/// |------------------------|-----|-----------|------------|-----------|-----------|
+/// | #CppInclude headers    | ✅  | ❌ error  | ❌ error   | ❌ error  | ❌ error  |
+/// | :: foreign types       | ✅  | ❌ error  | ❌ error   | ❌ error  | ❌ error  |
+/// | Collections (List/...) | ✅  | ✅ native | ✅ native  | ❌ error  | ❌ error  |
 ///
-/// C# accepts collections natively; it only rejects the passthrough features.
+/// C# and JavaScript accept collections natively; they only reject the passthrough
+/// features. JavaScript's own coverage lives in JsCapabilityCheckerTests — it additionally
+/// rejects ByRef, Long, Char, value Structure, operator overloading and .NET BCL types
+/// (BL7002-BL7007), which have no JS equivalent and would otherwise be silently wrong.
 /// </summary>
 [TestFixture]
 public class ForeignFeatureGuardTests

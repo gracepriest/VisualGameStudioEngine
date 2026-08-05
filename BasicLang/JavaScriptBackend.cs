@@ -63,6 +63,16 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         {
             if (module == null) throw new ArgumentNullException(nameof(module));
 
+            // Refuse before emitting anything. rejectCollections: false because
+            // List/Dictionary DO lower here (Array/Map) — the LLVM/MSIL posture of
+            // rejecting them outright would be wrong. ownInlineLanguage "javascript" lets
+            // a js{} block through while a cpp{} block is still an error: an inline block
+            // this backend cannot emit must fail loudly, not be dropped into a
+            // do-nothing program.
+            ForeignFeatureChecker.Check(module, "JavaScript", rejectCollections: false,
+                ownInlineLanguage: "javascript");
+            JsCapabilityChecker.Check(module);
+
             _output.Clear();
             _indentLevel = 0;
 
