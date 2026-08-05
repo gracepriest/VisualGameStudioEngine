@@ -642,6 +642,17 @@ namespace BasicLang.Compiler.AST
         public BlockNode Setter { get; set; }
         public ParameterNode SetterParameter { get; set; }  // The 'value' parameter
 
+        /// <summary>
+        /// True for an AUTO-PROPERTY: `Public Property V As Integer` with no accessor block
+        /// and no `End Property`. Both <see cref="Getter"/> and <see cref="Setter"/> are null.
+        ///
+        /// <para>Needed because null accessors alone are ambiguous: `Property V As Integer`
+        /// followed by an explicit `End Property` and nothing else ALSO leaves both null, and
+        /// that genuinely is an error ("must have at least one accessor"). Only the parser
+        /// can tell the two apart, so it records which one it saw.</para>
+        /// </summary>
+        public bool IsAuto { get; set; }
+
         public PropertyNode(int line, int column) : base(line, column)
         {
             Access = AccessModifier.Public;

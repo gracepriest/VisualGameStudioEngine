@@ -1114,6 +1114,21 @@ namespace BasicLang.Compiler
 
             ConsumeNewlines();
 
+            // Auto-property: `Public Property V As Integer` with no accessor block and no
+            // `End Property`. Getter/Setter stay null and IRBuilder synthesizes a backing
+            // field plus accessors, so every backend's existing property path is unchanged.
+            //
+            // Returning here rather than falling through matters: the Consume(EndProperty)
+            // below used to throw, and Parse()'s recovery Synchronize()s to EOF — so one
+            // bodyless property silently discarded the REST OF THE FILE, including unrelated
+            // top-level declarations. The CLI did report the parse error, but the language
+            // could not express the most common property form.
+            if (!Check(TokenType.Get) && !Check(TokenType.Set) && !Check(TokenType.EndProperty))
+            {
+                node.IsAuto = true;
+                return node;
+            }
+
             // Parse Get and Set blocks
             while (!Check(TokenType.EndProperty) && !IsAtEnd())
             {
