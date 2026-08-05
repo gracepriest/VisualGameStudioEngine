@@ -91,6 +91,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // they are skipped rather than emitted under a colliding name.
             var memberBodies = module.CollectMemberImplementations();
 
+            // Collected before any emission: a user's own Function Len(...) shadows the
+            // builtin, and the decision has to be available at every call site.
+            _userFunctionNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var f in module.Functions)
+                if (!string.IsNullOrEmpty(f.Name)) _userFunctionNames.Add(f.Name);
+
             foreach (var function in module.Functions)
             {
                 if (function.IsExternal) continue;
@@ -364,6 +370,97 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// so an unimplemented builtin cannot silently emit a call to a function that does
         /// not exist in the browser.</para>
         /// </summary>
+        /// <summary>
+        /// Functions this program declares. A user's own <c>Function Len(...)</c> must WIN over
+        /// the builtin — otherwise declaring it silently rebinds every call to the JS member
+        /// form and the user's code never runs.
+        /// </summary>
+        private HashSet<string> _userFunctionNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Renders a BasicLang string builtin as its JavaScript equivalent, or returns false
+        /// when the name is not one (or is shadowed by a user function).
+        ///
+        /// <para>Matched case-insensitively: IRBuilder only normalises casing when the call
+        /// resolved to a symbol, and every stdlib provider in this repo keys its table
+        /// case-insensitively for the same reason.</para>
+        ///
+        /// <para><b>The 1-based conversions are the whole risk here.</b> BasicLang's Mid and
+        /// InStr are 1-based, JavaScript's are 0-based, and an off-by-one compiles perfectly
+        /// and silently returns the wrong characters.</para>
+        /// </summary>
+        private bool TryStringBuiltin(string name, List<string> args, out string result)
+        {
+            result = null;
+            if (string.IsNullOrEmpty(name) || _userFunctionNames.Contains(name)) return false;
+
+            string Recv() => Receiver(args[0]);
+
+            switch (name.ToLowerInvariant())
+            {
+                case "len" when args.Count == 1:
+                    result = $"{Recv()}.length"; return true;
+                case "ucase" when args.Count == 1:
+                    result = $"{Recv()}.toUpperCase()"; return true;
+                case "lcase" when args.Count == 1:
+                    result = $"{Recv()}.toLowerCase()"; return true;
+                case "trim" when args.Count == 1:
+                    result = $"{Recv()}.trim()"; return true;
+
+                // START IS 1-BASED. substr (rather than substring/slice) so the start
+                // expression is evaluated ONCE — the two-argument alternatives need it twice.
+                case "mid" when args.Count == 3:
+                    result = $"{Recv()}.substr({args[1]} - 1, {args[2]})"; return true;
+                case "mid" when args.Count == 2:
+                    result = $"{Recv()}.substr({args[1]} - 1)"; return true;
+
+                case "left" when args.Count == 2:
+                    result = $"{Recv()}.substring(0, {args[1]})"; return true;
+
+                // n == 0 must yield "", which this does; `.slice(-n)` would return the WHOLE
+                // string for 0 because -0 === 0.
+                case "right" when args.Count == 2:
+                    result = $"{Recv()}.substring({Recv()}.length - ({args[1]}))"; return true;
+
+                // 1-BASED, and 0 (not JS's -1) means "not found".
+                case "instr" when args.Count == 2:
+                    result = $"({Recv()}.indexOf({args[1]}) + 1)"; return true;
+
+                // split/join replaces EVERY occurrence. `.replace(string, string)` changes
+                // only the FIRST — a plausible-looking wrong answer rather than an error.
+                case "replace" when args.Count == 3:
+                    result = $"{Recv()}.split({args[1]}).join({args[2]})"; return true;
+
+                case "chr" when args.Count == 1:
+                    result = $"String.fromCharCode({args[0]})"; return true;
+                case "asc" when args.Count == 1:
+                    result = $"{Recv()}.charCodeAt(0)"; return true;
+
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>
+        /// Parenthesises a receiver unless it is already a bare identifier, so
+        /// <c>Len(a &amp; b)</c> becomes <c>(a + b).length</c> rather than <c>a + b.length</c>.
+        /// </summary>
+        private static string Receiver(string expression)
+        {
+            if (string.IsNullOrEmpty(expression)) return expression;
+
+            var simple = true;
+            for (var i = 0; i < expression.Length; i++)
+            {
+                var c = expression[i];
+                var ok = char.IsLetterOrDigit(c) || c == '_' || c == '$';
+                if (i == 0) ok = char.IsLetter(c) || c == '_' || c == '$';
+                if (!ok) { simple = false; break; }
+            }
+
+            return simple ? expression : $"({expression})";
+        }
+
         private static string CallTarget(string functionName)
         {
             if (string.IsNullOrEmpty(functionName)) throw NotYet("a call with no target name");
@@ -979,7 +1076,21 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (call.ByRefArguments != null && call.ByRefArguments.Contains(true))
                 throw JsCapabilityChecker.ByRefArgumentRejection(call.FunctionName);
 
-            var args = string.Join(", ", call.Arguments.ConvertAll(Expr));
+            var rendered = call.Arguments.ConvertAll(Expr);
+
+            // String builtins arrive as a BARE FunctionName, which CallTarget would pass
+            // straight through as if it were a user function — emitting `Len(s)`, a call to
+            // something that exists nowhere in JavaScript. They also cannot be expressed as a
+            // renamed callee, since `Len(s)` becomes the MEMBER expression `s.length`, so they
+            // are rendered whole here.
+            if (TryStringBuiltin(call.FunctionName, rendered, out var builtin))
+            {
+                if (IsUsed(call)) Bind(call.Name, builtin);
+                else Line($"{builtin};");
+                return;
+            }
+
+            var args = string.Join(", ", rendered);
             var invocation = $"{CallTarget(call.FunctionName)}({args})";
 
             // A call that PRODUCES a value binds it, because Expr(IRCall) refers to the
