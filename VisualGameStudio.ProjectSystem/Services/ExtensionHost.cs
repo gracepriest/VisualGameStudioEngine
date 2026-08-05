@@ -258,21 +258,32 @@ public class ExtensionHost : IDisposable
     /// "Error reading boolean. Unexpected token: StartObject" and reported every successful
     /// activation as a failure.
     ///
-    /// <para>Property names bind case-insensitively under the Newtonsoft formatter this channel
-    /// uses, so PascalCase members match the host's camelCase JSON.</para>
+    /// <para>⛔ Every member carries an explicit <c>[JsonPropertyName]</c>. This channel used to run
+    /// the Newtonsoft formatter, which matches property names case-INSENSITIVELY, so PascalCase
+    /// members bound the host's camelCase JSON for free. System.Text.Json is case-SENSITIVE by
+    /// default, so moving the formatter silently turned every property back to its default —
+    /// <c>Activated</c> became false and a successful activation was reported as
+    /// "JS activation failed". Naming each property explicitly makes the binding independent of
+    /// whichever formatter or naming policy the channel happens to use.</para>
+    ///
+    /// <para>Public so a test can bind real host JSON against it; these types describe the wire
+    /// contract rather than any internal state.</para>
     /// </summary>
-    private sealed class ActivationResult
+    public sealed class ActivationResult
     {
-        public bool Activated { get; set; }
-        public bool HasMain { get; set; }
-        public string? Error { get; set; }
+        [JsonPropertyName("activated")] public bool Activated { get; set; }
+        [JsonPropertyName("hasMain")] public bool HasMain { get; set; }
+        [JsonPropertyName("error")] public string? Error { get; set; }
     }
 
-    /// <summary>Shape of <c>deactivateExtension</c>'s reply (main.js:251/271/273).</summary>
-    private sealed class DeactivationResult
+    /// <summary>
+    /// Shape of <c>deactivateExtension</c>'s reply (main.js:251/271/273). Explicitly named for the
+    /// same reason as <see cref="ActivationResult"/>.
+    /// </summary>
+    public sealed class DeactivationResult
     {
-        public bool Deactivated { get; set; }
-        public string? Error { get; set; }
+        [JsonPropertyName("deactivated")] public bool Deactivated { get; set; }
+        [JsonPropertyName("error")] public string? Error { get; set; }
     }
 
     /// <summary>
