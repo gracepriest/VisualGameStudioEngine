@@ -500,7 +500,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             var sizes = type.ArrayDimensionSizes;
             if (sizes == null || sizes.Count == 0) return null;
-            foreach (var s in sizes) if (s <= 0) return null;
+
+            // Zero is a legitimate size — `Dim a(0)` is an EMPTY array, and leaving it
+            // undefined makes `For Each` throw at runtime rather than iterate zero times.
+            // Only a negative size means "not a sized array".
+            foreach (var s in sizes) if (s < 0) return null;
 
             var element = TypeMapper.GetDefaultValue(type.ElementType);
             var init = $"new Array({sizes[sizes.Count - 1]}).fill({element})";
@@ -586,6 +590,21 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         /// <summary>Loop exit blocks, innermost last. Membership means `break`.</summary>
         private readonly Stack<BasicBlock> _loopEnds = new Stack<BasicBlock>();
+
+        /// <summary>
+        /// <c>For Each</c> exit blocks. Separate from <see cref="_loopEnds"/> because for-of
+        /// is the one loop whose body fall-through and whose <c>Exit For</c> emit the SAME
+        /// branch to the SAME block — the other loops fall through to a condition block
+        /// instead, so their exits are unambiguous.
+        /// </summary>
+        private readonly Stack<BasicBlock> _forEachEnds = new Stack<BasicBlock>();
+
+        /// <summary>
+        /// How many conditional ARMS deep the current emission is, within the nearest
+        /// enclosing <c>For Each</c> body. Zero means the straight-line path — where a branch
+        /// to the loop end is simply the end of an iteration, not an exit.
+        /// </summary>
+        private int _armDepth;
 
         /// <summary>
         /// Merge blocks an ENCLOSING construct will emit once it closes. A branch to one of
@@ -711,7 +730,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             Line($"if ({Expr(cond.Condition)}) {{");
             _indentLevel++;
+            _armDepth++;
             EmitStructured(cond.TrueTarget);
+            _armDepth--;
             _indentLevel--;
 
             // No `else` when the false path IS the merge point — that is a bare `If … End If`.
@@ -719,7 +740,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             {
                 Line("} else {");
                 _indentLevel++;
+                _armDepth++;
                 EmitStructured(cond.FalseTarget);
+                _armDepth--;
                 _indentLevel--;
             }
 
@@ -772,7 +795,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 first = false;
                 _indentLevel++;
                 _pendingMerges.Push(sw.EndBlock);
+                _armDepth++;
                 EmitStructured(target);
+                _armDepth--;
                 _pendingMerges.Pop();
                 _indentLevel--;
             }
@@ -880,6 +905,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         private void EmitBranch(IRBranch br)
         {
             if (br.Target == null) return;
+
+            // For Each: fall-through and Exit For are the same branch to the same block, so
+            // only POSITION separates them — inside a conditional arm it is an exit, on the
+            // straight-line path it is the end of an iteration and needs no statement.
+            if (_forEachEnds.Contains(br.Target))
+            {
+                if (_armDepth > 0) Line("break;");
+                return;
+            }
 
             if (_loopEnds.Contains(br.Target))
             {
@@ -995,7 +1029,57 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         public void Visit(IRTupleElement tupleElement) => throw NotYet(nameof(IRTupleElement));
         public void Visit(IRTryCatch tryCatch) => throw NotYet(nameof(IRTryCatch));
         public void Visit(IRInlineCode inlineCode) => throw NotYet(nameof(IRInlineCode));
-        public void Visit(IRForEach forEach) => throw NotYet(nameof(IRForEach));
+        /// <summary>
+        /// <c>For Each</c> → <c>for (const v of collection)</c>.
+        ///
+        /// <para>Unlike every other loop this is a single INSTRUCTION, not a terminator: it
+        /// carries BodyBlock and EndBlock itself, with no condition block, no increment block
+        /// and no back-edge. The enclosing block continues past it, so the continuation is
+        /// emitted here and EndBlock is marked emitted.</para>
+        ///
+        /// <para><b>Fall-through and <c>Exit For</c> are the same branch.</b> Both emit
+        /// <c>IRBranch(EndBlock)</c>, so only POSITION separates them: the body block's own
+        /// terminator is the natural end of an iteration, while a branch from any NESTED block
+        /// is a real exit and becomes <c>break</c>. One case stays undecidable — a bare
+        /// unconditional <c>Exit For</c> as the body's last statement, where the exit IS the
+        /// body terminator. It lowers as fall-through, matching the other backends; that is a
+        /// known limitation rather than an oversight.</para>
+        /// </summary>
+        public void Visit(IRForEach forEach)
+        {
+            var variable = SanitizeName(forEach.VariableName);
+            Line($"for (const {variable} of {Expr(forEach.Collection)}) {{");
+            _indentLevel++;
+
+            var body = forEach.BodyBlock;
+            if (body != null)
+            {
+                _emitted.Add(body);
+                _forEachEnds.Push(forEach.EndBlock);
+
+                // The body starts on the STRAIGHT-LINE path. A branch to EndBlock reached
+                // without entering a conditional arm is the natural end of an iteration and
+                // emits nothing; one reached from inside an arm is a real `Exit For`.
+                var savedDepth = _armDepth;
+                _armDepth = 0;
+
+                EmitInstructions(body);
+                switch (body.GetTerminator())
+                {
+                    case IRConditionalBranch cond: EmitConditional(cond); break;
+                    case IRBranch br: EmitBranch(br); break;
+                    case IRSwitch sw: EmitSelectCase(sw); break;
+                }
+
+                _armDepth = savedDepth;
+                _forEachEnds.Pop();
+            }
+
+            _indentLevel--;
+            Line("}");
+
+            EmitStructured(forEach.EndBlock);
+        }
         public void Visit(IRIndexerAccess indexer) => throw NotYet(nameof(IRIndexerAccess));
         public void Visit(IRThrow throwInst) => throw NotYet(nameof(IRThrow));
         public void Visit(IRIndexerStore indexerStore) => throw NotYet(nameof(IRIndexerStore));
