@@ -31,7 +31,7 @@
 | `BasicLang/JsCapabilityChecker.cs` | **Create** — `BL7001`–`BL7007` rejections |
 | `BasicLang/StdLib/JavaScriptStdLib.cs` | **Create** — `IStdLibProvider` for Console/Math/String/Random/DateTime/Regex |
 | `BasicLang/JavaScriptSourceMap.cs` | **Create** — Source Map v3 emitter (VLQ encoding) |
-| `BasicLang/JavaScriptEmitter.cs` | **Create** — writes `.js` + `.js.map` + `index.html` to an output dir |
+| `BasicLang/JavaScriptEmitter.cs` | **Create in Task 25** — writes `.js` + `.js.map` + `index.html` to an output dir. Not needed by Task 4: the single-file CLI path already writes `GenerateCode`'s string itself. |
 | `BasicLang/Runtime/NodeLocator.cs` | **Create** — extracted from `ExtensionHost`; see Task 3 |
 | `VisualGameStudio.ProjectSystem/Services/ExtensionHost.cs:768` | **Modify** — delegate to `NodeLocator` |
 | `VisualGameStudio.ProjectSystem/Services/WebPreviewServer.cs` | **Create** — `HttpListener` static server |
@@ -408,16 +408,35 @@ git commit -m "feat(js): Node execution test harness; extract NodeLocator to sha
 
 ### Task 4: CLI target wiring
 
+> **Amended during execution.** As written this task conflated the CLI's two output
+> routes. The **single-file** route (`Program.cs:1108-1129`) calls `GenerateCode` and
+> writes the returned string itself — it needs no emitter and never touches a csproj.
+> The **project** route (`build proj.blproj`, `Program.cs:684-700`) is the one that
+> hardcodes `<Project Sdk="Microsoft.NET.Sdk">` plus a `.cs` compile item; wiring that
+> for JavaScript is **Task 29**, where the IDE path is handled alongside it. So Task 4
+> is the target switch only, and `JavaScriptEmitter.cs` moves to Task 25 where the
+> `.js.map` + `index.html` outputs it exists to write actually arrive.
+
 **Files:**
 - Modify: `BasicLang/Program.cs` (the `--target=` switch)
-- Create: `BasicLang/JavaScriptEmitter.cs`
-- Test: `VisualGameStudio.Tests/Compiler/JavaScriptEmitterTests.cs`
+- Test: `VisualGameStudio.Tests/Compiler/JavaScriptCliTargetTests.cs`
 
-- [ ] **Step 1: Write the failing test** — `BasicLang.exe prog.bas --target=javascript` writes `prog.js` next to the source, containing `console.log`.
-- [ ] **Step 2: Run it, confirm it fails.**
-- [ ] **Step 3: Implement** `JavaScriptEmitter.Emit(IRModule, outputDir, baseName)` writing `<baseName>.js`. Wire `--target=javascript` / `--target=js` through the existing switch, routing to the emitter rather than the csproj-plus-`dotnet build` path at `Program.cs:684` — JS has no build step.
-- [ ] **Step 4: Run it, confirm it passes.**
-- [ ] **Step 5: Commit** — `feat(js): --target=javascript emits a .js file`
+- [x] **Step 1: Write the failing test** — `GenerateCode(ir, "javascript")` returns JavaScript and `GetOutputExtension("javascript")` returns `.js`. These are the CLI's **own** dispatch helpers, deliberately not `BackendRegistry`: the CLI does not go through the registry, so a registry-only test passes while the CLI emits C#. Both were made `internal` (`InternalsVisibleTo` was already present).
+- [x] **Step 2: Run it, confirm it fails.**
+- [x] **Step 3: Implement.** Add `"javascript" or "js"` arms to both switches.
+
+  While here, fix the pre-existing trap this exposed: the `_ =>` arm defaulted **any**
+  unrecognised target to the C# generator, so `--target=jscript` silently wrote a `.cs`
+  file and the build succeeded. A non-empty unknown target now throws — in **both**
+  helpers, since they must reject the same set or the extension disagrees with the
+  contents. `null`/`""` keeps defaulting to C#; that is the documented CLI default.
+
+- [x] **Step 4: Run it, confirm it passes.** 21/21 across the JS fixtures.
+- [x] **Step 5: Commit** — `feat(js): --target=javascript emits a .js file` (`9fe3c5e`)
+
+> **Deferred out of this task, tracked in Task 29:** an end-to-end test that spawns
+> `BasicLang.exe prog.bas --target=javascript` as a real process and runs the resulting
+> file under Node. The helpers are covered in-process; the actual argv→file path is not.
 
 ---
 
@@ -643,7 +662,8 @@ Same five-step TDD shape per task, each with a codegen assertion **and** an exec
 
 CLAUDE.md requires this explicitly; a fix verified through one entry point can break the other.
 
-- [ ] **Step 1:** Add a test compiling a JS project through the **CLI** path (`BasicLang.exe build proj.blproj`) and asserting the emitted `.js` runs under Node.
+- [ ] **Step 0 (carried over from Task 4):** Route the **project** build away from the csproj-plus-`dotnet build` path. `Program.cs:684-700` hardcodes `<Project Sdk="Microsoft.NET.Sdk">` and a `.cs` compile item, so `build proj.blproj` cannot currently produce JavaScript at all — only the single-file route works. JS has no build step; the project route must write the `.js` (via `JavaScriptEmitter`, Task 25) and stop.
+- [ ] **Step 1:** Add a test compiling a JS project through the **CLI** path (`BasicLang.exe build proj.blproj`) and asserting the emitted `.js` runs under Node. Also add the single-file end-to-end case deferred from Task 4: spawn `BasicLang.exe prog.bas --target=javascript` as a real process, assert `prog.js` appears next to the source, and run it under Node. Task 4 covers the dispatch helpers in-process; this covers argv→file.
 - [ ] **Step 2:** Add the equivalent through the **IDE** build path (`CompileProjectFiles`).
 - [ ] **Step 3:** Add an optimizer-running variant of the Phase 2 execution tests, mirroring `CompileToCppOptimized` in `CppCollectionTests.cs`. Assert identical stdout optimized and unoptimized.
 - [ ] **Step 4:** Commit.
