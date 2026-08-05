@@ -523,7 +523,8 @@ namespace BasicLang.Compiler.CodeGen.Net
         /// </summary>
         private static void EmitDelegateDispatcher(StringBuilder sb, NetDelegateForm form)
         {
-            if (!TryParseInvokeSignature(form.InvokeSignature, out var returnType, out var parameters))
+            if (!NetDelegateDispatch.TryParseInvokeSignature(
+                    form.InvokeSignature, out var returnType, out var parameters))
                 throw new NotSupportedException(
                     $"Cannot emit a §8.4 dispatcher for '{form.DelegateFullName}': its invoke "
                     + $"signature '{form.InvokeSignature}' is not parseable as Return(Param,…).");
@@ -563,43 +564,6 @@ namespace BasicLang.Compiler.CodeGen.Net
                 L(sb, "            return unchecked((" + Qualified(returnType) + ")r_);");
             L(sb, "        };");
             L(sb, "    }");
-        }
-
-        /// <summary>
-        /// <c>Return(Param,Param)</c> → its parts. Deliberately a small split rather than a type
-        /// parser: the string was RENDERED by <c>NetTypeResolver</c> from Roslyn symbols, so its
-        /// shape is known, and a generic argument's commas are the only nesting that can occur.
-        /// </summary>
-        private static bool TryParseInvokeSignature(
-            string signature, out string returnType, out IReadOnlyList<string> parameters)
-        {
-            returnType = null;
-            parameters = Array.Empty<string>();
-            if (string.IsNullOrEmpty(signature)) return false;
-
-            var open = signature.IndexOf('(');
-            if (open <= 0 || !signature.EndsWith(")", StringComparison.Ordinal)) return false;
-
-            returnType = signature.Substring(0, open);
-            var inner = signature.Substring(open + 1, signature.Length - open - 2);
-            if (inner.Length == 0) return true;
-
-            var parts = new List<string>();
-            var depth = 0;
-            var start = 0;
-            for (var i = 0; i < inner.Length; i++)
-            {
-                if (inner[i] == '<') depth++;
-                else if (inner[i] == '>') depth--;
-                else if (inner[i] == ',' && depth == 0)
-                {
-                    parts.Add(inner.Substring(start, i - start));
-                    start = i + 1;
-                }
-            }
-            parts.Add(inner.Substring(start));
-            parameters = parts;
-            return true;
         }
 
         /// <summary>

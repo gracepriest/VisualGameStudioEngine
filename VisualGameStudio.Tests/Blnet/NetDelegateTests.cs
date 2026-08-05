@@ -416,4 +416,59 @@ public class NetDelegateTests
         Assert.That(runtime, Does.Match(@"CallbackRef&\s*operator=\(const CallbackRef&\)\s*=\s*delete"),
             "copy assignment must be deleted");
     }
+
+    // ------------------------------------------------------------------------------------
+    // Step 5b — BlnetSlotDesc[] from the invoke signature.
+    // ------------------------------------------------------------------------------------
+
+    [Test]
+    public void TheInvokeSignatureParser_SplitsReturnAndParameters()
+    {
+        Assert.That(NetDelegateDispatch.TryParseInvokeSignature(
+            "System.Int32(System.Int32,System.Int32)", out var ret, out var ps), Is.True);
+        Assert.That(ret, Is.EqualTo("System.Int32"));
+        Assert.That(ps, Is.EqualTo(new[] { "System.Int32", "System.Int32" }).AsCollection);
+    }
+
+    [Test]
+    public void TheInvokeSignatureParser_DoesNotSplitInsideGenericArguments()
+    {
+        // The one nesting that can occur in a rendered signature. Splitting naively on ',' would
+        // report three parameters for a two-parameter delegate — and slot arity is exactly the
+        // thing that must not be wrong (see the arity test below).
+        Assert.That(NetDelegateDispatch.TryParseInvokeSignature(
+            "System.Void(System.Collections.Generic.List<System.Int32,System.String>,System.Int32)",
+            out _, out var ps), Is.True);
+        Assert.That(ps.Count, Is.EqualTo(2));
+        Assert.That(ps[0], Is.EqualTo("System.Collections.Generic.List<System.Int32,System.String>"));
+    }
+
+    [Test]
+    public void SlotDescriptors_AreOneValueSlotPerParameter()
+    {
+        Assert.That(
+            NetDelegateDispatch.CppSlotDescriptors("System.Int32(System.Int32,System.Int32)"),
+            Is.EqualTo("{ {BLNET_SLOT_VALUE, 0}, {BLNET_SLOT_VALUE, 0} }"));
+    }
+
+    [Test]
+    public void SlotDescriptorArity_MatchesTheInvokeSignature()
+    {
+        // ⛔ THE hazard this pins. P0's thunk deep-copies a QUEUED invocation by indexing
+        // snapshot.slots[i] for i in [0, argc) where argc comes from the INVOKE, while `slots`
+        // holds only the registration-time entries — and there is no bounds check. Registering
+        // a different arity than the delegate is invoked with is an out-of-bounds read.
+        Assert.That(NetDelegateDispatch.SlotCount("System.Void()"), Is.EqualTo(0));
+        Assert.That(NetDelegateDispatch.SlotCount("System.Int32(System.Int32)"), Is.EqualTo(1));
+        Assert.That(NetDelegateDispatch.SlotCount("System.Int32(System.Int32,System.Int32)"),
+            Is.EqualTo(2));
+    }
+
+    [Test]
+    public void AZeroParameterDelegate_EmitsNoSlotArray()
+    {
+        // blnet_register_callback guards this explicitly — `if (argc > 0) e.slots.assign(...)` —
+        // so a zero-arg registration may legally pass nullptr.
+        Assert.That(NetDelegateDispatch.CppSlotDescriptors("System.Void()"), Is.Null);
+    }
 }

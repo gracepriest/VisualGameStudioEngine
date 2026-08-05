@@ -100,6 +100,83 @@ namespace BasicLang.Net
         }
 
         /// <summary>
+        /// <c>Return(Param,Param)</c> → its parts. THE single parser for an invoke signature:
+        /// the shim generator needs it to emit a dispatcher, and the native side needs it to
+        /// compute <c>BlnetSlotDesc[]</c>. Two copies would be two chances to disagree about
+        /// arity, and arity is exactly what must not be wrong (see <see cref="SlotCount"/>).
+        ///
+        /// <para>Deliberately a bracket-aware split rather than a type parser: the string was
+        /// RENDERED by <c>NetTypeResolver</c> from Roslyn symbols, so its shape is known, and a
+        /// generic argument's commas are the only nesting that can occur. Splitting naively would
+        /// report three parameters for <c>(List&lt;int,string&gt;, int)</c>.</para>
+        /// </summary>
+        internal static bool TryParseInvokeSignature(
+            string signature, out string returnType, out IReadOnlyList<string> parameters)
+        {
+            returnType = null;
+            parameters = Array.Empty<string>();
+            if (string.IsNullOrEmpty(signature)) return false;
+
+            var open = signature.IndexOf('(');
+            if (open <= 0 || !signature.EndsWith(")", StringComparison.Ordinal)) return false;
+
+            returnType = signature.Substring(0, open);
+            var inner = signature.Substring(open + 1, signature.Length - open - 2);
+            if (inner.Length == 0) return true;
+
+            var parts = new List<string>();
+            var depth = 0;
+            var start = 0;
+            for (var i = 0; i < inner.Length; i++)
+            {
+                if (inner[i] == '<') depth++;
+                else if (inner[i] == '>') depth--;
+                else if (inner[i] == ',' && depth == 0)
+                {
+                    parts.Add(inner.Substring(start, i - start));
+                    start = i + 1;
+                }
+            }
+            parts.Add(inner.Substring(start));
+            parameters = parts;
+            return true;
+        }
+
+        /// <summary>
+        /// How many argument slots a delegate's registration declares.
+        ///
+        /// <para>⛔ <b>This must equal the arity the delegate is INVOKED with.</b> P0's thunk
+        /// deep-copies a queued invocation by indexing <c>snapshot.slots[i]</c> for
+        /// <c>i</c> in <c>[0, argc)</c>, where <c>argc</c> comes from the INVOKE while
+        /// <c>slots</c> holds only the registration-time entries — and there is no bounds check.
+        /// Registering a different arity than the delegate is invoked with is an out-of-bounds
+        /// read, not a mismatch error.</para>
+        /// </summary>
+        internal static int SlotCount(string invokeSignature) =>
+            TryParseInvokeSignature(invokeSignature, out _, out var parameters)
+                ? parameters.Count
+                : 0;
+
+        /// <summary>
+        /// The C++ <c>BlnetSlotDesc[]</c> initializer for a delegate's parameters, or
+        /// <c>null</c> when it takes none — <c>blnet_register_callback</c> guards that case
+        /// explicitly (<c>if (argc &gt; 0) e.slots.assign(…)</c>), so a zero-arg registration
+        /// may legally pass <c>nullptr</c> and allocating an empty array would be pretend-work.
+        ///
+        /// <para>Every slot is <c>BLNET_SLOT_VALUE</c> with size 0 because v1 admits blittable
+        /// scalars only — the gate lives in <c>NetShimGenerator</c>'s dispatcher emission, which
+        /// throws at generation time for anything else, so a non-scalar delegate never reaches
+        /// here. <c>size</c> is documented as meaningful only for STRUCT and OUT.</para>
+        /// </summary>
+        internal static string CppSlotDescriptors(string invokeSignature)
+        {
+            var count = SlotCount(invokeSignature);
+            if (count == 0) return null;
+
+            return "{ " + string.Join(", ", Enumerable.Repeat("{BLNET_SLOT_VALUE, 0}", count)) + " }";
+        }
+
+        /// <summary>
         /// Every managed helper name <see cref="RequiredForms"/> implies, in the same order.
         /// ⛔ These are shim-internal method names, NOT exports — see
         /// <see cref="NetDelegateForm.HelperName"/> for why they must never be appended to a
