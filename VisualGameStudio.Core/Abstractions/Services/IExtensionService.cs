@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Text.Json;
 
 namespace VisualGameStudio.Core.Abstractions.Services;
@@ -436,6 +437,14 @@ public class ExtensionManifest
     public ExtensionEngines? Engines { get; set; }
     public string? Icon { get; set; }
     public string? License { get; set; }
+
+    /// <summary>
+    /// Either an object <c>{ "type": "git", "url": "..." }</c> or the npm SHORTHAND STRING
+    /// <c>"https://github.com/owner/repo"</c>. This sits OUTSIDE <c>contributes</c>, so no
+    /// contribution-level tolerance can rescue it — typed as an object only, the shorthand made the
+    /// whole extension fail to bind. <c>VsixInstaller.VsixManifest</c> already tolerated both.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonConverter(typeof(ExtensionRepositoryConverter))]
     public ExtensionRepository? Repository { get; set; }
 }
 
@@ -545,22 +554,67 @@ public class ContributedMenuItem
 /// <summary>
 /// Features contributed by an extension.
 /// </summary>
+[System.Text.Json.Serialization.JsonConverter(typeof(ExtensionContributionsConverter))]
 public class ExtensionContributions
 {
     public List<CommandContribution> Commands { get; set; } = new();
-    public List<MenuContribution> Menus { get; set; } = new();
+
+    /// <summary>
+    /// An OBJECT MAP keyed by menu id — <c>{ "editor/context": [ ... ], "commandPalette": [ ... ] }</c>.
+    /// There is NO array form in VS Code's schema. Declared as a <c>List&lt;MenuContribution&gt;</c>
+    /// this could never have bound a real manifest: <see cref="MenuContribution.MenuId"/>
+    /// corresponds to no JSON field at all — it IS the map key.
+    /// </summary>
+    public Dictionary<string, List<MenuContribution>> Menus { get; set; } = new();
+
     public List<KeybindingContribution> Keybindings { get; set; } = new();
     public List<LanguageContribution> Languages { get; set; } = new();
     public List<GrammarContribution> Grammars { get; set; } = new();
     public List<ThemeContribution> Themes { get; set; } = new();
     public List<SnippetContribution> Snippets { get; set; } = new();
-    public List<ViewContribution> Views { get; set; } = new();
-    public List<ViewContainerContribution> ViewsContainers { get; set; } = new();
-    public ConfigurationContribution? Configuration { get; set; }
+
+    /// <summary>Object map keyed by container id — <c>{ "explorer": [ ... ] }</c>. Never an array.</summary>
+    public Dictionary<string, List<ViewContribution>> Views { get; set; } = new();
+
+    /// <summary>
+    /// Object map keyed by location — <c>{ "activitybar": [ ... ], "panel": [ ... ] }</c>.
+    /// As with <see cref="Menus"/>, <see cref="ViewContainerContribution.Location"/> is the map key,
+    /// not a field.
+    /// </summary>
+    public Dictionary<string, List<ViewContainerContribution>> ViewsContainers { get; set; } = new();
+
+    /// <summary>
+    /// A single section object OR an array of them — both legal, and the array form is what
+    /// multi-section extensions publish. Bound through
+    /// <see cref="SingleOrArrayConverter{T}"/> so either shape yields a list.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonConverter(typeof(SingleOrArrayConverter<ConfigurationContribution>))]
+    public List<ConfigurationContribution> Configuration { get; set; } = new();
     public List<DebuggerContribution> Debuggers { get; set; } = new();
     public List<TaskDefinitionContribution> TaskDefinitions { get; set; } = new();
     public List<ProblemMatcherContribution> ProblemMatchers { get; set; } = new();
+
+    /// <summary>
+    /// Sections that could not be bound and were degraded to their default. Populated by
+    /// <see cref="ExtensionContributionsConverter"/> on the instance it is constructing — a
+    /// converter is shared through static <see cref="JsonSerializerOptions"/>, so it can hold no
+    /// per-parse state of its own and cannot reach a logger through DI; writing onto the object
+    /// under construction is per-parse and thread-safe by construction.
+    ///
+    /// <para>Diagnostic state, not part of the manifest format, so it is never serialized.</para>
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public List<ContributionLoadError> LoadErrors { get; } = new();
 }
+
+/// <summary>
+/// One contribution section that failed to bind. Deliberately strings only — holding the
+/// <see cref="Exception"/> would keep a parse-time object graph alive on every loaded extension for
+/// a value only ever rendered as text.
+/// </summary>
+/// <param name="Section">The manifest key, e.g. <c>"grammars"</c>.</param>
+/// <param name="Message">The binding error, suitable for the Output pane.</param>
+public sealed record ContributionLoadError(string Section, string Message);
 
 /// <summary>
 /// Command contribution.
@@ -570,7 +624,17 @@ public class CommandContribution
     public string Command { get; set; } = "";
     public string Title { get; set; } = "";
     public string? Category { get; set; }
-    public string? Icon { get; set; }
+
+    /// <summary>
+    /// Either a string (an icon path or a <c>$(codicon)</c> reference) or an object
+    /// <c>{ "light": "...", "dark": "..." }</c>. Both are legal and both are common — vscode.git
+    /// and most icon-bearing extensions publish the object form. Kept as a raw
+    /// <see cref="JsonElement"/> because nothing consumes it yet and typing it as a string made
+    /// every such extension fail to load ENTIRELY: manifest binding is caught per-extension, so a
+    /// decorative icon took down that extension's commands, grammars, themes and activation.
+    /// </summary>
+    public JsonElement? Icon { get; set; }
+
     public string? EnablementCondition { get; set; }
 }
 
@@ -607,9 +671,13 @@ public class LanguageContribution
     public List<string> Extensions { get; set; } = new();
     public List<string> Aliases { get; set; } = new();
     public List<string> Filenames { get; set; } = new();
-    public List<string> FirstLine { get; set; } = new();
+    /// <summary>A single regex matched against a file's first line — a STRING in VS Code, not a list.</summary>
+    public string? FirstLine { get; set; }
+
     public string? Configuration { get; set; }
-    public string? Icon { get; set; }
+
+    /// <summary>String or <c>{ "light": ..., "dark": ... }</c> — see <see cref="CommandContribution.Icon"/>.</summary>
+    public JsonElement? Icon { get; set; }
 }
 
 /// <summary>
@@ -792,6 +860,312 @@ public sealed class JsonSchemaTypeConverter : System.Text.Json.Serialization.Jso
 }
 
 /// <summary>
+/// Binds <c>contributes</c> one section at a time so that a section which cannot bind costs only
+/// itself.
+///
+/// <para>Without this, <c>JsonSerializer.Deserialize&lt;ExtensionManifest&gt;</c> is all-or-nothing
+/// and the caller's catch is at WHOLE-EXTENSION scope, so a single unmodelled field aborts the bind
+/// and the extension is never added at all. That is what made two cosmetic schema mismatches delete
+/// <c>vscode.html</c> and <c>vscode.html-language-features</c> outright.</para>
+///
+/// <para>The real payoff is indirect: only <c>commands</c> and <c>keybindings</c> are read from this
+/// DTO. Themes, snippets, menus, grammars and languages are re-parsed from raw JSON on paths that
+/// ALREADY isolate per section — they simply never ran, because the bind threw first. Containing the
+/// throw here is what makes that existing isolation reachable.</para>
+/// </summary>
+public sealed class ExtensionContributionsConverter
+    : System.Text.Json.Serialization.JsonConverter<ExtensionContributions>
+{
+    /// <summary>
+    /// The manifest keys this converter binds, matched case-insensitively.
+    ///
+    /// <para>Hard-coded rather than derived from the CLR property names: a naming policy does NOT
+    /// apply inside a converter's own token walk, and deriving them would work only by coincidence
+    /// for sections whose VS Code key diverges from their property name.
+    /// <see cref="ExtensionContributions"/> gaining a section without a matching arm here is a
+    /// silent bind-to-nothing, which is why a test pins this list against the DTO.</para>
+    /// </summary>
+    public static readonly IReadOnlyList<string> KnownSections = new[]
+    {
+        "commands", "menus", "keybindings", "languages", "grammars", "themes", "snippets",
+        "views", "viewsContainers", "configuration", "debuggers", "taskDefinitions",
+        "problemMatchers"
+    };
+
+    public override ExtensionContributions Read(
+        ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        var result = new ExtensionContributions();
+
+        // FIRST statement: real manifests carry "contributes": [] or a string. Assuming an object
+        // and walking anyway runs off the end of the value and throws out of the converter — making
+        // this the very whole-extension kill path it exists to prevent. TrySkip, not Skip: Skip
+        // throws on partial JSON, which is latent today but becomes live under a Stream overload.
+        if (reader.TokenType != JsonTokenType.StartObject)
+        {
+            var found = reader.TokenType;
+            reader.TrySkip();
+            result.LoadErrors.Add(new ContributionLoadError(
+                "contributes", $"expected an object, found {found}; all contributions ignored"));
+            return result;
+        }
+
+        while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
+        {
+            if (reader.TokenType != JsonTokenType.PropertyName) continue;
+
+            var name = reader.GetString() ?? "";
+            if (!reader.Read()) break;
+
+            // OUTSIDE the try, deliberately. ParseValue advances the reader to the last token of
+            // the value before any binding runs, so a bind failure cannot move it — but a
+            // SYNTACTICALLY broken subtree strands the reader mid-value, and the next iteration
+            // would then throw something the catch below does not expect, escaping isolation
+            // entirely. A malformed document is a whole-document failure and must propagate.
+            var element = JsonElement.ParseValue(ref reader);
+
+            var section = KnownSections.FirstOrDefault(
+                s => string.Equals(s, name, StringComparison.OrdinalIgnoreCase));
+
+            // Unknown sections are skipped in silence: the DTO models a fraction of VS Code's
+            // schema, so warning on every unmodelled key would bury the ones that matter.
+            if (section is null) continue;
+
+            try
+            {
+                Bind(section, element, result, options);
+            }
+            catch (Exception ex) when (ex is JsonException or InvalidOperationException
+                                          or NotSupportedException or ArgumentException)
+            {
+                // Broader than JsonException on purpose: a nested tolerant converter can surface
+                // InvalidOperationException unwrapped, and JsonElement inspection throws it too.
+                // Never bare Exception — that would swallow cancellation and OOM.
+                result.LoadErrors.Add(new ContributionLoadError(section, ex.Message));
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Binds one section. Every nested call passes <paramref name="options"/>: the no-argument
+    /// overload uses <see cref="JsonSerializerOptions.Default"/>, which has neither the camelCase
+    /// policy nor case-insensitive matching, and would silently produce the right element count
+    /// with every string property empty — no exception, no recorded error.
+    /// </summary>
+    private static void Bind(
+        string section, JsonElement element, ExtensionContributions into, JsonSerializerOptions options)
+    {
+        switch (section)
+        {
+            case "commands":
+                into.Commands = element.Deserialize<List<CommandContribution>>(options) ?? new();
+                break;
+            case "menus":
+                into.Menus = element.Deserialize<Dictionary<string, List<MenuContribution>>>(options) ?? new();
+                break;
+            case "keybindings":
+                into.Keybindings = element.Deserialize<List<KeybindingContribution>>(options) ?? new();
+                break;
+            case "languages":
+                into.Languages = element.Deserialize<List<LanguageContribution>>(options) ?? new();
+                break;
+            case "grammars":
+                into.Grammars = element.Deserialize<List<GrammarContribution>>(options) ?? new();
+                break;
+            case "themes":
+                into.Themes = element.Deserialize<List<ThemeContribution>>(options) ?? new();
+                break;
+            case "snippets":
+                into.Snippets = element.Deserialize<List<SnippetContribution>>(options) ?? new();
+                break;
+            case "views":
+                into.Views = element.Deserialize<Dictionary<string, List<ViewContribution>>>(options) ?? new();
+                break;
+            case "viewsContainers":
+                into.ViewsContainers =
+                    element.Deserialize<Dictionary<string, List<ViewContainerContribution>>>(options) ?? new();
+                break;
+            case "configuration":
+                // The property's own SingleOrArrayConverter attribute does not apply here — this
+                // binds the value directly rather than through property metadata — so the
+                // object-or-array tolerance is repeated explicitly.
+                into.Configuration = element.ValueKind == JsonValueKind.Array
+                    ? element.Deserialize<List<ConfigurationContribution>>(options) ?? new()
+                    : element.ValueKind == JsonValueKind.Object
+                        ? new List<ConfigurationContribution>
+                            { element.Deserialize<ConfigurationContribution>(options)! }
+                        : new List<ConfigurationContribution>();
+                break;
+            case "debuggers":
+                into.Debuggers = element.Deserialize<List<DebuggerContribution>>(options) ?? new();
+                break;
+            case "taskDefinitions":
+                into.TaskDefinitions = element.Deserialize<List<TaskDefinitionContribution>>(options) ?? new();
+                break;
+            case "problemMatchers":
+                into.ProblemMatchers = element.Deserialize<List<ProblemMatcherContribution>>(options) ?? new();
+                break;
+        }
+    }
+
+    public override void Write(
+        Utf8JsonWriter writer, ExtensionContributions value, JsonSerializerOptions options)
+    {
+        // Hand-written, and it MUST stay that way. A class-level [JsonConverter] binds serialization
+        // too, and the natural body — JsonSerializer.Serialize(writer, value, options) — re-enters
+        // this method and dies with a StackOverflowException. That is uncatchable in .NET, so it
+        // terminates the IDE rather than failing one extension.
+        //
+        // NEVER pass ExtensionContributions as the type argument to Serialize or Deserialize from
+        // inside this class. The section values below are all OTHER types, so they cannot re-enter.
+        writer.WriteStartObject();
+
+        WriteIfAny(writer, "commands", value.Commands, options);
+        WriteIfAny(writer, "menus", value.Menus, options);
+        WriteIfAny(writer, "keybindings", value.Keybindings, options);
+        WriteIfAny(writer, "languages", value.Languages, options);
+        WriteIfAny(writer, "grammars", value.Grammars, options);
+        WriteIfAny(writer, "themes", value.Themes, options);
+        WriteIfAny(writer, "snippets", value.Snippets, options);
+        WriteIfAny(writer, "views", value.Views, options);
+        WriteIfAny(writer, "viewsContainers", value.ViewsContainers, options);
+        WriteIfAny(writer, "configuration", value.Configuration, options);
+        WriteIfAny(writer, "debuggers", value.Debuggers, options);
+        WriteIfAny(writer, "taskDefinitions", value.TaskDefinitions, options);
+        WriteIfAny(writer, "problemMatchers", value.ProblemMatchers, options);
+
+        // LoadErrors is deliberately absent: it is parse diagnostics, not manifest content.
+        writer.WriteEndObject();
+    }
+
+    private static void WriteIfAny<T>(
+        Utf8JsonWriter writer, string name, ICollection<T> value, JsonSerializerOptions options)
+    {
+        if (value is null || value.Count == 0) return;
+        writer.WritePropertyName(name);
+        JsonSerializer.Serialize(writer, value, options);
+    }
+}
+
+/// <summary>
+/// Binds a manifest field that is legally EITHER a single object OR an array of them, yielding a
+/// list in both cases. VS Code's schema uses this shape for <c>contributes.configuration</c>:
+/// single-section extensions publish an object, multi-section extensions publish an array, and a
+/// DTO that accepts only one of them fails the whole extension on the other.
+///
+/// <para>Anything else — a string, a number, <c>null</c> — degrades to an empty list rather than
+/// throwing. An unrecognised shape should cost that one section, never the extension.</para>
+/// </summary>
+public sealed class SingleOrArrayConverter<T> : System.Text.Json.Serialization.JsonConverter<List<T>>
+{
+    public override List<T> Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        // Deserialize<T>/<List<T>> is called with `options` deliberately. Dropping it silently
+        // binds every string property to "" — the right element count with blank values and no
+        // error — because the no-argument overload uses JsonSerializerOptions.Default, which has
+        // neither the camelCase naming policy nor case-insensitive matching.
+        if (reader.TokenType == JsonTokenType.StartArray)
+        {
+            return JsonSerializer.Deserialize<List<T>>(ref reader, options) ?? new List<T>();
+        }
+
+        if (reader.TokenType == JsonTokenType.StartObject)
+        {
+            var single = JsonSerializer.Deserialize<T>(ref reader, options);
+            return single is null ? new List<T>() : new List<T> { single };
+        }
+
+        reader.Skip();
+        return new List<T>();
+    }
+
+    public override void Write(Utf8JsonWriter writer, List<T> value, JsonSerializerOptions options)
+    {
+        // Serializing the ELEMENT type is safe: this converter is bound to List<T>, so it cannot
+        // re-enter itself. Never pass List<T> here — that recurses into a StackOverflowException,
+        // which is uncatchable in .NET and would take the IDE down rather than the extension.
+        writer.WriteStartArray();
+        foreach (var item in value)
+        {
+            JsonSerializer.Serialize(writer, item, options);
+        }
+        writer.WriteEndArray();
+    }
+}
+
+/// <summary>
+/// Binds <c>repository</c>, which npm allows as either an object <c>{ "type", "url" }</c> or a bare
+/// shorthand URL string. This field sits outside <c>contributes</c>, so nothing at the contribution
+/// level can compensate: typed as an object only, a shorthand string aborted the entire manifest
+/// bind and the extension vanished.
+/// </summary>
+public sealed class ExtensionRepositoryConverter : System.Text.Json.Serialization.JsonConverter<ExtensionRepository?>
+{
+    public override ExtensionRepository? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.String)
+        {
+            return new ExtensionRepository { Url = reader.GetString() ?? "" };
+        }
+
+        if (reader.TokenType == JsonTokenType.StartObject)
+        {
+            string type = "git";
+            string url = "";
+
+            while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
+            {
+                if (reader.TokenType != JsonTokenType.PropertyName) continue;
+
+                var name = reader.GetString();
+                if (!reader.Read()) break;
+
+                // Match case-insensitively: the naming policy on the options does NOT apply inside
+                // a converter's own token walk, and manifests in the wild are not consistent.
+                if (string.Equals(name, "url", StringComparison.OrdinalIgnoreCase)
+                    && reader.TokenType == JsonTokenType.String)
+                {
+                    url = reader.GetString() ?? "";
+                }
+                else if (string.Equals(name, "type", StringComparison.OrdinalIgnoreCase)
+                         && reader.TokenType == JsonTokenType.String)
+                {
+                    type = reader.GetString() ?? "git";
+                }
+                else
+                {
+                    reader.Skip();
+                }
+            }
+
+            return new ExtensionRepository { Type = type, Url = url };
+        }
+
+        reader.Skip();
+        return null;
+    }
+
+    public override void Write(Utf8JsonWriter writer, ExtensionRepository? value, JsonSerializerOptions options)
+    {
+        // Written by hand rather than delegating to Serialize(value): this converter is attached by
+        // property attribute, and hand-writing keeps it immune to ever being promoted to a
+        // type-level attribute, where delegation would self-recurse.
+        if (value is null)
+        {
+            writer.WriteNullValue();
+            return;
+        }
+
+        writer.WriteStartObject();
+        writer.WriteString("type", value.Type);
+        writer.WriteString("url", value.Url);
+        writer.WriteEndObject();
+    }
+}
+
+/// <summary>
 /// Debugger contribution.
 /// </summary>
 public class DebuggerContribution
@@ -801,8 +1175,15 @@ public class DebuggerContribution
     public string? Program { get; set; }
     public string? Runtime { get; set; }
     public List<string> Languages { get; set; } = new();
-    public List<DebuggerConfiguration> ConfigurationAttributes { get; set; } = new();
-    public List<DebuggerConfiguration> InitialConfigurations { get; set; } = new();
+    /// <summary>
+    /// A JSON-Schema-shaped OBJECT keyed by request type (<c>launch</c>/<c>attach</c>), not a list.
+    /// Raw because nothing consumes it and the schema is open-ended.
+    /// <c>Core/Extensions/VSCodeExtension.cs</c> already had this right.
+    /// </summary>
+    public JsonElement? ConfigurationAttributes { get; set; }
+
+    /// <summary>An array of configurations OR a string naming a snippet. Raw for the same reason.</summary>
+    public JsonElement? InitialConfigurations { get; set; }
 }
 
 /// <summary>
@@ -834,8 +1215,11 @@ public class ProblemMatcherContribution
     public string Name { get; set; } = "";
     public string? Label { get; set; }
     public string Owner { get; set; } = "";
-    public string? FileLocation { get; set; }
-    public ProblemPattern? Pattern { get; set; }
+    /// <summary>A string (<c>"absolute"</c>) or an array (<c>["relative", "${workspaceFolder}"]</c>).</summary>
+    public JsonElement? FileLocation { get; set; }
+
+    /// <summary>A single pattern object, an ARRAY of them (multi-line matchers), or a string naming a shared pattern.</summary>
+    public JsonElement? Pattern { get; set; }
 }
 
 /// <summary>

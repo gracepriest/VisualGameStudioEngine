@@ -24,6 +24,19 @@ public class ExtensionService : IExtensionService
         AllowTrailingCommas = true
     };
 
+    /// <summary>
+    /// The exact options this service binds a VS Code <c>package.json</c> with. PUBLIC
+    /// deliberately — this assembly grants no <c>InternalsVisibleTo</c> for VisualGameStudio.Tests
+    /// (precedent: <see cref="IntelliSenseEmissionService"/>, <c>DapSession</c>), and a
+    /// manifest-binding test MUST bind under these options rather than a hand-rolled copy: a copy
+    /// drifts from production and then proves nothing about what the IDE actually accepts.
+    ///
+    /// <para><c>PropertyNameCaseInsensitive</c>, <c>ReadCommentHandling</c> and
+    /// <c>AllowTrailingCommas</c> are all load-bearing here — real VS Code manifests rely on
+    /// each — so a test that omits any of them tests a stricter parser than the one that ships.</para>
+    /// </summary>
+    public static JsonSerializerOptions ManifestJsonOptions => JsonOptions;
+
     private readonly List<Extension> _extensions = new();
     private readonly Dictionary<string, bool> _enabledState = new();
     private readonly Dictionary<string, List<string>> _extensionCommands = new();
@@ -54,12 +67,20 @@ public class ExtensionService : IExtensionService
     private ExtensionHost? _extensionHost;
     private bool _disposed;
 
+    /// <param name="extensionsRoot">
+    /// Overrides the <c>~/.vgs</c> root that extensions and their enabled-state file live under.
+    /// Exists so behaviour at this layer can be tested at all: the path was previously derived from
+    /// the user profile unconditionally, so any test that exercised discovery read — and any test
+    /// that exercised install would have WRITTEN — inside the developer's own
+    /// <c>~/.vgs/extensions</c>. Production passes nothing and is unaffected.
+    /// </param>
     public ExtensionService(
         IOutputService outputService,
         ITextMateService? textMateService = null,
         ISnippetService? snippetService = null,
         ICommandService? commandService = null,
-        IKeybindingService? keybindingService = null)
+        IKeybindingService? keybindingService = null,
+        string? extensionsRoot = null)
     {
         _outputService = outputService;
         _textMateService = textMateService;
@@ -72,9 +93,11 @@ public class ExtensionService : IExtensionService
             _textMateRegistrar = new TextMateRegistrar(_textMateService);
         }
 
-        var userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        _extensionsDir = Path.Combine(userHome, ".vgs", "extensions");
-        _stateFile = Path.Combine(userHome, ".vgs", "extensions-state.json");
+        var root = extensionsRoot
+                   ?? Path.Combine(
+                       Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".vgs");
+        _extensionsDir = Path.Combine(root, "extensions");
+        _stateFile = Path.Combine(root, "extensions-state.json");
         _httpClient = new HttpClient();
 
         Directory.CreateDirectory(_extensionsDir);
@@ -108,7 +131,28 @@ public class ExtensionService : IExtensionService
 
     public async Task<IReadOnlyList<Extension>> DiscoverExtensionsAsync()
     {
+        // Discovery is RE-ENTRANT: it runs at startup and again after every install. Everything
+        // rebuilt from the manifests below must be cleared alongside _extensions, or each pass
+        // stacks another copy on the last — the keybinding and menu registrations append
+        // unconditionally, and entries belonging to an extension that has since been uninstalled
+        // would otherwise never be forgotten.
+        //
+        // Only state REBUILT from the manifests below may be cleared here. Two fields look like
+        // they belong in this list and do not:
+        //
+        //   _extensionCommands is fed by OnCommandRegistered — commands an extension registers at
+        //   RUNTIME through the host, never rebuilt by discovery. Clearing it would erase a running
+        //   extension's commands every time another extension is installed. Its lifecycle is the
+        //   uninstall path, which removes by id.
+        //
+        //   _activatedLanguages is bounded by the number of open languages rather than by passes,
+        //   so it is not a leak, and clearing it would re-fire onLanguage activation for languages
+        //   already open — a behaviour change, not a fix.
         _extensions.Clear();
+        _activationEventIndex.Clear();
+        _contributedCommands.Clear();
+        _contributedKeybindings.Clear();
+        _contributedMenuItems.Clear();
 
         if (!Directory.Exists(_extensionsDir))
         {
@@ -145,6 +189,19 @@ public class ExtensionService : IExtensionService
                             extension.IsEnabled = enabled;
                             extension.Status = enabled ? ExtensionStatus.Installed : ExtensionStatus.Disabled;
                         }
+                        // Two directories can carry the same publisher.name — an interrupted
+                        // version upgrade leaves both, and the uninstall path's cleanup is a
+                        // silent catch, so a stale copy surviving is expected rather than rare.
+                        // Without this guard the extension is listed twice and every contribution
+                        // it makes is registered twice.
+                        if (_extensions.Any(e => e.Id == extension.Id))
+                        {
+                            _outputService.WriteLine(
+                                $"[Extensions] Ignoring duplicate of {extension.Id} at {actualDir}.",
+                                OutputCategory.General);
+                            continue;
+                        }
+
                         _extensions.Add(extension);
                     }
                 }
@@ -555,6 +612,27 @@ public class ExtensionService : IExtensionService
         // If the extension has a JS entry point, activate it in the extension host
         if (!string.IsNullOrEmpty(extension.Manifest?.Main))
         {
+            // Start the host on demand. This is the ONLY place that does: StartExtensionHostAsync's
+            // other callers are RestartExtensionHostAsync and the crash handler, and the crash
+            // handler can only fire if the host was already up. Without this the check below is a
+            // guard whose precondition nothing establishes — every extension with a `main` fell to
+            // "static only" forever, which is exactly what 23a631c's fix ran into one layer down.
+            if (_extensionHost?.IsRunning != true)
+            {
+                try
+                {
+                    await StartExtensionHostAsync();
+                }
+                catch (Exception ex)
+                {
+                    // Never fatal: the extension's declarative contributions are already loaded and
+                    // stay useful even when Node is missing or the host script cannot be found.
+                    _outputService.WriteError(
+                        $"[Extensions] Could not start the extension host for {extensionId}: {ex.Message}",
+                        OutputCategory.General);
+                }
+            }
+
             if (_extensionHost?.IsRunning != true)
             {
                 // Static contributions are already loaded, just mark as active for static-only
@@ -755,6 +833,27 @@ public class ExtensionService : IExtensionService
         }
 
         _outputService.WriteLine($"[Extensions] Loaded static contributions from {activatedCount} extension(s).", OutputCategory.General);
+
+        // Fire onStartupFinished LAST, once every extension's declarative contributions are in
+        // place. It is the only activation event many real extensions declare — ESLint's manifest
+        // lists it and nothing else — so until now those could never activate however well the rest
+        // of the pipeline worked. Firing it here rather than earlier means an extension it wakes can
+        // rely on other extensions' grammars and themes already being registered.
+        //
+        // Extensions with a JS entry point will start the host from ActivateAsync; that is a
+        // deliberate behaviour change, since it means opening the IDE can now spawn Node.
+        if (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await TriggerActivationEventAsync("onStartupFinished");
+            }
+            catch (Exception ex)
+            {
+                _outputService.WriteError(
+                    $"[Extensions] onStartupFinished activation failed: {ex.Message}", OutputCategory.General);
+            }
+        }
     }
 
     #endregion
@@ -894,6 +993,33 @@ public class ExtensionService : IExtensionService
         if (manifest.Contributes != null)
         {
             extension.Contributions = manifest.Contributes;
+
+            // Report any section the converter had to drop. Deliberately drained HERE rather than
+            // in LoadContributionsAsync: that method's Output line sits inside `if (total > 0)`,
+            // where total counts successfully loaded contributions. An extension whose only
+            // section was the dropped one has total == 0 — exactly the case where silence is
+            // worst — so a warning gated on a success counter cannot report a total failure.
+            //
+            // Severity follows what the section is actually worth. Commands and keybindings are
+            // the only two read from this DTO, so losing them is real functional loss: an empty
+            // command palette and a dead onCommand path. The rest are either re-parsed from raw
+            // JSON further down or read by nothing at all, so reporting them as errors would bury
+            // the two that matter.
+            foreach (var error in manifest.Contributes.LoadErrors)
+            {
+                var message =
+                    $"[Extensions] {extension.Id}: skipped contributes.{error.Section} — {error.Message}. "
+                    + "Other contributions loaded normally.";
+
+                if (error.Section is "commands" or "keybindings" or "contributes")
+                {
+                    _outputService.WriteError(message, OutputCategory.General);
+                }
+                else
+                {
+                    _outputService.WriteLine(message, OutputCategory.General);
+                }
+            }
         }
 
         // Index activation events for fast lookup

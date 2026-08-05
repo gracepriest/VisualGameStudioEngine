@@ -1415,8 +1415,77 @@ namespace BasicLang.Compiler.IR
             {
                 IsGlobal = true
             };
-            GlobalVariables[name] = variable;
+            AddGlobalVariable(variable);
             return variable;
+        }
+
+        /// <summary>
+        /// Registers a module-scope variable, qualifying the DICTIONARY KEY when the bare name
+        /// is already taken.
+        ///
+        /// <para><b>Why the key must not simply be the name.</b> Separate <c>Module</c> blocks
+        /// are separate namespaces, and each may legitimately declare its own <c>Scale</c>.
+        /// This dictionary is shared by every Module in the combined IR, so a bare key silently
+        /// DROPPED one of them — and the emitted code still referenced it, leaving an
+        /// identifier declared nowhere from a build that reported success.</para>
+        ///
+        /// <para><b>Why only on collision.</b> Nearly every consumer iterates <c>.Values</c>
+        /// (and the C# backend groups those by <c>ModuleName</c> into per-module static
+        /// classes, so bare references resolve by ordinary lexical scoping once both survive).
+        /// Exactly one consumer looks a global up by bare name —
+        /// <c>CppCodeGenerator</c>'s delegate-invocation path — so keeping the key bare in the
+        /// common case preserves it, and only genuine collisions pay the qualified form.</para>
+        /// </summary>
+        public void AddGlobalVariable(IRVariable variable)
+        {
+            if (variable == null) return;
+
+            var key = variable.Name;
+            if (GlobalVariables.ContainsKey(key))
+                key = $"{variable.ModuleName ?? Name}.{variable.Name}";
+
+            GlobalVariables[key] = variable;
+        }
+
+        /// <summary>
+        /// Every <see cref="IRFunction"/> in <see cref="Functions"/> that is really a class or
+        /// interface MEMBER body, identified by reference.
+        ///
+        /// <para>Class members flatten into <c>Functions</c> under their UNQUALIFIED name —
+        /// <c>Class A.Handle</c> and <c>Class B.Handle</c> are both just "Handle" — while the
+        /// owning member keeps a pointer to the same object. Two consumers need to tell them
+        /// apart and must not each invent their own rule:</para>
+        /// <list type="bullet">
+        /// <item><description>Combining units must NOT dedupe them by name, or one class's
+        /// method is discarded outright.</description></item>
+        /// <item><description>A backend that walks <c>Functions</c> must NOT emit them as free
+        /// functions, or two same-named definitions collide and the later silently wins.</description></item>
+        /// </list>
+        ///
+        /// <para>Identity, never name: the names are exactly what is ambiguous.</para>
+        /// </summary>
+        public HashSet<IRFunction> CollectMemberImplementations()
+        {
+            var members = new HashSet<IRFunction>();
+
+            foreach (var cls in Classes.Values)
+            {
+                foreach (var m in cls.Methods)
+                    if (m?.Implementation != null) members.Add(m.Implementation);
+                foreach (var c in cls.Constructors)
+                    if (c?.Implementation != null) members.Add(c.Implementation);
+                foreach (var p in cls.Properties)
+                {
+                    if (p?.Getter != null) members.Add(p.Getter);
+                    if (p?.Setter != null) members.Add(p.Setter);
+                }
+            }
+
+            foreach (var iface in Interfaces.Values)
+                foreach (var m in iface.Methods)
+                    if (m?.DefaultImplementation != null) members.Add(m.DefaultImplementation);
+
+            return members;
         }
 
         /// <summary>
