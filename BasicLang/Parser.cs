@@ -1336,6 +1336,13 @@ namespace BasicLang.Compiler
 
             while (!Check(TokenType.EndInterface) && !IsAtEnd())
             {
+                SkipNewlines();
+                if (Check(TokenType.EndInterface) || IsAtEnd()) break;
+
+                // ReadOnly/WriteOnly may precede a property.
+                var isReadOnly = Match(TokenType.ReadOnly);
+                var isWriteOnly = !isReadOnly && Match(TokenType.WriteOnly);
+
                 if (Check(TokenType.Function))
                 {
                     var method = ParseInterfaceFunction();
@@ -1348,6 +1355,31 @@ namespace BasicLang.Compiler
                     method.IsAbstract = true;
                     node.Methods.Add(method);
                 }
+                else if (Check(TokenType.Property))
+                {
+                    // An interface property is inherently bodyless, so ParseProperty's
+                    // auto-property path handles it: no Get/Set block, no `End Property`.
+                    var prop = ParseProperty();
+                    prop.IsReadOnly = isReadOnly;
+                    prop.IsWriteOnly = isWriteOnly;
+                    node.Properties.Add(prop);
+                }
+                else
+                {
+                    // ⛔ PROGRESS INVARIANT. This arm is the real fix. The loop previously
+                    // fell through to a bare SkipNewlines(), which cannot advance past a
+                    // NON-newline token — so any unrecognised member (`Property` among them)
+                    // spun the parser forever: measured at 11.86s of CPU with output frozen,
+                    // still running when killed. A parse loop must consume something on every
+                    // iteration or report and stop; never neither.
+                    RecordError(
+                        $"'{Peek().Lexeme}' is not valid inside an Interface — only Sub, " +
+                        "Function and Property declarations are allowed.",
+                        Peek(),
+                        "Remove it, or move it into a Class that implements this interface.");
+                    Advance();
+                }
+
                 SkipNewlines();
             }
 

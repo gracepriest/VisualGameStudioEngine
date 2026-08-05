@@ -787,23 +787,37 @@ namespace BasicLang.Compiler
                 var unit = _registry.Get(moduleId);
                 if (unit?.IR == null) continue;
 
-                // Add functions from this module
+                // Add functions from this module.
+                //
+                // Class and interface MEMBER bodies are exempt from the name dedupe. They
+                // flatten into Functions under their UNQUALIFIED name, so `Class A.Handle` and
+                // `Class B.Handle` are both just "Handle" — and a first-wins name check
+                // discarded the second class's method entirely, body and all. Update, Draw,
+                // Run and ToString collide the same way, so this is not an exotic case.
+                //
+                // It hid because the C# backend emits class methods from
+                // IRClass.Methods[].Implementation, which still points at the dropped object;
+                // only a backend that walks Functions (JavaScript) lost the method.
+                var memberBodies = unit.IR.CollectMemberImplementations();
+
                 foreach (var func in unit.IR.Functions)
                 {
-                    // Prefix with module name to avoid conflicts
-                    if (!combined.Functions.Any(f => f.Name == func.Name))
+                    if (memberBodies.Contains(func) ||
+                        !combined.Functions.Any(f => f.Name == func.Name))
                     {
                         combined.Functions.Add(func);
                     }
                 }
 
-                // Add globals
+                // Add globals. Routed through AddGlobalVariable rather than a first-wins
+                // ContainsKey guard: each unit keys its own globals by BARE name, so two files
+                // whose Modules each declare `Scale` arrive with the same key and the guard
+                // silently dropped one — while the emitted code still referenced it.
+                // AddGlobalVariable qualifies the key by owning Module on collision, so both
+                // survive and each Module's code resolves to its own copy.
                 foreach (var global in unit.IR.GlobalVariables)
                 {
-                    if (!combined.GlobalVariables.ContainsKey(global.Key))
-                    {
-                        combined.GlobalVariables[global.Key] = global.Value;
-                    }
+                    combined.AddGlobalVariable(global.Value);
                 }
 
                 // Add classes
