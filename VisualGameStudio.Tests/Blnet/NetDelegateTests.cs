@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using BasicLang.Compiler.CodeGen.Net;
 using BasicLang.Net;
 using NUnit.Framework;
 
@@ -226,10 +227,10 @@ public class NetDelegateTests
         NetSurface Surface(params string[] order) =>
             new(order.Select(d => MemberTaking("M" + d, d)).ToArray(), Array.Empty<string>());
 
-        var forwards = NetDelegateDispatch.RequiredExportNames(Surface(
+        var forwards = NetDelegateDispatch.RequiredHelperNames(Surface(
             "System.Action", "System.Threading.ThreadStart",
             "System.Text.RegularExpressions.MatchEvaluator"));
-        var backwards = NetDelegateDispatch.RequiredExportNames(Surface(
+        var backwards = NetDelegateDispatch.RequiredHelperNames(Surface(
             "System.Text.RegularExpressions.MatchEvaluator", "System.Threading.ThreadStart",
             "System.Action"));
 
@@ -248,7 +249,7 @@ public class NetDelegateTests
             new[] { MemberTaking("A", "System.Action", "System.Threading.ThreadStart") },
             Array.Empty<string>());
 
-        var names = NetDelegateDispatch.RequiredExportNames(surface);
+        var names = NetDelegateDispatch.RequiredHelperNames(surface);
 
         Assert.That(names.Count, Is.EqualTo(2), "two distinct delegate types, two exports");
         Assert.That(names.Distinct().Count(), Is.EqualTo(names.Count),
@@ -263,6 +264,37 @@ public class NetDelegateTests
             Array.Empty<string>());
 
         Assert.That(NetDelegateDispatch.RequiredForms(surface), Is.Empty);
-        Assert.That(NetDelegateDispatch.RequiredExportNames(surface), Is.Empty);
+        Assert.That(NetDelegateDispatch.RequiredHelperNames(surface), Is.Empty);
+    }
+
+    /// <summary>
+    /// §12.4 under a delegate-bearing surface, and the guard for the correction that produced
+    /// <see cref="NetDelegateForm.HelperName"/>'s name.
+    ///
+    /// <para>The dispatcher is a MANAGED helper called from inside a member wrapper — the native
+    /// side mints its callback handle through <c>blnet_register_callback</c>, which is native
+    /// runtime, not a shim export. No native caller means no proxy slot and no export, so adding
+    /// a delegate parameter must leave "slots ≡ exports" completely untouched. Appending helper
+    /// names to either side — the obvious reading of "not §12.4-exempt" — would break the very
+    /// invariant that warning protects, and this test is what catches it.</para>
+    /// </summary>
+    [Test]
+    public void ADelegateBearingSurface_KeepsSlotsAndExportsEqual()
+    {
+        var surface = new NetSurface(
+            new[] { MemberTaking("Run", "System.Action") },
+            Array.Empty<string>());
+
+        var helpers = NetDelegateDispatch.RequiredHelperNames(surface);
+        Assert.That(helpers, Is.Not.Empty,
+            "guard: this test is worthless unless the surface really did require a dispatcher");
+
+        var slots = NetProxyEmitter.EmitBindings(surface).SlotNames;
+        var exports = NetShimGenerator.SurfaceDerivedExportNames(surface);
+
+        Assert.That(slots, Is.EquivalentTo(exports),
+            "§12.4 must still hold once a delegate parameter is in the surface");
+        Assert.That(exports, Has.No.Member(helpers[0]),
+            "a managed dispatcher is not an export and must not appear in the export set");
     }
 }
