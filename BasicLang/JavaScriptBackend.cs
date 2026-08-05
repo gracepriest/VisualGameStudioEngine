@@ -353,14 +353,43 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         // ------------------------------------------------------------------
 
         /// <summary>
-        /// True when a call's result is used, so it must be bound to a name.
-        /// A Sub returns Void and its IRCall carries no usable result.
+        /// Names consumed as operands somewhere in the current function.
+        ///
+        /// <para>Binding a call's result is keyed on ACTUAL USE, not on its declared type: a
+        /// <c>Console.WriteLine</c> IRCall carries a non-Void Type even though nothing reads
+        /// it, so a type test emits <c>const t0 = console.log(x);</c> for every print. That is
+        /// harmless at runtime but this backend's output is meant to be READ in devtools —
+        /// readability is half of what the source maps exist for.</para>
         /// </summary>
-        private static bool ProducesValue(IRCall call) =>
-            call.Type != null &&
-            call.Type.Kind != TypeKind.Void &&
-            !string.Equals(call.Type.Name, "Void", StringComparison.OrdinalIgnoreCase) &&
-            !string.IsNullOrEmpty(call.Name);
+        private HashSet<string> _usedOperandNames = new HashSet<string>(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Collects every operand name the function consumes, using the repo's shared
+        /// "values an instruction CONSUMES" enumeration rather than a private copy —
+        /// CLAUDE.md: change it once, not per-consumer.
+        /// </summary>
+        private void CollectUsedOperands(IRFunction function)
+        {
+            _usedOperandNames = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var block in function.Blocks ?? new List<BasicBlock>())
+            foreach (var instruction in block.Instructions)
+            {
+                foreach (var operand in IROperandWalker.EnumerateOperands(instruction))
+                    if (!string.IsNullOrEmpty(operand?.Name))
+                        _usedOperandNames.Add(operand.Name);
+
+                // A terminator's condition is an operand too, and EnumerateOperands is flat.
+                if (instruction is IRConditionalBranch cb && !string.IsNullOrEmpty(cb.Condition?.Name))
+                    _usedOperandNames.Add(cb.Condition.Name);
+                if (instruction is IRReturn r && !string.IsNullOrEmpty(r.Value?.Name))
+                    _usedOperandNames.Add(r.Value.Name);
+            }
+        }
+
+        /// <summary>True when something later reads this value, so it must be bound.</summary>
+        private bool IsUsed(IRValue value) =>
+            !string.IsNullOrEmpty(value?.Name) && _usedOperandNames.Contains(value.Name);
 
         private static Exception NotYet(string node) =>
             new NotSupportedException(
@@ -377,6 +406,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // loses its semantics, so refuse it.
             if (function.IsAsync) throw NotYet("Async functions (plan task 21)");
             if (function.IsIterator) throw NotYet("Iterator functions (plan task 22)");
+
+            CollectUsedOperands(function);
 
             Line($"function {SanitizeName(function.Name)}({parameters}) {{");
             _indentLevel++;
@@ -435,7 +466,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // A call that PRODUCES a value binds it, because Expr(IRCall) refers to the
             // result by name. Emitting a bare statement would discard the value and leave
             // every reference pointing at an undeclared identifier.
-            if (ProducesValue(call))
+            if (IsUsed(call))
                 Line($"const {SanitizeName(call.Name)} = {invocation};");
             else
                 Line($"{invocation};");

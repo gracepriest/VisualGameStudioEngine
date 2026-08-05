@@ -118,6 +118,22 @@ public class JsBannedTypeTests
         Assert.That(Reject("Sub Main()\nConsole.WriteLine(\"a\"c)\nEnd Sub"), Does.Contain("BL7004"));
     }
 
+    /// <summary>
+    /// Class events were a measured MISS: <c>Public Event Tick As Long</c> compiled clean
+    /// with no BL7003. <c>IRClass.Events</c> was not walked, and it cannot be backstopped by
+    /// ModuleTypeWalker either — an event carries only a delegate type NAME, not a TypeInfo,
+    /// so the shared walker explicitly skips it.
+    /// </summary>
+    [TestCase("Long", "BL7003", TestName = "Event_AsLong")]
+    [TestCase("Char", "BL7004", TestName = "Event_AsChar")]
+    [TestCase("Stream", "BL7007", TestName = "Event_AsBclType")]
+    public void Event_CarryingABannedType_IsRejected(string type, string code)
+    {
+        var source = $"Class W\nPublic Event Tick As {type}\nEnd Class\nSub Main()\nEnd Sub";
+
+        Assert.That(Reject(source), Does.Contain(code));
+    }
+
     // ---------------------------------------------------------------- controls
 
     /// <summary>
