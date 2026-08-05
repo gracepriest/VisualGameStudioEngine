@@ -96,6 +96,39 @@ public class JsBannedTypeTests
         Assert.That(message, Does.Contain("String"), "must point the user at String");
     }
 
+    /// <summary>
+    /// The .NET spellings resolve to the same 64-bit / character types and must be refused
+    /// identically. A position-complete checker that only knows the BasicLang spelling is
+    /// still wrong: <c>Using System</c> makes <c>Int64</c> and <c>System.Char</c> ordinary
+    /// declarations in fully-walked positions.
+    /// </summary>
+    [TestCase("Sub Main()\nDim a As Int64\nEnd Sub", "BL7003", TestName = "Int64_Spelling")]
+    [TestCase("Sub Main()\nDim a As System.Int64\nEnd Sub", "BL7003", TestName = "SystemInt64_Spelling")]
+    [TestCase("Sub Main()\nDim a As ULong\nEnd Sub", "BL7003", TestName = "ULong_SameDefect")]
+    [TestCase("Sub Main()\nDim a As UInt64\nEnd Sub", "BL7003", TestName = "UInt64_Spelling")]
+    [TestCase("Sub Main()\nDim c As System.Char\nEnd Sub", "BL7004", TestName = "SystemChar_Spelling")]
+    public void DotNetSpellingsOfBannedTypes_AreAlsoRejected(string source, string code)
+    {
+        Assert.That(Reject(source), Does.Contain(code));
+    }
+
+    /// <summary>
+    /// A banned type can reach the output carrying NO declared position at all, as a bare
+    /// literal operand. <c>IRConstant</c> is never an entry in <c>block.Instructions</c> —
+    /// every construction site assigns it to the expression result — so the declared-position
+    /// walk is structurally blind to it.
+    ///
+    /// <para>Measured before this guard existed: <c>Console.WriteLine("a"c)</c> compiled clean
+    /// and emitted <c>console.log(a);</c> — a bare undeclared JavaScript identifier, i.e. a
+    /// ReferenceError in the browser from a build that reported success. That is exactly the
+    /// silent-wrong-output class this backend exists to refuse.</para>
+    /// </summary>
+    [Test]
+    public void CharLiteral_IsRejected_EvenWithNoDeclaredPosition()
+    {
+        Assert.That(Reject("Sub Main()\nConsole.WriteLine(\"a\"c)\nEnd Sub"), Does.Contain("BL7004"));
+    }
+
     // ---------------------------------------------------------------- controls
 
     /// <summary>

@@ -133,13 +133,58 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         private static readonly Dictionary<string, (string Code, string Why)> BannedTypes =
             new Dictionary<string, (string, string)>(StringComparer.OrdinalIgnoreCase)
             {
-                ["Long"] = ("BL7003",
-                    "a JavaScript number is a double and is exact only to 2^53, so Long values " +
-                    "silently lose precision. BigInt would be exact but contaminates every " +
-                    "arithmetic expression it touches. Use Integer."),
+                ["Long"] = (LongCode, LongWhy),
+                ["Int64"] = (LongCode, LongWhy),     // .NET spelling of the same type
+                ["ULong"] = (LongCode, LongWhy),     // 64-bit unsigned: identical 2^53 defect
+                ["UInt64"] = (LongCode, LongWhy),
                 ["Char"] = ("BL7004",
                     "JavaScript has no character type. Use String."),
             };
+
+        private const string LongCode = "BL7003";
+        private const string LongWhy =
+            "a JavaScript number is a double and is exact only to 2^53, so 64-bit values " +
+            "silently lose precision. BigInt would be exact but contaminates every arithmetic " +
+            "expression it touches. Use Integer.";
+
+        /// <summary>
+        /// The declared name of a type, with any array suffix removed: <c>Long[]</c> and
+        /// <c>Long[,]</c> both reduce to <c>Long</c>.
+        ///
+        /// <para>Load-bearing: an array TypeInfo carries the brackets IN ITS NAME rather than
+        /// arriving as the element type with Kind=Array, so an exact-name lookup sees "Long[]",
+        /// misses the banned entry, and the value falls through to the generic BL7007 message
+        /// instead of the actionable "use Integer" one.</para>
+        /// </summary>
+        private static string BaseName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return name;
+
+            var bracket = name.IndexOf('[');
+            if (bracket >= 0) name = name.Substring(0, bracket);
+
+            // Strip the namespace: `Using System` makes System.Int64 and System.Char ordinary
+            // declarations in fully-walked positions, and they are the SAME 64-bit / character
+            // types. Without this they fall through to the generic BL7007 message instead of
+            // the actionable BL7003/BL7004 one. Harmless for BL7007 — System.IO.Stream still
+            // reduces to Stream, which is not on the allow-list either way.
+            var dot = name.LastIndexOf('.');
+            return dot < 0 ? name : name.Substring(dot + 1);
+        }
+
+        /// <summary>
+        /// A banned type carried by a bare LITERAL rather than by any declared position.
+        /// Raised from the generator, which is the only place that channel is visible —
+        /// <c>IRConstant</c> is never an entry in <c>block.Instructions</c>, so the
+        /// declaration walk cannot reach it.
+        /// </summary>
+        public static ForeignFeatureException BannedConstantRejection(string typeName, object value)
+        {
+            var banned = BannedTypes[typeName];
+            return new ForeignFeatureException(
+                $"{banned.Code}: the literal '{value}' is a {typeName}, which cannot be lowered " +
+                $"to JavaScript — {banned.Why}");
+        }
 
         /// <summary>
         /// BL7003 / BL7004 — banned types in any declared position.
@@ -160,12 +205,89 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// </summary>
         private static void CheckBannedTypes(IRModule module)
         {
+            var allowed = BuildAllowedTypeNames(module);
+
             foreach (var (type, where) in DeclaredTypePositions(module))
-                CheckTypeTree(type, where);
+                CheckTypeTree(type, where, allowed);
 
             foreach (var type in ModuleTypeWalker.AllTypes(module))
-                CheckTypeTree(type, "this program");
+                CheckTypeTree(type, "this program", allowed);
         }
+
+        /// <summary>
+        /// Every type name a valid JavaScript-target program may mention: the erased
+        /// primitives, the supported library surface, and everything this module declares.
+        ///
+        /// <para><b>An allow-list, not a deny-list, and that is structural.</b> The BCL is
+        /// ~10,000 public types plus every NuGet package; nothing in-tree enumerates it and
+        /// nothing could. <c>CppCapabilityChecker.CheckType</c> already runs this same gate in
+        /// production — supported names first, Kind last.</para>
+        /// </summary>
+        private static HashSet<string> BuildAllowedTypeNames(IRModule module)
+        {
+            var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                // Erased numerics and primitives. Long/ULong/Char are absent on purpose —
+                // they have their own diagnostics and are rejected before this set is read.
+                "Integer", "Single", "Double", "Boolean", "String", "Byte", "SByte",
+                "Short", "UShort", "UInteger", "Void",
+
+                // .NET spellings of the same primitives. An Enum's UnderlyingType arrives as
+                // "Int32", not "Integer", so omitting these rejects every enum in the program.
+                // Int64/UInt64 are deliberately absent — they are Long, and BannedTypes owns them.
+                "Int32", "UInt32", "Int16", "UInt16",
+
+                // ⛔ IRBuilder's UNIVERSAL FALLBACK type, synthesized whenever a type is
+                // unknown; IRParameter.TypeName literally defaults to "Object". Rejecting it
+                // would fire on programs containing no BCL type at all.
+                "Object",
+
+                // ⛔ Synthesized as every lambda's result type (IRBuilder.cs:1317).
+                "Delegate",
+
+                // Collections — reference semantics, matching .NET (spec).
+                "List", "Dictionary", "HashSet", "IEnumerable", "KeyValuePair", "Tuple",
+
+                // Async and callables lower to native JS equivalents.
+                "Task", "Func", "Action",
+
+                // The stdlib surface kept by user decision: genuine JS equivalents exist.
+                "Console", "Math", "Random", "DateTime", "Regex",
+            };
+
+            foreach (var name in module.Classes?.Keys ?? Enumerable.Empty<string>()) allowed.Add(name);
+            foreach (var name in module.Interfaces?.Keys ?? Enumerable.Empty<string>()) allowed.Add(name);
+            foreach (var name in module.Enums?.Keys ?? Enumerable.Empty<string>()) allowed.Add(name);
+            foreach (var name in module.Delegates?.Keys ?? Enumerable.Empty<string>()) allowed.Add(name);
+
+            // Generic parameter names are types inside their own scope. Omitting them makes a
+            // generic body's bare 'T' draw a false BL7007, because the fallback TypeInfo is
+            // built with Kind=Class rather than Kind=TypeParameter.
+            foreach (var f in module.Functions ?? Enumerable.Empty<IRFunction>())
+                foreach (var g in f.GenericParameters ?? Enumerable.Empty<string>()) allowed.Add(g);
+            foreach (var c in module.Classes?.Values ?? Enumerable.Empty<IRClass>())
+            {
+                foreach (var g in c.GenericParameters ?? Enumerable.Empty<string>()) allowed.Add(g);
+                foreach (var m in c.Methods ?? Enumerable.Empty<IRMethod>())
+                    foreach (var g in m.GenericParameters ?? Enumerable.Empty<string>()) allowed.Add(g);
+            }
+
+            return allowed;
+        }
+
+        /// <summary>
+        /// Exceptions are admitted by SUFFIX rather than by a fixed list. Under erasure every
+        /// BasicLang exception becomes a JS <c>Error</c>, so a broad rule costs nothing, while
+        /// a fixed list would reject <c>Catch ex As FileNotFoundException</c> on a program
+        /// that runs perfectly well.
+        ///
+        /// <para>⚠ COUPLING: this is only sound while the generator's exception lowering
+        /// (plan task 20) erases unknown exception type NAMES to <c>Error</c>. If that lowering
+        /// ever emits the BasicLang name verbatim, <c>Throw New FooException(...)</c> becomes
+        /// an undefined JS identifier. Change the two together.</para>
+        /// </summary>
+        private static bool IsExceptionName(string name) =>
+            name != null && name.EndsWith("Exception", StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
         /// Every declared type position, paired with a human description of where it is.
@@ -243,11 +365,13 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// and ElementType respectively, and ModuleTypeWalker does not descend into either.
         /// Tuples and nullables are recursed for the same reason.
         /// </summary>
-        private static void CheckTypeTree(TypeInfo type, string where, int depth = 0)
+        private static void CheckTypeTree(TypeInfo type, string where, HashSet<string> allowed, int depth = 0)
         {
             if (type == null || depth > 16) return;   // depth guard: malformed cyclic types
 
-            if (type.Name != null && BannedTypes.TryGetValue(type.Name, out var banned))
+            var name = BaseName(type.Name);
+
+            if (name != null && BannedTypes.TryGetValue(name, out var banned))
                 throw new ForeignFeatureException(
                     $"{banned.Code}: '{type.Name}' cannot be lowered to JavaScript — {banned.Why} " +
                     $"(found as {where}.)");
@@ -260,12 +384,30 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 type.Kind == TypeKind.UserDefinedType)
                 throw ValueAggregateRejection($"the value type '{type.Name}' (used as {where})");
 
+            // BL7007 — anything not on the allow-list. Gated on NAME for every Kind, not just
+            // Kind==Class: IRBuilder FORCES Kind to Primitive for delegate return types and
+            // extern parameters, so `Delegate Function F() As Stream` arrives as Primitive and
+            // a Kind-gated check would wave it through. TypeParameter is exempt because a
+            // generic 'T' is a placeholder, not a type to resolve.
+            if (type.Kind != TypeKind.TypeParameter &&
+                !string.IsNullOrEmpty(name) &&
+                !allowed.Contains(name) &&
+                !IsExceptionName(name))
+            {
+                throw new ForeignFeatureException(
+                    $"BL7007: '{type.Name}' is not available on the JavaScript backend — there " +
+                    "is no .NET base class library in a browser. Supported types are the " +
+                    "BasicLang primitives, List/Dictionary/HashSet, Task/Func/Action, " +
+                    "Console/Math/Random/DateTime/Regex, exceptions, and the types this " +
+                    $"project declares. (Found as {where}.)");
+            }
+
             foreach (var arg in type.GenericArguments ?? Enumerable.Empty<TypeInfo>())
-                CheckTypeTree(arg, where, depth + 1);
+                CheckTypeTree(arg, where, allowed, depth + 1);
             foreach (var el in type.TupleElementTypes ?? Enumerable.Empty<TypeInfo>())
-                CheckTypeTree(el, where, depth + 1);
-            CheckTypeTree(type.ElementType, where, depth + 1);
-            CheckTypeTree(type.UnderlyingType, where, depth + 1);
+                CheckTypeTree(el, where, allowed, depth + 1);
+            CheckTypeTree(type.ElementType, where, allowed, depth + 1);
+            CheckTypeTree(type.UnderlyingType, where, allowed, depth + 1);
         }
 
         /// <summary>

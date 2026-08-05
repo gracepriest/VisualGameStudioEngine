@@ -586,6 +586,26 @@ public void Js_ByRef_IsRejected()
 
 > `BL7xxx` was confirmed unused in-tree at spec time. Re-confirm with `rg "BL7\d{3}"` before Task 6 in case Plan 2 or another session has claimed part of the range.
 
+### Known Phase 1 gaps — measured, deliberately not closed here
+
+An adversarial pass compiled real programs against the finished checker. These escape it,
+and **none can be fixed inside `JsCapabilityChecker`** — each needs a compiler change.
+Recorded so a later reader does not mistake the checker for complete.
+
+| Escape | Why the checker cannot see it | Fix belongs in |
+|---|---|---|
+| `Delegate Sub P(xs As List(Of Long))` | `IRParameter.Type` is never assigned for delegates; `TypeName` is the **erased generic head**, the string `"List"`. The name-string channel is structurally incapable of seeing the inner `Long`. | `IRBuilder.cs:1036-1044` — populate `IRParameter.Type` |
+| `Delegate Function F() As List(Of Long)` | `ReturnType` is built bare-name at `IRBuilder.cs:1029-1031`, so `GenericArguments` is empty — there is nothing to recurse into. | same |
+| `Declare Function F Lib "m" (x As List(Of Long))` | Same bare-name construction at `IRBuilder.cs:2016/2027`. | same |
+| `TypeDefine BigNum As Long` then `Dim v As BigNum` | `SemanticAnalyzer.cs:5122-5136` builds an alias `TypeInfo` **with** `BaseType` and then discards it, registering only the alias name. The link to `Long` is severed, so even recursing `BaseType` cannot find it. | `SemanticAnalyzer.cs:5127-5132` |
+| A `Type…End Type` UDT used only through a delegate/extern signature | The declaration channel does not exist (`Visit(TypeNode)` is a no-op) and the use-site channel is Kind-based, but delegate/extern types carry a **hard-coded wrong Kind** (`Primitive`). | `IRBuilder.cs:979-982` |
+| `IRPhi` / `IRTupleElement` operands | Reachable through neither `block.Instructions` nor `IROperandWalker` (which omits them by design). **Latent** — the JS generator still throws on both, so it becomes live only when Tasks 21/22 land. | revisit at Tasks 21-22 |
+
+Three further escapes are pre-existing compiler bugs with their own tasks, because they
+delete the declaration before any checker runs: a class `Property` empties the whole
+module; a colliding `Const` is dropped first-wins; and `CombineIRModules` drops a
+same-named class method. A capability checker cannot reject what is no longer there.
+
 ---
 
 ## Phase 2 — Core language codegen

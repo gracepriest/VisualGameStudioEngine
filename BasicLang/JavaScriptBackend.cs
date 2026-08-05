@@ -149,6 +149,18 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case double d: return d.ToString("R", CultureInfo.InvariantCulture);
                 case float f: return f.ToString("R", CultureInfo.InvariantCulture);
                 case decimal m: return m.ToString(CultureInfo.InvariantCulture);
+
+                // A Char or a 64-bit integer can reach the output as a BARE LITERAL with no
+                // declared position anywhere, so JsCapabilityChecker's declaration walk is
+                // structurally blind to it — IRConstant is never an entry in
+                // block.Instructions, only ever an operand. This is the only guard on that
+                // channel, and it is not theoretical: before it existed,
+                // Console.WriteLine("a"c) emitted `console.log(a);` — a bare undeclared
+                // identifier, a ReferenceError in the browser from a green build.
+                case char: throw JsCapabilityChecker.BannedConstantRejection("Char", v);
+                case long: throw JsCapabilityChecker.BannedConstantRejection("Long", v);
+                case ulong: throw JsCapabilityChecker.BannedConstantRejection("ULong", v);
+
                 default: return Convert.ToString(v, CultureInfo.InvariantCulture);
             }
         }
