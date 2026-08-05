@@ -264,7 +264,7 @@ namespace BasicLang.Compiler.CodeGen.Net
             var index = 0;
             foreach (var p in member.Parameters ?? Array.Empty<NetParameterDescriptor>())
             {
-                var wire = WireOf(p.TypeFullName);
+                var wire = WireOf(p);
                 if (p.RefKind != NetRefKind.None && wire.Kind != WireKind.Scalar
                     && !NetArrayCopy.TryGetFormForArray(p.TypeFullName, out _))
                 {
@@ -304,7 +304,7 @@ namespace BasicLang.Compiler.CodeGen.Net
         // §8.3 marshaling: .NET type name -> wire form.
         // ------------------------------------------------------------------------------
 
-        private enum WireKind { Void, Scalar, String, Handle }
+        private enum WireKind { Void, Scalar, String, Handle, Callback }
 
         /// <summary>
         /// One row of §8.3. <see cref="CType"/> is the INBOUND C spelling and
@@ -326,6 +326,30 @@ namespace BasicLang.Compiler.CodeGen.Net
             internal static readonly WireForm Handle = new(
                 WireKind.Handle, "uint64_t", "uint64_t*",
                 "const BasicLang::blnet::NetRef&", "BasicLang::blnet::NetRef");
+
+            /// <summary>
+            /// §8.4's delegate parameter. The WIRE is identical to <see cref="Handle"/> — a
+            /// callback handle is a <c>uint64_t</c> like an object handle — so the C signature
+            /// this contributes is byte-identical to the handle row's and
+            /// <c>ExportSignaturesMatchTheProxyTableSlotSignatures</c> keeps comparing equal.
+            /// Only the C++ SPELLING differs.
+            ///
+            /// <para>⛔ <b>It must not be spelled <c>NetRef</c>, and that is a correctness rule,
+            /// not a style one.</b> <c>NetRef</c>'s deleter routes to <c>g_shim.release</c> — the
+            /// MANAGED object table. A callback handle lives in the NATIVE callback table
+            /// (<c>detail::g_callbacks</c>) and is freed by <c>blnet_callback_release</c>.
+            /// Wrapping one in a <c>NetRef</c> would release an unrelated managed object and
+            /// leave the callback entry alive: a wrong-table release, not a leak. (It also would
+            /// not compile implicitly — <c>explicit NetRef(std::uint64_t)</c> — which is the
+            /// only reason the mistake is not already latent.)</para>
+            ///
+            /// <para>Ownership of the callback belongs to <c>CppCodeGenerator</c>'s RAII guard in
+            /// the call prologue (D-P8), NOT to this parameter: the proxy only carries the
+            /// handle across.</para>
+            /// </summary>
+            internal static readonly WireForm Callback = new(
+                WireKind.Callback, "uint64_t", "uint64_t*",
+                "BasicLang::blnet::blnet_callback", "BasicLang::blnet::blnet_callback");
 
             /// <summary>
             /// <c>Boolean</c> is the one scalar whose C++ spelling differs from its wire
@@ -368,6 +392,22 @@ namespace BasicLang.Compiler.CodeGen.Net
         /// <c>CppCodeGenerator</c>, not here: truncating at the boundary would destroy the value
         /// before the compiler ever got the chance to diagnose it.</para>
         /// </summary>
+        /// <summary>
+        /// A PARAMETER's wire form. Delegate-ness cannot be recovered from a type name — the
+        /// surface carries it (D-P9) — so this overload exists and the name-keyed one below is
+        /// reached only for non-delegate parameters and for RETURNS.
+        ///
+        /// <para>Returns deliberately stay on the name-keyed path: §8.4 / spec D6 scopes P2a to
+        /// delegate ARGUMENTS, so a member returning a delegate keeps the handle row it has
+        /// always had, and <see cref="WireKind.Callback"/> can never appear in a return position.
+        /// That is what keeps the result-shaped switches below correct without a Callback arm.
+        /// </para>
+        /// </summary>
+        private static WireForm WireOf(NetParameterDescriptor parameter) =>
+            parameter != null && parameter.IsDelegate
+                ? Wire.Callback
+                : WireOf(parameter?.TypeFullName);
+
         private static WireForm WireOf(string netTypeFullName) => netTypeFullName switch
         {
             "System.Void" => Wire.Void,

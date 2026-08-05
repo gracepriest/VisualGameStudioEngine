@@ -297,4 +297,28 @@ public class NetDelegateTests
         Assert.That(exports, Has.No.Member(helpers[0]),
             "a managed dispatcher is not an export and must not appear in the export set");
     }
+
+    // ------------------------------------------------------------------------------------
+    // Step 4a — the proxy layer's callback wire row.
+    // ------------------------------------------------------------------------------------
+
+    [Test]
+    public void ADelegateParameter_IsSpelledAsACallbackHandle_NotANetRef()
+    {
+        var surface = new NetSurface(
+            new[] { MemberTaking("Run", "System.Action") },
+            Array.Empty<string>());
+
+        var proxies = NetProxyEmitter.Emit(surface, "Shim.dll")[NetProxyEmitter.ProxiesFileName];
+
+        Assert.That(proxies, Does.Contain("BasicLang::blnet::blnet_callback"),
+            "a delegate parameter's C++ spelling is a callback handle");
+
+        // The failure this pins is not a compile error, it is a WRONG-TABLE RELEASE. NetRef's
+        // deleter routes to g_shim.release — the MANAGED object table. A callback handle lives in
+        // the NATIVE callback table and is freed by blnet_callback_release. Wrapping one in a
+        // NetRef would release an unrelated managed object and leave the callback entry alive.
+        Assert.That(proxies, Does.Not.Contain("const BasicLang::blnet::NetRef&"),
+            "a callback handle must never be spelled NetRef — different table, different release");
+    }
 }
