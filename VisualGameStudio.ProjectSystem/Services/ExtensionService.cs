@@ -612,6 +612,27 @@ public class ExtensionService : IExtensionService
         // If the extension has a JS entry point, activate it in the extension host
         if (!string.IsNullOrEmpty(extension.Manifest?.Main))
         {
+            // Start the host on demand. This is the ONLY place that does: StartExtensionHostAsync's
+            // other callers are RestartExtensionHostAsync and the crash handler, and the crash
+            // handler can only fire if the host was already up. Without this the check below is a
+            // guard whose precondition nothing establishes — every extension with a `main` fell to
+            // "static only" forever, which is exactly what 23a631c's fix ran into one layer down.
+            if (_extensionHost?.IsRunning != true)
+            {
+                try
+                {
+                    await StartExtensionHostAsync();
+                }
+                catch (Exception ex)
+                {
+                    // Never fatal: the extension's declarative contributions are already loaded and
+                    // stay useful even when Node is missing or the host script cannot be found.
+                    _outputService.WriteError(
+                        $"[Extensions] Could not start the extension host for {extensionId}: {ex.Message}",
+                        OutputCategory.General);
+                }
+            }
+
             if (_extensionHost?.IsRunning != true)
             {
                 // Static contributions are already loaded, just mark as active for static-only
@@ -812,6 +833,27 @@ public class ExtensionService : IExtensionService
         }
 
         _outputService.WriteLine($"[Extensions] Loaded static contributions from {activatedCount} extension(s).", OutputCategory.General);
+
+        // Fire onStartupFinished LAST, once every extension's declarative contributions are in
+        // place. It is the only activation event many real extensions declare — ESLint's manifest
+        // lists it and nothing else — so until now those could never activate however well the rest
+        // of the pipeline worked. Firing it here rather than earlier means an extension it wakes can
+        // rely on other extensions' grammars and themes already being registered.
+        //
+        // Extensions with a JS entry point will start the host from ActivateAsync; that is a
+        // deliberate behaviour change, since it means opening the IDE can now spawn Node.
+        if (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await TriggerActivationEventAsync("onStartupFinished");
+            }
+            catch (Exception ex)
+            {
+                _outputService.WriteError(
+                    $"[Extensions] onStartupFinished activation failed: {ex.Message}", OutputCategory.General);
+            }
+        }
     }
 
     #endregion
