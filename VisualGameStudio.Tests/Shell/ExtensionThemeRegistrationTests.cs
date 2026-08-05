@@ -157,6 +157,36 @@ public class ExtensionThemeRegistrationTests
     }
 
     /// <summary>
+    /// A grammar contribution's embeddedLanguages/tokenTypes are OBJECTS (scope -> id), not
+    /// arrays. Typed as List&lt;string&gt; they threw, and because manifest parsing is caught at the
+    /// whole-extension level that took all of vscode.html down — grammar, language and snippets.
+    /// Note the orphaned VSCodeExtension model in Core/Extensions already had these right; only
+    /// the wired one was wrong, which is this subsystem's recurring shape.
+    /// </summary>
+    [Test]
+    public void GrammarContribution_ParsesEmbeddedLanguagesAndTokenTypesAsObjects()
+    {
+        // Shape taken verbatim from vscode.html 1.95.3's package.json.
+        const string json = """
+        {
+          "scopeName": "text.html.basic",
+          "path": "./syntaxes/html.tmLanguage.json",
+          "embeddedLanguages": { "text.html": "html", "source.css": "css", "source.js": "javascript" },
+          "tokenTypes": { "meta.embedded.block.html": "other" }
+        }
+        """;
+
+        var grammar = System.Text.Json.JsonSerializer.Deserialize<GrammarContribution>(
+            json, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+        Assert.That(grammar, Is.Not.Null);
+        Assert.That(grammar!.ScopeName, Is.EqualTo("text.html.basic"));
+        Assert.That(grammar.EmbeddedLanguages, Has.Count.EqualTo(3));
+        Assert.That(grammar.EmbeddedLanguages["source.css"], Is.EqualTo("css"));
+        Assert.That(grammar.TokenTypes["meta.embedded.block.html"], Is.EqualTo("other"));
+    }
+
+    /// <summary>
     /// Source guard: ExtensionService must hand the collected paths out on the event. Its
     /// extensions directory is hard-coded to ~/.vgs/extensions, so a behavioural test at that
     /// layer would write into the developer's real profile.

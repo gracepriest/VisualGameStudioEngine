@@ -620,8 +620,16 @@ public class GrammarContribution
     public string Language { get; set; } = "";
     public string ScopeName { get; set; } = "";
     public string Path { get; set; } = "";
-    public List<string> EmbeddedLanguages { get; set; } = new();
-    public List<string> TokenTypes { get; set; } = new();
+    /// <summary>
+    /// Scope name -> language id, e.g. { "source.css": "css", "source.js": "javascript" }.
+    /// An OBJECT in the VS Code schema, not an array. Typed as List&lt;string&gt; this threw, and
+    /// since manifest parsing is caught per-EXTENSION that took all of vscode.html down with it —
+    /// grammar, language and snippets included.
+    /// </summary>
+    public Dictionary<string, string> EmbeddedLanguages { get; set; } = new();
+
+    /// <summary>Scope name -&gt; token type, e.g. { "meta.embedded.block.html": "other" }. Also an object.</summary>
+    public Dictionary<string, string> TokenTypes { get; set; } = new();
 }
 
 /// <summary>
