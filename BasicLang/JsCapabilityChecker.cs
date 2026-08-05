@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using BasicLang.Compiler.IR;
 
 namespace BasicLang.Compiler.CodeGen.JavaScript
@@ -42,16 +44,74 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// on the first construct the JavaScript backend refuses to lower.
         /// </summary>
         /// <remarks>
-        /// Intentionally empty. The detection arms land one per task, each independently
-        /// revertable:
+        /// Arms land one per task, each independently revertable:
         /// BL7002 ByRef, BL7003 Long, BL7004 Char, BL7005 value Structure,
         /// BL7006 operator overloading, BL7007 .NET BCL types.
-        /// The seam is wired first so those arms have somewhere to go, and so the
-        /// passthrough rejection above it is live from the start.
         /// </remarks>
         public static void Check(IRModule module)
         {
             if (module == null) return;
+
+            CheckByRef(module);
         }
+
+        /// <summary>
+        /// BL7002 — <c>ByRef</c> parameters.
+        ///
+        /// <para>JavaScript passes primitives by value with no way to opt out, so a write
+        /// through a ByRef parameter is invisible to the caller. Emulating it means boxing
+        /// every argument, which D1 forbids.</para>
+        ///
+        /// <para><b>Five containers, two unrelated types.</b> ByRef reaches the IR as
+        /// <c>IRVariable.IsByRef</c> (free functions and class methods, which flatten into
+        /// <c>module.Functions</c>) and as <c>IRParameter.IsByRef</c> (interface methods,
+        /// delegates, extern declarations). Checking one channel silently accepts the other.
+        /// Do not "simplify" this to a single loop over <c>module.Functions</c>.</para>
+        ///
+        /// <para>Note <c>IRClass.Methods[].Parameters</c> is NOT one of the containers: it
+        /// was measured empty, because a method's parameters live on its
+        /// <c>Implementation</c>, and that implementation is already in
+        /// <c>module.Functions</c>.</para>
+        /// </summary>
+        private static void CheckByRef(IRModule module)
+        {
+            foreach (var function in module.Functions ?? Enumerable.Empty<IRFunction>())
+            {
+                if (function.Parameters == null) continue;
+                foreach (var p in function.Parameters)
+                    if (p != null && p.IsByRef)
+                        throw ByRefRejection(p.Name, DescribeFunction(function));
+            }
+
+            foreach (var iface in module.Interfaces?.Values ?? Enumerable.Empty<IRInterface>())
+            foreach (var method in iface.Methods ?? Enumerable.Empty<IRInterfaceMethod>())
+            foreach (var p in method.Parameters ?? Enumerable.Empty<IRParameter>())
+                if (p != null && p.IsByRef)
+                    throw ByRefRejection(p.Name, $"interface method '{iface.Name}.{method.Name}'");
+
+            foreach (var del in module.Delegates?.Values ?? Enumerable.Empty<IRDelegate>())
+            foreach (var p in del.Parameters ?? Enumerable.Empty<IRParameter>())
+                if (p != null && p.IsByRef)
+                    throw ByRefRejection(p.Name, $"delegate '{del.Name}'");
+
+            foreach (var ext in module.ExternDeclarations?.Values ?? Enumerable.Empty<IRExternDeclaration>())
+            foreach (var p in ext.Parameters ?? Enumerable.Empty<IRParameter>())
+                if (p != null && p.IsByRef)
+                    throw ByRefRejection(p.Name, $"extern declaration '{ext.Name}'");
+        }
+
+        private static string DescribeFunction(IRFunction f) =>
+            $"{(f.ReturnType == null || f.ReturnType.Name == "Void" ? "Sub" : "Function")} '{f.Name}'";
+
+        /// <summary>
+        /// Names the offender rather than citing a line: declaration <c>SourceLine</c> is 0
+        /// throughout the IR (it exists only on <c>IRInstruction</c>), so "parameter 'x' in
+        /// Sub 'Bump'" is the most locating information available here.
+        /// </summary>
+        private static ForeignFeatureException ByRefRejection(string parameterName, string container) =>
+            new ForeignFeatureException(
+                $"BL7002: ByRef parameter '{parameterName}' in {container} cannot be lowered to " +
+                "JavaScript. JavaScript has no reference parameters, so a write through a ByRef " +
+                "argument would be invisible to the caller. Return a value instead.");
     }
 }

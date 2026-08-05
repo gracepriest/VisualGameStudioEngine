@@ -43,6 +43,105 @@ public class JsCapabilityCheckerTests
     }
 
     /// <summary>
+    /// Plan task 6, reframed: BL7001 was to reject method overloading, but BasicLang has
+    /// none — the SemanticAnalyzer already refuses a second same-named subroutine, for free
+    /// subs and class methods alike. A BL7001 arm in JsCapabilityChecker could never fire,
+    /// so the diagnostic was dropped and this guard pins the assumption instead.
+    ///
+    /// <para>Passes the moment it is written, deliberately. If BasicLang ever gains
+    /// overloading this goes red, which is the signal that the JavaScript backend needs a
+    /// real BL7001 after all — JS has no overload resolution and the last definition would
+    /// silently win. Without this test that reasoning survives only in a commit message.</para>
+    /// </summary>
+    [TestCase("Sub F(a As Integer)\nEnd Sub\nSub F(a As String)\nEnd Sub\nSub Main()\nEnd Sub",
+        TestName = "Overloading_FreeSubs_RejectedByFrontEnd")]
+    [TestCase("Class C\nPublic Sub F(a As Integer)\nEnd Sub\nPublic Sub F(a As String)\nEnd Sub\nEnd Class\nSub Main()\nEnd Sub",
+        TestName = "Overloading_ClassMethods_RejectedByFrontEnd")]
+    public void Overloading_IsRejectedByTheFrontEnd_SoJsNeedsNoDiagnostic(string source)
+    {
+        var analyzer = new BasicLang.Compiler.SemanticAnalysis.SemanticAnalyzer();
+        var ast = new BasicLang.Compiler.Parser(new BasicLang.Compiler.Lexer(source).Tokenize()).Parse();
+
+        Assert.That(analyzer.Analyze(ast), Is.False,
+            "BasicLang gained method overloading — the JavaScript backend now needs BL7001, " +
+            "because JS has no overload resolution and the last definition silently wins.");
+        Assert.That(string.Join(" | ", analyzer.Errors.ConvertAll(e => e.Message)),
+            Does.Contain("already defined"));
+    }
+
+    /// <summary>
+    /// Plan task 7 — BL7002. JavaScript has no reference parameters: a primitive is copied
+    /// on call, so a ByRef write is invisible to the caller.
+    ///
+    /// <para>This is the highest-value rejection in Phase 1 because it is a bug the C++
+    /// backend actually shipped: `Sub Bump(ByRef x)` lowers there to `void Bump(int32_t x)`
+    /// and prints 1 instead of 11 — a build that succeeds and silently computes the wrong
+    /// answer. Rejecting it is what stops the JavaScript backend inheriting that bug class.</para>
+    /// </summary>
+    [Test]
+    public void Js_ByRefParameter_IsRejected()
+    {
+        var module = JsTestSupport.BuildModule(
+            "Sub Bump(ByRef x As Integer)\nx = x + 1\nEnd Sub\nSub Main()\nEnd Sub");
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new JavaScriptCodeGenerator().Generate(module));
+
+        Assert.That(ex!.Message, Does.Contain("BL7002"));
+        Assert.That(ex.Message, Does.Contain("ByRef"));
+        Assert.That(ex.Message, Does.Contain("x"), "must name the offending parameter");
+        Assert.That(ex.Message, Does.Contain("Bump"), "must name the function it is in");
+    }
+
+    /// <summary>
+    /// Class methods flatten into module.Functions carrying IsByRef, so one walk covers
+    /// them — but only if the walk really is over the flattened functions. A checker that
+    /// looked at IRClass.Methods instead would find nothing: those parameter lists are
+    /// empty, the parameters live on IRMethod.Implementation.
+    /// </summary>
+    [Test]
+    public void Js_ByRefParameter_OnAClassMethod_IsAlsoRejected()
+    {
+        var module = JsTestSupport.BuildModule(
+            "Class C\nPublic Sub Bump(ByRef x As Integer)\nEnd Sub\nEnd Class\nSub Main()\nEnd Sub");
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new JavaScriptCodeGenerator().Generate(module));
+
+        Assert.That(ex!.Message, Does.Contain("BL7002"));
+    }
+
+    /// <summary>
+    /// ByRef reaches the IR through TWO unrelated types: IRVariable (functions, class
+    /// methods) and IRParameter (interface methods, delegates, extern declarations). A
+    /// checker that walks only one of them leaves the other silently accepted, so these
+    /// pin the IRParameter side.
+    /// </summary>
+    [TestCase("Interface I\nSub F(ByRef x As Integer)\nEnd Interface\nSub Main()\nEnd Sub",
+        TestName = "ByRef_OnAnInterfaceMethod_IsRejected")]
+    [TestCase("Delegate Sub D(ByRef x As Integer)\nSub Main()\nEnd Sub",
+        TestName = "ByRef_OnADelegate_IsRejected")]
+    public void Js_ByRef_ThroughTheIRParameterChannel_IsRejected(string source)
+    {
+        var module = JsTestSupport.BuildModule(source);
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => new JavaScriptCodeGenerator().Generate(module));
+
+        Assert.That(ex!.Message, Does.Contain("BL7002"));
+    }
+
+    /// <summary>A ByVal parameter is ordinary and must not be caught by the ByRef arm.</summary>
+    [Test]
+    public void Js_ByValParameter_IsNotRejected()
+    {
+        var module = JsTestSupport.BuildModule(
+            "Sub Ok(a As Integer)\nEnd Sub\nSub Main()\nEnd Sub");
+
+        Assert.DoesNotThrow(() => new JavaScriptCodeGenerator().Generate(module));
+    }
+
+    /// <summary>
     /// Collections are IN for JavaScript, so the checker must not reject them.
     ///
     /// <para>Asserts on the exception TYPE rather than using DoesNotThrow: collection
