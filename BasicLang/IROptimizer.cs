@@ -1227,32 +1227,26 @@ namespace BasicLang.Compiler.IR.Optimization
             }
             
             // Division by power of 2 Ã¢â€ â€™ shift
-            if (op.Operation == BinaryOpKind.Div)
-            {
-                if (op.Right is IRConstant constant && constant.Value is int power)
-                {
-                    if (IsPowerOfTwo(power))
-                    {
-                        int shift = (int)Math.Log(power, 2);
-                        var shiftAmount = new IRConstant(shift, op.Right.Type);
-                        return new IRBinaryOp(op.Name, BinaryOpKind.Shr, op.Left, shiftAmount, op.Type);
-                    }
-                }
-            }
+            // REMOVED - this arm was UNSOUND for signed operands. An arithmetic shift FLOORS,
+            // while .NET/VB integer division TRUNCATES TOWARD ZERO. Measured against the C#
+            // backend: -10 / 4 is -2, but -10 >> 2 is -3. The identity holds only when the
+            // left operand is provably non-negative, and the IR carries no range analysis to
+            // establish that. Every C++ and IL compiler already performs this reduction
+            // downstream when it is legal, so nothing of value is lost by refusing it here.
             
             // Modulo by power of 2 Ã¢â€ â€™ bitwise AND
             // Modulo by power of 2 -> bitwise AND (x % 8 == x & 7)
-            if (op.Operation == BinaryOpKind.Mod)
-            {
-                if (op.Right is IRConstant modConst && modConst.Value is int power2)
-                {
-                    if (IsPowerOfTwo(power2))
-                    {
-                        var mask = new IRConstant(power2 - 1, op.Right.Type);
-                        return new IRBinaryOp(op.Name, BinaryOpKind.BitwiseAnd, op.Left, mask, op.Type);
-                    }
-                }
-            }
+            // REMOVED - unsound for the same reason, and worse: it gets the SIGN wrong.
+            // .NET: -10 Mod 4 is -2. The rewrite gives -10 & 3, which is 2.
+            //
+            // WHY BOTH ARMS WERE LATENT RATHER THAN HARMLESS: each produced a NEW IRValue
+            // whose consumers were never re-pointed at it (the defect this commit's parent
+            // fixes), so affected programs failed to COMPILE and nobody ever saw the wrong
+            // answer underneath. Repairing the re-pointing without removing these would have
+            // converted two compile errors into two SILENT MISCOMPILES - and on BOTH
+            // backends, because the optimizer is shared. That is also why cross-backend
+            // agreement cannot be the oracle for an optimizer bug: it moves both backends
+            // together. These were caught by comparing against real .NET semantics instead.
 
             return null;
         }
