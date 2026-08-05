@@ -624,6 +624,17 @@ namespace BasicLang.Compiler.IR.Optimization
                 // Replace uses
                 ReplaceUses(inst, copies);
 
+                // A CALL WRITES ITS ByRef ARGUMENTS. That write is invisible in this block —
+                // there is no IRAssignment and no rename for it — so without this kill the
+                // argument keeps whatever copy fact preceded the call and a later read folds
+                // against the STALE value. `Dim n = 0 : Int32.TryParse("42", n) : If n = 42`
+                // recorded `n -> 0`, survived the call, and folded the comparison to FALSE:
+                // a silent miscompile on EVERY backend (the C# backend, whose `ref` signature
+                // is correct, emitted `if (false)` just the same). Runs before the redefinition
+                // bookkeeping below because the callee's write happens during the call, ahead
+                // of any binding of the call's own result.
+                InvalidateByRefWrites(copies, inst);
+
                 // Track copy assignments. ANY assignment to a variable
                 // redefines it — invalidation must run unconditionally
                 // (an await-valued assignment `x = Await F()` records no
@@ -664,6 +675,102 @@ namespace BasicLang.Compiler.IR.Optimization
                     InvalidateRedefined(copies, defined.Name);
                 }
             }
+        }
+
+        /// <summary>
+        /// Kills the copy facts invalidated by a call's by-reference writes. A ByRef (or .NET
+        /// <c>ref</c>/<c>out</c>) argument is an OUTPUT of the call, so every variable its
+        /// expression reads may hold a different value afterwards.
+        ///
+        /// <para>Invalidation is by NAME over the argument's whole operand tree, not just the
+        /// top-level variable: an argument such as <c>h.F</c> or <c>arr(i)</c> writes storage
+        /// reachable through <c>h</c> / <c>arr</c>, and killing a fact is always safe while
+        /// keeping a stale one is not.</para>
+        /// </summary>
+        private static void InvalidateByRefWrites(Dictionary<IRVariable, IRValue> copies, IRInstruction inst)
+        {
+            if (copies.Count == 0) return;
+
+            List<bool> byRefFlags;
+            List<IRValue> arguments;
+            switch (inst)
+            {
+                case IRCall call:
+                    byRefFlags = call.ByRefArguments; arguments = call.Arguments; break;
+                case IRInstanceMethodCall methodCall:
+                    byRefFlags = methodCall.ByRefArguments; arguments = methodCall.Arguments; break;
+                default:
+                    return;
+            }
+            if (byRefFlags == null || arguments == null) return;
+
+            for (int i = 0; i < arguments.Count && i < byRefFlags.Count; i++)
+            {
+                if (!byRefFlags[i]) continue;
+                var written = new List<string>();
+                CollectNames(arguments[i], written);
+                foreach (var name in written)
+                    InvalidateRedefined(copies, name);
+            }
+        }
+
+        /// <summary>
+        /// Gathers every variable name read anywhere in <paramref name="value"/>'s operand tree,
+        /// plus the value's own destination name (the IRBuilder names result values after their
+        /// assignment target, so a renamed temp IS a definition). Mirrors <see cref="Mentions"/>
+        /// arm for arm; an unrecognized shape still contributes its own name, and the caller
+        /// pairs this with <see cref="InvalidateRedefined"/>, which additionally kills facts
+        /// whose recorded value MENTIONS the name. Over-collecting only costs optimization —
+        /// keeping a stale fact is the outcome that miscompiles.
+        /// </summary>
+        private static void CollectNames(IRValue value, List<string> into)
+        {
+            switch (value)
+            {
+                case null:
+                case IRConstant:
+                    return;
+                case IRVariable v:
+                    if (!string.IsNullOrEmpty(v.Name)) into.Add(v.Name);
+                    return;
+                case IRNewObject n:
+                    foreach (var a in n.Arguments) CollectNames(a, into);
+                    break;
+                case IRBinaryOp b:
+                    CollectNames(b.Left, into); CollectNames(b.Right, into);
+                    break;
+                case IRUnaryOp u:
+                    CollectNames(u.Operand, into);
+                    break;
+                case IRCompare c:
+                    CollectNames(c.Left, into); CollectNames(c.Right, into);
+                    break;
+                case IRCast cast:
+                    CollectNames(cast.Value, into);
+                    break;
+                case IRFieldAccess f:
+                    CollectNames(f.Object, into);
+                    break;
+                case IRInstanceMethodCall m:
+                    CollectNames(m.Object, into);
+                    foreach (var a in m.Arguments) CollectNames(a, into);
+                    break;
+                case IRCall call:
+                    foreach (var a in call.Arguments) CollectNames(a, into);
+                    break;
+                case IRLoad load:
+                    CollectNames(load.Address, into);
+                    break;
+                case IRGetElementPtr gep:
+                    CollectNames(gep.BasePointer, into);
+                    foreach (var idx in gep.Indices) CollectNames(idx, into);
+                    break;
+            }
+
+            // A value that names its own destination temp (the IRBuilder names result values
+            // after their assignment target) is itself a definition worth killing.
+            if (value != null && value is not IRVariable && !string.IsNullOrEmpty(value.Name))
+                into.Add(value.Name);
         }
 
         /// <summary>

@@ -3443,7 +3443,16 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var obj = EmitExpression(methodCall.Object);
             var methodName = SanitizeName(methodCall.MethodName);
             var generics = FormatGenericArgs(methodCall.GenericArguments);
-            var args = string.Join(", ", methodCall.Arguments.Select(EmitExpression));
+            // A ByRef parameter needs `ref` at the call site too, not only on the declaration —
+            // without it csc rejects the call outright (CS1620).
+            var args = string.Join(", ", methodCall.Arguments.Select((arg, i) =>
+            {
+                var expr = EmitExpression(arg);
+                bool isByRef = methodCall.ByRefArguments != null
+                               && i < methodCall.ByRefArguments.Count
+                               && methodCall.ByRefArguments[i];
+                return isByRef ? $"ref {expr}" : expr;
+            }));
 
             // Emit as statement (no assignment) if:
             // - Type is null or Void
