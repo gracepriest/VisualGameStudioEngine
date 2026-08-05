@@ -206,7 +206,24 @@ public static class ThemeManager
     /// Loads a VS Code theme JSON file and registers it as an available theme.
     /// Returns the display label if successful, null otherwise.
     /// </summary>
-    public static async Task<string?> LoadVsCodeThemeFileAsync(string filePath)
+    public static Task<string?> LoadVsCodeThemeFileAsync(string filePath)
+        => LoadVsCodeThemeFileAsync(filePath, null, null, "user");
+
+    /// <summary>
+    /// Registers a theme file under an explicit <paramref name="label"/>.
+    ///
+    /// Extension-contributed themes MUST pass the manifest's
+    /// <c>contributes.themes[].label</c>: theme files' internal "name" fields are not unique
+    /// across an extension's variants — Dracula's dracula.json and dracula-soft.json both call
+    /// themselves "Dracula" — so deriving the label from the file collapses both onto one
+    /// registry key and the second silently overwrites the first. The manifest labels
+    /// ("Dracula Theme" / "Dracula Theme Soft") are what VS Code shows, and are distinct.
+    ///
+    /// Passing null for label/uiTheme keeps the file-derived behaviour, which is correct for
+    /// the user-facing file-picker import where there is no manifest.
+    /// </summary>
+    public static async Task<string?> LoadVsCodeThemeFileAsync(
+        string filePath, string? label, string? uiTheme, string extensionId = "user")
     {
         try
         {
@@ -214,9 +231,13 @@ public static class ThemeManager
             if (info == null) return null;
 
             var (name, type) = info.Value;
-            var uiTheme = type == "light" ? "vs" : type == "hc" ? "hc-black" : "vs-dark";
+            var effectiveLabel = string.IsNullOrWhiteSpace(label) ? name : label!;
+            var effectiveUiTheme = string.IsNullOrWhiteSpace(uiTheme)
+                ? (type == "light" ? "vs" : type == "hc" ? "hc-black" : "vs-dark")
+                : uiTheme!;
 
-            var theme = await _themeLoader.LoadThemeAsync(filePath, name, name, uiTheme, "user");
+            var theme = await _themeLoader.LoadThemeAsync(
+                filePath, effectiveLabel, effectiveLabel, effectiveUiTheme, extensionId);
             if (theme == null) return null;
 
             _extensionThemes[theme.Label] = theme;

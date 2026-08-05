@@ -41,15 +41,89 @@ public class ExtensionThemeRegistrationTests
     /// subscriber that will foreach over it.
     /// </summary>
     [Test]
-    public void ContributionsLoadedEventArgs_ExposesThemeFilePaths()
+    public void ContributionsLoadedEventArgs_ExposesThemeContributions()
     {
         var args = new ExtensionContributionsLoadedEventArgs(new Extension { Id = "test.ext" });
 
-        Assert.That(args.ThemeFilePaths, Is.Not.Null, "subscribers enumerate this without a null check");
-        Assert.That(args.ThemeFilePaths, Is.Empty);
+        Assert.That(args.ThemeContributions, Is.Not.Null, "subscribers enumerate this without a null check");
+        Assert.That(args.ThemeContributions, Is.Empty);
 
-        args.ThemeFilePaths.Add("C:/x/theme.json");
-        Assert.That(args.ThemeFilePaths, Has.Count.EqualTo(1));
+        args.ThemeContributions.Add(new ExtensionThemeContribution
+        {
+            Path = "C:/x/theme.json",
+            Label = "My Theme",
+            UiTheme = "vs-dark"
+        });
+
+        Assert.That(args.ThemeContributions, Has.Count.EqualTo(1));
+        Assert.That(args.ThemeContributions[0].Label, Is.EqualTo("My Theme"),
+            "the manifest label must survive the hop to the Shell — it is the registry key");
+    }
+
+    /// <summary>
+    /// Regression for the Dracula case: an extension's theme files may share an internal "name"
+    /// ("Dracula" for both dracula.json and dracula-soft.json), so registering by file-derived
+    /// name collapses the variants onto one key and the second overwrites the first. The
+    /// manifest's distinct labels must be what reaches the registry.
+    /// </summary>
+    [Test]
+    public async Task ThemesWithIdenticalInternalNames_RegisterSeparatelyUnderManifestLabels()
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var sharedInternalName = $"Shared_{suffix}";
+        var labelA = $"Variant A {suffix}";
+        var labelB = $"Variant B {suffix}";
+
+        var pathA = Path.Combine(Path.GetTempPath(), $"themeA_{suffix}.json");
+        var pathB = Path.Combine(Path.GetTempPath(), $"themeB_{suffix}.json");
+        var body = $"{{ \"name\": \"{sharedInternalName}\", \"type\": \"dark\", \"colors\": {{}} }}";
+        await File.WriteAllTextAsync(pathA, body);
+        await File.WriteAllTextAsync(pathB, body);
+
+        try
+        {
+            var a = await ThemeManager.LoadVsCodeThemeFileAsync(pathA, labelA, "vs-dark", "test.ext");
+            var b = await ThemeManager.LoadVsCodeThemeFileAsync(pathB, labelB, "vs-dark", "test.ext");
+
+            Assert.That(a, Is.EqualTo(labelA));
+            Assert.That(b, Is.EqualTo(labelB));
+
+            Assert.That(ThemeManager.ExtensionThemeNames, Does.Contain(labelA));
+            Assert.That(ThemeManager.ExtensionThemeNames, Does.Contain(labelB),
+                "both variants must be selectable; registering by the shared internal name would " +
+                "leave only one.");
+            Assert.That(ThemeManager.ExtensionThemeNames, Does.Not.Contain(sharedInternalName),
+                "the file's internal name must not be used as the registry key for manifest themes");
+        }
+        finally
+        {
+            try { File.Delete(pathA); } catch { /* best effort */ }
+            try { File.Delete(pathB); } catch { /* best effort */ }
+        }
+    }
+
+    /// <summary>
+    /// A JSON Schema "type" may be a string or an array of strings. The array form threw, and
+    /// because manifest parsing is caught per-EXTENSION, that one field aborted loading the whole
+    /// extension — vscode.html-language-features never loaded at all because of
+    /// <c>"html.format.unformatted": { "type": ["string", "null"] }</c>.
+    /// </summary>
+    [TestCase("\"string\"", "string", TestName = "SchemaType_StringForm")]
+    [TestCase("[\"string\", \"null\"]", "string", TestName = "SchemaType_ArrayForm_TakesFirstNonNull")]
+    [TestCase("[\"null\", \"boolean\"]", "boolean", TestName = "SchemaType_ArrayForm_SkipsLeadingNull")]
+    [TestCase("[\"null\"]", "null", TestName = "SchemaType_ArrayForm_AllNull")]
+    [TestCase("123", "string", TestName = "SchemaType_UnexpectedShape_FallsBack")]
+    public void ConfigurationPropertyType_AcceptsStringAndArrayForms(string typeJson, string expected)
+    {
+        var json = $"{{ \"type\": {typeJson}, \"scope\": \"resource\" }}";
+
+        var prop = System.Text.Json.JsonSerializer.Deserialize<ConfigurationProperty>(
+            json, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+        Assert.That(prop, Is.Not.Null);
+        Assert.That(prop!.Type, Is.EqualTo(expected));
+        Assert.That(prop.Scope, Is.EqualTo("resource"),
+            "parsing must continue past the type field rather than consuming the rest of the object");
     }
 
     /// <summary>
@@ -83,6 +157,36 @@ public class ExtensionThemeRegistrationTests
     }
 
     /// <summary>
+    /// A grammar contribution's embeddedLanguages/tokenTypes are OBJECTS (scope -> id), not
+    /// arrays. Typed as List&lt;string&gt; they threw, and because manifest parsing is caught at the
+    /// whole-extension level that took all of vscode.html down — grammar, language and snippets.
+    /// Note the orphaned VSCodeExtension model in Core/Extensions already had these right; only
+    /// the wired one was wrong, which is this subsystem's recurring shape.
+    /// </summary>
+    [Test]
+    public void GrammarContribution_ParsesEmbeddedLanguagesAndTokenTypesAsObjects()
+    {
+        // Shape taken verbatim from vscode.html 1.95.3's package.json.
+        const string json = """
+        {
+          "scopeName": "text.html.basic",
+          "path": "./syntaxes/html.tmLanguage.json",
+          "embeddedLanguages": { "text.html": "html", "source.css": "css", "source.js": "javascript" },
+          "tokenTypes": { "meta.embedded.block.html": "other" }
+        }
+        """;
+
+        var grammar = System.Text.Json.JsonSerializer.Deserialize<GrammarContribution>(
+            json, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+        Assert.That(grammar, Is.Not.Null);
+        Assert.That(grammar!.ScopeName, Is.EqualTo("text.html.basic"));
+        Assert.That(grammar.EmbeddedLanguages, Has.Count.EqualTo(3));
+        Assert.That(grammar.EmbeddedLanguages["source.css"], Is.EqualTo("css"));
+        Assert.That(grammar.TokenTypes["meta.embedded.block.html"], Is.EqualTo("other"));
+    }
+
+    /// <summary>
     /// Source guard: ExtensionService must hand the collected paths out on the event. Its
     /// extensions directory is hard-coded to ~/.vgs/extensions, so a behavioural test at that
     /// layer would write into the developer's real profile.
@@ -99,9 +203,12 @@ public class ExtensionThemeRegistrationTests
 
         var src = File.ReadAllText(path);
 
-        Assert.That(src, Does.Contain("LoadThemesFromExtension(extension, stats.ThemeFilePaths)"),
-            "the theme loader must record each resolved theme file on the event args, otherwise the " +
+        Assert.That(src, Does.Contain("LoadThemesFromExtension(extension, stats.ThemeContributions)"),
+            "the theme loader must record each resolved theme on the event args, otherwise the " +
             "Shell has nothing to register and themes are silently dropped again.");
+        Assert.That(src, Does.Contain("Label = label"),
+            "the manifest label must be carried across — deriving identity from the theme file " +
+            "collapses same-named variants onto one registry entry.");
     }
 
     /// <summary>

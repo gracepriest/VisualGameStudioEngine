@@ -469,4 +469,78 @@ End Sub";
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
         Assert.That(output, Is.Not.Null);
     }
+
+    // ========================================================================
+    // ByRef — the call site, which is where C# needs the modifier repeated.
+    // ========================================================================
+
+    [Test]
+    public void Compile_ByRef_FreeFunction_EmitsRefAtDeclarationAndCallSite()
+    {
+        var source = @"
+Sub Bump(ByRef x As Integer)
+    x = x + 10
+End Sub
+
+Sub Main()
+    Dim v As Integer = 1
+    Bump(v)
+End Sub";
+        var output = CompileToCSharp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("void Bump(ref int x)"));
+        Assert.That(output, Does.Contain("Bump(ref v)"),
+            "C# needs `ref` repeated at the call site; without it csc reports CS1620:\n" + output);
+    }
+
+    [Test]
+    public void Compile_ByRef_InstanceMethod_EmitsRefAtCallSite()
+    {
+        // IRInstanceMethodCall carried no ByRef information at all, so the declaration got
+        // `ref int` while the call site did not — CS1620, a hard build failure for any program
+        // that called a ByRef method on an object.
+        var source = @"
+Class Worker
+    Public Sub Bump(ByRef x As Integer)
+        x = x + 10
+    End Sub
+End Class
+
+Sub Main()
+    Dim w As New Worker()
+    Dim v As Integer = 1
+    w.Bump(v)
+End Sub";
+        var output = CompileToCSharp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("Bump(ref v)"),
+            "an instance call must repeat `ref` at the call site too (CS1620):\n" + output);
+    }
+
+    [Test]
+    public void Compile_ByVal_InstanceMethod_EmitsNoRefAtCallSite()
+    {
+        // Anti-vacuity partner: a backend that marked every instance argument `ref` would pass
+        // the test above and break every ordinary call in the language.
+        var source = @"
+Class Worker
+    Public Sub Show(ByVal x As Integer)
+        Console.WriteLine(x)
+    End Sub
+End Class
+
+Sub Main()
+    Dim w As New Worker()
+    Dim v As Integer = 1
+    w.Show(v)
+End Sub";
+        var output = CompileToCSharp(source, out var errors);
+
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("Show(v)"));
+        Assert.That(output, Does.Not.Contain("Show(ref v)"),
+            "a ByVal argument must NOT be passed by reference:\n" + output);
+    }
 }

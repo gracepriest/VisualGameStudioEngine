@@ -620,8 +620,16 @@ public class GrammarContribution
     public string Language { get; set; } = "";
     public string ScopeName { get; set; } = "";
     public string Path { get; set; } = "";
-    public List<string> EmbeddedLanguages { get; set; } = new();
-    public List<string> TokenTypes { get; set; } = new();
+    /// <summary>
+    /// Scope name -> language id, e.g. { "source.css": "css", "source.js": "javascript" }.
+    /// An OBJECT in the VS Code schema, not an array. Typed as List&lt;string&gt; this threw, and
+    /// since manifest parsing is caught per-EXTENSION that took all of vscode.html down with it —
+    /// grammar, language and snippets included.
+    /// </summary>
+    public Dictionary<string, string> EmbeddedLanguages { get; set; } = new();
+
+    /// <summary>Scope name -&gt; token type, e.g. { "meta.embedded.block.html": "other" }. Also an object.</summary>
+    public Dictionary<string, string> TokenTypes { get; set; } = new();
 }
 
 /// <summary>
@@ -683,6 +691,11 @@ public class ConfigurationContribution
 /// </summary>
 public class ConfigurationProperty
 {
+    /// <summary>
+    /// JSON Schema type. Accepts both the string form ("string") and the array form
+    /// (["string", "null"]) — see <see cref="JsonSchemaTypeConverter"/> for why that matters.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonConverter(typeof(JsonSchemaTypeConverter))]
     public string Type { get; set; } = "string";
     public object? Default { get; set; }
     public string? Description { get; set; }
@@ -694,6 +707,88 @@ public class ConfigurationProperty
     public string? Pattern { get; set; }
     public string? Scope { get; set; }
     public int Order { get; set; }
+}
+
+/// <summary>
+/// One theme contributed by an extension, as declared in its package.json.
+///
+/// <see cref="Label"/> is the manifest's own <c>contributes.themes[].label</c> and is the
+/// identity the theme must register under. Deriving a name from the theme FILE instead loses
+/// this: Dracula ships dracula.json and dracula-soft.json whose internal "name" fields are
+/// both literally "Dracula", so the two collapsed onto one registry key and the second
+/// silently overwrote the first. The manifest labels ("Dracula Theme" / "Dracula Theme Soft")
+/// are distinct, which is why VS Code lists them separately.
+/// </summary>
+public sealed class ExtensionThemeContribution
+{
+    /// <summary>Absolute path to the theme JSON file.</summary>
+    public string Path { get; init; } = "";
+
+    /// <summary>Manifest label — the display name and registry key. Null falls back to the file's own name.</summary>
+    public string? Label { get; init; }
+
+    /// <summary>Manifest uiTheme ("vs", "vs-dark", "hc-black", "hc-light").</summary>
+    public string? UiTheme { get; init; }
+}
+
+/// <summary>
+/// Reads a JSON Schema "type" that may be either a string ("string") or an array of strings
+/// (["string", "null"] for a nullable setting). Both forms are legal and both appear in real
+/// VS Code manifests — vscode.html-language-features declares
+/// <c>html.format.unformatted</c> as ["string", "null"].
+///
+/// Without this, deserializing the array form threw a JsonException, and because manifest
+/// parsing is caught at the WHOLE-EXTENSION level, one optional field in a Settings-UI schema
+/// aborted loading that extension's grammars, themes, commands and activation entirely.
+///
+/// The array form collapses to its first non-"null" entry, which is the type the settings UI
+/// should present; "null" only signals nullability.
+/// </summary>
+public sealed class JsonSchemaTypeConverter : System.Text.Json.Serialization.JsonConverter<string>
+{
+    public override string Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.String)
+        {
+            return reader.GetString() ?? "string";
+        }
+
+        if (reader.TokenType == JsonTokenType.StartArray)
+        {
+            string? first = null;
+            string? firstNonNull = null;
+
+            while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+            {
+                if (reader.TokenType == JsonTokenType.StartObject || reader.TokenType == JsonTokenType.StartArray)
+                {
+                    reader.Skip();
+                    continue;
+                }
+
+                if (reader.TokenType != JsonTokenType.String) continue;
+
+                var value = reader.GetString();
+                if (string.IsNullOrEmpty(value)) continue;
+
+                first ??= value;
+                if (firstNonNull == null && !string.Equals(value, "null", StringComparison.OrdinalIgnoreCase))
+                {
+                    firstNonNull = value;
+                }
+            }
+
+            return firstNonNull ?? first ?? "string";
+        }
+
+        // Any other shape is not something the settings UI can render; skip it rather than
+        // letting an unrecognised schema take the whole extension down.
+        reader.Skip();
+        return "string";
+    }
+
+    public override void Write(Utf8JsonWriter writer, string value, JsonSerializerOptions options)
+        => writer.WriteStringValue(value);
 }
 
 /// <summary>
@@ -844,13 +939,13 @@ public class ExtensionContributionsLoadedEventArgs : EventArgs
     public int LanguageConfigsLoaded { get; set; }
 
     /// <summary>
-    /// Absolute paths of the VS Code theme JSON files this extension contributes.
-    /// The extension service parses themes but cannot register them: the theme registry
-    /// (ThemeManager) lives in the Shell, which references ProjectSystem and not the other
-    /// way round. Carrying the paths on this event lets the Shell do the registration
+    /// The VS Code themes this extension contributes, each with the manifest's own label and
+    /// uiTheme. The extension service parses themes but cannot register them: the theme
+    /// registry (ThemeManager) lives in the Shell, which references ProjectSystem and not the
+    /// other way round. Carrying the contributions on this event lets the Shell register them
     /// without inverting the dependency.
     /// </summary>
-    public List<string> ThemeFilePaths { get; } = new();
+    public List<ExtensionThemeContribution> ThemeContributions { get; } = new();
 
     public ExtensionContributionsLoadedEventArgs(Extension extension)
     {

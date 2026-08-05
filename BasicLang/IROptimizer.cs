@@ -19,10 +19,178 @@ namespace BasicLang.Compiler.IR.Optimization
         }
         
         public abstract bool Run(IRModule module);
-        
+
         protected void ReportModification()
         {
             ModificationCount++;
+        }
+
+        /// <summary>
+        /// Rewrite every USE of <paramref name="oldValue"/> to <paramref name="newValue"/>
+        /// across <paramref name="instructions"/>.
+        ///
+        /// <para><b>Why a pass that swaps an instruction MUST call this.</b> A pass that
+        /// rewrites <c>block.Instructions[i]</c> in place produces a NEW <see cref="IRValue"/>
+        /// object. Consumers elsewhere in the function still hold a reference to the DISCARDED
+        /// one. Backends name temporaries by OBJECT IDENTITY — <c>ICodeGenerator.GetValueName</c>
+        /// keys its <c>_valueNames</c> dictionary on the value instance and mints a fresh
+        /// <c>t{N}</c> for any instance it has not seen — so an orphaned consumer silently
+        /// renders an identifier that is never declared and never assigned. Carrying the old
+        /// <c>Name</c> onto the replacement does NOT help: the emitted assignment then looks
+        /// correct while the consumer still refers to a different object. That is exactly how
+        /// strength reduction shipped <c>t0 = v &lt;&lt; 1; return t1;</c>.</para>
+        ///
+        /// <para>Uses reference equality throughout: two structurally identical operands are
+        /// distinct values here, and only the one being replaced may be rewritten.</para>
+        /// </summary>
+        protected static void ReplaceUses(IEnumerable<IRInstruction> instructions, IRValue oldValue, IRValue newValue)
+        {
+            if (instructions == null) return;
+            foreach (var inst in instructions)
+                ReplaceUsesIn(inst, oldValue, newValue);
+        }
+
+        private static void ReplaceInList(List<IRValue> operands, IRValue oldValue, IRValue newValue)
+        {
+            if (operands == null) return;
+            for (int i = 0; i < operands.Count; i++)
+                if (ReferenceEquals(operands[i], oldValue)) operands[i] = newValue;
+        }
+
+        /// <summary>
+        /// One arm per IR node that CONSUMES a value. Definition slots are deliberately absent:
+        /// <c>IRAssignment.Target</c> is an <see cref="IRVariable"/> being written, not a use.
+        /// </summary>
+        private static void ReplaceUsesIn(IRInstruction inst, IRValue oldValue, IRValue newValue)
+        {
+            switch (inst)
+            {
+                case IRBinaryOp binOp:
+                    if (ReferenceEquals(binOp.Left, oldValue)) binOp.Left = newValue;
+                    if (ReferenceEquals(binOp.Right, oldValue)) binOp.Right = newValue;
+                    break;
+                case IRUnaryOp unOp:
+                    if (ReferenceEquals(unOp.Operand, oldValue)) unOp.Operand = newValue;
+                    break;
+                case IRCompare cmp:
+                    if (ReferenceEquals(cmp.Left, oldValue)) cmp.Left = newValue;
+                    if (ReferenceEquals(cmp.Right, oldValue)) cmp.Right = newValue;
+                    break;
+                case IRLoad load:
+                    if (ReferenceEquals(load.Address, oldValue)) load.Address = newValue;
+                    break;
+                case IRStore store:
+                    if (ReferenceEquals(store.Value, oldValue)) store.Value = newValue;
+                    if (ReferenceEquals(store.Address, oldValue)) store.Address = newValue;
+                    break;
+                case IRGetElementPtr gep:
+                    if (ReferenceEquals(gep.BasePointer, oldValue)) gep.BasePointer = newValue;
+                    ReplaceInList(gep.Indices, oldValue, newValue);
+                    break;
+                case IRConditionalBranch condBr:
+                    if (ReferenceEquals(condBr.Condition, oldValue)) condBr.Condition = newValue;
+                    break;
+                case IRSwitch sw:
+                    if (ReferenceEquals(sw.Value, oldValue)) sw.Value = newValue;
+                    if (sw.Cases != null)
+                        for (int i = 0; i < sw.Cases.Count; i++)
+                            if (ReferenceEquals(sw.Cases[i].CaseValue, oldValue))
+                                sw.Cases[i] = (newValue, sw.Cases[i].Target);
+                    if (sw.PatternCases != null)
+                        foreach (var patternCase in sw.PatternCases)
+                            ReplaceUsesInPattern(patternCase, oldValue, newValue);
+                    break;
+                case IRReturn ret:
+                    if (ReferenceEquals(ret.Value, oldValue)) ret.Value = newValue;
+                    break;
+                case IRCall call:
+                    if (ReferenceEquals(call.CalleeValue, oldValue)) call.CalleeValue = newValue;
+                    ReplaceInList(call.Arguments, oldValue, newValue);
+                    break;
+                case IRCast cast:
+                    if (ReferenceEquals(cast.Value, oldValue)) cast.Value = newValue;
+                    break;
+                case IRAssignment asg:
+                    if (ReferenceEquals(asg.Value, oldValue)) asg.Value = newValue;
+                    break;
+                case IRArrayStore arrayStore:
+                    if (ReferenceEquals(arrayStore.Array, oldValue)) arrayStore.Array = newValue;
+                    if (ReferenceEquals(arrayStore.Index, oldValue)) arrayStore.Index = newValue;
+                    if (ReferenceEquals(arrayStore.Value, oldValue)) arrayStore.Value = newValue;
+                    break;
+                case IRAwait await:
+                    if (ReferenceEquals(await.Expression, oldValue)) await.Expression = newValue;
+                    break;
+                case IRYield yield:
+                    if (ReferenceEquals(yield.Value, oldValue)) yield.Value = newValue;
+                    break;
+                case IRIndexerAccess indexerAccess:
+                    if (ReferenceEquals(indexerAccess.Collection, oldValue)) indexerAccess.Collection = newValue;
+                    ReplaceInList(indexerAccess.Indices, oldValue, newValue);
+                    break;
+                case IRIndexerStore indexerStore:
+                    if (ReferenceEquals(indexerStore.Collection, oldValue)) indexerStore.Collection = newValue;
+                    ReplaceInList(indexerStore.Indices, oldValue, newValue);
+                    if (ReferenceEquals(indexerStore.Value, oldValue)) indexerStore.Value = newValue;
+                    break;
+                case IRForEach forEach:
+                    if (ReferenceEquals(forEach.Collection, oldValue)) forEach.Collection = newValue;
+                    break;
+                case IRThrow thrown:
+                    if (ReferenceEquals(thrown.Exception, oldValue)) thrown.Exception = newValue;
+                    break;
+                case IRNewObject newObject:
+                    ReplaceInList(newObject.Arguments, oldValue, newValue);
+                    break;
+                case IRInstanceMethodCall instanceCall:
+                    if (ReferenceEquals(instanceCall.Object, oldValue)) instanceCall.Object = newValue;
+                    ReplaceInList(instanceCall.Arguments, oldValue, newValue);
+                    break;
+                case IRBaseMethodCall baseCall:
+                    ReplaceInList(baseCall.Arguments, oldValue, newValue);
+                    break;
+                case IRFieldAccess fieldAccess:
+                    if (ReferenceEquals(fieldAccess.Object, oldValue)) fieldAccess.Object = newValue;
+                    break;
+                case IRFieldStore fieldStore:
+                    if (ReferenceEquals(fieldStore.Object, oldValue)) fieldStore.Object = newValue;
+                    if (ReferenceEquals(fieldStore.Value, oldValue)) fieldStore.Value = newValue;
+                    break;
+                case IRTupleElement tupleElement:
+                    if (ReferenceEquals(tupleElement.Tuple, oldValue)) tupleElement.Tuple = newValue;
+                    break;
+            }
+        }
+
+        private static void ReplaceUsesInPattern(IRPatternCase patternCase, IRValue oldValue, IRValue newValue)
+        {
+            if (patternCase == null) return;
+
+            if (ReferenceEquals(patternCase.WhenGuard, oldValue)) patternCase.WhenGuard = newValue;
+
+            switch (patternCase)
+            {
+                case IRRangePatternCase range:
+                    if (ReferenceEquals(range.LowerBound, oldValue)) range.LowerBound = newValue;
+                    if (ReferenceEquals(range.UpperBound, oldValue)) range.UpperBound = newValue;
+                    break;
+                case IRComparisonPatternCase comparison:
+                    if (ReferenceEquals(comparison.CompareValue, oldValue)) comparison.CompareValue = newValue;
+                    break;
+                case IRConstantPatternCase constant:
+                    if (ReferenceEquals(constant.Value, oldValue)) constant.Value = newValue;
+                    break;
+                case IROrPatternCase or:
+                    if (or.Alternatives != null)
+                        foreach (var alternative in or.Alternatives)
+                            ReplaceUsesInPattern(alternative, oldValue, newValue);
+                    break;
+                case IRTuplePatternCase tuple:
+                    if (tuple.Elements != null)
+                        foreach (var element in tuple.Elements)
+                            ReplaceUsesInPattern(element, oldValue, newValue);
+                    break;
+            }
         }
     }
     
@@ -135,54 +303,20 @@ namespace BasicLang.Compiler.IR.Optimization
         }
 
         /// <summary>
-        /// Replace all references to oldValue with newValue in the block
+        /// Replace all references to oldValue with newValue in the block.
+        ///
+        /// <para>Delegates to <see cref="OptimizationPass.ReplaceUses"/> — one implementation
+        /// for every pass that swaps an instruction, per the repo rule that shared resolver
+        /// logic changes once rather than per consumer. The block scope is unchanged from the
+        /// hand-rolled version this replaced; what widened is NODE coverage, which previously
+        /// stopped at eight consumer kinds and silently missed field stores, indexer accesses,
+        /// array stores, casts, throws and instance-call receivers.</para>
         /// </summary>
         private void ReplaceAllReferences(BasicBlock block, IRValue oldValue, IRValue newValue)
         {
-            foreach (var inst in block.Instructions)
-            {
-                if (inst is IRBinaryOp binOp)
-                {
-                    if (ReferenceEquals(binOp.Left, oldValue)) binOp.Left = newValue;
-                    if (ReferenceEquals(binOp.Right, oldValue)) binOp.Right = newValue;
-                }
-                else if (inst is IRUnaryOp unOp)
-                {
-                    if (ReferenceEquals(unOp.Operand, oldValue)) unOp.Operand = newValue;
-                }
-                else if (inst is IRCompare cmp)
-                {
-                    if (ReferenceEquals(cmp.Left, oldValue)) cmp.Left = newValue;
-                    if (ReferenceEquals(cmp.Right, oldValue)) cmp.Right = newValue;
-                }
-                else if (inst is IRAssignment asg)
-                {
-                    if (ReferenceEquals(asg.Value, oldValue)) asg.Value = newValue;
-                }
-                else if (inst is IRStore store)
-                {
-                    if (ReferenceEquals(store.Value, oldValue)) store.Value = newValue;
-                    if (ReferenceEquals(store.Address, oldValue)) store.Address = newValue;
-                }
-                else if (inst is IRCall call)
-                {
-                    for (int j = 0; j < call.Arguments.Count; j++)
-                    {
-                        if (ReferenceEquals(call.Arguments[j], oldValue))
-                            call.Arguments[j] = newValue;
-                    }
-                }
-                else if (inst is IRReturn ret)
-                {
-                    if (ReferenceEquals(ret.Value, oldValue)) ret.Value = newValue;
-                }
-                else if (inst is IRConditionalBranch condBr)
-                {
-                    if (ReferenceEquals(condBr.Condition, oldValue)) condBr.Condition = newValue;
-                }
-            }
+            ReplaceUses(block.Instructions, oldValue, newValue);
         }
-        
+
         private IRConstant TryFoldBinary(IRBinaryOp op)
         {
             if (!(op.Left is IRConstant left) || !(op.Right is IRConstant right))
@@ -624,6 +758,17 @@ namespace BasicLang.Compiler.IR.Optimization
                 // Replace uses
                 ReplaceUses(inst, copies);
 
+                // A CALL WRITES ITS ByRef ARGUMENTS. That write is invisible in this block —
+                // there is no IRAssignment and no rename for it — so without this kill the
+                // argument keeps whatever copy fact preceded the call and a later read folds
+                // against the STALE value. `Dim n = 0 : Int32.TryParse("42", n) : If n = 42`
+                // recorded `n -> 0`, survived the call, and folded the comparison to FALSE:
+                // a silent miscompile on EVERY backend (the C# backend, whose `ref` signature
+                // is correct, emitted `if (false)` just the same). Runs before the redefinition
+                // bookkeeping below because the callee's write happens during the call, ahead
+                // of any binding of the call's own result.
+                InvalidateByRefWrites(copies, inst);
+
                 // Track copy assignments. ANY assignment to a variable
                 // redefines it — invalidation must run unconditionally
                 // (an await-valued assignment `x = Await F()` records no
@@ -664,6 +809,102 @@ namespace BasicLang.Compiler.IR.Optimization
                     InvalidateRedefined(copies, defined.Name);
                 }
             }
+        }
+
+        /// <summary>
+        /// Kills the copy facts invalidated by a call's by-reference writes. A ByRef (or .NET
+        /// <c>ref</c>/<c>out</c>) argument is an OUTPUT of the call, so every variable its
+        /// expression reads may hold a different value afterwards.
+        ///
+        /// <para>Invalidation is by NAME over the argument's whole operand tree, not just the
+        /// top-level variable: an argument such as <c>h.F</c> or <c>arr(i)</c> writes storage
+        /// reachable through <c>h</c> / <c>arr</c>, and killing a fact is always safe while
+        /// keeping a stale one is not.</para>
+        /// </summary>
+        private static void InvalidateByRefWrites(Dictionary<IRVariable, IRValue> copies, IRInstruction inst)
+        {
+            if (copies.Count == 0) return;
+
+            List<bool> byRefFlags;
+            List<IRValue> arguments;
+            switch (inst)
+            {
+                case IRCall call:
+                    byRefFlags = call.ByRefArguments; arguments = call.Arguments; break;
+                case IRInstanceMethodCall methodCall:
+                    byRefFlags = methodCall.ByRefArguments; arguments = methodCall.Arguments; break;
+                default:
+                    return;
+            }
+            if (byRefFlags == null || arguments == null) return;
+
+            for (int i = 0; i < arguments.Count && i < byRefFlags.Count; i++)
+            {
+                if (!byRefFlags[i]) continue;
+                var written = new List<string>();
+                CollectNames(arguments[i], written);
+                foreach (var name in written)
+                    InvalidateRedefined(copies, name);
+            }
+        }
+
+        /// <summary>
+        /// Gathers every variable name read anywhere in <paramref name="value"/>'s operand tree,
+        /// plus the value's own destination name (the IRBuilder names result values after their
+        /// assignment target, so a renamed temp IS a definition). Mirrors <see cref="Mentions"/>
+        /// arm for arm; an unrecognized shape still contributes its own name, and the caller
+        /// pairs this with <see cref="InvalidateRedefined"/>, which additionally kills facts
+        /// whose recorded value MENTIONS the name. Over-collecting only costs optimization —
+        /// keeping a stale fact is the outcome that miscompiles.
+        /// </summary>
+        private static void CollectNames(IRValue value, List<string> into)
+        {
+            switch (value)
+            {
+                case null:
+                case IRConstant:
+                    return;
+                case IRVariable v:
+                    if (!string.IsNullOrEmpty(v.Name)) into.Add(v.Name);
+                    return;
+                case IRNewObject n:
+                    foreach (var a in n.Arguments) CollectNames(a, into);
+                    break;
+                case IRBinaryOp b:
+                    CollectNames(b.Left, into); CollectNames(b.Right, into);
+                    break;
+                case IRUnaryOp u:
+                    CollectNames(u.Operand, into);
+                    break;
+                case IRCompare c:
+                    CollectNames(c.Left, into); CollectNames(c.Right, into);
+                    break;
+                case IRCast cast:
+                    CollectNames(cast.Value, into);
+                    break;
+                case IRFieldAccess f:
+                    CollectNames(f.Object, into);
+                    break;
+                case IRInstanceMethodCall m:
+                    CollectNames(m.Object, into);
+                    foreach (var a in m.Arguments) CollectNames(a, into);
+                    break;
+                case IRCall call:
+                    foreach (var a in call.Arguments) CollectNames(a, into);
+                    break;
+                case IRLoad load:
+                    CollectNames(load.Address, into);
+                    break;
+                case IRGetElementPtr gep:
+                    CollectNames(gep.BasePointer, into);
+                    foreach (var idx in gep.Indices) CollectNames(idx, into);
+                    break;
+            }
+
+            // A value that names its own destination temp (the IRBuilder names result values
+            // after their assignment target) is itself a definition worth killing.
+            if (value != null && value is not IRVariable && !string.IsNullOrEmpty(value.Name))
+                into.Add(value.Name);
         }
 
         /// <summary>
@@ -1032,19 +1273,19 @@ namespace BasicLang.Compiler.IR.Optimization
                 
                 foreach (var block in function.Blocks)
                 {
-                    ReduceStrength(block);
+                    ReduceStrength(function, block);
                 }
             }
-            
+
             return ModificationCount > 0;
         }
-        
-        private void ReduceStrength(BasicBlock block)
+
+        private void ReduceStrength(IRFunction function, BasicBlock block)
         {
             for (int i = 0; i < block.Instructions.Count; i++)
             {
                 var inst = block.Instructions[i];
-                
+
                 if (inst is IRBinaryOp binaryOp)
                 {
                     var reduced = TryReduceBinary(binaryOp);
@@ -1057,6 +1298,16 @@ namespace BasicLang.Compiler.IR.Optimization
                         // stepping in a debugger then lands in generated glue instead of
                         // the next source statement (found by the Phase 4 Step-0 gate).
                         reduced.SourceLine = binaryOp.SourceLine;
+
+                        // The rewrite produces a NEW IRValue object, so every consumer still
+                        // pointing at the discarded multiply/divide/modulo has to be re-pointed
+                        // at it. Reusing binaryOp.Name on the replacement is NOT sufficient —
+                        // backends key temporaries by object identity, so an un-updated consumer
+                        // renders a fresh, undeclared t{N} ("t0 = v << 1; return t1;"). Scoped to
+                        // the whole function because a use may live in a later block (a compare
+                        // feeding an If, a Return after a branch) — see ReplaceUses.
+                        ReplaceUses(function.Blocks.SelectMany(b => b.Instructions), binaryOp, reduced);
+
                         block.Instructions[i] = reduced;
                         ReportModification();
                     }
@@ -1064,7 +1315,9 @@ namespace BasicLang.Compiler.IR.Optimization
             }
         }
         
-        private IRInstruction TryReduceBinary(IRBinaryOp op)
+        // Returns IRBinaryOp (not IRInstruction): the replacement is always a value, and the
+        // caller must be able to hand it to ReplaceUses as the new definition.
+        private IRBinaryOp TryReduceBinary(IRBinaryOp op)
         {
             // Multiplication by power of 2 Ã¢â€ â€™ shift
             if (op.Operation == BinaryOpKind.Mul)
@@ -1081,32 +1334,26 @@ namespace BasicLang.Compiler.IR.Optimization
             }
             
             // Division by power of 2 Ã¢â€ â€™ shift
-            if (op.Operation == BinaryOpKind.Div)
-            {
-                if (op.Right is IRConstant constant && constant.Value is int power)
-                {
-                    if (IsPowerOfTwo(power))
-                    {
-                        int shift = (int)Math.Log(power, 2);
-                        var shiftAmount = new IRConstant(shift, op.Right.Type);
-                        return new IRBinaryOp(op.Name, BinaryOpKind.Shr, op.Left, shiftAmount, op.Type);
-                    }
-                }
-            }
+            // REMOVED - this arm was UNSOUND for signed operands. An arithmetic shift FLOORS,
+            // while .NET/VB integer division TRUNCATES TOWARD ZERO. Measured against the C#
+            // backend: -10 / 4 is -2, but -10 >> 2 is -3. The identity holds only when the
+            // left operand is provably non-negative, and the IR carries no range analysis to
+            // establish that. Every C++ and IL compiler already performs this reduction
+            // downstream when it is legal, so nothing of value is lost by refusing it here.
             
             // Modulo by power of 2 Ã¢â€ â€™ bitwise AND
             // Modulo by power of 2 -> bitwise AND (x % 8 == x & 7)
-            if (op.Operation == BinaryOpKind.Mod)
-            {
-                if (op.Right is IRConstant modConst && modConst.Value is int power2)
-                {
-                    if (IsPowerOfTwo(power2))
-                    {
-                        var mask = new IRConstant(power2 - 1, op.Right.Type);
-                        return new IRBinaryOp(op.Name, BinaryOpKind.BitwiseAnd, op.Left, mask, op.Type);
-                    }
-                }
-            }
+            // REMOVED - unsound for the same reason, and worse: it gets the SIGN wrong.
+            // .NET: -10 Mod 4 is -2. The rewrite gives -10 & 3, which is 2.
+            //
+            // WHY BOTH ARMS WERE LATENT RATHER THAN HARMLESS: each produced a NEW IRValue
+            // whose consumers were never re-pointed at it (the defect this commit's parent
+            // fixes), so affected programs failed to COMPILE and nobody ever saw the wrong
+            // answer underneath. Repairing the re-pointing without removing these would have
+            // converted two compile errors into two SILENT MISCOMPILES - and on BOTH
+            // backends, because the optimizer is shared. That is also why cross-backend
+            // agreement cannot be the oracle for an optimizer bug: it moves both backends
+            // together. These were caught by comparing against real .NET semantics instead.
 
             return null;
         }

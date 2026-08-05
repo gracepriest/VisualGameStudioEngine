@@ -923,7 +923,7 @@ public class ExtensionService : IExtensionService
         try
         {
             // Load themes
-            stats.ThemesLoaded = LoadThemesFromExtension(extension, stats.ThemeFilePaths);
+            stats.ThemesLoaded = LoadThemesFromExtension(extension, stats.ThemeContributions);
 
             // Load grammars and language configurations via TextMateRegistrar
             stats.GrammarsLoaded = await LoadGrammarsFromExtensionAsync(extension);
@@ -1056,7 +1056,7 @@ public class ExtensionService : IExtensionService
     /// ContributionsLoaded for the Shell to register. Without that the loaded theme object is
     /// discarded and the count reports work attempted rather than work completed.
     /// </summary>
-    private int LoadThemesFromExtension(Extension extension, List<string>? themeFilePaths = null)
+    private int LoadThemesFromExtension(Extension extension, List<ExtensionThemeContribution>? themeContributions = null)
     {
         if (_textMateService == null) return 0;
 
@@ -1088,10 +1088,17 @@ public class ExtensionService : IExtensionService
                 var fullPath = Path.Combine(extension.InstallPath, themePath.TrimStart('/'));
                 if (!File.Exists(fullPath)) continue;
 
-                // Surface the path even if TextMate parsing below fails — the Shell's theme
-                // loader (VsCodeThemeLoader) is a different, more capable parser and may well
-                // handle a file this one chokes on.
-                themeFilePaths?.Add(fullPath);
+                // Surface the contribution even if TextMate parsing below fails — the Shell's
+                // theme loader (VsCodeThemeLoader) is a different, more capable parser and may
+                // well handle a file this one chokes on. The manifest label travels with the
+                // path: theme files' internal names are not unique (Dracula's two variants both
+                // call themselves "Dracula"), so deriving identity from the file loses one.
+                themeContributions?.Add(new ExtensionThemeContribution
+                {
+                    Path = fullPath,
+                    Label = label,
+                    UiTheme = uiTheme
+                });
 
                 try
                 {

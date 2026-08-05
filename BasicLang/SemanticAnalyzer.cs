@@ -710,8 +710,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (typeRef.IsArray)
             {
                 var elementType = ResolveSiblingSignatureTypeName(typeRef.Name);
-                int arraySize = typeRef.ArrayDimensions.Count > 0 ? typeRef.ArrayDimensions[0] : 0;
-                return _typeManager.CreateArrayType(elementType, typeRef.ArrayDimensions.Count, arraySize);
+                // report: false — a sibling's own compilation reports its diagnostics, and this
+                // path deliberately never accuses the current unit (see the method summary).
+                return _typeManager.CreateArrayType(
+                    elementType, ResolveArrayDimensionSizes(typeRef, report: false));
             }
 
             if (typeRef.GenericArguments.Count > 0)
@@ -1992,9 +1994,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     Error($"Unknown type '{typeRef.Name}'", 0, 0);
                     return _typeManager.ObjectType;
                 }
-                // Get the array size from the first dimension (for 1D arrays)
-                int arraySize = typeRef.ArrayDimensions.Count > 0 ? typeRef.ArrayDimensions[0] : 0;
-                return _typeManager.CreateArrayType(elementType, typeRef.ArrayDimensions.Count, arraySize);
+                return _typeManager.CreateArrayType(
+                    elementType, ResolveArrayDimensionSizes(typeRef, report: true));
             }
 
             // Handle generic types
@@ -2063,6 +2064,184 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
 
             return type;
+        }
+
+        /// <summary>
+        /// Array-size expressions already reported as non-constant, by reference identity.
+        /// <see cref="ResolveTypeReference"/> can run over the same declaration more than once
+        /// (signature pre-passes, re-analysis), and one bad declaration must produce one
+        /// diagnostic, not one per visit.
+        /// </summary>
+        private readonly HashSet<ExpressionNode> _reportedNonConstantArraySizes =
+            new HashSet<ExpressionNode>();
+
+        /// <summary>
+        /// Folds a declaration's dimension list into per-dimension element counts, one entry per
+        /// dimension (0 = that dimension was declared empty, e.g. <c>Dim a() As Integer</c>).
+        ///
+        /// <para>THIS IS WHERE A SIZE BECOMES A NUMBER. Sizes reach here as expressions because
+        /// the parser cannot evaluate them (<c>Const N As Integer = 5</c> is not known until
+        /// constants are in scope), and a size that never becomes a number is the memory-safety
+        /// bug this fixes: <c>TypeInfo.ArraySize</c> stayed 0, so both backends emitted an EMPTY
+        /// array for a program that indexes it — <c>std::vector&lt;int32_t&gt; a = {}</c> then
+        /// <c>a[0] = 1</c> (access violation under C++), <c>int[] a = default!</c> then
+        /// <c>a[0] = 1</c> (NullReferenceException under C#). Both compiled clean.</para>
+        ///
+        /// <para>A size expression that will not fold is therefore REFUSED rather than dropped.
+        /// There is no run-time-sizing fallback to fall back to: <c>ReDim</c> is not implemented
+        /// (it lowers to a call to a function that does not exist), so an unfoldable size has no
+        /// correct lowering at all and a diagnostic is the only honest answer.</para>
+        /// </summary>
+        /// <param name="report">
+        /// False on the sibling-signature path, which must never accuse the current unit.
+        /// </param>
+        private List<int> ResolveArrayDimensionSizes(TypeReference typeRef, bool report)
+        {
+            var sizes = new List<int>();
+            if (typeRef?.ArrayDimensions == null) return sizes;
+
+            foreach (var dimension in typeRef.ArrayDimensions)
+            {
+                // An empty dimension is legitimately unsized: `Dim a() As Integer` declares an
+                // array variable that something else (an assignment) supplies storage for.
+                if (dimension == null)
+                {
+                    sizes.Add(0);
+                    continue;
+                }
+
+                if (TryFoldConstantInt(dimension, out var size))
+                {
+                    if (size < 0)
+                    {
+                        if (report && _reportedNonConstantArraySizes.Add(dimension))
+                            Error($"Array size cannot be negative (got {size})",
+                                  dimension.Line, dimension.Column);
+                        sizes.Add(0);
+                    }
+                    else
+                    {
+                        sizes.Add(size);
+                    }
+                    continue;
+                }
+
+                if (report && _reportedNonConstantArraySizes.Add(dimension))
+                {
+                    Error("Array size must be a compile-time constant (an integer literal, a "
+                          + "Const, or arithmetic over them). A size computed at run time cannot "
+                          + "be declared this way, and ReDim is not supported.",
+                          dimension.Line, dimension.Column);
+                }
+                sizes.Add(0);
+            }
+
+            return sizes;
+        }
+
+        /// <summary>
+        /// Refuses using a MULTI-DIMENSIONAL array as a WHOLE VALUE, at the sites that consume one
+        /// element-by-element or ask it for a single count. Returns true when it reported.
+        ///
+        /// <para>Rank &gt; 1 is supported for what a declaration means — declaring the storage and
+        /// indexing an element with the full set of indices — and that is deliberately the whole
+        /// surface. The two backends represent it differently on purpose (C++ nests one
+        /// <c>std::vector</c> per rank and indexes <c>g[i][j]</c>; C# uses a rectangular
+        /// <c>int[,]</c> indexed <c>g[i, j]</c>), which is invisible for declaration and indexing
+        /// but NOT for whole-array operations: <c>g.Length</c> is the row count natively and the
+        /// FLATTENED count on .NET, and <c>For Each</c> yields rows natively but elements on .NET.
+        /// Those are silent wrong answers, so they are refused here — in the analyzer, once, so
+        /// both backends refuse identically — rather than left to diverge per target.</para>
+        /// </summary>
+        private bool RefuseWholeMultiDimensionalArrayUse(TypeInfo type, string usage, int line, int column)
+        {
+            if (type?.Kind != TypeKind.Array || type.ArrayRank <= 1) return false;
+
+            Error($"A {type.ArrayRank}-dimensional array cannot be used {usage}. Multi-dimensional "
+                  + "arrays support declaration and indexing with all their indices "
+                  + "(for example 'g(x, y)'); index it in nested loops instead.",
+                  line, column);
+            return true;
+        }
+
+        /// <summary>
+        /// Folds an expression to a compile-time integer, or returns false when it does not fold.
+        /// Deliberately small: integer literals, references to a <c>Const</c> that itself folded,
+        /// unary +/-, and the integer arithmetic/shift operators over those. Anything else — a
+        /// variable, a call, a floating-point value — is not constant and must not be guessed at,
+        /// because the only consumer bakes the result into a storage declaration.
+        /// </summary>
+        private bool TryFoldConstantInt(ExpressionNode expr, out int value)
+        {
+            value = 0;
+            switch (expr)
+            {
+                case LiteralExpressionNode literal:
+                    return TryConvertConstantToInt(literal.Value, out value);
+
+                case IdentifierExpressionNode identifier:
+                {
+                    var symbol = _currentScope?.Resolve(identifier.Name);
+                    if (symbol == null || !symbol.IsConstant || symbol.ConstantValue == null)
+                        return false;
+                    return TryConvertConstantToInt(symbol.ConstantValue, out value);
+                }
+
+                case UnaryExpressionNode unary when unary.Operator is "-" or "+":
+                {
+                    if (!TryFoldConstantInt(unary.Operand, out var operand)) return false;
+                    value = unary.Operator == "-" ? -operand : operand;
+                    return true;
+                }
+
+                case BinaryExpressionNode binary:
+                {
+                    if (!TryFoldConstantInt(binary.Left, out var left)) return false;
+                    if (!TryFoldConstantInt(binary.Right, out var right)) return false;
+                    switch (binary.Operator)
+                    {
+                        case "+": value = left + right; return true;
+                        case "-": value = left - right; return true;
+                        case "*": value = left * right; return true;
+                        // Both division spellings truncate here: the result is an element count,
+                        // and `/` on two integer constants cannot yield a fractional size.
+                        case "/":
+                        case "\\": if (right == 0) return false; value = left / right; return true;
+                        case "%":
+                        case "Mod": if (right == 0) return false; value = left % right; return true;
+                        case "<<":
+                        case "Shl": value = left << right; return true;
+                        case ">>":
+                        case "Shr": value = left >> right; return true;
+                        default: return false;
+                    }
+                }
+
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>
+        /// Narrows a folded constant to <see cref="int"/>. Integral types convert when they fit;
+        /// floating-point and everything else do not convert at all, since an array size written
+        /// as <c>2.5</c> is a mistake to report, not a value to round.
+        /// </summary>
+        private static bool TryConvertConstantToInt(object constant, out int value)
+        {
+            value = 0;
+            switch (constant)
+            {
+                case int i: value = i; return true;
+                case short s: value = s; return true;
+                case byte b: value = b; return true;
+                case sbyte sb: value = sb; return true;
+                case ushort us: value = us; return true;
+                case long l when l >= int.MinValue && l <= int.MaxValue: value = (int)l; return true;
+                case uint u when u <= int.MaxValue: value = (int)u; return true;
+                case ulong ul when ul <= int.MaxValue: value = (int)ul; return true;
+                default: return false;
+            }
         }
 
         /// <summary>
@@ -4515,8 +4694,35 @@ namespace BasicLang.Compiler.SemanticAnalysis
             foreach (var member in node.Members)
             {
                 var memberType = ResolveTypeReference(member.Type);
+
+                // A SIZED array member of a Structure has no lowering that both backends can
+                // honor, so it is refused rather than allowed to diverge. A struct value is
+                // produced by default-initialization (`Dim g As Bag`), which in .NET means
+                // `default(Bag)` — and `default` bypasses any field initializer, so the array
+                // would be null however it was declared. C# says so outright (CS8983: a struct
+                // with field initializers must declare a constructor), and VB.NET refuses the
+                // same declaration for the same reason. The C++ backend WOULD size it, as a
+                // value std::vector member, which is exactly the silent divergence to avoid.
+                // An UNSIZED member (`Public Items() As Integer`) is an ordinary reference field
+                // and stays legal.
+                if (memberType?.Kind == TypeKind.Array && memberType.ArraySize > 0)
+                {
+                    Error($"Structure member '{member.Name}' cannot declare an array size. A "
+                          + "structure is default-initialized, so the storage would never be "
+                          + "allocated. Declare it unsized ('" + member.Name + "() As "
+                          + (memberType.ElementType?.Name ?? "Object")
+                          + "') and assign it, or use a Class.",
+                          member.Line, member.Column);
+                }
+
                 var memberSymbol = new Symbol(member.Name, SymbolKind.Variable, memberType, member.Line, member.Column);
                 type.Members[member.Name] = memberSymbol;
+                // Record the RESOLVED type on the member node. IRBuilder.Visit(StructureNode)
+                // reads it from here; without it that fallback rebuilt a type from the bare
+                // NAME, which silently discarded every modifier the type reference carried —
+                // so `Public Items() As Integer` became a scalar `int32_t Items`, and the
+                // struct's array member could not be indexed on either backend.
+                SetNodeType(member, memberType);
             }
         }
 
@@ -4897,6 +5103,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             var symbol = new Symbol(node.Name, SymbolKind.Constant, constType, node.Line, node.Column);
             symbol.IsConstant = true;
+            // Record the folded value so later declarations can consume it — `Dim a(N) As Integer`
+            // needs N's value at analysis time to size the array. Best-effort: a constant whose
+            // initializer does not fold simply has no value here, and a use that REQUIRES one
+            // reports at the use site (where the diagnostic can point at the failing expression).
+            if (node.Value != null && TryFoldConstantInt(node.Value, out var constantInt))
+                symbol.ConstantValue = constantInt;
 
             if (!_currentScope.Define(symbol))
             {
@@ -6007,6 +6219,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
                         // Try to infer element type from collection
                         TypeInfo elementType = _typeManager.ObjectType;
+                        RefuseWholeMultiDimensionalArrayUse(
+                            collectionType, "as a query source", from.Line, from.Column);
                         if (collectionType?.Kind == TypeKind.Array)
                         {
                             elementType = collectionType.ElementType ?? _typeManager.ObjectType;
@@ -6061,6 +6275,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         // Define the join range variable
                         var joinCollectionType = GetNodeType(join.Collection);
                         TypeInfo joinElementType = _typeManager.ObjectType;
+                        RefuseWholeMultiDimensionalArrayUse(
+                            joinCollectionType, "as a query source", join.Line, join.Column);
                         if (joinCollectionType?.Kind == TypeKind.Array)
                         {
                             joinElementType = joinCollectionType.ElementType ?? _typeManager.ObjectType;
@@ -6095,6 +6311,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
                         var aggCollectionType = GetNodeType(aggregate.Collection);
                         TypeInfo aggElementType = _typeManager.ObjectType;
+                        RefuseWholeMultiDimensionalArrayUse(
+                            aggCollectionType, "as a query source", aggregate.Line, aggregate.Column);
                         if (aggCollectionType?.Kind == TypeKind.Array)
                         {
                             aggElementType = aggCollectionType.ElementType ?? _typeManager.ObjectType;
@@ -6443,6 +6661,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Check collection
             node.Collection.Accept(this);
             var collectionType = GetNodeType(node.Collection);
+
+            RefuseWholeMultiDimensionalArrayUse(
+                collectionType, "as a For Each collection", node.Line, node.Column);
 
             // Determine element type - either from explicit type declaration or inferred from collection
             TypeInfo elementType;
@@ -7348,6 +7569,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return;
             }
 
+            // `g.Length` on a rank-2 array is the row count natively and the FLATTENED count on
+            // .NET — a silent wrong answer on one target or the other. Whole-array members are
+            // refused for the same reason For Each is.
+            if (RefuseWholeMultiDimensionalArrayUse(
+                    objectType, $"with the member '{node.MemberName}'", node.Line, node.Column))
+            {
+                SetNodeType(node, _typeManager.ObjectType);
+                return;
+            }
+
             // Task(Of T).Result unwraps to T; otherwise the generic .NET member
             // lookup below yields Object and member chaining off .Result breaks.
             if (node.MemberName == "Result" && IsTaskType(objectType))
@@ -7505,6 +7736,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     {
                         Error($"Array index must be an integer type, got '{indexType}'", index.Line, index.Column);
                     }
+                }
+                // The index COUNT must match the rank. The bracket spelling has always checked
+                // this (Visit(ArrayAccessExpressionNode)); the paren spelling — which is how VB
+                // code actually indexes — never did, and a wrong count silently produced an
+                // element-typed node over a partial index. `g(0)` on a rank-2 array would then be
+                // typed Integer while both backends handed back a whole ROW.
+                if (node.Arguments.Count != Math.Max(1, calleeType.ArrayRank))
+                {
+                    Error($"Array expects {Math.Max(1, calleeType.ArrayRank)} indices, got {node.Arguments.Count}",
+                          node.Line, node.Column);
                 }
                 SetNodeType(node, calleeType.ElementType ?? _typeManager.ObjectType);
                 return;

@@ -3468,6 +3468,41 @@ namespace BasicLang.Compiler.IR
                     return;
                 }
 
+                // `obj.Field(i)` where Field is an ARRAY is an index, not a method call. The
+                // array-index branch below covers only an IdentifierExpressionNode callee, so a
+                // FIELD receiver fell through to the instance-call arm and emitted `b->Cells(0)`
+                // — calling a std::vector. Same test as that branch, same lowering (GEP + load);
+                // the receiver is the field access rather than a bare variable.
+                var memberArrayType = _semanticAnalyzer.GetNodeType(memberExpr);
+                if (node.Arguments.Count > 0
+                    && memberArrayType != null
+                    && memberArrayType.Kind == TypeKind.Array
+                    // §8.5: a handle-represented .NET array owns no native storage to index —
+                    // the marker is tested before the array branch everywhere else too.
+                    && memberArrayType.NetHandleTypeFullName == null)
+                {
+                    memberExpr.Accept(this);
+                    var arrayField = _expressionResult;
+
+                    var elementType = memberArrayType.ElementType
+                                      ?? new TypeInfo("Object", TypeKind.Class);
+                    var fieldGepTemp = _currentFunction.GetNextTempName();
+                    var fieldGep = new IRGetElementPtr(fieldGepTemp, arrayField, elementType);
+                    foreach (var index in node.Arguments)
+                    {
+                        index.Accept(this);
+                        fieldGep.Indices.Add(_expressionResult);
+                    }
+                    EmitInstruction(fieldGep);
+
+                    var fieldLoadTemp = _currentFunction.GetNextTempName();
+                    var fieldLoad = new IRLoad(fieldLoadTemp, fieldGep, elementType);
+                    EmitInstruction(fieldLoad);
+
+                    _expressionResult = fieldLoad;
+                    return;
+                }
+
                 // Determine if this is a static call (type reference) or instance call (variable)
                 // Check if the object is a reference to a class type (static call) by:
                 // 1. It's an IRVariable with the EXACT name of a class (case-sensitive)
@@ -3609,10 +3644,22 @@ namespace BasicLang.Compiler.IR
                             : BoundaryTypeCategory.Unknown;
                     }
 
+                    // Which parameters the method takes ByRef. The analyzer recorded the member
+                    // symbol on this SAME MemberAccessExpressionNode, and its Parameters carry
+                    // IsByRef straight from the ParameterNode. Without this an instance call is
+                    // IR that lies about its own effects exactly the way the static arm used to:
+                    // the C# backend dropped the `ref` at the call site (CS1620) and the
+                    // optimizer kept copy facts across a call that writes them.
+                    var methodSymbol = _semanticAnalyzer.GetNodeSymbol(memberExpr);
                     foreach (var arg in node.Arguments)
                     {
                         arg.Accept(this);
                         methodCall.Arguments.Add(_expressionResult);
+
+                        var methodParams = methodSymbol?.Parameters;
+                        methodCall.ByRefArguments.Add(
+                            methodParams != null && methodCall.Arguments.Count - 1 < methodParams.Count
+                            && methodParams[methodCall.Arguments.Count - 1].IsByRef);
                     }
 
                     EmitInstruction(methodCall);

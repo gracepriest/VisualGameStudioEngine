@@ -976,6 +976,22 @@ test AND a receiver-set test proving it now answers "value type".
 
 ### Task 8c: the four remaining §6.4 rows + enum arguments — **blocks Task 13 program #1**
 
+> ⚠⚠ **STATUS 2026-08-05 — PARTIALLY LANDED. VERIFY BEFORE IMPLEMENTING; DO NOT REDO BLIND.**
+> A tree inspection found the four rows already present and wired in **both** directions:
+> `NetMarshalTable.cs:274-287` carries `System.Decimal`, `System.Guid`, `System.DateTimeOffset`
+> and `System.Text.StringBuilder` with `NativeToNet`/`NativeFromNet` functions
+> (`to_net_decimal`/`from_net_decimal`, …), `IsMultiSlot: true` where the arity demands it, and
+> StringBuilder correctly **directional (to-net only)** per §6.4. `NetConversionPairTests.cs`
+> references all six rows, and **no surviving gate limits lowering to DateTime+TimeSpan**.
+>
+> **The genuinely missing piece is the ENUM half**, which matches the measured note below:
+> `FileMode.Open` types as `Object` and lowers to nothing, so enum-member-constant lowering in
+> the FRONT END is the real work. `NetMarshalTable.cs:100-152` already exposes
+> `ResolveEnumUnderlyingType` (§8.3's enum row) for the marshaling side to build on.
+>
+> **First step of this task is therefore a verification step, not an implementation step:**
+> write one program per row through the real CLI and see which actually fail.
+
 Detailed designs are recorded in the plan above (commit `c29b4ca`): three distinct
 complications (arity>1 scalars via out-references returning `void`; direction-dependent C type
 at arity 1 for Guid — the same shape String already has; one-way StringBuilder), the managed-side
@@ -1201,7 +1217,15 @@ back (EXEMPT from the divergence — the parity program depends on this exact sc
 
 ---
 
-## ⛔ TASK-10 REVIEW FINDINGS (2026-08-04) — fix these FIRST, before Task 11
+## ✅ TASK-10 REVIEW FINDINGS (2026-08-04) — **ALL RESOLVED 2026-08-05, DO NOT REDO**
+
+> ⛔⛔ **STATUS 2026-08-05.** Findings **1, 2 and 3 are CLOSED**, each verified in the working
+> tree rather than from memory. This section is retained for its *reasoning*, **not as a work
+> list** — Task 11 must not spend a single step re-doing any of it. The only live item left here
+> is finding **4** (enum arrays), which belongs to Task 8c.
+>
+> The heading used to read *"fix these FIRST, before Task 11"*, which is exactly how a fresh
+> implementer would be sent to redo finished work.
 
 Task 10 shipped `5844df8` → `c833fde` → `cfb9f34` → `a10a689` (all pushed). Combined review:
 **❌ Issues found — feature correct and well-built, ONE reachable codegen break + doc drift.**
@@ -1256,27 +1280,34 @@ mutation). `NetProxyStubRunTests.OutParameter_InsideBranchAndLoop_WritesBackEver
 kept as branch/loop write-back coverage with a comment recording that it canNOT catch the goto
 regression, for the reason above — it was written believing it could.
 
-### 2. §12.4 exemption text survives in three places (the invariant itself is ✅)
+### 2. ✅ CLOSED — §12.4 exemption text corrected in all three places
 
-Verified holding: both emitters `.Concat(NetArrayCopy.RequiredExportNames(surface))`,
-`blnet_bind_all` binds them, and both sides derive from one `RequiredForms`. But the old
-"§12.4-exempt" claim is only deleted from `NetArrayCopy.cs:115-120`. Still false in:
-- `NetShimGenerator.cs:66-70` — *"§8.6's array copy helpers and §8.4's delegate dispatcher are
-  NOT emitted … both are §12.4-exempt"*. **False in the file that emits them, and it is what
-  Task 11 will read before deciding how to carry the delegate dispatcher.**
-- `NetShimGeneratorTests.cs:187-190` — the §12.4 drift test's own failure message still teaches
-  the wrong rule, at the exact moment someone is debugging that invariant.
-- **Spec §12.4** (`2026-07-29-p2a-dotnet-access-aot-shim-design.md:1263-1265`) — still carries the
-  exemption as normative text. The deviation is an IMPROVEMENT and belongs in the spec, not only
-  in a code header.
+The invariant itself was always holding (both emitters `.Concat(NetArrayCopy.RequiredExportNames(
+surface))`, `blnet_bind_all` binds them, both sides derive from one `RequiredForms`). The stale
+*prose* has now been fixed everywhere it lived — **re-verified in the tree 2026-08-05:**
 
-### 3. A false "measured" claim to retract
+- ✅ `NetArrayCopy.cs:119` — reframed ("P2a-1's header called these §12.4-exempt; making them
+  ordinary slots is strictly better, because the exemption would have been an invariant hole
+  nothing tested").
+- ✅ `NetShimGenerator.cs:68-74` — now states the array helpers **ARE** emitted and are **NOT**
+  exempt, and closes with: *"Task 11 should read this before deciding how to carry the delegate
+  dispatcher: '§12.4-exempt' is not an available answer."* Exactly the file Task 11 opens.
+- ✅ `NetShimGeneratorTests.cs:191-195` — the drift test's failure message now teaches the right
+  rule and says outright that a failure over an array helper means real drift, not a missing
+  exemption.
+- ✅ **Spec §12.4** (`…aot-shim-design.md:1271-1274`) — carries the improvement **normatively**,
+  with the same Task-11 warning.
 
-`NetCalls.cs:304-310` says the `t = call(); v = t;` fusion takes "the whole `CppProjectBuilder` →
-`CompileProjectFiles` path" and that "the fast subject cannot construct the shape". **The plain
-CLI single-file path (`BasicLang.exe file.bas --target=cpp`) runs the same
-`OptimizationPipeline.AddStandardPasses` and fuses it too.** So the shape IS constructible below
-the Integration tier — correct the note and add the cheap fast pin it currently discourages.
+⚠ Only the HISTORICAL P2a-1 plan (`2026-07-29-p2a1-dotnet-native-foundation.md:1664-1665`) still
+contains the original claim. That is a completed-phase record of what was true then; leave it.
+
+### 3. ✅ CLOSED — the false "measured" claim is retracted in place
+
+`NetCalls.cs:311-315` now carries an explicit retraction: the earlier comment claiming the
+`t = call(); v = t;` fusion "takes the whole `CppProjectBuilder` → `CompileProjectFiles` path"
+and that "the fast subject cannot construct the shape" **was wrong and is withdrawn** — the plain
+CLI single-file path (`BasicLang.exe f.bas --target=cpp`) runs the same
+`OptimizationPipeline.AddStandardPasses` and fuses it too.
 
 ### 4. Task-8c friction (record now, act in 8c)
 

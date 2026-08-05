@@ -378,16 +378,12 @@ public class NetProxyStubRunTests
     /// value the ByRef call then overwrites, and the result is READ through a comparison rather
     /// than printed, so a stale copy changes the BRANCH rather than the spelling.
     /// </summary>
+    // Was [Ignore]d for chip task_807f81e3 — CopyPropagationPass did not kill copy facts on a
+    // ByRef write, so `n` kept the fact from `Dim n = 0` and `If n = 42` folded against the
+    // stale 0, printing STALE. Fixed by InvalidateByRefWrites in that pass; the chip's other
+    // half (the C++ backend dropping ByRef from the SIGNATURE) landed in the same change.
+    // Never was .NET-specific — user ByRef Subs hit it identically.
     [Test]
-    [Ignore("PRE-EXISTING optimizer bug, chipped as task_807f81e3. VERIFIED by running this "
-            + "test un-ignored on 2026-08-03: it prints 'TRYPARSE(42)\\nSTALE\\n' where "
-            + "'TRYPARSE(42)\\nFRESH\\n' is correct. Note WHAT that proves — the call happened "
-            + "and the out slot carried 42 (TRYPARSE printed, and the un-optimized twin above "
-            + "passes); it is the SUBSEQUENT read that is wrong, because CopyPropagationPass "
-            + "does not kill copy facts on a ByRef write, so `n` keeps the fact from `Dim n = 0` "
-            + "and `If n = 42` folds against the stale 0. NOT a Task-8 regression and NOT "
-            + "specific to .NET calls — user ByRef Subs hit it the same way. Un-ignore when the "
-            + "chip lands; this test is its oracle.")]
     public void OutParameter_SurvivesTheOptimizer()
     {
         var (cpp, surface) = CompileWithSurface("""

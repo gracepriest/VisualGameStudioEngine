@@ -283,7 +283,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 {
                     var type = MapType(globalVar.Type);
                     var name = SanitizeName(globalVar.Name);
-                    WriteLine($"inline {type} {name} = {{}};");
+                    // A module-level fixed-size array allocates here for the same reason it does
+                    // in the combined emission. This is the FOURTH declaration site for the same
+                    // helper, and the only one the single-file CLI never exercises — the .blproj
+                    // project path emits split headers instead, so `Dim g(4, 3)` built through a
+                    // project produced `inline ... g = {};` and ACCESS-VIOLATED on the first
+                    // index while the identical program run through the CLI was correct.
+                    var init = SizedArrayInitializer(globalVar.Type, type) ?? "{}";
+                    WriteLine($"inline {type} {name} = {init};");
                 }
                 WriteLine();
             }

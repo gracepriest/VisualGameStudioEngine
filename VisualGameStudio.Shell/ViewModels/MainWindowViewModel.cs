@@ -801,6 +801,42 @@ public partial class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// Fires <c>onLanguage:&lt;id&gt;</c> for a newly opened document and then hands the document
+    /// to the extension host.
+    ///
+    /// Sequencing matters: <c>NotifyLanguageOpenedAsync</c> is what ACTIVATES extensions matching
+    /// that language, and activating an extension with a JS entry point is what starts the host.
+    /// Testing <c>IsExtensionHostRunning</c> before firing the event is therefore a deadlock of
+    /// sorts — the condition can never become true on its own.
+    ///
+    /// Fire-and-forget on purpose (opening a file must not wait on Node.js starting), with the
+    /// try/catch inside so nothing escapes as an unobserved task exception.
+    /// </summary>
+    private async Task ActivateExtensionsForDocumentAsync(string filePath, string content)
+    {
+        try
+        {
+            var langId = LanguageFileTypes.GetEditorLanguageId(filePath);
+            if (string.IsNullOrEmpty(langId)) return;
+
+            // May start the extension host as a side effect of activating an extension.
+            await _extensionService.NotifyLanguageOpenedAsync(langId);
+
+            // Only meaningful once the host is up — which the call above may have just done.
+            if (_extensionService.IsExtensionHostRunning)
+            {
+                await _extensionService.NotifyDocumentOpenedAsync(filePath, langId, 1, content);
+            }
+        }
+        catch (Exception ex)
+        {
+            _outputService.WriteError(
+                $"[Extensions] Activation failed for '{Path.GetFileName(filePath)}': {ex.Message}",
+                OutputCategory.General);
+        }
+    }
+
+    /// <summary>
     /// Registers an extension's contributed themes with <see cref="ThemeManager"/> so they appear
     /// in Tools &gt; Settings alongside built-ins and file-imported themes.
     ///
@@ -811,22 +847,28 @@ public partial class MainWindowViewModel : ViewModelBase
     /// </summary>
     private void OnExtensionContributionsLoaded(object? sender, ExtensionContributionsLoadedEventArgs e)
     {
-        if (e.ThemeFilePaths.Count == 0) return;
+        if (e.ThemeContributions.Count == 0) return;
 
-        var paths = e.ThemeFilePaths.ToList();
+        var contributions = e.ThemeContributions.ToList();
         var extensionName = e.Extension.Name;
+        var extensionId = e.Extension.Id;
 
         // ThemeManager touches Avalonia's Application.Current, so registration must happen on the
         // UI thread. Contributions load from a background-capable async path.
         Avalonia.Threading.Dispatcher.UIThread.Post(async () =>
         {
-            foreach (var path in paths)
+            foreach (var contribution in contributions)
             {
-                var label = await ThemeManager.LoadVsCodeThemeFileAsync(path);
+                // The manifest label is the registry key. Theme files' internal names are not
+                // unique across an extension's variants, so deriving it from the file would
+                // collapse variants onto one entry.
+                var label = await ThemeManager.LoadVsCodeThemeFileAsync(
+                    contribution.Path, contribution.Label, contribution.UiTheme, extensionId);
+
                 if (label == null)
                 {
                     _outputService.WriteError(
-                        $"[Extensions] Could not register theme from {extensionName}: {Path.GetFileName(path)}",
+                        $"[Extensions] Could not register theme from {extensionName}: {Path.GetFileName(contribution.Path)}",
                         OutputCategory.General);
                     continue;
                 }
@@ -2302,12 +2344,13 @@ public partial class MainWindowViewModel : ViewModelBase
                 ReportClangdMissingForCppFile(filePath);
             }
 
-            // Notify extension host about opened document (for all file types)
-            if (_extensionService.IsExtensionHostRunning)
-            {
-                var langId = LanguageFileTypes.GetEditorLanguageId(filePath);
-                _ = _extensionService.NotifyDocumentOpenedAsync(filePath, langId, 1, content);
-            }
+            // Fire the onLanguage activation event, then notify the host about the document.
+            // The order is load-bearing. This used to check IsExtensionHostRunning FIRST, which
+            // could never become true: the host only starts when an extension activates, and
+            // extensions activate on onLanguage:<id> — an event nothing was firing. The result
+            // was that no extension with a JS entry point could ever activate, so only purely
+            // static extensions (themes, grammars) worked.
+            _ = ActivateExtensionsForDocumentAsync(filePath, content);
 
             var document = new CodeEditorDocumentViewModel(_fileService, _eventAggregator, _bookmarkService)
             {
