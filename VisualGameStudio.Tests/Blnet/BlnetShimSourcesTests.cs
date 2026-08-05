@@ -76,7 +76,13 @@ public class BlnetShimSourcesTests
     [Test]
     public void ShimAbiDeclaresTheSameNamespaceAsHandleTable()
     {
-        var handleTableNs = Regex.Match(BlnetShimSources.HandleTable, @"(?m)^namespace [^\r\n]+;$").Value;
+        // `(?=\r?$)`, not a bare `$`: under RegexOptions.Multiline .NET's `$` matches only
+        // immediately before `\n`, so with CRLF the position after `;` sits before the `\r`
+        // and never matches. The repo is checked out with core.autocrlf=true, so ANY fresh
+        // clone or worktree turned this red while the checkout the file was authored in
+        // (pure LF) stayed green. A LOOKAHEAD, so the `\r` stays out of .Value and the
+        // equality assert below still compares against a bare "namespace BlnetTestShim;".
+        var handleTableNs = Regex.Match(BlnetShimSources.HandleTable, @"(?m)^namespace [^\r\n]+;(?=\r?$)").Value;
         Assert.That(handleTableNs, Is.EqualTo("namespace BlnetTestShim;"),
             "BlnetShimSources.HandleTable no longer declares 'namespace BlnetTestShim;'. That name is " +
             "the P2a-1 namespace decision and Task 14's Exports.g.cs depends on it — change the " +
