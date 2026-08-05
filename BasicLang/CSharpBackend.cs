@@ -3785,7 +3785,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (type.Kind == TypeKind.Array && type.ElementType != null)
             {
                 var elementType = MapType(type.ElementType);
-                return $"{elementType}[]";
+                // A MULTI-DIMENSIONAL array is spelled rectangularly — `int[,]` for rank 2 —
+                // which is what EmitExpression already emits for a multi-index
+                // IRGetElementPtr (`a[i, j]`), and what SizedArrayInitializer allocates
+                // (`new int[4, 3]`). Rank is clamped to at least 1 because many synthesized
+                // array TypeInfos carry rank 0 and have always meant one dimension.
+                var commas = new string(',', Math.Max(1, type.ArrayRank) - 1);
+                return $"{elementType}[{commas}]";
             }
 
             // Handle generic types with type arguments

@@ -539,8 +539,18 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // VB arrays lower to std::vector<T>: an assignable/copyable value type (unlike a
             // C array, which cannot be assigned or returned). Route the element type through
             // the mapper so `Integer` becomes int32_t instead of leaking verbatim into C++.
+            //
+            // A MULTI-DIMENSIONAL array nests one vector per rank, which is the shape
+            // ElementLValue already renders (`base[i][j]`). ArrayRank is clamped to at least 1
+            // because plenty of synthesized array TypeInfos (LINQ results, .NET element types)
+            // carry rank 0 and have always meant a single dimension.
             if (type.Kind == TypeKind.Array && type.ElementType != null)
-                return $"std::vector<{MapType(type.ElementType)}>";
+            {
+                var mapped = MapType(type.ElementType);
+                for (var dimension = 0; dimension < Math.Max(1, type.ArrayRank); dimension++)
+                    mapped = $"std::vector<{mapped}>";
+                return mapped;
+            }
             if (type.Kind == TypeKind.Array || type.Kind == TypeKind.Pointer || type.IsPointer)
                 return base.MapType(type);
 
@@ -1582,14 +1592,37 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// handle-represented .NET array arrives here already spelled <c>BasicLang::NetRef</c> and
         /// must NOT be sized — it owns no native storage. Requiring the <c>std::vector</c>
         /// lowering keeps <c>T(n)</c> to the one shape where it means anything.</para>
+        ///
+        /// <para>A MULTI-DIMENSIONAL array sizes every rank at once, using vector's fill
+        /// constructor: <c>Dim g(4, 3)</c> becomes
+        /// <c>std::vector&lt;std::vector&lt;int32_t&gt;&gt;(4, std::vector&lt;int32_t&gt;(3))</c>,
+        /// so all four rows exist before any <c>g[i][j]</c> runs. Every dimension must have a
+        /// known size — a partially-sized declaration has no allocation to emit and falls through
+        /// to the caller's default rather than being half-built.</para>
         /// </summary>
-        private string SizedArrayInitializer(TypeInfo type, string mappedType) =>
-            type?.Kind == TypeKind.Array
-            && type.ArraySize > 0
-            && mappedType != null
-            && mappedType.StartsWith("std::vector<", StringComparison.Ordinal)
-                ? $"{mappedType}({type.ArraySize})"
-                : null;
+        private string SizedArrayInitializer(TypeInfo type, string mappedType)
+        {
+            if (type?.Kind != TypeKind.Array) return null;
+            if (mappedType == null || !mappedType.StartsWith("std::vector<", StringComparison.Ordinal))
+                return null;
+
+            var sizes = type.ArrayDimensionSizes;
+            if (sizes.Count == 0) return null;
+            foreach (var size in sizes)
+                if (size <= 0) return null;
+
+            // Build inside-out: the innermost dimension is a plain sized vector, and each
+            // enclosing dimension fills its slots with a copy of the one below. `innerType`
+            // tracks the type the CURRENT dimension holds, so it grows a vector wrapper per step.
+            var innerType = MapType(type.ElementType);
+            var initializer = $"std::vector<{innerType}>({sizes[sizes.Count - 1]})";
+            for (var dimension = sizes.Count - 2; dimension >= 0; dimension--)
+            {
+                innerType = $"std::vector<{innerType}>";
+                initializer = $"std::vector<{innerType}>({sizes[dimension]}, {initializer})";
+            }
+            return initializer;
+        }
 
         /// <summary>
         /// The in-class member initializer for an array FIELD (<c>= std::vector&lt;int32_t&gt;(9)</c>),

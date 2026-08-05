@@ -52,6 +52,25 @@ namespace VisualGameStudio.Tests.Compiler;
 public class CppCollectionTests
 {
     /// <summary>
+    /// Drains the parser's RECORDED errors into the caller's list, returning true when the
+    /// fixture source did not parse cleanly.
+    ///
+    /// <para>Load-bearing because <see cref="Parser.Parse"/> does not rethrow: it catches each
+    /// <c>ParseException</c>, records it, and resynchronizes so it can report several syntax
+    /// errors at once. A helper that only catches the exception therefore sees NOTHING and goes
+    /// on to analyze a truncated AST — so a test asserting that bad syntax is rejected would pass
+    /// vacuously, and a test with an accidental typo would assert against a program that is not
+    /// the one it looks like. The CLI reads these same recorded errors, which is why a shape can
+    /// fail through `BasicLang.exe` and appear to succeed here.</para>
+    /// </summary>
+    private static bool CollectParseErrors(Parser parser, List<string> errors)
+    {
+        foreach (var error in parser.Errors)
+            errors.Add($"Parse error: {error.Message}");
+        return parser.Errors.Count > 0;
+    }
+
+    /// <summary>
     /// Helper: compile BasicLang source to C++ output string.
     /// Returns null and populates errors list if a pipeline stage fails.
     /// CppCapabilityException from the generator propagates to the caller.
@@ -74,6 +93,11 @@ public class CppCollectionTests
             errors.Add($"Parse error: {ex.Message}");
             return null;
         }
+
+        // Parser.Parse RECOVERS from a ParseException — it records the error and resynchronizes
+        // rather than rethrowing — so catching the exception alone sees nothing and the helper
+        // would happily analyze a TRUNCATED AST. Every syntax error in a fixture was invisible.
+        if (CollectParseErrors(parser, errors)) return null;
 
         var analyzer = new SemanticAnalyzer();
         bool success = analyzer.Analyze(ast);
@@ -111,6 +135,8 @@ public class CppCollectionTests
         ProgramNode ast;
         try { ast = parser.Parse(); }
         catch (Exception ex) { errors.Add($"Parse error: {ex.Message}"); return null; }
+
+        if (CollectParseErrors(parser, errors)) return null;
 
         var analyzer = new SemanticAnalyzer();
         if (!analyzer.Analyze(ast))
@@ -795,6 +821,8 @@ End Sub";
         ProgramNode ast;
         try { ast = parser.Parse(); }
         catch (Exception ex) { errors.Add($"Parse error: {ex.Message}"); return null; }
+
+        if (CollectParseErrors(parser, errors)) return null;
 
         var analyzer = new SemanticAnalyzer();
         if (!analyzer.Analyze(ast))
@@ -1894,5 +1922,182 @@ End Sub";
         Assert.That(output, Does.Contain("std::vector<int32_t> Items"),
             "the member must be typed as an array, not rebuilt as a scalar from its name:\n" + output);
         Assert.That(CompileRun(output), Is.EqualTo("8\n"));
+    }
+
+    // ========================================================================
+    // BUG 7e — MULTI-DIMENSIONAL ARRAYS.
+    //
+    //   Dim g(4, 3) As Integer     =>  "Error: Expected ')' but found Comma"
+    //
+    // The declaration loop closed its bracket and then looped on a REOPENED one, so it
+    // accepted `Dim a(2)(3)` and rejected `Dim a(4, 3)` — exactly backwards. The chained
+    // spelling it did accept then MIS-LOWERED: only dimension[0] reached the type and
+    // ArrayRank was ignored by both backends, so a declaration that reads as
+    // two-dimensional produced a flat one-dimensional array.
+    //
+    // SCOPE, deliberately bounded: rank > 1 supports DECLARATION and INDEXING WITH ALL
+    // INDICES, which is what the shipped Platformer sample needs (`Dim level(20, 15)`
+    // indexed `level(x, y)` in nested loops). The backends represent it differently on
+    // purpose — C++ nests one std::vector per rank and indexes `g[i][j]` (which
+    // ElementLValue already rendered); C# uses a rectangular `int[,]` indexed `g[i, j]`
+    // (which EmitExpression already rendered). That difference is invisible for
+    // declaration and indexing but NOT for whole-array operations, so `.Length`,
+    // `For Each` and LINQ over a rank > 1 array are REFUSED in the analyzer rather than
+    // left to give the row count on one target and the flattened count on the other.
+    // ========================================================================
+
+    [Test]
+    public void Cpp_TwoDimensionalArray_AllocatesAndIndexes_CompileAndRun()
+    {
+        // Writes and reads the LAST valid cell of both dimensions: if either rank were
+        // unallocated (or the type were flat) this is out of bounds, which
+        // _GLIBCXX_ASSERTIONS turns into an abort rather than a silent wrong answer.
+        var source = @"
+Sub Main()
+    Dim g(2, 3) As Integer
+    g(0, 0) = 7
+    g(1, 2) = 9
+    Console.WriteLine(g(0, 0) + g(1, 2))
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output,
+            Does.Contain("std::vector<std::vector<int32_t>>(2, std::vector<int32_t>(3))"),
+            "both ranks must be allocated, not just the first:\n" + output);
+        Assert.That(output, Does.Contain("g[0][0] = 7"), output);
+        Assert.That(CompileRun(output), Is.EqualTo("16\n"));
+    }
+
+    [Test]
+    public void Cpp_ModuleLevelTwoDimensionalArray_ConstSized_NestedLoops_CompileAndRun()
+    {
+        // The shipped Platformer sample's exact shape: a module-level Const-sized grid
+        // filled and summed through nested loops.
+        //
+        // The LOOP BOUNDS are literals rather than W/H on purpose. A file-level Const is
+        // emitted into a different generated class than the Module that uses it, so a
+        // RUN-TIME reference to one does not resolve (chip task_63ad2174) — a pre-existing
+        // defect unrelated to arrays, and one this test would otherwise trip over while
+        // appearing to be about multi-dimensional arrays. The array SIZES still come from
+        // the Consts, which is the part this test is pinning: those are constant-folded
+        // during analysis and never referenced at run time.
+        var source = @"
+Const W As Integer = 4
+Const H As Integer = 3
+
+Module Program
+    Dim level(W, H) As Integer
+    Sub Main()
+        For x As Integer = 0 To 3
+            For y As Integer = 0 To 2
+                level(x, y) = x * 10 + y
+            Next
+        Next
+        Dim total As Integer = 0
+        For x As Integer = 0 To 3
+            For y As Integer = 0 To 2
+                total = total + level(x, y)
+            Next
+        Next
+        Console.WriteLine(total)
+        Console.WriteLine(level(3, 2))
+    End Sub
+End Module";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output,
+            Does.Contain("std::vector<std::vector<int32_t>>(4, std::vector<int32_t>(3))"), output);
+        Assert.That(CompileRun(output), Is.EqualTo("192\n32\n"));
+    }
+
+    [Test]
+    public void Cpp_ThreeDimensionalArray_CompileAndRun()
+    {
+        // Rank is not special-cased at 2 — the nesting is built from the dimension list.
+        var source = @"
+Sub Main()
+    Dim cube(2, 2, 2) As Integer
+    cube(1, 1, 1) = 5
+    Console.WriteLine(cube(1, 1, 1))
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("cube[1][1][1] = 5"), output);
+        Assert.That(CompileRun(output), Is.EqualTo("5\n"));
+    }
+
+    /// <summary>
+    /// The CHAINED spelling is refused. It used to be the ONLY spelling the declaration loop
+    /// accepted, and it mis-lowered: `Dim a(2)(3)` reached codegen carrying just its first
+    /// size and no rank, so it emitted a flat one-dimensional array for a declaration that
+    /// reads as two-dimensional. Rank is declared with a comma list.
+    /// </summary>
+    [Test]
+    public void ChainedArrayDimensions_AreRefused()
+    {
+        var source = @"
+Sub Main()
+    Dim a(2)(3) As Integer
+End Sub";
+        CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Not.Empty, "the chained spelling must not silently mis-lower");
+        Assert.That(string.Join("; ", errors), Does.Contain("comma list"));
+    }
+
+    [Test]
+    public void IndexCountThatDoesNotMatchRank_IsRefused()
+    {
+        // The paren spelling — the one VB code actually uses — never checked this, so `g(0)`
+        // on a rank-2 array was typed as an element while both backends handed back a ROW.
+        var source = @"
+Sub Main()
+    Dim g(4, 3) As Integer
+    Console.WriteLine(g(0))
+End Sub";
+        CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Not.Empty);
+        Assert.That(string.Join("; ", errors), Does.Contain("expects 2 indices"));
+    }
+
+    [Test]
+    public void WholeArrayOperationsOnMultiDimensionalArray_AreRefused()
+    {
+        // `.Length` is the row count natively and the FLATTENED count on .NET; For Each
+        // yields rows natively and elements on .NET. Both are silent wrong answers on one
+        // target, so both are refused.
+        const string prologue = "\nSub Main()\n    Dim g(4, 3) As Integer\n";
+
+        CompileToCppOptimized(prologue + "    Console.WriteLine(g.Length)\nEnd Sub", out var lengthErrors);
+        Assert.That(string.Join("; ", lengthErrors), Does.Contain("2-dimensional array cannot be used"));
+
+        CompileToCppOptimized(
+            prologue + "    For Each n In g\n        Console.WriteLine(n)\n    Next\nEnd Sub",
+            out var forEachErrors);
+        Assert.That(string.Join("; ", forEachErrors), Does.Contain("2-dimensional array cannot be used"));
+    }
+
+    /// <summary>
+    /// ANTI-VACUITY PARTNER for the three refusals above: a RANK-1 array must keep its whole
+    /// surface — `.Length`, `For Each`, and a single index. If any of those guards widened to
+    /// every array, ordinary one-dimensional code would stop compiling.
+    /// </summary>
+    [Test]
+    public void RankOneArray_KeepsLengthAndForEachAndSingleIndex_CompileAndRun()
+    {
+        var source = @"
+Sub Main()
+    Dim a(3) As Integer
+    a(0) = 1
+    a(1) = 2
+    Console.WriteLine(a.Length)
+    Dim total As Integer = 0
+    For Each n In a
+        total = total + n
+    Next
+    Console.WriteLine(total)
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("3\n3\n"));
     }
 }

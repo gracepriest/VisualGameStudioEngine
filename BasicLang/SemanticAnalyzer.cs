@@ -2140,6 +2140,31 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
+        /// Refuses using a MULTI-DIMENSIONAL array as a WHOLE VALUE, at the sites that consume one
+        /// element-by-element or ask it for a single count. Returns true when it reported.
+        ///
+        /// <para>Rank &gt; 1 is supported for what a declaration means — declaring the storage and
+        /// indexing an element with the full set of indices — and that is deliberately the whole
+        /// surface. The two backends represent it differently on purpose (C++ nests one
+        /// <c>std::vector</c> per rank and indexes <c>g[i][j]</c>; C# uses a rectangular
+        /// <c>int[,]</c> indexed <c>g[i, j]</c>), which is invisible for declaration and indexing
+        /// but NOT for whole-array operations: <c>g.Length</c> is the row count natively and the
+        /// FLATTENED count on .NET, and <c>For Each</c> yields rows natively but elements on .NET.
+        /// Those are silent wrong answers, so they are refused here — in the analyzer, once, so
+        /// both backends refuse identically — rather than left to diverge per target.</para>
+        /// </summary>
+        private bool RefuseWholeMultiDimensionalArrayUse(TypeInfo type, string usage, int line, int column)
+        {
+            if (type?.Kind != TypeKind.Array || type.ArrayRank <= 1) return false;
+
+            Error($"A {type.ArrayRank}-dimensional array cannot be used {usage}. Multi-dimensional "
+                  + "arrays support declaration and indexing with all their indices "
+                  + "(for example 'g(x, y)'); index it in nested loops instead.",
+                  line, column);
+            return true;
+        }
+
+        /// <summary>
         /// Folds an expression to a compile-time integer, or returns false when it does not fold.
         /// Deliberately small: integer literals, references to a <c>Const</c> that itself folded,
         /// unary +/-, and the integer arithmetic/shift operators over those. Anything else — a
@@ -6194,6 +6219,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
                         // Try to infer element type from collection
                         TypeInfo elementType = _typeManager.ObjectType;
+                        RefuseWholeMultiDimensionalArrayUse(
+                            collectionType, "as a query source", from.Line, from.Column);
                         if (collectionType?.Kind == TypeKind.Array)
                         {
                             elementType = collectionType.ElementType ?? _typeManager.ObjectType;
@@ -6248,6 +6275,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         // Define the join range variable
                         var joinCollectionType = GetNodeType(join.Collection);
                         TypeInfo joinElementType = _typeManager.ObjectType;
+                        RefuseWholeMultiDimensionalArrayUse(
+                            joinCollectionType, "as a query source", join.Line, join.Column);
                         if (joinCollectionType?.Kind == TypeKind.Array)
                         {
                             joinElementType = joinCollectionType.ElementType ?? _typeManager.ObjectType;
@@ -6282,6 +6311,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
                         var aggCollectionType = GetNodeType(aggregate.Collection);
                         TypeInfo aggElementType = _typeManager.ObjectType;
+                        RefuseWholeMultiDimensionalArrayUse(
+                            aggCollectionType, "as a query source", aggregate.Line, aggregate.Column);
                         if (aggCollectionType?.Kind == TypeKind.Array)
                         {
                             aggElementType = aggCollectionType.ElementType ?? _typeManager.ObjectType;
@@ -6630,6 +6661,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Check collection
             node.Collection.Accept(this);
             var collectionType = GetNodeType(node.Collection);
+
+            RefuseWholeMultiDimensionalArrayUse(
+                collectionType, "as a For Each collection", node.Line, node.Column);
 
             // Determine element type - either from explicit type declaration or inferred from collection
             TypeInfo elementType;
@@ -7535,6 +7569,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return;
             }
 
+            // `g.Length` on a rank-2 array is the row count natively and the FLATTENED count on
+            // .NET — a silent wrong answer on one target or the other. Whole-array members are
+            // refused for the same reason For Each is.
+            if (RefuseWholeMultiDimensionalArrayUse(
+                    objectType, $"with the member '{node.MemberName}'", node.Line, node.Column))
+            {
+                SetNodeType(node, _typeManager.ObjectType);
+                return;
+            }
+
             // Task(Of T).Result unwraps to T; otherwise the generic .NET member
             // lookup below yields Object and member chaining off .Result breaks.
             if (node.MemberName == "Result" && IsTaskType(objectType))
@@ -7692,6 +7736,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     {
                         Error($"Array index must be an integer type, got '{indexType}'", index.Line, index.Column);
                     }
+                }
+                // The index COUNT must match the rank. The bracket spelling has always checked
+                // this (Visit(ArrayAccessExpressionNode)); the paren spelling — which is how VB
+                // code actually indexes — never did, and a wrong count silently produced an
+                // element-typed node over a partial index. `g(0)` on a rank-2 array would then be
+                // typed Integer while both backends handed back a whole ROW.
+                if (node.Arguments.Count != Math.Max(1, calleeType.ArrayRank))
+                {
+                    Error($"Array expects {Math.Max(1, calleeType.ArrayRank)} indices, got {node.Arguments.Count}",
+                          node.Line, node.Column);
                 }
                 SetNodeType(node, calleeType.ElementType ?? _typeManager.ObjectType);
                 return;
