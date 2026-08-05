@@ -276,6 +276,21 @@
 
 #### 9. Extensions (2/5)
 
+> ⛔ **THIS SECTION IS STALE (dated 2026-03-18) AND ITS FIVE "GAP" ROWS ARE ALL FALSE.**
+> Verified against current code on 2026-08-05 — see
+> [`docs/superpowers/specs/2026-08-05-extensions-recovery-ledger.md`](../superpowers/specs/2026-08-05-extensions-recovery-ledger.md).
+> - "`LoadContributions()` is a stub" → it is a full async loader, `ExtensionService.cs:916-958`.
+> - "No isolated extension host process" → a Node.js host exists (16 files, ~7,100 lines,
+>   JSON-RPC over stdin/stdout), `ExtensionHost.cs`.
+> - "`marketplace.visualgamestudio.com` does not exist" → correct, but irrelevant: that endpoint
+>   lives in the **orphaned** `MarketplaceService`. The live registry is **Open VSX**.
+> - "No theme loading from extensions" → extension themes register and appear in Settings (`19f55c0`).
+> - "No mechanism to add new languages" → languages and grammars register via `TextMateRegistrar`.
+>
+> The accurate statement is neither this 2/5 nor `memory/vscode-parity.md`'s 95%: the runtime
+> existed but had **never executed through the UI** until 2026-08-04, and the Node-host tier is
+> **still unproven**. Do not use this row to plan work.
+
 | Feature | VS Code | VGS | Status | Evidence |
 |---------|---------|-----|--------|----------|
 | Extension install/uninstall | Yes | Yes | DONE | `ExtensionService.InstallFromFileAsync()`, `.vsix`/`.zip` |
