@@ -54,7 +54,74 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (module == null) return;
 
             CheckByRef(module);
+            CheckValueAggregates(module);
+            CheckOperatorOverloading(module);
             CheckBannedTypes(module);
+        }
+
+        /// <summary>
+        /// BL7005 — value aggregates: <c>Structure</c>, <c>Type…End Type</c>, <c>Union</c>.
+        ///
+        /// <para>Value semantics mean assignment and argument passing COPY. JavaScript objects
+        /// are references, so honouring that would need a deep clone at every assignment and
+        /// every call — emulation, which the capability line forbids. The C++ backend proves
+        /// the cost of the alternative: its collections diverged from .NET precisely because
+        /// value wrappers were used where reference semantics were required.</para>
+        ///
+        /// <para>Rejected at the DECLARATION. Declaring one is already using a feature with no
+        /// JS equivalent, and a declaration rule has no blind spot — use-site detection would
+        /// have to catch every expression position, and <c>New Point()</c> in argument
+        /// position never binds to a declared slot at all.</para>
+        ///
+        /// <para>⛔ <c>Type…End Type</c> and <c>Union</c> are NOT in <c>module.Classes</c>:
+        /// <c>IRBuilder.Visit(TypeNode)</c> and <c>Visit(UnionNode)</c> emit nothing, so no IR
+        /// declaration exists to key on. They survive only on use-site TypeInfos, caught by
+        /// Kind in <see cref="CheckTypeTree"/>.</para>
+        /// </summary>
+        private static void CheckValueAggregates(IRModule module)
+        {
+            foreach (var c in module.Classes?.Values ?? Enumerable.Empty<IRClass>())
+                if (c.IsStruct)
+                    throw ValueAggregateRejection($"Structure '{c.Name}'");
+        }
+
+        private static ForeignFeatureException ValueAggregateRejection(string what) =>
+            new ForeignFeatureException(
+                $"BL7005: {what} cannot be lowered to JavaScript. A Structure has value " +
+                "semantics — assigning or passing one copies it — but JavaScript objects are " +
+                "references, so preserving that would require a deep clone on every assignment " +
+                "and every call. Use a Class instead (reference semantics on both sides).");
+
+        /// <summary>
+        /// BL7006 — operator overloading. JavaScript has none: <c>a + b</c> on two objects
+        /// stringifies them, so emitting the class without its operator would compile and
+        /// produce nonsense at runtime.
+        ///
+        /// <para>Operators lower to a function named <c>op_XXX</c> (IRBuilder.cs:1382),
+        /// class-qualified as <c>V.op_Addition</c> — but a BARE <c>op_Addition</c> is also
+        /// reachable, because <c>_currentClassName</c> is cleared unconditionally after a
+        /// nested class, so an operator declared after one emits an unqualified name and never
+        /// lands in <c>IRClass.Methods</c> either. Both spellings are matched.</para>
+        ///
+        /// <para>⛔ Matched by PREFIX and by <c>".op_"</c>, never by a bare
+        /// <c>Contains("op_")</c> — a user method named <c>Loop_Add</c> contains those three
+        /// characters and must not be rejected.</para>
+        /// </summary>
+        private static void CheckOperatorOverloading(IRModule module)
+        {
+            foreach (var f in module.Functions ?? Enumerable.Empty<IRFunction>())
+            {
+                var name = f.Name;
+                if (name == null) continue;
+                if (!name.StartsWith("op_", StringComparison.Ordinal) && !name.Contains(".op_"))
+                    continue;
+
+                throw new ForeignFeatureException(
+                    $"BL7006: operator overload '{name}' cannot be lowered to JavaScript — " +
+                    "JavaScript has no operator overloading, so 'a + b' on two objects would " +
+                    "concatenate their string forms instead of calling this. Expose it as a " +
+                    "named method (for example 'Add') and call that.");
+            }
         }
 
         /// <summary>
@@ -184,6 +251,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 throw new ForeignFeatureException(
                     $"{banned.Code}: '{type.Name}' cannot be lowered to JavaScript — {banned.Why} " +
                     $"(found as {where}.)");
+
+            // Value aggregates reached through a USE rather than a declaration. This is the
+            // only channel for Type…End Type and Union, which produce no IR declaration at
+            // all, so CheckValueAggregates cannot see them.
+            if (type.Kind == TypeKind.Structure ||
+                type.Kind == TypeKind.Union ||
+                type.Kind == TypeKind.UserDefinedType)
+                throw ValueAggregateRejection($"the value type '{type.Name}' (used as {where})");
 
             foreach (var arg in type.GenericArguments ?? Enumerable.Empty<TypeInfo>())
                 CheckTypeTree(arg, where, depth + 1);
