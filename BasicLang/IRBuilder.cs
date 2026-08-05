@@ -3609,10 +3609,22 @@ namespace BasicLang.Compiler.IR
                             : BoundaryTypeCategory.Unknown;
                     }
 
+                    // Which parameters the method takes ByRef. The analyzer recorded the member
+                    // symbol on this SAME MemberAccessExpressionNode, and its Parameters carry
+                    // IsByRef straight from the ParameterNode. Without this an instance call is
+                    // IR that lies about its own effects exactly the way the static arm used to:
+                    // the C# backend dropped the `ref` at the call site (CS1620) and the
+                    // optimizer kept copy facts across a call that writes them.
+                    var methodSymbol = _semanticAnalyzer.GetNodeSymbol(memberExpr);
                     foreach (var arg in node.Arguments)
                     {
                         arg.Accept(this);
                         methodCall.Arguments.Add(_expressionResult);
+
+                        var methodParams = methodSymbol?.Parameters;
+                        methodCall.ByRefArguments.Add(
+                            methodParams != null && methodCall.Arguments.Count - 1 < methodParams.Count
+                            && methodParams[methodCall.Arguments.Count - 1].IsByRef);
                     }
 
                     EmitInstruction(methodCall);

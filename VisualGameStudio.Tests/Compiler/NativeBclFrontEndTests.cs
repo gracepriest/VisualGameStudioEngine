@@ -510,6 +510,109 @@ End Module"), Is.EqualTo("1.5\n1.5"));
     }
 
     /// <summary>
+    /// The ByRef hole: a call WRITES its by-reference arguments, and that write appears
+    /// nowhere in the block — no IRAssignment, no rename — so a copy fact recorded before
+    /// the call must be killed BY the call. Without the kill,
+    /// <c>Dim n = 0 : Sub(n) : If n = 42</c> folds the comparison against the stale 0.
+    /// The anti-vacuity partner below proves the kill is driven by the ByRef FLAG and is
+    /// not just "any call kills everything".
+    /// </summary>
+    [Test]
+    public void CopyPropagation_ByRefArgumentWrite_KillsStaleFact()
+    {
+        var intType = new TypeInfo("Integer", TypeKind.Primitive);
+        var boolType = new TypeInfo("Boolean", TypeKind.Primitive);
+
+        var fn = new IRFunction("f", boolType);
+        var block = fn.CreateBlock("entry");
+
+        var n = new IRVariable("n", intType);
+        // n = 0 (records the copy fact n -> 0)
+        block.Instructions.Add(new IRAssignment(n, new IRConstant(0, intType)));
+        // SetIt(ByRef n) — the callee assigns n; nothing in this block says so.
+        var call = new IRCall("t0", "SetIt", new TypeInfo("Void", TypeKind.Primitive));
+        call.Arguments.Add(n);
+        call.ByRefArguments.Add(true);
+        block.Instructions.Add(call);
+        // A later use of n must NOT see the stale 0.
+        var cmp = new IRCompare("t1", CompareKind.Eq, n, new IRConstant(42, intType), boolType);
+        block.Instructions.Add(cmp);
+
+        var module = new IRModule("m");
+        module.Functions.Add(fn);
+        new CopyPropagationPass().Run(module);
+
+        Assert.That(cmp.Left, Is.SameAs(n),
+            "the compare's left operand was substituted with the STALE pre-call value " +
+            $"(got {cmp.Left}) — the ByRef write did not kill the copy fact");
+    }
+
+    /// <summary>
+    /// Anti-vacuity partner for the test above: the SAME shape with the argument passed
+    /// BY VALUE must still propagate. A kill that fired on every call argument would pass
+    /// the ByRef test while quietly disabling copy propagation across all calls.
+    /// </summary>
+    [Test]
+    public void CopyPropagation_ByValueArgument_StillPropagates()
+    {
+        var intType = new TypeInfo("Integer", TypeKind.Primitive);
+        var boolType = new TypeInfo("Boolean", TypeKind.Primitive);
+
+        var fn = new IRFunction("f", boolType);
+        var block = fn.CreateBlock("entry");
+
+        var n = new IRVariable("n", intType);
+        block.Instructions.Add(new IRAssignment(n, new IRConstant(0, intType)));
+        var call = new IRCall("t0", "Observe", new TypeInfo("Void", TypeKind.Primitive));
+        call.Arguments.Add(n);
+        call.ByRefArguments.Add(false);          // BY VALUE — the callee cannot write n
+        block.Instructions.Add(call);
+        var cmp = new IRCompare("t1", CompareKind.Eq, n, new IRConstant(42, intType), boolType);
+        block.Instructions.Add(cmp);
+
+        var module = new IRModule("m");
+        module.Functions.Add(fn);
+        new CopyPropagationPass().Run(module);
+
+        Assert.That(cmp.Left, Is.InstanceOf<IRConstant>(),
+            "a BY-VALUE argument cannot be written by the callee, so the copy fact n -> 0 must " +
+            "still propagate; killing here would pessimize every call in the program");
+    }
+
+    /// <summary>
+    /// The same kill for an INSTANCE call. <c>IRInstanceMethodCall</c> carried no ByRef
+    /// information at all until this fix, so <c>obj.Method(ByRef x)</c> looked side-effect-free
+    /// to the optimizer for exactly the same reason.
+    /// </summary>
+    [Test]
+    public void CopyPropagation_ByRefInstanceCallArgument_KillsStaleFact()
+    {
+        var intType = new TypeInfo("Integer", TypeKind.Primitive);
+        var boolType = new TypeInfo("Boolean", TypeKind.Primitive);
+
+        var fn = new IRFunction("f", boolType);
+        var block = fn.CreateBlock("entry");
+
+        var n = new IRVariable("n", intType);
+        block.Instructions.Add(new IRAssignment(n, new IRConstant(0, intType)));
+        var call = new IRInstanceMethodCall("t0", new IRVariable("w", new TypeInfo("Worker", TypeKind.Class)),
+                                            "Bump", new TypeInfo("Void", TypeKind.Primitive));
+        call.Arguments.Add(n);
+        call.ByRefArguments.Add(true);
+        block.Instructions.Add(call);
+        var cmp = new IRCompare("t1", CompareKind.Eq, n, new IRConstant(42, intType), boolType);
+        block.Instructions.Add(cmp);
+
+        var module = new IRModule("m");
+        module.Functions.Add(fn);
+        new CopyPropagationPass().Run(module);
+
+        Assert.That(cmp.Left, Is.SameAs(n),
+            "the compare's left operand was substituted with the STALE pre-call value " +
+            $"(got {cmp.Left}) — the instance call's ByRef write did not kill the copy fact");
+    }
+
+    /// <summary>
     /// Full front-end pipeline through the standard optimizer passes (the same
     /// pipeline the CLI runs at -O1; cf. CppSelectCaseTests.CompileToCppOptimized).
     /// </summary>

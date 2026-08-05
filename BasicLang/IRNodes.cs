@@ -1758,6 +1758,19 @@ namespace BasicLang.Compiler.IR
         public List<IRValue> Arguments { get; set; }
         public bool IsVirtual { get; set; }
 
+        /// <summary>
+        /// Which arguments the callee takes BY REFERENCE — the instance-call twin of
+        /// <see cref="IRCall.ByRefArguments"/>, indexed in lockstep with
+        /// <see cref="Arguments"/> and consulted only where an entry exists.
+        ///
+        /// <para>Its absence was a real defect, not a gap in coverage: an IRCall records the
+        /// fact and an instance call did not, so <c>obj.Method(ByRef x)</c> reached the C#
+        /// backend with no <c>ref</c> at the call site (CS1620, a hard build failure) and
+        /// reached the optimizer looking side-effect-free, which let a copy fact for <c>x</c>
+        /// survive a call that writes it.</para>
+        /// </summary>
+        public List<bool> ByRefArguments { get; set; }
+
         /// <summary>Explicit generic type arguments: obj.Method(Of T)() -> obj.Method&lt;T&gt;().</summary>
         public List<TypeInfo> GenericArguments { get; set; } = new List<TypeInfo>();
 
@@ -1811,6 +1824,7 @@ namespace BasicLang.Compiler.IR
             Object = obj;
             MethodName = methodName;
             Arguments = new List<IRValue>();
+            ByRefArguments = new List<bool>();
         }
 
         public override void Accept(IIRVisitor visitor) => visitor.Visit(this);

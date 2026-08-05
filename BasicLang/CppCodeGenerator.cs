@@ -495,7 +495,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         {
             var delegateName = SanitizeName(irDelegate.Name);
             var returnType = MapType(irDelegate.ReturnType);
-            var paramTypes = string.Join(", ", irDelegate.Parameters.Select(p => MapTypeName(p.TypeName)));
+            var paramTypes = string.Join(", ",
+                irDelegate.Parameters.Select(p => MapTypeName(p.TypeName) + (p.IsByRef ? "&" : "")));
 
             // Use std::function for delegate types
             WriteLine($"using {delegateName} = std::function<{returnType}({paramTypes})>;");
@@ -940,8 +941,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // Prefer the fully-resolved Type (carries generic arguments, e.g.
                 // std::shared_ptr<BasicLang::Dictionary<std::string, int32_t>>) when present;
                 // fall back to the bare TypeName string.
+                // A ByRef parameter must carry its `&` HERE too, not only on the implementing
+                // class method: the two signatures have to match exactly or the override does
+                // not override, the class stays abstract, and the emitted C++ fails to compile.
                 var paramList = string.Join(", ", method.Parameters.Select(p =>
-                    $"{(p.Type != null ? MapType(p.Type) : MapTypeName(p.TypeName))} {SanitizeName(p.Name)}"));
+                    $"{(p.Type != null ? MapType(p.Type) : MapTypeName(p.TypeName))}{(p.IsByRef ? "&" : "")} {SanitizeName(p.Name)}"));
 
                 WriteLine($"virtual {returnType} {methodName}({paramList}) = 0;");
             }
@@ -1152,6 +1156,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 paramList = string.Join(", ", ctor.Implementation.Parameters.Select(p =>
                 {
                     var paramType = MapType(p.Type);
+                    // ByRef outranks the const-ref optimization below: `const T&` aliases the
+                    // caller's object but forbids the write ByRef exists to make visible.
+                    if (p.IsByRef)
+                        return $"{paramType}& {SanitizeName(p.Name)}";
                     // Use const reference for string and complex types
                     if (paramType == "std::string" || (p.Type != null && p.Type.Kind == TypeKind.Class))
                         return $"const {paramType}& {SanitizeName(p.Name)}";
@@ -1380,7 +1388,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (method.Implementation != null)
             {
                 paramList = string.Join(", ", method.Implementation.Parameters.Select(p =>
-                    FormatParameter(p.Type, SanitizeName(p.Name))));
+                    FormatParameter(p.Type, SanitizeName(p.Name), p.IsByRef)));
             }
 
             var methodTemplate = TemplatePrefix(method.GenericParameters);
@@ -1679,7 +1687,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var functionName = SanitizeName(function.Name);
 
             var parameters = string.Join(", ",
-                function.Parameters.Select(p => FormatParameter(p.Type, GetValueName(p))));
+                function.Parameters.Select(p => FormatParameter(p.Type, GetValueName(p), p.IsByRef)));
 
             var fnTemplate = TemplatePrefix(function.GenericParameters);
             if (fnTemplate != null) WriteLine(fnTemplate);
@@ -1687,12 +1695,26 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         }
 
         /// <summary>
-        /// Format one parameter: type parameters pass by const-ref (safe for any T),
-        /// everything else keeps its existing by-value form.
+        /// Format one parameter: a ByRef parameter passes by NON-CONST C++ reference,
+        /// type parameters pass by const-ref (safe for any T), everything else keeps its
+        /// existing by-value form.
+        ///
+        /// <para><b>ByRef wins over every other rule</b>, including the const-ref one for
+        /// type parameters: `const T&amp;` aliases the caller's object but forbids the write
+        /// that is the whole point of ByRef. This single `&amp;` is what makes VB ByRef real on
+        /// this backend for EVERY payload shape at once — <c>int32_t&amp;</c> for scalars,
+        /// <c>Pt&amp;</c> for a value <c>Structure</c>, <c>std::vector&lt;T&gt;&amp;</c> for an
+        /// array, and <c>shared_ptr&lt;T&gt;&amp;</c> for a class (so REBINDING the parameter
+        /// to a different instance is visible to the caller, not merely mutating the pointee).
+        /// It also needs no call-site marker: C++ binds an lvalue argument to a reference
+        /// parameter silently, which is why <see cref="Visit(IRCall)"/> only has to
+        /// materialize the arguments that are NOT lvalues.</para>
         /// </summary>
-        private string FormatParameter(TypeInfo type, string name)
+        private string FormatParameter(TypeInfo type, string name, bool isByRef = false)
         {
             var paramType = MapType(type);
+            if (isByRef)
+                return $"{paramType}& {name}";
             if (type != null && type.Kind == TypeKind.TypeParameter)
                 return $"const {paramType}& {name}";
             return $"{paramType} {name}";
@@ -1722,7 +1744,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var returnType = MapReturnType(function);
             var functionName = SanitizeName(function.Name);
             var parameters = string.Join(", ",
-                function.Parameters.Select(p => FormatParameter(p.Type, GetValueName(p))));
+                function.Parameters.Select(p => FormatParameter(p.Type, GetValueName(p), p.IsByRef)));
 
             var fnTemplate = TemplatePrefix(function.GenericParameters);
             if (fnTemplate != null)
@@ -2176,9 +2198,35 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     destination = GetValueName(call);
             }
 
+            // An array-element or field argument arrives as a temp holding a COPY; for a ByRef
+            // parameter that copy IS the bug. Re-derive the real storage first, then give any
+            // remaining non-lvalue ByRef argument a named local to bind to.
+            AliasByRefLValueArguments(call.ByRefArguments, call.Arguments, args);
+            var byRefTemps = MaterializeByRefArguments(call, args);
+
+            // Emit one call statement, preceded by any ByRef copy-in temps. When temps exist
+            // the whole region is BRACED: this backend flattens control flow to labels+goto,
+            // and a forward jump that crossed a bare local initialization is a hard C++ error
+            // ("jump to label crosses initialization of ..."). Braces confine the declaration
+            // to a scope no goto can jump into, the same shape the .NET call region uses.
+            void EmitRegion(string statement)
+            {
+                if (byRefTemps.Count == 0)
+                {
+                    WriteLine(statement);
+                    return;
+                }
+                WriteLine("{");
+                Indent();
+                foreach (var decl in byRefTemps) WriteLine(decl);
+                WriteLine(statement);
+                Unindent();
+                WriteLine("}");
+            }
+
             void EmitCallStatement(string expression)
             {
-                WriteLine(destination != null ? $"{destination} = {expression};" : $"{expression};");
+                EmitRegion(destination != null ? $"{destination} = {expression};" : $"{expression};");
             }
 
             // Check if this is an extern function call
@@ -2213,7 +2261,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (stdlibCall != null)
             {
                 if (IsVoidStdLibCall(functionName))
-                    WriteLine($"{stdlibCall};");
+                    EmitRegion($"{stdlibCall};");
                 else
                     EmitCallStatement(stdlibCall);
                 return;
@@ -2223,6 +2271,137 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var sanitizedName = SanitizeName(ResolveFlattenedFunctionName(functionName));
             var argsStr = string.Join(", ", args);
             EmitCallStatement($"{sanitizedName}({argsStr})");
+        }
+
+        /// <summary>
+        /// Rewrite each ByRef argument that reads an ALIASABLE location — an array element or
+        /// an object field — from the temp holding its copy to the location itself, so the
+        /// callee's write lands in the caller's storage.
+        ///
+        /// <para>An argument like <c>arr(1)</c> or <c>h.F</c> reaches the call as an
+        /// <see cref="IRLoad"/>/<see cref="IRFieldAccess"/> that already materialized a COPY
+        /// (<c>t5 = arr[1]; Bump(t5);</c>). Binding the reference to <c>t5</c> compiles and runs
+        /// and throws the write away — the C# backend passes <c>ref arr[1]</c> and prints a
+        /// different answer. This is the same defect, and the same remedy, as the receiver of a
+        /// field store on an array element (see <see cref="Visit(IRFieldStore)"/>).</para>
+        ///
+        /// <para><b>Opt-in per call site, exactly like that one.</b> Aliasing every element read
+        /// would be wrong as soon as an index variable changes between the read and its use;
+        /// applied only to ByRef positions, the alias is what VB semantics ask for. A resolved
+        /// .NET member is excluded: its "field" read is a property-getter call, not storage.</para>
+        /// </summary>
+        private void AliasByRefLValueArguments(List<bool> byRefFlags, List<IRValue> arguments, List<string> args)
+        {
+            if (byRefFlags == null || byRefFlags.Count == 0) return;
+
+            for (int i = 0; i < args.Count && i < arguments.Count; i++)
+            {
+                if (i >= byRefFlags.Count || !byRefFlags[i]) continue;
+
+                var lvalue = ElementLValueOfArrayRead(arguments[i]) ?? FieldLValueOfRead(arguments[i]);
+                if (lvalue != null) args[i] = lvalue;
+            }
+        }
+
+        /// <summary>
+        /// The C++ lvalue behind a plain field READ (<c>h-&gt;F</c>, <c>p.X</c>), or <c>null</c>
+        /// for anything else. Foreign (::-qualified) and resolved-.NET reads are excluded: the
+        /// first is re-rendered inline as an expression, the second is a getter CALL rather than
+        /// storage, and neither is assignable.
+        /// </summary>
+        private string FieldLValueOfRead(IRValue value)
+        {
+            if (value is not IRFieldAccess field) return null;
+            if (field.Type?.Kind == TypeKind.Foreign) return null;
+            if (field.ResolvedNetTarget != null) return null;
+            if (field.Object == null || string.IsNullOrEmpty(field.FieldName)) return null;
+
+            var obj = ElementLValueOfArrayRead(field.Object) ?? GetValueName(field.Object);
+            return $"{obj}{MemberAccessOp(field.Object)}{SanitizeName(field.FieldName)}";
+        }
+
+        /// <summary>
+        /// Give every ByRef argument that is NOT already an lvalue a named local to bind to,
+        /// rewriting <paramref name="args"/> in place and returning the declarations to emit
+        /// ahead of the call. Returns an empty list — and touches nothing — for the ordinary
+        /// case where every ByRef argument is already a variable.
+        ///
+        /// <para>A ByRef parameter lowers to a non-const C++ reference, and C++ will not bind
+        /// one to an rvalue. VB is happy to pass a literal (or an expression the optimizer has
+        /// since folded to one) to a ByRef parameter: the callee writes into a copy nobody can
+        /// observe. Without a named temp that program emits C++ that does not compile.</para>
+        ///
+        /// <para><b>The conservative direction is to copy NOTHING.</b> Copying a real lvalue —
+        /// a variable, a field, an array element, or a declared result temp — would compile
+        /// perfectly and silently discard the write-back, reinstating exactly the bug ByRef
+        /// support exists to fix. So only shapes that GetValueName renders INLINE as an
+        /// expression qualify: constants, opaque foreign (::-qualified) results, and inlined
+        /// lambdas. Everything else already names storage.</para>
+        /// </summary>
+        private List<string> MaterializeByRefArguments(IRCall call, List<string> args) =>
+            MaterializeByRefArguments(call.ByRefArguments, call.Arguments, args,
+                // Resolved LAZILY — this is a linear scan of the module's functions, and the
+                // overwhelming majority of call sites have no ByRef argument needing a temp.
+                () => _module?.Functions.FirstOrDefault(f =>
+                    string.Equals(f.Name, call.FunctionName, StringComparison.OrdinalIgnoreCase))?.Parameters);
+
+        /// <summary><inheritdoc cref="MaterializeByRefArguments(IRCall, List{string})"/></summary>
+        /// <param name="calleeParameters">Resolves the callee's parameters when known — the
+        /// reference is declared with the PARAMETER's type, and a widening/narrowing argument
+        /// would otherwise fail to bind. Called at most once, and only when a temp is actually
+        /// needed; null (or a null result) falls back to each argument's own type.</param>
+        private List<string> MaterializeByRefArguments(List<bool> byRefFlags, List<IRValue> arguments,
+                                                       List<string> args, Func<List<IRVariable>> calleeParameters)
+        {
+            var decls = new List<string>();
+            if (byRefFlags == null || byRefFlags.Count == 0) return decls;
+
+            List<IRVariable> parameters = null;
+            bool parametersResolved = false;
+
+            for (int i = 0; i < args.Count && i < arguments.Count; i++)
+            {
+                if (i >= byRefFlags.Count || !byRefFlags[i]) continue;
+
+                var arg = arguments[i];
+                if (!NeedsByRefTemp(arg)) continue;
+
+                if (!parametersResolved)
+                {
+                    parameters = calleeParameters?.Invoke();
+                    parametersResolved = true;
+                }
+
+                var paramType = parameters != null && i < parameters.Count
+                    ? parameters[i].Type
+                    : arg?.Type;
+
+                var tempName = $"__byref{_byRefTempCounter++}";
+                decls.Add($"{MapType(paramType)} {tempName} = {args[i]};");
+                args[i] = tempName;
+            }
+            return decls;
+        }
+
+        /// <summary>Counter for ByRef copy-in temps; unique per translation unit so two braced
+        /// call regions in one function can never collide.</summary>
+        private int _byRefTempCounter;
+
+        /// <summary>
+        /// Whether <paramref name="value"/> is rendered by <see cref="GetValueName"/> as an
+        /// inline EXPRESSION rather than as the name of some storage — i.e. whether it is an
+        /// rvalue at the C++ call site. Mirrors GetValueName's inline-rendering arms.
+        /// </summary>
+        private static bool NeedsByRefTemp(IRValue value)
+        {
+            if (value == null) return false;
+            if (value is IRConstant) return true;
+            // Opaque foreign (::-qualified) results have no valid C++ temp and are re-rendered
+            // as the call/field expression at every use site.
+            if (value.Type?.Kind == TypeKind.Foreign) return true;
+            // A lambda is expanded into an inline closure expression.
+            if (value is IRVariable v && v.Name != null && v.Name.StartsWith("__lambda_")) return true;
+            return false;
         }
 
         /// <summary>
@@ -3482,11 +3661,32 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             var op = MemberAccessOp(methodCall.Object);
             var methodName = SanitizeName(methodCall.MethodName);
-            var args = string.Join(", ", methodCall.Arguments.Select(a => GetValueName(a)));
-            if (methodCall.Type == null || methodCall.Type.Name == "Void")
-                WriteLine($"{obj}{op}{methodName}({args});");
-            else
-                WriteLine($"{GetValueName(methodCall)} = {obj}{op}{methodName}({args});");
+            var argList = methodCall.Arguments.Select(a => GetValueName(a)).ToList();
+
+            // Same two ByRef adjustments the free-function path makes: bind to the caller's
+            // real storage for an aliasable argument, and give a non-lvalue one a named local
+            // (braced, so goto-lowered control flow cannot jump across its initialization).
+            AliasByRefLValueArguments(methodCall.ByRefArguments, methodCall.Arguments, argList);
+            var byRefTemps = MaterializeByRefArguments(methodCall.ByRefArguments, methodCall.Arguments,
+                                                       argList, calleeParameters: null);
+
+
+            var args = string.Join(", ", argList);
+            var statement = methodCall.Type == null || methodCall.Type.Name == "Void"
+                ? $"{obj}{op}{methodName}({args});"
+                : $"{GetValueName(methodCall)} = {obj}{op}{methodName}({args});";
+
+            if (byRefTemps.Count == 0)
+            {
+                WriteLine(statement);
+                return;
+            }
+            WriteLine("{");
+            Indent();
+            foreach (var decl in byRefTemps) WriteLine(decl);
+            WriteLine(statement);
+            Unindent();
+            WriteLine("}");
         }
 
         /// <summary>

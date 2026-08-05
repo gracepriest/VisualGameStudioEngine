@@ -1814,4 +1814,376 @@ End Sub";
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
         Assert.That(CompileRun(output), Is.EqualTo("11\n"));
     }
+
+    // ========================================================================
+    // ByRef parameters.
+    //
+    // The C++ backend used to drop ByRef ENTIRELY: `Sub Bump(ByRef x As Integer)`
+    // emitted `void Bump(int32_t x)` — by value, no diagnostic — so the callee wrote a
+    // copy and the caller printed the OLD value. The flag survived the whole front end
+    // (Parser -> Symbol -> IRParameter.IsByRef) and only the backend ignored it; the C#
+    // backend read the same flag and was correct, which is why these tests assert the
+    // .NET answer. Every one of them RUNS the binary: a signature assertion alone would
+    // have passed against several wrong lowerings.
+    //
+    // These MUST go through CompileToCppOptimized. A correct signature is still defeated
+    // by CopyPropagationPass folding a later read against the pre-call value, and only
+    // the optimizer exposes that (see the ...SurvivesTheOptimizer test).
+    // ========================================================================
+
+    [Test]
+    public void Cpp_ByRef_Scalar_WritesThroughToCaller_CompileAndRun()
+    {
+        // The headline bug: this printed 1 (by-value copy). .NET prints 11.
+        var source = @"
+Sub Bump(ByRef x As Integer)
+    x = x + 10
+End Sub
+
+Sub Main()
+    Dim v As Integer = 1
+    Bump(v)
+    Console.WriteLine(v)
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("void Bump(int32_t& x)"),
+            "a ByRef parameter must lower to a non-const C++ reference:\n" + output);
+        Assert.That(CompileRun(output), Is.EqualTo("11\n"),
+            "printed 1 => the callee wrote a by-value copy and the write never reached the caller");
+    }
+
+    [Test]
+    public void Cpp_ByVal_Scalar_DoesNotWriteThrough_CompileAndRun()
+    {
+        // Anti-vacuity partner: the SAME program with ByVal must still print 1. A backend
+        // that referenced every parameter would pass the test above and fail this one.
+        var source = @"
+Sub Bump(ByVal x As Integer)
+    x = x + 10
+End Sub
+
+Sub Main()
+    Dim v As Integer = 1
+    Bump(v)
+    Console.WriteLine(v)
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("void Bump(int32_t x)"),
+            "a ByVal parameter must stay by value:\n" + output);
+        Assert.That(CompileRun(output), Is.EqualTo("1\n"));
+    }
+
+    [Test]
+    public void Cpp_ByRef_OnFunction_WritesThroughAndReturns_CompileAndRun()
+    {
+        // ByRef is not Sub-only: a Function must alias its argument AND return normally.
+        var source = @"
+Function Twice(ByRef x As Integer) As Integer
+    x = x * 2
+    Return x + 1
+End Function
+
+Sub Main()
+    Dim w As Integer = 3
+    Dim r As Integer = Twice(w)
+    Console.WriteLine(w)
+    Console.WriteLine(r)
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("6\n7\n"));
+    }
+
+    [Test]
+    public void Cpp_ByRef_Structure_WritesThroughToCaller_CompileAndRun()
+    {
+        // The case ByRef breaks hardest: a Structure is a VALUE type, so by-value passing
+        // silently copies the whole struct and every field write is lost.
+        var source = @"
+Structure Pt
+    Public X As Integer
+    Public Y As Integer
+End Structure
+
+Sub Shift(ByRef p As Pt)
+    p.X = p.X + 100
+End Sub
+
+Sub Main()
+    Dim p As Pt
+    p.X = 5
+    Shift(p)
+    Console.WriteLine(p.X)
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("Pt& p"),
+            "a ByRef Structure parameter must alias the caller's value:\n" + output);
+        Assert.That(CompileRun(output), Is.EqualTo("105\n"));
+    }
+
+    [Test]
+    public void Cpp_ByRef_Array_WritesThroughToCaller_CompileAndRun()
+    {
+        // Arrays lower to std::vector<T> BY VALUE, so ByRef must produce std::vector<T>&.
+        var source = @"
+Sub BumpFirst(ByRef a[] As Integer)
+    a(0) = a(0) + 7
+End Sub
+
+Sub Main()
+    Dim a(3) As Integer
+    a(0) = 1
+    BumpFirst(a)
+    Console.WriteLine(a(0))
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("std::vector<int32_t>& a"),
+            "a ByRef array parameter must alias the caller's vector:\n" + output);
+        Assert.That(CompileRun(output), Is.EqualTo("8\n"));
+    }
+
+    [Test]
+    public void Cpp_ByRef_Class_ReassignmentIsVisibleToCaller_CompileAndRun()
+    {
+        // A class is already a shared_ptr, so MUTATING the pointee works even ByVal — that is
+        // the ByVal partner below, and it is why this test REASSIGNS instead. Only a true
+        // shared_ptr<T>& makes rebinding the parameter to a different instance visible.
+        var source = @"
+Class Box
+    Public V As Integer
+End Class
+
+Sub Replace(ByRef b As Box)
+    b = New Box()
+    b.V = 99
+End Sub
+
+Sub Main()
+    Dim b As New Box()
+    b.V = 1
+    Replace(b)
+    Console.WriteLine(b.V)
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Does.Contain("std::shared_ptr<Box>& b"),
+            "ByRef on a class must alias the HANDLE, not merely the pointee:\n" + output);
+        Assert.That(CompileRun(output), Is.EqualTo("99\n"),
+            "printed 1 => the callee rebound its own copy of the shared_ptr");
+    }
+
+    [Test]
+    public void Cpp_ByVal_Class_MutationAliasesButReassignmentDoesNot_CompileAndRun()
+    {
+        // Anti-vacuity partner for the class case, pinning BOTH halves of .NET reference
+        // semantics in one program: mutating through a ByVal handle IS visible (55), while
+        // reassigning that handle is NOT (still 55, never 99).
+        var source = @"
+Class Box
+    Public V As Integer
+End Class
+
+Sub Mutate(ByVal b As Box)
+    b.V = 55
+End Sub
+
+Sub Rebind(ByVal b As Box)
+    b = New Box()
+    b.V = 99
+End Sub
+
+Sub Main()
+    Dim c As New Box()
+    c.V = 1
+    Mutate(c)
+    Console.WriteLine(c.V)
+    Rebind(c)
+    Console.WriteLine(c.V)
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("55\n55\n"));
+    }
+
+    [Test]
+    public void Cpp_ByRef_String_WritesThroughToCaller_CompileAndRun()
+    {
+        var source = @"
+Sub Shout(ByRef s As String)
+    s = s & ""!""
+End Sub
+
+Sub Main()
+    Dim s As String = ""hi""
+    Shout(s)
+    Console.WriteLine(s)
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("hi!\n"));
+    }
+
+    [Test]
+    public void Cpp_ByRef_InstanceMethod_WritesThroughToCaller_CompileAndRun()
+    {
+        // IRInstanceMethodCall carried no ByRef information at all, so obj.Method(ByRef x)
+        // was broken on BOTH backends — silently here, and as CS1620 on the C# backend.
+        var source = @"
+Class Worker
+    Public Sub Bump(ByRef x As Integer)
+        x = x + 10
+    End Sub
+End Class
+
+Sub Main()
+    Dim w As New Worker()
+    Dim v As Integer = 1
+    w.Bump(v)
+    Console.WriteLine(v)
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("11\n"));
+    }
+
+    [Test]
+    public void Cpp_ByRef_InstanceMethod_ArrayElementArgument_WritesThrough_CompileAndRun()
+    {
+        // The instance-call twin of the aliasing case below. It only works because IRBuilder
+        // now records ByRefArguments for instance calls — with an empty list the backend
+        // cannot tell which argument to alias and binds the reference to the copy temp.
+        var source = @"
+Class Worker
+    Public Sub Bump(ByRef x As Integer)
+        x = x + 10
+    End Sub
+End Class
+
+Sub Main()
+    Dim w As New Worker()
+    Dim arr(3) As Integer
+    arr(2) = 4
+    w.Bump(arr(2))
+    Console.WriteLine(arr(2))
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("14\n"));
+    }
+
+    [Test]
+    public void Cpp_ByRef_ArrayElementAndFieldArguments_WriteThrough_CompileAndRun()
+    {
+        // An array element / field argument reaches the call as a temp holding a COPY
+        // (`t5 = arr[1]; Bump(t5);`). Binding the reference to that temp compiles and runs
+        // and throws the write away — the C# backend passes `ref arr[1]` and prints 14/16.
+        var source = @"
+Class Holder
+    Public F As Integer
+End Class
+
+Sub Bump(ByRef x As Integer)
+    x = x + 10
+End Sub
+
+Sub Main()
+    Dim arr(3) As Integer
+    arr(1) = 4
+    Bump(arr(1))
+    Console.WriteLine(arr(1))
+
+    Dim h As New Holder()
+    h.F = 6
+    Bump(h.F)
+    Console.WriteLine(h.F)
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("14\n16\n"),
+            "printed 4/6 => the reference bound to the temp copy instead of the real storage");
+    }
+
+    [Test]
+    public void Cpp_ByRef_LiteralArgument_EmitsCompilingCode_CompileAndRun()
+    {
+        // VB accepts a literal for a ByRef parameter (the callee writes a copy nobody can
+        // observe), but C++ will not bind a non-const reference to an rvalue. Without a
+        // materialized lvalue this program emits C++ that does not compile at all — and the
+        // optimizer FOLDS `a + b` to a constant, so the shape is reachable from ordinary code.
+        var source = @"
+Sub Bump(ByRef x As Integer)
+    x = x + 10
+End Sub
+
+Sub Main()
+    Bump(5)
+    Dim a As Integer = 1
+    Dim b As Integer = 2
+    Bump(a + b)
+    Console.WriteLine(""ok"")
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("ok\n"));
+    }
+
+    [Test]
+    public void Cpp_ByRef_LiteralArgumentInsideIf_CompilesUnderGotoLowering_CompileAndRun()
+    {
+        // This backend flattens control flow to labels + goto, so a bare local declaration
+        // emitted for the ByRef copy-in would be JUMPED OVER by the branch that skips the
+        // If body — a hard C++ error ("jump to label crosses initialization of"). The copy-in
+        // and the call are braced as one region for exactly this reason. Every other ByRef
+        // fixture here is straight-line, which is what let the analogous Task-10 break through.
+        var source = @"
+Sub Bump(ByRef x As Integer)
+    x = x + 10
+End Sub
+
+Sub Main()
+    Dim flag As Boolean = True
+    If flag Then
+        Bump(5)
+        Console.WriteLine(""taken"")
+    Else
+        Bump(7)
+        Console.WriteLine(""not taken"")
+    End If
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("taken\n"));
+    }
+
+    [Test]
+    public void Cpp_ByRef_SurvivesTheOptimizer_CompileAndRun()
+    {
+        // LAYER TWO, and the reason a correct signature alone is not enough: the result is
+        // read through a COMPARISON rather than printed, so a stale copy fact changes the
+        // BRANCH rather than a printed digit. CopyPropagationPass recorded `n -> 0` from the
+        // Dim, did not kill it on the ByRef write, and folded `If n = 42` to False — the C#
+        // backend, whose `ref` signature was already correct, emitted a literal `if (false)`.
+        var source = @"
+Sub SetIt(ByRef n As Integer)
+    n = 42
+End Sub
+
+Sub Main()
+    Dim n As Integer = 0
+    SetIt(n)
+    If n = 42 Then
+        Console.WriteLine(""FRESH"")
+    Else
+        Console.WriteLine(""STALE"")
+    End If
+End Sub";
+        var output = CompileToCppOptimized(source, out var errors);
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(CompileRun(output), Is.EqualTo("FRESH\n"),
+            "'STALE' means a pass kept a copy fact for n across a call that writes it");
+    }
 }
