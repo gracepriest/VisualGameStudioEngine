@@ -83,9 +83,17 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 Line();
             }
 
+            // Class and interface member bodies also live in module.Functions, under their
+            // UNQUALIFIED name — `Class A.Handle` and `Class B.Handle` are both "Handle".
+            // Emitting them here would produce two top-level `function Handle()` declarations
+            // and the second would silently win. Class emission is plan task 17; until then
+            // they are skipped rather than emitted under a colliding name.
+            var memberBodies = module.CollectMemberImplementations();
+
             foreach (var function in module.Functions)
             {
                 if (function.IsExternal) continue;
+                if (memberBodies.Contains(function)) continue;
                 function.Accept(this);
                 Line();
             }

@@ -1448,6 +1448,47 @@ namespace BasicLang.Compiler.IR
         }
 
         /// <summary>
+        /// Every <see cref="IRFunction"/> in <see cref="Functions"/> that is really a class or
+        /// interface MEMBER body, identified by reference.
+        ///
+        /// <para>Class members flatten into <c>Functions</c> under their UNQUALIFIED name —
+        /// <c>Class A.Handle</c> and <c>Class B.Handle</c> are both just "Handle" — while the
+        /// owning member keeps a pointer to the same object. Two consumers need to tell them
+        /// apart and must not each invent their own rule:</para>
+        /// <list type="bullet">
+        /// <item><description>Combining units must NOT dedupe them by name, or one class's
+        /// method is discarded outright.</description></item>
+        /// <item><description>A backend that walks <c>Functions</c> must NOT emit them as free
+        /// functions, or two same-named definitions collide and the later silently wins.</description></item>
+        /// </list>
+        ///
+        /// <para>Identity, never name: the names are exactly what is ambiguous.</para>
+        /// </summary>
+        public HashSet<IRFunction> CollectMemberImplementations()
+        {
+            var members = new HashSet<IRFunction>();
+
+            foreach (var cls in Classes.Values)
+            {
+                foreach (var m in cls.Methods)
+                    if (m?.Implementation != null) members.Add(m.Implementation);
+                foreach (var c in cls.Constructors)
+                    if (c?.Implementation != null) members.Add(c.Implementation);
+                foreach (var p in cls.Properties)
+                {
+                    if (p?.Getter != null) members.Add(p.Getter);
+                    if (p?.Setter != null) members.Add(p.Setter);
+                }
+            }
+
+            foreach (var iface in Interfaces.Values)
+                foreach (var m in iface.Methods)
+                    if (m?.DefaultImplementation != null) members.Add(m.DefaultImplementation);
+
+            return members;
+        }
+
+        /// <summary>
         /// Check if a function is an extern
         /// </summary>
         public bool IsExtern(string name) => ExternDeclarations.ContainsKey(name);
