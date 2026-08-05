@@ -765,71 +765,13 @@ public class ExtensionHost : IDisposable
         }
     }
 
-    private string? FindNodeExecutable()
-    {
-        // Try 'node' directly (on PATH)
-        var nodeNames = new[] { "node", "node.exe" };
-
-        foreach (var name in nodeNames)
-        {
-            try
-            {
-                var psi = new ProcessStartInfo
-                {
-                    FileName = name,
-                    Arguments = "--version",
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    CreateNoWindow = true
-                };
-                using var proc = Process.Start(psi);
-                if (proc != null)
-                {
-                    proc.WaitForExit(5000);
-                    if (proc.ExitCode == 0)
-                    {
-                        return name;
-                    }
-                }
-            }
-            catch
-            {
-                // Not found, try next
-            }
-        }
-
-        // Try common install locations
-        var commonPaths = new[]
-        {
-            @"C:\Program Files\nodejs\node.exe",
-            @"C:\Program Files (x86)\nodejs\node.exe",
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "nodejs", "node.exe"),
-            "/usr/local/bin/node",
-            "/usr/bin/node"
-        };
-
-        foreach (var path in commonPaths)
-        {
-            if (File.Exists(path))
-            {
-                return path;
-            }
-        }
-
-        // Try NVM for Windows
-        var nvmDir = Environment.GetEnvironmentVariable("NVM_HOME");
-        if (!string.IsNullOrEmpty(nvmDir))
-        {
-            var nvmSymlink = Environment.GetEnvironmentVariable("NVM_SYMLINK");
-            if (!string.IsNullOrEmpty(nvmSymlink))
-            {
-                var nvmNode = Path.Combine(nvmSymlink, "node.exe");
-                if (File.Exists(nvmNode)) return nvmNode;
-            }
-        }
-
-        return null;
-    }
+    /// <summary>
+    /// Delegates to <see cref="BasicLang.Runtime.NodeLocator"/>, which owns the probe
+    /// chain. The JavaScript backend's test tier needs the same discovery, and a second
+    /// copy would let the IDE and the compiler disagree about which Node they found —
+    /// CLAUDE.md's shared-resolver rule ("change it once, not per-consumer").
+    /// </summary>
+    private string? FindNodeExecutable() => BasicLang.Runtime.NodeLocator.Find();
 
     private void CleanupProcess()
     {

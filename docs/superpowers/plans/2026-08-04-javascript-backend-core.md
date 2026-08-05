@@ -31,7 +31,7 @@
 | `BasicLang/JsCapabilityChecker.cs` | **Create** — `BL7001`–`BL7007` rejections |
 | `BasicLang/StdLib/JavaScriptStdLib.cs` | **Create** — `IStdLibProvider` for Console/Math/String/Random/DateTime/Regex |
 | `BasicLang/JavaScriptSourceMap.cs` | **Create** — Source Map v3 emitter (VLQ encoding) |
-| `BasicLang/JavaScriptEmitter.cs` | **Create** — writes `.js` + `.js.map` + `index.html` to an output dir |
+| `BasicLang/JavaScriptEmitter.cs` | **Create in Task 25** — writes `.js` + `.js.map` + `index.html` to an output dir. Not needed by Task 4: the single-file CLI path already writes `GenerateCode`'s string itself. |
 | `BasicLang/Runtime/NodeLocator.cs` | **Create** — extracted from `ExtensionHost`; see Task 3 |
 | `VisualGameStudio.ProjectSystem/Services/ExtensionHost.cs:768` | **Modify** — delegate to `NodeLocator` |
 | `VisualGameStudio.ProjectSystem/Services/WebPreviewServer.cs` | **Create** — `HttpListener` static server |
@@ -408,22 +408,90 @@ git commit -m "feat(js): Node execution test harness; extract NodeLocator to sha
 
 ### Task 4: CLI target wiring
 
+> **Amended during execution.** As written this task conflated the CLI's two output
+> routes. The **single-file** route (`Program.cs:1108-1129`) calls `GenerateCode` and
+> writes the returned string itself — it needs no emitter and never touches a csproj.
+> The **project** route (`build proj.blproj`, `Program.cs:684-700`) is the one that
+> hardcodes `<Project Sdk="Microsoft.NET.Sdk">` plus a `.cs` compile item; wiring that
+> for JavaScript is **Task 29**, where the IDE path is handled alongside it. So Task 4
+> is the target switch only, and `JavaScriptEmitter.cs` moves to Task 25 where the
+> `.js.map` + `index.html` outputs it exists to write actually arrive.
+
 **Files:**
 - Modify: `BasicLang/Program.cs` (the `--target=` switch)
-- Create: `BasicLang/JavaScriptEmitter.cs`
-- Test: `VisualGameStudio.Tests/Compiler/JavaScriptEmitterTests.cs`
+- Test: `VisualGameStudio.Tests/Compiler/JavaScriptCliTargetTests.cs`
 
-- [ ] **Step 1: Write the failing test** — `BasicLang.exe prog.bas --target=javascript` writes `prog.js` next to the source, containing `console.log`.
-- [ ] **Step 2: Run it, confirm it fails.**
-- [ ] **Step 3: Implement** `JavaScriptEmitter.Emit(IRModule, outputDir, baseName)` writing `<baseName>.js`. Wire `--target=javascript` / `--target=js` through the existing switch, routing to the emitter rather than the csproj-plus-`dotnet build` path at `Program.cs:684` — JS has no build step.
-- [ ] **Step 4: Run it, confirm it passes.**
-- [ ] **Step 5: Commit** — `feat(js): --target=javascript emits a .js file`
+- [x] **Step 1: Write the failing test** — `GenerateCode(ir, "javascript")` returns JavaScript and `GetOutputExtension("javascript")` returns `.js`. These are the CLI's **own** dispatch helpers, deliberately not `BackendRegistry`: the CLI does not go through the registry, so a registry-only test passes while the CLI emits C#. Both were made `internal` (`InternalsVisibleTo` was already present).
+- [x] **Step 2: Run it, confirm it fails.**
+- [x] **Step 3: Implement.** Add `"javascript" or "js"` arms to both switches.
+
+  While here, fix the pre-existing trap this exposed: the `_ =>` arm defaulted **any**
+  unrecognised target to the C# generator, so `--target=jscript` silently wrote a `.cs`
+  file and the build succeeded. A non-empty unknown target now throws — in **both**
+  helpers, since they must reject the same set or the extension disagrees with the
+  contents. `null`/`""` keeps defaulting to C#; that is the documented CLI default.
+
+- [x] **Step 4: Run it, confirm it passes.** 21/21 across the JS fixtures.
+- [x] **Step 5: Commit** — `feat(js): --target=javascript emits a .js file` (`9fe3c5e`)
+
+> **Deferred out of this task, tracked in Task 29:** an end-to-end test that spawns
+> `BasicLang.exe prog.bas --target=javascript` as a real process and runs the resulting
+> file under Node. The helpers are covered in-process; the actual argv→file path is not.
 
 ---
 
 ## Phase 1 — The capability checker
 
 Built before the generator grows, so unsupported constructs are refused rather than half-emitted.
+
+### IR-shape recon — MEASURED, not assumed
+
+Every row below was observed by building real modules through Lexer → Parser →
+SemanticAnalyzer → IRBuilder and dumping the result. Do not re-derive these; do not trust
+a remembered shape over this table.
+
+| Feature | How it actually appears | Detectable on the IR? |
+|---|---|---|
+| Method overloading | **Front end rejects it.** `Sub F(a As Integer)` + `Sub F(a As String)` → SemanticAnalyzer error *"Subroutine 'F' is already defined in this scope"*. Same for class methods. | **N/A — the language has no overloading** |
+| `ByRef` | `IRVariable.IsByRef` on `IRFunction.Parameters`. Preserved at all six IRBuilder construction sites. Class methods are flattened into `module.Functions` with the flag intact, so one walk covers them. | ✅ |
+| `Long` | `TypeInfo.Name == "Long"`, `Kind == Primitive`. Survives as a local, a parameter, and a return type. | ✅ |
+| `Char` | `TypeInfo.Name == "Char"`, `Kind == Primitive`. | ✅ |
+| value `Structure` | `IRClass.IsStruct == true` in `module.Classes`. | ✅ |
+| Operator overloading | `IRFunction.Name == "V.op_Addition"` (class-qualified, `op_` prefix) **and** `IRClass.Methods[].Name == "op_Addition"`. | ✅ |
+| .NET BCL type | `TypeInfo.Name == "Stream"`, `Kind == Class`. Note the analyzer is **permissive** — it accepts `Dim s As Stream` with no reference at all, so there is no front-end error to lean on. | ✅ (needs a name list or an "unknown Class not in `module.Classes`" rule) |
+
+**Consequence — Task 6 is deleted, not implemented.** `BL7001` has nothing to reject:
+BasicLang never supported overloading on any backend. Writing the diagnostic would produce
+an arm that can never fire. Task 6 becomes a one-test guard asserting the front end
+rejects it, so the assumption is pinned rather than silently trusted.
+
+**Consequence — the plan's IR-level seam is sound; the spec's pre-IR seam is not needed.**
+The spec said the check must run after semantic analysis and *before* IR construction. The
+measurement says everything except overloading survives into the IR, so calling
+`JsCapabilityChecker.Check(module)` from `Generate` works — and that seam cannot be
+bypassed, because every entry point reaches codegen through it. A separate pre-IR
+invocation would be one more thing a caller can forget to call, which this repo's history
+says is the dominant failure mode.
+
+#### Two traps measured out of the IR
+
+1. **Declaration `SourceLine` is always 0.** `SourceLine` exists only on `IRInstruction`;
+   `IRFunction`, `IRClass`, `IRMethod` and `IRParameter` do not have it at all, and the
+   `IRVariable`s for parameters and locals all report `0`. So a rejection cannot cite a
+   line from the IR — messages must identify the offender by name (*"ByRef parameter 'x'
+   in 'Bump'"*). **Statement-level positions ARE correct** (`IRCall @L2`, `IRBinaryOp @L4`),
+   so Task 26's source maps do have the plumbing they assume; only declarations lack it.
+
+2. **Two classes with the same method name produce two `IRFunction`s with the same
+   unqualified name.** `Class A.F` and `Class B.F` both flatten to `fn 'F'` in
+   `module.Functions` — legal BasicLang. Operators flatten class-qualified (`V.op_Addition`)
+   but ordinary methods do not.
+   - This is why a "duplicate name ⇒ overloading" check would have been wrong.
+   - **Task 17 must not walk `module.Functions` naively** or it emits `function F()` twice
+     and the second silently wins. Use `IRClass.Methods[].Implementation` — an `IRFunction`
+     reference that links the two containers — and filter those implementations out of the
+     top-level walk. Note `IRMethod.Parameters` was observed **empty**; the parameters live
+     on `.Implementation`, so neither container is sufficient alone.
 
 ### Task 5: `JsCapabilityChecker` skeleton + passthrough rejection
 
@@ -484,7 +552,7 @@ Each follows the identical five steps. Do them one at a time and commit each —
 
 | Task | Code | Rejects | Test source | Message must suggest |
 |---|---|---|---|---|
-| 6 | `BL7001` | method overloading | two `Sub F` with different signatures | "rename one overload" |
+| 6 | ~~`BL7001`~~ | ~~method overloading~~ — **deleted, see recon.** Replace with a guard test asserting the SemanticAnalyzer rejects two same-named subs, so the "no overloading" assumption is pinned rather than assumed. `BL7001` stays unallocated. | two `Sub F` with different signatures | — |
 | 7 | `BL7002` | `ByRef` parameters | `Sub Bump(ByRef x As Integer)` | "return a value instead" |
 | 8 | `BL7003` | `Long` | `Dim n As Long` | "use Integer (Number, exact to 2^53)" |
 | 9 | `BL7004` | `Char` | `Dim c As Char` | "use String" |
@@ -517,6 +585,26 @@ public void Js_ByRef_IsRejected()
 - [ ] **Step 5: Commit** — e.g. `feat(js): BL7002 rejects ByRef parameters`
 
 > `BL7xxx` was confirmed unused in-tree at spec time. Re-confirm with `rg "BL7\d{3}"` before Task 6 in case Plan 2 or another session has claimed part of the range.
+
+### Known Phase 1 gaps — measured, deliberately not closed here
+
+An adversarial pass compiled real programs against the finished checker. These escape it,
+and **none can be fixed inside `JsCapabilityChecker`** — each needs a compiler change.
+Recorded so a later reader does not mistake the checker for complete.
+
+| Escape | Why the checker cannot see it | Fix belongs in |
+|---|---|---|
+| `Delegate Sub P(xs As List(Of Long))` | `IRParameter.Type` is never assigned for delegates; `TypeName` is the **erased generic head**, the string `"List"`. The name-string channel is structurally incapable of seeing the inner `Long`. | `IRBuilder.cs:1036-1044` — populate `IRParameter.Type` |
+| `Delegate Function F() As List(Of Long)` | `ReturnType` is built bare-name at `IRBuilder.cs:1029-1031`, so `GenericArguments` is empty — there is nothing to recurse into. | same |
+| `Declare Function F Lib "m" (x As List(Of Long))` | Same bare-name construction at `IRBuilder.cs:2016/2027`. | same |
+| `TypeDefine BigNum As Long` then `Dim v As BigNum` | `SemanticAnalyzer.cs:5122-5136` builds an alias `TypeInfo` **with** `BaseType` and then discards it, registering only the alias name. The link to `Long` is severed, so even recursing `BaseType` cannot find it. | `SemanticAnalyzer.cs:5127-5132` |
+| A `Type…End Type` UDT used only through a delegate/extern signature | The declaration channel does not exist (`Visit(TypeNode)` is a no-op) and the use-site channel is Kind-based, but delegate/extern types carry a **hard-coded wrong Kind** (`Primitive`). | `IRBuilder.cs:979-982` |
+| `IRPhi` / `IRTupleElement` operands | Reachable through neither `block.Instructions` nor `IROperandWalker` (which omits them by design). **Latent** — the JS generator still throws on both, so it becomes live only when Tasks 21/22 land. | revisit at Tasks 21-22 |
+
+Three further escapes are pre-existing compiler bugs with their own tasks, because they
+delete the declaration before any checker runs: a class `Property` empties the whole
+module; a colliding `Const` is dropped first-wins; and `CombineIRModules` drops a
+same-named class method. A capability checker cannot reject what is no longer there.
 
 ---
 
@@ -643,7 +731,8 @@ Same five-step TDD shape per task, each with a codegen assertion **and** an exec
 
 CLAUDE.md requires this explicitly; a fix verified through one entry point can break the other.
 
-- [ ] **Step 1:** Add a test compiling a JS project through the **CLI** path (`BasicLang.exe build proj.blproj`) and asserting the emitted `.js` runs under Node.
+- [ ] **Step 0 (carried over from Task 4):** Route the **project** build away from the csproj-plus-`dotnet build` path. `Program.cs:684-700` hardcodes `<Project Sdk="Microsoft.NET.Sdk">` and a `.cs` compile item, so `build proj.blproj` cannot currently produce JavaScript at all — only the single-file route works. JS has no build step; the project route must write the `.js` (via `JavaScriptEmitter`, Task 25) and stop.
+- [ ] **Step 1:** Add a test compiling a JS project through the **CLI** path (`BasicLang.exe build proj.blproj`) and asserting the emitted `.js` runs under Node. Also add the single-file end-to-end case deferred from Task 4: spawn `BasicLang.exe prog.bas --target=javascript` as a real process, assert `prog.js` appears next to the source, and run it under Node. Task 4 covers the dispatch helpers in-process; this covers argv→file.
 - [ ] **Step 2:** Add the equivalent through the **IDE** build path (`CompileProjectFiles`).
 - [ ] **Step 3:** Add an optimizer-running variant of the Phase 2 execution tests, mirroring `CompileToCppOptimized` in `CppCollectionTests.cs`. Assert identical stdout optimized and unoptimized.
 - [ ] **Step 4:** Commit.

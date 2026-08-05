@@ -4,6 +4,7 @@ using BasicLang.Compiler.CodeGen.CSharp;
 using BasicLang.Compiler.CodeGen.CPlusPlus;
 using BasicLang.Compiler.CodeGen.LLVM;
 using BasicLang.Compiler.CodeGen.MSIL;
+using BasicLang.Compiler.CodeGen.JavaScript;
 
 namespace BasicLang.Compiler.CodeGen
 {
@@ -67,6 +68,10 @@ namespace BasicLang.Compiler.CodeGen
                 GenerateComments = opts.GenerateComments,
                 AssemblyName = opts.ClassName ?? "GeneratedAssembly"
             }));
+
+            // Register JavaScript backend
+            Register(TargetPlatform.JavaScript, "JavaScript", opts => new JavaScriptCodeGenerator(opts));
+            Register(TargetPlatform.JavaScript, "JS", opts => new JavaScriptCodeGenerator(opts));
 
             _initialized = true;
         }
