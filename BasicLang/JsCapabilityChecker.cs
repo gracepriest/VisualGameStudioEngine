@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using BasicLang.Compiler.IR;
+using BasicLang.Compiler.SemanticAnalysis;
 
 namespace BasicLang.Compiler.CodeGen.JavaScript
 {
@@ -53,6 +54,143 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (module == null) return;
 
             CheckByRef(module);
+            CheckBannedTypes(module);
+        }
+
+        /// <summary>
+        /// Types with no JavaScript equivalent, keyed by BasicLang type name.
+        /// <c>Long</c> because a JS number is a double — exact only to 2^53 — and BigInt,
+        /// the only precise alternative, contaminates every expression it touches.
+        /// <c>Char</c> because JavaScript has no character type at all.
+        /// </summary>
+        private static readonly Dictionary<string, (string Code, string Why)> BannedTypes =
+            new Dictionary<string, (string, string)>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Long"] = ("BL7003",
+                    "a JavaScript number is a double and is exact only to 2^53, so Long values " +
+                    "silently lose precision. BigInt would be exact but contaminates every " +
+                    "arithmetic expression it touches. Use Integer."),
+                ["Char"] = ("BL7004",
+                    "JavaScript has no character type. Use String."),
+            };
+
+        /// <summary>
+        /// BL7003 / BL7004 — banned types in any declared position.
+        ///
+        /// <para><b>Two walks, deliberately.</b> The first is descriptive: it names the
+        /// position ("local 'n' in Sub 'Main'") so the error is actionable, since declaration
+        /// SourceLine is 0 and there is no line number to give. The second is
+        /// <see cref="ModuleTypeWalker"/>, the shared maintained enumeration of declared type
+        /// positions — used as a BACKSTOP. If it ever finds a banned type the descriptive
+        /// walk missed, the two have drifted and we refuse anyway with a vaguer message.
+        /// Refusing vaguely beats emitting silently-wrong JavaScript, and the vague message
+        /// is itself the signal that the descriptive walk needs a new arm.</para>
+        ///
+        /// <para>⛔ <see cref="ModuleTypeWalker"/> yields only TOP-LEVEL TypeInfos and leaves
+        /// recursion to callers, so <c>List(Of Long)</c> and <c>Long()</c> are invisible
+        /// without <see cref="CheckTypeTree"/>. It also never visits delegates, extern
+        /// declarations, or enum underlying types — those are walked explicitly below.</para>
+        /// </summary>
+        private static void CheckBannedTypes(IRModule module)
+        {
+            foreach (var (type, where) in DeclaredTypePositions(module))
+                CheckTypeTree(type, where);
+
+            foreach (var type in ModuleTypeWalker.AllTypes(module))
+                CheckTypeTree(type, "this program");
+        }
+
+        /// <summary>
+        /// Every declared type position, paired with a human description of where it is.
+        /// Mirrors ModuleTypeWalker's coverage and adds the three containers it never
+        /// visits: delegates, extern declarations, and enum underlying types.
+        /// </summary>
+        private static IEnumerable<(TypeInfo Type, string Where)> DeclaredTypePositions(IRModule module)
+        {
+            foreach (var f in module.Functions ?? Enumerable.Empty<IRFunction>())
+            {
+                var fn = DescribeFunction(f);
+                yield return (f.ReturnType, $"the return type of {fn}");
+                foreach (var p in f.Parameters ?? Enumerable.Empty<IRVariable>())
+                    yield return (p?.Type, $"parameter '{p?.Name}' of {fn}");
+                foreach (var v in f.LocalVariables ?? Enumerable.Empty<IRVariable>())
+                    yield return (v?.Type, $"local variable '{v?.Name}' in {fn}");
+            }
+
+            foreach (var g in module.GlobalVariables?.Values ?? Enumerable.Empty<IRVariable>())
+                yield return (g?.Type, $"global variable '{g?.Name}'");
+
+            foreach (var c in module.Classes?.Values ?? Enumerable.Empty<IRClass>())
+            {
+                var kind = c.IsStruct ? "Structure" : "Class";
+                foreach (var fld in c.Fields ?? Enumerable.Empty<IRField>())
+                    yield return (fld?.Type, $"field '{c.Name}.{fld?.Name}' of {kind} '{c.Name}'");
+                foreach (var prop in c.Properties ?? Enumerable.Empty<IRProperty>())
+                    yield return (prop?.Type, $"property '{c.Name}.{prop?.Name}'");
+                foreach (var m in c.Methods ?? Enumerable.Empty<IRMethod>())
+                    yield return (m?.ReturnType, $"the return type of method '{c.Name}.{m?.Name}'");
+            }
+
+            foreach (var i in module.Interfaces?.Values ?? Enumerable.Empty<IRInterface>())
+            {
+                foreach (var m in i.Methods ?? Enumerable.Empty<IRInterfaceMethod>())
+                {
+                    yield return (m?.ReturnType, $"the return type of '{i.Name}.{m?.Name}'");
+                    foreach (var p in m?.Parameters ?? Enumerable.Empty<IRParameter>())
+                        yield return (p?.Type, $"parameter '{p?.Name}' of '{i.Name}.{m?.Name}'");
+                }
+                foreach (var prop in i.Properties ?? Enumerable.Empty<IRInterfaceProperty>())
+                    yield return (prop?.Type, $"property '{i.Name}.{prop?.Name}'");
+            }
+
+            // ModuleTypeWalker visits none of the following.
+            foreach (var d in module.Delegates?.Values ?? Enumerable.Empty<IRDelegate>())
+            {
+                yield return (d?.ReturnType, $"the return type of Delegate '{d?.Name}'");
+                // ⛔ IRParameter.Type is NEVER assigned for delegates (IRBuilder.cs:1036-1044
+                // sets TypeName only), so a TypeInfo-based walk sees nothing here. The name
+                // string is the only carrier — synthesize a TypeInfo so one code path checks it.
+                foreach (var p in d?.Parameters ?? Enumerable.Empty<IRParameter>())
+                    yield return (p?.Type ?? NamedType(p?.TypeName),
+                        $"parameter '{p?.Name}' of Delegate '{d?.Name}'");
+            }
+
+            foreach (var e in module.ExternDeclarations?.Values ?? Enumerable.Empty<IRExternDeclaration>())
+            {
+                yield return (e?.ReturnType, $"the return type of extern '{e?.Name}'");
+                foreach (var p in e?.Parameters ?? Enumerable.Empty<IRParameter>())
+                    yield return (p?.Type ?? NamedType(p?.TypeName),
+                        $"parameter '{p?.Name}' of extern '{e?.Name}'");
+            }
+
+            foreach (var en in module.Enums?.Values ?? Enumerable.Empty<IREnum>())
+                yield return (en?.UnderlyingType, $"the underlying type of Enum '{en?.Name}'");
+        }
+
+        private static TypeInfo NamedType(string name) =>
+            string.IsNullOrEmpty(name) ? null : new TypeInfo(name, TypeKind.Class);
+
+        /// <summary>
+        /// Checks a type AND everything nested inside it. The nesting is the whole point:
+        /// <c>List(Of Long)</c> and <c>Long()</c> carry the banned type in GenericArguments
+        /// and ElementType respectively, and ModuleTypeWalker does not descend into either.
+        /// Tuples and nullables are recursed for the same reason.
+        /// </summary>
+        private static void CheckTypeTree(TypeInfo type, string where, int depth = 0)
+        {
+            if (type == null || depth > 16) return;   // depth guard: malformed cyclic types
+
+            if (type.Name != null && BannedTypes.TryGetValue(type.Name, out var banned))
+                throw new ForeignFeatureException(
+                    $"{banned.Code}: '{type.Name}' cannot be lowered to JavaScript — {banned.Why} " +
+                    $"(found as {where}.)");
+
+            foreach (var arg in type.GenericArguments ?? Enumerable.Empty<TypeInfo>())
+                CheckTypeTree(arg, where, depth + 1);
+            foreach (var el in type.TupleElementTypes ?? Enumerable.Empty<TypeInfo>())
+                CheckTypeTree(el, where, depth + 1);
+            CheckTypeTree(type.ElementType, where, depth + 1);
+            CheckTypeTree(type.UnderlyingType, where, depth + 1);
         }
 
         /// <summary>
