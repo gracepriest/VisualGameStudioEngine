@@ -811,22 +811,28 @@ public partial class MainWindowViewModel : ViewModelBase
     /// </summary>
     private void OnExtensionContributionsLoaded(object? sender, ExtensionContributionsLoadedEventArgs e)
     {
-        if (e.ThemeFilePaths.Count == 0) return;
+        if (e.ThemeContributions.Count == 0) return;
 
-        var paths = e.ThemeFilePaths.ToList();
+        var contributions = e.ThemeContributions.ToList();
         var extensionName = e.Extension.Name;
+        var extensionId = e.Extension.Id;
 
         // ThemeManager touches Avalonia's Application.Current, so registration must happen on the
         // UI thread. Contributions load from a background-capable async path.
         Avalonia.Threading.Dispatcher.UIThread.Post(async () =>
         {
-            foreach (var path in paths)
+            foreach (var contribution in contributions)
             {
-                var label = await ThemeManager.LoadVsCodeThemeFileAsync(path);
+                // The manifest label is the registry key. Theme files' internal names are not
+                // unique across an extension's variants, so deriving it from the file would
+                // collapse variants onto one entry.
+                var label = await ThemeManager.LoadVsCodeThemeFileAsync(
+                    contribution.Path, contribution.Label, contribution.UiTheme, extensionId);
+
                 if (label == null)
                 {
                     _outputService.WriteError(
-                        $"[Extensions] Could not register theme from {extensionName}: {Path.GetFileName(path)}",
+                        $"[Extensions] Could not register theme from {extensionName}: {Path.GetFileName(contribution.Path)}",
                         OutputCategory.General);
                     continue;
                 }
