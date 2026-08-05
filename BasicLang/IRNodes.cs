@@ -1415,8 +1415,36 @@ namespace BasicLang.Compiler.IR
             {
                 IsGlobal = true
             };
-            GlobalVariables[name] = variable;
+            AddGlobalVariable(variable);
             return variable;
+        }
+
+        /// <summary>
+        /// Registers a module-scope variable, qualifying the DICTIONARY KEY when the bare name
+        /// is already taken.
+        ///
+        /// <para><b>Why the key must not simply be the name.</b> Separate <c>Module</c> blocks
+        /// are separate namespaces, and each may legitimately declare its own <c>Scale</c>.
+        /// This dictionary is shared by every Module in the combined IR, so a bare key silently
+        /// DROPPED one of them — and the emitted code still referenced it, leaving an
+        /// identifier declared nowhere from a build that reported success.</para>
+        ///
+        /// <para><b>Why only on collision.</b> Nearly every consumer iterates <c>.Values</c>
+        /// (and the C# backend groups those by <c>ModuleName</c> into per-module static
+        /// classes, so bare references resolve by ordinary lexical scoping once both survive).
+        /// Exactly one consumer looks a global up by bare name —
+        /// <c>CppCodeGenerator</c>'s delegate-invocation path — so keeping the key bare in the
+        /// common case preserves it, and only genuine collisions pay the qualified form.</para>
+        /// </summary>
+        public void AddGlobalVariable(IRVariable variable)
+        {
+            if (variable == null) return;
+
+            var key = variable.Name;
+            if (GlobalVariables.ContainsKey(key))
+                key = $"{variable.ModuleName ?? Name}.{variable.Name}";
+
+            GlobalVariables[key] = variable;
         }
 
         /// <summary>

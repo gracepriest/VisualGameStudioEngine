@@ -389,9 +389,14 @@ namespace BasicLang.Compiler.IR
             if (_currentFunction == null)
             {
                 // Global variable
-                var globalVar = _module.CreateGlobalVariable(node.Name, varType);
+                // Built and registered in two steps rather than via CreateGlobalVariable:
+                // AddGlobalVariable keys on ModuleName when the bare name collides, so the
+                // owning module has to be set BEFORE it is registered or two Modules' globals
+                // are attributed to the same key and one is lost.
+                var globalVar = new IRVariable(node.Name, varType) { IsGlobal = true };
                 globalVar.ModuleName = _currentModuleName ?? _module?.Name;
                 globalVar.Access = MapAccessModifier(node.Access);
+                _module.AddGlobalVariable(globalVar);
                 _globalVariables[node.Name] = globalVar;
 
                 if (node.Initializer != null)
@@ -576,13 +581,13 @@ namespace BasicLang.Compiler.IR
                     Access = MapAccessModifier(node.Access)
                 };
 
-                // Add to module's global variables. Still first-wins, but at module scope a
-                // repeated name is a genuine redeclaration rather than two independent
-                // constants that merely share a name.
-                if (_module != null && !_module.GlobalVariables.ContainsKey(node.Name))
-                {
-                    _module.GlobalVariables[node.Name] = constVar;
-                }
+                // Add to the module's globals. This used to be first-wins, on the reasoning
+                // that "at module scope a repeated name is a genuine redeclaration" — WRONG.
+                // Separate Module blocks are separate namespaces, and this dictionary is
+                // shared by all of them, so the second Module's constant was silently dropped
+                // while the emitted code still referenced it. AddGlobalVariable keeps both by
+                // qualifying the key on collision.
+                _module?.AddGlobalVariable(constVar);
             }
         }
 

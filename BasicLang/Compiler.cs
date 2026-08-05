@@ -797,13 +797,15 @@ namespace BasicLang.Compiler
                     }
                 }
 
-                // Add globals
+                // Add globals. Routed through AddGlobalVariable rather than a first-wins
+                // ContainsKey guard: each unit keys its own globals by BARE name, so two files
+                // whose Modules each declare `Scale` arrive with the same key and the guard
+                // silently dropped one — while the emitted code still referenced it.
+                // AddGlobalVariable qualifies the key by owning Module on collision, so both
+                // survive and each Module's code resolves to its own copy.
                 foreach (var global in unit.IR.GlobalVariables)
                 {
-                    if (!combined.GlobalVariables.ContainsKey(global.Key))
-                    {
-                        combined.GlobalVariables[global.Key] = global.Value;
-                    }
+                    combined.AddGlobalVariable(global.Value);
                 }
 
                 // Add classes
