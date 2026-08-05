@@ -265,7 +265,7 @@ namespace BasicLang.Compiler.Driver
             Console.WriteLine("  --debug-adapter   Start Debug Adapter Protocol mode");
             Console.WriteLine("  --help, -h        Show this help message");
             Console.WriteLine("  --version, -v     Show version information");
-            Console.WriteLine("  --target=X        Target backend (csharp, cpp, llvm, msil)");
+            Console.WriteLine("  --target=X        Target backend (csharp, cpp, javascript, llvm, msil)");
             Console.WriteLine("  --output=FILE     Output file path");
             Console.WriteLine("  --optimize        Enable aggressive optimizations");
             Console.WriteLine("  --search-path=DIR Add module search path");
@@ -1224,14 +1224,26 @@ namespace BasicLang.Compiler.Driver
         /// <summary>
         /// Generate code for the specified backend
         /// </summary>
-        static string GenerateCode(IRModule ir, string backend)
+        internal static string GenerateCode(IRModule ir, string backend)
         {
             ICodeGenerator generator = backend?.ToLowerInvariant() switch
             {
                 "cpp" or "c++" => new CppCodeGenerator(),
                 "llvm" => new BasicLang.Compiler.CodeGen.LLVM.LLVMCodeGenerator(),
                 "msil" or "il" => new BasicLang.Compiler.CodeGen.MSIL.MSILCodeGenerator(),
-                _ => new BasicLang.Compiler.CodeGen.CSharp.CSharpCodeGenerator()  // Default to C#
+                "javascript" or "js" => new BasicLang.Compiler.CodeGen.JavaScript.JavaScriptCodeGenerator(),
+                "csharp" or "c#" or "cs" => new BasicLang.Compiler.CodeGen.CSharp.CSharpCodeGenerator(),
+
+                // No target given at all keeps the documented CLI default.
+                null or "" => new BasicLang.Compiler.CodeGen.CSharp.CSharpCodeGenerator(),
+
+                // A NON-EMPTY unrecognised target is an error, not a silent fallback. This
+                // arm used to be `_ => CSharp`, so `--target=jscript` wrote a .cs file and
+                // left the user to work out why their web page was empty. Emitting a
+                // different language than the one asked for is the worst kind of quiet
+                // wrongness: the build succeeds.
+                _ => throw new NotSupportedException(
+                    $"Unknown --target '{backend}'. Valid targets: csharp, cpp, javascript (js), llvm, msil.")
             };
 
             return generator.Generate(ir);
@@ -1240,14 +1252,21 @@ namespace BasicLang.Compiler.Driver
         /// <summary>
         /// Get output file extension for backend
         /// </summary>
-        static string GetOutputExtension(string backend)
+        internal static string GetOutputExtension(string backend)
         {
             return backend?.ToLowerInvariant() switch
             {
                 "cpp" or "c++" => ".cpp",
                 "llvm" => ".ll",
                 "msil" or "il" => ".il",
-                _ => ".cs"
+                "javascript" or "js" => ".js",
+                "csharp" or "c#" or "cs" => ".cs",
+                null or "" => ".cs",
+
+                // Must reject the same set GenerateCode rejects, or the two drift and a
+                // typo'd target produces a file whose extension disagrees with its contents.
+                _ => throw new NotSupportedException(
+                    $"Unknown --target '{backend}'. Valid targets: csharp, cpp, javascript (js), llvm, msil.")
             };
         }
 
