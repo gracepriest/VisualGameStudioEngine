@@ -180,8 +180,9 @@ public class NetDelegateTests
     // "slots ≡ exports" is a consequence of calling it twice rather than a property to re-check.
     // ------------------------------------------------------------------------------------
 
+    // NetMemberDescriptor's first argument is the MEMBER NAME, the second the declaring type.
     private static NetMemberDescriptor MemberTaking(string name, params string[] parameterTypes) =>
-        new("Contoso.Widget", name, NetMemberCategory.Method, isStatic: true, arity: 0,
+        new(name, "Contoso.Widget", NetMemberCategory.Method, isStatic: true, arity: 0,
             "System.Void",
             parameterTypes.Select(t => new NetParameterDescriptor(
                 NetRefKind.None, t, DelegateSignatureFor(t))).ToArray());
@@ -320,5 +321,62 @@ public class NetDelegateTests
         // NetRef would release an unrelated managed object and leave the callback entry alive.
         Assert.That(proxies, Does.Not.Contain("const BasicLang::blnet::NetRef&"),
             "a callback handle must never be spelled NetRef — different table, different release");
+    }
+
+    // ------------------------------------------------------------------------------------
+    // Step 4b — the managed dispatcher.
+    //
+    // v1 scope: delegates whose Invoke parameters and return are BLITTABLE SCALARS. That is
+    // exactly the plan's mandatory shape (Comparison(Of T) inside List.Sort) and P0 conformance
+    // scenario 8's proven shape — VALUE slots plus a scalar written to *result. Handle-, String-
+    // and struct-slotted delegates are refused loudly rather than guessed at, because the
+    // failure mode of guessing is a wrong-table read at runtime that no compile step catches.
+    // ------------------------------------------------------------------------------------
+
+    private static NetSurface ComparisonSurface() => new(
+        new[]
+        {
+            new NetMemberDescriptor(
+                "Sort", "Contoso.Widget", NetMemberCategory.Method, isStatic: true, arity: 0,
+                "System.Void",
+                new[]
+                {
+                    // TypeFullName is C# SYNTAX, fully qualified and never shorthand — that is
+                    // NetTypeResolver.TypeName's contract, and the reason Qualified() can simply
+                    // prefix "global::".
+                    new NetParameterDescriptor(
+                        NetRefKind.None, "System.Comparison<System.Int32>",
+                        "System.Int32(System.Int32,System.Int32)"),
+                }),
+        },
+        Array.Empty<string>());
+
+    [Test]
+    public void TheShimEmitsADispatcherForEachRequiredDelegate()
+    {
+        var surface = ComparisonSurface();
+        var helper = NetDelegateDispatch.RequiredHelperNames(surface).Single();
+
+        var exports = NetShimGenerator.Emit(surface, "Shim")[NetShimGenerator.ExportsFileName];
+
+        Assert.That(exports, Does.Contain(helper),
+            "the shim must emit a dispatcher named by the ONE shared derivation");
+        Assert.That(exports, Does.Contain("_thunk"),
+            "the dispatcher is what finally reads the vtable slot P2a-1 has been storing unused");
+    }
+
+    [Test]
+    public void ADelegateArgument_IsDecodedByTheDispatcher_NotTheHandleTable()
+    {
+        // The bug this pins: a callback handle belongs to the NATIVE callback table. Decoding it
+        // through the managed HandleTable would fail Validate and surface as BLNET_E_STALE_HANDLE
+        // — a confusing error for a perfectly good callback.
+        var surface = ComparisonSurface();
+        var helper = NetDelegateDispatch.RequiredHelperNames(surface).Single();
+
+        var exports = NetShimGenerator.Emit(surface, "Shim")[NetShimGenerator.ExportsFileName];
+
+        Assert.That(exports, Does.Match(@"Widget\.Sort\s*\(\s*" + helper + @"\("),
+            "the wrapper must pass the delegate built by the dispatcher, not a Table.TryGet cast");
     }
 }
