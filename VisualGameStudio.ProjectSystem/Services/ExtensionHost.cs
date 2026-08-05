@@ -247,6 +247,29 @@ public class ExtensionHost : IDisposable
     }
 
     /// <summary>
+    /// What <c>activateExtension</c> answers with (main.js:156/171/233/241). It is an OBJECT, not a
+    /// boolean — deserializing it as <c>bool</c> threw
+    /// "Error reading boolean. Unexpected token: StartObject" and reported every successful
+    /// activation as a failure.
+    ///
+    /// <para>Property names bind case-insensitively under the Newtonsoft formatter this channel
+    /// uses, so PascalCase members match the host's camelCase JSON.</para>
+    /// </summary>
+    private sealed class ActivationResult
+    {
+        public bool Activated { get; set; }
+        public bool HasMain { get; set; }
+        public string? Error { get; set; }
+    }
+
+    /// <summary>Shape of <c>deactivateExtension</c>'s reply (main.js:251/271/273).</summary>
+    private sealed class DeactivationResult
+    {
+        public bool Deactivated { get; set; }
+        public string? Error { get; set; }
+    }
+
+    /// <summary>
     /// Sends a request to activate an extension in the host.
     /// </summary>
     public async Task<bool> ActivateExtensionAsync(string extensionId, string extensionPath, string? mainEntry, CancellationToken cancellationToken = default)
@@ -255,17 +278,27 @@ public class ExtensionHost : IDisposable
 
         try
         {
-            var result = await _rpc.InvokeWithCancellationAsync<bool>(
+            // Named parameters, not positional: main.js reads params.extensionPath / params.extensionId.
+            // mainEntry rides along for forward compatibility but the host derives `main` from the
+            // extension's own package.json, so it is currently ignored on the far side.
+            var result = await _rpc.InvokeWithParameterObjectAsync<ActivationResult?>(
                 "activateExtension",
-                new object[] { extensionId, extensionPath, mainEntry ?? "" },
+                new { extensionId, extensionPath, mainEntry = mainEntry ?? "" },
                 cancellationToken);
 
-            if (result)
+            if (result?.Activated == true)
             {
                 _activeExtensions.Add((extensionId, extensionPath));
+                return true;
             }
 
-            return result;
+            if (!string.IsNullOrEmpty(result?.Error))
+            {
+                _outputService.WriteError(
+                    $"[ExtensionHost] {extensionId} did not activate: {result!.Error}", OutputCategory.General);
+            }
+
+            return false;
         }
         catch (Exception ex)
         {
@@ -283,17 +316,18 @@ public class ExtensionHost : IDisposable
 
         try
         {
-            var result = await _rpc.InvokeWithCancellationAsync<bool>(
+            var result = await _rpc.InvokeWithParameterObjectAsync<DeactivationResult?>(
                 "deactivateExtension",
-                new object[] { extensionId },
+                new { extensionId },
                 cancellationToken);
 
-            if (result)
+            if (result?.Deactivated == true)
             {
                 _activeExtensions.RemoveAll(x => x.extensionId == extensionId);
+                return true;
             }
 
-            return result;
+            return false;
         }
         catch (Exception ex)
         {
@@ -314,9 +348,9 @@ public class ExtensionHost : IDisposable
 
         try
         {
-            var result = await _rpc.InvokeWithCancellationAsync<object?>(
+            var result = await _rpc.InvokeWithParameterObjectAsync<object?>(
                 "executeCommand",
-                new object[] { commandId, args ?? Array.Empty<object?>() },
+                new { command = commandId, args = args ?? Array.Empty<object?>() },
                 cancellationToken);
             return result;
         }
@@ -336,9 +370,9 @@ public class ExtensionHost : IDisposable
 
         try
         {
-            await _rpc.InvokeWithCancellationAsync(
+            await _rpc.InvokeWithParameterObjectAsync(
                 "fireActivationEvent",
-                new object[] { activationEvent },
+                new { @event = activationEvent },
                 cancellationToken);
         }
         catch (Exception ex)
@@ -356,9 +390,12 @@ public class ExtensionHost : IDisposable
 
         try
         {
-            return await _rpc.InvokeWithCancellationAsync<JsonElement?>(
+            // NOTE: main.js registers no "provideCompletions" handler — the live provider path is
+            // textDocument/* through RequestProviderAsync. Corrected for shape consistency, but
+            // this method is currently a no-op on the far side.
+            return await _rpc.InvokeWithParameterObjectAsync<JsonElement?>(
                 "provideCompletions",
-                new object[] { languageId, uri, line, column },
+                new { languageId, uri, line, column },
                 cancellationToken);
         }
         catch
@@ -376,9 +413,10 @@ public class ExtensionHost : IDisposable
 
         try
         {
-            return await _rpc.InvokeWithCancellationAsync<JsonElement?>(
+            // Same as provideCompletions: no handler exists on the JS side today.
+            return await _rpc.InvokeWithParameterObjectAsync<JsonElement?>(
                 "provideHover",
-                new object[] { languageId, uri, line, column },
+                new { languageId, uri, line, column },
                 cancellationToken);
         }
         catch
@@ -395,7 +433,7 @@ public class ExtensionHost : IDisposable
     public async Task NotifyDocumentOpenedAsync(string uri, string languageId, int version, string text, CancellationToken ct = default)
     {
         if (!IsRunning || _rpc == null) return;
-        try { await _rpc.NotifyAsync("textDocument/didOpen", new { uri, languageId, version, text }); }
+        try { await _rpc.NotifyWithParameterObjectAsync("textDocument/didOpen", new { uri, languageId, version, text }); }
         catch { }
     }
 
@@ -405,7 +443,7 @@ public class ExtensionHost : IDisposable
     public async Task NotifyDocumentChangedAsync(string uri, int version, string text, CancellationToken ct = default)
     {
         if (!IsRunning || _rpc == null) return;
-        try { await _rpc.NotifyAsync("textDocument/didChange", new { uri, version, text }); }
+        try { await _rpc.NotifyWithParameterObjectAsync("textDocument/didChange", new { uri, version, text }); }
         catch { }
     }
 
@@ -415,7 +453,7 @@ public class ExtensionHost : IDisposable
     public async Task NotifyDocumentClosedAsync(string uri, CancellationToken ct = default)
     {
         if (!IsRunning || _rpc == null) return;
-        try { await _rpc.NotifyAsync("textDocument/didClose", new { uri }); }
+        try { await _rpc.NotifyWithParameterObjectAsync("textDocument/didClose", new { uri }); }
         catch { }
     }
 
@@ -425,7 +463,7 @@ public class ExtensionHost : IDisposable
     public async Task NotifyDocumentSavedAsync(string uri, string? text = null, CancellationToken ct = default)
     {
         if (!IsRunning || _rpc == null) return;
-        try { await _rpc.NotifyAsync("textDocument/didSave", new { uri, text }); }
+        try { await _rpc.NotifyWithParameterObjectAsync("textDocument/didSave", new { uri, text }); }
         catch { }
     }
 
@@ -435,7 +473,7 @@ public class ExtensionHost : IDisposable
     public async Task NotifyConfigurationChangedAsync(object settings, CancellationToken ct = default)
     {
         if (!IsRunning || _rpc == null) return;
-        try { await _rpc.NotifyAsync("workspace/didChangeConfiguration", new { settings }); }
+        try { await _rpc.NotifyWithParameterObjectAsync("workspace/didChangeConfiguration", new { settings }); }
         catch { }
     }
 
@@ -445,7 +483,7 @@ public class ExtensionHost : IDisposable
     public async Task NotifyActiveEditorChangedAsync(string? uri, string? languageId, CancellationToken ct = default)
     {
         if (!IsRunning || _rpc == null) return;
-        try { await _rpc.NotifyAsync("activeEditor/didChange", new { uri, languageId }); }
+        try { await _rpc.NotifyWithParameterObjectAsync("activeEditor/didChange", new { uri, languageId }); }
         catch { }
     }
 
@@ -463,7 +501,9 @@ public class ExtensionHost : IDisposable
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(10));
-            return await _rpc.InvokeWithCancellationAsync<JsonElement?>(method, new[] { parameters }, cts.Token);
+            // `parameters` is ALREADY the parameter object — the old `new[] { parameters }` wrapped
+            // it in an array, so every provider handler read undefined off it.
+            return await _rpc.InvokeWithParameterObjectAsync<JsonElement?>(method, parameters, cts.Token);
         }
         catch { return null; }
     }
@@ -519,9 +559,9 @@ public class ExtensionHost : IDisposable
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(10));
-            return await _rpc.InvokeWithCancellationAsync<JsonElement?>(
+            return await _rpc.InvokeWithParameterObjectAsync<JsonElement?>(
                 "treeView/getChildren",
-                new object?[] { viewId, element },
+                new { viewId, element },
                 cts.Token);
         }
         catch { return null; }
@@ -537,9 +577,9 @@ public class ExtensionHost : IDisposable
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(10));
-            return await _rpc.InvokeWithCancellationAsync<JsonElement?>(
+            return await _rpc.InvokeWithParameterObjectAsync<JsonElement?>(
                 "treeView/getTreeItem",
-                new object[] { viewId, element },
+                new { viewId, element },
                 cts.Token);
         }
         catch { return null; }
@@ -556,7 +596,10 @@ public class ExtensionHost : IDisposable
 
         try
         {
-            await _rpc.NotifyAsync("setWorkspaceFolder", new object[] { path });
+            // NOTE: main.js registers no "setWorkspaceFolder" handler; workspace roots reach the
+            // host through `initialize` (params.workspaceFolders) and
+            // workspace/didChangeWorkspaceFolders. Shape corrected, but this is currently a no-op.
+            await _rpc.NotifyWithParameterObjectAsync("setWorkspaceFolder", new { path });
         }
         catch { }
     }
