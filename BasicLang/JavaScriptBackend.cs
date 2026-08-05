@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Text;
 using BasicLang.Compiler.IR;
 
@@ -46,8 +47,152 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             TypeMapper = new JavaScriptTypeMapper();
         }
 
-        public string Generate(IRModule module) =>
-            throw new NotImplementedException("JavaScript backend: Generate lands in plan task 2.");
+        // ------------------------------------------------------------------
+        // Emission state
+        // ------------------------------------------------------------------
+
+        private int _indentLevel;
+
+        private void Line(string text = "")
+        {
+            if (text.Length == 0) { _output.Append('\n'); return; }
+            _output.Append(new string(' ', _indentLevel * _options.IndentSize)).Append(text).Append('\n');
+        }
+
+        public string Generate(IRModule module)
+        {
+            if (module == null) throw new ArgumentNullException(nameof(module));
+
+            _output.Clear();
+            _indentLevel = 0;
+
+            // ES module: strict mode is implicit, so no "use strict" prologue.
+            if (_options.GenerateComments)
+            {
+                Line($"// Generated from BasicLang module '{module.Name}' by the JavaScript backend.");
+                Line();
+            }
+
+            foreach (var function in module.Functions)
+            {
+                if (function.IsExternal) continue;
+                function.Accept(this);
+                Line();
+            }
+
+            EmitEntryPoint(module);
+            return _output.ToString();
+        }
+
+        /// <summary>
+        /// A module that defines Main runs it. Unlike C#, JS has no implicit entry point —
+        /// without this the emitted file declares functions and does nothing.
+        /// </summary>
+        private void EmitEntryPoint(IRModule module)
+        {
+            if (!_options.GenerateMainMethod) return;
+
+            foreach (var function in module.Functions)
+            {
+                if (string.Equals(function.Name, "Main", StringComparison.OrdinalIgnoreCase))
+                {
+                    Line($"{SanitizeName(function.Name)}();");
+                    return;
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Expression rendering
+        //
+        // Separate from the visitors on purpose: IIRVisitor returns void, so it can emit
+        // STATEMENTS but cannot produce the string an enclosing expression needs. Same
+        // split ImprovedCSharpCodeGenerator uses.
+        // ------------------------------------------------------------------
+
+        private string Expr(IRValue value)
+        {
+            switch (value)
+            {
+                case null:
+                    return "null";
+                case IRConstant c:
+                    return Constant(c);
+                case IRVariable v:
+                    return SanitizeName(v.Name);
+                default:
+                    throw NotYet(value.GetType().Name + " (as an expression)");
+            }
+        }
+
+        private static string Constant(IRConstant constant)
+        {
+            var v = constant.Value;
+            switch (v)
+            {
+                case null: return "null";
+                case bool b: return b ? "true" : "false";
+                case string s: return "\"" + EscapeJsString(s) + "\"";
+                // InvariantCulture is load-bearing: a comma decimal separator from the host
+                // locale would emit `3,14`, which inside a call becomes a SECOND ARGUMENT
+                // rather than a syntax error. Pinned by Emits_DoubleConstant_InvariantCulture.
+                case double d: return d.ToString("R", CultureInfo.InvariantCulture);
+                case float f: return f.ToString("R", CultureInfo.InvariantCulture);
+                case decimal m: return m.ToString(CultureInfo.InvariantCulture);
+                default: return Convert.ToString(v, CultureInfo.InvariantCulture);
+            }
+        }
+
+        private static string EscapeJsString(string s) => s
+            .Replace("\\", "\\\\")
+            .Replace("\"", "\\\"")
+            .Replace("\n", "\\n")
+            .Replace("\r", "\\r")
+            .Replace("\t", "\\t");
+
+        /// <summary>
+        /// JS identifiers allow letters, digits, _ and $. BasicLang's `Me` is `this`.
+        /// </summary>
+        private static string SanitizeName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return "_unnamed";
+            if (name.Equals("Me", StringComparison.OrdinalIgnoreCase)) return "this";
+
+            var sb = new StringBuilder(name.Length);
+            foreach (var ch in name)
+                if (char.IsLetterOrDigit(ch) || ch == '_' || ch == '$') sb.Append(ch);
+
+            if (sb.Length == 0) return "_unnamed";
+            if (char.IsDigit(sb[0])) sb.Insert(0, '_');
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Lower a call target to its JS form.
+        ///
+        /// <para>An UNQUALIFIED name is a user function and emits as itself. A DOTTED name
+        /// is a stdlib/framework call needing a deliberate mapping — the full table lands
+        /// in <c>JavaScriptStdLib</c> (plan task 24). Until then anything unmapped throws,
+        /// so an unimplemented builtin cannot silently emit a call to a function that does
+        /// not exist in the browser.</para>
+        /// </summary>
+        private static string CallTarget(string functionName)
+        {
+            if (string.IsNullOrEmpty(functionName)) throw NotYet("a call with no target name");
+
+            if (functionName.IndexOf('.') < 0) return SanitizeName(functionName);
+
+            switch (functionName)
+            {
+                case "Console.WriteLine": return "console.log";
+                case "Console.Write":     return "process.stdout.write";
+                default:
+                    throw new NotSupportedException(
+                        $"JavaScript backend: no lowering for '{functionName}'. " +
+                        "Add it to JavaScriptStdLib (plan task 24), or reject it in " +
+                        "JsCapabilityChecker with a BL70xx code if it cannot lower cleanly.");
+            }
+        }
 
         // ------------------------------------------------------------------
         // IIRVisitor
@@ -67,17 +212,55 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 "If this construct should be REJECTED rather than lowered, add it to " +
                 "JsCapabilityChecker with a BL70xx code instead of implementing it here.");
 
-        public void Visit(IRFunction function) => throw NotYet(nameof(IRFunction));
-        public void Visit(BasicBlock block) => throw NotYet(nameof(BasicBlock));
-        public void Visit(IRConstant constant) => throw NotYet(nameof(IRConstant));
+        public void Visit(IRFunction function)
+        {
+            var parameters = string.Join(", ", function.Parameters.ConvertAll(p => SanitizeName(p.Name)));
+
+            // Iterators and async get their JS keywords in tasks 21/22; until then a
+            // function carrying those flags would emit a plain function that silently
+            // loses its semantics, so refuse it.
+            if (function.IsAsync) throw NotYet("Async functions (plan task 21)");
+            if (function.IsIterator) throw NotYet("Iterator functions (plan task 22)");
+
+            Line($"function {SanitizeName(function.Name)}({parameters}) {{");
+            _indentLevel++;
+            foreach (var block in function.Blocks)
+                block.Accept(this);
+            _indentLevel--;
+            Line("}");
+        }
+
+        public void Visit(BasicBlock block)
+        {
+            foreach (var instruction in block.Instructions)
+                instruction.Accept(this);
+        }
+
+        /// <summary>
+        /// A bare constant is never a statement — constants reach output through
+        /// <see cref="Expr"/>. Reaching here means an enclosing node forgot to render it.
+        /// </summary>
+        public void Visit(IRConstant constant) => throw NotYet(nameof(IRConstant) + " as a statement");
         public void Visit(IRVariable variable) => throw NotYet(nameof(IRVariable));
         public void Visit(IRBinaryOp binaryOp) => throw NotYet(nameof(IRBinaryOp));
         public void Visit(IRUnaryOp unaryOp) => throw NotYet(nameof(IRUnaryOp));
         public void Visit(IRAssignment assignment) => throw NotYet(nameof(IRAssignment));
         public void Visit(IRLoad load) => throw NotYet(nameof(IRLoad));
         public void Visit(IRStore store) => throw NotYet(nameof(IRStore));
-        public void Visit(IRCall call) => throw NotYet(nameof(IRCall));
-        public void Visit(IRReturn ret) => throw NotYet(nameof(IRReturn));
+        public void Visit(IRCall call)
+        {
+            // ByRef has no JS form; JsCapabilityChecker rejects it with BL7002 (plan task 7).
+            // Until that lands, refuse here rather than emitting a by-value call that
+            // compiles and silently discards the write-back.
+            if (call.ByRefArguments != null && call.ByRefArguments.Contains(true))
+                throw NotYet("ByRef arguments (rejected as BL7002 in plan task 7)");
+
+            var args = string.Join(", ", call.Arguments.ConvertAll(Expr));
+            Line($"{CallTarget(call.FunctionName)}({args});");
+        }
+
+        public void Visit(IRReturn ret) =>
+            Line(ret.Value == null ? "return;" : $"return {Expr(ret.Value)};");
         public void Visit(IRBranch branch) => throw NotYet(nameof(IRBranch));
         public void Visit(IRConditionalBranch condBranch) => throw NotYet(nameof(IRConditionalBranch));
         public void Visit(IRPhi phi) => throw NotYet(nameof(IRPhi));
