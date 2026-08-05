@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.Linq;
 using NUnit.Framework;
 using BasicLang.Compiler;
 using BasicLang.Compiler.IR;
@@ -32,21 +34,53 @@ internal static class JsTestSupport
         {
             var pre = new Preprocessor();
             processed = pre.Process(source, "test.bas");
-            Assert.That(pre.Errors, Is.Empty,
-                string.Join("; ", pre.Errors.ConvertAll(e => e.Message)));
+            Fail(pre.Errors.Count > 0, "preprocess",
+                string.Join("; ", pre.Errors.ConvertAll(e => e.Message)), source);
             cppIncludes = new List<string>(pre.CppIncludes);
         }
 
         var tokens = new Lexer(processed).Tokenize();
-        var ast = new Parser(tokens).Parse();
+        var parser = new Parser(tokens);
+        var ast = parser.Parse();
+
+        // ⛔ THE FALSE-GREEN GUARD. Parser.Parse() CATCHES ParseException internally: it
+        // records the error and Synchronize()s forward, so a source file with a syntax error
+        // still returns normally — usually with ZERO declarations. The SemanticAnalyzer then
+        // reports success (an empty program is valid) and IRBuilder yields an empty module,
+        // so a fixture with a typo in its source asserts against nothing and PASSES.
+        //
+        // Every capability rejection in this backend is asserted through this helper, so a
+        // silent parse failure makes those rejections untestable. Checking Analyze() alone is
+        // NOT enough — it is downstream of the discarded declarations.
+        Fail(parser.Errors.Count > 0, "parse",
+            string.Join("; ", parser.Errors.Select(e => e.ToString())), source);
 
         var analyzer = new SemanticAnalyzer();
-        Assert.That(analyzer.Analyze(ast), Is.True,
-            string.Join("; ", analyzer.Errors.ConvertAll(e => e.Message)));
+        Fail(!analyzer.Analyze(ast), "semantic analysis",
+            string.Join("; ", analyzer.Errors.ConvertAll(e => e.Message)), source);
 
         var module = new IRBuilder(analyzer).Build(ast, "TestModule");
         module.CppIncludes.AddRange(cppIncludes);
         return module;
+    }
+
+    /// <summary>
+    /// Throws when a front-end stage rejected the source.
+    ///
+    /// <para>An exception rather than <c>Assert.Fail</c>, deliberately: this signals a broken
+    /// TEST (its source does not compile), not a failed product assertion, and the two should
+    /// not look alike in a run report. It is also what makes the guard itself testable —
+    /// NUnit records an assertion failure even when the exception is caught, so a helper
+    /// built on Assert cannot be verified by a test.</para>
+    /// </summary>
+    private static void Fail(bool failed, string stage, string diagnostics, string source)
+    {
+        if (!failed) return;
+
+        throw new InvalidOperationException(
+            $"BasicLang {stage} failed for this test's source — the test is broken, not the " +
+            $"backend.{Environment.NewLine}Diagnostics: {diagnostics}{Environment.NewLine}" +
+            $"Source:{Environment.NewLine}{source}");
     }
 
     /// <summary>Compile BasicLang source straight to JavaScript text.</summary>
