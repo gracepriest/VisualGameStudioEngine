@@ -135,6 +135,17 @@ namespace BasicLang.Net
         OwningTemp,
     }
 
+    /// <summary>
+    /// ONE wire slot of a multi-slot §6.4 row.
+    ///
+    /// <para><c>NativeField</c> is the field of the struct <c>NativeToNet</c> returns — and it
+    /// is NOT the P1 field of the same name. <c>NetDecimalWire</c> spells them <c>lo, mid, hi,
+    /// flags</c> while <c>BasicLang::Decimal</c> spells them <c>lo_, mid_, hi_, flags_</c>
+    /// (<c>CppDecimalRuntime.cs:207</c>), and <c>to_net_decimal</c>'s own body reads the
+    /// underscored ones — so the natural mistake compiles nowhere but reads correctly.</para>
+    /// </summary>
+    internal sealed record NetWireSlot(string CWire, string COutWire, string NativeField);
+
     internal sealed record NetWireRow(
         string NetFullName,
         string BasicLangSpelling,
@@ -145,7 +156,8 @@ namespace BasicLang.Net
         string CWire = null,
         string COutWire = null,
         NetConverterForm ConverterForm = NetConverterForm.Expression,
-        string NativeTempDecl = null)
+        string NativeTempDecl = null,
+        IReadOnlyList<NetWireSlot> Slots = null)
     {
         /// <summary>
         /// More than one wire slot — Decimal and DateTimeOffset. The one-slot-per-parameter
@@ -166,6 +178,14 @@ namespace BasicLang.Net
         /// </summary>
         internal bool HasByValueScalarSlot =>
             CWire != null && !CWire.EndsWith("*", StringComparison.Ordinal);
+
+        /// <summary>
+        /// This row spreads across several discrete scalar slots, and <see cref="Slots"/>
+        /// describes each. Kept as its own predicate rather than reading
+        /// <see cref="SlotCount"/> so the two can never drift: the count is what the refusal
+        /// MESSAGES quote, the list is what the emitters BUILD FROM.
+        /// </summary>
+        internal bool HasSlotList => Slots is { Count: > 1 };
     }
 
     /// <summary>
@@ -350,18 +370,35 @@ namespace BasicLang.Net
                     NativeToNet: "BasicLang::net::to_net_timespan",
                     NativeFromNet: "BasicLang::net::from_net_timespan",
                     CWire: "int64_t"),
-                // The two genuinely multi-slot pairs: Decimal is the four-uint32 GetBits quad,
-                // DateTimeOffset the DECLARED (int64 utcTicks, int16 offsetMinutes) pair. Both
-                // still refuse — one slot per parameter is baked into both emitters.
+                // The two genuinely multi-slot pairs. Decimal is the four-uint32 GetBits quad;
+                // DateTimeOffset the DECLARED (int64 utcTicks, int16 offsetMinutes) pair — never
+                // NetDateTimeOffsetWire itself, which is sizeof 16 with SIX trailing padding
+                // bytes and must not cross the ABI by value (blnet_marshal.hpp's ABI note).
+                //
+                // ⛔ CWire stays NULL on both. They have no ONE by-value slot, which is exactly
+                // what HasByValueScalarSlot asks — inventing one to satisfy a test would make
+                // ByRef Decimal reachable and emit a struct into a scalar temporary.
                 ["System.Decimal"] = new(
                     "System.Decimal", "Decimal", NetWireShape.Conversion, SlotCount: 4,
                     NativeToNet: "BasicLang::net::to_net_decimal",
-                    NativeFromNet: "BasicLang::net::from_net_decimal"),
+                    NativeFromNet: "BasicLang::net::from_net_decimal",
+                    Slots: new[]
+                    {
+                        new NetWireSlot("uint32_t", "uint32_t*", "lo"),
+                        new NetWireSlot("uint32_t", "uint32_t*", "mid"),
+                        new NetWireSlot("uint32_t", "uint32_t*", "hi"),
+                        new NetWireSlot("uint32_t", "uint32_t*", "flags"),
+                    }),
                 ["System.DateTimeOffset"] = new(
                     "System.DateTimeOffset", "DateTimeOffset", NetWireShape.Conversion,
                     SlotCount: 2,
                     NativeToNet: "BasicLang::net::to_net_datetimeoffset",
-                    NativeFromNet: "BasicLang::net::from_net_datetimeoffset"),
+                    NativeFromNet: "BasicLang::net::from_net_datetimeoffset",
+                    Slots: new[]
+                    {
+                        new NetWireSlot("int64_t", "int64_t*", "utcTicks"),
+                        new NetWireSlot("int16_t", "int16_t*", "offsetMinutes"),
+                    }),
 
                 // ONE slot, pointer-shaped, direction-dependent — the shape String already has.
                 // 16 bytes in ToByteArray order; NOT two uint64_t, which would make the wire
@@ -411,20 +448,11 @@ namespace BasicLang.Net
             return basicLangName != null;
         }
 
-        /// <summary>
-        /// The §6.4 pairs needing more than ONE wire slot: Decimal (the four-field GetBits quad)
-        /// and DateTimeOffset (the DECLARED scalar pair — blnet_marshal.hpp's ABI note).
-        /// Projected from <see cref="WireRows"/> rather than re-listed, so the two cannot
-        /// disagree about which rows are multi-slot.
-        ///
-        /// <para>Guid and StringBuilder used to be in here. They are not multi-slot and never
-        /// were — each crosses on ONE slot — so they lower now; see
-        /// <see cref="NetWireRow.SlotCount"/> for why one flag was carrying three meanings.</para>
-        /// </summary>
-        internal static readonly IReadOnlyCollection<string> MultiSlotConversionPairs =
-            new HashSet<string>(
-                WireRows.Values.Where(r => r.IsMultiSlot).Select(r => r.NetFullName),
-                StringComparer.Ordinal);
+        // MultiSlotConversionPairs lived here. Its only production consumer was the analyzer's
+        // multi-slot refusal, which Task 8c-2 deleted when Decimal and DateTimeOffset started
+        // lowering — leaving a member with no callers at all. Removed rather than kept "in case",
+        // which is how IsSingleSlotValue (just below) became dead without anyone noticing.
+        // A caller wanting the set can project WireRows.Values.Where(r => r.IsMultiSlot).
 
         /// <summary>
         /// True when a resolved member RESULT (or by-value parameter) of this full name has a

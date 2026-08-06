@@ -188,8 +188,25 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private sealed class NetCallEmission
         {
             internal List<string> Prologue { get; } = new List<string>();
-            internal string Expression { get; set; }
             internal List<string> WriteBack { get; } = new List<string>();
+
+            /// <summary><c>BasicLang::net::&lt;mangled&gt;</c> — set once the target is known.</summary>
+            internal string Callee { get; set; }
+
+            /// <summary>
+            /// The call's arguments, still OPEN after the factory returns.
+            ///
+            /// <para><b>Why this is a list and not a joined string.</b> §6.4's multi-slot rows
+            /// return through N out-references, so the RESULT arm has to append arguments to a
+            /// call the ARGUMENT loop already finished building. While <c>Expression</c> was an
+            /// eagerly-joined string there was nowhere to put them without re-parsing the text
+            /// it had produced.</para>
+            /// </summary>
+            internal List<string> CallArgs { get; } = new List<string>();
+
+            /// <summary>Computed, so an append after construction is reflected.</summary>
+            internal string Expression =>
+                Callee + "(" + string.Join(", ", CallArgs) + ")";
         }
 
         /// <summary>
@@ -248,7 +265,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     + "explicitly.");
             }
 
-            var callArgs = new List<string>(parameters.Count + 1);
+            var callArgs = emission.CallArgs;
 
             var hasReceiver = !target.IsStatic && target.Kind != NetMemberCategory.Constructor;
             if (hasReceiver)
@@ -284,8 +301,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 emission.WriteBack.AddRange(argument.WriteBack);
             }
 
-            emission.Expression = "BasicLang::net::" + NetNameMangler.Mangle(target)
-                                  + "(" + string.Join(", ", callArgs) + ")";
+            // Callee only — the argument list stays OPEN so a multi-slot result can append its
+            // out-references (§6.4). Expression is computed from both on demand.
+            emission.Callee = "BasicLang::net::" + NetNameMangler.Mangle(target);
             return emission;
         }
 
@@ -502,12 +520,6 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                         return NetArgEmission.Value(GetValueName(argument));
 
                     case NetWireShape.Conversion:
-                        if (row.IsMultiSlot)
-                            throw NetLoweringRefusal("BL6019",
-                                $"'{targetDisplay}': parameter {position} has type "
-                                + $"'{paramType}', whose §6.4 wire form is {row.SlotCount} "
-                                + "slots — one slot per parameter is baked into both emitters, "
-                                + "so it is not lowered at the native boundary yet.");
                         return MarshalNetConversionArgument(row, index, argument);
                 }
             }
@@ -562,6 +574,26 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private NetArgEmission MarshalNetConversionArgument(
             NetWireRow row, int index, IRValue argument)
         {
+            // §6.4 MULTI-SLOT: one converted temporary, then one expression per field. Tested
+            // FIRST because these rows also carry the default ConverterForm.Expression, and the
+            // short-circuit below would collapse four slots into a single struct-valued
+            // argument that binds to nothing.
+            //
+            // NextNetTemp(), not "_bl_net_arg{index}": four names derived from one index would
+            // collide with each other. The generator-wide sequence is also what keeps two proxy
+            // calls in the same C++ scope from redeclaring the same temporary.
+            if (row.HasSlotList)
+            {
+                var wire = NextNetTemp();
+                return NetArgEmission.Statements(
+                    row.Slots.Select(s => wire + "." + s.NativeField).ToArray(),
+                    prologue: new[]
+                    {
+                        "auto " + wire + " = " + row.NativeToNet
+                        + "(" + GetValueName(argument) + ");",
+                    });
+            }
+
             if (row.ConverterForm == NetConverterForm.Expression)
                 return NetArgEmission.Value(row.NativeToNet + "(" + GetValueName(argument) + ")");
 
@@ -898,7 +930,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             IRValue resultNode, NetMemberDescriptor target, NetCallEmission emission) =>
             // The Func is not ceremony: it is what makes "compute the statement BEFORE writing
             // the prologue" STRUCTURAL rather than conventional. See EmitNetCallStatements.
-            EmitNetCallStatements(emission, () => NetResultStatement(resultNode, target, emission.Expression));
+            // The whole EMISSION, not just its expression: a §6.4 multi-slot result appends its
+            // out-references to CallArgs and pushes declarations into Prologue, so it needs the
+            // object the Func's caller is about to write out.
+            EmitNetCallStatements(emission, () => NetResultStatement(resultNode, target, emission));
 
         /// <summary>
         /// THE one place a proxy call becomes C++ statements (P2a-2 Task-10 Step 0, quality
@@ -969,8 +1004,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// <summary>The single statement carrying <paramref name="expression"/>. See
         /// <see cref="EmitNetResult"/> for why it is computed before emission.</summary>
         private string NetResultStatement(
-            IRValue resultNode, NetMemberDescriptor target, string expression)
+            IRValue resultNode, NetMemberDescriptor target, NetCallEmission emission)
         {
+            var expression = emission.Expression;
+
             var targetDisplay = target.DeclaringTypeFullName + "."
                 + (target.Kind == NetMemberCategory.Constructor ? "New" : target.Name);
 
@@ -997,11 +1034,33 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                         return $"{destination} = static_cast<char>({expression});";
 
                     case NetWireShape.Conversion:
-                        if (row.IsMultiSlot)
-                            throw NetLoweringRefusal("BL6019",
-                                $"'{targetDisplay}' returns '{resultType}', whose §6.4 wire "
-                                + $"form is {row.SlotCount} slots — a proxy has ONE result "
-                                + "out-pointer, so it is not lowered at the native boundary yet.");
+                        // §6.4 MULTI-SLOT result: N locals declared BEFORE the call, passed by
+                        // address, converted after it. The proxy returns void, so the call is a
+                        // bare statement.
+                        //
+                        // Prologue, not WriteBack, for the declarations — WriteBack runs after
+                        // the call and the call already needs the addresses. And Prologue being
+                        // non-empty is exactly what makes EmitNetCallStatements wrap the region
+                        // in braces, which is load-bearing: without it a call inside If/loop is
+                        // "error: jump to label … crosses initialization". Every fixture for
+                        // this seam is straight-line, so the suite would stay green over it.
+                        if (row.HasSlotList)
+                        {
+                            var names = row.Slots.Select(_ => NextNetTemp()).ToArray();
+                            for (var s = 0; s < row.Slots.Count; s++)
+                            {
+                                emission.Prologue.Add(row.Slots[s].CWire + " " + names[s] + "{};");
+                                emission.CallArgs.Add(names[s]);
+                            }
+
+                            // SUCCESS-PATH ONLY, and right that way: a managed throw means the
+                            // slots were never written, so converting them would read garbage.
+                            emission.WriteBack.Add(
+                                destination + " = " + row.NativeFromNet
+                                + "(" + string.Join(", ", names) + ");");
+
+                            return emission.Expression + ";";
+                        }
 
                         // §6.4's ONE directional row. This used to be refused as a side effect of
                         // StringBuilder being flagged multi-slot; now that it lowers OUTBOUND, the

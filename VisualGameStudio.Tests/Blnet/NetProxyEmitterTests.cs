@@ -106,6 +106,17 @@ public class NetProxyEmitterTests
             // boundary cannot actually carry.
             Member("Stamp", "MyLib.Widen", NetMemberCategory.Method,
                    true, "System.Int32", P("System.Guid"), P("System.Text.StringBuilder")),
+            // §6.4's MULTI-SLOT rows (P2a-2 Task 8c-2), BOTH directions on each — the wire
+            // scalars appear as parameters and as results, which is what lets the signature
+            // oracle compare arity, widths AND argument names across the two emitters. Without
+            // these two members it is blind to every one of those, and a width or arity
+            // mismatch through a function pointer is stack corruption, not a warning.
+            //
+            // ⛔ APPEND ONLY. Four assertions below index slots[0..5] positionally.
+            Member("Money", "MyLib.Widen", NetMemberCategory.Method,
+                   true, "System.Decimal", P("System.Decimal")),
+            Member("Stamped", "MyLib.Widen", NetMemberCategory.Method,
+                   true, "System.DateTimeOffset", P("System.DateTimeOffset")),
         },
         new[] { "System.Text.RegularExpressions.Regex" });
 
@@ -114,13 +125,13 @@ public class NetProxyEmitterTests
     /// inlined so a fixture change updates ONE number and every count guard follows — a guard
     /// that silently tracked the fixture would assert nothing.
     /// </summary>
-    /// <para>Composition matters here, because the number is not the member count: <b>13 member
+    /// <para>Composition matters here, because the number is not the member count: <b>15 member
     /// slots + 2 §8.6 array-copy helper slots</b> (<c>bl_net_array_new_…</c> and
     /// <c>bl_net_array_read_…</c>, one pair per distinct element form). The helpers are ORDINARY
     /// slots on purpose — as a side channel they would have been exempt from §12.4's
     /// slots-≡-exports comparison — so they belong in this count and in every per-body
     /// assertion that iterates it.</para>
-    internal const int ShapeCount = 15;
+    internal const int ShapeCount = 17;
 
     /// <summary>
     /// <b>The row-by-row tie between <c>NetMarshalTable.WireRows</c>' <c>CWire</c> column and

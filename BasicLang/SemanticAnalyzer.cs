@@ -3114,20 +3114,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     return true;
                 }
 
-                if (NetMarshalTable.MultiSlotConversionPairs.Contains(parameter.TypeFullName))
-                {
-                    // The COUNT is the reason, so it is in the message. "not a single slot" was
-                    // also being shown for Guid and StringBuilder, which each need exactly one —
-                    // it told a user nothing about which rows were one change away from working.
-                    NetMarshalTable.TryGetWireRow(parameter.TypeFullName, out var multiSlotRow);
-                    NetWarning("BL6019",
-                        $"'{target}': parameter {position} has type "
-                        + $"'{parameter.TypeFullName}', whose §6.4 wire form is "
-                        + $"{multiSlotRow?.SlotCount} slots — one slot per parameter is baked "
-                        + "into both emitters, so it is not lowered at the native boundary yet.",
-                        line, column);
-                    return true;
-                }
+                // The multi-slot §6.4 refusal that stood here is gone: Decimal and DateTimeOffset
+                // now lower across N discrete wire slots (Task 8c-2). SlotCount stays 4 and 2 —
+                // it is DATA describing the wire, never a "refuse" flag.
 
                 if (IsNetEnumTypeName(parameter.TypeFullName))
                 {

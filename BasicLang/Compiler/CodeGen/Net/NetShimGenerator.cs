@@ -772,6 +772,14 @@ namespace BasicLang.Compiler.CodeGen.Net
                 case WireKind.Handle:
                     L(sb, "            *result = ToHandle(rv_);");
                     break;
+
+                // §6.4's multi-slot rows. STATEMENTS, not an expression: DecimalToWire returns
+                // an int[] that must be indexed, and DateTimeOffsetToWire has two `out`
+                // parameters. Deliberately NOT routed through ToWire — that helper is
+                // string→string and cannot declare a local.
+                case WireKind.MultiScalar:
+                    EmitMultiScalarResult(sb, plan.Return);
+                    break;
             }
 
             L(sb, "            return (int)BlnetStatus.BLNET_OK;");
@@ -791,6 +799,46 @@ namespace BasicLang.Compiler.CodeGen.Net
         }
 
         /// <summary>
+        /// Writes a §6.4 multi-slot RESULT through its N out-pointers.
+        ///
+        /// <para><b>The signed/unsigned hop is required, not defensive.</b>
+        /// <c>DecimalToWire</c> returns <c>int[]</c> — .NET's own <c>decimal.GetBits</c> shape —
+        /// while the wire slots are <c>uint32_t</c> because that is what
+        /// <c>from_net_decimal</c> takes natively. The <c>unchecked</c> cast is the bit-preserving
+        /// reinterpretation both sides agree on; without it this is CS0266, and widening the
+        /// wire to <c>int32_t</c> instead would put a sign bit where the native side reads a
+        /// magnitude.</para>
+        /// </summary>
+        private static void EmitMultiScalarResult(StringBuilder sb, WireForm wire)
+        {
+            switch (wire.CsManagedType)
+            {
+                case "System.Decimal":
+                    L(sb, "            var w_ = BlnetMarshal.DecimalToWire(rv_);");
+                    for (var s = 0; s < wire.Slots.Count; s++)
+                    {
+                        var i = s.ToString(CultureInfo.InvariantCulture);
+                        L(sb, "            *result" + i + " = unchecked((uint)w_[" + i + "]);");
+                    }
+                    break;
+
+                case "System.DateTimeOffset":
+                    L(sb, "            BlnetMarshal.DateTimeOffsetToWire("
+                          + "rv_, out long w0_, out short w1_);");
+                    L(sb, "            *result0 = w0_;");
+                    L(sb, "            *result1 = w1_;");
+                    break;
+
+                default:
+                    throw new NotSupportedException(
+                        $"No multi-slot RESULT emission for '{wire.CsManagedType}'. Every "
+                        + "MultiScalar row needs an explicit arm — a fallthrough would return "
+                        + "BLNET_OK having written nothing, and the caller would read an "
+                        + "uninitialised buffer with no diagnostic anywhere.");
+            }
+        }
+
+        /// <summary>
         /// The C# parameter list, matching <c>NetProxyEmitter.CSignature</c> position for
         /// position: receiver, parameters (pointer-shaped when ByRef), then the result pointer.
         /// </summary>
@@ -798,9 +846,32 @@ namespace BasicLang.Compiler.CodeGen.Net
         {
             var args = new List<string>();
             if (plan.HasReceiver) args.Add("ulong self");
+
             foreach (var p in plan.Parameters)
+            {
+                if (p.Wire.Kind == WireKind.MultiScalar)
+                {
+                    for (var s = 0; s < p.Wire.Slots.Count; s++)
+                        args.Add(CsScalarFor(p.Wire.Slots[s].CWire) + " " + p.Names[s]);
+                    continue;
+                }
+
                 args.Add((p.ByRef ? p.Wire.CsOutType : p.Wire.CsParamType) + " " + p.Name);
-            if (plan.Return.Kind != WireKind.Void) args.Add(plan.Return.CsOutType + " result");
+            }
+
+            if (plan.Return.Kind == WireKind.MultiScalar)
+            {
+                for (var s = 0; s < plan.Return.Slots.Count; s++)
+                {
+                    args.Add(CsScalarFor(plan.Return.Slots[s].CWire) + "* result"
+                             + s.ToString(CultureInfo.InvariantCulture));
+                }
+            }
+            else if (plan.Return.Kind != WireKind.Void)
+            {
+                args.Add(plan.Return.CsOutType + " result");
+            }
+
             return string.Join(", ", args);
         }
 
@@ -910,9 +981,34 @@ namespace BasicLang.Compiler.CodeGen.Net
                 WireKind.Callback =>
                     NetNameMangler.MangleDelegate(p.Descriptor.TypeFullName) + "(" + p.Name + ")",
 
+                // §6.4 multi-slot: N wire scalars reassemble into one managed value. Expression
+                // -shaped, so Invocation needs no knowledge of it.
+                WireKind.MultiScalar => MultiScalarArgument(p),
+
                 _ => FromWire(p.Wire, p.Name),
             };
         }
+
+        /// <summary>
+        /// The inverse of <see cref="EmitMultiScalarResult"/>: N wire slots back to one managed
+        /// value. <c>DecimalFromWire</c> takes <b>signed</b> <c>int</c>s (mirroring
+        /// <c>decimal.GetBits</c>) while the slots are <c>uint</c>, so each argument makes the
+        /// same bit-preserving hop the result direction makes in reverse.
+        /// </summary>
+        private static string MultiScalarArgument(ParameterPlan p) => p.Wire.CsManagedType switch
+        {
+            "System.Decimal" => "BlnetMarshal.DecimalFromWire("
+                + string.Join(", ", p.Names.Select(n => "unchecked((int)" + n + ")")) + ")",
+
+            // long/short already match DateTimeOffsetFromWire's parameters — no cast, and adding
+            // one would only hide a future width change.
+            "System.DateTimeOffset" =>
+                "BlnetMarshal.DateTimeOffsetFromWire(" + string.Join(", ", p.Names) + ")",
+
+            _ => throw new NotSupportedException(
+                $"No multi-slot ARGUMENT reassembly for '{p.Wire.CsManagedType}'. Falling back "
+                + "to a bare name would pass the first slot alone and drop the rest."),
+        };
 
         // ------------------------------------------------------------------------------
         // §8.3 marshaling, C# column. The C column is NetProxyEmitter.WireOf; the two are
@@ -925,7 +1021,7 @@ namespace BasicLang.Compiler.CodeGen.Net
         /// table — so a §6.4 pointer row modelled as Scalar silently cleared §8.4's delegate
         /// gate, whose whole job is to stay shut until a marshaling contract exists.
         /// </summary>
-        private enum WireKind { Void, Scalar, ByValuePointer, String, Handle, Callback }
+        private enum WireKind { Void, Scalar, ByValuePointer, MultiScalar, String, Handle, Callback }
 
         /// <summary>
         /// One row of §8.3 in C#. <see cref="CsParamType"/> is the inbound spelling and
@@ -935,8 +1031,14 @@ namespace BasicLang.Compiler.CodeGen.Net
         /// not blittable for <c>[UnmanagedCallersOnly]</c>) and <c>Char</c> as a
         /// <c>ushort</c> UTF-16 code unit.
         /// </summary>
+        /// <param name="Slots">
+        /// <see cref="WireKind.MultiScalar"/> only — the same slot list the C emitter projects,
+        /// from the same <c>NetMarshalTable</c> row, so arity and ORDER agree by construction.
+        /// The C# spelling is derived per slot from <see cref="CsScalarFor"/>.
+        /// </param>
         private readonly record struct WireForm(
-            WireKind Kind, string CsParamType, string CsOutType, string CsManagedType);
+            WireKind Kind, string CsParamType, string CsOutType, string CsManagedType,
+            IReadOnlyList<NetWireSlot> Slots = null);
 
         private static class Wire
         {
@@ -1060,7 +1162,37 @@ namespace BasicLang.Compiler.CodeGen.Net
             "System.TimeSpan" => Wire.TimeSpan,
             "System.Guid" => Wire.Guid,
             "System.Text.StringBuilder" => Wire.StringBuilder,
+
+            // §6.4's MULTI-SLOT rows — same table row the C emitter reads.
+            "System.Decimal" or "System.DateTimeOffset" => new WireForm(
+                WireKind.MultiScalar, "", "", netTypeFullName,
+                NetMarshalTable.WireRows[netTypeFullName].Slots),
+
             _ => Wire.Handle,
+        };
+
+        /// <summary>
+        /// The C# spelling of one wire slot's C type. Deliberately derived from the SAME strings
+        /// the C emitter declares, rather than carried as a second column on the slot: a table
+        /// that stated both could state them inconsistently, and the drift oracle only compares
+        /// what is EMITTED.
+        /// </summary>
+        private static string CsScalarFor(string cWire) => cWire switch
+        {
+            "int8_t" => "sbyte",
+            "uint8_t" => "byte",
+            "int16_t" => "short",
+            "uint16_t" => "ushort",
+            "int32_t" => "int",
+            "uint32_t" => "uint",
+            "int64_t" => "long",
+            "uint64_t" => "ulong",
+            "float" => "float",
+            "double" => "double",
+            _ => throw new NotSupportedException(
+                $"§6.4 wire slot type '{cWire}' has no C# spelling in CsScalarFor. A slot type "
+                + "the shim cannot spell would emit an export signature that silently disagrees "
+                + "with the C slot — add the row here, do not fall back."),
         };
 
         /// <summary>Wire value to managed value: <c>Boolean</c>, <c>Char</c>, and the §6.4
@@ -1325,7 +1457,19 @@ namespace BasicLang.Compiler.CodeGen.Net
                 Wire = wire;
                 Name = "a" + index.ToString(CultureInfo.InvariantCulture);
                 Local = "a" + index.ToString(CultureInfo.InvariantCulture) + "_";
+
+                // Must match NetProxyEmitter.ParameterPlan.Names EXACTLY — the drift oracle
+                // compares argument names, so a divergence here fails the signature comparison
+                // rather than producing a silent mismatch, which is the intended outcome.
+                Names = wire.Kind == WireKind.MultiScalar
+                    ? Enumerable.Range(0, wire.Slots.Count)
+                        .Select(s => Name + "_" + s.ToString(CultureInfo.InvariantCulture))
+                        .ToArray()
+                    : new[] { Name };
             }
+
+            /// <summary>One name per wire slot; a single-slot row has exactly <c>Name</c>.</summary>
+            internal IReadOnlyList<string> Names { get; }
 
             internal NetParameterDescriptor Descriptor { get; }
             internal WireForm Wire { get; }

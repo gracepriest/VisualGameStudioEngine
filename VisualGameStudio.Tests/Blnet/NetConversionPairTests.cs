@@ -405,10 +405,33 @@ public class NetConversionPairTests
                     $"the row for '{row.NetFullName}' names an inbound converter "
                     + $"'{row.NativeFromNet}' that blnet_marshal.hpp does not define.");
 
-                if (row.IsMultiSlot) continue;
-
                 // std:: is the header's spelling of the same fixed-width type the row names.
                 var flattened = native.Replace("std::", string.Empty);
+
+                // A MULTI-SLOT row names no single CWire, so the check is per slot: the
+                // converter's parameter list must open with the first slot's type, and every
+                // slot type must appear. Skipping these rows (as this oracle did while they
+                // refused) leaves the native converters' widths unchecked against the table
+                // that now generates call sites for them.
+                //
+                // ⚠ The skip cannot simply be deleted: the by-value check below dereferences
+                // row.CWire, which is NULL on exactly these rows.
+                if (row.HasSlotList)
+                {
+                    Assert.That(flattened, Does.Contain(fromNet + "(" + row.Slots[0].CWire + " "),
+                        $"'{row.NativeFromNet}' must take its slots as discrete scalars, "
+                        + $"starting with '{row.Slots[0].CWire}'.");
+
+                    foreach (var slot in row.Slots)
+                    {
+                        Assert.That(flattened, Does.Contain(slot.CWire + " "),
+                            $"'{row.NetFullName}': wire slot type '{slot.CWire}' appears in no "
+                            + "converter signature — a width the call site emits but the "
+                            + "converter does not take truncates silently.");
+                    }
+
+                    continue;
+                }
 
                 // A POINTER row declares its converter parameter as a SIZED ARRAY —
                 // `from_net_guid(const uint8_t in[16])` — which is the same type as

@@ -44,6 +44,8 @@ namespace ConvProbe {
         public static System.Guid MakeGid() => System.Guid.Empty;
         public static System.Text.StringBuilder MakeSb() => null;
         public static int Both(System.Guid g, System.Text.StringBuilder b) => 1;
+        public static decimal MakeDec() => 1m;
+        public static int DecDto(decimal d, System.DateTimeOffset t) => 1;
     }
 }";
 
@@ -203,25 +205,101 @@ namespace ConvProbe {
     // The rows that still refuse — each for its OWN reason, stated in its own message
     // ====================================================================================
 
+    /// <summary>
+    /// Decimal's four wire slots: ONE converted temporary, then one expression per field. The
+    /// fields are the WIRE struct's (<c>lo, mid, hi, flags</c>) — <b>not</b> P1's
+    /// <c>lo_, mid_, hi_, flags_</c>, which is what <c>to_net_decimal</c>'s own body reads.
+    /// </summary>
     [Test]
-    public void DecimalArgument_StillRefuses_NamingItsSlotCount()
+    public void DecimalArgument_MaterializesOneTempAndSplatsFourFields()
     {
-        var refusal = RefusalFor("Dim d As Decimal = 1\n  Dim r = Rows.Dec(d)");
+        var cpp = Lower("Dim d As Decimal = 1\n  Dim r = Rows.Dec(d)");
 
-        Assert.That(refusal, Is.Not.Null, "a Decimal argument must not lower");
-        Assert.That(refusal, Does.Contain("4"),
-            "the refusal names how many slots the row needs — the count is the reason, and "
-            + "'not a single slot' said nothing about which rows were close to working: "
-            + refusal);
+        Assert.Multiple(() =>
+        {
+            Assert.That(cpp, Does.Match(@"auto\s+blnet_t\d+\s*=\s*BasicLang::net::to_net_decimal\(\s*d\s*\)\s*;"),
+                "one temporary holds the wire struct:\n" + cpp);
+            Assert.That(cpp,
+                Does.Match(@"Dec[A-Za-z0-9_]*\(\s*blnet_t(\d+)\.lo\s*,\s*blnet_t\1\.mid\s*,\s*blnet_t\1\.hi\s*,\s*blnet_t\1\.flags\s*\)"),
+                "and all four fields cross, in GetBits order, from the SAME temporary:\n" + cpp);
+        });
     }
 
+    /// <summary>
+    /// DateTimeOffset crosses as its DECLARED scalar pair. <c>NetDateTimeOffsetWire</c> is
+    /// sizeof 16 with six trailing padding bytes and must never cross by value; the
+    /// struct-taking <c>from_net_datetimeoffset</c> overload exists for hand-written code only.
+    /// </summary>
     [Test]
-    public void DateTimeOffsetArgument_StillRefuses_NamingItsSlotCount()
+    public void DateTimeOffsetArgument_CrossesAsScalarFields_NeverThePaddedStruct()
     {
-        var refusal = RefusalFor("Dim t As DateTimeOffset = DateTimeOffset.Now\n  Dim r = Rows.Dto(t)");
+        var cpp = Lower("Dim t As DateTimeOffset = DateTimeOffset.Now\n  Dim r = Rows.Dto(t)");
 
-        Assert.That(refusal, Is.Not.Null, "a DateTimeOffset argument must not lower");
-        Assert.That(refusal, Does.Contain("2"), "…and names its two slots: " + refusal);
+        Assert.Multiple(() =>
+        {
+            Assert.That(cpp,
+                Does.Match(@"Dto[A-Za-z0-9_]*\(\s*blnet_t(\d+)\.utcTicks\s*,\s*blnet_t\1\.offsetMinutes\s*\)"),
+                "the two declared scalars cross individually:\n" + cpp);
+            Assert.That(cpp, Does.Not.Contain("NetDateTimeOffsetWire"),
+                "the padded struct must never appear in generated code:\n" + cpp);
+        });
+    }
+
+    /// <summary>
+    /// Two multi-slot arguments in one call. Temporaries come from the generator-wide sequence
+    /// precisely so four names derived from one parameter index cannot collide.
+    /// </summary>
+    [Test]
+    public void TwoMultiSlotArguments_GetIndependentTemporaries()
+    {
+        var cpp = Lower(
+            "Dim d As Decimal = 1\n  Dim t As DateTimeOffset = DateTimeOffset.Now\n"
+            + "  Dim r = Rows.DecDto(d, t)");
+
+        var temps = System.Text.RegularExpressions.Regex
+            .Matches(cpp, @"auto\s+(blnet_t\d+)\s*=\s*BasicLang::net::to_net_")
+            .Select(m => m.Groups[1].Value)
+            .ToArray();
+
+        Assert.That(temps, Has.Length.EqualTo(2), "one temporary per conversion:\n" + cpp);
+        Assert.That(temps[0], Is.Not.EqualTo(temps[1]),
+            "and they must be DIFFERENT names — a shared one would have the second converter "
+            + "overwrite the first argument's fields before the call ran:\n" + cpp);
+    }
+
+    /// <summary>
+    /// The RESULT direction: N locals declared BEFORE the call, passed by address, converted
+    /// after. The proxy returns void, so the call is a bare statement.
+    /// </summary>
+    [Test]
+    public void DecimalResult_DeclaresFourLocalsAndConvertsAfterTheCall()
+    {
+        var cpp = Lower("Dim d = Rows.MakeDec()");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                System.Text.RegularExpressions.Regex.Matches(cpp, @"uint32_t\s+blnet_t\d+\{\}\s*;").Count,
+                Is.EqualTo(4), "four result locals, declared before the call:\n" + cpp);
+            Assert.That(cpp, Does.Match(@"=\s*BasicLang::net::from_net_decimal\(\s*blnet_t\d+\s*,\s*blnet_t\d+\s*,\s*blnet_t\d+\s*,\s*blnet_t\d+\s*\)\s*;"),
+                "and the conversion reads all four AFTER the call:\n" + cpp);
+        });
+    }
+
+    /// <summary>
+    /// ⛔ The brace region is load-bearing, and every other fixture for this seam is
+    /// straight-line — so without this test the suite stays green while any multi-slot call
+    /// inside an <c>If</c> or a loop fails to compile with
+    /// <c>error: jump to label … crosses initialization</c>.
+    /// </summary>
+    [Test]
+    public void AMultiSlotResultInsideABranch_IsBraced()
+    {
+        var cpp = Lower("If True Then\n   Dim d = Rows.MakeDec()\n  End If");
+
+        Assert.That(cpp, Does.Match(@"\{[^{}]*uint32_t\s+blnet_t\d+\{\}"),
+            "the declarations must sit inside their own brace region, or jumping past them "
+            + "crosses an initialization:\n" + cpp);
     }
 
     /// <summary>
@@ -311,8 +389,76 @@ namespace ConvProbe {
     [Test]
     public void ExactlyTwoRowsAreMultiSlot()
     {
-        Assert.That(NetMarshalTable.MultiSlotConversionPairs,
+        Assert.That(
+            NetMarshalTable.WireRows.Values.Where(r => r.IsMultiSlot).Select(r => r.NetFullName),
             Is.EquivalentTo(new[] { "System.Decimal", "System.DateTimeOffset" }));
+    }
+
+    /// <summary>
+    /// The count and the slot LIST must agree. <c>SlotCount</c> is what refusal messages quote;
+    /// <c>Slots</c> is what both emitters BUILD FROM. If they drifted, a row could declare four
+    /// slots in its message and emit two, and only the C-vs-C# oracle would notice — and only
+    /// because the fixture happens to carry the row.
+    /// </summary>
+    [Test]
+    public void EveryMultiSlotRowsListMatchesItsCount()
+    {
+        Assert.Multiple(() =>
+        {
+            foreach (var row in NetMarshalTable.WireRows.Values)
+            {
+                Assert.That(row.HasSlotList, Is.EqualTo(row.IsMultiSlot),
+                    $"'{row.NetFullName}': a slot list exists exactly for the multi-slot rows");
+
+                if (row.Slots != null)
+                {
+                    Assert.That(row.Slots, Has.Count.EqualTo(row.SlotCount),
+                        $"'{row.NetFullName}': SlotCount and Slots must describe one wire");
+                }
+            }
+        });
+    }
+
+    /// <summary>
+    /// §11.4's structural diagnostic code. <c>CppProjectBuilder</c> reads
+    /// <c>CppCapabilityException.DiagnosticCode</c>, so a refusal that leaves it at the BL6001
+    /// default while its message says otherwise surfaces to the user as BL6001 over BL6019
+    /// prose — a support trap.
+    ///
+    /// <para><b>Moved here from <c>NetCallLoweringTests</c> in Task 8c-2.</b> The shape must be
+    /// one the CAPABILITY CHECKER passes (it runs first and owns BL6001) AND the ANALYZER
+    /// passes, so that the refusal under test genuinely belongs to the GENERATOR. Every such
+    /// shape left is a §6.4 row in the RESULT position — and those types are all P1 NATIVE types
+    /// too, so <c>Guid.NewGuid()</c> resolves to <c>BasicLang::Guid</c> and never crosses the
+    /// boundary at all. Only a member of a genuinely .NET type can carry this, which is why the
+    /// assertion had to follow the probe assembly rather than stay put.</para>
+    /// </summary>
+    [Test]
+    public void LoweringRefusal_CarriesItsRealDiagnosticCode()
+    {
+        var (analyzer, module) = BuildIR("Dim g = Rows.MakeGid()");
+
+        Assert.That(analyzer.NetDiagnostics, Is.Empty,
+            "guard: the analyzer must PASS this shape — the refusal under test belongs to the "
+            + "generator. Got: " + string.Join(" | ",
+                analyzer.NetDiagnostics.Select(d => d.Code + ": " + d.Message)));
+
+        var ex = Assert.Throws<CppCapabilityException>(() =>
+            new CppCodeGenerator(new CppCodeGenOptions { GenerateComments = false })
+                .Generate(module));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.DiagnosticCode, Is.EqualTo("BL6019"),
+                "an unmarshalable-shape refusal must REPORT as BL6019 (§11.4)");
+            Assert.That(ex.Message, Does.Contain("MakeGid"),
+                "the message must name the offending member");
+            Assert.That(ex.Message, Does.Not.Contain("BL6019:"),
+                "the code travels structurally — repeating it in the text is how the two get "
+                + "to disagree");
+            Assert.That(CppCapabilityException.DefaultDiagnosticCode, Is.EqualTo("BL6001"),
+                "guard: the checker's own positionless blob keeps BL6001 (D-P3)");
+        });
     }
 
     // ====================================================================================
@@ -368,14 +514,27 @@ namespace ConvProbe {
     }
 
     /// <summary>
-    /// The same widening reached §8.4's delegate gate. <c>RequireBlittableScalar</c> admits on
-    /// <c>Kind == WireKind.Scalar</c> ALONE — no table consult — so making these rows Scalar
-    /// silently opened a gate whose entire job is to stay shut until §8.4 specifies a
-    /// marshaling contract for non-scalars.
+    /// ⛔ THE SILENT-TRUNCATION GUARD, and the reason every non-blittable §6.4 row gets its own
+    /// <c>WireKind</c> rather than sharing <c>Scalar</c> with a slot list.
+    ///
+    /// <para><c>RequireBlittableScalar</c> admits on <c>Kind == WireKind.Scalar</c> ALONE — it
+    /// consults no table. Its entire job is to stay shut until §8.4 specifies a marshaling
+    /// contract for non-scalars, and a row that shares the kind opens it by construction.</para>
+    ///
+    /// <para><b>What gets through is not a compile error.</b> The dispatcher emits
+    /// <c>args_[i] = unchecked((ulong)a_i);</c> — and <c>unchecked((ulong)someDecimal)</c> is a
+    /// LEGAL C# explicit numeric conversion. It compiles, it truncates, and it produces a wrong
+    /// number with no diagnostic anywhere. (DateTimeOffset and Guid would instead fail CS0030
+    /// inside generated source, which is loud but still has no BasicLang diagnostic.)</para>
+    ///
+    /// <para>All four rows in one test on purpose: the failure mode is shared, and the next row
+    /// added to the table should join this list rather than get its own copy.</para>
     /// </summary>
     [TestCase("System.Guid")]
     [TestCase("System.Text.StringBuilder")]
-    public void AByValuePointerRow_IsStillRejectedByTheDelegateGate(string netType)
+    [TestCase("System.Decimal")]
+    [TestCase("System.DateTimeOffset")]
+    public void ANonBlittableConversionRow_IsRejectedByTheDelegateGate(string netType)
     {
         // A §8.4 delegate PARAMETER whose invoke signature names the row — the shape that
         // reaches RequireBlittableScalar through the real entry point.

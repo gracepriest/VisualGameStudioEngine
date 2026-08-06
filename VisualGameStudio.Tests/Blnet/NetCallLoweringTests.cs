@@ -535,51 +535,21 @@ public class NetCallLoweringTests
     /// <c>CppCapabilityException.DiagnosticCode</c>, so a refusal that merely wrote "BL6019"
     /// into its message text would surface to the user as BL6001 over BL6019 prose.
     ///
-    /// <para>The shape has to be one the CAPABILITY CHECKER passes (it runs first and owns
-    /// BL6001) AND the ANALYZER passes (a positioned finding would suppress the exact
-    /// annotation, so nothing would reach the lowering). A member RETURNING a multi-slot §6.4
-    /// pair is exactly that: <c>ReportUnlowerableWinnerParameters</c> gates multi-slot
-    /// PARAMETERS but judges the result only for <c>ref struct</c>, so
-    /// <c>Convert.ToDecimal(String)</c> resolves exactly, types its local as the native Decimal,
-    /// and refuses in <c>NetResultStatement</c>.</para>
+    /// <para><b>⚠ MOVED to <c>NetConversionRowLoweringTests</c> (P2a-2 Task 8c-2).</b> This
+    /// test's vehicle is BY CONSTRUCTION a shape that does not lower yet, so every §6.4 row
+    /// that lands takes its vehicle away. It has been re-vehicled twice already — from a native
+    /// <c>Byte()</c> against <c>System.Byte[]</c> (Task 10's §8.6 outbound copy) and from
+    /// <c>Convert.ToDecimal(String)</c> (Task 8c-2's multi-slot rows).</para>
     ///
-    /// <para><b>This used to be a native <c>Byte()</c> against a <c>System.Byte[]</c>
-    /// parameter</b>, and P2a-2 Task 10 made that shape LOWER — §8.6's outbound copy is
-    /// precisely the row it was borrowing. The churn is the feature landing, not a regression;
-    /// the assertion below is unchanged.</para>
+    /// <para>The third re-vehicling could not stay in THIS fixture. The remaining generator-only
+    /// refusals all involve §6.4 types that are ALSO P1 native types, and this fixture resolves
+    /// against the framework only: <c>Guid.NewGuid()</c> and <c>New StringBuilder()</c> lower to
+    /// the NATIVE <c>BasicLang::Guid</c> / <c>BasicLang::StringBuilder</c> and never reach the
+    /// .NET boundary. A vehicle needs a member of a genuinely .NET type whose RESULT is such a
+    /// row, which requires a probe assembly — so the assertion lives beside the probe now,
+    /// unchanged.</para>
     /// </summary>
-    [Test]
-    public void LoweringRefusal_CarriesItsRealDiagnosticCode()
-    {
-        var (analyzer, module) = BuildIR("""
-            Module M
-             Sub Main()
-              Dim d = Convert.ToDecimal("1.5")
-              Console.WriteLine("done")
-             End Sub
-            End Module
-            """);
-        Assert.That(analyzer.NetDiagnostics, Is.Empty,
-            "guard: the analyzer must PASS this shape — the refusal under test belongs to the "
-            + "generator. Got: " + string.Join(" | ",
-                analyzer.NetDiagnostics.Select(d => d.Code + ": " + d.Message)));
-
-        var ex = Assert.Throws<CppCapabilityException>(() =>
-            new CppCodeGenerator(new CppCodeGenOptions { GenerateComments = false })
-                .Generate(module));
-
-        Assert.That(ex!.DiagnosticCode, Is.EqualTo("BL6019"),
-            "an unmarshalable-shape refusal must REPORT as BL6019 (§11.4). "
-            + "CppProjectBuilder reads DiagnosticCode; leaving it at the BL6001 default while "
-            + "the message says otherwise is a support trap.");
-        Assert.That(ex.Message, Does.Contain("ToDecimal"),
-            "the message must name the offending member");
-        Assert.That(ex.Message, Does.Not.Contain("BL6019:"),
-            "the code travels structurally — repeating it in the text is how the two get to "
-            + "disagree");
-        Assert.That(CppCapabilityException.DefaultDiagnosticCode, Is.EqualTo("BL6001"),
-            "guard: the checker's own positionless blob keeps BL6001 (D-P3)");
-    }
+    // (test body relocated — see NetConversionRowLoweringTests.LoweringRefusal_CarriesItsRealDiagnosticCode)
 
     [Test]
     public void LoweredModule_IncludesTheProxyAndMarshalHeaders()
