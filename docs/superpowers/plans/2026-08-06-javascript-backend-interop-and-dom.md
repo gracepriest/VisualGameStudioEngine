@@ -610,6 +610,35 @@ Without this, the headline claim is false for the shipping routes: the project r
 
 ⛔ **THREE emit call sites, not two.** `BuildService.cs:922` is the IDE route — and it is the one this task's own test drives, since `result.OutputPath` comes from `BuildProjectAsync`. Putting the copy inside `JavaScriptEmitter.Emit` covers all three at once; patching call sites would reproduce the repo's documented "three independent maps, a missing arm is silent" failure.
 
+### ⛔ Measured during execution — two more rules, and one real limitation
+
+4. **Containment, not just self-copy.** `../shared/util.js` is a legal ES specifier that resolves
+   ABOVE the output directory. Copying it writes outside the build output, and one more `..`
+   reaches the project directory and overwrites a source file. Refused with a warning, reusing
+   `SafeZip.IsWithin` — the repo's one containment predicate — rather than growing a second.
+5. **Node needs `package.json` `{"type":"module"}`.** Node parses `.js` as CommonJS unless told
+   otherwise; automatic detection only became the default in **22.7**, so whether the emitted
+   site runs under Node depends on the reader's version. Written into the output directory
+   **only when the program has imports** (so a plain program leaves the user's directory alone —
+   the single-file route emits NEXT TO THE SOURCE) and **only when absent** (same rule as
+   `index.html`). This settles the ESM hazard Task 6 Step 6 flagged as open; browsers were never
+   affected.
+
+⚠ **KNOWN LIMITATION, found by running it.** `#JsImport` emits a **side-effect-only**
+`import "./m.js";` — no binding clause, so **no names are bound**. The ordinary modern module
+shape (`export function greet()`) is therefore unusable: import succeeds, copy succeeds, build
+succeeds, and the call dies at runtime with `greet is not defined`. An imported module has to
+publish through `globalThis` until the directive grows a named-import form. Pinned by
+`JavaScriptCliProcessTests.ProjectRoute_JsImport_BindsNoNames_KNOWN`, which goes RED the day
+that changes. **This is the biggest remaining gap in "call any JavaScript library" and deserves
+its own task.**
+
+⚠ **Test placement deviates from the plan.** These tests live in `JavaScriptCliProcessTests`,
+not `JavaScriptInteropExecutionTests`: the question is an ENTRY-POINT one — what lands in each
+route's output directory — and that fixture already owns both CLI routes, the IDE route, the
+Node harness and a `SilentOutput`. Duplicating that scaffolding to honour the plan's filename
+would have been the drift this repo keeps paying for.
+
 **Three things to specify before writing code:**
 
 1. **Resolution base.** `IRModule.JsImports` is a flat `List<string>` with no per-file origin, so `./helper.js` has no unambiguous base in a multi-file project. Simplest defensible rule: resolve against the **project directory** (single-file route: the source file's directory), and say so in the diagnostic when a file is not found. If per-file resolution is wanted later, `JsImports` needs to carry the importing file — a schema change, not part of this task.

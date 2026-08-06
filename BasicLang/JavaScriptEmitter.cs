@@ -39,12 +39,38 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <c>sourceMappingURL</c> comment is appended — an unconditional comment pointing at
         /// a file that does not exist makes devtools log a 404 on every page load.
         /// </param>
+        /// <param name="jsImports">
+        /// Module specifiers from <c>#JsImport</c>. A RELATIVE one names a file the user owns,
+        /// and the emitted <c>import "./helper.js"</c> resolves against the SCRIPT's URL — so
+        /// unless the module travels with the script the browser 404s on it. The project routes
+        /// write into <c>bin/…</c> while the module stays in the project directory, which is
+        /// exactly that case: without this the feature is broken in every real project while
+        /// every test that hand-places the file passes.
+        ///
+        /// <para>Bare specifiers (<c>"lodash"</c>) and URLs are package-manager territory — a
+        /// stated non-goal — and are left completely alone.</para>
+        /// </param>
+        /// <param name="importBaseDirectory">
+        /// What a relative specifier resolves against: the project directory for the project
+        /// routes, the source file's directory for the single-file one. <c>IRModule.JsImports</c>
+        /// is a flat list with no per-file origin, so no finer base exists — per-file resolution
+        /// would need the LIST to change shape first. Defaults to
+        /// <paramref name="outputDirectory"/>.
+        /// </param>
+        /// <param name="warn">
+        /// Receives one message per import that could not be copied. A missing module is NOT a
+        /// build failure: the user may be serving it from elsewhere, or about to add it, and
+        /// failing the build over a file the compiler never reads would be an overreach.
+        /// </param>
         public static IReadOnlyList<string> Emit(
             string outputDirectory,
             string scriptFileName,
             string javaScript,
             string title = null,
-            string sourceMapJson = null)
+            string sourceMapJson = null,
+            IReadOnlyList<string> jsImports = null,
+            string importBaseDirectory = null,
+            Action<string> warn = null)
         {
             if (string.IsNullOrWhiteSpace(outputDirectory))
                 throw new ArgumentException("An output directory is required.", nameof(outputDirectory));
@@ -83,8 +109,131 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 written.Add(harnessPath);
             }
 
+            CopyImportedModules(jsImports, outputDirectory,
+                importBaseDirectory ?? outputDirectory, warn, written);
+
+            WriteModulePackageJson(jsImports, outputDirectory, written);
+
             return written;
         }
+
+        /// <summary>
+        /// Declares the output directory an ES module scope, so <c>node Site.js</c> works.
+        ///
+        /// <para><b>Only when the script actually has imports, and only when absent.</b> The
+        /// browser never needs this — <c>type="module"</c> on the script tag settles it there —
+        /// but Node parses a <c>.js</c> file as CommonJS unless told otherwise, and an
+        /// <c>import</c> statement then dies with "Cannot use import statement outside a
+        /// module". Automatic detection only became Node's default in 22.7, so without this the
+        /// emitted site runs or does not depending on the reader's Node version.</para>
+        ///
+        /// <para>Gated on <paramref name="jsImports"/> so a program with no imports leaves the
+        /// user's directory exactly as it was — which matters because the single-file route
+        /// emits NEXT TO THE SOURCE. And never overwritten, for the same reason
+        /// <c>index.html</c> is not: a real <c>package.json</c> there belongs to the user.</para>
+        /// </summary>
+        private static void WriteModulePackageJson(IReadOnlyList<string> jsImports,
+            string outputDirectory, List<string> written)
+        {
+            if (jsImports == null || jsImports.Count == 0) return;
+
+            var path = Path.Combine(outputDirectory, "package.json");
+            if (File.Exists(path)) return;
+
+            File.WriteAllText(path, "{\n  \"type\": \"module\"\n}\n");
+            written.Add(path);
+        }
+
+        /// <summary>
+        /// Copies every RELATIVE <c>#JsImport</c> target beside the emitted script, preserving
+        /// its sub-path so the specifier the generator emitted still resolves.
+        ///
+        /// <para><b>Here, not at the call sites.</b> There are THREE routes into
+        /// <see cref="Emit"/> — CLI single-file, CLI project, and the IDE's BuildService — and
+        /// this repo has already paid for a decision duplicated across backend dispatch maps
+        /// where one arm went missing and the build silently produced the wrong thing. One copy
+        /// covers all three, and a fourth route gets it for free.</para>
+        /// </summary>
+        private static void CopyImportedModules(IReadOnlyList<string> jsImports,
+            string outputDirectory, string baseDirectory, Action<string> warn, List<string> written)
+        {
+            if (jsImports == null || jsImports.Count == 0) return;
+
+            var outputRoot = Path.GetFullPath(outputDirectory);
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var specifier in jsImports)
+            {
+                if (!IsRelativeFileSpecifier(specifier)) continue;
+                if (!seen.Add(specifier)) continue;   // two files may import the same module
+
+                // ⛔ Containment first, before touching the filesystem. `../shared/util.js` is a
+                // legal ES specifier that resolves ABOVE the output directory — copying it would
+                // write outside the build output and could overwrite a source file. Reuses the
+                // repo's one containment predicate (rooted paths, both separators, and the
+                // directory-boundary comparison that stops `/out_evil` counting as inside
+                // `/out`) rather than growing a second, subtly different one.
+                if (!BasicLang.Runtime.SafeZip.IsWithin(outputRoot, specifier))
+                {
+                    warn?.Invoke($"#JsImport \"{specifier}\" was not copied — it resolves outside " +
+                                 "the output directory. Move the module below the project " +
+                                 "directory, or serve it yourself.");
+                    continue;
+                }
+
+                var relative = specifier.Replace('/', Path.DirectorySeparatorChar);
+                var source = Path.GetFullPath(Path.Combine(baseDirectory, relative));
+                var destination = Path.GetFullPath(Path.Combine(outputRoot, relative));
+
+                if (!File.Exists(source))
+                {
+                    warn?.Invoke($"#JsImport \"{specifier}\" was not found at '{source}' — the " +
+                                 "emitted import will fail to load unless the module is served " +
+                                 "from somewhere else.");
+                    continue;
+                }
+
+                // The single-file route writes its output NEXT TO THE SOURCE, so base and output
+                // are the same directory and the module is already where it needs to be.
+                // File.Copy throws IOException when told to copy a file over itself.
+                if (string.Equals(source, destination, PathComparison)) continue;
+
+                var destinationDir = Path.GetDirectoryName(destination);
+                if (!string.IsNullOrEmpty(destinationDir)) Directory.CreateDirectory(destinationDir);
+
+                File.Copy(source, destination, overwrite: true);
+                written.Add(destination);
+            }
+        }
+
+        /// <summary>
+        /// True for a specifier that names a FILE this build owns — the only kind worth copying.
+        ///
+        /// <para>ES module specifier rules, not path rules: a leading <c>./</c> or <c>../</c>
+        /// with FORWARD slashes is what a browser treats as relative. A bare name is a package,
+        /// a leading <c>/</c> is server-root-absolute, and anything with a scheme or a leading
+        /// <c>//</c> is a URL — all of them the user's business, none of them ours. Windows
+        /// <c>.\</c> is deliberately NOT accepted: a browser would not resolve it either, so
+        /// accepting it here would copy a file for an import that still cannot load.</para>
+        /// </summary>
+        private static bool IsRelativeFileSpecifier(string specifier)
+        {
+            if (string.IsNullOrWhiteSpace(specifier)) return false;
+            if (specifier.StartsWith("//", StringComparison.Ordinal)) return false;
+            if (specifier.Contains("://", StringComparison.Ordinal)) return false;
+
+            return specifier.StartsWith("./", StringComparison.Ordinal)
+                || specifier.StartsWith("../", StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// Windows and macOS compare paths case-insensitively; an ordinal test there would call
+        /// two spellings of the same file different and try to copy it over itself.
+        /// </summary>
+        private static StringComparison PathComparison =>
+            OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
 
         /// <summary>
         /// <c>type="module"</c> is REQUIRED on the tag, and stays required either way.
