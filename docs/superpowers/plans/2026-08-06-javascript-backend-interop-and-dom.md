@@ -229,6 +229,34 @@ git commit -m "feat(js): #JsImport collects module specifiers onto IRModule"
 
 ---
 
+## Task 1b: `#JsImport` must be REFUSED on backends that cannot honour it
+
+**Found by the Task 1 code-quality review. Not in the original plan, and it would have been lost.**
+
+The `#CppInclude` precedent has THREE parts and Task 1 copied two: collect, thread, **and reject
+on backends that cannot honour it**. `ForeignFeatureChecker.cs:64` throws when a non-C++ backend
+sees a non-empty `module.CppIncludes`, and `JsCapabilityCheckerTests.cs:34`
+(`Js_CppInclude_ThrowsCleanError`) pins the mirror direction.
+
+Nothing rejects `JsImports`. `#JsImport "./chart.js"` in a **C#-backend** program preprocesses
+clean, lands on `CombinedIR`, and is **silently dropped** — precisely the "a refusal beats a half
+implementation" line this backend is built on, violated in the other direction.
+
+**Files:** `BasicLang/ForeignFeatureChecker.cs` (the arm at `:64` and the matrix comment at
+`:25-31`); test in `JsCapabilityCheckerTests.cs` beside `Js_CppInclude_ThrowsCleanError`.
+
+- [ ] **Step 1: Failing tests** — a `#JsImport` program compiled for the C# backend throws
+  `ForeignFeatureException` naming the directive; the same program on JavaScript does not.
+- [ ] **Step 2:** Run, confirm the C# case currently passes silently (that IS the bug).
+- [ ] **Step 3:** Add the symmetric arm. ⚠ The checker is SHARED and the JS backend calls it with
+  `backendName: "JavaScript"` — a naive `JsImports.Count > 0 → throw` breaks JavaScript itself.
+  Gate it the same way Task 3 gates `::`, with an explicit parameter rather than a name test.
+  ⚠ The C++ backend does not route through this checker at all and needs its own guard.
+  Scope per project direction: **C# and C++ only**; LLVM/MSIL are out of scope.
+- [ ] **Step 4:** Add a `#JsImport` row to the matrix comment. Run, commit.
+
+---
+
 ## Task 2: `#JsImport` emits real `import` statements
 
 **Files:**
