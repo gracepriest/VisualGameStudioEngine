@@ -61,16 +61,28 @@ public class JavaScriptCodeGenTests
     /// <para><b>This is a MOVING canary and is meant to be re-pointed.</b> It must always
     /// name a construct just beyond the implemented frontier, so as Phase 2 lands features
     /// this test goes green-by-accident and has to be aimed further out. It has already moved
-    /// three times: `x = x + 1` (task 13), Try/Catch (task 19), Async (task 21). It now names
-    /// an Iterator, task 22. Re-point it rather than deleting it — the principle it guards
+    /// four times: `x = x + 1` (task 13), Try/Catch (task 19), Async (task 21), Iterator
+    /// (task 22). It now names a SECOND Catch clause — task 19 built one, and JavaScript's
+    /// single catch binding means a second needs type dispatch inside the one handler, which
+    /// nothing has built. Re-point it rather than deleting it — the principle it guards
     /// outlives any one node.</para>
+    ///
+    /// <para><b>What it must NOT name: a construct the capability checker REFUSES.</b> Those
+    /// throw ForeignFeatureException by design and are permanent, so they would pin the canary
+    /// where it can never move from — and the assertion below is specifically that unbuilt
+    /// lowerings surface as NotSupportedException. Two candidates were rejected for exactly
+    /// this reason while re-pointing: an Event defaults to the type `EventHandler` and draws
+    /// BL7007, and `New List(Of T)(capacity)` is a deliberate refusal.</para>
     /// </summary>
     [Test]
     public void UnimplementedNode_Throws_RatherThanEmittingNothing()
     {
         var ex = Assert.Catch(() => JsTestSupport.Compile(
-            "Iterator Function Numbers() As IEnumerable(Of Integer)\nYield 1\nEnd Function\n" +
-            "Sub Main()\nEnd Sub"));
+            "Sub Main()\n" +
+            "Try\nConsole.WriteLine(1)\n" +
+            "Catch a As ArgumentException\nConsole.WriteLine(2)\n" +
+            "Catch e As Exception\nConsole.WriteLine(3)\n" +
+            "End Try\nEnd Sub"));
 
         Assert.That(ex, Is.InstanceOf<System.NotSupportedException>(),
             "unimplemented lowering must surface as NotSupportedException, not silence");

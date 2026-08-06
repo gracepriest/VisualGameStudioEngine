@@ -277,6 +277,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             _pendingMerges.Clear();
             _forEachEnds.Clear();
             _boundNames.Clear();
+            _sequenceValued.Clear();
             _armDepth = 0;
 
             Line(signature + " {");
@@ -845,6 +846,23 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         private bool Bound(IRValue v) =>
             !string.IsNullOrEmpty(v?.Name) && _boundNames.Contains(v.Name);
 
+        /// <summary>
+        /// Names holding a JS Array produced by a LINQ operator.
+        ///
+        /// <para><b>Why a side table rather than the type.</b> MEASURED: the result of
+        /// <c>l.Where(f)</c> is an IRInstanceMethodCall whose <c>Type.Name</c> is
+        /// <c>"Object"</c> — IRBuilder's universal fallback — NOT <c>IEnumerable</c>. So in
+        /// <c>l.Where(f).Select(g)</c> the receiver of <c>Select</c> is <c>t2:Object</c>, and
+        /// asking <c>CollectionKindOf</c> about it answers None. Chaining is the normal way
+        /// LINQ is written, so without this every chain past the first operator would emit the
+        /// BasicLang name verbatim and die at runtime with "t2.Select is not a function".</para>
+        ///
+        /// <para>Gating on a KNOWN sequence rather than on the method name alone is what keeps
+        /// a user-defined class method called <c>Select</c> from being rewritten into
+        /// <c>.map</c>.</para>
+        /// </summary>
+        private HashSet<string> _sequenceValued = new HashSet<string>(StringComparer.Ordinal);
+
         private void Bind(string name, string expression)
         {
             if (!string.IsNullOrEmpty(name)) _boundNames.Add(name);
@@ -914,9 +932,6 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         {
             var parameters = string.Join(", ", function.Parameters.ConvertAll(p => SanitizeName(p.Name)));
 
-            // Iterators get their JS keyword in task 22; until then a function carrying that
-            // flag would emit a plain function that silently loses its semantics.
-            if (function.IsIterator) throw NotYet("Iterator functions (plan task 22)");
 
             CollectUsedOperands(function);
 
@@ -925,10 +940,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             _loopEnds.Clear();
             _pendingMerges.Clear();
             _boundNames.Clear();
+            _sequenceValued.Clear();
 
-            // Native async — the C++ backend has to emulate this synchronously with no
-            // scheduler; here the runtime provides the semantics.
-            Line($"{(function.IsAsync ? "async " : "")}function {SanitizeName(function.Name)}({parameters}) {{");
+            // Native async and native generators — the C++ backend emulates async
+            // synchronously with no scheduler and hand-builds C++20 coroutines for iterators;
+            // here the runtime provides both. `function*` keeps iteration LAZY, which a
+            // materialise-an-array lowering would silently lose.
+            var modifiers = function.IsAsync ? "async " : "";
+            var star = function.IsIterator ? "*" : "";
+            Line($"{modifiers}function{star} {SanitizeName(function.Name)}({parameters}) {{");
             _indentLevel++;
 
             // Declare user locals up front. `let`, not `const`: unlike SSA temps these are
@@ -1413,7 +1433,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         private string AwaitExpr(IRAwait a) => $"await {Receiver(Expr(a.Expression))}";
 
         public void Visit(IRAwait awaitInst) => EmitValueOrStatement(awaitInst, AwaitExpr(awaitInst));
-        public void Visit(IRYield yieldInst) => throw NotYet(nameof(IRYield));
+        public void Visit(IRYield yieldInst) =>
+            Line(yieldInst.Value == null ? "yield;" : $"yield {Expr(yieldInst.Value)};");
         // Each of these is emitted into block.Instructions AND handed back as the expression
         // result, so the statement and expression arms must agree: bind when something reads
         // the value, otherwise emit it as a bare statement so side effects still happen.
@@ -1540,11 +1561,13 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             var savedEmitted = new HashSet<BasicBlock>(_emitted);
             var savedMembers = _memberNames;
             var savedBound = new HashSet<string>(_boundNames, StringComparer.Ordinal);
+            var savedSequences = new HashSet<string>(_sequenceValued, StringComparer.Ordinal);
 
             CollectUsedOperands(fn);
             _currentFunction = fn;
             _emitted.Clear();
             _boundNames.Clear();
+            _sequenceValued.Clear();
 
             _declaredNames = new HashSet<string>(StringComparer.Ordinal);
             foreach (var p in fn.Parameters ?? new List<IRVariable>())
@@ -1574,6 +1597,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             foreach (var b in savedEmitted) _emitted.Add(b);
             _boundNames.Clear();
             foreach (var n in savedBound) _boundNames.Add(n);
+            _sequenceValued.Clear();
+            foreach (var n in savedSequences) _sequenceValued.Add(n);
 
             var parameters = string.Join(", ",
                 (fn.Parameters ?? new List<IRVariable>()).ConvertAll(p => SanitizeName(p.Name)));
@@ -1606,12 +1631,118 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             var args = mc.Arguments.ConvertAll(Expr);
             var receiver = Expr(mc.Object);
+            var kind = ReceiverKind(mc.Object);
 
-            if (TryCollectionMethod(CollectionKindOf(mc.Object?.Type), mc.MethodName, receiver, args,
-                    out var collection))
+            if (TryCollectionMethod(kind, mc.MethodName, receiver, args, out var collection))
                 return collection;
 
+            if (kind == CollectionKind.List &&
+                TryLinqMethod(mc.MethodName, receiver, args, out var linq, out var yieldsSequence))
+            {
+                // Record the RESULT as a sequence so the next link in the chain resolves.
+                if (yieldsSequence && !string.IsNullOrEmpty(mc.Name)) _sequenceValued.Add(mc.Name);
+                return linq;
+            }
+
             return $"{receiver}.{SanitizeName(mc.MethodName)}({string.Join(", ", args)})";
+        }
+
+        /// <summary>
+        /// The collection kind of a call receiver — by declared type, else by the side table of
+        /// LINQ results. See <see cref="_sequenceValued"/> for why the type alone is not enough.
+        /// </summary>
+        private CollectionKind ReceiverKind(IRValue receiver)
+        {
+            var kind = CollectionKindOf(receiver?.Type);
+            if (kind != CollectionKind.None) return kind;
+
+            return !string.IsNullOrEmpty(receiver?.Name) && _sequenceValued.Contains(receiver.Name)
+                ? CollectionKind.List
+                : CollectionKind.None;
+        }
+
+        /// <summary>
+        /// Lowers a LINQ operator onto a native Array method.
+        ///
+        /// <para><b>Deferred execution does NOT survive this.</b> .NET's <c>Where</c> returns a
+        /// lazy sequence re-evaluated on each enumeration; <c>.filter</c> returns a materialised
+        /// Array. So mutating the source after the call is invisible to the result here, where
+        /// on .NET it would show up. This is the plan's chosen lowering and it is pinned by a
+        /// test rather than left to be discovered — the alternative (generator-based lazy
+        /// helpers) would break <c>.Count</c> and indexing on the result.</para>
+        ///
+        /// <para><paramref name="yieldsSequence"/> reports whether the RESULT is itself an
+        /// Array, which is what lets <c>a.Where(f).Select(g)</c> chain.</para>
+        /// </summary>
+        private static bool TryLinqMethod(string method, string receiver, List<string> args,
+            out string result, out bool yieldsSequence)
+        {
+            result = null;
+            yieldsSequence = false;
+            if (string.IsNullOrEmpty(method)) return false;
+
+            switch (method.ToLowerInvariant())
+            {
+                case "where" when args.Count == 1:
+                    yieldsSequence = true; result = $"{receiver}.filter({args[0]})"; return true;
+                case "select" when args.Count == 1:
+                    yieldsSequence = true; result = $"{receiver}.map({args[0]})"; return true;
+                case "skip" when args.Count == 1:
+                    yieldsSequence = true; result = $"{receiver}.slice({args[0]})"; return true;
+                case "take" when args.Count == 1:
+                    yieldsSequence = true; result = $"{receiver}.slice(0, {args[0]})"; return true;
+                case "concat" when args.Count == 1:
+                    yieldsSequence = true; result = $"{receiver}.concat({args[0]})"; return true;
+                case "distinct" when args.Count == 0:
+                    yieldsSequence = true; result = $"[...new Set({receiver})]"; return true;
+
+                // ⚠ `.reverse()` and `.sort()` mutate IN PLACE and return the same Array.
+                // `OrderBy` does not touch its source, so both copy first — without the
+                // `.slice()` a sort would silently reorder the caller's list.
+                case "reverse" when args.Count == 0:
+                    yieldsSequence = true; result = $"{receiver}.slice().reverse()"; return true;
+                case "orderby" when args.Count == 1:
+                    yieldsSequence = true; result = OrderBy(receiver, args[0], descending: false); return true;
+                case "orderbydescending" when args.Count == 1:
+                    yieldsSequence = true; result = OrderBy(receiver, args[0], descending: true); return true;
+
+                // Materialisers. A copy, not the same Array: `ToList` in .NET produces an
+                // independent list, and handing back the receiver would alias it.
+                case "tolist" when args.Count == 0:
+                case "toarray" when args.Count == 0:
+                    yieldsSequence = true; result = $"{receiver}.slice()"; return true;
+
+                case "any" when args.Count == 0: result = $"({receiver}.length > 0)"; return true;
+                case "any" when args.Count == 1: result = $"{receiver}.some({args[0]})"; return true;
+                case "all" when args.Count == 1: result = $"{receiver}.every({args[0]})"; return true;
+                case "count" when args.Count == 0: result = $"{receiver}.length"; return true;
+                case "count" when args.Count == 1: result = $"{receiver}.filter({args[0]}).length"; return true;
+
+                // Empty sums to 0 on .NET too, so the seed makes this exact rather than close.
+                case "sum" when args.Count == 0:
+                    result = $"{receiver}.reduce((a, b) => a + b, 0)"; return true;
+                case "sum" when args.Count == 1:
+                    result = $"{receiver}.map({args[0]}).reduce((a, b) => a + b, 0)"; return true;
+            }
+
+            // Everything else that LOOKS like LINQ is refused rather than approximated —
+            // see LinqRejection for why these have no honest one-line lowering.
+            if (JsCapabilityChecker.IsUnlowerableLinqOperator(method))
+                throw JsCapabilityChecker.LinqRejection(method);
+
+            return false;
+        }
+
+        /// <summary>
+        /// A key-comparator sort. <c>.sort()</c> with no argument compares elements as STRINGS,
+        /// so <c>[10, 9, 1]</c> sorts to <c>[1, 10, 9]</c> — wrong, and silently so. The
+        /// relational form below orders numbers and strings alike without assuming either.
+        /// </summary>
+        private static string OrderBy(string receiver, string keySelector, bool descending)
+        {
+            var order = descending ? "kb < ka ? -1 : kb > ka ? 1 : 0" : "ka < kb ? -1 : ka > kb ? 1 : 0";
+            return $"{receiver}.slice().sort((a, b) => {{ const ka = ({keySelector})(a), " +
+                   $"kb = ({keySelector})(b); return {order}; }})";
         }
 
         /// <summary>
