@@ -4554,9 +4554,20 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             BinaryOpKind.Shl => "<<",
             BinaryOpKind.Shr => ">>",
             BinaryOpKind.Concat => "+",
-            _ => "?"
+            // `\` (integer division). Both operands are integral by the time we get here
+            // (SemanticAnalyzer rejects floating operands), so C++ `/` on integers already
+            // truncates toward zero exactly as VB requires. The RESULT WIDTH is what makes
+            // this safe: SemanticAnalyzer types the result by the widened operand type, so
+            // the temp this lands in is int64_t for a 64-bit division. It used to be
+            // hardcoded to Integer, which would have made this arm emit a silent modulo-2^32
+            // truncation instead of the loud syntax error the missing arm produced.
+            BinaryOpKind.IntDiv => "/",
+            _ => throw new NotSupportedException(
+                $"The C++ backend has no operator text for BinaryOpKind.{op}. " +
+                "Returning a placeholder here would emit invalid C++ while the compiler " +
+                "reported success — add an arm above instead.")
         };
-        
+
         private string MapUnaryOperator(UnaryOpKind op) => op switch
         {
             UnaryOpKind.Neg => "-",
@@ -4571,7 +4582,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // emitted a literal "?" INTO THE GENERATED SOURCE — invalid C++, silently, with no
             // capability refusal to catch it.
             UnaryOpKind.AddressOf => "",
-            _ => "?"
+            _ => throw new NotSupportedException(
+                $"The C++ backend has no operator text for UnaryOpKind.{op}. " +
+                "Returning a placeholder here would emit invalid C++ while the compiler " +
+                "reported success — add an arm above instead.")
         };
         
         private string MapCompareOperator(CompareKind cmp) => cmp switch
@@ -4582,7 +4596,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             CompareKind.Le => "<=",
             CompareKind.Gt => ">",
             CompareKind.Ge => ">=",
-            _ => "?"
+            _ => throw new NotSupportedException(
+                $"The C++ backend has no operator text for CompareKind.{cmp}. " +
+                "Returning a placeholder here would emit invalid C++ while the compiler " +
+                "reported success — add an arm above instead.")
         };
 
         private bool IsNamedDestination(IRValue value)

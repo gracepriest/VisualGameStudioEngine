@@ -7164,12 +7164,27 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     break;
 
                 case "\\":
-                    // Integer division
+                    // Integer division. VB.NET types the result by the WIDENED operand type
+                    // — Long \ Integer is Long, Byte \ Byte is Byte — not by a fixed Integer.
+                    //
+                    // Hardcoding Integer here was wrong in both directions. Downward it
+                    // truncated: the C++ backend hoists the quotient into a temp of THIS
+                    // type, so `Long \ Long` produced `int32_t t0 = a / b` under an int64_t
+                    // return, and 9000000000 \ 2 yields 205032704 — well-defined modulo 2^32,
+                    // a plain assignment rather than brace-init, so no narrowing diagnostic
+                    // fires anywhere. Upward it leaked as a spurious user-visible error:
+                    // returning `a \ b` from a Byte function was rejected as a narrowing
+                    // conversion from the phantom Integer.
                     if (!leftType.IsIntegral() || !rightType.IsIntegral())
                     {
                         Error($"Integer division requires integral operands", node.Line, node.Column);
+                        resultType = _typeManager.IntegerType;
                     }
-                    resultType = _typeManager.IntegerType;
+                    else
+                    {
+                        resultType = _typeManager.GetCommonType(leftType, rightType)
+                                     ?? _typeManager.IntegerType;
+                    }
                     break;
 
                 case "&":
