@@ -51,9 +51,13 @@ public class ExtensionHostInboundBindingTests
         Assert.That(src, Does.Not.Contain("new Action<string, string, string?, string?>(OnRegisterProvider)"),
             "the old 4-parameter registration cannot bind the 5-key notification languages.js sends");
 
-        foreach (var name in new[] { "string type", "string id", "string extensionId" })
+        // Names only — deliberately NOT pinning types here. An earlier version of this test asserted
+        // "string id", which baked in the wrong contract: provider-registry.js sends a NUMERIC id,
+        // so that assertion was green while the wire stayed broken. Types are pinned by
+        // RegisterProvider_TakesTheIdAsANumber, against the JS that actually produces the value.
+        foreach (var name in new[] { "type", "id", "extensionId", "selector", "metadata" })
         {
-            Assert.That(src, Does.Contain(name).IgnoreCase,
+            Assert.That(SignatureOf("OnRegisterProvider("), Does.Contain(name),
                 $"OnRegisterProvider must accept '{name}' — StreamJsonRpc binds named arguments by "
                 + "exact parameter name, so a rename silently unbinds the whole call");
         }
@@ -162,6 +166,30 @@ public class ExtensionHostInboundBindingTests
         Assert.That(SignatureOf("OnShowMessageAsync("), Does.Contain(key),
             $"window.js sends '{key}'; a handler missing it cannot bind, and because showMessage is "
             + "a request the rejection propagates into the extension and aborts its activation");
+    }
+
+    /// <summary>
+    /// Names are not enough — TYPES bind too, and a type mismatch fails just as silently.
+    ///
+    /// <para><c>provider-registry.js:243</c> allocates ids with <c>const id = _nextId++</c>, so
+    /// <c>id</c> arrives as a JSON NUMBER (the file's own comment at :251 calls it a "numeric id").
+    /// Declared as <c>string</c>, StreamJsonRpc cannot bind it and drops the whole notification —
+    /// no error, no log, and <c>ProviderRegistered</c> never fires.</para>
+    ///
+    /// <para>This got past the first fix because that fix, and its guard, checked only that the
+    /// five parameter NAMES matched. Verified at runtime: the extension logged
+    /// "registerHoverProvider returned" while the IDE never logged "Provider registered".</para>
+    /// </summary>
+    [Test]
+    public void RegisterProvider_TakesTheIdAsANumber()
+    {
+        var signature = SignatureOf("OnRegisterProvider(");
+
+        Assert.That(signature, Does.Not.Contain("string id"),
+            "provider-registry.js allocates ids as numbers; a string parameter cannot bind one, and "
+            + "a notification that fails to bind is dropped in silence");
+        Assert.That(signature, Does.Match(@"\b(int|long|double|JsonElement)\s+id\b"),
+            "id must accept a JSON number");
     }
 
     /// <summary>Extracts a method's parameter list so assertions cannot match unrelated code.</summary>

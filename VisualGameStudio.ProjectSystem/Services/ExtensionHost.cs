@@ -193,7 +193,7 @@ public class ExtensionHost : IDisposable
             _rpc.AddLocalRpcMethod("outputChannel/create", new Action<string, string>(OnCreateOutputChannel));
             _rpc.AddLocalRpcMethod("outputChannel/append", new Action<string, string>(OnOutputChannelAppend));
             _rpc.AddLocalRpcMethod("statusBar/update", new Action<string, string, string?, string?>(OnSetStatusBarItem));
-            _rpc.AddLocalRpcMethod("languages/registerProvider", new Action<string, string, string, JsonElement, JsonElement>(OnRegisterProvider));
+            _rpc.AddLocalRpcMethod("languages/registerProvider", new Action<string, long, string, JsonElement, JsonElement>(OnRegisterProvider));
             _rpc.AddLocalRpcMethod("languages/publishDiagnostics", new Action<string, JsonElement, string?>(OnPublishDiagnostics));
             _rpc.AddLocalRpcMethod("treeView/create", new Action<string, string, string?>(OnTreeViewCreate));
             _rpc.AddLocalRpcMethod("treeView/refresh", new Action<string, string?>(OnTreeViewRefresh));
@@ -821,12 +821,18 @@ public class ExtensionHost : IDisposable
     /// <c>metadata || undefined</c>, which omits the key entirely, and a required parameter whose
     /// key is absent fails to bind.</para>
     ///
+    /// <para>⛔ <paramref name="id"/> is NUMERIC — <c>provider-registry.js:243</c> allocates it as
+    /// <c>_nextId++</c>. Declaring it <c>string</c> looks harmless and binds nothing: types are part
+    /// of the match, and the failure is as silent as a name mismatch. A first attempt at this fix
+    /// got all five names right and this one type wrong, and the only symptom was the IDE never
+    /// logging "Provider registered" while the extension logged that registration had returned.</para>
+    ///
     /// <para><c>selector</c> arrives as a JSON ARRAY of filter objects and <c>metadata</c> as an
     /// object; both are re-serialised to their raw text because
     /// <c>ExtensionService.OnProviderRegistered</c> parses them with <c>JsonDocument.Parse</c>.</para>
     /// </summary>
     private void OnRegisterProvider(
-        string type, string id, string extensionId,
+        string type, long id, string extensionId,
         JsonElement selector, JsonElement metadata = default)
     {
         _outputService.WriteLine(
