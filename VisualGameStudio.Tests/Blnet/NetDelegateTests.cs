@@ -529,6 +529,85 @@ End Sub");
             "a method reference is just the function's name in C++");
     }
 
+    // ------------------------------------------------------------------------------------
+    // Step 5d — the MarshalNetArgument delegate arm.
+    //
+    // This is where every earlier step converges on one call: admissibility (1), the carried
+    // invoke signature (2), the shared derivation (3), the callback wire row (4a), the managed
+    // dispatcher (4b), the RAII guard (5a), the slot descriptors (5b) and the AddressOf/lambda
+    // lowering (5c).
+    //
+    // List(Of Integer).Sort(Comparison(Of Integer)) is the plan's own mandatory shape and is
+    // int(int,int) — all blittable scalars, so it clears 4b's v1 gate.
+    // ------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// A purpose-built probe assembly with a SCALAR delegate member.
+    ///
+    /// <para>Nothing in the default surface will do. The ManagedOwned set is
+    /// {Regex, Uri, Stream, FileInfo, DirectoryInfo}, and its only delegate-taking member is
+    /// <c>Regex.Replace(String, MatchEvaluator)</c> — whose signature is <c>String(Match)</c>,
+    /// which v1's scalar gate correctly refuses. And a locally constructed
+    /// <c>List(Of Integer)</c> never crosses the boundary at all: BasicLang collections lower
+    /// to <c>std::shared_ptr&lt;BasicLang::List&lt;T&gt;&gt;</c>, a NATIVE type, so
+    /// <c>l.Sort(…)</c> is an ordinary native call that never reaches this lowering.</para>
+    /// </summary>
+    private const string DelegateProbeSource = @"
+namespace DelegateProbe {
+    public delegate int IntComparer(int a, int b);
+    public static class Runner {
+        public static int Run(IntComparer c) => c(1, 2);
+    }
+}";
+
+    private static string LowerWithNet(string basicLang, string probeAssemblyPath)
+    {
+        var parser = new Parser(new Lexer(basicLang).Tokenize());
+        var ast = parser.Parse();
+        Assert.That(parser.Errors, Is.Empty,
+            "parse errors:\n" + string.Join("\n", parser.Errors.Select(e => e.Message)));
+
+        var resolver = NetTypeResolver.Create(
+            NetTypeResolverTestRefs.FrameworkPaths.Concat(new[] { probeAssemblyPath }));
+
+        var analyzer = new SemanticAnalyzer();
+        analyzer.ConfigureNetResolution(() => resolver, nativeBackend: true);
+        Assert.That(analyzer.Analyze(ast), Is.True,
+            "semantic errors:\n" + string.Join("\n", analyzer.Errors.Select(e => e.Message)));
+        Assert.That(analyzer.NetDiagnostics.Where(d => !d.IsWarning), Is.Empty,
+            "net diagnostics:\n"
+            + string.Join("\n", analyzer.NetDiagnostics.Select(d => d.Code + ": " + d.Message)));
+
+        var ir = new IRBuilder(analyzer).Build(ast, "TestModule");
+        return new CppCodeGenerator(new CppCodeGenOptions { GenerateComments = false })
+            .Generate(ir);
+    }
+
+    [Test]
+    public void ALambdaArgument_RegistersACallbackGuardInTheCallPrologue()
+    {
+        using var dir = new ProbeDir();
+        var probe = dir.EmitAssembly("BlnetDelegateProbe", DelegateProbeSource);
+
+        var cpp = LowerWithNet(@"
+Using DelegateProbe
+
+Module M
+ Sub Main()
+  Console.WriteLine(Runner.Run(Function(a As Integer, b As Integer) a - b))
+ End Sub
+End Module", probe);
+
+        Assert.That(cpp, Does.Contain("BasicLang::blnet::CallbackRef"),
+            "§8.4 registration is an RAII guard in the PROLOGUE (D-P8) — never a paired "
+            + "register/release, because WriteBack is skipped when NetCheckTyped throws and the "
+            + "callback entry would leak permanently");
+        Assert.That(cpp, Does.Contain("BLNET_SLOT_VALUE"),
+            "the guard's constructor takes the BlnetSlotDesc[] computed in 5b");
+        Assert.That(cpp, Does.Match(@"\w+\.get\(\)"),
+            "the proxy parameter is a blnet_callback, so the guard's handle is what crosses");
+    }
+
     [Test]
     public void AddressOfASub_NoLongerEmitsAQuestionMark()
     {
@@ -546,6 +625,49 @@ End Sub");
 
         Assert.That(cpp, Does.Not.Contain("?Handler"));
         Assert.That(cpp, Does.Contain("= Handler;"));
+    }
+
+    /// <summary>
+    /// A scratch directory that compiles a C# probe assembly for the fixture. Mirrors
+    /// <c>NetCallLoweringTests.TempDir</c>, which is private to that fixture — copied rather
+    /// than shared because it is three lines of test scaffolding, and lifting it into a shared
+    /// helper would give two fixtures a coupling neither needs.
+    /// </summary>
+    private sealed class ProbeDir : IDisposable
+    {
+        private readonly string _path = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(), "blnet-delegate-" + Guid.NewGuid().ToString("N"));
+
+        public ProbeDir() => System.IO.Directory.CreateDirectory(_path);
+
+        public string EmitAssembly(string name, string source)
+        {
+            var path = System.IO.Path.Combine(_path, name + ".dll");
+            var compilation = Microsoft.CodeAnalysis.CSharp.CSharpCompilation.Create(
+                name,
+                new[] { Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(source) },
+                NetTypeResolverTestRefs.FrameworkPaths.Select(
+                    p => Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(p)),
+                new Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions(
+                    Microsoft.CodeAnalysis.OutputKind.DynamicallyLinkedLibrary));
+
+            Microsoft.CodeAnalysis.Emit.EmitResult emit;
+            using (var stream = System.IO.File.Create(path))
+                emit = compilation.Emit(stream);
+
+            Assert.That(emit.Success, Is.True,
+                "fixture probe assembly failed to build: " + string.Join("\n",
+                    emit.Diagnostics.Where(d =>
+                        d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error)));
+            return path;
+        }
+
+        public void Dispose()
+        {
+            try { System.IO.Directory.Delete(_path, recursive: true); }
+            catch (System.IO.IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
     }
 
     [Test]

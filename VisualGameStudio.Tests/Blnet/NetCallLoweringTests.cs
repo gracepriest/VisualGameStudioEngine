@@ -668,8 +668,19 @@ public class NetCallLoweringTests
     // Analyzer-side gates: untypeable shapes error at their positions (native only)
     // ====================================================================================
 
+    /// <summary>
+    /// ⚠ REPURPOSED by P2a-2 Task 11 Step 6. This used to pin the blanket refusal "delegate
+    /// arguments to .NET members are not supported on the native backend", which was deleted
+    /// when §8.4 lowering landed.
+    ///
+    /// <para>What it pins NOW is more useful: flipping that refusal did NOT make lambdas
+    /// universally acceptable. <c>Regex.IsMatch</c> takes no delegate in any overload, so a
+    /// lambda argument is refused by REAL OVERLOAD RESOLUTION — and the message names the
+    /// argument shapes rather than asserting a blanket limitation. Still BL6017, still a native
+    /// error, still silent on the C# path.</para>
+    /// </summary>
     [Test]
-    public void LambdaArgument_IsANativeError_AndSilentOnCSharp()
+    public void ALambdaAgainstANonDelegateParameter_IsStillANativeError_AndSilentOnCSharp()
     {
         const string source = """
             Module M
@@ -682,12 +693,17 @@ public class NetCallLoweringTests
         var native = AnalyzeForFindings(source, nativeBackend: true);
         var finding = native.NetDiagnostics.Where(d => d.Code == "BL6017").ToList();
         Assert.That(finding, Has.Count.EqualTo(1),
-            "a lambda argument cannot be typed for overload resolution and cannot lower "
-            + "(§8.4 delegate lowering is Task 11) — on the native path that is a "
-            + "BL6017-class ERROR at the call site, never a silent name-only lowering. Got: "
+            "no IsMatch overload takes a delegate, so the call cannot resolve — on the native "
+            + "path that is a BL6017-class ERROR at the call site, never a silent name-only "
+            + "lowering. Got: "
             + string.Join(" | ", native.NetDiagnostics.Select(d => d.Code + ": " + d.Message)));
         Assert.That(finding[0].IsWarning, Is.False);
-        Assert.That(finding[0].Message, Does.Contain("argument 2").IgnoreCase);
+        Assert.That(finding[0].Message, Does.Contain("no overload of 'IsMatch'"),
+            "the refusal comes from overload resolution now, not a special-cased lambda arm");
+        Assert.That(finding[0].Message, Does.Contain("lambda(1)"),
+            "D-P11: a target-typed lambda has no .NET type to report, so its ARITY is what "
+            + "identifies it in the diagnostic — and reporting the arity is what makes a "
+            + "wrong-arity mistake diagnosable at all");
 
         var csharp = AnalyzeForFindings(source, nativeBackend: false);
         Assert.That(csharp.NetDiagnostics, Is.Empty,
