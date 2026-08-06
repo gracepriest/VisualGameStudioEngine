@@ -192,6 +192,89 @@ public class ExtensionHostInboundBindingTests
             "id must accept a JSON number");
     }
 
+    /// <summary>
+    /// Every remaining host→IDE handler, checked against the keys its JS sender actually puts on
+    /// the wire.
+    ///
+    /// <para>⛔ StreamJsonRpc does NOT tolerate extra JSON keys: a payload carrying four fields
+    /// fails to bind a two-parameter method even when both of those two names match. The C#
+    /// signature must therefore declare EVERY field the JS sends, not merely the ones it cares
+    /// about. That is why several of these look over-specified — <c>statusBar/update</c> declares
+    /// eleven parameters because window.js sends eleven.</para>
+    /// </summary>
+    [TestCase("OnRegisterCommand(", new[] { "extensionId", "command" },
+        TestName = "registerCommand — commands.js sends `command`, not `commandId`")]
+    [TestCase("OnCreateOutputChannel(", new[] { "channelId", "name", "extensionId", "log" },
+        TestName = "outputChannel/create — four keys; ESLint's first act is creating its channel")]
+    [TestCase("OnOutputChannelAppend(", new[] { "channelId", "text" },
+        TestName = "outputChannel/append — `channelId`, not `channelName`")]
+    [TestCase("OnTreeViewCreate(", new[] { "extensionId", "viewId", "title" },
+        TestName = "treeView/create — only viewId+extensionId are sent")]
+    public void InboundHandlersDeclareEveryKeyTheHostSends(string methodPrefix, string[] keys)
+    {
+        var signature = SignatureOf(methodPrefix);
+
+        foreach (var key in keys)
+        {
+            // Whole-word match, deliberately. A substring check passes `commandId` for `command`
+            // and would have certified the exact broken signature this test exists to catch.
+            Assert.That(signature, Does.Match($@"\b{key}\b"),
+                $"'{key}' is on the wire but absent from the signature — StreamJsonRpc binds by "
+                + "exact name and rejects a payload carrying keys the method does not declare");
+        }
+    }
+
+    /// <summary>
+    /// A nullable type is NOT the same as an optional parameter.
+    ///
+    /// <para><c>treeView/create</c> is the clearest case and the one most likely to be "fixed"
+    /// wrongly: window.js sends only <c>{ viewId, extensionId }</c>, and the handler's
+    /// <c>string? title</c> matched by name but had no DEFAULT, so two supplied arguments could not
+    /// bind a three-parameter method. It was measured binding correctly the moment
+    /// <c>= null</c> was added. Because TreeViewCreated never fired, no extension tree view was
+    /// ever created — which is why the getChildren bug beneath it was unreachable.</para>
+    /// </summary>
+    [TestCase("OnTreeViewCreate(", "title")]
+    [TestCase("OnCreateOutputChannel(", "log")]
+    public void ParametersWhoseKeyMayBeAbsentCarryADefault(string methodPrefix, string parameter)
+    {
+        var signature = SignatureOf(methodPrefix);
+        var idx = signature.IndexOf(parameter, StringComparison.Ordinal);
+
+        Assert.That(idx, Is.GreaterThan(-1), $"premise: {parameter} is declared");
+        Assert.That(signature[idx..], Does.Contain("="),
+            $"'{parameter}' may be absent from the payload, and a parameter with no default value "
+            + "fails binding when its key is missing — nullability alone does not make it optional");
+    }
+
+    /// <summary>
+    /// statusBar/update sends two different shapes — an eleven-key update and a three-key
+    /// <c>{ id, visible:false, extensionId }</c> hide. Declaring all eleven with defaults binds
+    /// both, because missing named arguments fall back to the C# defaults.
+    ///
+    /// <para>⛔ These must be string/int/bool, NOT JsonElement: a JsonElement parameter receiving a
+    /// JSON null was measured to FAIL binding, and window.js sends color, backgroundColor and
+    /// accessibilityInformation as null.</para>
+    /// </summary>
+    [Test]
+    public void StatusBarUpdateDeclaresBothShapesItReceives()
+    {
+        var signature = SignatureOf("OnSetStatusBarItem(");
+
+        foreach (var key in new[]
+                 {
+                     "id", "extensionId", "text", "tooltip", "color", "backgroundColor",
+                     "command", "alignment", "priority", "name", "accessibilityInformation", "visible"
+                 })
+        {
+            Assert.That(signature, Does.Match($@"\b{key}\b"), $"window.js sends '{key}'");
+        }
+
+        Assert.That(signature, Does.Not.Contain("JsonElement"),
+            "a JsonElement parameter receiving JSON null fails to bind, and three of these are "
+            + "sent as null");
+    }
+
     /// <summary>Extracts a method's parameter list so assertions cannot match unrelated code.</summary>
     private static string SignatureOf(string methodPrefix)
     {

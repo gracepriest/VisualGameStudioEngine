@@ -190,9 +190,10 @@ public class ExtensionHost : IDisposable
             // Register methods the extension host can call back into the IDE
             _rpc.AddLocalRpcMethod("registerCommand", new Action<string, string>(OnRegisterCommand));
             _rpc.AddLocalRpcMethod("window/showMessage", new Func<string, string, JsonElement, string, JsonElement, Task<string?>>(OnShowMessageAsync));
-            _rpc.AddLocalRpcMethod("outputChannel/create", new Action<string, string>(OnCreateOutputChannel));
+            _rpc.AddLocalRpcMethod("outputChannel/create", new Action<string, string, string, bool>(OnCreateOutputChannel));
             _rpc.AddLocalRpcMethod("outputChannel/append", new Action<string, string>(OnOutputChannelAppend));
-            _rpc.AddLocalRpcMethod("statusBar/update", new Action<string, string, string?, string?>(OnSetStatusBarItem));
+            _rpc.AddLocalRpcMethod("statusBar/update",
+                new Action<string, string, string?, string?, string?, string?, string?, int, int, string?, string?, bool>(OnSetStatusBarItem));
             _rpc.AddLocalRpcMethod("languages/registerProvider", new Action<string, long, string, JsonElement, JsonElement>(OnRegisterProvider));
             _rpc.AddLocalRpcMethod("languages/publishDiagnostics", new Action<string, JsonElement, string?>(OnPublishDiagnostics));
             _rpc.AddLocalRpcMethod("treeView/create", new Action<string, string, string?>(OnTreeViewCreate));
@@ -683,13 +684,19 @@ public class ExtensionHost : IDisposable
 
     #region JSON-RPC Callback Handlers (called by Extension Host)
 
-    private void OnRegisterCommand(string extensionId, string commandId)
+    /// <summary>
+    /// ⛔ The second parameter is <c>command</c>, matching <c>vscode-api/commands.js:27</c>. It was
+    /// <c>commandId</c>, which bound nothing — so no extension command has ever registered with
+    /// this IDE, and because it is a notification the failure produced no error and no log line.
+    /// Not even the ABSENCE was visible: the "Command registered" line lives inside the handler.
+    /// </summary>
+    private void OnRegisterCommand(string extensionId, string command)
     {
-        _outputService.WriteLine($"[ExtensionHost] Command registered: {commandId} (by {extensionId})", OutputCategory.General);
+        _outputService.WriteLine($"[ExtensionHost] Command registered: {command} (by {extensionId})", OutputCategory.General);
         CommandRegistered?.Invoke(this, new ExtensionCommandRegisteredArgs
         {
             ExtensionId = extensionId,
-            CommandId = commandId
+            CommandId = command
         });
     }
 
@@ -773,32 +780,68 @@ public class ExtensionHost : IDisposable
         return titles;
     }
 
-    private void OnCreateOutputChannel(string extensionId, string channelName)
+    /// <summary>
+    /// ⛔ Declares all FOUR keys <c>window.js:98</c> sends —
+    /// <c>{ channelId, name, extensionId, log }</c>. It previously took two, and StreamJsonRpc does
+    /// NOT tolerate extra JSON keys: a four-key payload fails to bind a two-parameter method even
+    /// when both of those names match. The signature must mirror the payload, not the subset the
+    /// IDE happens to care about.
+    ///
+    /// <para>This one mattered more than it looks: creating an output channel is ESLint's first
+    /// act, so with this dead its entire diagnostic output had nowhere to go.</para>
+    ///
+    /// <para><paramref name="channelId"/> — not the display name — is carried through, because that
+    /// is the key <c>outputChannel/append</c> addresses.</para>
+    /// </summary>
+    private void OnCreateOutputChannel(string channelId, string name, string extensionId, bool log = false)
     {
-        _outputService.WriteLine($"[ExtensionHost] Output channel created: {channelName} (by {extensionId})", OutputCategory.General);
+        _outputService.WriteLine($"[ExtensionHost] Output channel created: {name} (by {extensionId})", OutputCategory.General);
         OutputChannelCreated?.Invoke(this, new OutputChannelEventArgs
         {
             ExtensionId = extensionId,
-            ChannelName = channelName
+            ChannelName = channelId
         });
     }
 
-    private void OnOutputChannelAppend(string channelName, string text)
+    /// <summary>
+    /// <c>channelId</c>, not <c>channelName</c> (window.js:104/107/120). Same arity as before and
+    /// <c>text</c> already matched — a clean demonstration that arity is not enough and names are
+    /// compared exactly.
+    ///
+    /// <para><c>appendLine</c> appends its own newline on the JS side, so nothing is added here.</para>
+    /// </summary>
+    private void OnOutputChannelAppend(string channelId, string text)
     {
         OutputChannelMessage?.Invoke(this, new OutputChannelMessageArgs
         {
-            ChannelName = channelName,
+            ChannelName = channelId,
             Text = text,
             AppendLine = false
         });
     }
 
-    private void OnSetStatusBarItem(string extensionId, string text, string? tooltip, string? command)
+    /// <summary>
+    /// <c>window.js</c> sends TWO shapes through this one method: an eleven-key update (:172) and a
+    /// three-key hide <c>{ id, visible:false, extensionId }</c> (:213). Declaring all eleven with
+    /// defaults binds both, because missing named arguments fall back to the C# defaults.
+    ///
+    /// <para>⛔ These are string/int/bool and must stay so. A <c>JsonElement</c> parameter receiving
+    /// a JSON null was measured to FAIL binding, and <c>color</c>, <c>backgroundColor</c> and
+    /// <c>accessibilityInformation</c> are all sent as null when unset.</para>
+    ///
+    /// <para>⚠ Behaviour change: the IDE now receives <c>visible:false</c> hide requests it has
+    /// never seen before and should honour them.</para>
+    /// </summary>
+    private void OnSetStatusBarItem(
+        string id, string extensionId, string? text = null, string? tooltip = null,
+        string? color = null, string? backgroundColor = null, string? command = null,
+        int alignment = 0, int priority = 0, string? name = null,
+        string? accessibilityInformation = null, bool visible = true)
     {
         StatusBarItemChanged?.Invoke(this, new StatusBarItemArgs
         {
             ExtensionId = extensionId,
-            Text = text,
+            Text = text ?? "",
             Tooltip = tooltip,
             Command = command
         });
@@ -873,7 +916,15 @@ public class ExtensionHost : IDisposable
         });
     }
 
-    private void OnTreeViewCreate(string extensionId, string viewId, string? title)
+    /// <summary>
+    /// ⛔ <paramref name="title"/> needs an actual DEFAULT, not merely a nullable type.
+    /// <c>window.js:258</c> sends only <c>{ viewId, extensionId }</c>; both names already matched,
+    /// but two supplied arguments cannot bind a three-parameter method, so this never fired and no
+    /// extension tree view was ever created — which is why the getChildren mismatch beneath it was
+    /// unreachable. <c>string?</c> describes the VALUE; <c>= null</c> is what makes the PARAMETER
+    /// optional, and only the latter affects binding.
+    /// </summary>
+    private void OnTreeViewCreate(string extensionId, string viewId, string? title = null)
     {
         _outputService.WriteLine($"[ExtensionHost] Tree view created: {viewId} (by {extensionId})", OutputCategory.General);
         TreeViewCreated?.Invoke(this, new TreeViewEventArgs
