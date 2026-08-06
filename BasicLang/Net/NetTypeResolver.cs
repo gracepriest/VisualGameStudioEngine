@@ -483,6 +483,49 @@ namespace BasicLang.Net
         }
 
         /// <summary>
+        /// The constant value of an ENUM MEMBER, coerced to the CLR primitive of the enum's
+        /// underlying type — <c>1</c> as an <see cref="int"/> for
+        /// <c>System.Text.RegularExpressions.RegexOptions.IgnoreCase</c>. Null when the type
+        /// does not resolve, is not an enum, has no such member, or the member carries no
+        /// constant.
+        ///
+        /// <para>⛔ <b>THE COERCION IS LOAD-BEARING, NOT TIDINESS.</b> Both
+        /// <c>CppCodeGenerator</c>'s and <c>JavaScriptBackend</c>'s constant emitters end in
+        /// <c>Value.ToString()</c>, and <c>Visit(IRConstant)</c> is a no-op on both. A value
+        /// still boxed as the ENUM would render as the bare identifier <c>IgnoreCase</c> — an
+        /// undeclared name emitted from a GREEN build, which is the silent-miscompile shape
+        /// this whole task exists to remove.</para>
+        /// </summary>
+        internal object EnumMemberConstant(string enumFullName, string memberName)
+        {
+            var symbol = Lookup(enumFullName).Symbol;
+            if (symbol is not { TypeKind: TypeKind.Enum, EnumUnderlyingType: { } underlying })
+                return null;
+
+            var field = symbol.GetMembers()
+                .OfType<IFieldSymbol>()
+                .FirstOrDefault(f => f.HasConstantValue &&
+                                     string.Equals(f.MetadataName, memberName, StringComparison.Ordinal));
+            if (field?.ConstantValue == null)
+                return null;
+
+            // Explicit per-underlying coercion rather than Convert.ChangeType(field.Type):
+            // the boxed CLR primitive must match the wire slot the descriptor will claim.
+            return underlying.SpecialType switch
+            {
+                SpecialType.System_SByte  => Convert.ToSByte(field.ConstantValue),
+                SpecialType.System_Byte   => Convert.ToByte(field.ConstantValue),
+                SpecialType.System_Int16  => Convert.ToInt16(field.ConstantValue),
+                SpecialType.System_UInt16 => Convert.ToUInt16(field.ConstantValue),
+                SpecialType.System_Int32  => Convert.ToInt32(field.ConstantValue),
+                SpecialType.System_UInt32 => Convert.ToUInt32(field.ConstantValue),
+                SpecialType.System_Int64  => Convert.ToInt64(field.ConstantValue),
+                SpecialType.System_UInt64 => Convert.ToUInt64(field.ConstantValue),
+                _ => null
+            };
+        }
+
+        /// <summary>
         /// True when <paramref name="fullName"/> resolves and derives from
         /// <c>System.Exception</c> (or IS it). Spec §11.1's ladder-trigger completion (P2a-2
         /// Task 4): a catch clause whose type resolves as a .NET exception gets a
@@ -1304,8 +1347,27 @@ namespace BasicLang.Net
             IEnumerable<IParameterSymbol> parameters) =>
             parameters
                 .Select(p => new NetParameterDescriptor(
-                    RefKindOf(p.RefKind), TypeName(p.Type), DelegateInvokeSignatureOf(p.Type)))
+                    RefKindOf(p.RefKind), TypeName(p.Type), DelegateInvokeSignatureOf(p.Type),
+                    EnumUnderlyingOf(p.Type)))
                 .ToList();
+
+        /// <summary>
+        /// §8.3's "enums → underlying integral" row, read straight off the parameter's symbol.
+        ///
+        /// <para>Deliberately symbol-based rather than the name-keyed
+        /// <see cref="EnumUnderlyingTypeFullName"/>: <c>Describe</c> is static, and this is the
+        /// ONE place a descriptor is built from Roslyn — the same reason
+        /// <c>DelegateInvokeSignatureOf</c> beside it is shaped this way. Neither emitter can
+        /// recover this later; both see only a type name.</para>
+        ///
+        /// <para>⛔ Only PARAMETERS get this. <c>NetAccessorSynthesis</c> builds its value
+        /// parameter by hand and must keep spelling the enum itself, or the ungated
+        /// property-write path starts putting a handle into a scalar slot.</para>
+        /// </summary>
+        private static string EnumUnderlyingOf(ITypeSymbol type) =>
+            type is INamedTypeSymbol { TypeKind: TypeKind.Enum, EnumUnderlyingType: { } underlying }
+                ? TypeName(underlying)
+                : null;
 
         /// <summary>
         /// P2a-2 Task 11 / decision D-P9: a delegate parameter's <c>Invoke</c> signature rendered
