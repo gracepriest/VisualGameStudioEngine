@@ -980,21 +980,117 @@ test AND a receiver-set test proving it now answers "value type".
 
 ### Task 8c: the four remaining §6.4 rows + enum arguments — **blocks Task 13 program #1**
 
-> ⚠⚠ **STATUS 2026-08-05 — PARTIALLY LANDED. VERIFY BEFORE IMPLEMENTING; DO NOT REDO BLIND.**
-> A tree inspection found the four rows already present and wired in **both** directions:
-> `NetMarshalTable.cs:274-287` carries `System.Decimal`, `System.Guid`, `System.DateTimeOffset`
-> and `System.Text.StringBuilder` with `NativeToNet`/`NativeFromNet` functions
-> (`to_net_decimal`/`from_net_decimal`, …), `IsMultiSlot: true` where the arity demands it, and
-> StringBuilder correctly **directional (to-net only)** per §6.4. `NetConversionPairTests.cs`
-> references all six rows, and **no surviving gate limits lowering to DateTime+TimeSpan**.
+> ⛔ **STATUS 2026-08-05 — NOT STARTED. MEASURED, correcting an earlier annotation in this
+> same file that called it "partially landed".**
 >
-> **The genuinely missing piece is the ENUM half**, which matches the measured note below:
-> `FileMode.Open` types as `Object` and lowers to nothing, so enum-member-constant lowering in
-> the FRONT END is the real work. `NetMarshalTable.cs:100-152` already exposes
-> `ResolveEnumUnderlyingType` (§8.3's enum row) for the marshaling side to build on.
+> That earlier note reasoned from `NetMarshalTable.cs:274-287`, which does carry all four rows
+> with `NativeToNet`/`NativeFromNet` converter names and `IsMultiSlot: true`. **That table holds
+> the DESIGN, not the lowering.** Every row is still refused at the call site, with purpose-built
+> messages Task 8 left deliberately. Measured by driving one program per row through
+> parse → analyze → lower:
 >
-> **First step of this task is therefore a verification step, not an implementation step:**
-> write one program per row through the real CLI and see which actually fail.
+> | Shape | Outcome |
+> |---|---|
+> | control (`Integer`) | LOWERED ok — the probe itself is sound |
+> | `Decimal` | BL6019 *"whose §6.4 wire form is not a single slot — it is not lowered at the native boundary yet"* |
+> | `Guid` | BL6019, same message |
+> | `StringBuilder` | BL6019, same message |
+> | enum member (`FileMode.Open`) | BL6019 *"§8.3's underlying-integral enum marshaling is not lowered at the native boundary yet"* |
+> | `DateTimeOffset` | not measured — the probe used `DateTimeOffset.Empty`, which does not exist (only `Guid` has `.Empty`) |
+>
+> So this is real work, not wiring: multi-slot marshaling (Decimal = four scalars, Guid = sixteen
+> bytes, DateTimeOffset = the declared scalar pair, StringBuilder = directional String) plus
+> enum-member-constant lowering in the front end. `NetMarshalTable.cs:100-152` exposes
+> `ResolveEnumUnderlyingType` for the enum half to build on.
+>
+> ⚠ **Durable lesson from the wrong annotation:** a table of converter NAMES is not evidence that
+> anything calls them. Grep for callers, not definitions — the same rule this repo already
+> records from the extensions work.
+
+> ### ✅ 8c-1 DONE (`c3f65f7`) + regression fix (`d51c155`) — Guid & StringBuilder
+>
+> Both lower in the **argument direction**. Results refuse. `IsMultiSlot` is now a derived
+> `SlotCount > 1`; the pointer rows carry `COutWire` + `ConverterForm` + `NativeTempDecl`.
+>
+> ⛔ **`c3f65f7` shipped a regression that no gate caught (suite was 636/636 over it).** Making
+> the rows `WireKind.Scalar` opened two positions the call-site refusal does not reach, because
+> a `<NetProxy>` DECLARED TYPE projects every member it has, called or not — and **`PlanMember`
+> validated PARAMETERS only** on both sides. Fixed with a distinct `WireKind.ByValuePointer`
+> plus an explicit result guard in both `PlanMember`s. **Durable rule: adding a wire row adds
+> shapes no fixture builds. Ask not "did tests pass" but "which POSITIONS can this row now
+> reach" — parameter, result, ByRef, delegate parameter, delegate return.**
+>
+> ### ⛔ 8c-2 (Decimal + DateTimeOffset) — MEASURED 2026-08-06 by a 10-agent recon+adversarial sweep
+>
+> **The premise below (and in `c29b4ca`) is REFUTED on two counts.**
+>
+> 1. **"A proxy has ONE result out-pointer" is false of the ABI.** §8.6's readback slot already
+>    is `int32_t (*read)(uint64_t self, int32_t capacity, T* dst, int32_t* result)` —
+>    `NetProxyEmitter.cs:507-508`, mirrored `NetShimGenerator.cs:640-641`. The drift oracle's
+>    `SlotLine` regex is arity-agnostic (`NetShimGeneratorTests.cs:518-520`). The limit is in the
+>    member-proxy PLANNER, not the transport. (The refusal text I wrote in `c3f65f7` overstates
+>    it.)
+> 2. **The stated reason for out-references — "a POD would need layout agreement with
+>    `blnet_marshal.hpp`" (plan `:710-712`) — is wrong.** A POD returned by value from an
+>    `inline` proxy never crosses the C ABI. Out-references are still preferred, but for a
+>    DIFFERENT reason: a generated wire struct creates a new cross-producer field-name contract
+>    (`NetProxyEmitter` declares, `NetCalls` reads `t.lo`) that **no oracle covers** — the drift
+>    oracle compares slot LINES to exports and never sees proxy bodies or call-site text.
+> 3. **`CsTypeFor` is NOT missing `const uint8_t*`** (plan `:733-737`) — the general const-strip
+>    arm exists at `NetShimGeneratorTests.cs:572-573`.
+>
+> **⚠ THE DANGEROUS SEAM, and the reason a new `WireKind.MultiScalar` is mandatory:**
+> `RequireBlittableScalar` (`NetShimGenerator.cs:574-586`) admits on `Kind == Scalar` ALONE.
+> `unchecked((ulong)someDecimal)` is a **legal C# numeric conversion — it compiles and
+> truncates**. A `Kind = Scalar` multi-slot row opens §8.4's gate to silent wrong numbers.
+> (DateTimeOffset would instead fail CS0030 inside generated source.) This is the same class of
+> bug as `d51c155`, one row over.
+>
+> **Chosen shape.** C slot gains N trailing scalar out-pointers `result0..resultN-1`; the C++
+> proxy returns `void` and takes N out-REFERENCES; the call site declares N locals in `Prologue`,
+> passes them, converts in `WriteBack`. A multi-slot PARAMETER is one `Prologue` temp
+> (`auto t = to_net_X(v);`) plus N field expressions — `NetArgEmission.Expressions` is already a
+> LIST for exactly this. Decimal → 4×`uint32_t`, fields `lo, mid, hi, flags`; DateTimeOffset →
+> `int64_t`+`int16_t`, fields `utcTicks, offsetMinutes`. **`CsTypeFor` needs no new rows.**
+>
+> **Keep refused, deliberately:** `CWire` stays **null** on both rows → `HasByValueScalarSlot`
+> false → ByRef stays refused for its own reason. `SlotCount` stays 4/2 — it is DATA, not a flag;
+> the messages interpolate it.
+>
+> **Measured facts that matter.** Native converters are READY — no `CppNetMarshal.cs` edit
+> (`from_net_decimal(uint32_t lo,mid,hi,flags)` `:103-110`; `from_net_datetimeoffset(int64_t,
+> int16_t)` `:142-161`). Managed: **`DecimalFromWire` takes `int`, signed** (`BlnetShimSources.cs
+> :141-142`); `DateTimeOffsetToWire` has **two `out`s** so the result arm needs STATEMENTS —
+> `EmitWrapper` is already statement-capable, but `ToWire` is `string→string` and **cannot** be
+> routed through. Wire-struct fields carry **NO trailing underscore** (`lo` not `lo_`; the P1
+> fields do — `CppDecimalRuntime.cs:207`). `NetDateTimeOffsetWire` is **sizeof 16 with 6 padding
+> bytes and must never cross by value** — the struct-taking `from_net_*` overloads exist for
+> hand-written code only. Naming is arity-blind (`NetNameMangler.CanonicalIdentity:219-235` never
+> reads the return type), so extra out-params cannot move a name. `EmitNetCallStatements` already
+> honours a result arm that appends to `Prologue`, braces included — and those braces are
+> **load-bearing** against `error: jump to label … crosses initialization`.
+>
+> **Traps, ranked:** (1) `Kind = Scalar` → silent truncation via §8.4; (2) landing the `WireOf`
+> arms and the three refusals in SEPARATE commits — either window miscompiles, so **one commit**;
+> (3) not adding Decimal/DateTimeOffset to `WireShapeSurface` (**append** — `slots[0..5]` are
+> index-pinned at `NetProxyEmitterTests.cs:625-634`), leaving the oracle blind to width/arity/name
+> divergence, which through a function pointer is **stack corruption, not a warning**;
+> (4) passing the padded DTO struct by value; (5) inventing a `CWire` to satisfy a test;
+> (6) emitting `t.lo_`; (7) dropping the brace region — every fixture for this seam is
+> straight-line, so the suite stays green over it; (8) deleting `(void)r.ClockDateTime();`
+> (`CppNetMarshal.cs:159`) which looks dead and is the only range check;
+> (9) removing `if (row.IsMultiSlot) continue;` at `NetConversionPairTests.cs:408` without
+> generalizing → NullReferenceException, not an assert.
+>
+> ⚠ **A Decimal PROPERTY has zero parameters**, and the analyzer's gate lives inside the
+> parameter loop — so it is analyzer-clean and refuses positionlessly today. Any result-direction
+> regression surfaces with NO source position.
+>
+> **Open:** fate of `MultiSlotConversionPairs` (zero production consumers once the analyzer arm
+> goes — a second `IsSingleSlotValue`, which also has none); replacement vehicle for
+> `LoweringRefusal_CarriesItsRealDiagnosticCode` (`Convert.ToDecimal` will start lowering —
+> a Guid result is the candidate but its overload-probe path is UNVERIFIED).
+> Full 13-edit map + 9 new tests with their mutations: recon `wf_90fc13e8-724`.
 
 Detailed designs are recorded in the plan above (commit `c29b4ca`): three distinct
 complications (arity>1 scalars via out-references returning `void`; direction-dependent C type

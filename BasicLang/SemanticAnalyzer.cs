@@ -3114,15 +3114,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     return true;
                 }
 
-                if (NetMarshalTable.MultiSlotConversionPairs.Contains(parameter.TypeFullName))
-                {
-                    NetWarning("BL6019",
-                        $"'{target}': parameter {position} has type "
-                        + $"'{parameter.TypeFullName}', whose §6.4 wire form is not a single "
-                        + "slot — it is not lowered at the native boundary yet.",
-                        line, column);
-                    return true;
-                }
+                // The multi-slot §6.4 refusal that stood here is gone: Decimal and DateTimeOffset
+                // now lower across N discrete wire slots (Task 8c-2). SlotCount stays 4 and 2 —
+                // it is DATA describing the wire, never a "refuse" flag.
 
                 if (IsNetEnumTypeName(parameter.TypeFullName))
                 {
@@ -3176,7 +3170,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 if (argument is IdentifierExpressionNode) return false;
             }
             else if (!NetMarshalTable.TryGetWireRow(parameter.TypeFullName, out var row)
-                     || row.IsMultiSlot || string.IsNullOrEmpty(row.CWire))
+                     || !row.HasByValueScalarSlot)
             {
                 NetWarning("BL6019",
                     $"'{target}': parameter {position} ('{parameter}') is passed {passing} and "

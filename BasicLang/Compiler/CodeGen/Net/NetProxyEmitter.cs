@@ -260,6 +260,29 @@ namespace BasicLang.Compiler.CodeGen.Net
                 ? Wire.Handle
                 : WireOf(member.TypeFullName);
 
+            // §6.4's pointer rows are admissible as by-value ARGUMENTS only. In the RESULT
+            // position the converter would have to fill a caller-owned buffer, and the buffer
+            // would have to be an extra proxy argument — the shape §6.4's multi-slot rows also
+            // need and neither has yet.
+            //
+            // ⛔ This guard is not defence-in-depth for the call site's refusal; it is the ONLY
+            // check on this path. A <NetProxy> DECLARED TYPE projects every member it has,
+            // called or not, so a Guid-returning member reaches here without any call site ever
+            // existing. Without this the switches below simply have no arm for the kind: the
+            // result temporary is never declared while `&blnet_result` is still passed.
+            //
+            // PlanMember validated PARAMETERS only until this was added — the asymmetry is why
+            // the hole survived review.
+            if (returnWire.Kind == WireKind.ByValuePointer)
+            {
+                throw new NotSupportedException(
+                    $"Cannot emit a proxy for '{member}': its result type "
+                    + $"'{member.TypeFullName}' is a §6.4 row that crosses as a pointer to a "
+                    + "caller-owned buffer. §6.4 lowers these as by-value ARGUMENTS only — a "
+                    + "result would need the buffer as an extra slot argument. Use an overload "
+                    + "returning String, or take the value as a parameter.");
+            }
+
             var parameters = new List<ParameterPlan>();
             var index = 0;
             foreach (var p in member.Parameters ?? Array.Empty<NetParameterDescriptor>())
@@ -304,7 +327,17 @@ namespace BasicLang.Compiler.CodeGen.Net
         // §8.3 marshaling: .NET type name -> wire form.
         // ------------------------------------------------------------------------------
 
-        private enum WireKind { Void, Scalar, String, Handle, Callback }
+        /// <summary>
+        /// <para><b><see cref="ByValuePointer"/> is separate from <see cref="Scalar"/> on
+        /// purpose, and the separation is load-bearing.</b> §6.4's Guid and StringBuilder rows
+        /// cross on one slot that is a POINTER to a caller-owned buffer. Modelling them as
+        /// Scalar — which they briefly were — makes every <c>Kind == Scalar</c> test in either
+        /// emitter answer yes for them, and those tests were written meaning "a blittable
+        /// value that fits a register". Two of them let the rows through into positions with
+        /// no conversion at all. A distinct kind keeps those gates shut BY CONSTRUCTION rather
+        /// than by each site remembering to ask a second question.</para>
+        /// </summary>
+        private enum WireKind { Void, Scalar, ByValuePointer, MultiScalar, String, Handle, Callback }
 
         /// <summary>
         /// One row of §8.3. <see cref="CType"/> is the INBOUND C spelling and
@@ -313,8 +346,15 @@ namespace BasicLang.Compiler.CodeGen.Net
         /// different ownership: in-params borrow, out-params transfer a <c>blnet_alloc</c>'d
         /// buffer the receiver frees.
         /// </summary>
+        /// <param name="Slots">
+        /// For <see cref="WireKind.MultiScalar"/> only: the discrete scalar slots this row
+        /// spreads across, projected from <c>NetMarshalTable</c> rather than re-listed here so
+        /// the C column and the call site cannot disagree about arity, order or field names.
+        /// Null for every other kind.
+        /// </param>
         private readonly record struct WireForm(
-            WireKind Kind, string CType, string COutType, string CppParamType, string CppReturnType);
+            WireKind Kind, string CType, string COutType, string CppParamType, string CppReturnType,
+            IReadOnlyList<NetWireSlot> Slots = null);
 
         private static class Wire
         {
@@ -366,6 +406,45 @@ namespace BasicLang.Compiler.CodeGen.Net
             /// </summary>
             internal static readonly WireForm Boolean =
                 new(WireKind.Scalar, "int32_t", "int32_t*", "bool", "bool");
+
+            /// <summary>
+            /// §6.4's Guid row — 16 bytes in <c>System.Guid.ToByteArray</c> order, borrowed from
+            /// the caller. The out spelling drops <c>const</c> because that direction is written
+            /// THROUGH, the same in/out asymmetry <see cref="String"/> has.
+            ///
+            /// <para>The RESULT direction is not emitted yet (the call site refuses it): filling
+            /// a caller-owned buffer needs the buffer as an extra proxy argument, which is the
+            /// one-result-out-pointer limit the multi-slot rows also hit.</para>
+            /// </summary>
+            internal static readonly WireForm Guid = new(
+                WireKind.ByValuePointer, "const uint8_t*", "uint8_t*",
+                "const uint8_t*", "const uint8_t*");
+
+            /// <summary>
+            /// §6.4's StringBuilder row: crosses BY VALUE as the String wire, to-net ONLY. The
+            /// pointer borrows a <c>std::string</c> the CALL SITE keeps alive across the call —
+            /// unlike <see cref="String"/>'s out direction, nothing here is
+            /// <c>blnet_alloc</c>'d and nothing is freed.
+            /// </summary>
+            internal static readonly WireForm StringBuilder = new(
+                WireKind.ByValuePointer, "const char*", "const char*",
+                "const char*", "const char*");
+
+            /// <summary>
+            /// §6.4's multi-slot rows (Decimal = 4, DateTimeOffset = 2). There is no single
+            /// C type, so <c>CType</c>/<c>COutType</c> stay empty and every consumer must go
+            /// through <see cref="WireForm.Slots"/> — an empty string in a signature is a loud
+            /// C++ error, which is the point.
+            ///
+            /// <para><b>A distinct kind, not <see cref="WireKind.Scalar"/> with a slot list.</b>
+            /// <c>NetShimGenerator.RequireBlittableScalar</c> admits on <c>Kind == Scalar</c>
+            /// ALONE, and <c>unchecked((ulong)someDecimal)</c> is a legal C# conversion that
+            /// COMPILES AND TRUNCATES. Sharing the kind would silently open §8.4's delegate
+            /// gate to wrong numbers. Same lesson as
+            /// <see cref="WireKind.ByValuePointer"/>, one row over.</para>
+            /// </summary>
+            internal static WireForm MultiScalar(IReadOnlyList<NetWireSlot> slots) =>
+                new(WireKind.MultiScalar, "", "", "", "", slots);
 
             internal static WireForm Scalar(string cType) =>
                 new(WireKind.Scalar, cType, cType + "*", cType, cType);
@@ -437,13 +516,22 @@ namespace BasicLang.Compiler.CodeGen.Net
             // RAW wire scalar — the CALL SITE converts through blnet_marshal.hpp's
             // to_net_datetime/from_net_datetime (etc.), because this header is deliberately
             // include-free of the P1 types (the marshal header's include-order contract).
-            // Decimal (4 scalars), Guid (16 bytes), DateTimeOffset (the DECLARED scalar
-            // pair) and StringBuilder (directional String) need multi-slot/directional
-            // machinery — Task 8's §8.3 drift completion; until then they stay in the handle
-            // row here AND the analyzer refuses them at resolved call sites, so no BL call
-            // can reach a handle-shaped §6.4 slot.
             "System.DateTime" => Wire.Scalar("uint64_t"),
             "System.TimeSpan" => Wire.Scalar("int64_t"),
+
+            // §6.4's MULTI-SLOT rows (Task 8c-2). Projected from the marshal table so arity,
+            // order and field names have exactly one definition. Decimal is the four-uint32
+            // GetBits quad; DateTimeOffset the declared (int64, int16) pair — never the padded
+            // NetDateTimeOffsetWire struct, which must not cross the ABI by value.
+            "System.Decimal" or "System.DateTimeOffset" =>
+                Wire.MultiScalar(NetMarshalTable.WireRows[netTypeFullName].Slots),
+
+            // §6.4 rows that cross on ONE POINTER slot (Task 8c). Both are pure passthrough
+            // here — the proxy forwards the caller's pointer and converts nothing, exactly as
+            // it does for String. The call site owns the buffer and the conversion, which is
+            // what keeps this header free of the P1 types.
+            "System.Guid" => Wire.Guid,
+            "System.Text.StringBuilder" => Wire.StringBuilder,
             _ => Wire.Handle,
         };
 
@@ -504,9 +592,37 @@ namespace BasicLang.Compiler.CodeGen.Net
         {
             var args = new List<string>();
             if (plan.HasReceiver) args.Add("uint64_t self");
+
             foreach (var p in plan.Parameters)
+            {
+                if (p.Wire.Kind == WireKind.MultiScalar)
+                {
+                    // ByRef is already refused for these upstream (PlanMember's guard fires on
+                    // Kind != Scalar), so only the by-value spelling is reachable.
+                    for (var s = 0; s < p.Wire.Slots.Count; s++)
+                        args.Add(p.Wire.Slots[s].CWire + " " + p.Names[s]);
+                    continue;
+                }
+
                 args.Add((p.ByRef ? p.Wire.COutType : p.Wire.CType) + " " + p.Name);
-            if (plan.Return.Kind != WireKind.Void) args.Add(plan.Return.COutType + " result");
+            }
+
+            if (plan.Return.Kind == WireKind.MultiScalar)
+            {
+                // N discrete out-pointers. Discrete SCALARS specifically: an array-suffixed or
+                // comma-bearing spelling would defeat the drift oracle's signature splitter,
+                // which takes the text after the last space as the argument name.
+                for (var s = 0; s < plan.Return.Slots.Count; s++)
+                {
+                    args.Add(plan.Return.Slots[s].COutWire + " result"
+                             + s.ToString(CultureInfo.InvariantCulture));
+                }
+            }
+            else if (plan.Return.Kind != WireKind.Void)
+            {
+                args.Add(plan.Return.COutType + " result");
+            }
+
             return args.Count == 0 ? "void" : string.Join(", ", args);
         }
 
@@ -676,11 +792,40 @@ namespace BasicLang.Compiler.CodeGen.Net
             var cppArgs = new List<string>();
             if (plan.HasReceiver) cppArgs.Add("const BasicLang::blnet::NetRef& self");
             foreach (var p in plan.Parameters)
+            {
+                if (p.Wire.Kind == WireKind.MultiScalar)
+                {
+                    for (var s = 0; s < p.Wire.Slots.Count; s++)
+                        cppArgs.Add(p.Wire.Slots[s].CWire + " " + p.Names[s]);
+                    continue;
+                }
+
                 cppArgs.Add(p.ByRef
                     ? CppByRefParamType(p.Wire) + " " + p.Name
                     : p.Wire.CppParamType + " " + p.Name);
+            }
 
-            L(sb, "inline " + plan.Return.CppReturnType + " " + plan.SlotName
+            // A MULTI-SLOT result is returned through out-REFERENCES and the proxy returns void.
+            //
+            // The alternative — a generated POD returned by value — is cheaper at the call site
+            // and would NOT need layout agreement with blnet_marshal.hpp (an inline function's
+            // return never crosses the C ABI, so the plan's stated objection was wrong). It is
+            // still the worse trade: a struct creates a field-name contract between this emitter
+            // and CppCodeGenerator.NetCalls that NO oracle covers — the drift oracle compares
+            // slot LINES to exports and never reads proxy bodies or call-site text. Out-references
+            // keep every name inside the generated call statement, which the signature oracle
+            // does police.
+            var multiResult = plan.Return.Kind == WireKind.MultiScalar;
+            if (multiResult)
+            {
+                for (var s = 0; s < plan.Return.Slots.Count; s++)
+                {
+                    cppArgs.Add(plan.Return.Slots[s].CWire + "& result"
+                                + s.ToString(CultureInfo.InvariantCulture));
+                }
+            }
+
+            L(sb, "inline " + (multiResult ? "void" : plan.Return.CppReturnType) + " " + plan.SlotName
                   + "(" + (cppArgs.Count == 0 ? "" : string.Join(", ", cppArgs)) + ") {");
             L(sb, "    BlnetRequireSlot(g_net." + plan.SlotName + " != nullptr, \"" + plan.SlotName + "\");");
 
@@ -692,13 +837,37 @@ namespace BasicLang.Compiler.CodeGen.Net
                 case WireKind.Scalar: L(sb, "    " + plan.Return.CType + " blnet_result{};"); break;
                 case WireKind.String: L(sb, "    char* blnet_result = nullptr;"); break;
                 case WireKind.Handle: L(sb, "    uint64_t blnet_result = 0;"); break;
+
+                // MultiScalar declares NOTHING here, deliberately: the slots are written
+                // straight through the caller's out-references, so there is no local to hold
+                // them and no copy on the way out.
+                case WireKind.MultiScalar: break;
             }
 
             var callArgs = new List<string>();
             if (plan.HasReceiver) callArgs.Add("self.get()");
             foreach (var p in plan.Parameters)
+            {
+                if (p.Wire.Kind == WireKind.MultiScalar)
+                {
+                    // Already scalars at this point — the CALL SITE did the conversion and
+                    // handed over one argument per slot. Nothing to convert here.
+                    callArgs.AddRange(p.Names);
+                    continue;
+                }
+
                 callArgs.Add(p.ByRef ? "&" + p.Temp : ToWire(p.Wire, p.Name));
-            if (plan.Return.Kind != WireKind.Void) callArgs.Add("&blnet_result");
+            }
+
+            if (multiResult)
+            {
+                for (var s = 0; s < plan.Return.Slots.Count; s++)
+                    callArgs.Add("&result" + s.ToString(CultureInfo.InvariantCulture));
+            }
+            else if (plan.Return.Kind != WireKind.Void)
+            {
+                callArgs.Add("&blnet_result");
+            }
 
             L(sb, "    int32_t blnet_status;");
             L(sb, "    {");
@@ -724,6 +893,10 @@ namespace BasicLang.Compiler.CodeGen.Net
             switch (plan.Return.Kind)
             {
                 case WireKind.Void:
+                // Same reason: the proxy is declared void and the slots are already in the
+                // caller's references by the time NetCheckTyped has run. Sharing the Void arm
+                // is the accurate statement, not a shortcut.
+                case WireKind.MultiScalar:
                     break;
                 case WireKind.Scalar:
                     L(sb, "    return " + FromWire(plan.Return, "blnet_result") + ";");
@@ -952,11 +1125,23 @@ namespace BasicLang.Compiler.CodeGen.Net
                 Wire = wire;
                 Name = "a" + index.ToString(CultureInfo.InvariantCulture);
                 Temp = "blnet_" + Name;
+
+                // A single-slot parameter keeps the bare "a{index}" spelling — four assertions
+                // pin it, and renaming for uniformity would break them for no behaviour. A
+                // multi-slot parameter fans out to "a{index}_{slot}". BOTH emitters must
+                // compute these identically: the drift oracle compares argument NAMES, not
+                // just types.
+                Names = wire.Kind == WireKind.MultiScalar
+                    ? Enumerable.Range(0, wire.Slots.Count)
+                        .Select(s => Name + "_" + s.ToString(CultureInfo.InvariantCulture))
+                        .ToArray()
+                    : new[] { Name };
             }
 
             internal NetParameterDescriptor Descriptor { get; }
             internal WireForm Wire { get; }
             internal string Name { get; }
+            internal IReadOnlyList<string> Names { get; }
             internal string Temp { get; }
             internal bool ByRef => Descriptor.RefKind != NetRefKind.None;
         }

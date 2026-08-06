@@ -38,11 +38,20 @@ namespace BasicLang.Net
     /// is the one failure mode this boundary cannot afford. The call site now projects from
     /// here, so adding a row in one place is what makes it exist.</para>
     ///
-    /// <para><b><see cref="IsMultiSlot"/> is a property of the WIRE, not of the value.</b>
-    /// Decimal is four scalars, Guid is sixteen bytes, DateTimeOffset is the declared scalar
-    /// pair (never the padded struct — <c>blnet_marshal.hpp</c>'s ABI note), and StringBuilder
-    /// is directional (to-net only). They are still §6.4 pairs and must never degrade to the
-    /// handle row: a §6.4 value that becomes a handle is a silently wrong program.</para>
+    /// <para><b><see cref="SlotCount"/> is a property of the WIRE, not of the value.</b>
+    /// Decimal is four scalars, DateTimeOffset is the declared scalar pair (never the padded
+    /// struct — <c>blnet_marshal.hpp</c>'s ABI note). They are still §6.4 pairs and must never
+    /// degrade to the handle row: a §6.4 value that becomes a handle is a silently wrong
+    /// program.</para>
+    ///
+    /// <para><b>⛔ Why this is a COUNT and not the <c>IsMultiSlot</c> boolean it replaced.</b>
+    /// That flag was read as "refuse", and it was set on four rows for three unrelated reasons:
+    /// Decimal/DateTimeOffset genuinely need more than one slot; Guid needs ONE slot whose C
+    /// type differs by direction (<c>const uint8_t*</c> in, <c>uint8_t*</c> out — precisely the
+    /// shape <c>String</c> already had); StringBuilder needs one slot in ONE direction. Conflating
+    /// them meant the two rows that fit the existing one-slot machinery were refused alongside the
+    /// two that do not. The count now says only what it means, and the other two facts have their
+    /// own carriers (<see cref="COutWire"/>, and a null <see cref="NativeFromNet"/>).</para>
     /// </summary>
     /// <param name="NetFullName">The metadata full name this row is keyed by.</param>
     /// <param name="BasicLangSpelling">
@@ -80,14 +89,104 @@ namespace BasicLang.Net
     /// generalization that needs the bindable type must take the proxy's C++ parameter type,
     /// never this.</para>
     /// </param>
+    /// <param name="ConverterForm">
+    /// HOW <paramref name="NativeToNet"/> is invoked at a call site. The converters are not
+    /// uniform and the difference is not inferable from the type name, so it is recorded here
+    /// rather than re-derived by each emitter — the same consolidation argument as the rest of
+    /// this row.
+    /// </param>
+    /// <param name="NativeTempDecl">
+    /// For the forms that need a caller-owned temporary, its C++ declaration with <c>{0}</c>
+    /// where the name goes. Null for <see cref="NetConverterForm.Expression"/>.
+    /// </param>
+    /// <param name="COutWire">
+    /// The C ABI spelling this row's slot takes in the OUT direction, when that differs from
+    /// <paramref name="CWire"/>. Null means "same as in". Only the pointer-shaped rows need it:
+    /// an inbound Guid borrows 16 bytes the caller owns (<c>const uint8_t*</c>), an outbound one
+    /// is written THROUGH (<c>uint8_t*</c>). <c>String</c> has the same asymmetry but keeps its
+    /// dedicated <see cref="NetWireShape.String"/> arm, because its two directions differ in
+    /// OWNERSHIP as well as constness.
+    /// </param>
+    /// <summary>
+    /// How a §6.4 row's native converter is CALLED. Three shapes exist in
+    /// <c>blnet_marshal.hpp</c> and the lowering must not guess between them.
+    /// </summary>
+    internal enum NetConverterForm
+    {
+        /// <summary>
+        /// <c>slot = to_net(x)</c> — the converter RETURNS the wire value, so the argument is a
+        /// pure expression needing no statements. DateTime, TimeSpan.
+        /// </summary>
+        Expression,
+
+        /// <summary>
+        /// <c>decl buf; to_net(x, buf);</c> — the converter returns <c>void</c> and WRITES
+        /// THROUGH a caller-owned buffer, which is then what crosses. Guid
+        /// (<c>to_net_guid(const Guid&amp;, uint8_t out[16])</c>).
+        /// </summary>
+        OutBuffer,
+
+        /// <summary>
+        /// <c>decl t = to_net(x);</c> and <c>t.c_str()</c> crosses. The converter returns an
+        /// OWNING <c>std::string</c>, so binding <c>.c_str()</c> directly to the call would
+        /// dangle — the temporary dies at the end of its full-expression while the callee still
+        /// holds the pointer. StringBuilder.
+        /// </summary>
+        OwningTemp,
+    }
+
+    /// <summary>
+    /// ONE wire slot of a multi-slot §6.4 row.
+    ///
+    /// <para><c>NativeField</c> is the field of the struct <c>NativeToNet</c> returns — and it
+    /// is NOT the P1 field of the same name. <c>NetDecimalWire</c> spells them <c>lo, mid, hi,
+    /// flags</c> while <c>BasicLang::Decimal</c> spells them <c>lo_, mid_, hi_, flags_</c>
+    /// (<c>CppDecimalRuntime.cs:207</c>), and <c>to_net_decimal</c>'s own body reads the
+    /// underscored ones — so the natural mistake compiles nowhere but reads correctly.</para>
+    /// </summary>
+    internal sealed record NetWireSlot(string CWire, string COutWire, string NativeField);
+
     internal sealed record NetWireRow(
         string NetFullName,
         string BasicLangSpelling,
         NetWireShape Shape,
-        bool IsMultiSlot = false,
+        int SlotCount = 1,
         string NativeToNet = null,
         string NativeFromNet = null,
-        string CWire = null);
+        string CWire = null,
+        string COutWire = null,
+        NetConverterForm ConverterForm = NetConverterForm.Expression,
+        string NativeTempDecl = null,
+        IReadOnlyList<NetWireSlot> Slots = null)
+    {
+        /// <summary>
+        /// More than one wire slot — Decimal and DateTimeOffset. The one-slot-per-parameter
+        /// machinery in both emitters cannot carry these, so they still refuse.
+        /// </summary>
+        internal bool IsMultiSlot => SlotCount > 1;
+
+        /// <summary>
+        /// §8.3's ByRef gate: this row crosses as ONE slot holding a by-value scalar, so a
+        /// <c>ref</c>/<c>out</c> parameter of it is just a pointer to that scalar.
+        ///
+        /// <para><b>The pointer test is load-bearing, not cosmetic.</b> Guid and StringBuilder
+        /// now HAVE a <see cref="CWire"/>, which the old gate (<c>IsMultiSlot ||
+        /// CWire is null</c>) took as sufficient. But their slot is already a pointer, so a
+        /// ByRef one would be a pointer-to-pointer with no specified ownership — exactly what
+        /// §8.3 declines to define. Testing the spelling keeps them refused while the by-value
+        /// direction lowers.</para>
+        /// </summary>
+        internal bool HasByValueScalarSlot =>
+            CWire != null && !CWire.EndsWith("*", StringComparison.Ordinal);
+
+        /// <summary>
+        /// This row spreads across several discrete scalar slots, and <see cref="Slots"/>
+        /// describes each. Kept as its own predicate rather than reading
+        /// <see cref="SlotCount"/> so the two can never drift: the count is what the refusal
+        /// MESSAGES quote, the list is what the emitters BUILD FROM.
+        /// </summary>
+        internal bool HasSlotList => Slots is { Count: > 1 };
+    }
 
     /// <summary>
     /// The environment-specific JUDGMENTS <see cref="NetMarshalTable"/> cannot make for itself,
@@ -271,27 +370,60 @@ namespace BasicLang.Net
                     NativeToNet: "BasicLang::net::to_net_timespan",
                     NativeFromNet: "BasicLang::net::from_net_timespan",
                     CWire: "int64_t"),
+                // The two genuinely multi-slot pairs. Decimal is the four-uint32 GetBits quad;
+                // DateTimeOffset the DECLARED (int64 utcTicks, int16 offsetMinutes) pair — never
+                // NetDateTimeOffsetWire itself, which is sizeof 16 with SIX trailing padding
+                // bytes and must not cross the ABI by value (blnet_marshal.hpp's ABI note).
+                //
+                // ⛔ CWire stays NULL on both. They have no ONE by-value slot, which is exactly
+                // what HasByValueScalarSlot asks — inventing one to satisfy a test would make
+                // ByRef Decimal reachable and emit a struct into a scalar temporary.
                 ["System.Decimal"] = new(
-                    "System.Decimal", "Decimal", NetWireShape.Conversion, IsMultiSlot: true,
+                    "System.Decimal", "Decimal", NetWireShape.Conversion, SlotCount: 4,
                     NativeToNet: "BasicLang::net::to_net_decimal",
-                    NativeFromNet: "BasicLang::net::from_net_decimal"),
-                ["System.Guid"] = new(
-                    "System.Guid", "Guid", NetWireShape.Conversion, IsMultiSlot: true,
-                    NativeToNet: "BasicLang::net::to_net_guid",
-                    NativeFromNet: "BasicLang::net::from_net_guid"),
+                    NativeFromNet: "BasicLang::net::from_net_decimal",
+                    Slots: new[]
+                    {
+                        new NetWireSlot("uint32_t", "uint32_t*", "lo"),
+                        new NetWireSlot("uint32_t", "uint32_t*", "mid"),
+                        new NetWireSlot("uint32_t", "uint32_t*", "hi"),
+                        new NetWireSlot("uint32_t", "uint32_t*", "flags"),
+                    }),
                 ["System.DateTimeOffset"] = new(
                     "System.DateTimeOffset", "DateTimeOffset", NetWireShape.Conversion,
-                    IsMultiSlot: true,
+                    SlotCount: 2,
                     NativeToNet: "BasicLang::net::to_net_datetimeoffset",
-                    NativeFromNet: "BasicLang::net::from_net_datetimeoffset"),
+                    NativeFromNet: "BasicLang::net::from_net_datetimeoffset",
+                    Slots: new[]
+                    {
+                        new NetWireSlot("int64_t", "int64_t*", "utcTicks"),
+                        new NetWireSlot("int16_t", "int16_t*", "offsetMinutes"),
+                    }),
+
+                // ONE slot, pointer-shaped, direction-dependent — the shape String already has.
+                // 16 bytes in ToByteArray order; NOT two uint64_t, which would make the wire
+                // host-endian-dependent and force the managed side to reverse it identically.
+                ["System.Guid"] = new(
+                    "System.Guid", "Guid", NetWireShape.Conversion,
+                    NativeToNet: "BasicLang::net::to_net_guid",
+                    NativeFromNet: "BasicLang::net::from_net_guid",
+                    CWire: "const uint8_t*", COutWire: "uint8_t*",
+                    ConverterForm: NetConverterForm.OutBuffer,
+                    NativeTempDecl: "std::uint8_t {0}[16]"),
+
                 // DIRECTIONAL: §6.4's table gives StringBuilder a to-net direction only, so
                 // NativeFromNet is null ON PURPOSE and a StringBuilder RESULT must refuse.
                 // to_net_stringbuilder's absence of an inverse is pinned by a fast test.
+                // ⛔ That null is now the ONLY thing refusing the result direction — it used to
+                // ride on IsMultiSlot, and the Conversion result arm must test it explicitly or
+                // it emits `dest = (expr);` with no converter at all.
                 ["System.Text.StringBuilder"] = new(
                     "System.Text.StringBuilder", "StringBuilder", NetWireShape.Conversion,
-                    IsMultiSlot: true,
                     NativeToNet: "BasicLang::net::to_net_stringbuilder",
-                    NativeFromNet: null),
+                    NativeFromNet: null,
+                    CWire: "const char*",
+                    ConverterForm: NetConverterForm.OwningTemp,
+                    NativeTempDecl: "std::string {0}"),
             };
 
         /// <summary>The <see cref="WireRows"/> row for a full name, or false.</summary>
@@ -316,17 +448,11 @@ namespace BasicLang.Net
             return basicLangName != null;
         }
 
-        /// <summary>
-        /// The §6.4 pairs whose WIRE form is not one scalar slot: Decimal (the four-field
-        /// GetBits quad), Guid (16 bytes), DateTimeOffset (the DECLARED scalar pair —
-        /// blnet_marshal.hpp's ABI note), StringBuilder (directional — to-net only, as
-        /// String). Projected from <see cref="WireRows"/> rather than re-listed, so the two
-        /// cannot disagree about which rows are multi-slot.
-        /// </summary>
-        internal static readonly IReadOnlyCollection<string> MultiSlotConversionPairs =
-            new HashSet<string>(
-                WireRows.Values.Where(r => r.IsMultiSlot).Select(r => r.NetFullName),
-                StringComparer.Ordinal);
+        // MultiSlotConversionPairs lived here. Its only production consumer was the analyzer's
+        // multi-slot refusal, which Task 8c-2 deleted when Decimal and DateTimeOffset started
+        // lowering — leaving a member with no callers at all. Removed rather than kept "in case",
+        // which is how IsSingleSlotValue (just below) became dead without anyone noticing.
+        // A caller wanting the set can project WireRows.Values.Where(r => r.IsMultiSlot).
 
         /// <summary>
         /// True when a resolved member RESULT (or by-value parameter) of this full name has a
