@@ -1266,11 +1266,13 @@ public class NetShimPipelineTests
             + "blnet_startup.g.cpp loads it by BARE NAME and the OS resolves that from the "
             + "executable's own directory, so without this copy the program dies at startup.");
 
-        Assert.That(NetShimPipelineFixture.Run(result.ExecutablePath!), Is.EqualTo("True\n0\n"),
+        Assert.That(NetShimPipelineFixture.Run(result.ExecutablePath!), Is.EqualTo("True\nFalse\n"),
             "'True' proves the constructor, the receiver handle, the UTF-8 argument and the "
-            + "Boolean result all crossed correctly; '0' is IsMatch(\"bbb\") = False rendered by "
-            + "the pre-existing C++ Boolean-formatting gap (gaps spec item 8) — if THAT line "
-            + "changed to 'False', the gap was fixed and this expectation should follow it. If the "
+            + "Boolean result all crossed correctly; the second line is IsMatch(\"bbb\") = False. "
+            + "That line USED to read '0' because of the C++ Boolean-formatting gap (gaps spec "
+            + "item 8), and this expectation carried an instruction to follow it if the gap was "
+            + "ever fixed — chip task_6fd2c7e4, commit 692f381, did fix it, so it now reads "
+            + "'False'. Note this test is Integration and so is invisible to the fast subset. If the "
             + "first line is 'False', the .NET call ran and answered wrong; if the program failed "
             + "to start, look at the shim deployment and the §9.3 handshake.");
 
