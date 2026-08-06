@@ -36,6 +36,7 @@ internal static class JsTestSupport
     {
         string processed = source;
         var cppIncludes = new List<string>();
+        var jsImports = new List<string>();
 
         if (runPreprocessor)
         {
@@ -44,6 +45,7 @@ internal static class JsTestSupport
             Fail(pre.Errors.Count > 0, "preprocess",
                 string.Join("; ", pre.Errors.ConvertAll(e => e.Message)), source);
             cppIncludes = new List<string>(pre.CppIncludes);
+            jsImports = new List<string>(pre.JsImports);
         }
 
         var tokens = new Lexer(processed).Tokenize();
@@ -68,6 +70,10 @@ internal static class JsTestSupport
 
         var module = new IRBuilder(analyzer).Build(ast, "TestModule", sourceFilePath);
         module.CppIncludes.AddRange(cppIncludes);
+        // ⛔ This helper HAND-COPIES what Compiler.cs threads onto the combined module, so a new
+        // preprocessor-collected list is invisible here until it gets a line of its own — the
+        // product code can be entirely correct and the fixture still sees an empty collection.
+        module.JsImports.AddRange(jsImports);
         return module;
     }
 
