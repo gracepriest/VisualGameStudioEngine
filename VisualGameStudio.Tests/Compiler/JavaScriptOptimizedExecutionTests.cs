@@ -175,32 +175,57 @@ public class JavaScriptOptimizedExecutionTests
         => AssertSameOutput("Sub Main()\nDim x As Integer = 5\nConsole.WriteLine(x * 8)\nEnd Sub");
 
     /// <summary>
-    /// ⚠ A CHARACTERIZATION TEST, not an endorsement — it pins a real divergence rather than
-    /// claiming either side is right. Chip <c>task_98f2685b</c>.
+    /// Chip <c>task_98f2685b</c>, FIXED — <c>Integer</c> arithmetic now wraps to int32 on
+    /// this backend, so optimized and unoptimized agree.
     ///
-    /// <para><c>Integer</c> is 32-bit everywhere else (<c>"integer" =&gt; "int"</c>,
-    /// CSharpBackend.cs:760), so C# computes <c>1000000000 * 4</c> as int32 and wraps to
-    /// -294967296. The JavaScript backend does arithmetic in doubles and does NOT wrap — but
-    /// ConstantFoldingPass folds in int32, so the moment the operands are known at compile
-    /// time the answer changes. Same source, same backend, two answers depending on whether a
-    /// value happened to be foldable.</para>
+    /// <para>This began as a CHARACTERIZATION test asserting the two different answers
+    /// (4000000000 unoptimized, -294967296 optimized) precisely so that fixing the divergence
+    /// would fail loudly rather than pass unnoticed. It did exactly that, and is now inverted
+    /// to assert the consistency instead.</para>
     ///
-    /// <para>Deciding which is correct is a LANGUAGE question — whether BasicLang
-    /// <c>Integer</c> wraps on a web target — and forcing <c>|0</c> onto every arithmetic
-    /// operation is not a change to make as a side effect of a gate task. Asserted as-is so
-    /// that fixing it fails this test loudly instead of passing unnoticed.</para>
+    /// <para><c>Integer</c> is 32-bit everywhere else in the compiler, and ConstantFoldingPass
+    /// folds in int32 — so wrapping is what agrees with the optimizer and with the C# and C++
+    /// backends. ⚠ It does NOT match VB.NET, where Integer overflow raises
+    /// OverflowException; matching that would be a further language decision.</para>
     /// </summary>
     [Test]
-    public void StrengthReduction_LargeMultiply_DivergesFromUnoptimized_KNOWN()
+    public void LargeMultiply_WrapsConsistently_OptimizedOrNot()
     {
         const string source = "Sub Main()\nDim x As Integer = 1000000000\nConsole.WriteLine(x * 4)\nEnd Sub";
 
-        Assert.That(JavaScriptExecutionTests.RunJs(source), Is.EqualTo("4000000000"),
-            "unoptimized JS computes in doubles and does not wrap");
+        AssertSameOutput(source);
         Assert.That(RunOptimized(source), Is.EqualTo("-294967296"),
-            "the optimizer folds in int32 and wraps — matching C#, but not matching the " +
-            "unoptimized JavaScript path");
+            "Integer is 32-bit; 1000000000 * 4 wraps, matching C# and the optimizer");
     }
+
+    /// <summary>
+    /// The half the optimizer could NOT reach — a genuinely non-foldable operand. This is
+    /// where the old behaviour showed 4000000000 while the foldable form showed -294967296.
+    /// </summary>
+    [Test]
+    public void LargeMultiply_WrapsEvenWhenNotFoldable()
+        => Assert.That(RunOptimized(
+                "Function Scale() As Integer\nReturn 4\nEnd Function\n" +
+                "Sub Main()\nDim x As Integer = 1000000000\nConsole.WriteLine(x * Scale())\nEnd Sub"),
+            Is.EqualTo("-294967296"));
+
+    /// <summary>
+    /// ⛔ Math.imul, not `(a * b) | 0`. A double multiply loses precision above 2^53 BEFORE a
+    /// coercion can wrap it, so the naive form gives the wrong int32 here.
+    /// </summary>
+    [Test]
+    public void LargeMultiply_IsExact_NotDoubleThenCoerced()
+        => Assert.That(RunOptimized(
+                "Function Big() As Integer\nReturn 123456789\nEnd Function\n" +
+                "Sub Main()\nDim x As Integer = 987654321\nConsole.WriteLine(x * Big())\nEnd Sub"),
+            Is.EqualTo(unchecked((int)(987654321 * 123456789L)).ToString()));
+
+    /// <summary>Doubles must NOT be coerced — `| 0` would truncate every fraction.</summary>
+    [Test]
+    public void DoubleArithmetic_IsNotCoercedToInt32()
+        => Assert.That(RunOptimized(
+                "Sub Main()\nDim a As Double = 1.5\nDim b As Double = 2.25\nConsole.WriteLine(a + b)\nEnd Sub"),
+            Is.EqualTo("3.75"));
 
     // ---------------------------------------------------------------- block structure
 

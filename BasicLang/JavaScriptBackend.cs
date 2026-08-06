@@ -510,16 +510,55 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         private string BinaryExpr(IRBinaryOp op) => RenderBinary(op, Expr);
         private string BinaryExprInline(IRBinaryOp op) => RenderBinary(op, ExprInline);
 
+        /// <summary>
+        /// True for the BasicLang types that are 32-bit-or-narrower signed integers, whose
+        /// arithmetic must wrap to int32 to match every other backend and the IR optimizer.
+        ///
+        /// <para>Deliberately NOT true for Double/Single/Decimal (they are genuinely
+        /// floating-point and coercing them would truncate every fraction), nor for Long —
+        /// which BL7003 refuses outright, because a 64-bit integer has no exact JavaScript
+        /// representation at all.</para>
+        /// </summary>
+        private static bool IsInt32(TypeInfo type) => type?.Name switch
+        {
+            "Integer" or "Short" or "Byte" or "SByte" or "UShort" => true,
+            _ => false
+        };
+
         private string RenderBinary(IRBinaryOp op, Func<IRValue, string> render)
         {
             var l = render(op.Left);
             var r = render(op.Right);
 
+            // ⚠ 32-BIT WRAPPING FOR `Integer`, and it is a bug fix rather than a nicety.
+            //
+            // `Integer` is 32-bit everywhere else in this compiler ("integer" => "int",
+            // CSharpBackend.cs), and ConstantFoldingPass folds in int32 and WRAPS. JavaScript
+            // numbers are doubles and do not wrap — so the same program produced two different
+            // answers depending only on whether the optimizer could see the operands:
+            //
+            //     Dim x As Integer = 1000000000
+            //     Console.WriteLine(x * 4)          -> -294967296  (folded)
+            //     Console.WriteLine(x * Scale())    ->  4000000000 (not folded)
+            //
+            // Every shipping route optimizes unconditionally, so users met both. Coercing here
+            // makes the backend agree with itself, with the optimizer, and with the C# and C++
+            // backends. (⚠ It does NOT match VB.NET, where Integer overflow raises
+            // OverflowException — matching THAT is a separate language decision, and neither
+            // behaviour was reachable before this.)
+            var wrap = IsInt32(op.Type);
+
             switch (op.Operation)
             {
-                case BinaryOpKind.Add: return $"({l} + {r})";
-                case BinaryOpKind.Sub: return $"({l} - {r})";
-                case BinaryOpKind.Mul: return $"({l} * {r})";
+                case BinaryOpKind.Add: return wrap ? $"(({l} + {r}) | 0)" : $"({l} + {r})";
+                case BinaryOpKind.Sub: return wrap ? $"(({l} - {r}) | 0)" : $"({l} - {r})";
+
+                // ⛔ Math.imul, NOT `(a * b) | 0`. A double multiply loses precision above 2^53
+                // BEFORE the coercion can wrap it, so `| 0` gives the wrong int32 for large
+                // operands. Math.imul is an exact 32-bit multiply and is what every JS
+                // transpiler uses for this.
+                case BinaryOpKind.Mul: return wrap ? $"Math.imul({l}, {r})" : $"({l} * {r})";
+
                 case BinaryOpKind.Div: return $"({l} / {r})";
 
                 // BasicLang `\`. JS has NO integer-division operator — `/` is always floating
