@@ -137,6 +137,24 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             SourceMap = new JavaScriptSourceMap();
             _sourceLineOffsets = module.SourceLineOffsets;
 
+            // #JsImport specifiers, ahead of everything including the banner: ESM hoists imports
+            // anyway, so this is for a human reading the output in devtools.
+            //
+            // De-duplicated because two files in one project accumulate into ONE combined module,
+            // and both may import the same library.
+            //
+            // ⛔ Emitted through Line(), never by appending to _output — Line() is what maintains
+            // _generatedLine, and RecordMapping reads it. A direct Append here would silently
+            // shift every source-map segment by the number of imports, sending the debugger to
+            // the wrong .bas line in exactly the files that use interop.
+            var seenImports = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var specifier in module.JsImports ?? new List<string>())
+            {
+                if (!seenImports.Add(specifier)) continue;
+                Line($"import \"{EscapeJsString(specifier)}\";");
+            }
+            if (seenImports.Count > 0) Line();
+
             // ES module: strict mode is implicit, so no "use strict" prologue.
             if (_options.GenerateComments)
             {

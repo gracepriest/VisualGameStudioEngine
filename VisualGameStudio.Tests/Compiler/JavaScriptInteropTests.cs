@@ -185,4 +185,71 @@ public class JavaScriptInteropTests
             Is.EquivalentTo(new[] { "./chart.js", "./util.js" }),
             "#JsImport must survive CompileProjectFiles' CombineIRModules -> CombinedIR.JsImports join");
     }
+
+    // ------------------------------------------------------------------
+    // EMISSION. Collecting a specifier is worth nothing until it reaches
+    // the generated JavaScript as a real ES import.
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void JsImport_EmitsAnImportStatement()
+        => Assert.That(
+            JsTestSupport.Compile("#JsImport \"./chart.js\"\nSub Main()\nEnd Sub", runPreprocessor: true),
+            Does.Contain("import \"./chart.js\";"));
+
+    /// <summary>
+    /// Imports go first. ESM hoists them, so this is convention and readability rather than a
+    /// correctness requirement — but the output is meant to be READ in devtools, and an import
+    /// buried under function declarations reads as generated sludge.
+    /// </summary>
+    [Test]
+    public void JsImport_ImportsPrecedeDeclarations()
+    {
+        var lines = JsTestSupport
+            .Compile("#JsImport \"./a.js\"\nSub Main()\nEnd Sub", runPreprocessor: true)
+            .Replace("\r\n", "\n").Split('\n')
+            .Where(l => l.Trim().Length > 0).ToList();
+
+        var firstImport = lines.FindIndex(l => l.TrimStart().StartsWith("import "));
+        var firstFunction = lines.FindIndex(l => l.TrimStart().StartsWith("function "));
+
+        Assert.That(firstImport, Is.GreaterThanOrEqualTo(0), "no import emitted");
+        Assert.That(firstImport, Is.LessThan(firstFunction));
+    }
+
+    /// <summary>Two files in one project may import the same module.</summary>
+    [Test]
+    public void JsImport_DeduplicatesRepeatedSpecifiers()
+    {
+        var js = JsTestSupport.Compile(
+            "#JsImport \"./a.js\"\n#JsImport \"./a.js\"\nSub Main()\nEnd Sub", runPreprocessor: true);
+
+        Assert.That(System.Text.RegularExpressions.Regex.Matches(js, @"import ""\./a\.js""").Count,
+            Is.EqualTo(1));
+    }
+
+    /// <summary>
+    /// A source map must still point at the right .bas lines with imports above the code —
+    /// which it does only because Line() maintains _generatedLine.
+    /// </summary>
+    [Test]
+    public void JsImport_DoesNotShiftSourceMapPositions()
+    {
+        var module = JsTestSupport.BuildModule(
+            "#JsImport \"./a.js\"\nSub Main()\nConsole.WriteLine(1)\nEnd Sub",
+            runPreprocessor: true, sourceFilePath: "prog.bas");
+        var generator = new BasicLang.Compiler.CodeGen.JavaScript.JavaScriptCodeGenerator();
+        var js = generator.Generate(module).Replace("\r\n", "\n").Split('\n');
+
+        var generatedLine = System.Array.FindIndex(js, l => l.Contains("console.log(1)"));
+        Assert.That(generatedLine, Is.GreaterThanOrEqualTo(0), "no console.log emitted");
+
+        // Reuse the existing decoder rather than asserting on the raw mappings string —
+        // Does.Contain("mappings") passes on ANY source map and proves nothing.
+        var pairs = JavaScriptGeneratorSourceMapTests.Decode(generator.SourceMap.ToJson("app.js"));
+        var mapped = pairs.Where(p => p.generated == generatedLine).Select(p => p.source).ToList();
+
+        Assert.That(mapped, Does.Contain(2),
+            "Console.WriteLine is on source line 3 (0-based 2); imports above it must not shift it");
+    }
 }
