@@ -689,6 +689,7 @@ public class BuildService : IBuildService
 
             string generatedCode;
             string extension;
+            BasicLang.Compiler.CodeGen.JavaScript.JavaScriptCodeGenerator jsGenerator = null;
             try
             {
                 switch (backend)
@@ -704,6 +705,17 @@ public class BuildService : IBuildService
                         generatedCode = new BasicLang.Compiler.CodeGen.MSIL.MSILCodeGenerator().Generate(compilation.CombinedIR);
                         extension = ".il";
                         break;
+
+                    // The generator instance is kept because it carries a SECOND artefact —
+                    // the source map — that ICodeGenerator.Generate's single-string contract
+                    // cannot return. BL70xx capability rejections throw out of Generate and
+                    // are caught below as a BL4001 diagnostic, same as any other backend.
+                    case "javascript":
+                        jsGenerator = new BasicLang.Compiler.CodeGen.JavaScript.JavaScriptCodeGenerator();
+                        generatedCode = jsGenerator.Generate(compilation.CombinedIR);
+                        extension = ".js";
+                        break;
+
                     default: // csharp
                         generatedCode = new BasicLang.Compiler.CodeGen.CSharp.CSharpCodeGenerator().Generate(compilation.CombinedIR);
                         extension = ".cs";
@@ -737,10 +749,20 @@ public class BuildService : IBuildService
             // ---------- Other non-.NET backends stop at source ----------
             if (backend != "csharp")
             {
+                // JavaScript has NO build step — the emitted files ARE the deliverable. The
+                // harness and the source map complete the site here, and OutputPath becomes
+                // the directory the preview server serves.
+                if (backend == "javascript")
+                {
+                    EmitJavaScriptSite(outputDir, result.GeneratedFileName, generatedCode,
+                        project, jsGenerator);
+                }
+
                 var toolchainHint = backend switch
                 {
                     "llvm" => $"Generated LLVM IR: {generatedFilePath} — compile it with the LLVM toolchain (llc/clang).",
                     "msil" => $"Generated MSIL: {generatedFilePath} — assemble it with ilasm.",
+                    "javascript" => $"Generated web site: {outputDir} — open index.html, or press F5 to preview it.",
                     _ => $"Generated output: {generatedFilePath}."
                 };
                 _outputService.WriteLine(toolchainHint, OutputCategory.Build);
@@ -857,13 +879,51 @@ public class BuildService : IBuildService
     }
 
     /// <summary>Maps the IDE's backend enum to the compiler's backend identifier.</summary>
+    /// <remarks>
+    /// ⚠ The <c>_ => "csharp"</c> default means a MISSING arm does not fail — it silently
+    /// builds C# instead. That is how a JavaScript project would have emitted C# even with the
+    /// codegen arm in place, and it is the same shape of bug the CLI project route carried.
+    /// </remarks>
     private static string GetBackendId(TargetBackend backend) => backend switch
     {
         TargetBackend.Cpp => "cpp",
         TargetBackend.LLVM => "llvm",
         TargetBackend.MSIL => "msil",
+        TargetBackend.JavaScript => "javascript",
         _ => "csharp"
     };
+
+    /// <summary>
+    /// Completes a JavaScript build into a servable site: the harness, and the source map when
+    /// the generator produced one.
+    ///
+    /// <para>Source text is INLINED into the map. Output lands in <c>bin/…</c> while the
+    /// <c>.bas</c> files stay in the project directory, so a browser resolving <c>sources</c>
+    /// against the map's own URL would 404 on every one and devtools would silently show no
+    /// original source. A file that cannot be read contributes a null entry rather than
+    /// failing the build.</para>
+    /// </summary>
+    private void EmitJavaScriptSite(string outputDir, string scriptFileName, string generatedCode,
+        BasicLangProject project,
+        BasicLang.Compiler.CodeGen.JavaScript.JavaScriptCodeGenerator generator)
+    {
+        string mapJson = null;
+        if (generator != null && generator.SourceMap.Count > 0)
+        {
+            var contents = new List<string?>();
+            foreach (var path in generator.SourceMap.Sources)
+            {
+                try { contents.Add(File.Exists(path) ? File.ReadAllText(path) : null); }
+                catch { contents.Add(null); }
+            }
+            mapJson = generator.SourceMap.ToJson(scriptFileName, project.ProjectDirectory, contents!);
+        }
+
+        BasicLang.Compiler.CodeGen.JavaScript.JavaScriptEmitter.Emit(
+            outputDir, scriptFileName, generatedCode, title: project.Name, sourceMapJson: mapJson);
+
+        _outputService.WriteLine($"Site: {Path.Combine(outputDir, "index.html")}", OutputCategory.Build);
+    }
 
     /// <summary>
     /// Loads the CLI's project model from the .blproj (PackageReferences, assembly

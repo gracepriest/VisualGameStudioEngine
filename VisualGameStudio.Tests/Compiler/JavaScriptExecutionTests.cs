@@ -40,17 +40,35 @@ public class JavaScriptExecutionTests
             var file = Path.Combine(dir, "program.mjs");
             File.WriteAllText(file, js);
 
-            using var p = Process.Start(new ProcessStartInfo(node!, $"\"{file}\"")
+            var psi = new ProcessStartInfo(node!)
             {
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
-            })!;
+            };
+            // ArgumentList, not a hand-quoted Arguments string: the runtime escapes each
+            // entry, so a temp path containing a space or a quote cannot split the command.
+            psi.ArgumentList.Add(file);
 
-            var stdout = p.StandardOutput.ReadToEnd();
-            var stderr = p.StandardError.ReadToEnd();
-            p.WaitForExit(30000);
+            using var p = Process.Start(psi)!;
+
+            // ⛔ ASYNC reads, then wait, then KILL on timeout. The obvious ordering —
+            // ReadToEnd() before WaitForExit — makes the timeout unreachable: the read blocks
+            // until the child closes the pipe, so a wedged node hangs the test run forever and
+            // WaitForExit is never even called. This repo has already had Node wedge machine-
+            // wide, and the same trap is documented in BlnetConformanceTests.
+            var stdoutTask = p.StandardOutput.ReadToEndAsync();
+            var stderrTask = p.StandardError.ReadToEndAsync();
+
+            if (!p.WaitForExit(30000))
+            {
+                try { p.Kill(entireProcessTree: true); } catch { }
+                Assert.Fail($"node did not exit within 30s.\n--- generated JS ---\n{js}");
+            }
+
+            var stdout = stdoutTask.GetAwaiter().GetResult();
+            var stderr = stderrTask.GetAwaiter().GetResult();
 
             Assert.That(p.ExitCode, Is.Zero,
                 $"node exited {p.ExitCode}.\n--- stderr ---\n{stderr}\n--- generated JS ---\n{js}");

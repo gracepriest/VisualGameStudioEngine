@@ -447,7 +447,9 @@ public partial class SettingsViewModel : ViewModelBase
     private string _compilerBackend = "CSharp";
 
     [ObservableProperty]
-    private ObservableCollection<string> _compilerBackends = new() { "CSharp", "MSIL", "LLVM", "CPP" };
+    // ⚠ Must match SettingsService's enumVals for basiclang.compiler.backend — a value in one
+    // list and not the other is either unselectable or accepted and then ignored.
+    private ObservableCollection<string> _compilerBackends = new() { "CSharp", "MSIL", "LLVM", "CPP", "JavaScript" };
 
     // Keyboard Shortcuts
     [ObservableProperty]

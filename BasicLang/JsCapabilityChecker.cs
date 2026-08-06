@@ -47,7 +47,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <remarks>
         /// Arms land one per task, each independently revertable:
         /// BL7002 ByRef, BL7003 Long, BL7004 Char, BL7005 value Structure,
-        /// BL7006 operator overloading, BL7007 .NET BCL types.
+        /// BL7006 operator overloading, BL7007 .NET BCL types, BL7008 LINQ operators.
+        ///
+        /// BL7008 is raised from the generator rather than from this walk: whether a call is
+        /// LINQ at all depends on the RECEIVER being a sequence, which only the generator
+        /// knows (it tracks chained results that the IR types as plain Object).
         /// </remarks>
         public static void Check(IRModule module)
         {
@@ -318,6 +322,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     yield return (prop?.Type, $"property '{c.Name}.{prop?.Name}'");
                 foreach (var m in c.Methods ?? Enumerable.Empty<IRMethod>())
                     yield return (m?.ReturnType, $"the return type of method '{c.Name}.{m?.Name}'");
+
+                // ⛔ Events carry only a delegate type NAME, not a TypeInfo (IRNodes.cs:1596),
+                // so ModuleTypeWalker explicitly skips them and cannot back this up. Measured
+                // missed rejection: `Public Event Tick As Long` compiled clean with no BL7003.
+                foreach (var e in c.Events ?? Enumerable.Empty<IREvent>())
+                    yield return (NamedType(e?.DelegateType), $"the type of event '{c.Name}.{e?.Name}'");
             }
 
             foreach (var i in module.Interfaces?.Values ?? Enumerable.Empty<IRInterface>())
@@ -486,5 +496,40 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         private const string ByRefWhy =
             "JavaScript has no reference parameters, so a write through a ByRef argument " +
             "would be invisible to the caller. Return a value instead.";
+
+        /// <summary>
+        /// LINQ operators that THROW on an empty sequence in .NET.
+        ///
+        /// <para>Every one of them has a tempting JS one-liner that answers with a value
+        /// instead of raising: <c>a[0]</c> is <c>undefined</c>, <c>Math.max()</c> of nothing is
+        /// <c>-Infinity</c>, an average is <c>NaN</c>. Each of those then propagates silently —
+        /// <c>NaN</c> in particular contaminates every arithmetic result downstream and never
+        /// raises. Emitting the guard inline is not a fix either: it evaluates the receiver
+        /// TWICE, so <c>MakeList().First()</c> would build the list twice.</para>
+        ///
+        /// <para>These want a runtime prelude to call into, which the stdlib task introduces.
+        /// Until then they are refused at compile time, which beats today's behaviour — an
+        /// unmapped name reaches Node as <c>a.First is not a function</c>.</para>
+        /// </summary>
+        private static readonly HashSet<string> UnlowerableLinq =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "First", "FirstOrDefault", "Last", "LastOrDefault", "Single", "SingleOrDefault",
+                "Min", "Max", "Average", "Aggregate", "ElementAt",
+                "GroupBy", "Join", "SelectMany", "Zip", "Except", "Intersect", "Union",
+                "ThenBy", "ThenByDescending",
+            };
+
+        public static bool IsUnlowerableLinqOperator(string method) =>
+            !string.IsNullOrEmpty(method) && UnlowerableLinq.Contains(method);
+
+        /// <summary>BL7008 — a LINQ operator with no faithful Array-method lowering.</summary>
+        public static ForeignFeatureException LinqRejection(string method) =>
+            new ForeignFeatureException(
+                $"BL7008: the LINQ operator '{method}' is not available on the JavaScript " +
+                "backend. Operators that raise on an empty sequence, or that have no native " +
+                "Array equivalent, would need a runtime helper to behave as they do on .NET. " +
+                "Where/Select/OrderBy/Skip/Take/Distinct/Concat/Reverse/Any/All/Count/Sum/" +
+                "ToList are supported.");
     }
 }

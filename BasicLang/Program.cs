@@ -7,6 +7,7 @@ using BasicLang.Compiler.AST;
 using BasicLang.Compiler.CodeGen;
 using BasicLang.Compiler.CodeGen.CSharp;
 using BasicLang.Compiler.CodeGen.CPlusPlus;
+using BasicLang.Compiler.CodeGen.JavaScript;
 using BasicLang.Compiler.CodeGen.LLVM;
 using BasicLang.Compiler.CodeGen.MSIL;
 using BasicLang.Compiler.IR;
@@ -564,30 +565,44 @@ namespace BasicLang.Compiler.Driver
                 var outputFileName = project.AssemblyName ?? project.ProjectName ?? "Program";
                 var backend = project.Backend?.ToLowerInvariant() ?? "csharp";
 
+                // ⛔ ONE dispatch, shared with the single-file route above. This used to be a
+                // PRIVATE copy of the switch whose `default:` silently produced C#, so
+                // `build proj.blproj` on a <TargetBackend>JavaScript</TargetBackend> project
+                // wrote a .cs file, ran `dotnet build` on it, printed "Build succeeded" and
+                // exited 0. GenerateCode was hardened against exactly that for --target three
+                // weeks earlier (see its comment); the project route never got the same
+                // treatment, which is what a second copy of a decision always costs.
                 string generatedCode;
                 string extension;
-
-                switch (backend)
+                ICodeGenerator generator;
+                try
                 {
-                    case "llvm":
-                        var llvmGen = new CodeGen.LLVM.LLVMCodeGenerator();
-                        generatedCode = llvmGen.Generate(combinedIR);
-                        extension = ".ll";
-                        break;
-                    case "msil":
-                        var msilGen = new CodeGen.MSIL.MSILCodeGenerator();
-                        generatedCode = msilGen.Generate(combinedIR);
-                        extension = ".il";
-                        break;
-                    default: // csharp
-                        var csGen = new CodeGen.CSharp.CSharpCodeGenerator();
-                        generatedCode = csGen.Generate(combinedIR);
-                        extension = ".cs";
-                        break;
+                    generatedCode = GenerateCode(combinedIR, backend, out generator);
+                    extension = GetOutputExtension(backend);
+                }
+                catch (Exception ex) when (ex is NotSupportedException || ex is ForeignFeatureException)
+                {
+                    // An unknown backend, or one that refuses a construct (BL70xx on the JS
+                    // capability line). Both are the author's problem and both must read as a
+                    // clean build failure rather than a stack trace.
+                    Console.Error.WriteLine($"  {ex.Message}");
+                    Console.Error.WriteLine("  Build failed.");
+                    return 1;
                 }
 
                 var outputPath = Path.Combine(outputDir, outputFileName + extension);
                 File.WriteAllText(outputPath, generatedCode);
+
+                // JavaScript has NO build step — the emitted files ARE the deliverable, so the
+                // site is completed here and the csproj/`dotnet build` path below is skipped.
+                if (IsJavaScriptTarget(backend))
+                {
+                    var scriptName = outputFileName + extension;
+                    JavaScriptEmitter.Emit(outputDir, scriptName, generatedCode,
+                        title: project.ProjectName,
+                        sourceMapJson: BuildSourceMapJson(generator, scriptName, projectDir));
+                    Console.WriteLine($"  Site written to: {outputDir}");
+                }
 
                 // For C# backend, compile to .dll
                 if (backend == "csharp" || backend == "cs")
@@ -1108,7 +1123,7 @@ namespace BasicLang.Compiler.Driver
                 // Generate output
                 if (result.CombinedIR != null)
                 {
-                    string outputCode = GenerateCode(result.CombinedIR, targetBackend);
+                    string outputCode = GenerateCode(result.CombinedIR, targetBackend, out var generator);
                     string actualOutputPath;
 
                     if (!string.IsNullOrEmpty(outputPath))
@@ -1126,6 +1141,23 @@ namespace BasicLang.Compiler.Driver
                         File.WriteAllText(defaultOutputPath, outputCode);
                         Console.WriteLine($"  Output written to: {defaultOutputPath}");
                         actualOutputPath = defaultOutputPath;
+                    }
+
+                    // A web target needs a page to load the script from. Emitted BESIDE the
+                    // .js wherever that landed — including next to the source file, which is
+                    // exactly why JavaScriptEmitter refuses to overwrite an existing
+                    // index.html: that is where a hand-authored one lives.
+                    if (IsJavaScriptTarget(targetBackend))
+                    {
+                        var siteDir = Path.GetDirectoryName(Path.GetFullPath(actualOutputPath)) ?? ".";
+                        var scriptName = Path.GetFileName(actualOutputPath);
+                        var hadHarness = File.Exists(Path.Combine(siteDir, JavaScriptEmitter.HarnessName));
+
+                        JavaScriptEmitter.Emit(siteDir, scriptName, outputCode,
+                            sourceMapJson: BuildSourceMapJson(generator, scriptName, siteDir));
+
+                        if (!hadHarness)
+                            Console.WriteLine($"  Harness written to: {Path.Combine(siteDir, JavaScriptEmitter.HarnessName)}");
                     }
 
                     // Show generated code if requested
@@ -1224,9 +1256,21 @@ namespace BasicLang.Compiler.Driver
         /// <summary>
         /// Generate code for the specified backend
         /// </summary>
-        internal static string GenerateCode(IRModule ir, string backend)
+        internal static string GenerateCode(IRModule ir, string backend) =>
+            GenerateCode(ir, backend, out _);
+
+        /// <summary>
+        /// As <see cref="GenerateCode(IRModule, string)"/>, but hands back the generator.
+        ///
+        /// <para>Needed because the JavaScript backend produces a SECOND artefact — its source
+        /// map — that <c>ICodeGenerator.Generate</c>'s single-string contract cannot return.
+        /// Widening that interface would force C#/C++/LLVM/MSIL to answer a question none of
+        /// them has, so the map is a property on the JS generator and the caller has to keep
+        /// the instance alive to read it.</para>
+        /// </summary>
+        internal static string GenerateCode(IRModule ir, string backend, out ICodeGenerator generator)
         {
-            ICodeGenerator generator = backend?.ToLowerInvariant() switch
+            generator = backend?.ToLowerInvariant() switch
             {
                 "cpp" or "c++" => new CppCodeGenerator(),
                 "llvm" => new BasicLang.Compiler.CodeGen.LLVM.LLVMCodeGenerator(),
@@ -1247,6 +1291,41 @@ namespace BasicLang.Compiler.Driver
             };
 
             return generator.Generate(ir);
+        }
+
+        /// <summary>
+        /// True for every spelling of the JavaScript target. One predicate rather than a
+        /// repeated <c>== "javascript" || == "js"</c> — the repo already carries three
+        /// independent backend→extension maps, and this is how that starts.
+        /// </summary>
+        internal static bool IsJavaScriptTarget(string backend) =>
+            backend?.ToLowerInvariant() is "javascript" or "js";
+
+        /// <summary>
+        /// The Source Map v3 document for a completed JavaScript generation, or null when the
+        /// generator was not the JavaScript one or recorded no mappings.
+        ///
+        /// <para>Source text is INLINED. The project route emits into <c>bin/…</c> while the
+        /// <c>.bas</c> files stay in the project root, so a browser resolving <c>sources</c>
+        /// relative to the map's own URL would 404 on every one and devtools would silently
+        /// show nothing. A file that cannot be read contributes a null entry rather than
+        /// failing the build — a partial map beats no map, and beats a crash.</para>
+        /// </summary>
+        private static string BuildSourceMapJson(ICodeGenerator generator, string scriptFileName,
+            string sourceRoot)
+        {
+            if (generator is not BasicLang.Compiler.CodeGen.JavaScript.JavaScriptCodeGenerator js)
+                return null;
+            if (js.SourceMap.Count == 0) return null;
+
+            var contents = new List<string>(js.SourceMap.Count);
+            foreach (var path in js.SourceMap.Sources)
+            {
+                try { contents.Add(File.Exists(path) ? File.ReadAllText(path) : null); }
+                catch { contents.Add(null); }
+            }
+
+            return js.SourceMap.ToJson(scriptFileName, sourceRoot, contents);
         }
 
         /// <summary>

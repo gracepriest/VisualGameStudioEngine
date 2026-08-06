@@ -111,8 +111,10 @@ public class VsixInstaller : IDisposable
 
         try
         {
-            // Extract ZIP (.vsix is a ZIP archive)
-            ZipFile.ExtractToDirectory(vsixPath, tempDir, overwriteFiles: true);
+            // Extract ZIP (.vsix is a ZIP archive).
+            // ⛔ SafeZip: a .vsix is UNTRUSTED third-party input, so an entry named `../x`
+            // would write outside tempDir. This is the highest-risk of the five sites.
+            BasicLang.Runtime.SafeZip.ExtractToDirectory(vsixPath, tempDir, overwriteFiles: true);
 
             // Find package.json — may be at root or in extension/ subdirectory
             var packageJsonPath = FindPackageJson(tempDir);

@@ -88,6 +88,12 @@ public static class ServiceConfiguration
         // PLACEHOLDERS until the self-hosted zip ships (runbook, Task 13) — the flow's
         // IsReleasePinned gate keeps the installer from ever fetching the placeholder URL.
         services.AddSingleton(sp => new LldbDapInstaller());
+        // Serves a built JavaScript project on loopback for F5. A factory-created singleton for
+        // the same reason as the two above: the CONTAINER disposes it on shutdown, which is what
+        // releases the HttpListener and its accept-loop thread. One instance, because a preview
+        // is per-IDE — starting a second project's preview rebinds this one rather than leaking
+        // the first port.
+        services.AddSingleton(sp => new WebPreviewServer());
         // Gives clangd its obj/gen headers + obj/compile_commands.json on project open, before any
         // build has produced them (Task 10). Singleton because its whole job is to coalesce and
         // serialize a multi-second, non-incremental emission across requests — per-instance state

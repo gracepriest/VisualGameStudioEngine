@@ -25,7 +25,14 @@ namespace VisualGameStudio.Tests.Compiler;
 internal static class JsTestSupport
 {
     /// <summary>Build an IRModule from BasicLang source, asserting a clean front end.</summary>
-    public static IRModule BuildModule(string source, bool runPreprocessor = false)
+    /// <param name="sourceFilePath">
+    /// Threaded onto every IRFunction as <c>SourceFilePath</c>. Omitting it leaves the path
+    /// NULL, which silently disables source-map recording — the generator has no file name to
+    /// attribute a mapping to. The real compiler always supplies one (Compiler.cs:724), so a
+    /// null here is an artefact of the helper rather than a real shape.
+    /// </param>
+    public static IRModule BuildModule(string source, bool runPreprocessor = false,
+        string sourceFilePath = null)
     {
         string processed = source;
         var cppIncludes = new List<string>();
@@ -59,7 +66,7 @@ internal static class JsTestSupport
         Fail(!analyzer.Analyze(ast), "semantic analysis",
             string.Join("; ", analyzer.Errors.ConvertAll(e => e.Message)), source);
 
-        var module = new IRBuilder(analyzer).Build(ast, "TestModule");
+        var module = new IRBuilder(analyzer).Build(ast, "TestModule", sourceFilePath);
         module.CppIncludes.AddRange(cppIncludes);
         return module;
     }

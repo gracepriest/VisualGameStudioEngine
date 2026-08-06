@@ -266,6 +266,13 @@ namespace BasicLang.Compiler
         AndAnd,
         OrOr,
         Bang,
+
+        // VB's explicit short-circuit spellings. The LSP has served hover documentation for
+        // these since before they existed here, and FormattingHandler auto-capitalises
+        // `andalso` as you type — so the IDE steered users into a spelling the lexer then
+        // rejected with "Unexpected token in expression".
+        AndAlso,
+        OrElse,
         
         // Operators - Assignment
         Assignment,
@@ -569,6 +576,11 @@ namespace BasicLang.Compiler
             // Logical Operators
             { "And", TokenType.And },
             { "Or", TokenType.Or },
+            // Single tokens, not `And` + `Also`: ScanIdentifierOrKeyword consumes one maximal
+            // alphanumeric run, so "AndAlso" arrives here whole. The table is
+            // OrdinalIgnoreCase, so `andalso` resolves too.
+            { "AndAlso", TokenType.AndAlso },
+            { "OrElse", TokenType.OrElse },
             { "Not", TokenType.Not },
             { "NotEqual", TokenType.NotEqual },
             { "IsEqual", TokenType.IsEqual },

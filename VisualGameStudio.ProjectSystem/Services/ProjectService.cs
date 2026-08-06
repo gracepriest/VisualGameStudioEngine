@@ -71,6 +71,7 @@ public class ProjectService : IProjectService
             "cpp" or "c++" => TargetBackend.Cpp,
             "llvm" => TargetBackend.LLVM,
             "msil" => TargetBackend.MSIL,
+            "javascript" or "js" => TargetBackend.JavaScript,
             "csharp" or "c#" => TargetBackend.CSharp,
             _ => TargetBackend.CSharp
         };

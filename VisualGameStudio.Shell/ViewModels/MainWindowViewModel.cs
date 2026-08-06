@@ -59,6 +59,9 @@ public partial class MainWindowViewModel : ViewModelBase
     private readonly IProjectTemplateService _projectTemplateService;
     private readonly ICppToolchainProbe _cppToolchainProbe;
     private readonly ProjectSystem.Services.CppToolchainOverrides _toolchainOverrides;
+
+    /// <summary>Serves a built JavaScript project for F5. Idle (Url == null) until one runs.</summary>
+    private readonly ProjectSystem.Services.WebPreviewServer _webPreviewServer;
     private readonly IGitService _gitService;
     private readonly ILaunchConfigurationService _launchConfigurationService;
     private readonly IAutoSaveService _autoSaveService;
@@ -379,6 +382,7 @@ public partial class MainWindowViewModel : ViewModelBase
         IProjectTemplateService projectTemplateService,
         ICppToolchainProbe cppToolchainProbe,
         ProjectSystem.Services.CppToolchainOverrides toolchainOverrides,
+        ProjectSystem.Services.WebPreviewServer webPreviewServer,
         IGitService gitService,
         ILaunchConfigurationService launchConfigurationService,
         IAutoSaveService autoSaveService,
@@ -433,6 +437,7 @@ public partial class MainWindowViewModel : ViewModelBase
         _projectTemplateService = projectTemplateService;
         _cppToolchainProbe = cppToolchainProbe;
         _toolchainOverrides = toolchainOverrides;
+        _webPreviewServer = webPreviewServer;
         _gitService = gitService;
         _launchConfigurationService = launchConfigurationService;
         _autoSaveService = autoSaveService;
@@ -3412,6 +3417,14 @@ public partial class MainWindowViewModel : ViewModelBase
             ClearAllInlineDebugValues();
             ClearAllExecutionLines();
             RestorePreDebugPanels();
+
+            // ⛔ NOT inside RestorePreDebugPanels, which is where the plan puts it: that method
+            // returns immediately unless _debugPanelsShown is set, and that flag is only set on
+            // a DAP Running/Paused transition. A JavaScript preview never starts a DAP session,
+            // so the stop would never fire from in there and the server would leak. This block
+            // runs unconditionally on debug-end, which is the property the teardown needs.
+            StopWebPreview();
+
             Services.ScreenReaderService.Instance.Announce("Debug session ended");
 
             // Refresh breakpoint visuals: all revert to filled circles (verified) when not debugging
@@ -3793,6 +3806,17 @@ public partial class MainWindowViewModel : ViewModelBase
             return;
         }
 
+        // ⛔ JavaScript branches BEFORE the adapter pre-flight, not after the build. The
+        // registry's managed descriptor serves on `!IsNativeBuild`, which is TRUE for a
+        // JavaScript project, so leaving this until later means F5 first demands a .NET debug
+        // adapter and refuses outright when BasicLang.dll cannot be located — for a project
+        // that never needed one. There is no exe to debug here: the deliverable is a web page.
+        if (_projectService.CurrentProject.TargetBackend == TargetBackend.JavaScript)
+        {
+            await StartJavaScriptPreviewAsync();
+            return;
+        }
+
         // Phase 4: the registry routes F5 — the same IsNativeBuild predicate that routes
         // the BUILD picks the ADAPTER (managed BasicLang or lldb-dap), so the two can never
         // disagree about what a project is. The old "native C++ debugging arrives in a later
@@ -4034,6 +4058,15 @@ public partial class MainWindowViewModel : ViewModelBase
         if (_projectService.CurrentProject == null) return;
         if (IsDebugging) return;
 
+        // Ctrl+F5 needs the same branch as F5. Without it a JavaScript project builds fine
+        // and then dead-ends on "No executable found after build" — a JS build has no exe by
+        // design, and that message describes a failure that did not happen.
+        if (_projectService.CurrentProject.TargetBackend == TargetBackend.JavaScript)
+        {
+            await StartJavaScriptPreviewAsync();
+            return;
+        }
+
         await SaveBeforeBuildAsync();
         ShowBuildOutput();
         StatusBar.SetBuildStarted();
@@ -4062,6 +4095,91 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             OutputPanel.AppendOutput("Failed to start program.\n");
         }
+    }
+
+    /// <summary>
+    /// The JavaScript "run": build the site, serve it on loopback, open the browser.
+    ///
+    /// <para>Shared by F5 and Ctrl+F5 because there is no debugger to differentiate them —
+    /// stepping happens in the browser's own devtools, against the <c>.bas</c> via the source
+    /// map, not through a DAP session.</para>
+    ///
+    /// <para>The server is restarted rather than reused so a rebuild is never served from a
+    /// stale root, and it is deliberately left RUNNING after this returns: the page is live
+    /// until the user stops it or opens something else.</para>
+    /// </summary>
+    private async Task StartJavaScriptPreviewAsync()
+    {
+        await SaveBeforeBuildAsync();
+        ShowBuildOutput();
+        StatusBar.SetBuildStarted();
+        StatusText = "Building web site...";
+
+        var buildResult = await _buildService.BuildProjectAsync(_projectService.CurrentProject!);
+        if (!buildResult.Success) return;
+
+        // ⚠ OutputPath, NOT ExecutablePath. A JS build has no executable, and the guard the
+        // other run paths use — File.Exists(buildResult.ExecutablePath) — would reject this
+        // build as broken. Reusing ExecutablePath to carry a URL would be a type lie for the
+        // same reason.
+        var siteDirectory = buildResult.OutputPath;
+        if (string.IsNullOrEmpty(siteDirectory) || !Directory.Exists(siteDirectory))
+        {
+            OutputPanel.AppendOutput("Error: the build produced no output directory to serve.\n");
+            return;
+        }
+
+        string url;
+        try
+        {
+            url = _webPreviewServer.Start(siteDirectory);
+        }
+        catch (Exception ex)
+        {
+            OutputPanel.AppendOutput($"Error: could not start the preview server — {ex.Message}\n");
+            return;
+        }
+
+        OutputPanel.SelectedCategory = OutputCategory.General;
+        OutputPanel.AppendOutput($"\n========== Serving: {url} ==========\n");
+        OutputPanel.AppendOutput("Console output appears in the browser's developer tools.\n");
+        StatusText = $"Previewing at {url}";
+
+        OpenInBrowser(url);
+    }
+
+    /// <summary>
+    /// Hands a URL to the system browser.
+    ///
+    /// <para><c>UseShellExecute</c> is what makes this the DEFAULT browser rather than a
+    /// hardcoded one, and it is required — without it .NET tries to execute the URL as a
+    /// program and throws.</para>
+    /// </summary>
+    private void OpenInBrowser(string url)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = url,
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            // Never fatal: the server is already up, so the URL in the Output pane is enough
+            // to carry on by hand.
+            OutputPanel.AppendOutput($"Could not open a browser ({ex.Message}). Open {url} manually.\n");
+        }
+    }
+
+    /// <summary>Stops the preview server if one is running, and says so once.</summary>
+    private void StopWebPreview()
+    {
+        if (_webPreviewServer.Url is null) return;
+
+        _webPreviewServer.Stop();
+        OutputPanel.AppendOutput("Preview server stopped.\n");
     }
 
     [RelayCommand]
@@ -4151,6 +4269,11 @@ public partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task StopDebuggingAsync()
     {
+        // Shift+F5 on a JavaScript preview: there is no DAP session, so IsDebugging is false
+        // and the guard below would make this a no-op — leaving the server running with no way
+        // to stop it short of closing the IDE.
+        StopWebPreview();
+
         if (!IsDebugging) return;
         await _debugService.StopDebuggingAsync();
     }

@@ -57,7 +57,22 @@ public enum TargetBackend
     CSharp,
     Cpp,
     LLVM,
-    MSIL
+    MSIL,
+
+    /// <summary>
+    /// Emits a web site — a .js plus an index.html harness — rather than an executable.
+    ///
+    /// <para>Until this member existed the IDE could not REPRESENT a JavaScript project at
+    /// all: <c>&lt;TargetBackend&gt;JavaScript&lt;/TargetBackend&gt;</c> failed
+    /// <c>Enum.TryParse</c> in the serializer and the value silently reverted to CSharp with
+    /// no diagnostic. The compiler-side <c>TargetPlatform</c> gained JavaScript in Phase 0;
+    /// this is a DIFFERENT enum in a different assembly, so that did nothing for the IDE.</para>
+    ///
+    /// <para>Appended, never inserted — <c>Enum.TryParse</c> also accepts a numeric string, so
+    /// a hand-edited <c>&lt;TargetBackend&gt;3&lt;/TargetBackend&gt;</c> parses by ordinal.
+    /// Normal saves write the NAME, so round-tripping does not depend on this.</para>
+    /// </summary>
+    JavaScript
 }
 
 public enum ProjectLanguage

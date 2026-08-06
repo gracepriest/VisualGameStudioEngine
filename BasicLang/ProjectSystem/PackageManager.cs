@@ -205,8 +205,10 @@ namespace BasicLang.Compiler.ProjectSystem
                 }
             }
 
-            // Extract the nupkg (it's a zip file)
-            ZipFile.ExtractToDirectory(nupkgPath, packagePath, overwriteFiles: true);
+            // Extract the nupkg (it's a zip file).
+            // ⛔ SafeZip: a .nupkg is third-party input from a package feed, so an entry named
+            // `../x` would write outside the package cache directory.
+            BasicLang.Runtime.SafeZip.ExtractToDirectory(nupkgPath, packagePath, overwriteFiles: true);
         }
 
         /// <summary>
