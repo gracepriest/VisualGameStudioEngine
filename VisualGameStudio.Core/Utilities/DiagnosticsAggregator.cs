@@ -25,6 +25,11 @@ public class DiagnosticsAggregator
     private readonly Dictionary<string, List<DiagnosticItem>> _buildDiagnostics =
         new(StringComparer.OrdinalIgnoreCase);
 
+    // Keyed by (collection, file): one extension's publish must not disturb another's, and neither
+    // must disturb the LSP's. File comparison stays case-insensitive to match the other keyspaces.
+    private readonly Dictionary<(string Collection, string FilePath), List<DiagnosticItem>> _extensionDiagnostics =
+        new(ValueTupleComparer.OrdinalIgnoreCaseOnFilePath);
+
     /// <summary>
     /// Replaces the LSP diagnostics for a single file. An empty or null payload
     /// removes the file's entry (the LSP "file is now clean" signal). Items
@@ -69,13 +74,46 @@ public class DiagnosticsAggregator
         }
     }
 
-    /// <summary>Removes all LSP and build diagnostics.</summary>
+    /// <summary>
+    /// Replaces one extension DiagnosticCollection's diagnostics for a single file. An empty or
+    /// null payload removes that pair — VS Code's "this collection is clean for this file" signal.
+    /// </summary>
+    /// <remarks>
+    /// Keyed by (collection, file) rather than file, because several extensions reporting on the
+    /// same file is the ordinary case: ESLint and a spell checker both flagging app.js. Keying by
+    /// file alone would make each publish erase the previous extension's findings, and sharing the
+    /// LSP keyspace would let any LSP publish erase all of them at once. Build diagnostics already
+    /// set the precedent of a separate keyspace for the same reason.
+    /// </remarks>
+    public void SetExtensionDiagnostics(string collection, string filePath, IEnumerable<DiagnosticItem>? diagnostics)
+    {
+        if (string.IsNullOrEmpty(filePath)) return;
+
+        var key = (collection ?? "", filePath);
+        var list = diagnostics?.ToList();
+
+        lock (_lock)
+        {
+            if (list == null || list.Count == 0)
+            {
+                _extensionDiagnostics.Remove(key);
+            }
+            else
+            {
+                StampFilePath(list, filePath);
+                _extensionDiagnostics[key] = list;
+            }
+        }
+    }
+
+    /// <summary>Removes all LSP, build and extension diagnostics.</summary>
     public void Clear()
     {
         lock (_lock)
         {
             _lspDiagnostics.Clear();
             _buildDiagnostics.Clear();
+            _extensionDiagnostics.Clear();
         }
     }
 
@@ -90,12 +128,32 @@ public class DiagnosticsAggregator
         {
             return _lspDiagnostics.Values
                 .Concat(_buildDiagnostics.Values)
+                .Concat(_extensionDiagnostics.Values)
                 .SelectMany(items => items)
                 .OrderBy(d => d.FilePath ?? "", StringComparer.OrdinalIgnoreCase)
                 .ThenBy(d => d.Line)
                 .ThenBy(d => d.Column)
                 .ToList();
         }
+    }
+
+    /// <summary>
+    /// Compares (collection, file) keys, matching the file part case-insensitively so the extension
+    /// keyspace agrees with the LSP and build ones about what counts as the same file. The
+    /// collection name stays ordinal — it is an extension-chosen identifier, not a path.
+    /// </summary>
+    private sealed class ValueTupleComparer : IEqualityComparer<(string Collection, string FilePath)>
+    {
+        public static readonly ValueTupleComparer OrdinalIgnoreCaseOnFilePath = new();
+
+        public bool Equals((string Collection, string FilePath) x, (string Collection, string FilePath) y) =>
+            string.Equals(x.Collection, y.Collection, StringComparison.Ordinal)
+            && string.Equals(x.FilePath, y.FilePath, StringComparison.OrdinalIgnoreCase);
+
+        public int GetHashCode((string Collection, string FilePath) obj) =>
+            HashCode.Combine(
+                obj.Collection,
+                StringComparer.OrdinalIgnoreCase.GetHashCode(obj.FilePath ?? ""));
     }
 
     private static void StampFilePath(List<DiagnosticItem> items, string filePath)

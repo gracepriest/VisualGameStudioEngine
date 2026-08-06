@@ -680,6 +680,104 @@ public class ExtensionService : IExtensionService
     public bool HasExtensionProviders(string languageId) => _extensionProviderLanguages.ContainsKey(languageId);
 
     /// <summary>
+    /// Converts an extension's diagnostics payload into the IDE's model.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ THE SEVERITY SCALES DIFFER BY ONE, and using the wrong one fails silently.
+    /// LSP is Error=1/Warning=2/Information=3/Hint=4; VS Code — which is what an extension sends —
+    /// is Error=0/Warning=1/Information=2/Hint=3. Reusing the LSP converter would render every
+    /// extension ERROR as a warning and every warning as information: no crash, no log, just
+    /// quietly wrong severities. That is why this is a separate function rather than a shared one.
+    ///
+    /// <para>Positions are 0-based on the wire and 1-based in the IDE, matching the LSP path.</para>
+    ///
+    /// <para>Every shape here degrades rather than throws: this runs on a notification, so an
+    /// exception has nowhere to surface and would simply lose the batch.</para>
+    /// </remarks>
+    public static IEnumerable<DiagnosticItem> ConvertExtensionDiagnostics(JsonElement diagnostics, string filePath)
+    {
+        if (diagnostics.ValueKind != JsonValueKind.Array) yield break;
+
+        foreach (var entry in diagnostics.EnumerateArray())
+        {
+            // One malformed entry must not discard the well-formed ones beside it.
+            if (entry.ValueKind != JsonValueKind.Object) continue;
+
+            var item = new DiagnosticItem
+            {
+                FilePath = filePath,
+                Message = entry.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.String
+                    ? message.GetString() ?? ""
+                    : "",
+                Id = entry.TryGetProperty("code", out var code)
+                    ? (code.ValueKind == JsonValueKind.String ? code.GetString() ?? "" : code.ToString())
+                    : ""
+            };
+
+            // VS Code's scale, deliberately not the LSP one. A missing severity is Error, matching
+            // VS Code's own default.
+            item.Severity = entry.TryGetProperty("severity", out var severity)
+                            && severity.ValueKind == JsonValueKind.Number
+                            && severity.TryGetInt32(out var severityValue)
+                ? severityValue switch
+                {
+                    0 => DiagnosticSeverity.Error,
+                    1 => DiagnosticSeverity.Warning,
+                    2 => DiagnosticSeverity.Info,
+                    // VS Code's Hint is a faint suggestion. Mapped to Info rather than Hidden so it
+                    // stays visible — Hidden is the IDE's "do not surface this" level, and silently
+                    // dropping an extension's output is the failure mode this whole area suffers from.
+                    3 => DiagnosticSeverity.Info,
+                    _ => DiagnosticSeverity.Error
+                }
+                : DiagnosticSeverity.Error;
+
+            if (entry.TryGetProperty("range", out var range)
+                && range.ValueKind == JsonValueKind.Object
+                && range.TryGetProperty("start", out var start)
+                && start.ValueKind == JsonValueKind.Object)
+            {
+                item.Line = start.TryGetProperty("line", out var line) && line.TryGetInt32(out var lineValue)
+                    ? lineValue + 1
+                    : 0;
+                item.Column = start.TryGetProperty("character", out var character)
+                              && character.TryGetInt32(out var characterValue)
+                    ? characterValue + 1
+                    : 0;
+            }
+
+            yield return item;
+        }
+    }
+
+    /// <summary>
+    /// Turns the document identity an extension reports back into a local path the IDE recognises.
+    /// </summary>
+    /// <remarks>
+    /// The host percent-encodes the drive colon — <c>file:///C%3A/…</c> — while the IDE identifies
+    /// documents by plain Windows path. Observed directly: a diagnostic published for
+    /// <c>file:///C%3A/Users/…/hover-test.js</c> could never be matched to the open document, so it
+    /// never appeared in the Problems panel. This is the inverse of
+    /// <see cref="ExtensionHost.ToDocumentUri"/>: canonicalising inside one process is not the same
+    /// as agreeing across two.
+    /// </remarks>
+    public static string ToLocalDocumentPath(string uriOrPath)
+    {
+        if (string.IsNullOrWhiteSpace(uriOrPath)) return uriOrPath;
+
+        if (!uriOrPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase)) return uriOrPath;
+
+        try
+        {
+            return new Uri(uriOrPath).LocalPath;
+        }
+        catch (UriFormatException)
+        {
+            return uriOrPath;
+        }
+    }
+
+    /// <summary>
     /// Reads the language ids out of a VS Code document selector.
     /// </summary>
     /// <remarks>

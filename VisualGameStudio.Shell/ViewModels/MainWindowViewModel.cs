@@ -672,6 +672,12 @@ public partial class MainWindowViewModel : ViewModelBase
         // then silently dropped — never appearing in Tools > Settings.
         _extensionService.ContributionsLoaded += OnExtensionContributionsLoaded;
 
+        // Route extension diagnostics into the same aggregator the LSP and build paths feed.
+        // ExtensionDiagnosticsReceived was declared, raised, and had ZERO subscribers anywhere in
+        // the repo — so an extension could publish diagnostics all day and nothing would ever show
+        // them. ESLint's findings had no route to the Problems panel at all.
+        _extensionService.ExtensionDiagnosticsReceived += OnExtensionDiagnosticsReceived;
+
         // Load accessibility and zoom settings
         if (_settingsService != null)
         {
@@ -1512,6 +1518,54 @@ public partial class MainWindowViewModel : ViewModelBase
         _diagnosticsAggregator.Clear();
         ErrorList.UpdateDiagnostics(_diagnosticsAggregator.GetSnapshot());
         Problems.ReplaceAllDiagnostics(_diagnosticsAggregator.GetSnapshot());
+    }
+
+    /// <summary>
+    /// Publishes an extension's diagnostics into the Error List and Problems panel.
+    /// </summary>
+    /// <remarks>
+    /// Two things had to be true before this could work, and neither was:
+    /// <list type="number">
+    /// <item>Something had to SUBSCRIBE. The event was declared on the interface and raised by the
+    /// service, with no listener anywhere in the repo.</item>
+    /// <item>The document identity had to match. The host reports
+    /// <c>file:///C%3A/…</c> — percent-encoding the drive colon — while the IDE keys documents by
+    /// plain Windows path, so even a delivered diagnostic could not be attached to a file.</item>
+    /// </list>
+    ///
+    /// <para>Both panels are fed, deliberately: a drift guard counts Error List feed sites against
+    /// Problems feed sites and requires equality, so that a future third source cannot be
+    /// half-wired the way the Problems panel originally was.</para>
+    /// </remarks>
+    private void OnExtensionDiagnosticsReceived(object? sender, ExtensionDiagnosticsEventArgs e)
+    {
+        try
+        {
+            var filePath = VisualGameStudio.ProjectSystem.Services.ExtensionService.ToLocalDocumentPath(e.Uri);
+            if (string.IsNullOrEmpty(filePath)) return;
+
+            var items = VisualGameStudio.ProjectSystem.Services.ExtensionService
+                .ConvertExtensionDiagnostics(e.Diagnostics, filePath)
+                .ToList();
+
+            // Keyed by (collection, file) so one extension's publish cannot erase another's, and
+            // an empty payload is VS Code's "this collection is clean" signal rather than a no-op.
+            _diagnosticsAggregator.SetExtensionDiagnostics(e.CollectionName ?? "", filePath, items);
+
+            ErrorList.UpdateDiagnostics(_diagnosticsAggregator.GetSnapshot());
+            Problems.ReplaceAllDiagnostics(_diagnosticsAggregator.GetSnapshot());
+
+            if (_openDocuments.TryGetValue(filePath, out var document))
+            {
+                document.UpdateDiagnostics(items);
+            }
+        }
+        catch (Exception ex)
+        {
+            _outputService?.WriteError(
+                $"[Extensions] Failed to apply diagnostics for {e.Uri}: {ex.Message}",
+                OutputCategory.General);
+        }
     }
 
     /// <summary>
