@@ -2596,17 +2596,39 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private static string GetArg(List<string> args, int index) => index < args.Count ? args[index] : "0";
 
         /// <summary>
-        /// Widen a Byte/SByte console argument for printing (spec §14.6). <c>cout</c>
-        /// streams <c>int8_t</c>/<c>uint8_t</c> as a CHARACTER — <c>Console.WriteLine(b)</c>
-        /// with b = 65 printed 'A' — while .NET (and the C# backend) print the NUMBER.
-        /// Wrapping the arg in <c>static_cast&lt;int32_t&gt;</c> restores parity. Char is
-        /// deliberately NOT wrapped: .NET prints a Char as its character too.
+        /// Coerce a console argument so <c>cout</c> renders it the way .NET does.
+        ///
+        /// <para>Byte/SByte (spec §14.6): <c>cout</c> streams <c>int8_t</c>/<c>uint8_t</c> as a
+        /// CHARACTER — <c>Console.WriteLine(b)</c> with b = 65 printed 'A' — while .NET (and
+        /// the C# backend) print the NUMBER. Char is deliberately NOT wrapped: .NET prints a
+        /// Char as its character too.</para>
+        ///
+        /// <para>Boolean: <c>cout</c> streams a bool as 1/0, while .NET, VB and the C# backend
+        /// all print True/False.</para>
         /// </summary>
         private static string NumericPrintArg(string rendered, IRCall call, int index)
         {
-            var typeName = call != null && index < call.Arguments.Count
-                ? call.Arguments[index]?.Type?.Name
+            var argument = call != null && index < call.Arguments.Count
+                ? call.Arguments[index]
                 : null;
+            if (argument == null) return rendered;
+
+            // ⛔ THE OUTER PARENTHESES ARE LOAD-BEARING, NOT STYLE. Every caller splices this
+            // into `cout << {arg} << endl`, and `<<` binds TIGHTER than `?:`. Without them,
+            // `cout << flag ? "True" : "False"` parses as `(cout << flag) ? ... : ...` — which
+            // COMPILES CLEAN, prints 1, and discards both strings. The generated source reads
+            // as fixed while nothing changed. Both forms were hand-compiled to confirm it, and
+            // CppBooleanPrintingTests.BooleanArgument_IsParenthesized is the only test that
+            // fails when they are dropped — the obvious ones stay green.
+            //
+            // The type name alone is sufficient, including for a literal `Console.WriteLine(True)`
+            // and for an optimizer-folded comparison: both arrive as constants that DO carry a
+            // Boolean type. An extra `argument is IRConstant { Value: bool }` disjunct was tried
+            // and deleted — no mutation could kill it, which is the definition of dead code.
+            if (string.Equals(argument.Type?.Name, "Boolean", StringComparison.OrdinalIgnoreCase))
+                return $"({rendered} ? \"True\" : \"False\")";
+
+            var typeName = argument.Type?.Name;
             if (typeName == null) return rendered;
             return typeName.ToLowerInvariant() is "byte" or "sbyte" or "ubyte"
                 ? $"static_cast<int32_t>({rendered})"
