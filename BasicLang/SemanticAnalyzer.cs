@@ -6393,8 +6393,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(InlineCodeNode node)
         {
-            // Validate the language is one of the supported targets
-            var supportedLanguages = new[] { "csharp", "cpp", "llvm", "msil" };
+            // Validate the language is one of the supported targets.
+            //
+            // ⛔ THE SECOND LIST. The lexer's keyword table (BasicLangLexer._keywords) decides
+            // which tags LEX as an inline block; this decides which ones ANALYZE. They are
+            // independent, and a tag present in one and missing from the other is a construct
+            // the compiler accepts at one stage and rejects at the next. Adding a backend means
+            // adding it here too — which is exactly what was missed when javascript{ } landed,
+            // and only a test that compiled a real block caught it.
+            var supportedLanguages = new[] { "csharp", "cpp", "llvm", "msil", "javascript" };
             if (!supportedLanguages.Contains(node.Language.ToLower()))
             {
                 Error($"Unsupported inline code language '{node.Language}'. Supported languages: {string.Join(", ", supportedLanguages)}", node.Line, node.Column);

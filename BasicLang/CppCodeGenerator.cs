@@ -4441,9 +4441,17 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             }
             else
             {
-                // For non-C++ inline code, emit a comment indicating it's not supported
-                WriteLine($"// WARNING: Inline {inlineCode.Language} code not supported in C++ backend");
-                WriteLine($"// Original code ({inlineCode.Code.Length} chars) was skipped");
+                // Unreachable through Generate/GenerateSplit — CppCapabilityChecker refuses a
+                // foreign-tagged block before either emits anything. Kept as a THROW rather than
+                // the warning comment it used to be: this generator is constructible directly,
+                // and skipping a block the author wrote is a do-nothing program from a build
+                // that reported success. A refusal beats a half implementation.
+                throw new CppCapabilityException(new List<string>
+                {
+                    $"inline '{inlineCode.Language}' code (a '{inlineCode.Language}{{ }}' passthrough " +
+                    "block) is not supported on the C++ backend; inline code written for another " +
+                    "backend cannot be lowered here"
+                });
             }
         }
 

@@ -2348,7 +2348,39 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         public void Visit(IRThrow throwInst) =>
             Line(throwInst.Exception == null ? "throw _ex;" : $"throw {Expr(throwInst.Exception)};");
-        public void Visit(IRInlineCode inlineCode) => throw NotYet(nameof(IRInlineCode));
+        /// <summary>
+        /// <c>javascript{ … }</c> → the block's text, verbatim.
+        ///
+        /// <para><b>The universal escape hatch.</b> <c>::</c> is call-only — a member assignment
+        /// through it dies in the SemanticAnalyzer and a <c>::</c> value cannot be stored in a
+        /// local — so anything stateful (the DOM idioms above all) has to come through here.
+        /// There is no type checking and no BL70xx protection inside a block; that is the
+        /// deliberate bargain (spec D4), not a gap.</para>
+        ///
+        /// <para><b>Line by line through <see cref="Line"/>, never one Append.</b> Line() is what
+        /// maintains <c>_generatedLine</c>, which every subsequent <c>RecordMapping</c> reads —
+        /// bypassing it would shift the whole source map below this block by the number of lines
+        /// in it, so a devtools breakpoint on any later statement would bind to the wrong
+        /// <c>.bas</c> line. The block's OWN mapping is already recorded by EmitInstructions
+        /// before this runs, which is what makes a breakpoint on the <c>javascript{</c> line land.</para>
+        ///
+        /// <para>A block tagged for another language cannot normally arrive — ForeignFeatureChecker
+        /// refuses anything but <c>ownInlineLanguage</c> before generation starts — but this
+        /// re-checks rather than trusting that. The generator is reachable directly (every test in
+        /// this repo constructs it and calls Generate), and emitting the body of a <c>cpp{ }</c>
+        /// block as JavaScript would be a silent miscompile of exactly the kind this backend
+        /// refuses elsewhere.</para>
+        /// </summary>
+        public void Visit(IRInlineCode inlineCode)
+        {
+            if (!string.Equals(inlineCode.Language, "javascript", StringComparison.OrdinalIgnoreCase))
+                throw new ForeignFeatureException(
+                    $"The JavaScript backend does not support inline '{inlineCode.Language}' code " +
+                    $"(a '{inlineCode.Language}{{ }}' passthrough block); use javascript{{ }} instead.");
+
+            foreach (var line in (inlineCode.Code ?? string.Empty).Replace("\r\n", "\n").Split('\n'))
+                Line(line.TrimEnd());
+        }
         /// <summary>
         /// <c>For Each</c> → <c>for (const v of collection)</c>.
         ///

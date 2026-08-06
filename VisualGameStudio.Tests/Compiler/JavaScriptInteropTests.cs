@@ -543,4 +543,108 @@ public class JavaScriptInteropTests
         => Assert.That(() => JsTestSupport.CompileOptimized(
                 "Sub Main()\nConsole.WriteLine(New std::mutex())\nEnd Sub"),
             Throws.Exception.With.Message.Contains("BL7009"));
+
+    // ------------------------------------------------------------------
+    // Task 4 — javascript{ … } inline blocks: THE UNIVERSAL ESCAPE HATCH.
+    //
+    // `::` is call-only (see the _KNOWN tests above), so every stateful DOM idiom — assigning
+    // textContent, storing an element, attaching a handler — has to come through a block. That
+    // makes this, not `::`, the feature the "BasicLang produces web sites" milestone rests on.
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void InlineJavaScriptBlock_EmitsVerbatim()
+        => Assert.That(
+            JsTestSupport.Compile("Sub Main()\njavascript{ console.log(\"inline\"); }\nEnd Sub"),
+            Does.Contain("console.log(\"inline\");"));
+
+    /// <summary>
+    /// The milestone program itself, guarded by a test rather than only by a checklist item:
+    /// a block reaching into the DOM. Node cannot run it (no DOM), so codegen is the only
+    /// automatable oracle — the human step is Task 6.
+    /// </summary>
+    [Test]
+    public void InlineJavaScriptBlock_TheMilestoneProgram_EmitsVerbatim()
+    {
+        var js = JsTestSupport.Compile(
+            "#JsImport \"./greet.js\"\nSub Main()\n" +
+            "javascript{ document.getElementById(\"out\").textContent = greet(\"BasicLang\"); }\n" +
+            "End Sub", runPreprocessor: true);
+
+        Assert.That(js, Does.Contain("import \"./greet.js\";"));
+        Assert.That(js, Does.Contain("document.getElementById(\"out\").textContent = greet(\"BasicLang\");"));
+    }
+
+    /// <summary>
+    /// A multi-line block must not shift the source map for anything BELOW it. This is the
+    /// whole reason Visit(IRInlineCode) emits through Line() rather than appending: Line()
+    /// maintains _generatedLine, and every later RecordMapping reads it. Append the block
+    /// directly and a breakpoint on the last line of this program binds three lines too high.
+    /// </summary>
+    [Test]
+    public void InlineJavaScriptBlock_DoesNotShiftSourceMapPositionsBelowIt()
+    {
+        var module = JsTestSupport.BuildModule(
+            "Sub Main()\njavascript{\nconst a = 1;\nconst b = 2;\n}\nConsole.WriteLine(7)\nEnd Sub",
+            sourceFilePath: "prog.bas");
+        var generator = new BasicLang.Compiler.CodeGen.JavaScript.JavaScriptCodeGenerator();
+        var js = generator.Generate(module).Replace("\r\n", "\n").Split('\n');
+
+        var generatedLine = Array.FindIndex(js, l => l.Contains("console.log(7)"));
+        Assert.That(generatedLine, Is.GreaterThanOrEqualTo(0), "no console.log emitted");
+
+        var pairs = JavaScriptGeneratorSourceMapTests.Decode(generator.SourceMap.ToJson("app.js"));
+        var mapped = pairs.Where(p => p.generated == generatedLine).Select(p => p.source).ToList();
+
+        Assert.That(mapped, Does.Contain(5),
+            "Console.WriteLine is on source line 6 (0-based 5); the block above it must not shift it");
+    }
+
+    /// <summary>A block tagged for another backend must still be refused here.</summary>
+    [Test]
+    public void InlineCppBlock_IsStillRejectedOnJavaScript()
+        => Assert.That(() => JsTestSupport.Compile("Sub Main()\ncpp{ int x = 1; }\nEnd Sub"),
+            Throws.TypeOf<BasicLang.Compiler.CodeGen.ForeignFeatureException>());
+
+    /// <summary>
+    /// ⛔ THE MIRROR, and the one that would have been missed: a `javascript{ }` block must be
+    /// refused on the backends that cannot emit it. The checker arm is symmetric
+    /// (ownInlineLanguage), so this passes for free — but "for free" is exactly what a
+    /// regression silently takes away, and the C# backend dropping a block would produce a
+    /// do-nothing program from a green build.
+    /// </summary>
+    [TestCase("csharp")]
+    [TestCase("cpp")]
+    public void InlineJavaScriptBlock_IsRejectedOnOtherBackends(string backend)
+    {
+        var module = JsTestSupport.BuildModule("Sub Main()\njavascript{ console.log(1); }\nEnd Sub");
+
+        Assert.That(() => BasicLang.Compiler.Driver.Program.GenerateCode(module, backend),
+            Throws.Exception, $"the {backend} backend silently dropped a javascript{{ }} block");
+    }
+
+    /// <summary>
+    /// ⛔ Adding a language tag to the lexer's keyword table would otherwise STEAL that word as
+    /// an identifier — and `javascript` is a plausible variable name on this backend
+    /// specifically. The scan arm falls back to Identifier when no `{` follows, which makes all
+    /// five tags contextual rather than reserved.
+    /// </summary>
+    [TestCase("javascript")]
+    [TestCase("csharp")]
+    [TestCase("cpp")]
+    public void InlineLanguageTag_WithoutABrace_IsStillAnOrdinaryIdentifier(string name)
+        => Assert.That(
+            JsTestSupport.Compile($"Sub Main()\nDim {name} As Integer = 3\nConsole.WriteLine({name})\nEnd Sub"),
+            Does.Contain($"console.log({name})"));
+
+    /// <summary>
+    /// The optimizer sees an opaque instruction with no operands and no result. Confirm it is
+    /// not pruned as dead — a dropped escape hatch is a silent do-nothing program, and the
+    /// shipping routes all optimize while JsTestSupport.Compile does not.
+    /// </summary>
+    [Test]
+    public void Optimized_InlineJavaScriptBlock_SurvivesVerbatim()
+        => Assert.That(
+            JsTestSupport.CompileOptimized("Sub Main()\njavascript{ console.log(\"inline\"); }\nEnd Sub"),
+            Does.Contain("console.log(\"inline\");"));
 }

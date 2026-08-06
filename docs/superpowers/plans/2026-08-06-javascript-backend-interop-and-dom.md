@@ -530,6 +530,28 @@ git commit -am "feat(js): :: passes raw JavaScript identifiers through unmangled
 
 ⛔ There is **no `js{}` today** — inline blocks are lexer keywords and there are exactly four. And the tag is lowercased at `:1299`, so the keyword spelling must match the `ownInlineLanguage` string passed at `JavaScriptBackend.cs:129-130`. **Use the keyword `javascript`**, matching that string, rather than adding `js` and then having to normalise two spellings in the checker.
 
+### ⛔ Two things this task's plan got wrong — MEASURED during execution
+
+1. **There is a FIFTH list, in the SemanticAnalyzer.** `Visit(InlineCodeNode)`
+   (`SemanticAnalyzer.cs:6397`) carries its own `{ "csharp", "cpp", "llvm", "msil" }` allow-list
+   and errors with *"Unsupported inline code language"*. The lexer changes alone make
+   `javascript{ }` **lex** and then **fail analysis** — every codegen test dies in
+   `JsTestSupport`'s parse/analyze guard, not at `NotYet(IRInlineCode)` as the plan predicted.
+   Same "N independent lists, add an arm to N−1" shape the repo has paid for repeatedly; this
+   one at least fails loudly.
+2. **The C++ backend SILENTLY DROPS a foreign inline block**, and always has.
+   `CppCodeGenerator.Visit(IRInlineCode)` emits `// WARNING: Inline <lang> code not supported`
+   into the generated C++ and continues — a do-nothing program from a build that reported
+   success. C#/LLVM/MSIL refuse this through `ForeignFeatureChecker`'s inline arm; C++ does not
+   run that checker and never got the guard. Fixed the same way Task 1b fixed `#JsImport`: an
+   arm in `CppCapabilityChecker.CheckInstruction`, which covers `Generate` **and**
+   `GenerateSplit`. It was already true for `csharp{ }`/`llvm{ }`/`msil{ }` — the honesty
+   matrix's last dishonest cell, found only because the `javascript{ }` mirror test drove it.
+
+Also settled here rather than deferred to a release note: the scan arm now falls back to
+`Identifier` when no `{` follows, so all five tags are CONTEXTUAL keywords. `Dim javascript As
+Integer` stays legal — see the risk row at the end of this plan.
+
 - [ ] **Step 1: Write the failing tests**
 
 ```csharp

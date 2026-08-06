@@ -35,7 +35,13 @@ public class JavaScriptOptimizedExecutionTests
     /// </summary>
     private static string CompileOptimized(string source) => JsTestSupport.CompileOptimized(source);
 
-    private static string RunOptimized(string source) => RunNode(CompileOptimized(source));
+    /// <summary>
+    /// Compile with the shipping passes and RUN it. <c>internal</c> so sibling execution
+    /// fixtures can reach the optimized path without a second copy of the Node harness —
+    /// two copies would drift about timeouts, .mjs and the exit-code assertion, and the
+    /// point of this fixture is that the optimized path is exercised the SAME way.
+    /// </summary>
+    internal static string RunOptimized(string source) => RunNode(CompileOptimized(source));
 
     /// <summary>
     /// Runs a JS string under Node.
