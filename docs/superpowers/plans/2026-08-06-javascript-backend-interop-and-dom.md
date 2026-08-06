@@ -26,7 +26,7 @@ That is why `javascript{ … }` (Task 4) is the universal hatch and carries the 
 
 ## Scope: why this plan is only the escape hatch
 
-The design spec's D5 (a typed DOM declared in `.bli` files, generated from `lib.dom.d.ts`) is a **different feature** — a type system for foreign declarations — and it is blocked behind two decisions only the user can make (listed at the end). Bundling it here would block four tasks of ready, shippable work behind two unanswered questions.
+The design spec's D5 (a typed DOM declared in `.bli` files, generated from `lib.dom.d.ts`) is a **different feature** — a type system for foreign declarations — with its own extension-list, parser and codegen work. It is outlined as **plan 2b** at the end, with both of its design decisions now settled and one hard prerequisite identified. Bundling it here would delay four tasks of ready, shippable work behind a much larger piece.
 
 **This plan ships alone.** After Task 6 a user can write a real web page — via `javascript{ … }` for anything stateful, `::` for calls, and `#JsImport` for libraries. The typed surface becomes **plan 2b**, outlined at the end with its decisions surfaced.
 
@@ -736,16 +736,73 @@ Two independent restrictions, in two different components:
 
 # Plan 2b (deferred) — The typed DOM
 
-**Not part of this plan.** It is a separate feature — a type system for foreign declarations — and it is blocked on two decisions only the user can make.
+**Not part of this plan.** It is a separate feature — a type system for foreign declarations. Both of its blocking decisions are now **SETTLED** (user, 2026-08-06), so 2b is ready to be written as a full plan whenever wanted.
 
-### Decisions needed before 2b can be written
+### Decision 1 — `Extern` marks a declaration-only type ✅ SETTLED
 
-1. **What marks a declaration-only type?** The spec writes `Public Extern Class Element`, but **`Extern` is already taken**: `ParseExtern` (`Parser.cs:1752`) parses `Extern Function F() … CSharp: "…" End Extern`, per-backend inline implementations, producing an `IRExternDeclaration` (`IRNodes.cs:1529-1547`) that is function-shaped and has no members. Options: overload `Extern` (unifying reading: "defined outside BasicLang"), or a new marker. Hard to reverse once `.bli` files exist.
+```basiclang
+Public Extern Class Element
+    ...
+End Class
+```
 
-2. **How do BasicLang names map to JavaScript names?** BasicLang is PascalCase; the DOM is camelCase. Implicit conversion handles `TextContent` → `textContent` and `GetElementById` → `getElementById` but not `InnerHTML` → `innerHTML` reliably, nor `URL`. An explicit `Alias "textContent"` is exact but verbose. Recommendation: explicit alias, with implicit camelCase as the default when absent — the generator writes aliases mechanically, so verbosity is free, while hand-written declarations stay short. **This choice determines the generator's output format**, so it must be settled before plan 3.
+`Extern` is overloaded deliberately. It already parses as per-backend inline implementations — `Extern Function F() … CSharp: "…" End Extern` (`ParseExtern`, `Parser.cs:1752`), producing a function-shaped `IRExternDeclaration` (`IRNodes.cs:1529-1547`) with no members. The unifying reading is **"defined outside BasicLang"**: `Extern Function` with a body says *how* to define it per backend; `Extern Class` with no body says *it already exists in the target runtime*. No new keyword, no new concept for the user.
+
+### Decision 2 — declare members with their EXACT JavaScript names ✅ SETTLED
+
+```basiclang
+Public Extern Class Element
+    Public Property textContent As String
+    Public Property innerHTML As String
+    Public Function querySelector(sel As String) As Element
+    Public Sub addEventListener(evt As String, handler As Action)
+End Class
+```
+
+No conversion rule and no `Alias` syntax. The declaration carries the real JS name and codegen emits **the declared name**, verbatim.
+
+**Why this over implicit camelCase or explicit aliases:**
+
+- **Exact by construction.** Implicit "lowercase the first letter" handles `TextContent`→`textContent` and `GetElementById`→`getElementById`, but mangles `document.URL` into `uRL`. Every such member then needs an override anyway, so the implicit rule buys nothing and costs a second mechanism plus a rule for when it is wrong.
+- **The plan-3 generator becomes a COPY, not a transform.** `lib.dom.d.ts` already holds the exact names. Copying cannot be wrong; transforming has to detect its own failures.
+- **IntelliSense matches MDN.** Completion shows `textContent`, which is what the user just read on the docs page. No mental translation.
+- **camelCase at the call site is informative** — it signals "this is a foreign type", the same way `::` does.
+
+The cost — `.bli` files not following BasicLang's PascalCase convention — is accepted: these are declarations *of foreign types*, and looking foreign is honest.
+
+### ⛔ Decision 2 has a hard prerequisite: chip `task_8f4dcdb2`
+
+**Member access currently emits the USE-SITE casing, not the declared name.** Measured:
+
+```basiclang
+Class Box
+    Public TextContent As String
+End Class
+Sub Main()
+    Dim b As New Box()
+    b.textContent = "hi"          ' lowercase t — accepted, BasicLang is case-insensitive
+    Console.WriteLine(b.TextContent)
+End Sub
+```
+
+emits two DIFFERENT JS properties and prints nothing:
+
+```js
+class Box { TextContent = ""; }
+b.textContent = "hi";        // writes one
+const t2 = b.TextContent;    // reads another
+```
+
+On the C# backend the same program emits `b.textContent` against `public string TextContent` and fails late in `csc` (CS1061). On JavaScript it is silently wrong from a green build.
+
+So a user writing `element.TextContent` out of BasicLang habit would emit `.TextContent` and get `undefined`. **Extern member resolution must canonicalise to the declared name** — which is required no matter which mapping was chosen, since an `Alias` mechanism would have to do exactly the same thing. Fixing `task_8f4dcdb2` at IR-build time makes every backend inherit it and turns Decision 2 into "emit what the declaration says", with no extra machinery.
+
+This is the same shape as the operator bug fixed in `cd4f04d`: case-insensitive front end, case-sensitive back end.
 
 ### Work 2b must cover that this plan does not
 
+- **⛔ FIRST: chip `task_8f4dcdb2`** (declared-name canonicalisation), per Decision 2 above. Everything else in 2b is silently wrong without it.
+- **`Extern Class` codegen emits NOTHING for the type itself.** An extern class exists in the runtime; emitting `class Element { }` would SHADOW the real one. See the `EmitClass` note below.
 - **`.bli` in THREE independent extension lists**, not one: `ModuleResolver.SupportedExtensions` (`:15`), `ProjectFile.BasicLangSourceExtensions` (`:81-82`), and `VisualGameStudio.Core/Constants/FileExtensions.SourceExtensions` (`:15`). Consequences of missing any:
   - `ProjectFile.GetSourceFiles()` (`:415`) globs by the second list — miss it and **the project route never compiles the DOM lib**.
   - `DocumentManager.cs:183`, `TextDocumentSyncHandler.cs:41`, `LspProjectContext.cs:343` and `:394` all key off the second list — miss it and there is **no completion, no hover, no diagnostics** on a `.bli`, which defeats spec D5's entire "zero LSP changes" rationale.
@@ -755,6 +812,6 @@ Two independent restrictions, in two different components:
 - **`Public Extern Class` needs TWO parser edits.** `ParseTopLevelDeclaration` handles bare `Extern` at `:106-107`, but the modifier path is a separate block at `:125-236` with no `Extern` arm and throws at `:233-235`.
 - **`JsCapabilityChecker` likely needs NO change** — `BuildAllowedTypeNames` (`:262-263`) already admits every declared class and interface. Verify rather than assume work.
 - **`EmitClass` must skip extern types.** `Generate` iterates `module.Classes.Values` (`:163-167`) unfiltered, so an auto-loaded `Element` would emit `class Element { }` and **shadow the real DOM type** — a runtime failure with no compile error. Also decide what happens to extern members flattened by `CollectMemberImplementations()` (`:152`), which have no `Implementation`.
-- **`Console` collides.** `Console` is already the stdlib surface (`JsCapabilityChecker.cs:259`, `StdLibRegistry.cs:37`). A `dom-core.bli` declaring `Console` would fight it. Leave `Console` to the stdlib.
+- **`console` collides with `Console`, and Decision 2 does NOT save you from it.** `Console` is already the stdlib surface (`JsCapabilityChecker.cs:259`, `StdLibRegistry.cs:37`). Declaring `Extern Class console` in a `.bli` looks distinct under Decision 2's exact-JS-name rule, but `IRModule.Classes` is keyed `OrdinalIgnoreCase`, so the two ARE the same key. Leave `console` out of the DOM declarations entirely — the stdlib already lowers `Console.WriteLine` to `console.log`.
 - **BL7007's exception-by-suffix rule** (`JsCapabilityChecker.cs:293`) admits anything ending in `Exception` — so a generated `DOMException` passes the allow-list even if its declaration is missing. A false green waiting for plan 3.
 - **DOM auto-loading must be backend-gated** (`project.Backend`, `Program.cs:566`) — `Element` would collide with a user type on the C# backend — **and must cover the single-file route**, which has no `.blproj` and therefore no `TargetBackend`.
