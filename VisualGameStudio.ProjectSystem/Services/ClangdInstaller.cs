@@ -235,7 +235,8 @@ public sealed class ClangdInstaller : IDisposable
             try
             {
                 Directory.CreateDirectory(stagingDir);
-                ZipFile.ExtractToDirectory(tempZip, stagingDir);
+                // SafeZip, not ZipFile: an entry named `../x` escapes the staging dir.
+                BasicLang.Runtime.SafeZip.ExtractToDirectory(tempZip, stagingDir);
             }
             catch (Exception ex)
             {

@@ -328,8 +328,10 @@ public class ExtensionService : IExtensionService
 
             try
             {
-                // Extract package
-                ZipFile.ExtractToDirectory(packagePath, tempDir);
+                // Extract package.
+                // ⛔ SafeZip: this package came from Open VSX and is UNTRUSTED — an entry
+                // named `../x` would be written outside tempDir.
+                BasicLang.Runtime.SafeZip.ExtractToDirectory(packagePath, tempDir);
 
                 // Find package.json (might be in extension/ subdirectory for vsix)
                 var manifestPath = Path.Combine(tempDir, "package.json");
