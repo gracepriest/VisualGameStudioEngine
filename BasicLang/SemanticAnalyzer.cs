@@ -7038,6 +7038,39 @@ namespace BasicLang.Compiler.SemanticAnalysis
         // Expressions
         // ====================================================================
 
+        /// <summary>
+        /// Canonical casing for BasicLang's WORD operators.
+        ///
+        /// <para>BasicLang is case-insensitive — the lexer's keyword table is
+        /// OrdinalIgnoreCase — but the AST stores the RAW SOURCE LEXEME, and the operator
+        /// switches below match string literals exactly. So <c>If a and b Then</c> fell
+        /// through to "Unknown binary operator 'and'" on every backend while <c>And</c>
+        /// worked. Symbol operators are returned untouched; an unrecognised word is returned
+        /// untouched too, so the resulting diagnostic still quotes what the user actually
+        /// wrote.</para>
+        /// </summary>
+        private static string NormalizeOperator(string op)
+        {
+            if (string.IsNullOrEmpty(op) || !char.IsLetter(op[0])) return op;
+
+            return op.ToLowerInvariant() switch
+            {
+                "and" => "And",
+                "andalso" => "AndAlso",
+                "or" => "Or",
+                "orelse" => "OrElse",
+                "not" => "Not",
+                "mod" => "Mod",
+                "xor" => "Xor",
+                "shl" => "Shl",
+                "shr" => "Shr",
+                "isequal" => "IsEqual",
+                "notequal" => "NotEqual",
+                "addressof" => "AddressOf",
+                _ => op
+            };
+        }
+
         public void Visit(BinaryExpressionNode node)
         {
             node.Left.Accept(this);
@@ -7063,7 +7096,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             TypeInfo resultType;
 
-            switch (node.Operator)
+            switch (NormalizeOperator(node.Operator))
             {
                 case "+":
                 case "-":
@@ -7224,7 +7257,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 case "&&":
                 case "Or":
                 case "||":
-                    // Logical operators
+                case "AndAlso":
+                case "OrElse":
+                    // Logical operators.
+                    //
+                    // ⚠ BOOLEAN-ONLY, which is narrower than real VB: there, And/Or are also
+                    // BITWISE over integral operands. BasicLang has never supported that half
+                    // — `&` is string concatenation and BinaryOpKind.BitwiseAnd/BitwiseOr have
+                    // no producer anywhere in the compiler — so `flags And &H0F` is a type
+                    // error here. Admitting it would be a language change, not a codegen fix.
+                    // This gate is what lets every backend lower And unconditionally as a
+                    // LOGICAL operator without inspecting operand types.
                     if (!leftType.Equals(_typeManager.BooleanType) ||
                         !rightType.Equals(_typeManager.BooleanType))
                     {
@@ -7256,7 +7299,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             TypeInfo resultType;
 
-            switch (node.Operator)
+            switch (NormalizeOperator(node.Operator))
             {
                 case "-":
                 case "+":

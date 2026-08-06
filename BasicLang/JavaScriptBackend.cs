@@ -548,13 +548,24 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case BinaryOpKind.Shl: return $"({l} << {r})";
                 case BinaryOpKind.Shr: return $"({l} >> {r})";
 
-                // ⚠ And/Or are NOT mapped, deliberately. IRNodes.cs groups them under
-                // "Logical (short-circuit)", but VB's `And`/`Or` are NON-short-circuit
-                // (`AndAlso`/`OrElse` are the short-circuiting pair) and are bitwise over
-                // integers. An open chip on the C++ backend records the same ambiguity. Since
-                // `&&` and `&` differ observably — on operand evaluation AND on integers —
-                // guessing would ship silently-wrong output. Throw until the semantics are
-                // settled, exactly as IntDiv was left unmapped before it was measured.
+                // And/Or were left unmapped until the semantics were MEASURED rather than
+                // assumed, and the measurement settled it: BasicLang's And/Or are
+                // BOOLEAN-ONLY. SemanticAnalyzer rejects integral operands, `&` is string
+                // concatenation, and BitwiseAnd/BitwiseOr have no producer anywhere in the
+                // compiler — so the bitwise half of VB's overload is simply not in this
+                // language, and every And reaching here provably has Boolean operands.
+                //
+                // That makes `&&` correct rather than a guess, and `&` actively WRONG:
+                // JavaScript's `&` coerces to int32, so `true & false` is 0 and a
+                // Boolean-typed expression would print 0/1 instead of false/true.
+                //
+                // Short-circuiting is not a divergence either — the IR optimizer already
+                // rewrites `x And False` to `False`, discarding the left operand, which is
+                // sound only under short-circuit evaluation. The C# backend and both
+                // interpreters emit `&&` too.
+                case BinaryOpKind.And: return $"({l} && {r})";
+                case BinaryOpKind.Or: return $"({l} || {r})";
+
                 default:
                     throw NotYet($"BinaryOpKind.{op.Operation}");
             }

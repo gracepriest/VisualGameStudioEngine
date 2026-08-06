@@ -3809,6 +3809,7 @@ namespace BasicLang.Compiler
             {
                 TokenType.Plus or TokenType.Minus or TokenType.Multiply or TokenType.Divide or
                 TokenType.Modulo or TokenType.And or TokenType.Or or TokenType.BitwiseXor or
+                TokenType.AndAlso or TokenType.OrElse or
                 TokenType.AndAnd or TokenType.OrOr or TokenType.Assignment or
                 TokenType.Equal or TokenType.NotEqual or TokenType.LessThan or
                 TokenType.LessThanOrEqual or TokenType.GreaterThan or TokenType.GreaterThanOrEqual => true,
@@ -3820,8 +3821,14 @@ namespace BasicLang.Compiler
         {
             return token.Type switch
             {
-                TokenType.OrOr or TokenType.Or => 1,
-                TokenType.AndAnd or TokenType.And => 2,
+                // ⚠ This is the SECOND expression parser. Parser.cs has two with independent
+                // operator tables — a recursive-descent chain (ParseLogicalOr/ParseLogicalAnd)
+                // and this precedence-climbing continuation, reached for a bare expression
+                // statement whose target was already consumed. Adding an operator to only one
+                // gives position-dependent parsing: `Dim r = a AndAlso b` would compile while
+                // `r = a AndAlso b` would not.
+                TokenType.OrOr or TokenType.Or or TokenType.OrElse => 1,
+                TokenType.AndAnd or TokenType.And or TokenType.AndAlso => 2,
                 TokenType.Assignment or TokenType.Equal or TokenType.NotEqual => 3,
                 TokenType.LessThan or TokenType.LessThanOrEqual or
                 TokenType.GreaterThan or TokenType.GreaterThanOrEqual => 4,
@@ -3845,7 +3852,9 @@ namespace BasicLang.Compiler
         {
             var expr = ParseLogicalAnd();
 
-            while (Check(TokenType.Or) || Check(TokenType.OrOr))
+            // OrElse shares Or's precedence level in VB, so it belongs here rather than at a
+            // new level of its own.
+            while (Check(TokenType.Or) || Check(TokenType.OrOr) || Check(TokenType.OrElse))
             {
                 var op = Advance();
                 var right = ParseLogicalAnd();
@@ -3863,7 +3872,8 @@ namespace BasicLang.Compiler
         {
             var expr = ParseEquality();
 
-            while (Check(TokenType.And) || Check(TokenType.AndAnd))
+            // AndAlso shares And's precedence level in VB — same reasoning as OrElse above.
+            while (Check(TokenType.And) || Check(TokenType.AndAnd) || Check(TokenType.AndAlso))
             {
                 var op = Advance();
                 var right = ParseEquality();
