@@ -174,10 +174,18 @@ namespace BasicLang.Compiler
                         // so <./a.js> is not an alternate spelling to accept — it is a mistake,
                         // and so is a bare unquoted path.
                         var quote = Regex.Match(trimmedLine, "#JsImport\\s+\"([^\"]+)\"", RegexOptions.IgnoreCase);
-                        if (quote.Success)
-                            _jsImports.Add(quote.Groups[1].Value);
-                        else
+                        if (!quote.Success)
                             _errors.Add(new PreprocessorError { Line = lineNumber, Message = $"Invalid #JsImport syntax (expected a quoted module specifier): {trimmedLine}" });
+                        // ⛔ A backslash path is the natural thing for a Windows user to type, and it
+                        // is the one bad specifier that produces NO diagnostic anywhere downstream:
+                        // it collects, it escapes cleanly into the emitted ES `import`, and no module
+                        // loader — browser or Node — resolves it. The result is a clean build and a
+                        // 404 at run time. Reject it here to turn that into a build error. Module
+                        // specifiers are URLs, not OS paths: forward slashes on every platform.
+                        else if (quote.Groups[1].Value.Contains('\\'))
+                            _errors.Add(new PreprocessorError { Line = lineNumber, Message = $"Invalid #JsImport specifier \"{quote.Groups[1].Value}\": JavaScript module specifiers use forward slashes, not backslashes (a backslash path resolves in no module loader)" });
+                        else
+                            _jsImports.Add(quote.Groups[1].Value);
                     }
                     result.AppendLine($"' {line}"); // Comment the directive out of the BasicLang source
                 }
