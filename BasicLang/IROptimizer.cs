@@ -464,10 +464,18 @@ namespace BasicLang.Compiler.IR.Optimization
             return null;
         }
         
+        // `/` is FLOATING-POINT division in VB.NET even on two integers: 7 / 2 is 3.5.
+        // These two arms used C# integer division, so the CONSTANT path truncated
+        // independently of the analyzer's result type — proven by the JS backend, which is
+        // otherwise correct yet still printed 3 for `7 / 2` while printing 3.5 for `a / b`.
+        // Must ship with the analyzer's Double result type: TryFoldBinary stamps op.Type onto
+        // the folded IRConstant, so fixing either one alone yields a mismatched pair
+        // (IRConstant(3 as int) typed Double, or IRConstant(3.5) typed Integer).
+        // FoldIntDiv below is deliberately left truncating — `\` is the integer operator.
         private object FoldDiv(object a, object b)
         {
-            if (a is int ia && b is int ib && ib != 0) return ia / ib;
-            if (a is long la && b is long lb && lb != 0) return la / lb;
+            if (a is int ia && b is int ib && ib != 0) return (double)ia / ib;
+            if (a is long la && b is long lb && lb != 0) return (double)la / lb;
             if (a is float fa && b is float fb && fb != 0) return fa / fb;
             if (a is double da && b is double db && db != 0) return da / db;
             return null;

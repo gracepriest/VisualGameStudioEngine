@@ -7160,6 +7160,22 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             // checks don't cascade a second, misleading error.
                             resultType = leftType.Name == "Decimal" ? leftType : rightType;
                         }
+
+                        // VB.NET: `/` is FLOATING-POINT division ALWAYS. 7 / 2 is 3.5, typed
+                        // Double; `\` is the integer operator. Sharing this arm's
+                        // GetCommonType typed Integer / Integer as Integer, and BOTH backends
+                        // then inherited C-family truncation — neither backend was at fault.
+                        //
+                        // Decimal and Single keep their own width: Decimal has no implicit
+                        // conversion to Double in either direction (promoting it would lose
+                        // precision), and promoting Single would change the result type.
+                        if (NormalizeOperator(node.Operator) == "/"
+                            && resultType != null
+                            && !resultType.Name.Equals("Decimal", StringComparison.OrdinalIgnoreCase)
+                            && !resultType.Name.Equals("Single", StringComparison.OrdinalIgnoreCase))
+                        {
+                            resultType = _typeManager.DoubleType;
+                        }
                     }
                     break;
 
@@ -7175,10 +7191,20 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     // fires anywhere. Upward it leaked as a spurious user-visible error:
                     // returning `a \ b` from a Byte function was rejected as a narrowing
                     // conversion from the phantom Integer.
-                    if (!leftType.IsIntegral() || !rightType.IsIntegral())
+                    if (!leftType.IsNumeric() || !rightType.IsNumeric())
                     {
-                        Error($"Integer division requires integral operands", node.Line, node.Column);
+                        Error($"Integer division requires numeric operands", node.Line, node.Column);
                         resultType = _typeManager.IntegerType;
+                    }
+                    else if (!leftType.IsIntegral() || !rightType.IsIntegral())
+                    {
+                        // A floating operand is NOT an error: VB.NET rounds it to Long and
+                        // then divides. Rejecting it used to be harmless because `/` yielded
+                        // an integral type, so `(a / b) \ c` type-checked. Now that `/` is
+                        // correctly Double, keeping the old rejection would turn that
+                        // expression — which compiles today — into a hard error. This
+                        // relaxation is REQUIRED BY the `/` change, not optional cleanup.
+                        resultType = _typeManager.LongType;
                     }
                     else
                     {

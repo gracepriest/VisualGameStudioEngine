@@ -3311,11 +3311,49 @@ namespace BasicLang.Compiler.IR
             else
             {
                 var opKind = MapBinaryOperator(node.Operator);
+
+                // ⛔ NEITHER BACKEND READS IRBinaryOp.Type. Both render `{left} {op} {right}`
+                // and let the TARGET language pick the operator semantics, so a Double-typed
+                // division of two int32_t operands still performs C-family INTEGER division
+                // and merely widens the already-truncated result. Measured: the temp was
+                // correctly `double t0` and the program still printed 3 for 7 / 2 — the
+                // emission assertion passed while the executable was wrong.
+                //
+                // So widen the OPERANDS, not just the result. IRCast is the right seam: it is
+                // already handled by both interpreters, every backend, IROperandWalker,
+                // IRPrettyPrinter and CppCapabilityChecker, so one insertion here moves every
+                // consumer at once instead of repeating the coercion per backend.
+                //
+                // IntDiv is deliberately excluded — `\` must keep truncating.
+                if (opKind == BinaryOpKind.Div && resultType != null && resultType.IsFloatingPoint())
+                {
+                    left = WidenDivisionOperand(left, resultType);
+                    right = WidenDivisionOperand(right, resultType);
+                }
+
                 result = new IRBinaryOp(tempName, opKind, left, right, resultType);
             }
 
             EmitInstruction(result);
             _expressionResult = result;
+        }
+
+        /// <summary>
+        /// Widen an integral operand of a floating-point division to the result type, so the
+        /// target language divides in floating point rather than truncating first. Non-integral
+        /// operands are returned unchanged, so this is a no-op once both sides already match.
+        /// </summary>
+        private IRValue WidenDivisionOperand(IRValue operand, TypeInfo targetType)
+        {
+            var sourceType = operand?.Type;
+            if (sourceType == null || !sourceType.IsIntegral())
+                return operand;
+
+            var castName = _currentFunction.GetNextTempName();
+            var cast = new IRCast(castName, operand, sourceType, targetType,
+                                  DetermineCastKind(sourceType, targetType));
+            EmitInstruction(cast);
+            return cast;
         }
 
         public void Visit(UnaryExpressionNode node)
