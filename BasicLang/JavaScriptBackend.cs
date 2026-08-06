@@ -55,10 +55,65 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         private int _indentLevel;
 
+        /// <summary>
+        /// How many newlines <see cref="_output"/> currently holds — i.e. the 0-based index of
+        /// the line about to be written.
+        ///
+        /// <para><b>Why a counter rather than counting Line() calls.</b> Line() is NOT 1:1
+        /// with output lines: RenderLambda returns a multi-line arrow body which is then
+        /// passed through Line() as part of a larger expression. Incrementing by one per call
+        /// drifts the moment a program contains a lambda — and every LINQ chain contains
+        /// lambdas, so the drift would be normal rather than exotic.</para>
+        /// </summary>
+        private int _generatedLine;
+
         private void Line(string text = "")
         {
-            if (text.Length == 0) { _output.Append('\n'); return; }
+            if (text.Length == 0) { _output.Append('\n'); _generatedLine++; return; }
             _output.Append(new string(' ', _indentLevel * _options.IndentSize)).Append(text).Append('\n');
+
+            _generatedLine++;
+            for (var i = 0; i < text.Length; i++)
+                if (text[i] == '\n') _generatedLine++;
+        }
+
+        /// <summary>The Source Map v3 document accumulated by the last <see cref="Generate"/> call.</summary>
+        public JavaScriptSourceMap SourceMap { get; private set; } = new JavaScriptSourceMap();
+
+        /// <summary>
+        /// Per-source-file line offsets introduced by the <c>.mod</c>/<c>.cls</c> implicit
+        /// wrappers. See <see cref="RecordMapping"/> for why ignoring these is a bug that
+        /// only shows up in the files nobody tests with.
+        /// </summary>
+        private IReadOnlyDictionary<string, int> _sourceLineOffsets;
+
+        /// <summary>
+        /// Maps the statement about to be emitted back to its BasicLang line.
+        ///
+        /// <para><b>SourceLine == 0 is DROPPED, not mapped to line 0.</b> IROptimizer preserves
+        /// SourceLine at exactly one site (its strength-reduction block); every other rewrite
+        /// that allocates a fresh node leaves it unset, and nothing back-fills it. A segment
+        /// pointing at line 0 sends the debugger to the top of the file, which reads as a
+        /// wrong answer rather than as no answer.</para>
+        ///
+        /// <para><b>The <c>.mod</c>/<c>.cls</c> offset is why this is not a one-liner.</b> Those
+        /// files are wrapped in an implicit <c>Module</c>/<c>Class</c> block before parsing,
+        /// which shifts every line down by one, and the correction has always lived on
+        /// CompilationUnit where no backend can see it. Mapping the raw SourceLine is correct
+        /// for <c>.bas</c> and off by exactly one line for every <c>.mod</c> and <c>.cls</c> —
+        /// the worst shape of bug, because the obvious test passes.</para>
+        /// </summary>
+        private void RecordMapping(int sourceLine)
+        {
+            if (sourceLine <= 0) return;
+
+            var path = _currentFunction?.SourceFilePath;
+            if (string.IsNullOrEmpty(path)) return;
+
+            if (_sourceLineOffsets != null && _sourceLineOffsets.TryGetValue(path, out var offset))
+                sourceLine -= offset;
+
+            SourceMap.Add(_generatedLine, _indentLevel * _options.IndentSize, path, sourceLine);
         }
 
         public string Generate(IRModule module)
@@ -78,6 +133,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             _module = module;
             _output.Clear();
             _indentLevel = 0;
+            _generatedLine = 0;
+            SourceMap = new JavaScriptSourceMap();
+            _sourceLineOffsets = module.SourceLineOffsets;
 
             // ES module: strict mode is implicit, so no "use strict" prologue.
             if (_options.GenerateComments)
@@ -1108,7 +1166,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             _emitted.Add(block);
             EmitInstructions(block);
 
-            switch (block.GetTerminator())
+            // Control-flow HEADERS never reach EmitInstructions — If/While/Select are
+            // terminators, which that loop skips by design. Without a second record here the
+            // map has no entry for any `if (...)` or `while (...)` line, so a breakpoint on
+            // an `If` in the .bas has nothing to bind to.
+            var terminator = block.GetTerminator();
+            if (terminator != null) RecordMapping(terminator.SourceLine);
+
+            switch (terminator)
             {
                 case IRConditionalBranch cond:
                     EmitConditional(cond);
@@ -1136,6 +1201,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             {
                 if (instruction is IRBranch || instruction is IRConditionalBranch || instruction is IRSwitch)
                     continue;
+
+                RecordMapping(instruction.SourceLine);
                 instruction.Accept(this);
             }
         }
@@ -1610,6 +1677,19 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             var savedBound = new HashSet<string>(_boundNames, StringComparer.Ordinal);
             var savedSequences = new HashSet<string>(_sequenceValued, StringComparer.Ordinal);
 
+            // ⛔ SOURCE MAP: this method renders into the shared buffer and then REWINDS it,
+            // handing the text back to be re-emitted somewhere else at a different position
+            // and a different indent. Any mapping recorded in between describes output lines
+            // that are about to stop existing, so they are DISCARDED at the end rather than
+            // re-based — re-basing would need to know where the enclosing expression finally
+            // lands, which the caller decides after this returns.
+            //
+            // The cost is honest: no stepping INSIDE a lambda body, with the enclosing
+            // statement still mapped. A wrong mapping would send the debugger to an unrelated
+            // line, which is worse than an absent one.
+            var savedMappings = SourceMap.Count;
+            var savedGeneratedLine = _generatedLine;
+
             CollectUsedOperands(fn);
             _currentFunction = fn;
             _emitted.Clear();
@@ -1646,6 +1726,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             foreach (var n in savedBound) _boundNames.Add(n);
             _sequenceValued.Clear();
             foreach (var n in savedSequences) _sequenceValued.Add(n);
+
+            // The buffer was rewound above; drop the mappings that described it and restore
+            // the line counter to match, or every subsequent mapping is shifted by the height
+            // of every lambda emitted before it.
+            SourceMap.TruncateTo(savedMappings);
+            _generatedLine = savedGeneratedLine;
 
             var parameters = string.Join(", ",
                 (fn.Parameters ?? new List<IRVariable>()).ConvertAll(p => SanitizeName(p.Name)));

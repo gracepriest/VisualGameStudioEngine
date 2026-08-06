@@ -787,6 +787,14 @@ namespace BasicLang.Compiler
                 var unit = _registry.Get(moduleId);
                 if (unit?.IR == null) continue;
 
+                // Carry each unit's wrapper line offset onto the combined module. This is the
+                // ONLY point where a file path and its LineOffset are both in hand — the
+                // offset lives on CompilationUnit and every consumer downstream of here sees
+                // only IR. Source maps need it to point at the line the user wrote rather
+                // than the line the implicit Module/Class wrapper shifted it to.
+                if (!string.IsNullOrEmpty(unit.FilePath) && unit.LineOffset != 0)
+                    combined.SourceLineOffsets[unit.FilePath] = unit.LineOffset;
+
                 // Add functions from this module.
                 //
                 // Class and interface MEMBER bodies are exempt from the name dedupe. They

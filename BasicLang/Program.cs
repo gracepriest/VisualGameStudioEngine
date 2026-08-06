@@ -574,9 +574,10 @@ namespace BasicLang.Compiler.Driver
                 // treatment, which is what a second copy of a decision always costs.
                 string generatedCode;
                 string extension;
+                ICodeGenerator generator;
                 try
                 {
-                    generatedCode = GenerateCode(combinedIR, backend);
+                    generatedCode = GenerateCode(combinedIR, backend, out generator);
                     extension = GetOutputExtension(backend);
                 }
                 catch (Exception ex) when (ex is NotSupportedException || ex is ForeignFeatureException)
@@ -596,8 +597,10 @@ namespace BasicLang.Compiler.Driver
                 // site is completed here and the csproj/`dotnet build` path below is skipped.
                 if (IsJavaScriptTarget(backend))
                 {
-                    JavaScriptEmitter.Emit(outputDir, outputFileName + extension, generatedCode,
-                        title: project.ProjectName);
+                    var scriptName = outputFileName + extension;
+                    JavaScriptEmitter.Emit(outputDir, scriptName, generatedCode,
+                        title: project.ProjectName,
+                        sourceMapJson: BuildSourceMapJson(generator, scriptName, projectDir));
                     Console.WriteLine($"  Site written to: {outputDir}");
                 }
 
@@ -1120,7 +1123,7 @@ namespace BasicLang.Compiler.Driver
                 // Generate output
                 if (result.CombinedIR != null)
                 {
-                    string outputCode = GenerateCode(result.CombinedIR, targetBackend);
+                    string outputCode = GenerateCode(result.CombinedIR, targetBackend, out var generator);
                     string actualOutputPath;
 
                     if (!string.IsNullOrEmpty(outputPath))
@@ -1146,13 +1149,15 @@ namespace BasicLang.Compiler.Driver
                     // index.html: that is where a hand-authored one lives.
                     if (IsJavaScriptTarget(targetBackend))
                     {
-                        var siteDir = Path.GetDirectoryName(Path.GetFullPath(actualOutputPath));
-                        var harness = Path.Combine(siteDir ?? ".", JavaScriptEmitter.HarnessName);
-                        if (!File.Exists(harness))
-                        {
-                            JavaScriptEmitter.Emit(siteDir, Path.GetFileName(actualOutputPath), outputCode);
-                            Console.WriteLine($"  Harness written to: {harness}");
-                        }
+                        var siteDir = Path.GetDirectoryName(Path.GetFullPath(actualOutputPath)) ?? ".";
+                        var scriptName = Path.GetFileName(actualOutputPath);
+                        var hadHarness = File.Exists(Path.Combine(siteDir, JavaScriptEmitter.HarnessName));
+
+                        JavaScriptEmitter.Emit(siteDir, scriptName, outputCode,
+                            sourceMapJson: BuildSourceMapJson(generator, scriptName, siteDir));
+
+                        if (!hadHarness)
+                            Console.WriteLine($"  Harness written to: {Path.Combine(siteDir, JavaScriptEmitter.HarnessName)}");
                     }
 
                     // Show generated code if requested
@@ -1251,9 +1256,21 @@ namespace BasicLang.Compiler.Driver
         /// <summary>
         /// Generate code for the specified backend
         /// </summary>
-        internal static string GenerateCode(IRModule ir, string backend)
+        internal static string GenerateCode(IRModule ir, string backend) =>
+            GenerateCode(ir, backend, out _);
+
+        /// <summary>
+        /// As <see cref="GenerateCode(IRModule, string)"/>, but hands back the generator.
+        ///
+        /// <para>Needed because the JavaScript backend produces a SECOND artefact — its source
+        /// map — that <c>ICodeGenerator.Generate</c>'s single-string contract cannot return.
+        /// Widening that interface would force C#/C++/LLVM/MSIL to answer a question none of
+        /// them has, so the map is a property on the JS generator and the caller has to keep
+        /// the instance alive to read it.</para>
+        /// </summary>
+        internal static string GenerateCode(IRModule ir, string backend, out ICodeGenerator generator)
         {
-            ICodeGenerator generator = backend?.ToLowerInvariant() switch
+            generator = backend?.ToLowerInvariant() switch
             {
                 "cpp" or "c++" => new CppCodeGenerator(),
                 "llvm" => new BasicLang.Compiler.CodeGen.LLVM.LLVMCodeGenerator(),
@@ -1283,6 +1300,33 @@ namespace BasicLang.Compiler.Driver
         /// </summary>
         internal static bool IsJavaScriptTarget(string backend) =>
             backend?.ToLowerInvariant() is "javascript" or "js";
+
+        /// <summary>
+        /// The Source Map v3 document for a completed JavaScript generation, or null when the
+        /// generator was not the JavaScript one or recorded no mappings.
+        ///
+        /// <para>Source text is INLINED. The project route emits into <c>bin/…</c> while the
+        /// <c>.bas</c> files stay in the project root, so a browser resolving <c>sources</c>
+        /// relative to the map's own URL would 404 on every one and devtools would silently
+        /// show nothing. A file that cannot be read contributes a null entry rather than
+        /// failing the build — a partial map beats no map, and beats a crash.</para>
+        /// </summary>
+        private static string BuildSourceMapJson(ICodeGenerator generator, string scriptFileName,
+            string sourceRoot)
+        {
+            if (generator is not BasicLang.Compiler.CodeGen.JavaScript.JavaScriptCodeGenerator js)
+                return null;
+            if (js.SourceMap.Count == 0) return null;
+
+            var contents = new List<string>(js.SourceMap.Count);
+            foreach (var path in js.SourceMap.Sources)
+            {
+                try { contents.Add(File.Exists(path) ? File.ReadAllText(path) : null); }
+                catch { contents.Add(null); }
+            }
+
+            return js.SourceMap.ToJson(scriptFileName, sourceRoot, contents);
+        }
 
         /// <summary>
         /// Get output file extension for backend

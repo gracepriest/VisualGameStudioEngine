@@ -1386,9 +1386,29 @@ namespace BasicLang.Compiler.IR
         /// </summary>
         public List<string> CppIncludes { get; set; }
 
+        /// <summary>
+        /// Source path → the number of lines the front end INSERTED above that file's original
+        /// content, keyed the way <c>IRFunction.SourceFilePath</c> spells it.
+        ///
+        /// <para><b>Why this had to leave CompilationUnit.</b> A <c>.mod</c> is wrapped in an
+        /// implicit <c>Module</c> block and a <c>.cls</c> in an implicit <c>Class</c> block
+        /// before parsing, so every <c>SourceLine</c> in the IR for those files is one greater
+        /// than the line the user sees. The correction has always lived on
+        /// <c>CompilationUnit.LineOffset</c>, which no backend can reach — fine while only
+        /// diagnostics needed it, wrong once a source map has to point a debugger at a real
+        /// line. Ignoring it yields a map that is correct for <c>.bas</c> and off by one for
+        /// everything else, which the obvious test never catches.</para>
+        ///
+        /// <para>⚠ The offset is NOT derivable from the extension: an <c>Option Public</c>
+        /// <c>.cls</c> substitutes the directive line in place and has offset 0, while every
+        /// other <c>.cls</c> has 1.</para>
+        /// </summary>
+        public Dictionary<string, int> SourceLineOffsets { get; set; }
+
         public IRModule(string name)
         {
             Name = name;
+            SourceLineOffsets = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             Functions = new List<IRFunction>();
             GlobalVariables = new Dictionary<string, IRVariable>();
             Types = new Dictionary<string, TypeInfo>();

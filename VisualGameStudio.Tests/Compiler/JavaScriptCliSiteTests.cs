@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Text.Json;
 using System.Threading.Tasks;
 using BasicLang.Compiler.Driver;
 using NUnit.Framework;
@@ -172,5 +174,88 @@ public class JavaScriptCliSiteTests
         Assert.That(exit, Is.Not.Zero, "an unknown backend must fail the build");
         Assert.That(output, Does.Contain("jscript"));
         Assert.That(Built("*.cs"), Is.Empty, "must not silently emit C#");
+    }
+
+    // ---------------------------------------------------------------- source maps (task 26)
+
+    [Test]
+    [NonParallelizable]
+    public async Task SingleFile_EmitsASourceMapAndLinksIt()
+    {
+        File.WriteAllText(Path.Combine(_dir, "prog.bas"), Source);
+
+        await Cli(Path.Combine(_dir, "prog.bas"), "--target=javascript");
+
+        var mapPath = Path.Combine(_dir, "prog.js.map");
+        Assert.That(File.Exists(mapPath), Is.True, "a .map must be emitted");
+        Assert.That(File.ReadAllText(Path.Combine(_dir, "prog.js")).TrimEnd(),
+            Does.EndWith("//# sourceMappingURL=prog.js.map"));
+
+        var map = JsonDocument.Parse(File.ReadAllText(mapPath)).RootElement;
+        Assert.That(map.GetProperty("version").GetInt32(), Is.EqualTo(3));
+        Assert.That(map.GetProperty("sources")[0].GetString(), Is.EqualTo("prog.bas"));
+        Assert.That(map.GetProperty("mappings").GetString(), Is.Not.Empty);
+    }
+
+    /// <summary>
+    /// The project route emits into bin/… while the .bas stays in the project root, so a
+    /// browser resolving `sources` against the map's URL would 404 on every one. Inlined
+    /// text is what makes the map usable there.
+    /// </summary>
+    [Test]
+    [NonParallelizable]
+    public async Task ProjectRoute_InlinesSourceContentIntoTheMap()
+    {
+        await Cli("build", WriteProject("JavaScript"));
+
+        var maps = Built("*.js.map");
+        Assert.That(maps, Is.Not.Empty, "a .map must be emitted");
+
+        var map = JsonDocument.Parse(File.ReadAllText(maps[0])).RootElement;
+        var contents = map.GetProperty("sourcesContent");
+        Assert.That(contents.GetArrayLength(), Is.EqualTo(map.GetProperty("sources").GetArrayLength()));
+        Assert.That(contents[0].GetString(), Does.Contain("Console.WriteLine"));
+    }
+
+    /// <summary>
+    /// THE OFF-BY-ONE. A `.mod` is wrapped in an implicit Module block before parsing, so
+    /// every IR line for it is one greater than the line the user sees. The correction lived
+    /// on CompilationUnit where no backend could reach it — mapping the raw value is correct
+    /// for `.bas` and wrong for `.mod`, so the obvious test would never catch it.
+    /// </summary>
+    [Test]
+    [NonParallelizable]
+    public async Task ModFile_MapsToTheLineTheUserWrote()
+    {
+        // No Module wrapper in the text — a .mod gets one inserted, shifting every line by 1.
+        var mod = Path.Combine(_dir, "Helpers.mod");
+        File.WriteAllText(mod, "Sub Main()\nConsole.WriteLine(1)\nEnd Sub\n");
+
+        var (exit, output) = await Cli(mod, "--target=javascript");
+        Assert.That(exit, Is.Zero, output);
+
+        var map = JsonDocument.Parse(File.ReadAllText(Path.Combine(_dir, "Helpers.js.map"))).RootElement;
+        var mappings = map.GetProperty("mappings").GetString() ?? "";
+
+        // Decode absolute source lines; the WriteLine is on the user's line 2 => 0-based 1.
+        var lines = new List<int>();
+        var current = 0;
+        foreach (var group in mappings.Split(';'))
+        {
+            if (group.Length == 0) continue;
+            foreach (var seg in group.Split(','))
+            {
+                var f = BasicLang.Compiler.CodeGen.JavaScript.JavaScriptSourceMap.DecodeVlq(seg);
+                if (f.Count < 4) continue;
+                current += f[2];
+                lines.Add(current);
+            }
+        }
+
+        Assert.That(lines, Is.Not.Empty, "the .mod must produce mappings");
+        Assert.That(lines, Has.All.LessThan(3),
+            "a 3-line .mod cannot map past its own last line — a wrapper offset leaked through");
+        Assert.That(lines, Does.Contain(1),
+            "Console.WriteLine is on the user's line 2 (0-based 1), not the wrapped line 3");
     }
 }
