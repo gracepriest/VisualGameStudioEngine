@@ -2596,17 +2596,39 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private static string GetArg(List<string> args, int index) => index < args.Count ? args[index] : "0";
 
         /// <summary>
-        /// Widen a Byte/SByte console argument for printing (spec §14.6). <c>cout</c>
-        /// streams <c>int8_t</c>/<c>uint8_t</c> as a CHARACTER — <c>Console.WriteLine(b)</c>
-        /// with b = 65 printed 'A' — while .NET (and the C# backend) print the NUMBER.
-        /// Wrapping the arg in <c>static_cast&lt;int32_t&gt;</c> restores parity. Char is
-        /// deliberately NOT wrapped: .NET prints a Char as its character too.
+        /// Coerce a console argument so <c>cout</c> renders it the way .NET does.
+        ///
+        /// <para>Byte/SByte (spec §14.6): <c>cout</c> streams <c>int8_t</c>/<c>uint8_t</c> as a
+        /// CHARACTER — <c>Console.WriteLine(b)</c> with b = 65 printed 'A' — while .NET (and
+        /// the C# backend) print the NUMBER. Char is deliberately NOT wrapped: .NET prints a
+        /// Char as its character too.</para>
+        ///
+        /// <para>Boolean: <c>cout</c> streams a bool as 1/0, while .NET, VB and the C# backend
+        /// all print True/False.</para>
         /// </summary>
         private static string NumericPrintArg(string rendered, IRCall call, int index)
         {
-            var typeName = call != null && index < call.Arguments.Count
-                ? call.Arguments[index]?.Type?.Name
+            var argument = call != null && index < call.Arguments.Count
+                ? call.Arguments[index]
                 : null;
+            if (argument == null) return rendered;
+
+            // ⛔ THE OUTER PARENTHESES ARE LOAD-BEARING, NOT STYLE. Every caller splices this
+            // into `cout << {arg} << endl`, and `<<` binds TIGHTER than `?:`. Without them,
+            // `cout << flag ? "True" : "False"` parses as `(cout << flag) ? ... : ...` — which
+            // COMPILES CLEAN, prints 1, and discards both strings. The generated source reads
+            // as fixed while nothing changed. Both forms were hand-compiled to confirm it, and
+            // CppBooleanPrintingTests.BooleanArgument_IsParenthesized is the only test that
+            // fails when they are dropped — the obvious ones stay green.
+            //
+            // The type name alone is sufficient, including for a literal `Console.WriteLine(True)`
+            // and for an optimizer-folded comparison: both arrive as constants that DO carry a
+            // Boolean type. An extra `argument is IRConstant { Value: bool }` disjunct was tried
+            // and deleted — no mutation could kill it, which is the definition of dead code.
+            if (string.Equals(argument.Type?.Name, "Boolean", StringComparison.OrdinalIgnoreCase))
+                return $"({rendered} ? \"True\" : \"False\")";
+
+            var typeName = argument.Type?.Name;
             if (typeName == null) return rendered;
             return typeName.ToLowerInvariant() is "byte" or "sbyte" or "ubyte"
                 ? $"static_cast<int32_t>({rendered})"
@@ -4562,9 +4584,20 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             BinaryOpKind.Shl => "<<",
             BinaryOpKind.Shr => ">>",
             BinaryOpKind.Concat => "+",
-            _ => "?"
+            // `\` (integer division). Both operands are integral by the time we get here
+            // (SemanticAnalyzer rejects floating operands), so C++ `/` on integers already
+            // truncates toward zero exactly as VB requires. The RESULT WIDTH is what makes
+            // this safe: SemanticAnalyzer types the result by the widened operand type, so
+            // the temp this lands in is int64_t for a 64-bit division. It used to be
+            // hardcoded to Integer, which would have made this arm emit a silent modulo-2^32
+            // truncation instead of the loud syntax error the missing arm produced.
+            BinaryOpKind.IntDiv => "/",
+            _ => throw new NotSupportedException(
+                $"The C++ backend has no operator text for BinaryOpKind.{op}. " +
+                "Returning a placeholder here would emit invalid C++ while the compiler " +
+                "reported success — add an arm above instead.")
         };
-        
+
         private string MapUnaryOperator(UnaryOpKind op) => op switch
         {
             UnaryOpKind.Neg => "-",
@@ -4579,7 +4612,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // emitted a literal "?" INTO THE GENERATED SOURCE — invalid C++, silently, with no
             // capability refusal to catch it.
             UnaryOpKind.AddressOf => "",
-            _ => "?"
+            _ => throw new NotSupportedException(
+                $"The C++ backend has no operator text for UnaryOpKind.{op}. " +
+                "Returning a placeholder here would emit invalid C++ while the compiler " +
+                "reported success — add an arm above instead.")
         };
         
         private string MapCompareOperator(CompareKind cmp) => cmp switch
@@ -4590,7 +4626,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             CompareKind.Le => "<=",
             CompareKind.Gt => ">",
             CompareKind.Ge => ">=",
-            _ => "?"
+            _ => throw new NotSupportedException(
+                $"The C++ backend has no operator text for CompareKind.{cmp}. " +
+                "Returning a placeholder here would emit invalid C++ while the compiler " +
+                "reported success — add an arm above instead.")
         };
 
         private bool IsNamedDestination(IRValue value)

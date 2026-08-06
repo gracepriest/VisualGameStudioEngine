@@ -220,10 +220,34 @@ namespace BasicLang.Net
     internal sealed record NetParameterDescriptor(
         NetRefKind RefKind,
         string TypeFullName,
-        string DelegateInvokeSignature = null)
+        string DelegateInvokeSignature = null,
+        string EnumUnderlyingTypeFullName = null)
     {
         /// <summary>True when this parameter's type is a delegate (§8.4).</summary>
         public bool IsDelegate => DelegateInvokeSignature != null;
+
+        /// <summary>
+        /// True when this parameter's type is a .NET enum, in which case
+        /// <see cref="EnumUnderlyingTypeFullName"/> is its underlying integral (§8.3's
+        /// "enums → underlying integral" row).
+        ///
+        /// <para>⛔ Carried on the PARAMETER descriptor and populated ONLY in
+        /// <c>NetTypeResolver.Describe</c> — deliberately NOT on <c>NetMemberDescriptor</c> and
+        /// deliberately NOT propagated through <c>NetAccessorSynthesis</c>. The property/field
+        /// write and §8.5 array-set positions build their value parameter by hand and have NO
+        /// analyzer gate at all, so flipping their slot from Handle to Scalar would put a
+        /// <c>NetRef</c> into an <c>int32_t</c> slot with nothing in front of it. Measured:
+        /// <c>fi.Attributes = FileAttributes.ReadOnly</c> compiles and ships on the handle wire
+        /// TODAY, and must keep doing so.</para>
+        ///
+        /// <para>⛔ Like <see cref="DelegateInvokeSignature"/>, deliberately absent from
+        /// <see cref="ToString"/> — see that parameter's note. Leaking it into
+        /// <c>ToString</c> or <c>CanonicalIdentity</c> moves every mangled export name. And
+        /// never rewrite <see cref="TypeFullName"/> to the underlying: <c>Foo(FileMode)</c> and
+        /// <c>Foo(Int32)</c> would collide and <c>NetSurfaceCollector.AddMember</c> silently
+        /// drops the loser.</para>
+        /// </summary>
+        public bool IsEnum => EnumUnderlyingTypeFullName != null;
 
         public override string ToString() =>
             (RefKind == NetRefKind.None ? "" : RefKind.ToString().ToLowerInvariant() + " ") + TypeFullName;

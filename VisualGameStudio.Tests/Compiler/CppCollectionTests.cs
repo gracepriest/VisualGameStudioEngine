@@ -782,7 +782,7 @@ End Sub";
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
         // Count=2, d[a]=10, d[b]=2, ContainsKey(a)=true(1), ContainsKey(z)=false(0),
         // TryGetValue -> 2, sum of values (10+2)=12.
-        Assert.That(CompileRun(output), Is.EqualTo("2\n10\n2\n1\n0\n2\n12\n"));
+        Assert.That(CompileRun(output), Is.EqualTo("2\n10\n2\nTrue\nFalse\n2\n12\n"));
     }
 
     [Test]
@@ -803,7 +803,7 @@ End Sub";
         var output = CompileToCpp(source, out var errors);
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
         // first Add=true(1), dup Add=false(0), Count=2, Contains(5)=true(1), Contains(99)=false(0)
-        Assert.That(CompileRun(output), Is.EqualTo("1\n0\n2\n1\n0\n"));
+        Assert.That(CompileRun(output), Is.EqualTo("True\nFalse\n2\nTrue\nFalse\n"));
     }
 
     /// <summary>
@@ -1365,7 +1365,7 @@ End Sub";
         var output = CompileToCpp(source, out var errors);
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
         // Remove(5)=true(1), Remove(42)=false(0), Count=1.
-        Assert.That(CompileRun(output), Is.EqualTo("1\n0\n1\n"));
+        Assert.That(CompileRun(output), Is.EqualTo("True\nFalse\n1\n"));
     }
 
     [Test]
@@ -1382,7 +1382,7 @@ Sub Main()
 End Sub";
         var output = CompileToCpp(source, out var errors);
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
-        Assert.That(CompileRun(output), Is.EqualTo("1\n0\n"));
+        Assert.That(CompileRun(output), Is.EqualTo("True\nFalse\n"));
     }
 
     // ---- BUG 6: chained/nested indexer `a(i)(j)` on nested collections. ----
@@ -1457,7 +1457,7 @@ End Sub";
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
         Assert.That(output, Does.Contain("bool operator==(const Point& other) const = default;"));
         // Contains(q)=true(1), Contains(other)=false(0), IndexOf(q)=0.
-        Assert.That(CompileRun(output), Is.EqualTo("1\n0\n0\n"));
+        Assert.That(CompileRun(output), Is.EqualTo("True\nFalse\n0\n"));
     }
 
     // ========================================================================

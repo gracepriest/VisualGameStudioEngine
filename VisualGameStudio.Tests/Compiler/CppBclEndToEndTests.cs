@@ -1167,14 +1167,29 @@ End Sub");
     [Test]
     public void UnsupportedNativeConversion_IsRejectedCleanly()
     {
-        var ex = AssertRejected(@"
+        // MOVED FROM THE C++ CAPABILITY CHECKER TO THE FRONT END, deliberately.
+        //
+        // This used to reach codegen and be refused by CppCapabilityChecker — which meant the
+        // C# backend accepted the SAME source and emitted `(int)(d)`, a CS0030. The analyzer
+        // never read a cast's source type at all (chip task_0c803e75), so every impossible
+        // CType type-checked and failed downstream, differently per backend, or not at all:
+        // a reference cast to Boolean COMPILED AND RAN on C++, silently yielding
+        // handle-truthiness. The check now lives in SemanticAnalyzer.RejectImpossibleConversion
+        // and lands on both backends from one place.
+        var source = @"
 Sub Main()
     Dim d As New DateTime(2026, 1, 1)
     Dim n As Integer = CType(d, Integer)
     Console.WriteLine(n)
-End Sub");
-        Assert.That(ex.Message, Does.Contain("DateTime").And.Contain("Integer"));
-        Assert.That(ex.Message, Does.Contain("not supported on the C++ backend"));
+End Sub";
+        var analyzer = new SemanticAnalyzer();
+        var ast = new Parser(new Lexer(source).Tokenize()).Parse();
+
+        Assert.That(analyzer.Analyze(ast), Is.False,
+            "an impossible conversion must be refused by the front end, not left for one " +
+            "backend's capability checker to catch");
+        Assert.That(string.Join("; ", analyzer.Errors.Select(e => e.Message)),
+            Does.Contain("DateTime").And.Contain("Integer"));
     }
 
     /// <summary>

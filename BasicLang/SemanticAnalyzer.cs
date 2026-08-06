@@ -3114,15 +3114,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     return true;
                 }
 
-                if (NetMarshalTable.MultiSlotConversionPairs.Contains(parameter.TypeFullName))
-                {
-                    NetWarning("BL6019",
-                        $"'{target}': parameter {position} has type "
-                        + $"'{parameter.TypeFullName}', whose §6.4 wire form is not a single "
-                        + "slot — it is not lowered at the native boundary yet.",
-                        line, column);
-                    return true;
-                }
+                // The multi-slot §6.4 refusal that stood here is gone: Decimal and DateTimeOffset
+                // now lower across N discrete wire slots (Task 8c-2). SlotCount stays 4 and 2 —
+                // it is DATA describing the wire, never a "refuse" flag.
 
                 if (IsNetEnumTypeName(parameter.TypeFullName))
                 {
@@ -3176,7 +3170,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 if (argument is IdentifierExpressionNode) return false;
             }
             else if (!NetMarshalTable.TryGetWireRow(parameter.TypeFullName, out var row)
-                     || row.IsMultiSlot || string.IsNullOrEmpty(row.CWire))
+                     || !row.HasByValueScalarSlot)
             {
                 NetWarning("BL6019",
                     $"'{target}': parameter {position} ('{parameter}') is passed {passing} and "
@@ -7173,16 +7167,57 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             // checks don't cascade a second, misleading error.
                             resultType = leftType.Name == "Decimal" ? leftType : rightType;
                         }
+
+                        // VB.NET: `/` is FLOATING-POINT division ALWAYS. 7 / 2 is 3.5, typed
+                        // Double; `\` is the integer operator. Sharing this arm's
+                        // GetCommonType typed Integer / Integer as Integer, and BOTH backends
+                        // then inherited C-family truncation — neither backend was at fault.
+                        //
+                        // Decimal and Single keep their own width: Decimal has no implicit
+                        // conversion to Double in either direction (promoting it would lose
+                        // precision), and promoting Single would change the result type.
+                        if (NormalizeOperator(node.Operator) == "/"
+                            && resultType != null
+                            && !resultType.Name.Equals("Decimal", StringComparison.OrdinalIgnoreCase)
+                            && !resultType.Name.Equals("Single", StringComparison.OrdinalIgnoreCase))
+                        {
+                            resultType = _typeManager.DoubleType;
+                        }
                     }
                     break;
 
                 case "\\":
-                    // Integer division
-                    if (!leftType.IsIntegral() || !rightType.IsIntegral())
+                    // Integer division. VB.NET types the result by the WIDENED operand type
+                    // — Long \ Integer is Long, Byte \ Byte is Byte — not by a fixed Integer.
+                    //
+                    // Hardcoding Integer here was wrong in both directions. Downward it
+                    // truncated: the C++ backend hoists the quotient into a temp of THIS
+                    // type, so `Long \ Long` produced `int32_t t0 = a / b` under an int64_t
+                    // return, and 9000000000 \ 2 yields 205032704 — well-defined modulo 2^32,
+                    // a plain assignment rather than brace-init, so no narrowing diagnostic
+                    // fires anywhere. Upward it leaked as a spurious user-visible error:
+                    // returning `a \ b` from a Byte function was rejected as a narrowing
+                    // conversion from the phantom Integer.
+                    if (!leftType.IsNumeric() || !rightType.IsNumeric())
                     {
-                        Error($"Integer division requires integral operands", node.Line, node.Column);
+                        Error($"Integer division requires numeric operands", node.Line, node.Column);
+                        resultType = _typeManager.IntegerType;
                     }
-                    resultType = _typeManager.IntegerType;
+                    else if (!leftType.IsIntegral() || !rightType.IsIntegral())
+                    {
+                        // A floating operand is NOT an error: VB.NET rounds it to Long and
+                        // then divides. Rejecting it used to be harmless because `/` yielded
+                        // an integral type, so `(a / b) \ c` type-checked. Now that `/` is
+                        // correctly Double, keeping the old rejection would turn that
+                        // expression — which compiles today — into a hard error. This
+                        // relaxation is REQUIRED BY the `/` change, not optional cleanup.
+                        resultType = _typeManager.LongType;
+                    }
+                    else
+                    {
+                        resultType = _typeManager.GetCommonType(leftType, rightType)
+                                     ?? _typeManager.IntegerType;
+                    }
                     break;
 
                 case "&":
@@ -8279,7 +8314,70 @@ namespace BasicLang.Compiler.SemanticAnalysis
                       node.Line, node.Column);
             }
 
+            RejectImpossibleConversion(node, targetType);
+
             SetNodeType(node, targetType);
+        }
+
+        /// <summary>
+        /// Refuse a <c>CType</c>/<c>DirectCast</c> between categories that have no conversion
+        /// in either direction — a reference and a scalar.
+        ///
+        /// <para>Nothing in this visitor read the SOURCE type, so a cast between ANY two types
+        /// type-checked and the breakage surfaced downstream: <c>CS0030</c> from csc, an
+        /// invalid <c>static_cast</c> from g++, or — for a Boolean target on the native
+        /// backend — no error at all, because a handle type has an
+        /// <c>explicit operator bool()</c> that the cast binds to as an exact match, silently
+        /// yielding handle-truthiness instead of a value. That last row is why this check
+        /// belongs in the front end rather than in the C++ capability checker: no
+        /// "does the generated code compile" gate can catch a program that compiles and lies.
+        /// It is also why this is not a C++ bug — the C# backend has the same hole.</para>
+        ///
+        /// <para>DELIBERATELY NOT REFUSED HERE:</para>
+        /// <list type="bullet">
+        /// <item><description><c>Object</c> in either position — the universal box, legal in
+        /// VB both ways, and the type a .NET enum member takes on the C#-backend path, so
+        /// refusing it would regress a currently-working program.</description></item>
+        /// <item><description>Enums — enum-to-integral is a real VB conversion and is already
+        /// correct on the C# backend. It is the literal repro of chip task_0c803e75 on the
+        /// native backend, but the fix there is the enum lowering work (P2a-2 T8c-3), which
+        /// makes the operand a constant so <c>static_cast&lt;int32_t&gt;(3)</c> becomes valid
+        /// — refusing it here would have to be un-refused a task later.</description></item>
+        /// <item><description><c>String</c> — real conversions exist in both directions.</description></item>
+        /// <item><description>Unrelated class-to-class, which is also broken, but where
+        /// inheritance, interfaces and generics make the judgement materially different.</description></item>
+        /// </list>
+        /// </summary>
+        private void RejectImpossibleConversion(CastExpressionNode node, TypeInfo targetType)
+        {
+            var sourceType = GetNodeType(node.Expression);
+            if (sourceType == null || targetType == null)
+                return;
+
+            if (sourceType.Name == "Object" || targetType.Name == "Object")
+                return;
+            if (sourceType.Kind == TypeKind.Enum || targetType.Kind == TypeKind.Enum)
+                return;
+            if (sourceType.Name == "String" || targetType.Name == "String")
+                return;
+
+            static bool IsScalar(TypeInfo t) =>
+                t.IsNumeric() || t.Name == "Boolean" || t.Name == "Char";
+
+            // ⛔ SCALAR-NESS WINS OVER Kind. Not every primitive is registered with a
+            // primitive TypeKind — SByte reports Class — so keying purely on Kind refused
+            // CType(sbyteValue, Integer), a perfectly ordinary widening. Anything numeric,
+            // Boolean or Char is a value here no matter how its Kind was registered.
+            static bool IsReference(TypeInfo t) =>
+                (t.Kind == TypeKind.Class || t.Kind == TypeKind.Interface) && !IsScalar(t);
+
+            if ((IsReference(sourceType) && IsScalar(targetType)) ||
+                (IsScalar(sourceType) && IsReference(targetType)))
+            {
+                Error($"Cannot convert '{sourceType.Name}' to '{targetType.Name}': no such " +
+                      $"conversion exists",
+                      node.Line, node.Column);
+            }
         }
     }
 }

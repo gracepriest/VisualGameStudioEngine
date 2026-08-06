@@ -498,6 +498,18 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case IRBaseMethodCall bc:
                     return Bound(bc) ? SanitizeName(bc.Name) : BaseCall(bc);
 
+                // The inline-renderer twin of Visit(IRCast). A numeric WIDENING cast — what
+                // IRBuilder inserts so `/` divides in floating point — is a no-op here because
+                // every JS number is already an IEEE double.
+                //
+                // ⛔ BOTH ARMS ARE REQUIRED. The renderer rebuilds operand trees rather than
+                // looking names up, so patching only the statement form left `a / b` throwing
+                // from RenderBinary the moment the division sat inside a larger expression.
+                // Any cast that is NOT this widening still throws, on both paths.
+                case IRCast c when c.SourceType?.IsIntegral() == true
+                                   && c.Type?.IsFloatingPoint() == true:
+                    return Bound(c) ? SanitizeName(c.Name) : Expr(c.Value);
+
                 default:
                     throw NotYet(value.GetType().Name + " (as an expression)");
             }
@@ -1769,7 +1781,25 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         // Emits nothing: the access is rendered inline by Expr, as an L-value. See the
         // IRGetElementPtr arm there for why binding it to a temp drops writes.
         public void Visit(IRGetElementPtr gep) { }
-        public void Visit(IRCast cast) => throw NotYet(nameof(IRCast));
+        // A numeric WIDENING cast — what IRBuilder inserts so `/` divides in floating point
+        // rather than truncating its integral operands first. In JavaScript every number is
+        // already an IEEE double, so the widening is a no-op and the destination simply binds
+        // the operand.
+        //
+        // ⛔ ONLY that shape. CType is genuinely unimplemented on this backend, and passing an
+        // arbitrary cast through silently would convert an unsupported construct into a
+        // miscompile — the exact trade this file's NotYet() exists to refuse. Narrowing is not
+        // a no-op in JS either (it needs Math.trunc), so it keeps throwing too.
+        public void Visit(IRCast cast)
+        {
+            if (cast.SourceType?.IsIntegral() == true && cast.Type?.IsFloatingPoint() == true)
+            {
+                Bind(cast.Name, Expr(cast.Value));
+                return;
+            }
+
+            throw NotYet(nameof(IRCast));
+        }
         public void Visit(IRCompare compare) => Bind(compare.Name, CompareExpr(compare));
         public void Visit(IRSwitch switchInst) => throw NotYet(nameof(IRSwitch));
         public void Visit(IRLabel label) => throw NotYet(nameof(IRLabel));
