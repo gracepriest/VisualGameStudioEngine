@@ -1202,7 +1202,11 @@ public class SettingsService : ISettingsService, IDisposable
             Properties = new List<SettingsPropertySchema>
             {
                 Prop("basiclang.compiler.backend", SettingsPropertyType.String, "Compiler Backend", "CSharp", "The default compilation backend.",
-                    enumVals: new[] { "CSharp", "MSIL", "LLVM", "CPP" }),
+                    // ⚠ Kept in step with SettingsViewModel._compilerBackends and
+                    // ProjectService.ResolveDefaultBackend — three independent copies of the
+                    // same vocabulary, so a value missing from any one of them is
+                    // unselectable or silently resolves to CSharp.
+                    enumVals: new[] { "CSharp", "MSIL", "LLVM", "CPP", "JavaScript" }),
                 Prop("basiclang.lsp.path", SettingsPropertyType.String, "LSP Server Path", "", "Path to the BasicLang LSP server executable. Leave empty for auto-detection."),
                 Prop("basiclang.lsp.autoStart", SettingsPropertyType.Boolean, "Auto Start LSP", true, "Automatically start the LSP server when the IDE launches. When off, use the \"Start Language Server\" command to start it manually."),
             }
