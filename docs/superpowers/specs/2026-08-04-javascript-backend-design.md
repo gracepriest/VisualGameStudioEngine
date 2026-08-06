@@ -1,7 +1,13 @@
 # BasicLang JavaScript Backend (v1) — Design
 
 **Date:** 2026-08-04
-**Status:** Design — not started
+**Status:** **Shipped** — plan 1 (`2026-08-04-javascript-backend-core.md`, tasks 1–30) and plan 2
+(`2026-08-06-javascript-backend-interop-and-dom.md`, the interop escape hatch) are both complete.
+`#JsImport` emits real ES imports and copies its targets to the output; `::` passes raw
+JavaScript through in call position; `javascript{ … }` is the universal hatch. **Not yet built:**
+the typed DOM (D5), outlined as plan 2b at the end of plan 2 — both of its design decisions are
+settled. Known limitations are tabled in plan 2, the two load-bearing ones being that `::` is
+**call-only** and that `#JsImport` binds **no names**.
 **Owner feature:** BasicLang produces web content ("DHTML projects" for the modern web)
 
 ## Context

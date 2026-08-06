@@ -344,4 +344,41 @@ public class JavaScriptOptimizedExecutionTests
         => AssertSameOutput(
             "Sub Main()\nConsole.WriteLine(Sqr(16))\nConsole.WriteLine(Abs(-3))\n" +
             "Console.WriteLine(Round(2.5))\nEnd Sub");
+
+    // ---------------------------------------------------------------- features plan 2 added
+    //
+    // Both interop channels are OPAQUE to the optimizer in different ways, and each has a
+    // matching way to go wrong. A `::` name is a foreign IDENTIFIER, so copy propagation and CSE
+    // can hand the renderer a different node than IRBuilder produced — and this generator
+    // renders an operand tree INLINE when a consumer is mis-pointed, which duplicates side
+    // effects rather than failing. An inline block has no operands and no result, so nothing
+    // proves it live to dead-code elimination.
+
+    [Test]
+    public void Optimized_ForeignCallStillWorks()
+        => AssertSameOutput("Sub Main()\n::console.log(\"hi\")\nEnd Sub");
+
+    /// <summary>An inline block is opaque to the optimizer — confirm it is not dropped as dead.</summary>
+    [Test]
+    public void Optimized_InlineJavaScriptSurvives()
+        => AssertSameOutput("Sub Main()\njavascript{ console.log(\"inline\"); }\nEnd Sub");
+
+    /// <summary>
+    /// A foreign call sitting beside folded constants: the arm that made Visit(IRConstant)
+    /// throw, now with a `::` name in the same block.
+    /// </summary>
+    [Test]
+    public void Optimized_ForeignCallBesideFoldedConstants()
+        => AssertSameOutput(
+            "Sub Main()\nDim x As Integer = 2 + 3 * 4\n::console.log(\"hi\")\nConsole.WriteLine(x)\nEnd Sub");
+
+    /// <summary>
+    /// The two channels interleaved, which is what the milestone program actually looks like:
+    /// an inline block reading a BasicLang local whose initialiser the optimizer folded away.
+    /// </summary>
+    [Test]
+    public void Optimized_InlineBlockReadingAFoldedLocal()
+        => AssertSameOutput(
+            "Sub Main()\nDim n As Integer = 20 + 22\njavascript{ console.log(n); }\n" +
+            "::console.log(\"after\")\nEnd Sub");
 }

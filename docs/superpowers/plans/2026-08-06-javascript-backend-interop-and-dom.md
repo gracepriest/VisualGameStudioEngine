@@ -739,9 +739,25 @@ Add cases to `JavaScriptCliProcessTests` using `VisualGameStudio.Tests\bin\Relea
 
 Add `JavaScriptInteropExecutionTests` to `JsExecutionTierRosterTests.ExecutionTier` and bump `RosterIsPinned` from 17 to 18. The name prefix `JavaScript` means discovery finds it; the class-level `[Category("Integration")]` means `EveryFixtureIsStillCategorisedIntegration` passes. `JavaScriptInteropTests` (codegen) must **not** be rostered and must **not** carry a class-level category.
 
-- [ ] **Step 6: THE MILESTONE — a real web page, verified by a human**
+- [x] **Step 6: THE MILESTONE — a real web page. ✅ DONE 2026-08-06.**
 
-This is what makes "BasicLang produces web sites" true, and it cannot be automated here (Node has no DOM).
+**It works.** Compiled through the real
+`VisualGameStudio.Tests\bin\Release\net8.0\BasicLang.exe`, served over HTTP, loaded in a browser:
+the page renders **"Hello from BasicLang"**, with no console errors.
+
+Verified, in order:
+
+| | Result |
+|---|---|
+| `BasicLang.exe page.bas --target=javascript` | ✅ `page.js`, `index.html`, `page.js.map`, **`package.json`** |
+| Emitted script | `import "./greet.js";` at the top, then `function Main() { document.getElementById("out").textContent = greet("BasicLang"); }` |
+| Page over `http://127.0.0.1:…` (**not** `file://` — ES modules are CORS-gated and a `file://` origin is opaque) | ✅ renders **"Hello from BasicLang"**, console clean |
+| Source map | `sources: ["page.bas"]`, **`sourcesContent` inlined**, generated line 5 → **page.bas line 4** — the `javascript{ … }` line, which is exactly what a devtools breakpoint binds to |
+
+⚠ `greet.js` publishes through `globalThis`, not `export` — forced by the side-effect-only import
+(see the Task 5 limitation above). That is the shape a user has to write today.
+
+The original checklist, kept for reproduction:
 
 ⛔ The milestone uses `javascript{ … }`, **not** `::`. A `::` member assignment does not compile (see the limitations table at the top of this plan) — an earlier draft of this plan used one and it was wrong. Add a codegen assertion for this exact program in `JavaScriptInteropTests` first, so the headline example is guarded by a test rather than only by a checklist.
 
@@ -769,7 +785,12 @@ This is what makes "BasicLang produces web sites" true, and it cannot be automat
 7. Set a devtools breakpoint on the javascript{} line; confirm it lands on the .bas line.
 ```
 
-⚠ **Node/ESM hazard to settle before this step.** Task 2 makes the emitted file contain `import`, but both shipping routes still write `X.js`. Node parses `.js` as CommonJS unless a `package.json` says `"type":"module"`; automatic detection only became the default in Node 22.7. The unit tier already sidesteps this by writing `program.mjs` (`JavaScriptExecutionTests.cs:38-40`), but `JavaScriptCliProcessTests.RunNodeFile` runs the real `.js`. Decide one of: emit `.mjs`, emit a `package.json` beside the output, or document a Node floor. Browsers are unaffected — `type="module"` on the script tag settles it there.
+✅ **The Node/ESM hazard is SETTLED** (Task 5): the emitter writes a `package.json` containing
+`{"type":"module"}` into the output directory, but only when the program has imports and only
+when absent. Node parses `.js` as CommonJS unless told otherwise and automatic detection only
+became the default in 22.7, so without it whether the emitted site runs under Node depended on
+the reader's version. Browsers were never affected — `type="module"` on the script tag settles
+it there.
 
 - [ ] **Step 7: Update the spec's status line**
 
