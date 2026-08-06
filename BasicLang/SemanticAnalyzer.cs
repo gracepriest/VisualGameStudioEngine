@@ -8354,10 +8354,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (sourceType.Name == "String" || targetType.Name == "String")
                 return;
 
-            static bool IsReference(TypeInfo t) =>
-                t.Kind == TypeKind.Class || t.Kind == TypeKind.Interface;
             static bool IsScalar(TypeInfo t) =>
                 t.IsNumeric() || t.Name == "Boolean" || t.Name == "Char";
+
+            // ⛔ SCALAR-NESS WINS OVER Kind. Not every primitive is registered with a
+            // primitive TypeKind — SByte reports Class — so keying purely on Kind refused
+            // CType(sbyteValue, Integer), a perfectly ordinary widening. Anything numeric,
+            // Boolean or Char is a value here no matter how its Kind was registered.
+            static bool IsReference(TypeInfo t) =>
+                (t.Kind == TypeKind.Class || t.Kind == TypeKind.Interface) && !IsScalar(t);
 
             if ((IsReference(sourceType) && IsScalar(targetType)) ||
                 (IsScalar(sourceType) && IsReference(targetType)))
