@@ -69,7 +69,124 @@ namespace BasicLang.Compiler.IR
 
             program.Accept(this);
 
+            CanonicaliseMemberNames();
+
             return _module;
+        }
+
+        /// <summary>
+        /// Rewrites every member reference to the DECLARED spelling of the member it resolved
+        /// to, so the call site's casing stops reaching the backends.
+        ///
+        /// <para><b>The bug this fixes.</b> BasicLang is case-insensitive, so the front end
+        /// correctly accepts <c>b.textContent</c> against a field declared
+        /// <c>TextContent</c> — and then the raw source lexeme was carried into
+        /// <c>IRFieldAccess.FieldName</c> and emitted verbatim. On JavaScript that produced
+        /// TWO distinct properties from one declaration, so a write and a read that disagreed
+        /// on casing silently missed each other. On C# it surfaced as a late CS1061 pointing
+        /// at generated code rather than at the user's source.</para>
+        ///
+        /// <para><b>Why a post-pass and not the three construction sites.</b> A class may be
+        /// declared AFTER the function that uses it, in which case
+        /// <c>_module.Classes</c> has no entry yet when the member reference is built.
+        /// Running once at the end makes the result independent of source order.</para>
+        ///
+        /// <para><b>An unresolvable receiver is left completely alone.</b> A <c>::</c> foreign
+        /// name, a .NET type, a collection, a generic type parameter — anything this module did
+        /// not declare keeps the spelling it already had, because those names are correct as
+        /// written and rewriting them would be the very bug this fixes, inverted.</para>
+        /// </summary>
+        private void CanonicaliseMemberNames()
+        {
+            if (_module?.Functions == null) return;
+
+            foreach (var function in _module.Functions)
+            {
+                if (function?.Blocks == null) continue;
+                foreach (var block in function.Blocks)
+                    CanonicaliseBlock(block);
+            }
+        }
+
+        private void CanonicaliseBlock(BasicBlock block)
+        {
+            if (block?.Instructions == null) return;
+
+            foreach (var instruction in block.Instructions)
+            {
+                switch (instruction)
+                {
+                    case IRFieldAccess read:
+                        read.FieldName = DeclaredMemberName(read.Object?.Type, read.FieldName);
+                        break;
+
+                    case IRFieldStore write:
+                        write.FieldName = DeclaredMemberName(write.Object?.Type, write.FieldName);
+                        break;
+
+                    // Methods need this as much as fields do: `c.bump()` against a declared
+                    // `Bump()` emitted `c.bump()`, which is a TypeError in the browser rather
+                    // than a wrong value — loud, but still from a build that reported success.
+                    // A collection or stdlib receiver is untouched, because DeclaredMemberName
+                    // only rewrites types this module declares.
+                    case IRInstanceMethodCall call:
+                        call.MethodName = DeclaredMemberName(call.Object?.Type, call.MethodName);
+                        break;
+
+                    // Nested blocks are NOT entries in function.Blocks — mirrors the recursion
+                    // ForeignFeatureChecker does for the same reason.
+                    case IRTryCatch tryCatch:
+                        CanonicaliseBlock(tryCatch.TryBlock);
+                        if (tryCatch.CatchClauses != null)
+                            foreach (var clause in tryCatch.CatchClauses)
+                                CanonicaliseBlock(clause?.Block);
+                        CanonicaliseBlock(tryCatch.FinallyBlock);
+                        CanonicaliseBlock(tryCatch.EndBlock);
+                        break;
+
+                    case IRForEach forEach:
+                        CanonicaliseBlock(forEach.BodyBlock);
+                        CanonicaliseBlock(forEach.EndBlock);
+                        break;
+                }
+            }
+        }
+
+        /// <summary>
+        /// The declared spelling of <paramref name="written"/> on <paramref name="objectType"/>,
+        /// or <paramref name="written"/> unchanged when the type or member is not one this
+        /// module declares. Walks the base chain, since an inherited member is declared on an
+        /// ancestor.
+        /// </summary>
+        private string DeclaredMemberName(TypeInfo objectType, string written)
+        {
+            if (string.IsNullOrEmpty(written) || string.IsNullOrEmpty(objectType?.Name))
+                return written;
+
+            var typeName = objectType.Name;
+            var guard = 0;   // a malformed base chain must not spin
+
+            while (!string.IsNullOrEmpty(typeName) && guard++ < 64)
+            {
+                if (!_module.Classes.TryGetValue(typeName, out var irClass) || irClass == null)
+                    return written;
+
+                foreach (var field in irClass.Fields)
+                    if (string.Equals(field?.Name, written, StringComparison.OrdinalIgnoreCase))
+                        return field.Name;
+
+                foreach (var property in irClass.Properties)
+                    if (string.Equals(property?.Name, written, StringComparison.OrdinalIgnoreCase))
+                        return property.Name;
+
+                foreach (var method in irClass.Methods)
+                    if (string.Equals(method?.Name, written, StringComparison.OrdinalIgnoreCase))
+                        return method.Name;
+
+                typeName = irClass.BaseClass;
+            }
+
+            return written;
         }
 
         private IRVariable CreateVariable(string name, TypeInfo type, int version = 0)
