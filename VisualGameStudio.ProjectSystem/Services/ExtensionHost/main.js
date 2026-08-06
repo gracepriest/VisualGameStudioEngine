@@ -684,7 +684,23 @@ for (const [method, type, paramMapper] of providerRequestTypes) {
 
         const isWorkspaceRequest = type === 'workspaceSymbol';
         const doc = isWorkspaceRequest ? null : documentManager.getDocument(params.uri);
-        if (!doc && !isWorkspaceRequest) return null;
+
+        if (!doc && !isWorkspaceRequest) {
+            // Say so. A document miss and "no provider had anything to say" both used to return
+            // null here, and the two are indistinguishable from the IDE — which is how a permanent
+            // key mismatch between the IDE's document identity and the host's went unnoticed
+            // entirely. If this fires, the request arrived but nothing was open under that key.
+            const known = documentManager._documents
+                ? [...documentManager._documents.keys()]
+                : [];
+            rpc.sendNotification('log', {
+                level: 'warn',
+                message:
+                    `[host] ${method}: no open document keyed '${params.uri}'. ` +
+                    `Open keys: [${known.join(', ')}]`,
+            });
+            return null;
+        }
 
         const cts = new CancellationTokenSource();
         if (requestId !== undefined) {

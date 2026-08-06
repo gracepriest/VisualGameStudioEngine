@@ -2480,6 +2480,13 @@ public partial class MainWindowViewModel : ViewModelBase
             };
             document.OnTypeFormattingRequested += onTypeFormat;
 
+            // Reports the hover routing decision ONCE per document. Hover fires on every mouse move
+            // over text, so this cannot be unconditional — but with nothing logged at all, "the
+            // extension was never asked" and "the extension was asked and said nothing" are
+            // indistinguishable from the Output pane, and they have completely different causes.
+            var hoverPathLogged = false;
+            var hoverPathReplyLogged = false;
+
             EventHandler<HoverRequestEventArgs>? onHover = async (s, e) =>
             {
                 try
@@ -2498,14 +2505,35 @@ public partial class MainWindowViewModel : ViewModelBase
                         : null;
 
                     // Try extension host providers if built-in LSP returned nothing
-                    if (hover == null &&
-                        _extensionService.HasExtensionProviders(LanguageFileTypes.GetEditorLanguageId(document.FilePath)))
+                    var editorLanguageId = LanguageFileTypes.GetEditorLanguageId(document.FilePath);
+                    var hasExtensionProviders = _extensionService.HasExtensionProviders(editorLanguageId);
+
+                    if (!hoverPathLogged)
+                    {
+                        hoverPathLogged = true;
+                        _outputService?.WriteLine(
+                            $"[Hover] {System.IO.Path.GetFileName(document.FilePath)} -> languageId '{editorLanguageId}', "
+                            + $"lsp {(hoverSvc is { IsConnected: true } ? "connected" : "none")}, "
+                            + $"lsp answered: {hover != null}, extension providers: {hasExtensionProviders}",
+                            OutputCategory.General);
+                    }
+
+                    if (hover == null && hasExtensionProviders)
                     {
                         var extResult = await _extensionService.RequestHoverAsync(
                             document.FilePath, e.Line, e.Column);
+
                         if (extResult.HasValue)
                         {
                             hover = ParseExtensionHover(extResult.Value);
+                        }
+                        else if (!hoverPathReplyLogged)
+                        {
+                            hoverPathReplyLogged = true;
+                            _outputService?.WriteLine(
+                                "[Hover] extension providers returned nothing for "
+                                + System.IO.Path.GetFileName(document.FilePath),
+                                OutputCategory.General);
                         }
                     }
 
