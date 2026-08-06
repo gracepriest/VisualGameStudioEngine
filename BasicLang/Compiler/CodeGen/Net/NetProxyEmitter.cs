@@ -260,6 +260,29 @@ namespace BasicLang.Compiler.CodeGen.Net
                 ? Wire.Handle
                 : WireOf(member.TypeFullName);
 
+            // §6.4's pointer rows are admissible as by-value ARGUMENTS only. In the RESULT
+            // position the converter would have to fill a caller-owned buffer, and the buffer
+            // would have to be an extra proxy argument — the shape §6.4's multi-slot rows also
+            // need and neither has yet.
+            //
+            // ⛔ This guard is not defence-in-depth for the call site's refusal; it is the ONLY
+            // check on this path. A <NetProxy> DECLARED TYPE projects every member it has,
+            // called or not, so a Guid-returning member reaches here without any call site ever
+            // existing. Without this the switches below simply have no arm for the kind: the
+            // result temporary is never declared while `&blnet_result` is still passed.
+            //
+            // PlanMember validated PARAMETERS only until this was added — the asymmetry is why
+            // the hole survived review.
+            if (returnWire.Kind == WireKind.ByValuePointer)
+            {
+                throw new NotSupportedException(
+                    $"Cannot emit a proxy for '{member}': its result type "
+                    + $"'{member.TypeFullName}' is a §6.4 row that crosses as a pointer to a "
+                    + "caller-owned buffer. §6.4 lowers these as by-value ARGUMENTS only — a "
+                    + "result would need the buffer as an extra slot argument. Use an overload "
+                    + "returning String, or take the value as a parameter.");
+            }
+
             var parameters = new List<ParameterPlan>();
             var index = 0;
             foreach (var p in member.Parameters ?? Array.Empty<NetParameterDescriptor>())
@@ -304,7 +327,17 @@ namespace BasicLang.Compiler.CodeGen.Net
         // §8.3 marshaling: .NET type name -> wire form.
         // ------------------------------------------------------------------------------
 
-        private enum WireKind { Void, Scalar, String, Handle, Callback }
+        /// <summary>
+        /// <para><b><see cref="ByValuePointer"/> is separate from <see cref="Scalar"/> on
+        /// purpose, and the separation is load-bearing.</b> §6.4's Guid and StringBuilder rows
+        /// cross on one slot that is a POINTER to a caller-owned buffer. Modelling them as
+        /// Scalar — which they briefly were — makes every <c>Kind == Scalar</c> test in either
+        /// emitter answer yes for them, and those tests were written meaning "a blittable
+        /// value that fits a register". Two of them let the rows through into positions with
+        /// no conversion at all. A distinct kind keeps those gates shut BY CONSTRUCTION rather
+        /// than by each site remembering to ask a second question.</para>
+        /// </summary>
+        private enum WireKind { Void, Scalar, ByValuePointer, String, Handle, Callback }
 
         /// <summary>
         /// One row of §8.3. <see cref="CType"/> is the INBOUND C spelling and
@@ -377,7 +410,8 @@ namespace BasicLang.Compiler.CodeGen.Net
             /// one-result-out-pointer limit the multi-slot rows also hit.</para>
             /// </summary>
             internal static readonly WireForm Guid = new(
-                WireKind.Scalar, "const uint8_t*", "uint8_t*", "const uint8_t*", "const uint8_t*");
+                WireKind.ByValuePointer, "const uint8_t*", "uint8_t*",
+                "const uint8_t*", "const uint8_t*");
 
             /// <summary>
             /// §6.4's StringBuilder row: crosses BY VALUE as the String wire, to-net ONLY. The
@@ -386,7 +420,8 @@ namespace BasicLang.Compiler.CodeGen.Net
             /// <c>blnet_alloc</c>'d and nothing is freed.
             /// </summary>
             internal static readonly WireForm StringBuilder = new(
-                WireKind.Scalar, "const char*", "const char*", "const char*", "const char*");
+                WireKind.ByValuePointer, "const char*", "const char*",
+                "const char*", "const char*");
 
             internal static WireForm Scalar(string cType) =>
                 new(WireKind.Scalar, cType, cType + "*", cType, cType);

@@ -919,7 +919,13 @@ namespace BasicLang.Compiler.CodeGen.Net
         // separate code and NetShimGeneratorTests compares the signatures they produce.
         // ------------------------------------------------------------------------------
 
-        private enum WireKind { Void, Scalar, String, Handle, Callback }
+        /// <summary>
+        /// Mirrors <c>NetProxyEmitter.WireKind</c>. <see cref="ByValuePointer"/> exists because
+        /// <c>RequireBlittableScalar</c> admits on <c>Kind == Scalar</c> ALONE — it consults no
+        /// table — so a §6.4 pointer row modelled as Scalar silently cleared §8.4's delegate
+        /// gate, whose whole job is to stay shut until a marshaling contract exists.
+        /// </summary>
+        private enum WireKind { Void, Scalar, ByValuePointer, String, Handle, Callback }
 
         /// <summary>
         /// One row of §8.3 in C#. <see cref="CsParamType"/> is the inbound spelling and
@@ -949,7 +955,7 @@ namespace BasicLang.Compiler.CodeGen.Net
             /// C# has no const pointers, so both directions spell <c>byte*</c>.
             /// </summary>
             internal static readonly WireForm Guid =
-                new(WireKind.Scalar, "byte*", "byte*", "System.Guid");
+                new(WireKind.ByValuePointer, "byte*", "byte*", "System.Guid");
 
             /// <summary>
             /// §6.4's StringBuilder row: the String wire, to-net ONLY. Not
@@ -958,7 +964,7 @@ namespace BasicLang.Compiler.CodeGen.Net
             /// direction this row does not have.
             /// </summary>
             internal static readonly WireForm StringBuilder =
-                new(WireKind.Scalar, "byte*", "byte*", "System.Text.StringBuilder");
+                new(WireKind.ByValuePointer, "byte*", "byte*", "System.Text.StringBuilder");
 
             /// <summary>
             /// §8.4's delegate parameter. Same wire as <see cref="Handle"/> — a callback handle is
@@ -1120,6 +1126,24 @@ namespace BasicLang.Compiler.CodeGen.Net
             var returnWire = member.Kind == NetMemberCategory.Constructor
                 ? Wire.Handle
                 : WireOf(member.TypeFullName);
+
+            // Mirrors NetProxyEmitter.PlanMember's guard, and must: if only one side refuses,
+            // the two tables disagree about which members exist and §12.4's slots-≡-exports
+            // comparison fails with a confusing count rather than this explanation.
+            //
+            // ⛔ The C# side is the more dangerous of the two. EmitWrapper's result switch has
+            // no arm for this kind, so without the guard it emits NOTHING for the result — the
+            // export returns BLNET_OK having never written through `result`, and the caller
+            // reads an uninitialised buffer. That is strictly worse than the ill-typed
+            // assignment it replaced, because nothing fails to compile.
+            if (returnWire.Kind == WireKind.ByValuePointer)
+            {
+                throw new NotSupportedException(
+                    $"Cannot emit an export for '{member}': its result type "
+                    + $"'{member.TypeFullName}' is a §6.4 row that crosses as a pointer to a "
+                    + "caller-owned buffer. §6.4 lowers these as by-value ARGUMENTS only. Use "
+                    + "an overload returning String, or take the value as a parameter.");
+            }
 
             var parameters = new List<ParameterPlan>();
             var index = 0;

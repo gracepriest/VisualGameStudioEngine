@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using BasicLang.Compiler;
 using BasicLang.Compiler.CodeGen.CPlusPlus;
+using BasicLang.Compiler.CodeGen.Net;
 using BasicLang.Compiler.IR;
 using BasicLang.Compiler.SemanticAnalysis;
 using BasicLang.Net;
@@ -312,6 +313,88 @@ namespace ConvProbe {
     {
         Assert.That(NetMarshalTable.MultiSlotConversionPairs,
             Is.EquivalentTo(new[] { "System.Decimal", "System.DateTimeOffset" }));
+    }
+
+    // ====================================================================================
+    // The EMITTER positions, which a call-site refusal does not reach
+    // ====================================================================================
+
+    private static NetMemberDescriptor Returning(string netType) => new(
+        "Get", "MyLib.Holder", NetMemberCategory.Method, true, 0, netType,
+        Array.Empty<NetParameterDescriptor>());
+
+    private static NetSurface SurfaceReturning(string netType) =>
+        new(new[] { Returning(netType) }, new[] { "MyLib.Holder" });
+
+    /// <summary>
+    /// ⛔ REGRESSION GUARD for the hole Task 8c-1 opened.
+    ///
+    /// <para>Giving Guid and StringBuilder a by-value wire form made them
+    /// <c>WireKind.Scalar</c> in both emitters. The call site refuses them in the RESULT
+    /// position — but a call site is not the only way a member reaches an emitter. A
+    /// <c>&lt;NetProxy&gt;</c> DECLARED TYPE projects every member it has, called or not, so a
+    /// Guid-returning member walks straight into <c>PlanMember</c>.</para>
+    ///
+    /// <para>Before Task 8c-1 these rows were <c>Wire.Handle</c> and the result position was
+    /// sound (<c>*result = ToHandle(rv_)</c>). After it, the shim's Scalar arm emits
+    /// <c>*result = rv_;</c> — a <c>System.Guid</c> assigned to a <c>byte*</c> — because
+    /// <c>ToWire</c> has no arm for the row. That is ill-typed GENERATED C# with no BasicLang
+    /// diagnostic attached: the user sees a compiler error inside a file they never wrote.</para>
+    ///
+    /// <para>An emitter must refuse loudly at PLAN time instead. The refusal is the contract;
+    /// emitting something that happens not to compile is not.</para>
+    /// </summary>
+    [TestCase("System.Guid")]
+    [TestCase("System.Text.StringBuilder")]
+    public void AByValuePointerRow_InTheRESULTPosition_RefusesAtPlanTime(string netType)
+    {
+        var surface = SurfaceReturning(netType);
+
+        var proxy = Assert.Throws<NotSupportedException>(
+            () => NetProxyEmitter.EmitBindings(surface),
+            "the C emitter must refuse a §6.4 pointer row in the result position rather than "
+            + "emit a slot whose out-pointer it has no conversion for");
+
+        var shim = Assert.Throws<NotSupportedException>(
+            () => NetShimGenerator.Emit(surface, "Shim"),
+            "and the C# emitter must refuse it too — this is the side that would otherwise "
+            + "emit `*result = rv_;` and fail to compile inside generated source");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(proxy.Message, Does.Contain(netType));
+            Assert.That(shim.Message, Does.Contain(netType));
+        });
+    }
+
+    /// <summary>
+    /// The same widening reached §8.4's delegate gate. <c>RequireBlittableScalar</c> admits on
+    /// <c>Kind == WireKind.Scalar</c> ALONE — no table consult — so making these rows Scalar
+    /// silently opened a gate whose entire job is to stay shut until §8.4 specifies a
+    /// marshaling contract for non-scalars.
+    /// </summary>
+    [TestCase("System.Guid")]
+    [TestCase("System.Text.StringBuilder")]
+    public void AByValuePointerRow_IsStillRejectedByTheDelegateGate(string netType)
+    {
+        // A §8.4 delegate PARAMETER whose invoke signature names the row — the shape that
+        // reaches RequireBlittableScalar through the real entry point.
+        var member = new NetMemberDescriptor(
+            "Run", "MyLib.Holder", NetMemberCategory.Method, true, 0, "System.Void",
+            new[]
+            {
+                new NetParameterDescriptor(
+                    NetRefKind.None, "MyLib.Callback", netType + "(" + netType + ")"),
+            });
+
+        var surface = new NetSurface(new[] { member }, new[] { "MyLib.Holder" });
+
+        var ex = Assert.Throws<NotSupportedException>(
+            () => NetShimGenerator.Emit(surface, "Shim"),
+            "§8.4 v1 admits blittable scalars only; a pointer-shaped §6.4 row is not one, and "
+            + "the gate must not admit it merely because it shares a WireKind with Integer");
+
+        Assert.That(ex.Message, Does.Contain(netType));
     }
 
     /// <summary>A throwaway on-disk assembly the resolver can read real metadata from.</summary>
