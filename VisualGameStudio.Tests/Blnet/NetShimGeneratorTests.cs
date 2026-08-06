@@ -562,6 +562,15 @@ public class NetShimGeneratorTests
         "double" => "double",
         "const char*" => "byte*",
         "char**" => "byte**",
+        // §8.6's array-copy helpers spell their source pointer `const int32_t* src`. C# has no
+        // const pointers, so the qualifier simply drops — but it must be stripped BEFORE the
+        // pointer arm below, which strips only the trailing '*' and would hand "const int32_t"
+        // to the fallback. This arm is why the oracle could not check an array-helper slot at
+        // all: it produced "<no C# wire form for const int32_t>*", which never matched, and no
+        // fixture surface had an array parameter to expose it. (`const char*` stays special —
+        // it is a UTF-8 string pointer that maps to byte*, not to sbyte*.)
+        _ when cType.StartsWith("const ", StringComparison.Ordinal) =>
+            CsTypeFor(cType["const ".Length..]),
         _ when cType.EndsWith("*", StringComparison.Ordinal) =>
             CsTypeFor(cType[..^1]) + "*",
         _ => "<no C# wire form for " + cType + ">",

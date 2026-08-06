@@ -91,6 +91,13 @@ public class NetProxyEmitterTests
                    P("System.Char")),
             Member("ToChar", "MyLib.Widen", NetMemberCategory.Method,
                    true, "System.Char", P("System.Int32")),
+            // §8.6's ARRAY row (P2a-2 Task 11 Step 8). Until this member existed the fixture
+            // had no array parameter at all, so NetArrayCopy contributed no forms and the
+            // array-copy PROXIES — which every per-body assertion below iterates — were never
+            // inspected by any of them. A whole emitted proxy shape sat outside the coverage
+            // the fixture was believed to provide.
+            Member("SumAll", "MyLib.Widen", NetMemberCategory.Method,
+                   true, "System.Int32", P("System.Int32[]")),
         },
         new[] { "System.Text.RegularExpressions.Regex" });
 
@@ -99,7 +106,13 @@ public class NetProxyEmitterTests
     /// inlined so a fixture change updates ONE number and every count guard follows — a guard
     /// that silently tracked the fixture would assert nothing.
     /// </summary>
-    internal const int ShapeCount = 11;
+    /// <para>Composition matters here, because the number is not the member count: <b>12 member
+    /// slots + 2 §8.6 array-copy helper slots</b> (<c>bl_net_array_new_…</c> and
+    /// <c>bl_net_array_read_…</c>, one pair per distinct element form). The helpers are ORDINARY
+    /// slots on purpose — as a side channel they would have been exempt from §12.4's
+    /// slots-≡-exports comparison — so they belong in this count and in every per-body
+    /// assertion that iterates it.</para>
+    internal const int ShapeCount = 14;
 
     /// <summary>
     /// <b>The row-by-row tie between <c>NetMarshalTable.WireRows</c>' <c>CWire</c> column and
@@ -326,11 +339,28 @@ public class NetProxyEmitterTests
                 Assert.That(body, Is.Not.Null,
                     $"No proxy function was emitted for slot '{slot}'. Every table slot needs a "
                     + "typed proxy — the slot alone is not the public API (§9.2).");
-                Assert.That(body, Does.Contain("BasicLang::blnet::BlnetCallScope"),
-                    $"The proxy for '{slot}' calls through g_net WITHOUT a BlnetCallScope. §9.2 "
-                    + "makes it normative: P0's thunk treats g_call_depth == 0 as cross-thread, so "
-                    + "without the scope every delegate argument misdispatches — silently, for an "
-                    + "Action. Fix NetProxyEmitter.EmitProxyBody.");
+                // COUNTED, not Does.Contain (P2a-2 Task 11 Step 8). §8.6's readback proxy makes
+                // TWO g_net calls — a length probe with a null buffer, then the real read — and
+                // each opens its own scope. A containment check passes with only ONE of them
+                // scoped, which is precisely the regression it is supposed to catch.
+                //
+                // The call sites are matched with a trailing '(' so the slot GUARD
+                // (`g_net.X != nullptr`) is not miscounted as a call.
+                var calls = System.Text.RegularExpressions.Regex.Matches(
+                    body, @"g_net\." + System.Text.RegularExpressions.Regex.Escape(slot) + @"\s*\(")
+                    .Count;
+                var scopes = System.Text.RegularExpressions.Regex.Matches(
+                    body, "BasicLang::blnet::BlnetCallScope").Count;
+
+                Assert.That(calls, Is.GreaterThan(0),
+                    $"The proxy for '{slot}' never calls through g_net — the slot is declared and "
+                    + "the typed proxy does nothing with it.");
+                Assert.That(scopes, Is.EqualTo(calls),
+                    $"The proxy for '{slot}' makes {calls} g_net call(s) but opens {scopes} "
+                    + "BlnetCallScope(s). §9.2 makes the scope normative per CALL: P0's thunk "
+                    + "treats g_call_depth == 0 as cross-thread, so an unscoped call misdispatches "
+                    + "every delegate argument — silently, for an Action. Fix "
+                    + "NetProxyEmitter.EmitProxyBody.");
                 Assert.That(body, Does.Contain($"BlnetRequireSlot(g_net.{slot} != nullptr"),
                     $"The proxy for '{slot}' does not guard its slot. §9.2 requires a clear "
                     + "diagnostic when blnet_startup() has not run (a static-initialization-order "
