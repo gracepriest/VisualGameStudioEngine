@@ -1,7 +1,10 @@
 using System;
 using System.Linq;
+using BasicLang.Compiler;
 using BasicLang.Compiler.CodeGen.CPlusPlus;
 using BasicLang.Compiler.CodeGen.Net;
+using BasicLang.Compiler.IR;
+using BasicLang.Compiler.SemanticAnalysis;
 using BasicLang.Net;
 using NUnit.Framework;
 
@@ -462,6 +465,87 @@ public class NetDelegateTests
         Assert.That(NetDelegateDispatch.SlotCount("System.Int32(System.Int32)"), Is.EqualTo(1));
         Assert.That(NetDelegateDispatch.SlotCount("System.Int32(System.Int32,System.Int32)"),
             Is.EqualTo(2));
+    }
+
+    // ------------------------------------------------------------------------------------
+    // Step 5c — AddressOf lowering on the C++ backend (decision D-P12).
+    //
+    // Today MapUnaryOperator has no AddressOf arm and falls to `_ => "?"`, so `AddressOf Fn`
+    // emits `t0 = ?Fn;` — invalid C++, silently, with no capability refusal. The result temp is
+    // equally broken: AddressOf types as `Pointer To <return type>`, which MapType renders
+    // verbatim as `Pointer To Integer t0 = {};`.
+    //
+    // D-P12: fuse the declaration into the assignment as `auto`, so C++ deduces the
+    // function-pointer type. That works for Function and Sub alike without needing a parameter
+    // list the IR does not carry.
+    // ------------------------------------------------------------------------------------
+
+    private static string CompileToCpp(string source)
+    {
+        var lexer = new Lexer(source);
+        var parser = new Parser(lexer.Tokenize());
+        var ast = parser.Parse();
+
+        var analyzer = new SemanticAnalyzer();
+        Assert.That(analyzer.Analyze(ast), Is.True,
+            "fixture must be valid BasicLang: "
+            + string.Join("; ", analyzer.Errors.Select(e => e.Message)));
+
+        var ir = new IRBuilder(analyzer).Build(ast, "TestModule");
+        return new CppCodeGenerator(new CppCodeGenOptions { GenerateComments = false })
+            .Generate(ir);
+    }
+
+    // ⚠ SCOPE, measured rather than assumed. Two adjacent shapes are NOT reachable today, and
+    // neither is caused by this change:
+    //
+    //   • `Apply(AddressOf Compare)` against a user `Delegate` parameter — the ANALYZER refuses
+    //     it: "cannot convert from 'Pointer To Pointer To Integer' to 'Comparer'". Note the
+    //     DOUBLE pointer; the AddressOf arm appears to wrap an already-pointer type. A separate
+    //     pre-existing defect, upstream of codegen.
+    //   • `Dim f = AddressOf Compare` — analyzes and reaches codegen, but the LOCALS pass
+    //     declares `Pointer To Integer f`, which is not a C++ type. Chipped as task_4392b185.
+    //
+    // So these tests assert exactly what Step 5c owns: the operator mapping. The `auto` fusion
+    // is exercised only once a delegate argument reaches lowering through the resolved .NET
+    // path in Step 5d, which bypasses user-delegate type checking.
+
+    [Test]
+    public void AddressOfAFunction_NoLongerEmitsAQuestionMark()
+    {
+        var cpp = CompileToCpp(@"
+Function Compare(a As Integer, b As Integer) As Integer
+    Return a - b
+End Function
+
+Sub Main()
+    Dim f = AddressOf Compare
+End Sub");
+
+        Assert.That(cpp, Does.Not.Contain("?Compare"),
+            "MapUnaryOperator's `_ => \"?\"` default emitted a literal question mark INTO THE "
+            + "GENERATED SOURCE — invalid C++, silently, with no capability refusal to catch it");
+        Assert.That(cpp, Does.Contain("= Compare;"),
+            "a method reference is just the function's name in C++");
+    }
+
+    [Test]
+    public void AddressOfASub_NoLongerEmitsAQuestionMark()
+    {
+        // A Sub's symbol type is VoidType, so AddressOf types as `Pointer To Void`. Any filter
+        // that tests the literal "void" silently lets that through, which is why the lowering
+        // keys on node KIND rather than on the result type.
+        var cpp = CompileToCpp(@"
+Sub Handler()
+    Console.WriteLine(""hi"")
+End Sub
+
+Sub Main()
+    Dim h = AddressOf Handler
+End Sub");
+
+        Assert.That(cpp, Does.Not.Contain("?Handler"));
+        Assert.That(cpp, Does.Contain("= Handler;"));
     }
 
     [Test]
