@@ -1462,19 +1462,28 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// ConstantFoldingPass turned <c>2 + 3 * 4</c> into an <c>IRConstant</c> and PUT IT IN
         /// the instruction list, and every shipping route runs that pass unconditionally.</para>
         ///
-        /// <para><b>Why binding rather than a no-op,</b> given this file's rule against
-        /// silencing a Visit to make a test pass. C#, C++, LLVM and MSIL all no-op this node
-        /// and have silently absorbed it for the optimizer's whole life; a no-op is defensible
-        /// here too, since a constant has no side effect and <see cref="Expr"/> renders the
-        /// literal inline for any consumer. But binding is provably correct rather than merely
-        /// harmless — the consumer gets a name that is actually defined — and it keeps the
-        /// emitted JS readable, which is half of why source maps exist. An UNUSED constant
-        /// emits nothing, because a pure value nobody reads is genuinely dead.</para>
+        /// <para><b>Emitting nothing is correct here, and this is the one place in this file
+        /// where that is true</b> — the surrounding rule against silencing a Visit exists
+        /// because a no-op usually hides a dropped side effect. Two facts make this node the
+        /// exception, and BOTH matter:</para>
+        ///
+        /// <para>1. <see cref="Expr"/> renders a constant INLINE unconditionally — its
+        /// <c>IRConstant</c> arm returns the literal without ever consulting
+        /// <c>_boundNames</c>, unlike every other value-producing node. So no consumer can
+        /// ever refer to a constant by name, and a binding would be a declaration nobody
+        /// reads.</para>
+        ///
+        /// <para>2. The name is <c>$"const_{value}"</c> — derived from the VALUE, so it is
+        /// neither unique nor stable through <see cref="SanitizeName"/>: three folded
+        /// <c>True</c>s all want <c>const_True</c>, and <c>-5</c> and <c>5</c> both sanitize
+        /// to <c>const_5</c>. Binding therefore emits duplicate <c>const</c> declarations,
+        /// which is a SyntaxError that stops the whole module parsing.</para>
+        ///
+        /// <para>⚠ This shipped briefly as a binding, and <c>If x &gt; 0 And y &gt; 0</c> was
+        /// enough to produce <c>const const_True</c> three times over. Pinned by
+        /// JavaScriptOptimizedExecutionTests.</para>
         /// </summary>
-        public void Visit(IRConstant constant)
-        {
-            if (IsUsed(constant)) Bind(constant.Name, Constant(constant));
-        }
+        public void Visit(IRConstant constant) { }
         public void Visit(IRVariable variable) => throw NotYet(nameof(IRVariable));
         // Value-producing instructions declare their result, and every later reference is by
         // name (see Expr). `const` because the IR is SSA — each temp is assigned exactly once,

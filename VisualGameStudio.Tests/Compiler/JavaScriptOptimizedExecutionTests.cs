@@ -133,6 +133,37 @@ public class JavaScriptOptimizedExecutionTests
     public void ConstantFolding_StringConcatenation()
         => AssertSameOutput("Sub Main()\nDim s As String = \"a\" & \"b\"\nConsole.WriteLine(s)\nEnd Sub");
 
+    /// <summary>
+    /// ⛔ THE DUPLICATE-DECLARATION REGRESSION. An IRConstant's name is <c>$"const_{value}"</c>
+    /// — derived from the VALUE, so it is not unique. <c>If x &gt; 0 And y &gt; 0</c> folds to
+    /// three separate <c>True</c> constants that all want the name <c>const_True</c>, and
+    /// binding them emitted <c>const const_True = true;</c> three times: a SyntaxError that
+    /// stops the entire module parsing, from a build that reported success.
+    ///
+    /// <para>Found by hand-compiling an ordinary VB condition (<c>If x &gt; 0 And y &gt; 0</c>),
+    /// NOT by the suite — every optimizer test above happened to fold to distinct values.
+    /// Reproduced here without <c>And</c>, which is separately unmapped on this backend.</para>
+    /// </summary>
+    [Test]
+    public void ConstantFolding_RepeatedIdenticalConstants_DoNotCollide()
+        => AssertSameOutput(
+            "Sub Main()\n" +
+            "Dim a As Boolean = 1 < 2\n" +
+            "Dim b As Boolean = 3 < 4\n" +
+            "Dim c As Boolean = 5 < 6\n" +
+            "Console.WriteLine(a)\nConsole.WriteLine(b)\nConsole.WriteLine(c)\n" +
+            "End Sub");
+
+    /// <summary>
+    /// The same collision by a second route: <c>-5</c> and <c>5</c> both sanitize to
+    /// <c>const_5</c>, so a name-keyed binding would declare one twice AND give one of them
+    /// the wrong value.
+    /// </summary>
+    [Test]
+    public void ConstantFolding_NegativeAndPositive_DoNotCollide()
+        => AssertSameOutput(
+            "Sub Main()\nConsole.WriteLine(2 - 7)\nConsole.WriteLine(2 + 3)\nEnd Sub");
+
     // ---------------------------------------------------------------- strength reduction
 
     /// <summary>
