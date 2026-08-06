@@ -459,6 +459,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var isNullConstant = argument is IRConstant { Value: null };
             var paramType = parameter.TypeFullName;
 
+            // §8.4 FIRST, and authoritatively: delegate-ness rides the surface (D-P9) rather
+            // than being guessed from a type name, and a delegate parameter's name is never in
+            // WireRows, so without this arm it would fall to the handle row and then the
+            // terminal BL6019 — refusing with an ARRAY explanation for a delegate.
+            if (parameter.IsDelegate)
+                return MarshalNetDelegateArgument(targetDisplay, parameter, position, argument);
+
             // §8.3's by-value rows, projected from NetMarshalTable.WireRows — the SAME table
             // NetProxyEmitter.WireOf and NetShimGenerator.WireOf project from. A row that
             // exists in the emitters but not here is a SILENT wire mismatch (the emitters
@@ -533,6 +540,104 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 + "row, or String) against a matching T[] parameter; List/Dictionary/HashSet, "
                 + "nested element types and handle element types have no v1 copy. Pass Nothing, "
                 + "a .NET-typed value, or a simple array.");
+        }
+
+        /// <summary>
+        /// Spec §8.4 — a BasicLang lambda or <c>AddressOf</c> crossing as a delegate ARGUMENT.
+        ///
+        /// <para><b>The RAII slot, same contract §8.6 uses.</b> Registration is ONE prologue line
+        /// declaring a <c>CallbackRef</c>, and the guard's handle is what crosses. It must not be
+        /// a paired register/release: <c>WriteBack</c> is success-path only (NetCheckTyped throws
+        /// from inside the call statement), so a release parked after the call would be skipped
+        /// whenever the managed callee throws and the entry — reclaimed only through
+        /// <c>blnet_callback_release</c>'s freelist — would leak permanently. D-P8.</para>
+        ///
+        /// <para><b>The adapter is the non-obvious part.</b> <c>NativeCallbackFn</c> is
+        /// <c>int32_t(const uint64_t*, int32_t, uint64_t*)</c> — nothing like the user's
+        /// function — so the lowered lambda cannot be handed over directly. The emitted adapter
+        /// unpacks each slot, calls through, and writes the result.</para>
+        ///
+        /// <para><b>v1 admits <see cref="NetWireShape.Scalar"/> rows only</b>, and that predicate
+        /// is doing real work rather than being a rough cut: it excludes <c>Boolean</c> and
+        /// <c>Char</c> precisely because those are the two rows whose WIRE spelling differs from
+        /// their C++ spelling (int32_t/bool and uint16_t/char). <c>NetWireRow.CWire</c>'s own
+        /// remarks warn that a generalization needing the bindable type must take the proxy's C++
+        /// parameter type and never the wire — restricting to Scalar sidesteps that entirely,
+        /// because for those rows the two coincide. Widening to Boolean/Char or to handle slots
+        /// needs the §8.4 marshaling contract written first.</para>
+        /// </summary>
+        private NetArgEmission MarshalNetDelegateArgument(
+            string targetDisplay, NetParameterDescriptor parameter, string position,
+            IRValue argument)
+        {
+            if (!NetDelegateDispatch.TryParseInvokeSignature(
+                    parameter.DelegateInvokeSignature, out var returnType, out var invokeParams))
+            {
+                throw NetLoweringRefusal("BL6019",
+                    $"'{targetDisplay}': argument {position} is a delegate whose invoke signature "
+                    + $"('{parameter.DelegateInvokeSignature}') could not be read.");
+            }
+
+            string CppSlotType(string netFullName, string what)
+            {
+                if (NetMarshalTable.TryGetWireRow(netFullName, out var row)
+                    && row.Shape == NetWireShape.Scalar
+                    && !string.IsNullOrEmpty(row.CWire))
+                {
+                    return row.CWire;
+                }
+
+                throw NetLoweringRefusal("BL6019",
+                    $"'{targetDisplay}': argument {position} is a delegate whose {what} type "
+                    + $"'{netFullName}' is not a §8.3 by-value scalar. §8.4 v1 carries blittable "
+                    + "scalars only — Boolean and Char are excluded because their wire spelling "
+                    + "differs from their C++ spelling, and handle/String slots need a "
+                    + "marshaling contract §8.4 does not yet specify.");
+            }
+
+            var slotTypes = invokeParams.Select(t => CppSlotType(t, "parameter")).ToList();
+            var isVoid = string.Equals(returnType, "System.Void", StringComparison.Ordinal);
+            var cppReturn = isVoid ? "void" : CppSlotType(returnType, "return");
+
+            var guard = NextNetTemp();
+            var callee = GetValueName(argument);
+            var prologue = new List<string>();
+
+            var slots = NetDelegateDispatch.CppSlotDescriptors(parameter.DelegateInvokeSignature);
+            var slotsArgument = "nullptr";
+            if (slots != null)
+            {
+                prologue.Add("BlnetSlotDesc " + guard + "_slots[] = " + slots + ";");
+                slotsArgument = guard + "_slots";
+            }
+
+            // §8.4: codegen always registers immediate = false; Immediate stays P0's rare opt-in.
+            // result_bearing is what makes the thunk run a value-returning callback INLINE under
+            // a BlnetCallScope instead of refusing it as cross-thread.
+            prologue.Add("BasicLang::blnet::CallbackFlags " + guard + "_flags{};");
+            if (!isVoid)
+                prologue.Add(guard + "_flags.result_bearing = true;");
+
+            var unpacked = string.Join(", ",
+                slotTypes.Select((t, i) => "static_cast<" + t + ">(blnet_a["
+                    + i.ToString(CultureInfo.InvariantCulture) + "])"));
+            var invoke = guard + "_fn(" + unpacked + ")";
+
+            var body = isVoid
+                ? invoke + "; return 0;"
+                : "auto blnet_r = " + invoke + "; if (blnet_result) *blnet_result = "
+                  + "static_cast<uint64_t>(blnet_r); return 0;";
+
+            prologue.Add(
+                "BasicLang::blnet::CallbackRef " + guard + "(["
+                + guard + "_fn = " + callee + "]"
+                + "(const uint64_t* blnet_a, int32_t, uint64_t* blnet_result) -> int32_t { "
+                + body + " }, "
+                + slotsArgument + ", "
+                + invokeParams.Count.ToString(CultureInfo.InvariantCulture) + ", "
+                + guard + "_flags);");
+
+            return NetArgEmission.Statements(new[] { guard + ".get()" }, prologue);
         }
 
         /// <summary>

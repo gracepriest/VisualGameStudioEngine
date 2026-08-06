@@ -263,36 +263,11 @@ public class ExtensionService : IExtensionService
         });
         _extensionHost.ProviderRegistered += (s, e) =>
         {
-            // Extract language IDs from selector and add to tracking set
-            if (!string.IsNullOrEmpty(e.SelectorJson))
+            // Which languages this provider claims decides whether the IDE will ever ASK for it:
+            // the hover and completion paths are gated on HasExtensionProviders(languageId).
+            foreach (var language in ExtractSelectorLanguages(e.SelectorJson))
             {
-                try
-                {
-                    var doc = JsonDocument.Parse(e.SelectorJson);
-                    if (doc.RootElement.TryGetProperty("language", out var langProp))
-                    {
-                        var lang = langProp.GetString();
-                        if (!string.IsNullOrEmpty(lang))
-                        {
-                            _extensionProviderLanguages.TryAdd(lang, 0);
-                        }
-                    }
-                    else if (doc.RootElement.ValueKind == JsonValueKind.Array)
-                    {
-                        foreach (var item in doc.RootElement.EnumerateArray())
-                        {
-                            if (item.TryGetProperty("language", out var itemLang))
-                            {
-                                var lang = itemLang.GetString();
-                                if (!string.IsNullOrEmpty(lang))
-                                {
-                                    _extensionProviderLanguages.TryAdd(lang, 0);
-                                }
-                            }
-                        }
-                    }
-                }
-                catch { }
+                _extensionProviderLanguages.TryAdd(language, 0);
             }
         };
 
@@ -703,6 +678,179 @@ public class ExtensionService : IExtensionService
     #region Extension Provider Methods
 
     public bool HasExtensionProviders(string languageId) => _extensionProviderLanguages.ContainsKey(languageId);
+
+    /// <summary>
+    /// Converts an extension's diagnostics payload into the IDE's model.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ THE SEVERITY SCALES DIFFER BY ONE, and using the wrong one fails silently.
+    /// LSP is Error=1/Warning=2/Information=3/Hint=4; VS Code — which is what an extension sends —
+    /// is Error=0/Warning=1/Information=2/Hint=3. Reusing the LSP converter would render every
+    /// extension ERROR as a warning and every warning as information: no crash, no log, just
+    /// quietly wrong severities. That is why this is a separate function rather than a shared one.
+    ///
+    /// <para>Positions are 0-based on the wire and 1-based in the IDE, matching the LSP path.</para>
+    ///
+    /// <para>Every shape here degrades rather than throws: this runs on a notification, so an
+    /// exception has nowhere to surface and would simply lose the batch.</para>
+    /// </remarks>
+    public static IEnumerable<DiagnosticItem> ConvertExtensionDiagnostics(JsonElement diagnostics, string filePath)
+    {
+        if (diagnostics.ValueKind != JsonValueKind.Array) yield break;
+
+        foreach (var entry in diagnostics.EnumerateArray())
+        {
+            // One malformed entry must not discard the well-formed ones beside it.
+            if (entry.ValueKind != JsonValueKind.Object) continue;
+
+            var item = new DiagnosticItem
+            {
+                FilePath = filePath,
+                Message = entry.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.String
+                    ? message.GetString() ?? ""
+                    : "",
+                Id = entry.TryGetProperty("code", out var code)
+                    ? (code.ValueKind == JsonValueKind.String ? code.GetString() ?? "" : code.ToString())
+                    : ""
+            };
+
+            // VS Code's scale, deliberately not the LSP one. A missing severity is Error, matching
+            // VS Code's own default.
+            item.Severity = entry.TryGetProperty("severity", out var severity)
+                            && severity.ValueKind == JsonValueKind.Number
+                            && severity.TryGetInt32(out var severityValue)
+                ? severityValue switch
+                {
+                    0 => DiagnosticSeverity.Error,
+                    1 => DiagnosticSeverity.Warning,
+                    2 => DiagnosticSeverity.Info,
+                    // VS Code's Hint is a faint suggestion. Mapped to Info rather than Hidden so it
+                    // stays visible — Hidden is the IDE's "do not surface this" level, and silently
+                    // dropping an extension's output is the failure mode this whole area suffers from.
+                    3 => DiagnosticSeverity.Info,
+                    _ => DiagnosticSeverity.Error
+                }
+                : DiagnosticSeverity.Error;
+
+            if (entry.TryGetProperty("range", out var range)
+                && range.ValueKind == JsonValueKind.Object
+                && range.TryGetProperty("start", out var start)
+                && start.ValueKind == JsonValueKind.Object)
+            {
+                item.Line = start.TryGetProperty("line", out var line) && line.TryGetInt32(out var lineValue)
+                    ? lineValue + 1
+                    : 0;
+                item.Column = start.TryGetProperty("character", out var character)
+                              && character.TryGetInt32(out var characterValue)
+                    ? characterValue + 1
+                    : 0;
+            }
+
+            yield return item;
+        }
+    }
+
+    /// <summary>
+    /// Turns the document identity an extension reports back into a local path the IDE recognises.
+    /// </summary>
+    /// <remarks>
+    /// The host percent-encodes the drive colon — <c>file:///C%3A/…</c> — while the IDE identifies
+    /// documents by plain Windows path. Observed directly: a diagnostic published for
+    /// <c>file:///C%3A/Users/…/hover-test.js</c> could never be matched to the open document, so it
+    /// never appeared in the Problems panel. This is the inverse of
+    /// <see cref="ExtensionHost.ToDocumentUri"/>: canonicalising inside one process is not the same
+    /// as agreeing across two.
+    /// </remarks>
+    public static string ToLocalDocumentPath(string uriOrPath)
+    {
+        if (string.IsNullOrWhiteSpace(uriOrPath)) return uriOrPath;
+
+        if (!uriOrPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase)) return uriOrPath;
+
+        try
+        {
+            return new Uri(uriOrPath).LocalPath;
+        }
+        catch (UriFormatException)
+        {
+            return uriOrPath;
+        }
+    }
+
+    /// <summary>
+    /// Reads the language ids out of a VS Code document selector.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ ORDER IS LOAD-BEARING: <see cref="JsonElement.TryGetProperty(string, out JsonElement)"/>
+    /// does NOT return false for a non-object — it THROWS
+    /// <see cref="System.InvalidOperationException"/>. The original inline version called it on the
+    /// root before checking for an array, so an array selector threw on the first line, landed in a
+    /// bare <c>catch { }</c>, and the array-handling branch directly beneath it was unreachable.
+    ///
+    /// <para>Arrays are the ordinary case, not an edge case: <c>vscode-api/languages.js</c> puts
+    /// every selector through <c>_normaliseSelector</c>, which wraps objects and bare strings alike
+    /// into an array. So essentially every real selector was discarded, <c>HasExtensionProviders</c>
+    /// stayed false forever, and the IDE never asked any extension for anything — while the log
+    /// cheerfully reported the provider as registered.</para>
+    ///
+    /// <para>Public and static so this can be tested directly; it is pure, while the event handler
+    /// that consumes it is reachable only through a running extension host.</para>
+    /// </remarks>
+    public static IEnumerable<string> ExtractSelectorLanguages(string? selectorJson)
+    {
+        if (string.IsNullOrWhiteSpace(selectorJson)) yield break;
+
+        JsonDocument doc;
+        try
+        {
+            doc = JsonDocument.Parse(selectorJson);
+        }
+        catch (JsonException)
+        {
+            yield break;
+        }
+
+        using (doc)
+        {
+            var root = doc.RootElement;
+
+            if (root.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in root.EnumerateArray())
+                {
+                    var language = LanguageOf(item);
+                    if (language != null) yield return language;
+                }
+            }
+            else
+            {
+                var language = LanguageOf(root);
+                if (language != null) yield return language;
+            }
+        }
+
+        // A selector entry is either a filter object with an optional `language`, or a bare
+        // language string. Anything else — a scheme-only filter, a number — contributes nothing
+        // and must not disturb its neighbours.
+        static string? LanguageOf(JsonElement element)
+        {
+            if (element.ValueKind == JsonValueKind.String)
+            {
+                var bare = element.GetString();
+                return string.IsNullOrEmpty(bare) ? null : bare;
+            }
+
+            if (element.ValueKind == JsonValueKind.Object
+                && element.TryGetProperty("language", out var languageProperty)
+                && languageProperty.ValueKind == JsonValueKind.String)
+            {
+                var language = languageProperty.GetString();
+                return string.IsNullOrEmpty(language) ? null : language;
+            }
+
+            return null;
+        }
+    }
 
     public async Task<JsonElement?> RequestCompletionAsync(string uri, int line, int character, CancellationToken ct = default)
     {

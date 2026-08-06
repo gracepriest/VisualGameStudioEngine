@@ -12,6 +12,57 @@ const fs = require('fs');
 const Module = require('module');
 
 const rpc = require('./rpc');
+
+// ---------------------------------------------------------------------------
+// Console isolation — MUST stay above every other require in this file.
+// ---------------------------------------------------------------------------
+// stdout IS the JSON-RPC channel: rpc.js writes `Content-Length` framed messages
+// straight to process.stdout. Node's console writes to that same stream, so an
+// extension calling console.log emits raw text into the middle of a frame. The
+// IDE can then no longer parse the message, the connection drops, stdin ends,
+// and rpc.js's `process.stdin.on('end')` handler exits the process — with code
+// ZERO, so the host dies and the failure reads as a clean shutdown rather than a
+// crash.
+//
+// console.log is the single most common thing extension code does; real VS Code
+// shims console inside its extension host for exactly this reason. One logging
+// line in one extension's activate() was enough to take the whole host down.
+//
+// Everything is routed to the `log` notification instead, which the IDE already
+// surfaces in its Output pane, using the same { level, message } shape main.js
+// itself sends.
+(function isolateConsoleFromTheRpcChannel() {
+    const util = require('util');
+    let sending = false;
+
+    function forward(level) {
+        return function (...args) {
+            // A failure while logging must never re-enter logging.
+            if (sending) return;
+            sending = true;
+            try {
+                rpc.sendNotification('log', {
+                    level,
+                    message: args
+                        .map((a) => (typeof a === 'string' ? a : util.inspect(a, { depth: 2 })))
+                        .join(' '),
+                });
+            } catch (_) {
+                // Losing a log line is acceptable; losing the host is not.
+            } finally {
+                sending = false;
+            }
+        };
+    }
+
+    console.log = forward('info');
+    console.info = forward('info');
+    console.warn = forward('warn');
+    console.error = forward('error');
+    console.debug = forward('debug');
+    console.trace = forward('debug');
+})();
+
 const { DocumentManager } = require('./document-manager');
 const { createVscodeApi, createMemento } = require('./vscode-api/index');
 const { EventEmitter, CancellationTokenSource } = require('./vscode-api/event');
@@ -633,7 +684,23 @@ for (const [method, type, paramMapper] of providerRequestTypes) {
 
         const isWorkspaceRequest = type === 'workspaceSymbol';
         const doc = isWorkspaceRequest ? null : documentManager.getDocument(params.uri);
-        if (!doc && !isWorkspaceRequest) return null;
+
+        if (!doc && !isWorkspaceRequest) {
+            // Say so. A document miss and "no provider had anything to say" both used to return
+            // null here, and the two are indistinguishable from the IDE — which is how a permanent
+            // key mismatch between the IDE's document identity and the host's went unnoticed
+            // entirely. If this fires, the request arrived but nothing was open under that key.
+            const known = documentManager._documents
+                ? [...documentManager._documents.keys()]
+                : [];
+            rpc.sendNotification('log', {
+                level: 'warn',
+                message:
+                    `[host] ${method}: no open document keyed '${params.uri}'. ` +
+                    `Open keys: [${known.join(', ')}]`,
+            });
+            return null;
+        }
 
         const cts = new CancellationTokenSource();
         if (requestId !== undefined) {

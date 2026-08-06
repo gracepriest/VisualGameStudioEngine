@@ -171,6 +171,35 @@ namespace BasicLang.Net
             return stem + "_" + hash;
         }
 
+        /// <summary>
+        /// The dispatcher export name for a delegate TYPE — §8.4, P2a-2 Task 11 Step 3. Same
+        /// guarantees as <see cref="Mangle"/>: a readable stem, an untruncated stable hash, and
+        /// the same output in any process on any machine.
+        ///
+        /// <para><b>Keyed on the delegate's full name, never on its invoke signature.</b> The
+        /// managed dispatcher has to construct the RIGHT named delegate, and
+        /// <c>System.Action</c> and <c>System.Threading.ThreadStart</c> are both <c>void()</c> —
+        /// collapsing them onto one export would hand the shim a delegate of the wrong type at
+        /// the one place the type is no longer recoverable.</para>
+        /// </summary>
+        public static string MangleDelegate(string delegateFullName)
+        {
+            if (string.IsNullOrEmpty(delegateFullName))
+                throw new ArgumentException(
+                    "A delegate full name is required.", nameof(delegateFullName));
+
+            var hash = StableHashHex(delegateFullName);
+            var stem = Prefix + "delegate_" + Sanitize(delegateFullName);
+
+            // Same rule as Mangle: truncate only the readable stem, never the hash, and compute
+            // the hash from the untruncated name so truncation cannot manufacture a collision.
+            var budget = MaxIdentifierLength - 1 - HashHexLength;
+            if (stem.Length > budget)
+                stem = stem.Substring(0, Math.Max(Prefix.Length, budget));
+
+            return stem + "_" + hash;
+        }
+
         private static string MemberSpelling(NetMemberDescriptor member) =>
             member.Kind == NetMemberCategory.Constructor ? "ctor" : member.Name;
 

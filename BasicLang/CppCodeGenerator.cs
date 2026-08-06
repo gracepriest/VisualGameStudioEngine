@@ -1726,6 +1726,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // temp would leave a never-written variable typed as the ELEMENT rather than a
                 // pointer — dead, and misleading to anyone reading the generated source.
                 .Where(t => t is not IRGetElementPtr)
+                // §8.4 / D-P12: an AddressOf result is declared at its assignment
+                // (`auto t = Fn;`) because the IR carries only pointer-to-RETURN-type — the
+                // parameter list is discarded at the analyzer — so no spelling here could name
+                // the real function type. `Pointer To Integer t0 = {};` is what this filter
+                // prevents, and for a Sub it would be `Pointer To Void`, which the void check
+                // above does NOT catch: it tests the literal "void", not "Pointer To Void".
+                .Where(t => t is not IRUnaryOp { Operation: UnaryOpKind.AddressOf })
                 .Where(t => !CppExceptionTypes.IsNetException(t.Type?.Name))
                 // §11.1: a `<catchVar>.Message` read lowers to
                 // BasicLang::String(v.what()) — its temp must be std::string
@@ -2108,6 +2115,27 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (unaryOp.Operation == UnaryOpKind.Inc || unaryOp.Operation == UnaryOpKind.Dec)
             {
                 WriteLine($"{result}{op};");
+            }
+            else if (unaryOp.Operation == UnaryOpKind.AddressOf
+                     && _allTemporaries.Contains(unaryOp))
+            {
+                // P2a-2 Task 11, decision D-P12: DECLARE at the assignment and let C++ deduce
+                // the type. The standalone declaration is suppressed for this temp in the
+                // temporaries pass — the same arrangement type-inferred foreign locals use, and
+                // for the same reason: there is no valid type to write.
+                //
+                // The analyzer types `AddressOf F` as a POINTER TO F'S RETURN TYPE (a Sub gives
+                // `Pointer To Void`), discarding the parameter list entirely, so no spelling
+                // derived from the IR could name the real function type. `auto` sidesteps that
+                // and handles Function and Sub identically.
+                //
+                // ⛔ Gated on the result actually BEING a temporary. When the value flows
+                // straight into a named local (`Dim f = AddressOf Fn`), GetValueName returns the
+                // LOCAL's name, and emitting `auto` there would redeclare a variable the locals
+                // pass has already declared. That case is a known gap — the local is declared
+                // `Pointer To Integer f` and does not compile — tracked separately; it is a
+                // BasicLang-delegate shape, not the §8.4 delegate-ARGUMENT shape D6 scopes P2a to.
+                WriteLine($"auto {result} = {operand};");
             }
             else
             {
@@ -4536,6 +4564,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             UnaryOpKind.BitwiseNot => "~",
             UnaryOpKind.Inc => "++",
             UnaryOpKind.Dec => "--",
+            // §8.4 / P2a-2 Task 11: a method reference is just the function's name in C++, the
+            // same answer CSharpBackend gives. A bare function name converts to std::function
+            // (BasicLang delegates) and to a function pointer (a callback registration), so no
+            // operator text is needed on either path. Before this arm existed the default below
+            // emitted a literal "?" INTO THE GENERATED SOURCE — invalid C++, silently, with no
+            // capability refusal to catch it.
+            UnaryOpKind.AddressOf => "",
             _ => "?"
         };
         

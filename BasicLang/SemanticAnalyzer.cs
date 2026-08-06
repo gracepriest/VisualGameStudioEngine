@@ -2957,6 +2957,34 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     continue;
                 }
 
+                // §8.4 / D-P11: a lambda has NO independent .NET type. It is TARGET-TYPED
+                // against each candidate by the probe — exactly as C# does it — because a
+                // BasicLang lambda types structurally as Func/Action while real delegate
+                // parameters are NAMED types (MatchEvaluator, Comparison(Of T), ThreadStart),
+                // and nominal matching admits none of the APIs anyone actually calls.
+                //
+                // Same shape as the Nothing rule above: a reserved non-type spelling, added and
+                // skipped past the static-type mapping. This is the arm that used to refuse with
+                // BL6017 "delegate arguments to .NET members are not supported on the native
+                // backend"; the lowering that replaces it is §8.4's callback registration.
+                if (argument is LambdaExpressionNode lambdaArgument)
+                {
+                    // ⛔ NATIVE ONLY, and this guard is load-bearing — it was added because the
+                    // repinned test MEASURED the regression without it. §6.3 promises the C#
+                    // path stays SILENT for shapes it cannot type, because csc judges the call
+                    // late. Presenting the spelling there routes the lambda into overload
+                    // resolution, and a member with no delegate overload then surfaces a BL6017
+                    // WARNING on a program that compiles clean today. That is precisely the
+                    // C#-preservation violation that got Task 2's ConfigureTypeRegistry wiring
+                    // BLOCKED by measurement — the same trap, one task later.
+                    if (!_netNativeBackend)
+                        return null;
+
+                    arguments.Add(NetTypeResolver.LambdaArgumentSpelling(
+                        lambdaArgument.Parameters?.Count ?? 0));
+                    continue;
+                }
+
                 if (!TryMapNetArgumentType(GetNodeType(argument), out var spelling, out var userDefined))
                 {
                     if (userDefined)
@@ -2968,15 +2996,6 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             $"Argument {position} of '{target}': BasicLang type "
                             + $"'{GetNodeType(argument)?.Name}' cannot cross the .NET boundary "
                             + "(spec §6.5 — user-defined types are not marshalable under P2a).",
-                            argument.Line, argument.Column);
-                    }
-                    else if (argument is LambdaExpressionNode)
-                    {
-                        NetErrorNativeOnly("BL6017",
-                            $"Argument {position} of '{target}' is a lambda; delegate arguments "
-                            + "to .NET members are not supported on the native backend (spec "
-                            + "§8.4). Got a Comparison/Action shape? Perform the work in "
-                            + "BasicLang, or move the call to the C# backend.",
                             argument.Line, argument.Column);
                     }
                     else

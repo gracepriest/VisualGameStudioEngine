@@ -24,12 +24,11 @@ public class ExtensionHost : IDisposable
 
     private readonly List<(string extensionId, string extensionPath)> _activeExtensions = new();
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        PropertyNameCaseInsensitive = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-    };
+    // NOTE: a JsonSerializerOptions with CamelCase + PropertyNameCaseInsensitive used to live here,
+    // referenced by nothing. It was System.Text.Json configuration sitting on what was then a
+    // Newtonsoft channel, and it advertised case-INSENSITIVE binding that this wire has never had:
+    // StreamJsonRpc matches named arguments to parameter names EXACTLY and case-sensitively.
+    // Deleted rather than wired up, so nobody infers a tolerance that does not exist.
 
     /// <summary>
     /// Whether the extension host process is running and connected.
@@ -175,19 +174,26 @@ public class ExtensionHost : IDisposable
             _hostProcess.BeginErrorReadLine();
 
             // Set up JSON-RPC over stdin/stdout
+            // The formatter is chosen EXPLICITLY. The no-formatter overload defaults to the
+            // Newtonsoft one, which cannot materialize a System.Text.Json.JsonElement — it yields
+            // default(JsonElement) silently instead of throwing. Every JsonElement parameter and
+            // every JsonElement? result on this channel therefore arrived EMPTY: the diagnostics
+            // payload, workspace/applyEdit, all twelve provider results and both tree-view results.
+            // Nothing failed loudly; the values were simply blank.
             var handler = new HeaderDelimitedMessageHandler(
                 _hostProcess.StandardInput.BaseStream,
-                _hostProcess.StandardOutput.BaseStream);
+                _hostProcess.StandardOutput.BaseStream,
+                new SystemTextJsonFormatter());
 
             _rpc = new JsonRpc(handler);
 
             // Register methods the extension host can call back into the IDE
             _rpc.AddLocalRpcMethod("registerCommand", new Action<string, string>(OnRegisterCommand));
-            _rpc.AddLocalRpcMethod("window/showMessage", new Func<string, string, string, string[]?, Task<string?>>(OnShowMessageAsync));
+            _rpc.AddLocalRpcMethod("window/showMessage", new Func<string, string, JsonElement, string, JsonElement, Task<string?>>(OnShowMessageAsync));
             _rpc.AddLocalRpcMethod("outputChannel/create", new Action<string, string>(OnCreateOutputChannel));
             _rpc.AddLocalRpcMethod("outputChannel/append", new Action<string, string>(OnOutputChannelAppend));
             _rpc.AddLocalRpcMethod("statusBar/update", new Action<string, string, string?, string?>(OnSetStatusBarItem));
-            _rpc.AddLocalRpcMethod("languages/registerProvider", new Action<string, string, string?, string?>(OnRegisterProvider));
+            _rpc.AddLocalRpcMethod("languages/registerProvider", new Action<string, long, string, JsonElement, JsonElement>(OnRegisterProvider));
             _rpc.AddLocalRpcMethod("languages/publishDiagnostics", new Action<string, JsonElement, string?>(OnPublishDiagnostics));
             _rpc.AddLocalRpcMethod("treeView/create", new Action<string, string, string?>(OnTreeViewCreate));
             _rpc.AddLocalRpcMethod("treeView/refresh", new Action<string, string?>(OnTreeViewRefresh));
@@ -247,6 +253,40 @@ public class ExtensionHost : IDisposable
     }
 
     /// <summary>
+    /// What <c>activateExtension</c> answers with (main.js:156/171/233/241). It is an OBJECT, not a
+    /// boolean — deserializing it as <c>bool</c> threw
+    /// "Error reading boolean. Unexpected token: StartObject" and reported every successful
+    /// activation as a failure.
+    ///
+    /// <para>⛔ Every member carries an explicit <c>[JsonPropertyName]</c>. This channel used to run
+    /// the Newtonsoft formatter, which matches property names case-INSENSITIVELY, so PascalCase
+    /// members bound the host's camelCase JSON for free. System.Text.Json is case-SENSITIVE by
+    /// default, so moving the formatter silently turned every property back to its default —
+    /// <c>Activated</c> became false and a successful activation was reported as
+    /// "JS activation failed". Naming each property explicitly makes the binding independent of
+    /// whichever formatter or naming policy the channel happens to use.</para>
+    ///
+    /// <para>Public so a test can bind real host JSON against it; these types describe the wire
+    /// contract rather than any internal state.</para>
+    /// </summary>
+    public sealed class ActivationResult
+    {
+        [JsonPropertyName("activated")] public bool Activated { get; set; }
+        [JsonPropertyName("hasMain")] public bool HasMain { get; set; }
+        [JsonPropertyName("error")] public string? Error { get; set; }
+    }
+
+    /// <summary>
+    /// Shape of <c>deactivateExtension</c>'s reply (main.js:251/271/273). Explicitly named for the
+    /// same reason as <see cref="ActivationResult"/>.
+    /// </summary>
+    public sealed class DeactivationResult
+    {
+        [JsonPropertyName("deactivated")] public bool Deactivated { get; set; }
+        [JsonPropertyName("error")] public string? Error { get; set; }
+    }
+
+    /// <summary>
     /// Sends a request to activate an extension in the host.
     /// </summary>
     public async Task<bool> ActivateExtensionAsync(string extensionId, string extensionPath, string? mainEntry, CancellationToken cancellationToken = default)
@@ -255,17 +295,27 @@ public class ExtensionHost : IDisposable
 
         try
         {
-            var result = await _rpc.InvokeWithCancellationAsync<bool>(
+            // Named parameters, not positional: main.js reads params.extensionPath / params.extensionId.
+            // mainEntry rides along for forward compatibility but the host derives `main` from the
+            // extension's own package.json, so it is currently ignored on the far side.
+            var result = await _rpc.InvokeWithParameterObjectAsync<ActivationResult?>(
                 "activateExtension",
-                new object[] { extensionId, extensionPath, mainEntry ?? "" },
+                new { extensionId, extensionPath, mainEntry = mainEntry ?? "" },
                 cancellationToken);
 
-            if (result)
+            if (result?.Activated == true)
             {
                 _activeExtensions.Add((extensionId, extensionPath));
+                return true;
             }
 
-            return result;
+            if (!string.IsNullOrEmpty(result?.Error))
+            {
+                _outputService.WriteError(
+                    $"[ExtensionHost] {extensionId} did not activate: {result!.Error}", OutputCategory.General);
+            }
+
+            return false;
         }
         catch (Exception ex)
         {
@@ -283,17 +333,18 @@ public class ExtensionHost : IDisposable
 
         try
         {
-            var result = await _rpc.InvokeWithCancellationAsync<bool>(
+            var result = await _rpc.InvokeWithParameterObjectAsync<DeactivationResult?>(
                 "deactivateExtension",
-                new object[] { extensionId },
+                new { extensionId },
                 cancellationToken);
 
-            if (result)
+            if (result?.Deactivated == true)
             {
                 _activeExtensions.RemoveAll(x => x.extensionId == extensionId);
+                return true;
             }
 
-            return result;
+            return false;
         }
         catch (Exception ex)
         {
@@ -314,9 +365,9 @@ public class ExtensionHost : IDisposable
 
         try
         {
-            var result = await _rpc.InvokeWithCancellationAsync<object?>(
+            var result = await _rpc.InvokeWithParameterObjectAsync<object?>(
                 "executeCommand",
-                new object[] { commandId, args ?? Array.Empty<object?>() },
+                new { command = commandId, args = args ?? Array.Empty<object?>() },
                 cancellationToken);
             return result;
         }
@@ -336,9 +387,9 @@ public class ExtensionHost : IDisposable
 
         try
         {
-            await _rpc.InvokeWithCancellationAsync(
+            await _rpc.InvokeWithParameterObjectAsync(
                 "fireActivationEvent",
-                new object[] { activationEvent },
+                new { @event = activationEvent },
                 cancellationToken);
         }
         catch (Exception ex)
@@ -356,9 +407,12 @@ public class ExtensionHost : IDisposable
 
         try
         {
-            return await _rpc.InvokeWithCancellationAsync<JsonElement?>(
+            // NOTE: main.js registers no "provideCompletions" handler — the live provider path is
+            // textDocument/* through RequestProviderAsync. Corrected for shape consistency, but
+            // this method is currently a no-op on the far side.
+            return await _rpc.InvokeWithParameterObjectAsync<JsonElement?>(
                 "provideCompletions",
-                new object[] { languageId, uri, line, column },
+                new { languageId, uri = ToDocumentUri(uri), line, column },
                 cancellationToken);
         }
         catch
@@ -376,9 +430,10 @@ public class ExtensionHost : IDisposable
 
         try
         {
-            return await _rpc.InvokeWithCancellationAsync<JsonElement?>(
+            // Same as provideCompletions: no handler exists on the JS side today.
+            return await _rpc.InvokeWithParameterObjectAsync<JsonElement?>(
                 "provideHover",
-                new object[] { languageId, uri, line, column },
+                new { languageId, uri = ToDocumentUri(uri), line, column },
                 cancellationToken);
         }
         catch
@@ -395,7 +450,7 @@ public class ExtensionHost : IDisposable
     public async Task NotifyDocumentOpenedAsync(string uri, string languageId, int version, string text, CancellationToken ct = default)
     {
         if (!IsRunning || _rpc == null) return;
-        try { await _rpc.NotifyAsync("textDocument/didOpen", new { uri, languageId, version, text }); }
+        try { await _rpc.NotifyWithParameterObjectAsync("textDocument/didOpen", new { uri = ToDocumentUri(uri),languageId, version, text }); }
         catch { }
     }
 
@@ -405,7 +460,7 @@ public class ExtensionHost : IDisposable
     public async Task NotifyDocumentChangedAsync(string uri, int version, string text, CancellationToken ct = default)
     {
         if (!IsRunning || _rpc == null) return;
-        try { await _rpc.NotifyAsync("textDocument/didChange", new { uri, version, text }); }
+        try { await _rpc.NotifyWithParameterObjectAsync("textDocument/didChange", new { uri = ToDocumentUri(uri),version, text }); }
         catch { }
     }
 
@@ -415,7 +470,7 @@ public class ExtensionHost : IDisposable
     public async Task NotifyDocumentClosedAsync(string uri, CancellationToken ct = default)
     {
         if (!IsRunning || _rpc == null) return;
-        try { await _rpc.NotifyAsync("textDocument/didClose", new { uri }); }
+        try { await _rpc.NotifyWithParameterObjectAsync("textDocument/didClose", new { uri = ToDocumentUri(uri) }); }
         catch { }
     }
 
@@ -425,7 +480,7 @@ public class ExtensionHost : IDisposable
     public async Task NotifyDocumentSavedAsync(string uri, string? text = null, CancellationToken ct = default)
     {
         if (!IsRunning || _rpc == null) return;
-        try { await _rpc.NotifyAsync("textDocument/didSave", new { uri, text }); }
+        try { await _rpc.NotifyWithParameterObjectAsync("textDocument/didSave", new { uri = ToDocumentUri(uri),text }); }
         catch { }
     }
 
@@ -435,7 +490,7 @@ public class ExtensionHost : IDisposable
     public async Task NotifyConfigurationChangedAsync(object settings, CancellationToken ct = default)
     {
         if (!IsRunning || _rpc == null) return;
-        try { await _rpc.NotifyAsync("workspace/didChangeConfiguration", new { settings }); }
+        try { await _rpc.NotifyWithParameterObjectAsync("workspace/didChangeConfiguration", new { settings }); }
         catch { }
     }
 
@@ -445,7 +500,7 @@ public class ExtensionHost : IDisposable
     public async Task NotifyActiveEditorChangedAsync(string? uri, string? languageId, CancellationToken ct = default)
     {
         if (!IsRunning || _rpc == null) return;
-        try { await _rpc.NotifyAsync("activeEditor/didChange", new { uri, languageId }); }
+        try { await _rpc.NotifyWithParameterObjectAsync("activeEditor/didChange", new { uri = ToDocumentUri(uri),languageId }); }
         catch { }
     }
 
@@ -463,46 +518,108 @@ public class ExtensionHost : IDisposable
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(10));
-            return await _rpc.InvokeWithCancellationAsync<JsonElement?>(method, new[] { parameters }, cts.Token);
+            // `parameters` is ALREADY the parameter object — the old `new[] { parameters }` wrapped
+            // it in an array, so every provider handler read undefined off it.
+            return await _rpc.InvokeWithParameterObjectAsync<JsonElement?>(method, parameters, cts.Token);
         }
         catch { return null; }
     }
 
+    /// <summary>
+    /// Normalises a document identity for the extension host, which keys documents by URI while the
+    /// IDE identifies them by raw filesystem path.
+    ///
+    /// <para>Without this the two ends can never agree. The host stores a document under
+    /// <c>Uri.parse(path).toString()</c>; for <c>C:\proj\a.js</c> the JS scheme regex is lazy, so it
+    /// captures scheme <c>"C"</c>, the backslash normalisation (gated on <c>scheme === 'file'</c>)
+    /// never runs, and the key becomes <c>C:%5Cproj%5Ca.js</c>. Lookup then passes the raw string
+    /// verbatim. Every provider request missed, permanently and silently.</para>
+    ///
+    /// <para>It also decides selector matching: with a raw path the derived scheme is <c>"C"</c>, so
+    /// <c>{ scheme: 'file' }</c> — the most common VS Code selector shape — scores zero.</para>
+    ///
+    /// <para>⚠ BEHAVIOUR CHANGE: every uri string every extension sees changes. That is a correction
+    /// toward the real VS Code contract, which is <c>file:///</c> URIs rather than Windows paths.</para>
+    /// </summary>
+    public static string ToDocumentUri(string pathOrUri)
+    {
+        if (string.IsNullOrWhiteSpace(pathOrUri)) return pathOrUri;
+
+        // Anything that already carries a scheme is left exactly as-is: untitled:, vscode-userdata:
+        // and https: are all legitimate document identities, and rewriting them would break them.
+        if (HasUriScheme(pathOrUri)) return pathOrUri;
+
+        try
+        {
+            return new Uri(pathOrUri).AbsoluteUri;
+        }
+        catch
+        {
+            // Notifications are fire-and-forget; a malformed path must degrade to itself rather
+            // than throw on a path the caller cannot observe.
+            return pathOrUri;
+        }
+    }
+
+    /// <summary>
+    /// Whether a string already carries a URI scheme.
+    ///
+    /// <para>The single-character check is the important part: a Windows drive letter looks exactly
+    /// like a scheme, and treating <c>C:</c> as one is precisely the bug this class of code keeps
+    /// reproducing — it is what the host's own lazy regex does.</para>
+    /// </summary>
+    private static bool HasUriScheme(string value)
+    {
+        var colon = value.IndexOf(':');
+
+        // No colon at all, or a one-letter prefix — i.e. a drive letter, not a scheme.
+        if (colon <= 1) return false;
+        if (!char.IsLetter(value[0])) return false;
+
+        for (var i = 1; i < colon; i++)
+        {
+            var c = value[i];
+            if (!char.IsLetterOrDigit(c) && c != '+' && c != '.' && c != '-') return false;
+        }
+
+        return true;
+    }
+
     public Task<JsonElement?> RequestCompletionAsync(string uri, int line, int character, CancellationToken ct = default)
-        => RequestProviderAsync("textDocument/completion", new { uri, position = new { line, character } }, ct);
+        => RequestProviderAsync("textDocument/completion", new { uri = ToDocumentUri(uri),position = new { line, character } }, ct);
 
     public Task<JsonElement?> RequestHoverAsync(string uri, int line, int character, CancellationToken ct = default)
-        => RequestProviderAsync("textDocument/hover", new { uri, position = new { line, character } }, ct);
+        => RequestProviderAsync("textDocument/hover", new { uri = ToDocumentUri(uri),position = new { line, character } }, ct);
 
     public Task<JsonElement?> RequestDefinitionAsync(string uri, int line, int character, CancellationToken ct = default)
-        => RequestProviderAsync("textDocument/definition", new { uri, position = new { line, character } }, ct);
+        => RequestProviderAsync("textDocument/definition", new { uri = ToDocumentUri(uri),position = new { line, character } }, ct);
 
     public Task<JsonElement?> RequestReferencesAsync(string uri, int line, int character, CancellationToken ct = default)
-        => RequestProviderAsync("textDocument/references", new { uri, position = new { line, character } }, ct);
+        => RequestProviderAsync("textDocument/references", new { uri = ToDocumentUri(uri),position = new { line, character } }, ct);
 
     public Task<JsonElement?> RequestFormattingAsync(string uri, CancellationToken ct = default)
-        => RequestProviderAsync("textDocument/formatting", new { uri }, ct);
+        => RequestProviderAsync("textDocument/formatting", new { uri = ToDocumentUri(uri) }, ct);
 
     public Task<JsonElement?> RequestCodeActionsAsync(string uri, int startLine, int startChar, int endLine, int endChar, CancellationToken ct = default)
-        => RequestProviderAsync("textDocument/codeAction", new { uri, range = new { start = new { line = startLine, character = startChar }, end = new { line = endLine, character = endChar } } }, ct);
+        => RequestProviderAsync("textDocument/codeAction", new { uri = ToDocumentUri(uri),range = new { start = new { line = startLine, character = startChar }, end = new { line = endLine, character = endChar } } }, ct);
 
     public Task<JsonElement?> RequestDocumentSymbolsAsync(string uri, CancellationToken ct = default)
-        => RequestProviderAsync("textDocument/documentSymbol", new { uri }, ct);
+        => RequestProviderAsync("textDocument/documentSymbol", new { uri = ToDocumentUri(uri) }, ct);
 
     public Task<JsonElement?> RequestSignatureHelpAsync(string uri, int line, int character, CancellationToken ct = default)
-        => RequestProviderAsync("textDocument/signatureHelp", new { uri, position = new { line, character } }, ct);
+        => RequestProviderAsync("textDocument/signatureHelp", new { uri = ToDocumentUri(uri),position = new { line, character } }, ct);
 
     public Task<JsonElement?> RequestRenameAsync(string uri, int line, int character, string newName, CancellationToken ct = default)
-        => RequestProviderAsync("textDocument/rename", new { uri, position = new { line, character }, newName }, ct);
+        => RequestProviderAsync("textDocument/rename", new { uri = ToDocumentUri(uri),position = new { line, character }, newName }, ct);
 
     public Task<JsonElement?> RequestFoldingRangesAsync(string uri, CancellationToken ct = default)
-        => RequestProviderAsync("textDocument/foldingRange", new { uri }, ct);
+        => RequestProviderAsync("textDocument/foldingRange", new { uri = ToDocumentUri(uri) }, ct);
 
     public Task<JsonElement?> RequestInlayHintsAsync(string uri, int startLine, int startChar, int endLine, int endChar, CancellationToken ct = default)
-        => RequestProviderAsync("textDocument/inlayHint", new { uri, range = new { start = new { line = startLine, character = startChar }, end = new { line = endLine, character = endChar } } }, ct);
+        => RequestProviderAsync("textDocument/inlayHint", new { uri = ToDocumentUri(uri),range = new { start = new { line = startLine, character = startChar }, end = new { line = endLine, character = endChar } } }, ct);
 
     public Task<JsonElement?> RequestSemanticTokensAsync(string uri, CancellationToken ct = default)
-        => RequestProviderAsync("textDocument/semanticTokens", new { uri }, ct);
+        => RequestProviderAsync("textDocument/semanticTokens", new { uri = ToDocumentUri(uri) }, ct);
 
     #endregion
 
@@ -519,9 +636,9 @@ public class ExtensionHost : IDisposable
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(10));
-            return await _rpc.InvokeWithCancellationAsync<JsonElement?>(
+            return await _rpc.InvokeWithParameterObjectAsync<JsonElement?>(
                 "treeView/getChildren",
-                new object?[] { viewId, element },
+                new { viewId, element },
                 cts.Token);
         }
         catch { return null; }
@@ -537,9 +654,9 @@ public class ExtensionHost : IDisposable
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(10));
-            return await _rpc.InvokeWithCancellationAsync<JsonElement?>(
+            return await _rpc.InvokeWithParameterObjectAsync<JsonElement?>(
                 "treeView/getTreeItem",
-                new object[] { viewId, element },
+                new { viewId, element },
                 cts.Token);
         }
         catch { return null; }
@@ -556,7 +673,10 @@ public class ExtensionHost : IDisposable
 
         try
         {
-            await _rpc.NotifyAsync("setWorkspaceFolder", new object[] { path });
+            // NOTE: main.js registers no "setWorkspaceFolder" handler; workspace roots reach the
+            // host through `initialize` (params.workspaceFolders) and
+            // workspace/didChangeWorkspaceFolders. Shape corrected, but this is currently a no-op.
+            await _rpc.NotifyWithParameterObjectAsync("setWorkspaceFolder", new { path });
         }
         catch { }
     }
@@ -573,16 +693,36 @@ public class ExtensionHost : IDisposable
         });
     }
 
-    private async Task<string?> OnShowMessageAsync(string extensionId, string severity, string message, string[]? actions)
+    /// <summary>
+    /// Handles <c>vscode.window.showInformationMessage</c> and friends.
+    ///
+    /// <para>Parameters mirror <c>vscode-api/window.js:81-87</c> exactly —
+    /// <c>{ type, message, options, items, extensionId }</c>. The old signature took four
+    /// differently-named parameters, producing
+    /// <c>-32602 ... parameter(s) ... 4 - 4, but the request supplies 5</c>.</para>
+    ///
+    /// <para>⛔ This is the one inbound mismatch that fails LOUDLY, and it is far worse than the
+    /// silent ones. <c>showMessage</c> is a REQUEST, so the rejection travels back into the
+    /// extension: <c>await vscode.window.showInformationMessage(...)</c> THROWS, and an unhandled
+    /// rejection inside <c>activate()</c> aborts activation. Showing a message on activation is
+    /// commonplace, so this presents as "that extension doesn't work" rather than as a wire bug.</para>
+    ///
+    /// <para><paramref name="items"/> are objects <c>{ title }</c> (window.js:78-80), not strings.
+    /// <paramref name="options"/> is accepted and currently unused; it carries modal/detail hints
+    /// the IDE has nowhere to show yet, and it needs a default because window.js omits the key when
+    /// no options were passed.</para>
+    /// </summary>
+    private async Task<string?> OnShowMessageAsync(
+        string type, string message, JsonElement items, string extensionId, JsonElement options = default)
     {
-        _outputService.WriteLine($"[ExtensionHost] [{severity}] {extensionId}: {message}", OutputCategory.General);
+        _outputService.WriteLine($"[ExtensionHost] [{type}] {extensionId}: {message}", OutputCategory.General);
 
         var eventArgs = new ExtensionMessageEventArgs
         {
             ExtensionId = extensionId,
-            Severity = severity,
+            Severity = type,
             Message = message,
-            Actions = actions?.ToList() ?? new List<string>(),
+            Actions = ExtractActionTitles(items),
             ResponseSource = new TaskCompletionSource<string?>()
         };
 
@@ -604,6 +744,33 @@ public class ExtensionHost : IDisposable
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Projects <c>window.js</c>'s normalised items — <c>[{ title }]</c> — into the plain action
+    /// titles the IDE presents. Tolerates bare strings too, since an extension may bypass the
+    /// facade's normalisation.
+    /// </summary>
+    private static List<string> ExtractActionTitles(JsonElement items)
+    {
+        var titles = new List<string>();
+        if (items.ValueKind != JsonValueKind.Array) return titles;
+
+        foreach (var item in items.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.String)
+            {
+                titles.Add(item.GetString() ?? "");
+            }
+            else if (item.ValueKind == JsonValueKind.Object
+                     && item.TryGetProperty("title", out var title)
+                     && title.ValueKind == JsonValueKind.String)
+            {
+                titles.Add(title.GetString() ?? "");
+            }
+        }
+
+        return titles;
     }
 
     private void OnCreateOutputChannel(string extensionId, string channelName)
@@ -637,25 +804,72 @@ public class ExtensionHost : IDisposable
         });
     }
 
-    private void OnRegisterProvider(string extensionId, string type, string? selectorJson, string? metadataJson)
+    /// <summary>
+    /// Handles <c>languages/registerProvider</c>. All 30 <c>registerXxxProvider</c> entry points in
+    /// <c>vscode-api/languages.js</c> funnel through this one notification, so nothing an extension
+    /// contributes to the language surface exists until it binds.
+    ///
+    /// <para>The parameter list mirrors <c>languages.js:53-59</c> EXACTLY —
+    /// <c>{ type, id, extensionId, selector, metadata }</c> — because StreamJsonRpc matches named
+    /// arguments to parameter names case-sensitively and by exact spelling. The previous signature
+    /// took four parameters in a different order, naming two of them <c>selectorJson</c> and
+    /// <c>metadataJson</c>, so it never bound: a notification that fails to bind produces no error
+    /// response and no log line anywhere. ⛔ Renaming any parameter here silently unbinds the call
+    /// again, with no compiler error.</para>
+    ///
+    /// <para><paramref name="metadata"/> MUST keep its default: <c>languages.js:58</c> sends
+    /// <c>metadata || undefined</c>, which omits the key entirely, and a required parameter whose
+    /// key is absent fails to bind.</para>
+    ///
+    /// <para>⛔ <paramref name="id"/> is NUMERIC — <c>provider-registry.js:243</c> allocates it as
+    /// <c>_nextId++</c>. Declaring it <c>string</c> looks harmless and binds nothing: types are part
+    /// of the match, and the failure is as silent as a name mismatch. A first attempt at this fix
+    /// got all five names right and this one type wrong, and the only symptom was the IDE never
+    /// logging "Provider registered" while the extension logged that registration had returned.</para>
+    ///
+    /// <para><c>selector</c> arrives as a JSON ARRAY of filter objects and <c>metadata</c> as an
+    /// object; both are re-serialised to their raw text because
+    /// <c>ExtensionService.OnProviderRegistered</c> parses them with <c>JsonDocument.Parse</c>.</para>
+    /// </summary>
+    private void OnRegisterProvider(
+        string type, long id, string extensionId,
+        JsonElement selector, JsonElement metadata = default)
     {
-        _outputService.WriteLine($"[ExtensionHost] Provider registered: {type} (by {extensionId})", OutputCategory.General);
+        _outputService.WriteLine(
+            $"[ExtensionHost] Provider registered: {type} (by {extensionId})", OutputCategory.General);
+
         ProviderRegistered?.Invoke(this, new ProviderRegisteredEventArgs
         {
             ExtensionId = extensionId,
             Type = type,
-            SelectorJson = selectorJson,
-            MetadataJson = metadataJson
+            SelectorJson = selector.ValueKind == JsonValueKind.Undefined ? null : selector.GetRawText(),
+            MetadataJson = metadata.ValueKind == JsonValueKind.Undefined ? null : metadata.GetRawText()
         });
     }
 
-    private void OnPublishDiagnostics(string uri, JsonElement diagnostics, string? collectionName)
+    /// <summary>
+    /// Carries an extension's diagnostics to the IDE — the path that puts ESLint's findings in the
+    /// Problems panel.
+    ///
+    /// <para>The third parameter is named <c>collection</c> because that is the key
+    /// <c>vscode-api/languages.js:227</c> sends. It was named <c>collectionName</c>, which does not
+    /// bind; and because it had no default, the failure was not partial — the ENTIRE invocation
+    /// failed to bind, taking <c>uri</c> and <c>diagnostics</c> with it. As a notification it
+    /// produced no error response and no log line, so no extension diagnostic has ever reached the
+    /// IDE, from any of set/delete/clear.</para>
+    ///
+    /// <para>The default is required: a publish for a collection-less diagnostic omits the key, and
+    /// a parameter with no default fails binding when its key is absent. Do not "tidy" this name to
+    /// match the event property — <c>languages/disposeDiagnosticCollection</c> uses
+    /// <c>collection</c> too, and renaming the JS would split the pair.</para>
+    /// </summary>
+    private void OnPublishDiagnostics(string uri, JsonElement diagnostics, string? collection = null)
     {
         DiagnosticsReceived?.Invoke(this, new ExtensionDiagnosticsEventArgs
         {
             Uri = uri,
             Diagnostics = diagnostics,
-            CollectionName = collectionName ?? ""
+            CollectionName = collection ?? ""
         });
     }
 

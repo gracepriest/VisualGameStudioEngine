@@ -484,8 +484,105 @@ namespace BasicLang.Compiler.CodeGen.Net
                 foreach (var form in arrayForms)
                     EmitArrayCopyHelpers(sb, form);
             }
+
+            var delegateForms = NetDelegateDispatch.RequiredForms(surface);
+            if (delegateForms.Count > 0)
+            {
+                L(sb, "");
+                L(sb, "    // ---- §8.4 delegate dispatchers (managed helpers, NOT exports) ----");
+                foreach (var form in delegateForms)
+                    EmitDelegateDispatcher(sb, form);
+            }
             L(sb, "}");
             return sb.ToString();
+        }
+
+        // ------------------------------------------------------------------------------
+        // §8.4 — the managed delegate dispatcher.
+        // ------------------------------------------------------------------------------
+
+        /// <summary>
+        /// One delegate type's dispatcher: <c>ulong</c> callback handle in, a real delegate of
+        /// that type out, invoking P0's universal thunk when called.
+        ///
+        /// <para><b>Not an export.</b> No <c>[UnmanagedCallersOnly]</c>, no proxy slot — it is
+        /// called from a wrapper's argument list on the managed side. See
+        /// <see cref="NetDelegateForm.HelperName"/> for why §12.4 does not range over it.</para>
+        ///
+        /// <para><b>v1 admits BLITTABLE SCALARS only</b>, in both parameter and return position.
+        /// That is the shape P0 conformance scenario 8 already proves end to end (VALUE slots
+        /// plus a scalar written through <c>*result</c>) and it covers the delegates that
+        /// actually occur in argument position — <c>Comparison&lt;T&gt;</c>,
+        /// <c>Predicate&lt;T&gt;</c>, <c>Action&lt;int&gt;</c>. Handle-, String- and
+        /// struct-slotted signatures throw HERE, at generation time, rather than emitting code
+        /// that would read the wrong table at runtime: a build error names the offender, a wrong
+        /// table read does not.</para>
+        ///
+        /// <para>Handle 0 is <c>Nothing</c> (§8.2) and yields a null delegate rather than a
+        /// wrapper that would invoke a callback that was never registered.</para>
+        /// </summary>
+        private static void EmitDelegateDispatcher(StringBuilder sb, NetDelegateForm form)
+        {
+            if (!NetDelegateDispatch.TryParseInvokeSignature(
+                    form.InvokeSignature, out var returnType, out var parameters))
+                throw new NotSupportedException(
+                    $"Cannot emit a §8.4 dispatcher for '{form.DelegateFullName}': its invoke "
+                    + $"signature '{form.InvokeSignature}' is not parseable as Return(Param,…).");
+
+            foreach (var t in parameters)
+                RequireBlittableScalar(t, form, "parameter");
+            if (returnType != "System.Void")
+                RequireBlittableScalar(returnType, form, "return");
+
+            var names = Enumerable.Range(0, parameters.Count).Select(i => "a" + i).ToList();
+
+            L(sb, "");
+            L(sb, "    /// <summary>§8.4 dispatcher for " + Comment(form.DelegateFullName) + ".</summary>");
+            L(sb, "    private static " + Qualified(form.DelegateFullName) + " " + form.HelperName + "(ulong cb_)");
+            L(sb, "    {");
+            L(sb, "        if (cb_ == 0) return null!;");
+            L(sb, "        return (" + string.Join(", ", names) + ") =>");
+            L(sb, "        {");
+            if (parameters.Count > 0)
+            {
+                L(sb, "            ulong* args_ = stackalloc ulong[" + parameters.Count + "];");
+                for (var i = 0; i < parameters.Count; i++)
+                    L(sb, "            args_[" + i + "] = unchecked((ulong)" + names[i] + ");");
+            }
+            else
+            {
+                L(sb, "            ulong* args_ = null;");
+            }
+            L(sb, "            ulong r_ = 0;");
+            L(sb, "            int st_ = _thunk(cb_, args_, " + parameters.Count + ", &r_);");
+            // BLNET_OK is 0 — BlnetContract's status table is the single source, and the value
+            // is frozen by contract rule C7 (changing it bumps AbiVersion).
+            L(sb, "            if (st_ != 0)");
+            L(sb, "                throw new global::System.InvalidOperationException(");
+            L(sb, "                    \"blnet: callback invocation failed with status \" + st_);");
+            if (returnType != "System.Void")
+                L(sb, "            return unchecked((" + Qualified(returnType) + ")r_);");
+            L(sb, "        };");
+            L(sb, "    }");
+        }
+
+        /// <summary>
+        /// v1's admissibility gate. A scalar row of §8.3 fits a <c>ulong</c> slot by an
+        /// <c>unchecked</c> cast in both directions; nothing else does, and guessing produces a
+        /// runtime misread rather than a build failure.
+        /// </summary>
+        private static void RequireBlittableScalar(
+            string typeFullName, NetDelegateForm form, string position)
+        {
+            var wire = WireOf(typeFullName);
+            if (wire.Kind == WireKind.Scalar) return;
+
+            throw new NotSupportedException(
+                $"Cannot emit a §8.4 dispatcher for '{form.DelegateFullName}': its {position} type "
+                + $"'{typeFullName}' has wire form {wire.Kind}, and v1 admits blittable scalars "
+                + "only (P0 conformance scenario 8's proven shape). Handle, String and struct "
+                + "slots need a marshaling contract §8.4 does not yet specify — specify it there "
+                + "before widening this gate.");
         }
 
         // ------------------------------------------------------------------------------
@@ -805,6 +902,14 @@ namespace BasicLang.Compiler.CodeGen.Net
                 // value-type knowledge at all.
                 WireKind.Handle => "(" + Qualified(p.Descriptor.TypeFullName) + ")" + p.Local + "!",
 
+                // §8.4: NOT a HandleTable decode. A callback handle belongs to the NATIVE
+                // callback table, so Table.TryGet would fail Validate and report
+                // BLNET_E_STALE_HANDLE for a good callback. The generated dispatcher builds a
+                // real delegate around the handle instead. Same MangleDelegate call as
+                // NetDelegateDispatch, so the name agrees by construction.
+                WireKind.Callback =>
+                    NetNameMangler.MangleDelegate(p.Descriptor.TypeFullName) + "(" + p.Name + ")",
+
                 _ => FromWire(p.Wire, p.Name),
             };
         }
@@ -814,7 +919,7 @@ namespace BasicLang.Compiler.CodeGen.Net
         // separate code and NetShimGeneratorTests compares the signatures they produce.
         // ------------------------------------------------------------------------------
 
-        private enum WireKind { Void, Scalar, String, Handle }
+        private enum WireKind { Void, Scalar, String, Handle, Callback }
 
         /// <summary>
         /// One row of §8.3 in C#. <see cref="CsParamType"/> is the inbound spelling and
@@ -836,6 +941,23 @@ namespace BasicLang.Compiler.CodeGen.Net
 
             internal static readonly WireForm Handle =
                 new(WireKind.Handle, "ulong", "ulong*", "object");
+
+            /// <summary>
+            /// §8.4's delegate parameter. Same wire as <see cref="Handle"/> — a callback handle is
+            /// a <c>ulong</c> — which is what keeps this row's C signature identical to the C
+            /// column's <c>Wire.Callback</c> and the signature-parity test comparing equal.
+            ///
+            /// <para><c>CsManagedType</c> is <c>object</c> only as a placeholder, exactly as the
+            /// handle row does it: the real managed type is per-parameter and comes from the
+            /// descriptor at use time, in <see cref="Argument"/>.</para>
+            ///
+            /// <para>⛔ The decode must NOT go through <c>HandleTable</c>. A callback handle
+            /// belongs to the NATIVE callback table, so <c>Table.TryGet</c> would fail
+            /// <c>Validate</c> and report <c>BLNET_E_STALE_HANDLE</c> for a perfectly good
+            /// callback. It is decoded by the generated dispatcher instead.</para>
+            /// </summary>
+            internal static readonly WireForm Callback =
+                new(WireKind.Callback, "ulong", "ulong*", "object");
 
             internal static readonly WireForm Boolean =
                 new(WireKind.Scalar, "int", "int*", "bool");
@@ -878,6 +1000,17 @@ namespace BasicLang.Compiler.CodeGen.Net
         /// wrapper. Adding an arm for one here would silently re-admit a type the collector
         /// refused.</para>
         /// </summary>
+        /// <summary>
+        /// A PARAMETER's wire form. Mirrors <c>NetProxyEmitter.WireOf(NetParameterDescriptor)</c>
+        /// — delegate-ness rides the surface (D-P9) and cannot be recovered from a type name.
+        /// RETURNS stay on the name-keyed path below, because §8.4 / D6 scopes P2a to delegate
+        /// ARGUMENTS, so <see cref="WireKind.Callback"/> never reaches a result-shaped switch.
+        /// </summary>
+        private static WireForm WireOf(NetParameterDescriptor parameter) =>
+            parameter != null && parameter.IsDelegate
+                ? Wire.Callback
+                : WireOf(parameter?.TypeFullName);
+
         private static WireForm WireOf(string netTypeFullName) => netTypeFullName switch
         {
             "System.Void" => Wire.Void,
@@ -956,7 +1089,7 @@ namespace BasicLang.Compiler.CodeGen.Net
             var parameters = new List<ParameterPlan>();
             var index = 0;
             foreach (var p in member.Parameters ?? (IReadOnlyList<NetParameterDescriptor>)Array.Empty<NetParameterDescriptor>())
-                parameters.Add(new ParameterPlan(p, WireOf(p.TypeFullName), index++));
+                parameters.Add(new ParameterPlan(p, WireOf(p), index++));
 
             return new SlotPlan(
                 exportName,

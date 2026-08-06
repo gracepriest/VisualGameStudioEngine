@@ -82,6 +82,80 @@ namespace BasicLang.Net
         private static bool IsNullSpelling(string spelling) =>
             string.Equals(spelling, NullArgumentSpelling, StringComparison.Ordinal);
 
+        private const string LambdaSpellingPrefix = "lambda(";
+
+        /// <summary>
+        /// The reserved argument spelling for a BasicLang LAMBDA of <paramref name="arity"/>
+        /// parameters — §8.4, decision D-P11.
+        ///
+        /// <para><b>Why a lambda has no type spelling.</b> A BasicLang lambda types structurally
+        /// as <c>Func</c>/<c>Action</c>, while real .NET delegate parameters are NAMED types
+        /// (<c>MatchEvaluator</c>, <c>Comparison&lt;T&gt;</c>, <c>ThreadStart</c>). Matching those
+        /// nominally admits none of the APIs anyone actually calls. So a lambda is TARGET-TYPED
+        /// against each candidate, exactly as C# does it — and because this probe resolves
+        /// overloads by synthesizing source and letting the real C# compiler answer, target-typing
+        /// costs nothing but emitting a lambda expression instead of a declared local.</para>
+        ///
+        /// <para>Reserved like <see cref="NullArgumentSpelling"/> and screened out of the
+        /// well-formed-type-name validation for the same reason: it is an ARGUMENT spelling, not a
+        /// type name. <c>lambda(</c> cannot collide with a real spelling — no well-formed C# type
+        /// name contains a parenthesis.</para>
+        /// </summary>
+        public static string LambdaArgumentSpelling(int arity)
+        {
+            if (arity < 0)
+                throw new ArgumentOutOfRangeException(nameof(arity));
+
+            return LambdaSpellingPrefix
+                 + arity.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                 + ")";
+        }
+
+        private static bool TryLambdaArity(string spelling, out int arity)
+        {
+            arity = 0;
+            if (spelling == null
+                || !spelling.StartsWith(LambdaSpellingPrefix, StringComparison.Ordinal)
+                || !spelling.EndsWith(")", StringComparison.Ordinal))
+                return false;
+
+            var digits = spelling.Substring(
+                LambdaSpellingPrefix.Length,
+                spelling.Length - LambdaSpellingPrefix.Length - 1);
+
+            return int.TryParse(
+                digits,
+                System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out arity);
+        }
+
+        private static bool IsLambdaSpelling(string spelling) => TryLambdaArity(spelling, out _);
+
+        /// <summary>
+        /// The lambda expression synthesized for a §8.4 lambda argument.
+        ///
+        /// <para>The body is <c>throw null!</c> and not <c>default</c> deliberately: a throw
+        /// expression converts to ANY delegate return type <b>including void</b>, so one spelling
+        /// serves <c>Action</c>-shaped and <c>Func</c>-shaped targets alike. A <c>default</c> body
+        /// would silently fail to convert to every void-returning delegate — i.e. it would answer
+        /// "no such overload" for <c>ThreadStart</c> and friends.</para>
+        ///
+        /// <para>Parameters are implicitly typed, which is what forces C# to target-type them from
+        /// the candidate's delegate signature. Names are slot- AND position-qualified so two
+        /// lambda arguments in one call cannot collide.</para>
+        /// </summary>
+        private static string LambdaExpression(string spelling, int slot)
+        {
+            TryLambdaArity(spelling, out var arity);
+
+            var names = Enumerable.Range(0, arity)
+                .Select(p => ProbeArgumentPrefix + slot + "_p" + p.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture));
+
+            return "(" + string.Join(", ", names) + ") => throw null!";
+        }
+
         /// <summary>
         /// Overload results, keyed on the whole request. Separate from <see cref="_cache"/> because
         /// the key is a request, not a type name. Concurrent for the reason <see cref="_cache"/>
@@ -348,6 +422,10 @@ namespace BasicLang.Net
                 // The null literal is a legal ARGUMENT spelling (§6.5), not a type name.
                 if (IsNullSpelling(spelling))
                     continue;
+                // So is a lambda (§8.4 / D-P11): it has no independent .NET type at all, and is
+                // target-typed against each candidate by the synthesized source below.
+                if (IsLambdaSpelling(spelling))
+                    continue;
                 if (!IsOneWellFormedTypeName(spelling))
                     return NoOverloadMatch;
             }
@@ -469,7 +547,9 @@ namespace BasicLang.Net
                 // parameter — null has no type to declare. Indices stay stable: the
                 // parameter for slot i keeps the i-suffixed name whether or not earlier
                 // slots were null.
-                if (!IsNullSpelling(arguments[i]))
+                // A lambda is likewise not declared — it has no type to declare, and declaring one
+                // would defeat the target-typing that makes it bind (§8.4 / D-P11).
+                if (!IsNullSpelling(arguments[i]) && !IsLambdaSpelling(arguments[i]))
                     declared.Add(arguments[i] + " " + ProbeArgumentPrefix + i);
             }
 
@@ -477,7 +557,9 @@ namespace BasicLang.Net
                 Enumerable.Range(0, arguments.Count).Select(i =>
                     IsNullSpelling(arguments[i])
                         ? NullArgumentSpelling
-                        : mask[i] + ProbeArgumentPrefix + i));
+                        : IsLambdaSpelling(arguments[i])
+                            ? LambdaExpression(arguments[i], i)
+                            : mask[i] + ProbeArgumentPrefix + i));
 
             // A discard rather than `object x = new ...`: boxing a `ref struct` would be CS0029 and
             // would read as "no such constructor" instead of the §8.3 marshaling answer it is.
@@ -561,7 +643,9 @@ namespace BasicLang.Net
                 var anyKeyword = false;
                 for (var i = 0; i < argumentCount; i++)
                 {
-                    mask[i] = IsNullSpelling(arguments[i])
+                    // A lambda argument takes no ref/out keyword — a lambda expression is not a
+                    // variable, so `ref (x) => …` is not even syntax.
+                    mask[i] = IsNullSpelling(arguments[i]) || IsLambdaSpelling(arguments[i])
                         ? string.Empty
                         : CallSiteKeyword(parameters[i].RefKind);
                     anyKeyword |= mask[i].Length != 0;
