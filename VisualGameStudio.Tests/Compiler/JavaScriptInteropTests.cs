@@ -255,4 +255,122 @@ public class JavaScriptInteropTests
         Assert.That(mapped, Does.Contain(2),
             "Console.WriteLine is on source line 3 (0-based 2); imports above it must not shift it");
     }
+
+    // ------------------------------------------------------------------
+    // `::` — the raw-JavaScript escape hatch, in EXPRESSION (call) position ONLY.
+    //
+    // ⛔ THE EXPRESSION/TYPE SPLIT IS THE DESIGN. `::` predates this backend: it was built
+    // for C++ passthrough and means two different things by POSITION.
+    //   * EXPRESSION — `::console.log(x)` — a raw JS identifier. It LOWERS: emitted verbatim.
+    //   * TYPE — `Dim m As std::mutex` — an opaque C++ type. It does NOT lower; emitting
+    //     `stdmutex` would be a silent miscompile, so it stays REJECTED (see below).
+    //
+    // ⚠ MEASURED IR SHAPES, because they are not what the syntax suggests:
+    //   `::console.log("hi")`  -> IRInstanceMethodCall{ MethodName="log",
+    //                             Object=IRVariable("::console", Foreign) }  — the `::` is on
+    //                             the RECEIVER, rendered by VariableRef, NOT by CallTarget.
+    //   `::alert("hi")`        -> IRCall{ FunctionName="::alert" }           — CallTarget.
+    // Both spellings are covered below so a fix to one cannot be mistaken for a fix to both.
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void ForeignIdentifier_EmitsVerbatim()
+        => Assert.That(JsTestSupport.Compile("Sub Main()\n::console.log(\"hi\")\nEnd Sub"),
+            Does.Contain("console.log(\"hi\")"));
+
+    /// <summary>
+    /// ⚠ SanitizeName DROPS non-alphanumerics — it does not substitute underscores. The mangled
+    /// form is `windowalert`, so that is what must be absent. Asserting Not.Contain("window_alert")
+    /// would be false-green: it passes before and after the fix.
+    /// </summary>
+    [Test]
+    public void ForeignIdentifier_IsNotMangled()
+    {
+        var js = JsTestSupport.Compile("Sub Main()\n::window.alert(\"hi\")\nEnd Sub");
+
+        Assert.That(js, Does.Contain("window.alert"));
+        Assert.That(js, Does.Not.Contain("windowalert"));
+    }
+
+    /// <summary>
+    /// The FREE-FUNCTION spelling — a leading `::` with no member access — reaches a different
+    /// renderer (IRCall/CallTarget) than the dotted form above (IRInstanceMethodCall/VariableRef).
+    /// Without this, a fix applied at only one of the two sites reads as complete.
+    /// </summary>
+    [Test]
+    public void ForeignIdentifier_BareFreeFunction_EmitsVerbatim()
+        => Assert.That(JsTestSupport.Compile("Sub Main()\n::alert(\"hi\")\nEnd Sub"),
+            Does.Contain("alert(\"hi\")"));
+
+    /// <summary>A `::` TYPE is still a C++ passthrough type and still does not lower.</summary>
+    [Test]
+    public void ForeignType_IsStillRejected()
+        => Assert.That(() => JsTestSupport.Compile("Sub Main()\nDim m As std::mutex\nEnd Sub"),
+            Throws.TypeOf<BasicLang.Compiler.CodeGen.ForeignFeatureException>());
+
+    /// <summary>
+    /// ⚠ KNOWN LIMITATION, pinned so it is known rather than discovered. Assignment to a `::`
+    /// member is a SEMANTIC ANALYZER error, raised before any backend, so relaxing
+    /// ForeignFeatureChecker cannot reach it. Use javascript{ } for stateful DOM work.
+    /// </summary>
+    [Test]
+    public void ForeignMemberAssignment_IsStillRejected_KNOWN()
+        => Assert.That(() => JsTestSupport.Compile("Sub Main()\n::document.title = \"hi\"\nEnd Sub"),
+            Throws.Exception.With.Message.Contains("Cannot assign"));
+
+    /// <summary>
+    /// ⚠ KNOWN LIMITATION. An inferred local from a `::` expression gets a Foreign type, which
+    /// CheckType rejects — so a `::` value cannot be stored and reused.
+    /// </summary>
+    [Test]
+    public void ForeignValueInALocal_IsStillRejected_KNOWN()
+        => Assert.That(() => JsTestSupport.Compile(
+                "Sub Main()\nDim el = ::document.getElementById(\"out\")\nEnd Sub"),
+            Throws.TypeOf<BasicLang.Compiler.CodeGen.ForeignFeatureException>());
+
+    /// <summary>
+    /// ⛔ Only a LEADING `::` is a JS passthrough. An INTERIOR one (`mathlib::freeAdd`) is a C++
+    /// namespace qualification with no JavaScript meaning: stripping it yields `mathlibfreeAdd`,
+    /// an undefined identifier reaching the browser from a green build.
+    /// </summary>
+    [Test]
+    public void ForeignIdentifier_WithInteriorNamespace_IsRejected()
+        => Assert.That(() => JsTestSupport.Compile("Sub Main()\n::mathlib::freeAdd(1, 2)\nEnd Sub"),
+            Throws.Exception.With.Message.Contains("BL7009"));
+
+    /// <summary>
+    /// ⛔ The interior-`::` form with NO leading `::` — `mathlib::freeAdd(1, 2)`, which is how
+    /// every pre-existing foreign-passthrough test in this repo is written. It must be refused
+    /// for the same reason as the leading form, and it is the case a "does the name START with
+    /// `::`" guard silently lets through: nothing throws, `mathlibfreeAdd` is emitted, and the
+    /// ReferenceError surfaces in the browser instead of in the build.
+    /// </summary>
+    [Test]
+    public void ForeignIdentifier_InteriorNamespaceWithoutLeadingColons_IsRejected()
+        => Assert.That(() => JsTestSupport.Compile("Sub Main()\nmathlib::freeAdd(1, 2)\nEnd Sub"),
+            Throws.Exception.With.Message.Contains("BL7009"));
+
+    /// <summary>
+    /// A `Select Case` pattern operand reaches the output through ExprInline and NOTHING else —
+    /// pattern operands are never entries in any block, so no other renderer sees them. That made
+    /// it the easiest site to miss when the checker's operand scan stepped aside.
+    /// </summary>
+    [Test]
+    public void ForeignIdentifier_InACaseValue_IsRejected()
+        => Assert.That(() => JsTestSupport.Compile(
+                "Sub Main()\nDim y As Integer = 42\nSelect Case y\nCase mathlib::kAnswer\n" +
+                "Console.WriteLine(\"m\")\nEnd Select\nEnd Sub"),
+            Throws.Exception.With.Message.Contains("BL7009"));
+
+    /// <summary>
+    /// The same interior-`::` refusal through the OTHER channel: a `New` of a `::`-qualified
+    /// class. `New std::mutex()` used to be refused by ForeignFeatureChecker's IRNewObject arm;
+    /// now that the arm is relaxed for this backend, NewObject itself must refuse it — otherwise
+    /// it emits `new stdmutex()`, a ReferenceError from a build that reported success.
+    /// </summary>
+    [Test]
+    public void ForeignNewObject_WithInteriorNamespace_IsRejected()
+        => Assert.That(() => JsTestSupport.Compile(
+                "Sub Main()\nConsole.WriteLine(New std::mutex())\nEnd Sub"),
+            Throws.Exception.With.Message.Contains("BL7009"));
 }

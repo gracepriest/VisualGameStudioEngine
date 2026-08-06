@@ -115,6 +115,10 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             // (#CppInclude / :: foreign types / cpp{} inline blocks) AND collections
             // (List/Dictionary/HashSet are not yet lowered to LLVM IR) with a clean
             // error before any emission. Its own inline language is "llvm".
+            //
+            // ⛔ allowForeignIdentifiers stays at its default FALSE — see the note on the C#
+            // backend's call. It is JavaScript-only, because only there does `::name` mean a real
+            // identifier in the target language.
             ForeignFeatureChecker.Check(module, "LLVM", rejectCollections: true, ownInlineLanguage: "llvm");
 
             _output.Clear();

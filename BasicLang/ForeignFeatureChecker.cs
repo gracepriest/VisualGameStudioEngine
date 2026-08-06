@@ -22,13 +22,23 @@ namespace BasicLang.Compiler.CodeGen
     /// Enforces the backend HONESTY MATRIX (spec decision 12): the non-C++ backends
     /// reject C++-passthrough features, and LLVM/MSIL additionally reject collections.
     ///
-    /// | Feature                | C++ | C#        | LLVM      | MSIL      |
-    /// |------------------------|-----|-----------|-----------|-----------|
-    /// | #CppInclude headers    | yes | error     | error     | error     |
-    /// | :: foreign types       | yes | error     | error     | error     |
-    /// | Collections (List/...) | yes | native    | error     | error     |
-    /// | Foreign inline code    | yes | error     | error     | error     |
+    /// | Feature                  | C++ | C#        | JavaScript | LLVM      | MSIL      |
+    /// |--------------------------|-----|-----------|------------|-----------|-----------|
+    /// | #CppInclude headers      | yes | error     | error      | error     | error     |
+    /// | :: foreign TYPES         | yes | error     | error      | error     | error     |
+    /// | :: foreign EXPRESSIONS   | yes | error     | VERBATIM   | error     | error     |
+    /// | Collections (List/...)   | yes | native    | native     | error     | error     |
+    /// | Foreign inline code      | yes | error     | error      | error     | error     |
     ///   (cpp{} passthrough)
+    ///
+    /// ⛔ <b>The two ':: foreign' rows are one syntax with two meanings, split by POSITION.</b>
+    /// A <c>::</c> name in TYPE position (<c>Dim m As std::mutex</c>) is an opaque C++ type that
+    /// no managed backend can lower — <see cref="CheckType"/> rejects it everywhere, forever. A
+    /// <c>::</c> name in EXPRESSION position is just an already-qualified foreign IDENTIFIER, and
+    /// on the JavaScript backend that is exactly what a raw JS global is (<c>::console.log(x)</c>),
+    /// so JavaScript opts in via <c>Check(allowForeignIdentifiers: true)</c> and emits it verbatim.
+    /// C#/LLVM/MSIL have no such reading and keep refusing both. Never widen the flag to
+    /// <see cref="CheckType"/>: emitting <c>std::mutex</c> as <c>stdmutex</c> is a silent miscompile.
     ///
     /// C# supports List/Dictionary/HashSet natively, so it passes
     /// <c>rejectCollections: false</c>; LLVM and MSIL pass <c>true</c>. Each backend
@@ -56,11 +66,30 @@ namespace BasicLang.Compiler.CodeGen
         /// is rejected — otherwise the non-C++ backends silently DROP it (emitting a warning
         /// comment and a do-nothing program). Pass the lowercased tag; case-insensitive.
         /// </param>
-        public static void Check(IRModule module, string backendName, bool rejectCollections, string ownInlineLanguage)
+        /// <param name="allowForeignIdentifiers">
+        /// True only for a backend that can lower a <c>::</c>-qualified name in EXPRESSION
+        /// (VALUE) position — today, JavaScript, where <c>::console</c> IS a real global.
+        ///
+        /// <para>⛔ This relaxes the two VALUE sites only (the inline-operand scan and the
+        /// <see cref="IRNewObject"/> arm). It does NOT touch <see cref="CheckType"/>: a <c>::</c>
+        /// TYPE stays rejected on every backend that runs this checker. Nor does it touch the
+        /// <c>#CppInclude</c> rejection — a C++ header in a JavaScript program is still an error.</para>
+        ///
+        /// <para>⛔ Defaults to FALSE, and C#/LLVM/MSIL must keep the default. An opted-in backend
+        /// takes on the OBLIGATION to handle every <c>::</c> name it now receives — emitting it
+        /// verbatim where that is meaningful and refusing it where it is not. Setting this true
+        /// without that handling does not produce an error; it produces a mangled identifier in a
+        /// build that reported success. See <c>JavaScriptCodeGenerator.ForeignName</c>.</para>
+        /// </param>
+        public static void Check(IRModule module, string backendName, bool rejectCollections,
+            string ownInlineLanguage, bool allowForeignIdentifiers = false)
         {
             if (module == null) return;
 
             // (1) #CppInclude headers — C++-backend-only passthrough.
+            // ⛔ NOT covered by allowForeignIdentifiers. A #CppInclude names a C++ HEADER; there
+            // is nothing for a JavaScript (or any managed) backend to do with one, so this stays
+            // an error even on a backend that accepts '::' expressions.
             if (module.CppIncludes != null && module.CppIncludes.Count > 0)
             {
                 throw new ForeignFeatureException(
@@ -72,6 +101,12 @@ namespace BasicLang.Compiler.CodeGen
             // Walk EVERY type-bearing DECLARED position in the module (functions,
             // globals, class members, interface signatures) via the shared
             // ModuleTypeWalker, recursing generic arguments and array element types.
+            //
+            // ⛔ DELIBERATELY NOT gated on allowForeignIdentifiers. This is the TYPE side of the
+            // split; see the class remarks. It also does the load-bearing work of keeping the
+            // JavaScript relaxation narrow: `Dim el = ::document.getElementById("x")` infers a
+            // Foreign-typed local and is refused HERE, which is what stops a '::' value being
+            // stored and reused as if the backend had a type for it.
             foreach (var type in ModuleTypeWalker.AllTypes(module))
                 CheckType(type, backendName, rejectCollections);
 
@@ -92,7 +127,8 @@ namespace BasicLang.Compiler.CodeGen
                     {
                         if (block?.Instructions == null) continue;
                         foreach (var inst in block.Instructions)
-                            CheckInstruction(inst, backendName, rejectCollections, ownInlineLanguage);
+                            CheckInstruction(inst, backendName, rejectCollections, ownInlineLanguage,
+                                allowForeignIdentifiers);
                     }
                 }
         }
@@ -103,7 +139,8 @@ namespace BasicLang.Compiler.CodeGen
         /// Recurses into try/catch/finally nested blocks so a temporary inside a Try
         /// body is not missed.
         /// </summary>
-        private static void CheckInstruction(IRInstruction inst, string backendName, bool rejectCollections, string ownInlineLanguage)
+        private static void CheckInstruction(IRInstruction inst, string backendName, bool rejectCollections,
+            string ownInlineLanguage, bool allowForeignIdentifiers)
         {
             // An INLINE-consumed foreign construct whose result never binds to a declared
             // local/field/param/return (so ModuleTypeWalker's declared-type walk never sees it):
@@ -113,7 +150,12 @@ namespace BasicLang.Compiler.CodeGen
             // Without this, the '::' was stripped by the backend's SanitizeName and the managed
             // program compiled "successfully" into broken code (undefined identifier). Reject it
             // here with the same clean foreign-not-supported diagnostic.
-            RejectInlineForeign(inst, backendName);
+            //
+            // VALUE SITE 1 of 2. An opted-in backend handles these itself — the '::' name reaches
+            // its renderer, which must emit it verbatim or refuse it. Skipping the scan is what
+            // hands that responsibility over.
+            if (!allowForeignIdentifiers)
+                RejectInlineForeign(inst, backendName);
 
             switch (inst)
             {
@@ -124,7 +166,13 @@ namespace BasicLang.Compiler.CodeGen
                             $"The {backendName} backend does not support the collection type '{no.ClassName}'; " +
                             "List/Dictionary/HashSet are not yet supported on this backend (use the C# or C++ backend).");
                     // A `::`-qualified C++ foreign type constructed inline (any non-C++ backend).
-                    if (no.ClassName != null && no.ClassName.Contains("::"))
+                    //
+                    // VALUE SITE 2 of 2. `New ::Chart(ctx)` is a legitimate raw-JS construction on
+                    // an opted-in backend, so the arm steps aside there — but ONLY because that
+                    // backend's own NewObject renderer re-checks the name and refuses an interior
+                    // '::' (`New std::mutex()`), which has no JavaScript meaning. Without that
+                    // second check this relaxation would emit `new stdmutex()`.
+                    if (!allowForeignIdentifiers && no.ClassName != null && no.ClassName.Contains("::"))
                         throw new ForeignFeatureException(
                             $"The {backendName} backend does not support the '::'-qualified foreign C++ type " +
                             $"'{no.ClassName}'; C++ passthrough types are only available on the C++ backend.");
@@ -144,15 +192,15 @@ namespace BasicLang.Compiler.CodeGen
                 case IRTryCatch tc:
                     if (tc.TryBlock?.Instructions != null)
                         foreach (var i in tc.TryBlock.Instructions)
-                            CheckInstruction(i, backendName, rejectCollections, ownInlineLanguage);
+                            CheckInstruction(i, backendName, rejectCollections, ownInlineLanguage, allowForeignIdentifiers);
                     if (tc.CatchClauses != null)
                         foreach (var cc in tc.CatchClauses)
                             if (cc?.Block?.Instructions != null)
                                 foreach (var i in cc.Block.Instructions)
-                                    CheckInstruction(i, backendName, rejectCollections, ownInlineLanguage);
+                                    CheckInstruction(i, backendName, rejectCollections, ownInlineLanguage, allowForeignIdentifiers);
                     if (tc.FinallyBlock?.Instructions != null)
                         foreach (var i in tc.FinallyBlock.Instructions)
-                            CheckInstruction(i, backendName, rejectCollections, ownInlineLanguage);
+                            CheckInstruction(i, backendName, rejectCollections, ownInlineLanguage, allowForeignIdentifiers);
                     break;
             }
         }

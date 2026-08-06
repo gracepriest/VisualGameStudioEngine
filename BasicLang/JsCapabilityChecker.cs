@@ -52,6 +52,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// BL7008 is raised from the generator rather than from this walk: whether a call is
         /// LINQ at all depends on the RECEIVER being a sequence, which only the generator
         /// knows (it tracks chained results that the IR types as plain Object).
+        ///
+        /// BL7009 (interior '::' namespace) is likewise generator-raised — it guards the raw-JS
+        /// passthrough that ForeignFeatureChecker now lets through for this backend, and the
+        /// leading-vs-interior distinction is only meaningful at the name-rendering sites.
         /// </remarks>
         public static void Check(IRModule module)
         {
@@ -522,6 +526,27 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         public static bool IsUnlowerableLinqOperator(string method) =>
             !string.IsNullOrEmpty(method) && UnlowerableLinq.Contains(method);
+
+        /// <summary>
+        /// BL7009 — a <c>::</c> name carrying an INTERIOR namespace qualification.
+        ///
+        /// <para>A LEADING <c>::</c> is this backend's raw-JavaScript escape hatch:
+        /// <c>::console.log(x)</c> means "emit <c>console.log(x)</c> verbatim". An INTERIOR
+        /// <c>::</c> is the OTHER thing the same syntax means — a C++ namespace qualification
+        /// (<c>mathlib::freeAdd</c>, <c>std::mutex</c>) — and JavaScript has no namespaces at all.
+        /// There is no lowering: stripping the separator yields <c>mathlibfreeAdd</c>, an
+        /// undefined identifier that reaches the browser from a build that reported success.</para>
+        ///
+        /// <para>Raised from the generator rather than from the walk above because that is where
+        /// the distinction is visible — <c>ForeignFeatureChecker</c> now waves every <c>::</c>
+        /// VALUE through for this backend, so the name-rendering sites are the gate.</para>
+        /// </summary>
+        public static ForeignFeatureException ForeignNamespaceRejection(string name) =>
+            new ForeignFeatureException(
+                $"BL7009: '{name}' cannot be lowered to JavaScript — the '::' inside it is a C++ " +
+                "namespace qualification, and JavaScript has no namespaces. Only a LEADING '::' " +
+                "is a JavaScript passthrough: '::console.log(x)' emits 'console.log(x)' verbatim. " +
+                "For anything else, use a javascript{ } block.");
 
         /// <summary>BL7008 — a LINQ operator with no faithful Array-method lowering.</summary>
         public static ForeignFeatureException LinqRejection(string method) =>
