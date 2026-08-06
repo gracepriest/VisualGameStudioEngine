@@ -316,8 +316,14 @@ public class NetDelegateTests
 
         var proxies = NetProxyEmitter.Emit(surface, "Shim.dll")[NetProxyEmitter.ProxiesFileName];
 
-        Assert.That(proxies, Does.Contain("BasicLang::blnet::blnet_callback"),
-            "a delegate parameter's C++ spelling is a callback handle");
+        // UNQUALIFIED. blnet_callback is a C typedef in blnet.h at GLOBAL scope, not a member of
+        // the BasicLang::blnet namespace — qualifying it is C2039. This assertion originally
+        // pinned the qualified spelling and passed, because an emission test can only confirm
+        // the generator wrote what you told it to; the run-level proof is what caught it.
+        Assert.That(proxies, Does.Match(@"[^:\w]blnet_callback\s"),
+            "a delegate parameter's C++ spelling is an UNQUALIFIED callback handle");
+        Assert.That(proxies, Does.Not.Contain("blnet::blnet_callback"),
+            "qualifying it does not compile — blnet_callback is not in that namespace");
 
         // The failure this pins is not a compile error, it is a WRONG-TABLE RELEASE. NetRef's
         // deleter routes to g_shim.release — the MANAGED object table. A callback handle lives in
@@ -625,6 +631,98 @@ End Sub");
 
         Assert.That(cpp, Does.Not.Contain("?Handler"));
         Assert.That(cpp, Does.Contain("= Handler;"));
+    }
+
+    // ------------------------------------------------------------------------------------
+    // Step 7 — THE RUN-LEVEL PROOF.
+    //
+    // Everything before this verifies emitted TEXT. A wrong unchecked cast, a wrong slot count
+    // or a wrong-table read passes all of it. This is the first test that runs the generated
+    // C++ and observes what it actually does.
+    //
+    // The mandatory shape is a RESULT-BEARING delegate, and that is not a stylistic preference:
+    // at g_call_depth == 0 a result-bearing callback is REFUSED with BLNET_E_CROSS_THREAD_RESULT
+    // while an Action is merely QUEUED and drained later — so an Action-only test passes even
+    // with BlnetCallScope missing entirely. Only a value coming back proves inline dispatch.
+    // ------------------------------------------------------------------------------------
+
+    [Test]
+    [Category("Integration")]
+    [NonParallelizable]
+    public void ARunningProgram_DispatchesAResultBearingDelegateInline()
+    {
+        using var dir = new ProbeDir();
+        var probe = dir.EmitAssembly("BlnetDelegateProbe", DelegateProbeSource);
+        var resolver = NetTypeResolver.Create(
+            NetTypeResolverTestRefs.FrameworkPaths.Concat(new[] { probe }));
+
+        const string source = @"
+Using DelegateProbe
+
+Module M
+ Sub Main()
+  Console.WriteLine(Runner.Run(Function(a As Integer, b As Integer) a - b))
+ End Sub
+End Module";
+
+        var parser = new Parser(new Lexer(source).Tokenize());
+        var ast = parser.Parse();
+        Assert.That(parser.Errors, Is.Empty,
+            "parse errors:\n" + string.Join("\n", parser.Errors.Select(e => e.Message)));
+
+        var analyzer = new SemanticAnalyzer();
+        analyzer.ConfigureNetResolution(() => resolver, nativeBackend: true);
+        Assert.That(analyzer.Analyze(ast), Is.True,
+            "semantic errors:\n" + string.Join("\n", analyzer.Errors.Select(e => e.Message)));
+        Assert.That(analyzer.NetDiagnostics, Is.Empty,
+            "unexpected findings: " + string.Join(" | ",
+                analyzer.NetDiagnostics.Select(d => d.Code + ": " + d.Message)));
+
+        var module = new IRBuilder(analyzer).Build(ast, "TestModule");
+        var cpp = new CppCodeGenerator(new CppCodeGenOptions { GenerateComments = false })
+            .Generate(module);
+        var surface = NetSurfaceCollector.Collect(
+            new[] { module }, null, () => resolver, new List<NetReferenceDiagnostic>());
+        Assert.That(surface.IsNonEmpty, Is.True, "the program must draw a surface");
+
+        // The slot name is RE-DERIVED from the seams production uses, so a mangling or
+        // overload-selection drift breaks the C++ compile rather than silently passing.
+        // NetStubHarness.Winner cannot serve here — it resolves against the framework-only
+        // SharedResolver, and this member lives in the probe assembly.
+        var run = resolver.ResolveOverload(
+            "DelegateProbe.Runner", NetCallForm.Static, "Run",
+            new[] { NetTypeResolver.LambdaArgumentSpelling(2) });
+        Assert.That(run.Outcome, Is.EqualTo(NetOverloadOutcome.Resolved),
+            "fixture provenance: Runner.Run must resolve against a 2-parameter lambda — this is "
+            + "also an independent check that D-P11's target-typing selects the delegate overload");
+        var slot = NetNameMangler.Mangle(run.Member!);
+
+        // The stub stands in for the managed side: it receives the callback handle and invokes
+        // it through P0's universal thunk with (7, 3). Because the REAL proxy opens a
+        // BlnetCallScope around this call, g_call_depth > 0 and the thunk must dispatch INLINE.
+        var stub = NetStubHarness.StubTranslationUnit(new[]
+        {
+            new NetStubHarness.StubSlot(slot,
+                @"[](uint64_t cb, int32_t* result) -> int32_t {
+                    uint64_t args[2] = { 7, 3 };
+                    uint64_t r = 0;
+                    int32_t st = BasicLang::blnet::blnet_invoke_callback(cb, args, 2, &r);
+                    if (st != BLNET_OK) { std::printf(""THUNK-FAILED %d\n"", st); return st; }
+                    *result = (int32_t)r;
+                    return BLNET_OK;
+                }"),
+        });
+
+        var stdout = NetStubHarness.RunWithStub(cpp, surface, stub);
+
+        Assert.That(stdout, Does.Not.Contain("THUNK-FAILED"),
+            "a non-OK status here means the callback never ran inline — BLNET_E_CROSS_THREAD_RESULT "
+            + "(5) specifically means g_call_depth was 0, i.e. the proxy's BlnetCallScope is missing");
+        Assert.That(stdout.Trim(), Is.EqualTo("4"),
+            "7 - 3 = 4 proves the WHOLE path: the slots unpacked in the right ORDER (3 - 7 would "
+            + "give -4), the BasicLang lambda actually ran, and its value came back through "
+            + "*result. This is the first test in Task 11 that could catch a bad cast or a wrong "
+            + "slot count.");
     }
 
     /// <summary>

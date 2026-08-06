@@ -347,9 +347,17 @@ namespace BasicLang.Compiler.CodeGen.Net
             /// the call prologue (D-P8), NOT to this parameter: the proxy only carries the
             /// handle across.</para>
             /// </summary>
+            /// <para>⛔ <b><c>blnet_callback</c> is spelled UNQUALIFIED, and that is not a style
+            /// choice.</b> It is a C typedef in <c>blnet.h</c> — <c>typedef uint64_t
+            /// blnet_callback;</c> — at GLOBAL scope, not a member of the <c>BasicLang::blnet</c>
+            /// C++ namespace that <c>blnet_runtime.hpp</c> opens. Qualifying it is
+            /// <c>error C2039: 'blnet_callback': is not a member of 'BasicLang::blnet'</c>.
+            /// Caught by Task 11's run-level proof, NOT by any emission assertion: a test that
+            /// checks the generated text contains the spelling you chose cannot tell you the
+            /// spelling compiles.</para>
             internal static readonly WireForm Callback = new(
                 WireKind.Callback, "uint64_t", "uint64_t*",
-                "BasicLang::blnet::blnet_callback", "BasicLang::blnet::blnet_callback");
+                "blnet_callback", "blnet_callback");
 
             /// <summary>
             /// <c>Boolean</c> is the one scalar whose C++ spelling differs from its wire
