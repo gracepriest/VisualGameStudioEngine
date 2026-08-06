@@ -132,6 +132,33 @@ public class JavaScriptClassTests
             "Sub Main()\nDim d As New Dog()\nd.Speak()\nEnd Sub"),
             Is.EqualTo("woof"));
 
+    /// <summary>
+    /// A value-producing node is emitted into block.Instructions AND handed back as the
+    /// expression result. If the Expr arm RE-RENDERS it instead of returning the name it was
+    /// bound to, the work happens TWICE — here the constructor runs twice.
+    ///
+    /// <para>Every earlier class test missed this because none had an observable side effect:
+    /// constructing Point2 twice assigns the same field twice and looks identical. Only a
+    /// constructor that PRINTS reveals it.</para>
+    /// </summary>
+    [Test]
+    public void Constructor_RunsExactlyOnce()
+        => Assert.That(Run(
+            "Class Noisy\nPublic Sub New()\nConsole.WriteLine(\"ctor\")\nEnd Sub\nEnd Class\n" +
+            "Sub Main()\nDim n As New Noisy()\nEnd Sub"),
+            Is.EqualTo("ctor"));
+
+    /// <summary>The same hazard for a method call whose result is consumed.</summary>
+    [Test]
+    public void MethodCallUsedAsAValue_RunsExactlyOnce()
+        => Assert.That(Run(
+            "Class Counter\n" +
+            "Public N As Integer\n" +
+            "Public Function Bump() As Integer\nN = N + 1\nConsole.WriteLine(\"call\")\nReturn N\nEnd Function\n" +
+            "End Class\n" +
+            "Sub Main()\nDim c As New Counter()\nc.N = 0\nDim r As Integer\nr = c.Bump()\nConsole.WriteLine(r)\nEnd Sub"),
+            Is.EqualTo("call\n1"));
+
     // ---------------------------------------------------------------- emission shape
 
     /// <summary>

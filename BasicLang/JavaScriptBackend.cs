@@ -367,22 +367,27 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case IRFieldAccess fa when IsLengthAccess(fa):
                     return $"{Expr(fa.Object)}.length";
 
-                // Fields and properties share one node — there is no IRPropertyAccess — which
-                // is exactly right for JS, where a get/set accessor makes both spellings work.
+                // ⛔ These are IRValues that ALSO appear in block.Instructions, so their
+                // visitor has already bound them. Referring to the NAME is not a nicety: a
+                // `new` or a call RE-RENDERED here would run a SECOND time — measured, a
+                // constructor printed twice. Only render inline when nothing bound it.
+                //
+                // Fields and properties share one node (there is no IRPropertyAccess), which
+                // is exactly right for JS: a get/set accessor makes both spellings work.
                 case IRFieldAccess fa:
-                    return $"{Expr(fa.Object)}.{SanitizeName(fa.FieldName)}";
+                    return IsUsed(fa) ? SanitizeName(fa.Name) : FieldAccess(fa);
 
                 case IRNewObject n:
-                    return $"new {SanitizeName(n.ClassName)}({string.Join(", ", n.Arguments.ConvertAll(Expr))})";
+                    return IsUsed(n) ? SanitizeName(n.Name) : NewObject(n);
 
                 case IRInstanceMethodCall mc:
-                    return InstanceCall(mc);
+                    return IsUsed(mc) ? SanitizeName(mc.Name) : InstanceCall(mc);
 
                 // The ONLY non-virtual dispatch in the language. Everything else is
                 // prototype dispatch, which is virtual by default and already matches
                 // VB's Overridable/Overrides.
                 case IRBaseMethodCall bc:
-                    return $"super.{SanitizeName(bc.MethodName)}({string.Join(", ", bc.Arguments.ConvertAll(Expr))})";
+                    return IsUsed(bc) ? SanitizeName(bc.Name) : BaseCall(bc);
 
                 default:
                     throw NotYet(value.GetType().Name + " (as an expression)");
@@ -1342,9 +1347,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         // Each of these is emitted into block.Instructions AND handed back as the expression
         // result, so the statement and expression arms must agree: bind when something reads
         // the value, otherwise emit it as a bare statement so side effects still happen.
-        public void Visit(IRNewObject newObj) => EmitValueOrStatement(newObj, Expr(newObj));
+        public void Visit(IRNewObject newObj) => EmitValueOrStatement(newObj, NewObject(newObj));
         public void Visit(IRInstanceMethodCall methodCall) => EmitValueOrStatement(methodCall, InstanceCall(methodCall));
-        public void Visit(IRBaseMethodCall baseCall) => EmitValueOrStatement(baseCall, Expr(baseCall));
+        public void Visit(IRBaseMethodCall baseCall) => EmitValueOrStatement(baseCall, BaseCall(baseCall));
+
+        private string NewObject(IRNewObject n) =>
+            $"new {SanitizeName(n.ClassName)}({string.Join(", ", n.Arguments.ConvertAll(Expr))})";
+
+        private string BaseCall(IRBaseMethodCall b) =>
+            $"super.{SanitizeName(b.MethodName)}({string.Join(", ", b.Arguments.ConvertAll(Expr))})";
 
         private void EmitValueOrStatement(IRValue value, string expression)
         {
@@ -1399,10 +1410,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // `.Length` is pure and renders inline via Expr — no statement needed.
             if (IsLengthAccess(fieldAccess)) return;
 
-            // A field or property READ is pure too, so it only needs a binding when something
-            // consumes it; an unread read emits nothing rather than a stray statement.
-            if (IsUsed(fieldAccess)) Bind(fieldAccess.Name, Expr(fieldAccess));
+            // ⛔ FieldAccess(...), never Expr(...): once the node is used, Expr returns its
+            // NAME, so binding through Expr emits `const t2 = t2;` — a self-reference and a
+            // TDZ error. The renderer and the name lookup must stay separate.
+            if (IsUsed(fieldAccess)) Bind(fieldAccess.Name, FieldAccess(fieldAccess));
         }
+
+        private string FieldAccess(IRFieldAccess fa) =>
+            $"{Expr(fa.Object)}.{SanitizeName(fa.FieldName)}";
         // Statement-only: it has no Name and can never be an operand.
         public void Visit(IRFieldStore fieldStore) =>
             Line($"{Expr(fieldStore.Object)}.{SanitizeName(fieldStore.FieldName)} = {Expr(fieldStore.Value)};");
