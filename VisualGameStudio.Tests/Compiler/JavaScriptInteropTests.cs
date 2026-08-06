@@ -329,6 +329,92 @@ public class JavaScriptInteropTests
             Throws.TypeOf<BasicLang.Compiler.CodeGen.ForeignFeatureException>());
 
     /// <summary>
+    /// ⚠ KNOWN LIMITATION, and <b>the first wall a user actually hits</b> — so it is pinned
+    /// separately from the inferred-local form above rather than assumed to be the same case.
+    ///
+    /// <para>Declaring the type does NOT rescue the value. `Dim v As Integer = ::getValue()`
+    /// dies EARLIER and in a different component: the SemanticAnalyzer types the initializer as
+    /// `::getValue` and refuses the assignment outright — <i>"Cannot assign value of type
+    /// '::getValue' to variable of type 'Integer'"</i> — so no backend flag can reach it and
+    /// relaxing ForeignFeatureChecker further would change nothing.</para>
+    ///
+    /// <para>Together with the two pins above, the honest statement of the hatch's scope is:
+    /// <b>`::` works in CALL and ARGUMENT position only. A `::` value cannot be STORED at all</b>,
+    /// by inference or by declaration. Reach for <c>javascript{ }</c> when you need to keep one.</para>
+    /// </summary>
+    [Test]
+    public void ForeignValueInATypedLocal_IsStillRejected_KNOWN()
+        => Assert.That(() => JsTestSupport.Compile(
+                "Sub Main()\nDim v As Integer = ::getValue()\nEnd Sub"),
+            Throws.Exception.With.Message.Contains(
+                "Cannot assign value of type '::getValue' to variable of type 'Integer'"));
+
+    /// <summary>
+    /// ⛔ THE MEASURED MISCOMPILE. `.Length` on a FOREIGN receiver must reach the output exactly
+    /// as written — the hatch's entire promise is verbatim emission.
+    ///
+    /// <para>Before the fix <c>Console.WriteLine(::s.Length)</c> emitted
+    /// <c>console.log(s.length)</c>: <c>Expr</c>'s <c>IsLengthAccess</c> arm short-circuits ahead
+    /// of <c>FieldAccess</c>, and <c>IsLengthAccess</c> matched the FIELD NAME alone,
+    /// case-insensitively, with no receiver gate at all. Usually right by accident, because
+    /// JavaScript does spell it <c>length</c> — and a silent miscompile for any foreign object
+    /// carrying a capital-<c>Length</c> property, from a build that reported success.</para>
+    ///
+    /// <para>Asserting the ABSENCE of <c>.length</c> as well is what makes this test load-bearing:
+    /// <c>Does.Contain(".Length")</c> alone would pass on a case-insensitive substring engine and,
+    /// more importantly, says nothing about which of the two spellings was emitted.</para>
+    /// </summary>
+    [Test]
+    public void ForeignIdentifier_LengthMember_IsNotCaseFolded()
+    {
+        var js = JsTestSupport.Compile("Sub Main()\nConsole.WriteLine(::s.Length)\nEnd Sub");
+
+        Assert.That(js, Does.Contain("s.Length"));
+        Assert.That(js, Does.Not.Contain("s.length"));
+    }
+
+    /// <summary>
+    /// The same rule one hop further out. The receiver of the `.Length` in `::a.b.Length` is NOT
+    /// an IRVariable named `::a.b` — MEASURED, it is an IRFieldAccess bound to a temp
+    /// (<c>const t7 = a.b;</c>) whose own name carries no `::` at all. So a "does the receiver's
+    /// name start with `::`" gate fixes the single-hop shape and leaves this one folded, which is
+    /// why the backend's foreignness test is TRANSITIVE.
+    /// </summary>
+    [Test]
+    public void ForeignIdentifier_LengthOnAChainedMember_IsNotCaseFolded()
+    {
+        var js = JsTestSupport.Compile("Sub Main()\nConsole.WriteLine(::a.b.Length)\nEnd Sub");
+
+        Assert.That(js, Does.Contain(".Length"));
+        Assert.That(js, Does.Not.Contain(".length"));
+    }
+
+    /// <summary>
+    /// The same gate through the OTHER member-rewriting channel. `Me` is the one BasicLang name
+    /// <c>SanitizeName</c> actively REWRITES (to `this`), so a foreign property spelled `Me`
+    /// measured as <c>s.this</c> — valid JavaScript reading an entirely different property.
+    /// </summary>
+    [Test]
+    public void ForeignIdentifier_MemberNamedMe_IsNotRewrittenToThis()
+    {
+        var js = JsTestSupport.Compile("Sub Main()\nConsole.WriteLine(::s.Me)\nEnd Sub");
+
+        Assert.That(js, Does.Contain("s.Me"));
+        Assert.That(js, Does.Not.Contain("s.this"));
+    }
+
+    /// <summary>An ORDINARY `.Length` still lowers — the gate must not disarm the rename itself.</summary>
+    [Test]
+    public void OrdinaryLength_StillLowersToLowercase()
+    {
+        var js = JsTestSupport.Compile(
+            "Sub Main()\nDim s As String = \"abc\"\nConsole.WriteLine(s.Length)\nEnd Sub");
+
+        Assert.That(js, Does.Contain("s.length"));
+        Assert.That(js, Does.Not.Contain("s.Length"));
+    }
+
+    /// <summary>
     /// ⛔ Only a LEADING `::` is a JS passthrough. An INTERIOR one (`mathlib::freeAdd`) is a C++
     /// namespace qualification with no JavaScript meaning: stripping it yields `mathlibfreeAdd`,
     /// an undefined identifier reaching the browser from a green build.
@@ -371,6 +457,90 @@ public class JavaScriptInteropTests
     [Test]
     public void ForeignNewObject_WithInteriorNamespace_IsRejected()
         => Assert.That(() => JsTestSupport.Compile(
+                "Sub Main()\nConsole.WriteLine(New std::mutex())\nEnd Sub"),
+            Throws.Exception.With.Message.Contains("BL7009"));
+
+    // ------------------------------------------------------------------
+    // THE SAME SHAPES, ON THE IR THAT ACTUALLY SHIPS.
+    //
+    // ⛔⛔ Every `::` test above runs through JsTestSupport.Compile, which is BuildModule +
+    // Generate with NOTHING between — while all three shipping routes (CLI single-file, CLI
+    // project, the IDE's BuildService) run OptimizationPipeline.AddStandardPasses()
+    // UNCONDITIONALLY, with no switch that turns it off. So the guard for this feature was
+    // pinned entirely to a path no user reaches. That is the documented hazard in CLAUDE.md and
+    // it is not hypothetical here: it once hid six live defects on this backend behind 351 green
+    // tests.
+    //
+    // These need no Node. The question is a CODEGEN one — does the name still come out verbatim,
+    // does the interior form still get refused — and text answers it. (Behaviour questions need
+    // stdout as the oracle, which is what JavaScriptOptimizedExecutionTests exists for.)
+    //
+    // Passes that could plausibly disturb these: copy propagation and CSE re-point operands, so
+    // a foreign receiver can arrive at the renderer as a DIFFERENT node than IRBuilder produced;
+    // dead-code elimination can drop the block a rejection would have been raised from, turning
+    // a refusal into a silent accept.
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void Optimized_ForeignIdentifier_EmitsVerbatim()
+        => Assert.That(
+            JsTestSupport.CompileOptimized("Sub Main()\n::console.log(\"hi\")\nEnd Sub"),
+            Does.Contain("console.log(\"hi\")"));
+
+    /// <summary>The free-function spelling reaches CallTarget rather than VariableRef.</summary>
+    [Test]
+    public void Optimized_ForeignIdentifier_BareFreeFunction_EmitsVerbatim()
+    {
+        var js = JsTestSupport.CompileOptimized("Sub Main()\n::window.alert(\"hi\")\n::alert(\"bye\")\nEnd Sub");
+
+        Assert.That(js, Does.Contain("window.alert(\"hi\")"));
+        Assert.That(js, Does.Contain("alert(\"bye\")"));
+        Assert.That(js, Does.Not.Contain("windowalert"));
+    }
+
+    /// <summary>
+    /// The measured miscompile, re-pinned on the shipping IR. Copy propagation is exactly the
+    /// kind of pass that could hand <c>IsLengthAccess</c> a receiver node the transitive
+    /// foreignness test has to walk further to recognise.
+    /// </summary>
+    [Test]
+    public void Optimized_ForeignIdentifier_LengthMember_IsNotCaseFolded()
+    {
+        var js = JsTestSupport.CompileOptimized("Sub Main()\nConsole.WriteLine(::s.Length)\nEnd Sub");
+
+        Assert.That(js, Does.Contain("s.Length"));
+        Assert.That(js, Does.Not.Contain("s.length"));
+    }
+
+    /// <summary>
+    /// A refusal is worth nothing if a pass can delete the code that raises it. Both spellings,
+    /// because the leading and non-leading forms take different branches of the guard.
+    /// </summary>
+    [Test]
+    public void Optimized_ForeignIdentifier_WithInteriorNamespace_IsStillRejected()
+    {
+        Assert.That(() => JsTestSupport.CompileOptimized("Sub Main()\n::mathlib::freeAdd(1, 2)\nEnd Sub"),
+            Throws.Exception.With.Message.Contains("BL7009"));
+
+        Assert.That(() => JsTestSupport.CompileOptimized("Sub Main()\nmathlib::freeAdd(1, 2)\nEnd Sub"),
+            Throws.Exception.With.Message.Contains("BL7009"));
+    }
+
+    /// <summary>
+    /// ⚠ The pattern-operand channel is the one the optimizer is most likely to reshape:
+    /// ConstantFoldingPass rewrites case constants, and dead-code elimination prunes switch arms.
+    /// If a `Case mathlib::kAnswer` were folded away, the BL7009 would vanish with it.
+    /// </summary>
+    [Test]
+    public void Optimized_ForeignIdentifier_InACaseValue_IsStillRejected()
+        => Assert.That(() => JsTestSupport.CompileOptimized(
+                "Sub Main()\nDim y As Integer = 42\nSelect Case y\nCase mathlib::kAnswer\n" +
+                "Console.WriteLine(\"m\")\nEnd Select\nEnd Sub"),
+            Throws.Exception.With.Message.Contains("BL7009"));
+
+    [Test]
+    public void Optimized_ForeignNewObject_WithInteriorNamespace_IsStillRejected()
+        => Assert.That(() => JsTestSupport.CompileOptimized(
                 "Sub Main()\nConsole.WriteLine(New std::mutex())\nEnd Sub"),
             Throws.Exception.With.Message.Contains("BL7009"));
 }

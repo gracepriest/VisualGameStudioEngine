@@ -750,21 +750,37 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <para>Named ForeignName rather than TryForeignName because it THROWS — a `Try*` that
         /// can throw breaks the convention every caller relies on.</para>
         ///
-        /// <para><b>Every site that turns an IR name into output text must route through this,
-        /// and there are FIVE</b> — the `::` does not always land where the syntax suggests:
+        /// <para><b>THE INVARIANT — stated so that nobody has to keep a COUNT in sync.</b> An
+        /// earlier revision of this comment claimed "there are FIVE" sites and was already wrong
+        /// when it was written: <see cref="FieldAccess"/> was the sixth, and the miss was not
+        /// theoretical (see the <see cref="IsLengthAccess"/> note). A count is the wrong shape for
+        /// an exhaustiveness claim, so use the MECHANICAL test instead:
+        /// <b>if a method splices a name that can come from user source into the emitted text, it
+        /// routes through this helper — or, when the name is a MEMBER of a foreign object rather
+        /// than the foreign name itself, through <see cref="IsForeignValue"/> — before anything
+        /// else looks at it.</b> Grep <c>SanitizeName(</c> for the candidate list; every other call
+        /// on it takes a compiler-generated temp or a DECLARED local, neither of which can carry a
+        /// `::`. Miss one and that shape mangles SILENTLY, because ForeignFeatureChecker no longer
+        /// refuses `::` values on this backend — these renderers ARE the guard now.</para>
+        ///
+        /// <para>The `::` does not always land where the syntax suggests, so the sites cannot be
+        /// read off the grammar. Measured:
         /// <list type="bullet">
         /// <item><c>::alert("hi")</c> is an IRCall named `::alert` → <see cref="CallTarget"/>.</item>
         /// <item><c>::console.log("hi")</c> is an IRInstanceMethodCall whose METHOD name is the
         /// plain `log`; the `::` rides on the RECEIVER, an IRVariable named `::console` →
-        /// <see cref="VariableRef"/>. Measured, and not obvious from the source.</item>
+        /// <see cref="VariableRef"/>. Measured, and not obvious from the source.
+        /// (<see cref="InstanceCall"/> guards the rarer spelling that puts a `::` on the method
+        /// name itself, and skips the collection/LINQ rewrites for a foreign receiver.)</item>
         /// <item><c>Console.WriteLine(::a::b)</c> reaches VariableRef too, as a bare operand.</item>
         /// <item><c>New ::Chart(ctx)</c> is an IRNewObject → <see cref="NewObject"/>.</item>
         /// <item><c>Case mathlib::kAnswer</c> is a pattern operand and reaches ONLY
         /// <see cref="ExprInline"/> — it appears in no block, so no other renderer sees it.</item>
-        /// <item>(<see cref="InstanceCall"/> also guards the METHOD name, for completeness.)</item>
-        /// </list>
-        /// Miss one and that shape mangles silently, because ForeignFeatureChecker no longer
-        /// refuses `::` values on this backend — these ARE the guard now.</para>
+        /// <item><c>::s.Length</c> is an IRFieldAccess → <see cref="FieldAccess"/>, whose FIELD
+        /// name is an ordinary segment that must still be emitted verbatim. ⚠ And the
+        /// <see cref="IsLengthAccess"/> arm in <see cref="Expr"/> SHORT-CIRCUITS ahead of it, so
+        /// gating FieldAccess alone is not enough — that arm has its own foreign gate.</item>
+        /// </list></para>
         ///
         /// <para>⛔ The FIRST test is "does the name contain `::` at all", NOT "does it START with
         /// `::`". Getting that backwards leaves the commonest interior form — `mathlib::freeAdd`,
@@ -783,9 +799,52 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 throw JsCapabilityChecker.ForeignNamespaceRejection(name);
 
             raw = name.Substring(2);
+
+            // ⛔ A name of exactly "::" strips to "", which contains no "::" and would therefore be
+            // reported as a SUCCESSFUL passthrough that emits NOTHING — the callee silently deleted
+            // from the output. Unreachable through the parser today, and guarded anyway: this
+            // helper is the boundary that decides what reaches the browser unchecked, and a
+            // boundary must not have a success path that returns an empty name.
+            if (raw.Length == 0) throw JsCapabilityChecker.EmptyForeignNameRejection();
+
             if (raw.Contains("::")) throw JsCapabilityChecker.ForeignNamespaceRejection(name);
             return true;
         }
+
+        /// <summary>
+        /// True when <paramref name="value"/> denotes a FOREIGN (raw-JavaScript) object.
+        ///
+        /// <para><see cref="ForeignName"/> answers "is this NAME raw JS"; this answers "is this
+        /// VALUE a raw JS object", which is the question every <b>member-rewriting</b> arm has to
+        /// ask before it rewrites anything. A foreign object's members are raw JavaScript too:
+        /// `.Length` must stay `.Length`, `.Count` must not become `.size`, and `Me` must not
+        /// become `this`. BasicLang's member spellings mean nothing to it.</para>
+        ///
+        /// <para>⛔ TRANSITIVE, and it has to be. The receiver of the `.Length` in `::a.b.Length`
+        /// is not an IRVariable named `::a.b` — MEASURED, it is an IRFieldAccess BOUND to a temp
+        /// (`const t7 = a.b;`), whose own Name is `t7` and carries no `::` at all. The same holds
+        /// for `::makeThing().Length` (IRCall), `::doc.getThing().Length` (IRInstanceMethodCall)
+        /// and `::arr(0).Length`. A "does the receiver's Name start with `::`" test answers NO to
+        /// every one of those, so it would fix only the single-hop shape.</para>
+        ///
+        /// <para>Tests CONTAINMENT rather than a leading `::` on purpose: the only job here is
+        /// "this is not an ordinary BasicLang value, keep your hands off its members". Whether the
+        /// `::` is a legal passthrough or an interior namespace qualification is ForeignName's
+        /// call, and it throws when the receiver is finally rendered.</para>
+        /// </summary>
+        private static bool IsForeignValue(IRValue value) => value switch
+        {
+            null => false,
+            IRFieldAccess fa => IsForeignValue(fa.Object),
+            IRInstanceMethodCall mc => IsForeignValue(mc.Object),
+            IRIndexerAccess ix => IsForeignValue(ix.Collection),
+            IRCall call => HasForeignMarker(call.FunctionName),
+            IRNewObject n => HasForeignMarker(n.ClassName),
+            _ => HasForeignMarker(value.Name)
+        };
+
+        private static bool HasForeignMarker(string name) =>
+            name != null && name.IndexOf("::", StringComparison.Ordinal) >= 0;
 
         /// <summary>
         /// Lower a call target to its JS form.
@@ -1952,6 +2011,26 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             var args = mc.Arguments.ConvertAll(Expr);
             var receiver = Expr(mc.Object);
+
+            // ⚠ THE FOREIGN ARM RUNS FIRST, matching the ordering rule CallTarget states: a `::`
+            // name is raw JavaScript and must not be INTERPRETED by any arm below it. It used to
+            // sit last, which was harmless only because a foreign receiver types
+            // CollectionKind.None so both rewrites decline — a property of the TYPE TABLE, not of
+            // this method, and nothing pinned it. Running the guard first makes the invariant
+            // local to the code that depends on it.
+            //
+            // Two spellings, one arm. Usually the `::` rides on the RECEIVER (`::console` in
+            // `::console.log`), already emitted verbatim by VariableRef, leaving `log` as an
+            // ordinary segment; the rarer spelling puts a `::` on the method name itself. Either
+            // way the member segment is the user's raw JS and skips SanitizeName, which would map
+            // a method named `Me` to `this`.
+            var methodIsForeign = ForeignName(mc.MethodName, out var foreignMethod);
+            if (methodIsForeign || IsForeignValue(mc.Object))
+            {
+                var raw = methodIsForeign ? foreignMethod : mc.MethodName;
+                return $"{receiver}.{raw}({string.Join(", ", args)})";
+            }
+
             var kind = ReceiverKind(mc.Object);
 
             if (TryCollectionMethod(kind, mc.MethodName, receiver, args, out var collection))
@@ -1965,15 +2044,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 return linq;
             }
 
-            // The METHOD name of a foreign call is an ordinary segment (`log` in `::console.log`)
-            // and needs no special handling — the `::` rode in on the receiver and was already
-            // emitted verbatim by VariableRef. This arm covers the rarer spelling where a `::`
-            // reaches the method name itself, so no channel is left unguarded.
-            var method = ForeignName(mc.MethodName, out var foreignMethod)
-                ? foreignMethod
-                : SanitizeName(mc.MethodName);
-
-            return $"{receiver}.{method}({string.Join(", ", args)})";
+            return $"{receiver}.{SanitizeName(mc.MethodName)}({string.Join(", ", args)})";
         }
 
         /// <summary>
@@ -2125,8 +2196,24 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             return false;
         }
 
+        /// <summary>
+        /// `.Length` on a BasicLang array or String, which must be renamed to JavaScript's
+        /// `.length`.
+        ///
+        /// <para>⛔ NOT on a FOREIGN receiver. `::s.Length` is a member of a raw JavaScript
+        /// object, and the hatch's whole promise is that such a name reaches the output exactly
+        /// as written. MEASURED before the gate existed: <c>Console.WriteLine(::s.Length)</c>
+        /// emitted <c>console.log(s.length)</c> — right by accident for a DOM string, and a
+        /// silent miscompile for any foreign object with a capital-`Length` property, from a
+        /// build that reported success.</para>
+        ///
+        /// <para>The match stays case-INSENSITIVE for ordinary receivers (as the C++ backend
+        /// does): BasicLang identifiers are case-insensitive, so `x.length` on a real array is
+        /// the same member as `x.Length` and must lower the same way.</para>
+        /// </summary>
         private static bool IsLengthAccess(IRFieldAccess fa) =>
-            string.Equals(fa?.FieldName, "Length", StringComparison.OrdinalIgnoreCase);
+            string.Equals(fa?.FieldName, "Length", StringComparison.OrdinalIgnoreCase)
+            && !IsForeignValue(fa.Object);
 
         public void Visit(IRFieldAccess fieldAccess)
         {
@@ -2142,6 +2229,17 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         private string FieldAccess(IRFieldAccess fa)
         {
             var receiver = Expr(fa.Object);
+
+            // ⚠ FIRST, ahead of every rewrite below. A member of a FOREIGN object is raw
+            // JavaScript and its spelling is the user's, not ours: `::el.Length` stays `.Length`
+            // and `::el.Count` stays `.Count`. SanitizeName is not merely unnecessary here, it is
+            // WRONG — it maps `Me` to `this`, so `::obj.Me` MEASURED as `obj.this`, a read of an
+            // entirely different property from a green build.
+            //
+            // ForeignName still runs on the segment so an interior `::` is refused rather than
+            // emitted; on an ordinary member it declines and the name goes out verbatim.
+            if (IsForeignValue(fa.Object))
+                return $"{receiver}.{(ForeignName(fa.FieldName, out var f) ? f : fa.FieldName)}";
 
             // `.Count` is spelled differently per native type, and getting it wrong is silent:
             // a Map's `.length` is `undefined`, which then propagates as NaN through

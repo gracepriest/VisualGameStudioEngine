@@ -548,6 +548,19 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 "is a JavaScript passthrough: '::console.log(x)' emits 'console.log(x)' verbatim. " +
                 "For anything else, use a javascript{ } block.");
 
+        /// <summary>
+        /// BL7009 — a `::` with NOTHING after it.
+        ///
+        /// <para>Unreachable through the parser today, and guarded anyway: the helper that raises
+        /// it is the boundary deciding what reaches the browser UNCHECKED, and `"::"` is the one
+        /// input whose SUCCESS path yields an empty name — reported as a passthrough that emits
+        /// nothing at all, silently deleting the callee from the output.</para>
+        /// </summary>
+        public static ForeignFeatureException EmptyForeignNameRejection() =>
+            new ForeignFeatureException(
+                "BL7009: '::' names nothing. A JavaScript passthrough is a LEADING '::' followed " +
+                "by the raw JavaScript name, as in '::console.log(x)'.");
+
         /// <summary>BL7008 — a LINQ operator with no faithful Array-method lowering.</summary>
         public static ForeignFeatureException LinqRejection(string method) =>
             new ForeignFeatureException(

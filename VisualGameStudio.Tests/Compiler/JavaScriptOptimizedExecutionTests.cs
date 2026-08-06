@@ -1,7 +1,5 @@
 using System.Diagnostics;
 using System.IO;
-using BasicLang.Compiler.CodeGen.JavaScript;
-using BasicLang.Compiler.IR.Optimization;
 using NUnit.Framework;
 
 namespace VisualGameStudio.Tests.Compiler;
@@ -28,17 +26,14 @@ namespace VisualGameStudio.Tests.Compiler;
 [NonParallelizable]
 public class JavaScriptOptimizedExecutionTests
 {
-    /// <summary>Compile with the standard passes applied, exactly as every shipping route does.</summary>
-    private static string CompileOptimized(string source)
-    {
-        var module = JsTestSupport.BuildModule(source, sourceFilePath: "prog.bas");
-
-        var pipeline = new OptimizationPipeline();
-        pipeline.AddStandardPasses();
-        pipeline.Run(module);
-
-        return new JavaScriptCodeGenerator().Generate(module);
-    }
+    /// <summary>
+    /// Compile with the standard passes applied, exactly as every shipping route does.
+    ///
+    /// <para>Delegates to <see cref="JsTestSupport.CompileOptimized"/> — ONE definition of "the IR
+    /// that ships", shared with the codegen-only optimized fixtures that need no Node. A second
+    /// copy here would let the two drift about which passes "optimized" means.</para>
+    /// </summary>
+    private static string CompileOptimized(string source) => JsTestSupport.CompileOptimized(source);
 
     private static string RunOptimized(string source) => RunNode(CompileOptimized(source));
 
