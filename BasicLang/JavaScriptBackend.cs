@@ -613,9 +613,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
                 // A Char or a 64-bit integer can reach the output as a BARE LITERAL with no
                 // declared position anywhere, so JsCapabilityChecker's declaration walk is
-                // structurally blind to it — IRConstant is never an entry in
-                // block.Instructions, only ever an operand. This is the only guard on that
-                // channel, and it is not theoretical: before it existed,
+                // structurally blind to it — on IRBuilder output a constant is only ever an
+                // operand. (⚠ On OPTIMIZED IR that is no longer true: ConstantFoldingPass puts
+                // IRConstant nodes into block.Instructions, which is why Visit(IRConstant) now
+                // binds instead of throwing. The guard still holds either way because it lives
+                // in the RENDERER, which both paths go through.) This is the only guard on
+                // that channel, and it is not theoretical: before it existed,
                 // Console.WriteLine("a"c) emitted `console.log(a);` — a bare undeclared
                 // identifier, a ReferenceError in the browser from a green build.
                 case char: throw JsCapabilityChecker.BannedConstantRejection("Char", v);
@@ -1451,10 +1454,27 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         public void Visit(BasicBlock block) => EmitInstructions(block);
 
         /// <summary>
-        /// A bare constant is never a statement — constants reach output through
-        /// <see cref="Expr"/>. Reaching here means an enclosing node forgot to render it.
+        /// A constant reached as an INSTRUCTION — which happens only on optimized IR.
+        ///
+        /// <para><b>This threw until Phase 5, and it was right to.</b> On IRBuilder output a
+        /// constant is operand-only and never an entry in <c>block.Instructions</c>, so
+        /// arriving here meant an enclosing node had forgotten to render it. Then
+        /// ConstantFoldingPass turned <c>2 + 3 * 4</c> into an <c>IRConstant</c> and PUT IT IN
+        /// the instruction list, and every shipping route runs that pass unconditionally.</para>
+        ///
+        /// <para><b>Why binding rather than a no-op,</b> given this file's rule against
+        /// silencing a Visit to make a test pass. C#, C++, LLVM and MSIL all no-op this node
+        /// and have silently absorbed it for the optimizer's whole life; a no-op is defensible
+        /// here too, since a constant has no side effect and <see cref="Expr"/> renders the
+        /// literal inline for any consumer. But binding is provably correct rather than merely
+        /// harmless — the consumer gets a name that is actually defined — and it keeps the
+        /// emitted JS readable, which is half of why source maps exist. An UNUSED constant
+        /// emits nothing, because a pure value nobody reads is genuinely dead.</para>
         /// </summary>
-        public void Visit(IRConstant constant) => throw NotYet(nameof(IRConstant) + " as a statement");
+        public void Visit(IRConstant constant)
+        {
+            if (IsUsed(constant)) Bind(constant.Name, Constant(constant));
+        }
         public void Visit(IRVariable variable) => throw NotYet(nameof(IRVariable));
         // Value-producing instructions declare their result, and every later reference is by
         // name (see Expr). `const` because the IR is SSA — each temp is assigned exactly once,
