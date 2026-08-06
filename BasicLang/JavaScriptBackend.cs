@@ -74,6 +74,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 ownInlineLanguage: "javascript");
             JsCapabilityChecker.Check(module);
 
+            _module = module;
             _output.Clear();
             _indentLevel = 0;
 
@@ -110,6 +111,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             {
                 if (function.IsExternal) continue;
                 if (memberBodies.Contains(function)) continue;
+
+                // ⛔ Lambdas are NOT hoisted. They are rendered inline as arrow functions at
+                // their use site, so JavaScript's own lexical scope supplies the capture —
+                // see RenderLambda for why the hoisting alternative cannot work.
+                if (function.IsLambda) continue;
+
                 function.Accept(this);
                 Line();
             }
@@ -332,6 +339,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     return "null";
                 case IRConstant c:
                     return Constant(c);
+                // A lambda reaches its use site as a VARIABLE naming the synthesized function.
+                case IRVariable lam when IsLambdaRef(lam, out var lambdaFn):
+                    return RenderLambda(lambdaFn);
+
                 case IRVariable v:
                     return VariableRef(v);
 
@@ -1433,6 +1444,84 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <para>Parameters and locals SHADOW members, so they are checked first — rewriting a
         /// shadowed name would silently read the wrong value.</para>
         /// </summary>
+        private IRModule _module;
+
+        private bool IsLambdaRef(IRVariable v, out IRFunction fn)
+        {
+            fn = null;
+            if (v?.Name == null || !v.Name.StartsWith("__lambda_", StringComparison.Ordinal)) return false;
+            if (_module?.Functions == null) return false;
+
+            foreach (var f in _module.Functions)
+                if (f.IsLambda && f.Name == v.Name) { fn = f; return true; }
+            return false;
+        }
+
+        /// <summary>
+        /// Renders a lambda INLINE as an arrow function.
+        ///
+        /// <para><b>Why inline is the only workable route.</b> The alternative — hoist
+        /// <c>__lambda_N</c> to a top-level function and pass its captures as parameters —
+        /// depends on <c>IRFunction.CapturedVariables</c>, which is ALWAYS EMPTY: it is
+        /// populated from a list IRBuilder never fills. A hoisted body would therefore
+        /// reference every captured variable as a FREE identifier — a ReferenceError at
+        /// runtime from a build that reported success. Measured: the non-capturing lambda
+        /// tests passed while all three capture tests failed.</para>
+        ///
+        /// <para>Emitted where the value is used, so JavaScript's lexical scope does the
+        /// capture — and captures by REFERENCE, matching BasicLang.</para>
+        /// </summary>
+        private string RenderLambda(IRFunction fn)
+        {
+            // Render into the main buffer, then lift the text back out. Emission is
+            // line-oriented, so there is no separate "render to string" path to reuse.
+            var start = _output.Length;
+
+            var savedIndent = _indentLevel;
+            var savedFunction = _currentFunction;
+            var savedDeclared = _declaredNames;
+            var savedUsed = _usedOperandNames;
+            var savedEmitted = new HashSet<BasicBlock>(_emitted);
+            var savedMembers = _memberNames;
+
+            CollectUsedOperands(fn);
+            _currentFunction = fn;
+            _emitted.Clear();
+
+            _declaredNames = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var p in fn.Parameters ?? new List<IRVariable>())
+                _declaredNames.Add(p.Name);
+
+            _indentLevel = savedIndent + 1;
+            foreach (var local in fn.LocalVariables ?? new List<IRVariable>())
+            {
+                if (!_declaredNames.Add(local.Name)) continue;
+                var init = ArrayInitializer(local.Type);
+                Line(init == null
+                    ? $"let {SanitizeName(local.Name)};"
+                    : $"let {SanitizeName(local.Name)} = {init};");
+            }
+
+            EmitStructured(fn.EntryBlock ?? fn.Blocks?.FirstOrDefault());
+
+            var body = _output.ToString(start, _output.Length - start);
+            _output.Length = start;
+
+            _indentLevel = savedIndent;
+            _currentFunction = savedFunction;
+            _declaredNames = savedDeclared;
+            _usedOperandNames = savedUsed;
+            _memberNames = savedMembers;
+            _emitted.Clear();
+            foreach (var b in savedEmitted) _emitted.Add(b);
+
+            var parameters = string.Join(", ",
+                (fn.Parameters ?? new List<IRVariable>()).ConvertAll(p => SanitizeName(p.Name)));
+            var closingIndent = new string(' ', savedIndent * _options.IndentSize);
+
+            return $"({parameters}) => {{\n{body}{closingIndent}}}";
+        }
+
         private string VariableRef(IRVariable v)
         {
             var name = SanitizeName(v.Name);
