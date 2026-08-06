@@ -8307,7 +8307,65 @@ namespace BasicLang.Compiler.SemanticAnalysis
                       node.Line, node.Column);
             }
 
+            RejectImpossibleConversion(node, targetType);
+
             SetNodeType(node, targetType);
+        }
+
+        /// <summary>
+        /// Refuse a <c>CType</c>/<c>DirectCast</c> between categories that have no conversion
+        /// in either direction — a reference and a scalar.
+        ///
+        /// <para>Nothing in this visitor read the SOURCE type, so a cast between ANY two types
+        /// type-checked and the breakage surfaced downstream: <c>CS0030</c> from csc, an
+        /// invalid <c>static_cast</c> from g++, or — for a Boolean target on the native
+        /// backend — no error at all, because a handle type has an
+        /// <c>explicit operator bool()</c> that the cast binds to as an exact match, silently
+        /// yielding handle-truthiness instead of a value. That last row is why this check
+        /// belongs in the front end rather than in the C++ capability checker: no
+        /// "does the generated code compile" gate can catch a program that compiles and lies.
+        /// It is also why this is not a C++ bug — the C# backend has the same hole.</para>
+        ///
+        /// <para>DELIBERATELY NOT REFUSED HERE:</para>
+        /// <list type="bullet">
+        /// <item><description><c>Object</c> in either position — the universal box, legal in
+        /// VB both ways, and the type a .NET enum member takes on the C#-backend path, so
+        /// refusing it would regress a currently-working program.</description></item>
+        /// <item><description>Enums — enum-to-integral is a real VB conversion and is already
+        /// correct on the C# backend. It is the literal repro of chip task_0c803e75 on the
+        /// native backend, but the fix there is the enum lowering work (P2a-2 T8c-3), which
+        /// makes the operand a constant so <c>static_cast&lt;int32_t&gt;(3)</c> becomes valid
+        /// — refusing it here would have to be un-refused a task later.</description></item>
+        /// <item><description><c>String</c> — real conversions exist in both directions.</description></item>
+        /// <item><description>Unrelated class-to-class, which is also broken, but where
+        /// inheritance, interfaces and generics make the judgement materially different.</description></item>
+        /// </list>
+        /// </summary>
+        private void RejectImpossibleConversion(CastExpressionNode node, TypeInfo targetType)
+        {
+            var sourceType = GetNodeType(node.Expression);
+            if (sourceType == null || targetType == null)
+                return;
+
+            if (sourceType.Name == "Object" || targetType.Name == "Object")
+                return;
+            if (sourceType.Kind == TypeKind.Enum || targetType.Kind == TypeKind.Enum)
+                return;
+            if (sourceType.Name == "String" || targetType.Name == "String")
+                return;
+
+            static bool IsReference(TypeInfo t) =>
+                t.Kind == TypeKind.Class || t.Kind == TypeKind.Interface;
+            static bool IsScalar(TypeInfo t) =>
+                t.IsNumeric() || t.Name == "Boolean" || t.Name == "Char";
+
+            if ((IsReference(sourceType) && IsScalar(targetType)) ||
+                (IsScalar(sourceType) && IsReference(targetType)))
+            {
+                Error($"Cannot convert '{sourceType.Name}' to '{targetType.Name}': no such " +
+                      $"conversion exists",
+                      node.Line, node.Column);
+            }
         }
     }
 }
