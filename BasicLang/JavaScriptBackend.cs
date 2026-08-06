@@ -97,6 +97,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             foreach (var f in module.Functions)
                 if (!string.IsNullOrEmpty(f.Name)) _userFunctionNames.Add(f.Name);
 
+            // Classes BEFORE free functions: JS class declarations are not hoisted the way
+            // function declarations are, so a `new Person()` reached from the entry point
+            // would hit the temporal dead zone.
+            foreach (var irClass in module.Classes.Values)
+            {
+                EmitClass(irClass, module);
+                Line();
+            }
+
             foreach (var function in module.Functions)
             {
                 if (function.IsExternal) continue;
@@ -107,6 +116,186 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             EmitEntryPoint(module);
             return _output.ToString();
+        }
+
+        /// <summary>
+        /// Names that resolve to <c>this.X</c> inside the method currently being emitted:
+        /// the class's fields and properties, plus its bases'.
+        /// </summary>
+        private HashSet<string> _memberNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        private void EmitClass(IRClass irClass, IRModule module)
+        {
+            // Events have no JS form, and RaiseEvent lowers to a call to `raise_X` that
+            // nothing defines — emitting the class without the member would be silently
+            // broken, so refuse.
+            if (irClass.Events != null && irClass.Events.Count > 0)
+                throw NotYet($"Events (on class '{irClass.Name}')");
+
+            var header = $"class {SanitizeName(irClass.Name)}";
+            if (!string.IsNullOrEmpty(irClass.BaseClass))
+                header += $" extends {SanitizeName(irClass.BaseClass)}";
+
+            // Interfaces and generic parameters ERASE — JS has neither.
+            Line(header + " {");
+            _indentLevel++;
+
+            var members = MemberNames(irClass, module);
+
+            foreach (var field in irClass.Fields ?? new List<IRField>())
+            {
+                // IRField.Initializer is a constant or null — IRBuilder drops every
+                // non-constant initializer, so `Private items As New List(...)` arrives null
+                // with nothing constructing it anywhere.
+                var init = field.Initializer != null
+                    ? Expr(field.Initializer)
+                    : ArrayInitializer(field.Type) ?? TypeMapper.GetDefaultValue(field.Type);
+                Line($"{(field.IsStatic ? "static " : "")}{SanitizeName(field.Name)} = {init};");
+            }
+
+            foreach (var prop in irClass.Properties ?? new List<IRProperty>())
+                EmitProperty(prop, members);
+
+            foreach (var ctor in irClass.Constructors ?? new List<IRConstructor>())
+                EmitConstructor(irClass, ctor, members);
+
+            foreach (var method in irClass.Methods ?? new List<IRMethod>())
+                EmitMethod(irClass, method, members);
+
+            _indentLevel--;
+            Line("}");
+        }
+
+        /// <summary>
+        /// Fields and properties of a class AND of its bases — the set an unqualified
+        /// reference inside a method must resolve to <c>this.</c>.
+        /// </summary>
+        private static HashSet<string> MemberNames(IRClass irClass, IRModule module)
+        {
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            var current = irClass;
+            while (current != null && seen.Add(current.Name))
+            {
+                foreach (var f in current.Fields ?? new List<IRField>())
+                    if (f?.Name != null) names.Add(f.Name);
+                foreach (var p in current.Properties ?? new List<IRProperty>())
+                    if (p?.Name != null) names.Add(p.Name);
+
+                if (string.IsNullOrEmpty(current.BaseClass)) break;
+                module.Classes.TryGetValue(current.BaseClass, out current);
+            }
+
+            return names;
+        }
+
+        private void EmitProperty(IRProperty prop, HashSet<string> members)
+        {
+            // Both accessors null is an AUTO-PROPERTY: a plain class field, which makes the
+            // same `obj.X` spelling work for reads and writes.
+            if (prop.Getter == null && prop.Setter == null)
+            {
+                Line($"{(prop.IsStatic ? "static " : "")}{SanitizeName(prop.Name)} = {TypeMapper.GetDefaultValue(prop.Type)};");
+                return;
+            }
+
+            if (prop.Getter != null && !prop.IsWriteOnly)
+                EmitMemberBody($"get {SanitizeName(prop.Name)}()", prop.Getter, members);
+
+            // The setter's implementation already has a parameter named `value`, so the JS
+            // accessor's parameter name matches for free.
+            if (prop.Setter != null && !prop.IsReadOnly)
+                EmitMemberBody($"set {SanitizeName(prop.Name)}(value)", prop.Setter, members);
+        }
+
+        private void EmitConstructor(IRClass irClass, IRConstructor ctor, HashSet<string> members)
+        {
+            var impl = ctor.Implementation;
+            if (impl == null) return;
+
+            // ⛔ ctor.Parameters is ALWAYS EMPTY — reading it yields a zero-arg constructor
+            // that ignores every argument. Parameters live on the implementation.
+            var parameters = string.Join(", ", impl.Parameters.ConvertAll(p => SanitizeName(p.Name)));
+
+            var prologue = new List<string>();
+            if (!string.IsNullOrEmpty(irClass.BaseClass))
+            {
+                // JS forbids touching `this` before super(), and a computed base argument
+                // would have emitted instructions that must run first — an ordering the IR
+                // does not mark. Only constants and plain parameters are safe here.
+                foreach (var arg in ctor.BaseConstructorArgs ?? new List<IRValue>())
+                {
+                    if (!(arg is IRConstant || arg is IRVariable))
+                        throw NotYet("a computed base-constructor argument");
+                }
+                var baseArgs = string.Join(", ",
+                    (ctor.BaseConstructorArgs ?? new List<IRValue>()).ConvertAll(Expr));
+                prologue.Add($"super({baseArgs});");
+            }
+
+            EmitMemberBody($"constructor({parameters})", impl, members, prologue);
+        }
+
+        private void EmitMethod(IRClass irClass, IRMethod method, HashSet<string> members)
+        {
+            var impl = method.Implementation;
+
+            // An abstract method has no body. Emitting an EMPTY one would silently override
+            // the base's real implementation, so omit the member entirely.
+            if (impl == null || method.IsAbstract) return;
+
+            // ⛔ Implementation is bound with Functions.LastOrDefault(), so a method whose
+            // body declares a lambda gets the LAMBDA's function instead — a pre-existing
+            // compiler defect that would emit a scrambled class. Refuse rather than emit it.
+            if (impl.IsLambda)
+                throw NotYet($"a lambda inside method '{irClass.Name}.{method.Name}' (IRMethod.Implementation binds to the lambda)");
+
+            var parameters = string.Join(", ", impl.Parameters.ConvertAll(p => SanitizeName(p.Name)));
+            EmitMemberBody($"{(method.IsStatic ? "static " : "")}{SanitizeName(method.Name)}({parameters})",
+                impl, members);
+        }
+
+        /// <summary>Emits a class member's body, with member names resolving to this.X.</summary>
+        private void EmitMemberBody(string signature, IRFunction impl, HashSet<string> members,
+            List<string> prologue = null)
+        {
+            var savedMembers = _memberNames;
+            _memberNames = members;
+
+            CollectUsedOperands(impl);
+            _currentFunction = impl;
+            _emitted.Clear();
+            _loopEnds.Clear();
+            _pendingMerges.Clear();
+            _forEachEnds.Clear();
+            _armDepth = 0;
+
+            Line(signature + " {");
+            _indentLevel++;
+
+            foreach (var line in prologue ?? new List<string>()) Line(line);
+
+            _declaredNames = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var p in impl.Parameters ?? new List<IRVariable>())
+                _declaredNames.Add(p.Name);
+
+            foreach (var local in impl.LocalVariables ?? new List<IRVariable>())
+            {
+                if (!_declaredNames.Add(local.Name)) continue;
+                var init = ArrayInitializer(local.Type);
+                Line(init == null
+                    ? $"let {SanitizeName(local.Name)};"
+                    : $"let {SanitizeName(local.Name)} = {init};");
+            }
+
+            EmitStructured(impl.EntryBlock ?? impl.Blocks?.FirstOrDefault());
+
+            _indentLevel--;
+            Line("}");
+
+            _currentFunction = null;
+            _memberNames = savedMembers;
         }
 
         /// <summary>
@@ -144,7 +333,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case IRConstant c:
                     return Constant(c);
                 case IRVariable v:
-                    return SanitizeName(v.Name);
+                    return VariableRef(v);
 
                 // These are IRValues that ALSO appear as entries in block.Instructions, so
                 // their visitor has already emitted `const <name> = ...`. Referencing them by
@@ -177,6 +366,23 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // case-insensitively, as the C++ backend does.
                 case IRFieldAccess fa when IsLengthAccess(fa):
                     return $"{Expr(fa.Object)}.length";
+
+                // Fields and properties share one node — there is no IRPropertyAccess — which
+                // is exactly right for JS, where a get/set accessor makes both spellings work.
+                case IRFieldAccess fa:
+                    return $"{Expr(fa.Object)}.{SanitizeName(fa.FieldName)}";
+
+                case IRNewObject n:
+                    return $"new {SanitizeName(n.ClassName)}({string.Join(", ", n.Arguments.ConvertAll(Expr))})";
+
+                case IRInstanceMethodCall mc:
+                    return InstanceCall(mc);
+
+                // The ONLY non-virtual dispatch in the language. Everything else is
+                // prototype dispatch, which is virtual by default and already matches
+                // VB's Overridable/Overrides.
+                case IRBaseMethodCall bc:
+                    return $"super.{SanitizeName(bc.MethodName)}({string.Join(", ", bc.Arguments.ConvertAll(Expr))})";
 
                 default:
                     throw NotYet(value.GetType().Name + " (as an expression)");
@@ -568,9 +774,17 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         private void Bind(string name, string expression)
         {
             var js = SanitizeName(name);
-            Line(_declaredNames.Contains(name)
-                ? $"{js} = {expression};"
-                : $"const {js} = {expression};");
+
+            // Already in scope — assign.
+            if (_declaredNames.Contains(name)) { Line($"{js} = {expression};"); return; }
+
+            // A CLASS MEMBER. `Count = Count + 1` produces an IRBinaryOp named `Count`
+            // (IRBuilder renames a result to the variable it initialises), so a `const` here
+            // would declare a fresh local and the member would never change — the method
+            // would silently do nothing.
+            if (_memberNames.Contains(name)) { Line($"this.{js} = {expression};"); return; }
+
+            Line($"const {js} = {expression};");
         }
 
         /// <summary>
@@ -1041,8 +1255,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         public void Visit(IRBinaryOp binaryOp) => Bind(binaryOp.Name, BinaryExpr(binaryOp));
 
         public void Visit(IRUnaryOp unaryOp) => Bind(unaryOp.Name, UnaryExpr(unaryOp));
+        // VariableRef, not SanitizeName: an assignment whose target is an unqualified class
+        // member must become `this.X = …`, or it writes a fresh global instead.
         public void Visit(IRAssignment assignment) =>
-            Line($"{SanitizeName(assignment.Target.Name)} = {Expr(assignment.Value)};");
+            Line($"{VariableRef(assignment.Target)} = {Expr(assignment.Value)};");
         // A load produces no statement — Expr renders it at the use site.
         public void Visit(IRLoad load) { }
 
@@ -1123,20 +1339,73 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         public void Visit(IRArrayStore arrayStore) => throw NotYet(nameof(IRArrayStore));
         public void Visit(IRAwait awaitInst) => throw NotYet(nameof(IRAwait));
         public void Visit(IRYield yieldInst) => throw NotYet(nameof(IRYield));
-        public void Visit(IRNewObject newObj) => throw NotYet(nameof(IRNewObject));
-        public void Visit(IRInstanceMethodCall methodCall) => throw NotYet(nameof(IRInstanceMethodCall));
-        public void Visit(IRBaseMethodCall baseCall) => throw NotYet(nameof(IRBaseMethodCall));
+        // Each of these is emitted into block.Instructions AND handed back as the expression
+        // result, so the statement and expression arms must agree: bind when something reads
+        // the value, otherwise emit it as a bare statement so side effects still happen.
+        public void Visit(IRNewObject newObj) => EmitValueOrStatement(newObj, Expr(newObj));
+        public void Visit(IRInstanceMethodCall methodCall) => EmitValueOrStatement(methodCall, InstanceCall(methodCall));
+        public void Visit(IRBaseMethodCall baseCall) => EmitValueOrStatement(baseCall, Expr(baseCall));
+
+        private void EmitValueOrStatement(IRValue value, string expression)
+        {
+            if (IsUsed(value)) Bind(value.Name, expression);
+            else Line($"{expression};");
+        }
+        /// <summary>
+        /// Renders a variable reference, resolving an unqualified CLASS MEMBER to
+        /// <c>this.X</c>.
+        ///
+        /// <para><b>Why this is mandatory.</b> Inside a method, <c>Count = Count + 1</c> does
+        /// not produce an IRFieldAccess — IRBuilder's identifier resolution has no arm for
+        /// class fields, so it yields a bare IRVariable that is neither a parameter nor a
+        /// local. C# and C++ survive on implicit <c>this.</c> resolution; JavaScript does not,
+        /// and an ES module is always strict, so the bare name is a ReferenceError at runtime
+        /// from a build that reported success.</para>
+        ///
+        /// <para>Parameters and locals SHADOW members, so they are checked first — rewriting a
+        /// shadowed name would silently read the wrong value.</para>
+        /// </summary>
+        private string VariableRef(IRVariable v)
+        {
+            var name = SanitizeName(v.Name);
+
+            if (_memberNames.Count == 0) return name;
+            if (v.IsGlobal || v.IsParameter) return name;
+            if (_declaredNames.Contains(v.Name)) return name;   // parameter or local shadows
+            if (!_memberNames.Contains(v.Name)) return name;
+
+            return $"this.{name}";
+        }
+
+        /// <summary>
+        /// ByRef is re-checked here because IRInstanceMethodCall carries its OWN
+        /// ByRefArguments list — a separate channel from IRCall's, which the declaration walk
+        /// cannot see for a resolved .NET target.
+        /// </summary>
+        private string InstanceCall(IRInstanceMethodCall mc)
+        {
+            if (mc.ByRefArguments != null && mc.ByRefArguments.Contains(true))
+                throw JsCapabilityChecker.ByRefArgumentRejection(mc.MethodName);
+
+            var args = string.Join(", ", mc.Arguments.ConvertAll(Expr));
+            return $"{Expr(mc.Object)}.{SanitizeName(mc.MethodName)}({args})";
+        }
+
         private static bool IsLengthAccess(IRFieldAccess fa) =>
             string.Equals(fa?.FieldName, "Length", StringComparison.OrdinalIgnoreCase);
 
         public void Visit(IRFieldAccess fieldAccess)
         {
-            // `.Length` is pure and renders inline via Expr. General field access belongs to
-            // class support (plan task 17) and still refuses rather than guessing.
+            // `.Length` is pure and renders inline via Expr — no statement needed.
             if (IsLengthAccess(fieldAccess)) return;
-            throw NotYet(nameof(IRFieldAccess));
+
+            // A field or property READ is pure too, so it only needs a binding when something
+            // consumes it; an unread read emits nothing rather than a stray statement.
+            if (IsUsed(fieldAccess)) Bind(fieldAccess.Name, Expr(fieldAccess));
         }
-        public void Visit(IRFieldStore fieldStore) => throw NotYet(nameof(IRFieldStore));
+        // Statement-only: it has no Name and can never be an operand.
+        public void Visit(IRFieldStore fieldStore) =>
+            Line($"{Expr(fieldStore.Object)}.{SanitizeName(fieldStore.FieldName)} = {Expr(fieldStore.Value)};");
         public void Visit(IRTupleElement tupleElement) => throw NotYet(nameof(IRTupleElement));
         public void Visit(IRTryCatch tryCatch) => throw NotYet(nameof(IRTryCatch));
         public void Visit(IRInlineCode inlineCode) => throw NotYet(nameof(IRInlineCode));
