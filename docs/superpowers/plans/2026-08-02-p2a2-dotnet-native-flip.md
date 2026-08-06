@@ -1092,6 +1092,64 @@ test AND a receiver-set test proving it now answers "value type".
 > a Guid result is the candidate but its overload-probe path is UNVERIFIED).
 > Full 13-edit map + 9 new tests with their mutations: recon `wf_90fc13e8-724`.
 
+> ### ⛔ 8c-3 (ENUM) — MEASURED 2026-08-06 through the REAL CLI. Three claims in this file are FALSE.
+>
+> A 9-agent recon re-ran every enum claim as an actual compile. Do not trust the prose below it.
+>
+> | # | Probe | Result |
+> |---|---|---|
+> | **M1** | `System.IO.File.Open(…)` fully qualified | `BL6017 … 'System.Object' has no member 'File'` — **the qualified spelling is broken for EVERY .NET member**, so the bare-identifier detector misses nothing |
+> | **M2** | `Dim n As Integer = CType(FileMode.Open, Integer)` | **compiles**, emitting `t0 = BasicLang::net::bl_net_System_IO_FileMode_Open__…();` |
+> | **M3** | that same C++ compiled standalone | `error: invalid static_cast from type 'NetRef' to 'int32_t'` — **a green BasicLang build emitting uncompilable C++** (chipped) |
+> | **M4** | `fi.Attributes = FileAttributes.ReadOnly` | **`Compilation successful!`** — an enum parameter ALREADY crosses end-to-end on the handle wire, ungated |
+> | **M5** | `fi.Attributes = 1` | `Cannot assign value of type 'Integer' to 'FileAttributes'` |
+> | **M6** | `Dim s = File.OpenRead(…)` | refused — `FileStream` is not ManagedOwned |
+> | **M7/M8** | `File.SetAttributes(p, FileAttributes.ReadOnly)`, `New Regex(s, RegexOptions…)` | BL6019 on cpp, clean on csharp |
+>
+> **⛔ CORRECTION 1 — "`FileMode.Open` types as `Object` and lowers to NOTHING" is FALSE at this HEAD.**
+> It lowers to a REAL shim export returning a GCHandle (M2). That sentence (from an earlier
+> session, repeated in this file and in auto-memory) drove the whole "front-end constant
+> lowering" framing. The framing survives, but for a different reason: the fold must also
+> SUPPRESS an export that exists today.
+>
+> **⛔ CORRECTION 2 — enums are NOT uniformly refused.** M4 ships today through the synthesized
+> setter, whose value parameter comes from `NetAccessorSynthesis`, not from Roslyn. Any design
+> that retypes enum member access to the underlying integral turns M4 into M5 — **a regression on
+> a currently-clean program.** `NetMemberResultTypeInfo` is ALSO the result-direction function,
+> so that edit would additionally write a `uint64_t` handle into an `int32_t` destination: a
+> wrong value, not a compile error. **Rejected on measurement, not taste.**
+>
+> **⛔ CORRECTION 3 — `File.Open(path, FileMode.Open)`, this plan's canonical shape, will NOT work
+> after this change either** (M6, `FileStream` is not ManagedOwned). The real end-to-end targets
+> are `File.SetAttributes` (void result) and `New Regex(s, RegexOptions.IgnoreCase)`.
+>
+> **CHOSEN SHAPE — "fold at the SLOT, not at the expression."** The analyzer, inside the
+> already-native-gated `ReportUnlowerableWinnerParameters`, folds an enum-LITERAL argument to an
+> `IRConstant` of the underlying primitive **only when the winner's parameter at that index is
+> enum-typed**, recording it in a 4th `NetAstAnnotations` side table. `IRBuilder.Visit(MemberAccess)`
+> mints the constant and **returns before emitting**, so no `IRFieldAccess` exists, so the
+> collector mints no export — which is what removes M2's export. Three consequences are
+> load-bearing: the analyzer's TYPING of the member access is unchanged (forces M4 to keep
+> working); the underlying type rides ONLY on `NetParameterDescriptor` and is deliberately NOT
+> propagated by `NetAccessorSynthesis` (so the setter's value parameter keeps the handle wire —
+> positions with NO analyzer gate); and the C#-path preservation comes free because the recording
+> site is already `if (!_netNativeBackend) return false;`.
+>
+> **Enum VARIABLES are OUT OF SCOPE** and every omitted shape keeps an existing measured refusal
+> (`fi.Attributes` as an argument · `Dim m As FileMode` · flag `Or` · ByRef · arrays · results ·
+> delegate signatures). The `:3121` arm is **NARROWED, never deleted** — deleting it is the exact
+> miscompile (`NetRef` into an `int32_t` slot, and M3 proves `NetRef` has no integral conversion).
+>
+> ⚠ **`TryMapArgumentType` must KEEP spelling the enum** — it feeds `NetOverloadProbe`, which
+> synthesizes C# and requires it to compile; `File.Open(a0, System.Int32)` is CS1503 and the call
+> would stop resolving. Wiring `ResolveEnumUnderlyingType` in there (an obvious-looking one-liner)
+> BREAKS the feature.
+>
+> ⭐ **T15 is the only test that proves the VALUE crossed** rather than the shape compiling:
+> `New Regex("A", RegexOptions.IgnoreCase)` prints True, `RegexOptions.None` prints False.
+> Everything else is satisfied by a wire carrying a wrong number.
+> Full 15-edit map + 15 tests with mutations: recon `wf_d88ef1ba-49e`.
+
 Detailed designs are recorded in the plan above (commit `c29b4ca`): three distinct
 complications (arity>1 scalars via out-references returning `void`; direction-dependent C type
 at arity 1 for Guid — the same shape String already has; one-way StringBuilder), the managed-side
