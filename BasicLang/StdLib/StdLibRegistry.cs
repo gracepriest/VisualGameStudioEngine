@@ -34,6 +34,7 @@ namespace BasicLang.Compiler.StdLib
             Register(TargetPlatform.Cpp, new CppStdLibProvider());
             Register(TargetPlatform.LLVM, new LLVMStdLibProvider());
             Register(TargetPlatform.MSIL, new MSILStdLibProvider());
+            Register(TargetPlatform.JavaScript, new JavaScriptStdLibProvider());
 
             _initialized = true;
         }

@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text;
 using BasicLang.Compiler.IR;
 using BasicLang.Compiler.SemanticAnalysis;
+using BasicLang.Compiler.StdLib;
 
 namespace BasicLang.Compiler.CodeGen.JavaScript
 {
@@ -691,7 +692,36 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             return simple ? expression : $"({expression})";
         }
 
-        private static string CallTarget(string functionName)
+        /// <summary>
+        /// Renders a standard-library call through <see cref="StdLibRegistry"/>, or returns
+        /// false when the name is not one (or is shadowed by a user function).
+        ///
+        /// <para>Routed through the registry rather than a private table so the JavaScript
+        /// provider is a peer of the C#/C++ ones and the roster stays in one place —
+        /// CLAUDE.md's "change it once, not per-consumer".</para>
+        ///
+        /// <para>The shadowing check comes FIRST, matching TryStringBuiltin: a user's own
+        /// <c>Function Abs(...)</c> must win, or declaring it silently rebinds every call to
+        /// <c>Math.abs</c> and their code never runs.</para>
+        /// </summary>
+        private static NotSupportedException NoLowering(string functionName) =>
+            new NotSupportedException(
+                $"JavaScript backend: no lowering for '{functionName}'. It is neither declared " +
+                "by this program nor supported by JavaScriptStdLib. Networking, file, process, " +
+                "environment and crypto functions are deliberately unavailable on a web target.");
+
+        private bool TryStdLib(string name, List<string> args, out string result)
+        {
+            result = null;
+            if (string.IsNullOrEmpty(name) || _userFunctionNames.Contains(name)) return false;
+
+            if (!StdLibRegistry.CanHandle(TargetPlatform.JavaScript, name)) return false;
+
+            result = StdLibRegistry.EmitCall(TargetPlatform.JavaScript, name, args.ToArray());
+            return result != null;
+        }
+
+        private string CallTarget(string functionName)
         {
             if (string.IsNullOrEmpty(functionName)) throw NotYet("a call with no target name");
 
@@ -716,17 +746,31 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // CLng deliberately absent: it converts TO Long, which BL7003 bans.
             }
 
-            if (functionName.IndexOf('.') < 0) return SanitizeName(functionName);
+            if (functionName.IndexOf('.') < 0)
+            {
+                // ⛔ THE HOLE THIS CLOSES: a bare stdlib name used to pass straight through as
+                // if it were a user function, so `HttpGet(url)` emitted a call to `HttpGet` —
+                // which exists nowhere — and a clean-looking build died in Node with
+                // "HttpGet is not defined".
+                //
+                // The question asked is deliberately NARROW: is this a name some backend's
+                // stdlib knows, that THIS backend refuses? Asking the broader "did the program
+                // declare it" instead is wrong — a lambda in a local is called through a bare
+                // name that is not a module function, and that guard rejected seven passing
+                // lambda tests. A name nobody claims still passes through, exactly as before.
+                if (!_userFunctionNames.Contains(functionName) &&
+                    StdLibRegistry.IsStdLibFunction(functionName))
+                    throw NoLowering(functionName);
+
+                return SanitizeName(functionName);
+            }
 
             switch (functionName)
             {
                 case "Console.WriteLine": return "console.log";
                 case "Console.Write":     return "process.stdout.write";
                 default:
-                    throw new NotSupportedException(
-                        $"JavaScript backend: no lowering for '{functionName}'. " +
-                        "Add it to JavaScriptStdLib (plan task 24), or reject it in " +
-                        "JsCapabilityChecker with a BL70xx code if it cannot lower cleanly.");
+                    throw NoLowering(functionName);
             }
         }
 
@@ -1405,6 +1449,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // are rendered whole here.
             if (TryStringBuiltin(call.FunctionName, rendered, out var builtin))
                 return builtin;
+
+            if (TryStdLib(call.FunctionName, rendered, out var stdlib))
+                return stdlib;
 
             return $"{CallTarget(call.FunctionName)}({string.Join(", ", rendered)})";
         }
