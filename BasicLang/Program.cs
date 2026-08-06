@@ -7,6 +7,7 @@ using BasicLang.Compiler.AST;
 using BasicLang.Compiler.CodeGen;
 using BasicLang.Compiler.CodeGen.CSharp;
 using BasicLang.Compiler.CodeGen.CPlusPlus;
+using BasicLang.Compiler.CodeGen.JavaScript;
 using BasicLang.Compiler.CodeGen.LLVM;
 using BasicLang.Compiler.CodeGen.MSIL;
 using BasicLang.Compiler.IR;
@@ -564,30 +565,41 @@ namespace BasicLang.Compiler.Driver
                 var outputFileName = project.AssemblyName ?? project.ProjectName ?? "Program";
                 var backend = project.Backend?.ToLowerInvariant() ?? "csharp";
 
+                // ⛔ ONE dispatch, shared with the single-file route above. This used to be a
+                // PRIVATE copy of the switch whose `default:` silently produced C#, so
+                // `build proj.blproj` on a <TargetBackend>JavaScript</TargetBackend> project
+                // wrote a .cs file, ran `dotnet build` on it, printed "Build succeeded" and
+                // exited 0. GenerateCode was hardened against exactly that for --target three
+                // weeks earlier (see its comment); the project route never got the same
+                // treatment, which is what a second copy of a decision always costs.
                 string generatedCode;
                 string extension;
-
-                switch (backend)
+                try
                 {
-                    case "llvm":
-                        var llvmGen = new CodeGen.LLVM.LLVMCodeGenerator();
-                        generatedCode = llvmGen.Generate(combinedIR);
-                        extension = ".ll";
-                        break;
-                    case "msil":
-                        var msilGen = new CodeGen.MSIL.MSILCodeGenerator();
-                        generatedCode = msilGen.Generate(combinedIR);
-                        extension = ".il";
-                        break;
-                    default: // csharp
-                        var csGen = new CodeGen.CSharp.CSharpCodeGenerator();
-                        generatedCode = csGen.Generate(combinedIR);
-                        extension = ".cs";
-                        break;
+                    generatedCode = GenerateCode(combinedIR, backend);
+                    extension = GetOutputExtension(backend);
+                }
+                catch (Exception ex) when (ex is NotSupportedException || ex is ForeignFeatureException)
+                {
+                    // An unknown backend, or one that refuses a construct (BL70xx on the JS
+                    // capability line). Both are the author's problem and both must read as a
+                    // clean build failure rather than a stack trace.
+                    Console.Error.WriteLine($"  {ex.Message}");
+                    Console.Error.WriteLine("  Build failed.");
+                    return 1;
                 }
 
                 var outputPath = Path.Combine(outputDir, outputFileName + extension);
                 File.WriteAllText(outputPath, generatedCode);
+
+                // JavaScript has NO build step — the emitted files ARE the deliverable, so the
+                // site is completed here and the csproj/`dotnet build` path below is skipped.
+                if (IsJavaScriptTarget(backend))
+                {
+                    JavaScriptEmitter.Emit(outputDir, outputFileName + extension, generatedCode,
+                        title: project.ProjectName);
+                    Console.WriteLine($"  Site written to: {outputDir}");
+                }
 
                 // For C# backend, compile to .dll
                 if (backend == "csharp" || backend == "cs")
@@ -1128,6 +1140,21 @@ namespace BasicLang.Compiler.Driver
                         actualOutputPath = defaultOutputPath;
                     }
 
+                    // A web target needs a page to load the script from. Emitted BESIDE the
+                    // .js wherever that landed — including next to the source file, which is
+                    // exactly why JavaScriptEmitter refuses to overwrite an existing
+                    // index.html: that is where a hand-authored one lives.
+                    if (IsJavaScriptTarget(targetBackend))
+                    {
+                        var siteDir = Path.GetDirectoryName(Path.GetFullPath(actualOutputPath));
+                        var harness = Path.Combine(siteDir ?? ".", JavaScriptEmitter.HarnessName);
+                        if (!File.Exists(harness))
+                        {
+                            JavaScriptEmitter.Emit(siteDir, Path.GetFileName(actualOutputPath), outputCode);
+                            Console.WriteLine($"  Harness written to: {harness}");
+                        }
+                    }
+
                     // Show generated code if requested
                     if (showGenerated)
                     {
@@ -1248,6 +1275,14 @@ namespace BasicLang.Compiler.Driver
 
             return generator.Generate(ir);
         }
+
+        /// <summary>
+        /// True for every spelling of the JavaScript target. One predicate rather than a
+        /// repeated <c>== "javascript" || == "js"</c> — the repo already carries three
+        /// independent backend→extension maps, and this is how that starts.
+        /// </summary>
+        internal static bool IsJavaScriptTarget(string backend) =>
+            backend?.ToLowerInvariant() is "javascript" or "js";
 
         /// <summary>
         /// Get output file extension for backend
