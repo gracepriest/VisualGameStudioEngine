@@ -383,6 +383,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case IRInstanceMethodCall mc:
                     return IsUsed(mc) ? SanitizeName(mc.Name) : InstanceCall(mc);
 
+                case IRIndexerAccess ix:
+                    return IsUsed(ix) ? SanitizeName(ix.Name) : IndexerAccess(ix);
+
                 // The ONLY non-virtual dispatch in the language. Everything else is
                 // prototype dispatch, which is virtual by default and already matches
                 // VB's Overridable/Overrides.
@@ -1351,8 +1354,50 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         public void Visit(IRInstanceMethodCall methodCall) => EmitValueOrStatement(methodCall, InstanceCall(methodCall));
         public void Visit(IRBaseMethodCall baseCall) => EmitValueOrStatement(baseCall, BaseCall(baseCall));
 
-        private string NewObject(IRNewObject n) =>
-            $"new {SanitizeName(n.ClassName)}({string.Join(", ", n.Arguments.ConvertAll(Expr))})";
+        private string NewObject(IRNewObject n)
+        {
+            // Collections lower to NATIVE JS types. `new List()` would be a ReferenceError —
+            // there is no List in JavaScript. Array and Map are reference types, which is what
+            // gives these the .NET reference semantics the spec requires, for free.
+            switch (CollectionKindOf(n.ClassName))
+            {
+                case CollectionKind.List: return "[]";
+                case CollectionKind.Dictionary: return "new Map()";
+                case CollectionKind.Set: return "new Set()";
+            }
+
+            return $"new {SanitizeName(n.ClassName)}({string.Join(", ", n.Arguments.ConvertAll(Expr))})";
+        }
+
+        private enum CollectionKind { None, List, Dictionary, Set }
+
+        /// <summary>
+        /// Which native JS type a BasicLang collection maps to, by NAME. A generic type
+        /// arrives as its base name (`List`), the arguments having erased.
+        /// </summary>
+        private static CollectionKind CollectionKindOf(string typeName)
+        {
+            if (string.IsNullOrEmpty(typeName)) return CollectionKind.None;
+
+            var bare = typeName;
+            var tick = bare.IndexOf('`');
+            if (tick > 0) bare = bare.Substring(0, tick);
+            var paren = bare.IndexOf('(');
+            if (paren > 0) bare = bare.Substring(0, paren);
+
+            if (bare.Equals("List", StringComparison.OrdinalIgnoreCase) ||
+                bare.Equals("IEnumerable", StringComparison.OrdinalIgnoreCase))
+                return CollectionKind.List;
+            if (bare.Equals("Dictionary", StringComparison.OrdinalIgnoreCase))
+                return CollectionKind.Dictionary;
+            if (bare.Equals("HashSet", StringComparison.OrdinalIgnoreCase))
+                return CollectionKind.Set;
+
+            return CollectionKind.None;
+        }
+
+        private static CollectionKind CollectionKindOf(TypeInfo type) =>
+            CollectionKindOf(type?.Name);
 
         private string BaseCall(IRBaseMethodCall b) =>
             $"super.{SanitizeName(b.MethodName)}({string.Join(", ", b.Arguments.ConvertAll(Expr))})";
@@ -1398,8 +1443,65 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (mc.ByRefArguments != null && mc.ByRefArguments.Contains(true))
                 throw JsCapabilityChecker.ByRefArgumentRejection(mc.MethodName);
 
-            var args = string.Join(", ", mc.Arguments.ConvertAll(Expr));
-            return $"{Expr(mc.Object)}.{SanitizeName(mc.MethodName)}({args})";
+            var args = mc.Arguments.ConvertAll(Expr);
+            var receiver = Expr(mc.Object);
+
+            if (TryCollectionMethod(CollectionKindOf(mc.Object?.Type), mc.MethodName, receiver, args,
+                    out var collection))
+                return collection;
+
+            return $"{receiver}.{SanitizeName(mc.MethodName)}({string.Join(", ", args)})";
+        }
+
+        /// <summary>
+        /// Renames a collection method onto its native JS equivalent. Emitting the BasicLang
+        /// name verbatim would call a member that does not exist — an Array has
+        /// <c>push</c>, not <c>Add</c>.
+        /// </summary>
+        private static bool TryCollectionMethod(CollectionKind kind, string method, string receiver,
+            List<string> args, out string result)
+        {
+            result = null;
+            if (kind == CollectionKind.None || string.IsNullOrEmpty(method)) return false;
+
+            var name = method.ToLowerInvariant();
+
+            if (kind == CollectionKind.List)
+            {
+                switch (name)
+                {
+                    case "add" when args.Count == 1: result = $"{receiver}.push({args[0]})"; return true;
+                    case "contains" when args.Count == 1: result = $"{receiver}.includes({args[0]})"; return true;
+                    case "indexof" when args.Count == 1: result = $"{receiver}.indexOf({args[0]})"; return true;
+                    case "removeat" when args.Count == 1: result = $"{receiver}.splice({args[0]}, 1)"; return true;
+                    case "insert" when args.Count == 2: result = $"{receiver}.splice({args[0]}, 0, {args[1]})"; return true;
+                    // Array has no Clear; length = 0 empties it IN PLACE, which preserves the
+                    // reference every alias holds. Assigning a fresh [] would not.
+                    case "clear" when args.Count == 0: result = $"({receiver}.length = 0)"; return true;
+                }
+                return false;
+            }
+
+            if (kind == CollectionKind.Dictionary)
+            {
+                switch (name)
+                {
+                    case "add" when args.Count == 2: result = $"{receiver}.set({args[0]}, {args[1]})"; return true;
+                    case "containskey" when args.Count == 1: result = $"{receiver}.has({args[0]})"; return true;
+                    case "remove" when args.Count == 1: result = $"{receiver}.delete({args[0]})"; return true;
+                    case "clear" when args.Count == 0: result = $"{receiver}.clear()"; return true;
+                }
+                return false;
+            }
+
+            switch (name)
+            {
+                case "add" when args.Count == 1: result = $"{receiver}.add({args[0]})"; return true;
+                case "contains" when args.Count == 1: result = $"{receiver}.has({args[0]})"; return true;
+                case "remove" when args.Count == 1: result = $"{receiver}.delete({args[0]})"; return true;
+                case "clear" when args.Count == 0: result = $"{receiver}.clear()"; return true;
+            }
+            return false;
         }
 
         private static bool IsLengthAccess(IRFieldAccess fa) =>
@@ -1416,8 +1518,25 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (IsUsed(fieldAccess)) Bind(fieldAccess.Name, FieldAccess(fieldAccess));
         }
 
-        private string FieldAccess(IRFieldAccess fa) =>
-            $"{Expr(fa.Object)}.{SanitizeName(fa.FieldName)}";
+        private string FieldAccess(IRFieldAccess fa)
+        {
+            var receiver = Expr(fa.Object);
+
+            // `.Count` is spelled differently per native type, and getting it wrong is silent:
+            // a Map's `.length` is `undefined`, which then propagates as NaN through
+            // arithmetic rather than raising.
+            if (string.Equals(fa.FieldName, "Count", StringComparison.OrdinalIgnoreCase))
+            {
+                switch (CollectionKindOf(fa.Object?.Type))
+                {
+                    case CollectionKind.List: return $"{receiver}.length";
+                    case CollectionKind.Dictionary:
+                    case CollectionKind.Set: return $"{receiver}.size";
+                }
+            }
+
+            return $"{receiver}.{SanitizeName(fa.FieldName)}";
+        }
         // Statement-only: it has no Name and can never be an operand.
         public void Visit(IRFieldStore fieldStore) =>
             Line($"{Expr(fieldStore.Object)}.{SanitizeName(fieldStore.FieldName)} = {Expr(fieldStore.Value)};");
@@ -1475,8 +1594,43 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             EmitStructured(forEach.EndBlock);
         }
-        public void Visit(IRIndexerAccess indexer) => throw NotYet(nameof(IRIndexerAccess));
+        // A List index is a plain subscript; a Dictionary lookup is Map.get — `d["k"]` on a
+        // Map is NOT an error, it silently returns undefined, which is exactly the kind of
+        // wrong-but-running output this backend refuses.
+        private string IndexerAccess(IRIndexerAccess ix)
+        {
+            var receiver = Expr(ix.Collection);
+            var indices = (ix.Indices ?? new List<IRValue>()).ConvertAll(Expr);
+
+            if (CollectionKindOf(ix.Collection?.Type) == CollectionKind.Dictionary)
+                return $"{receiver}.get({string.Join(", ", indices)})";
+
+            var sb = new StringBuilder(receiver);
+            foreach (var i in indices) sb.Append('[').Append(i).Append(']');
+            return sb.ToString();
+        }
+
+        public void Visit(IRIndexerAccess indexer)
+        {
+            // Pure: only needs binding when something reads it.
+            if (IsUsed(indexer)) Bind(indexer.Name, IndexerAccess(indexer));
+        }
         public void Visit(IRThrow throwInst) => throw NotYet(nameof(IRThrow));
-        public void Visit(IRIndexerStore indexerStore) => throw NotYet(nameof(IRIndexerStore));
+        public void Visit(IRIndexerStore indexerStore)
+        {
+            var receiver = Expr(indexerStore.Collection);
+            var indices = (indexerStore.Indices ?? new List<IRValue>()).ConvertAll(Expr);
+            var value = Expr(indexerStore.Value);
+
+            if (CollectionKindOf(indexerStore.Collection?.Type) == CollectionKind.Dictionary)
+            {
+                Line($"{receiver}.set({string.Join(", ", indices)}, {value});");
+                return;
+            }
+
+            var sb = new StringBuilder(receiver);
+            foreach (var i in indices) sb.Append('[').Append(i).Append(']');
+            Line($"{sb} = {value};");
+        }
     }
 }
