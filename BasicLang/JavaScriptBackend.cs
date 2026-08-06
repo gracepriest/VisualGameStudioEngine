@@ -276,6 +276,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             _loopEnds.Clear();
             _pendingMerges.Clear();
             _forEachEnds.Clear();
+            _boundNames.Clear();
             _armDepth = 0;
 
             Line(signature + " {");
@@ -352,13 +353,13 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // would evaluate side effects twice and, worse, silently drop an optimizer
                 // rewrite that re-pointed the node.
                 case IRBinaryOp b:
-                    return SanitizeName(b.Name);
+                    return Bound(b) ? SanitizeName(b.Name) : BinaryExprInline(b);
                 case IRCompare c2:
-                    return SanitizeName(c2.Name);
+                    return Bound(c2) ? SanitizeName(c2.Name) : CompareExprInline(c2);
                 case IRUnaryOp u:
-                    return SanitizeName(u.Name);
+                    return Bound(u) ? SanitizeName(u.Name) : $"({UnaryOpToken(u.Operation)}{ExprInline(u.Operand)})";
                 case IRCall call:
-                    return SanitizeName(call.Name);
+                    return Bound(call) ? SanitizeName(call.Name) : CallExpr(call);
 
                 // ⛔ A gep is a POINTER, and it is rendered INLINE as an L-value rather than
                 // bound to a temp. Materialising it as a value (`const t1 = a[0];`) makes a
@@ -386,22 +387,25 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // Fields and properties share one node (there is no IRPropertyAccess), which
                 // is exactly right for JS: a get/set accessor makes both spellings work.
                 case IRFieldAccess fa:
-                    return IsUsed(fa) ? SanitizeName(fa.Name) : FieldAccess(fa);
+                    return Bound(fa) ? SanitizeName(fa.Name) : FieldAccess(fa);
 
                 case IRNewObject n:
-                    return IsUsed(n) ? SanitizeName(n.Name) : NewObject(n);
+                    return Bound(n) ? SanitizeName(n.Name) : NewObject(n);
 
                 case IRInstanceMethodCall mc:
-                    return IsUsed(mc) ? SanitizeName(mc.Name) : InstanceCall(mc);
+                    return Bound(mc) ? SanitizeName(mc.Name) : InstanceCall(mc);
 
                 case IRIndexerAccess ix:
-                    return IsUsed(ix) ? SanitizeName(ix.Name) : IndexerAccess(ix);
+                    return Bound(ix) ? SanitizeName(ix.Name) : IndexerAccess(ix);
+
+                case IRAwait aw:
+                    return Bound(aw) ? SanitizeName(aw.Name) : AwaitExpr(aw);
 
                 // The ONLY non-virtual dispatch in the language. Everything else is
                 // prototype dispatch, which is virtual by default and already matches
                 // VB's Overridable/Overrides.
                 case IRBaseMethodCall bc:
-                    return IsUsed(bc) ? SanitizeName(bc.Name) : BaseCall(bc);
+                    return Bound(bc) ? SanitizeName(bc.Name) : BaseCall(bc);
 
                 default:
                     throw NotYet(value.GetType().Name + " (as an expression)");
@@ -764,11 +768,47 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     if (!string.IsNullOrEmpty(operand?.Name))
                         _usedOperandNames.Add(operand.Name);
 
-                // A terminator's condition is an operand too, and EnumerateOperands is flat.
-                if (instruction is IRConditionalBranch cb && !string.IsNullOrEmpty(cb.Condition?.Name))
-                    _usedOperandNames.Add(cb.Condition.Name);
-                if (instruction is IRReturn r && !string.IsNullOrEmpty(r.Value?.Name))
-                    _usedOperandNames.Add(r.Value.Name);
+                // IROperandWalker is FLAT and does not cover every node this backend emits, so
+                // the rest are added explicitly. A miss here is not cosmetic: an operand that
+                // is never marked used is never BOUND, and the consumer then references a name
+                // that was never declared. Measured — `Await GetValue()` emitted
+                // `const t1 = await t0;` with t0 undefined, because IRAwait's operand was not
+                // being counted.
+                void Use(IRValue v)
+                {
+                    if (!string.IsNullOrEmpty(v?.Name)) _usedOperandNames.Add(v.Name);
+                }
+
+                switch (instruction)
+                {
+                    case IRConditionalBranch cb: Use(cb.Condition); break;
+                    case IRReturn r: Use(r.Value); break;
+                    case IRAwait aw: Use(aw.Expression); break;
+                    case IRThrow th: Use(th.Exception); break;
+                    case IRYield y: Use(y.Value); break;
+                    case IRFieldAccess fa: Use(fa.Object); break;
+                    case IRFieldStore fs: Use(fs.Object); Use(fs.Value); break;
+                    case IRForEach fe: Use(fe.Collection); break;
+                    case IRSwitch sw: Use(sw.Value); break;
+                    case IRIndexerAccess ia:
+                        Use(ia.Collection);
+                        foreach (var i in ia.Indices ?? new List<IRValue>()) Use(i);
+                        break;
+                    case IRIndexerStore ist:
+                        Use(ist.Collection); Use(ist.Value);
+                        foreach (var i in ist.Indices ?? new List<IRValue>()) Use(i);
+                        break;
+                    case IRNewObject no:
+                        foreach (var a in no.Arguments ?? new List<IRValue>()) Use(a);
+                        break;
+                    case IRInstanceMethodCall imc:
+                        Use(imc.Object);
+                        foreach (var a in imc.Arguments ?? new List<IRValue>()) Use(a);
+                        break;
+                    case IRBaseMethodCall bmc:
+                        foreach (var a in bmc.Arguments ?? new List<IRValue>()) Use(a);
+                        break;
+                }
             }
         }
 
@@ -790,8 +830,24 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// an already-declared local or parameter is an ASSIGNMENT; only genuine SSA temps
         /// get a fresh <c>const</c>.</para>
         /// </summary>
+        /// <summary>
+        /// Names actually BOUND by an emitted statement in the current body.
+        ///
+        /// <para>Not the same question as "is it used". Some IRValues are operand-only and
+        /// never appear in <c>block.Instructions</c> at all — measured: <c>Await GetValue()</c>
+        /// puts the IRCall solely on <c>IRAwait.Expression</c>, so nothing ever emits it.
+        /// Returning its NAME from Expr then produced <c>await t0</c> with <c>t0</c> declared
+        /// nowhere. Referring to a name is only safe once something has defined it.</para>
+        /// </summary>
+        private HashSet<string> _boundNames = new HashSet<string>(StringComparer.Ordinal);
+
+        /// <summary>True when this value already has a binding to refer to.</summary>
+        private bool Bound(IRValue v) =>
+            !string.IsNullOrEmpty(v?.Name) && _boundNames.Contains(v.Name);
+
         private void Bind(string name, string expression)
         {
+            if (!string.IsNullOrEmpty(name)) _boundNames.Add(name);
             var js = SanitizeName(name);
 
             // Already in scope — assign.
@@ -858,10 +914,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         {
             var parameters = string.Join(", ", function.Parameters.ConvertAll(p => SanitizeName(p.Name)));
 
-            // Iterators and async get their JS keywords in tasks 21/22; until then a
-            // function carrying those flags would emit a plain function that silently
-            // loses its semantics, so refuse it.
-            if (function.IsAsync) throw NotYet("Async functions (plan task 21)");
+            // Iterators get their JS keyword in task 22; until then a function carrying that
+            // flag would emit a plain function that silently loses its semantics.
             if (function.IsIterator) throw NotYet("Iterator functions (plan task 22)");
 
             CollectUsedOperands(function);
@@ -870,8 +924,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             _emitted.Clear();
             _loopEnds.Clear();
             _pendingMerges.Clear();
+            _boundNames.Clear();
 
-            Line($"function {SanitizeName(function.Name)}({parameters}) {{");
+            // Native async — the C++ backend has to emulate this synchronously with no
+            // scheduler; here the runtime provides the semantics.
+            Line($"{(function.IsAsync ? "async " : "")}function {SanitizeName(function.Name)}({parameters}) {{");
             _indentLevel++;
 
             // Declare user locals up front. `let`, not `const`: unlike SSA temps these are
@@ -1311,6 +1368,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (call.ByRefArguments != null && call.ByRefArguments.Contains(true))
                 throw JsCapabilityChecker.ByRefArgumentRejection(call.FunctionName);
 
+            var invocationText = CallExpr(call);
+            if (IsUsed(call)) Bind(call.Name, invocationText);
+            else Line($"{invocationText};");
+        }
+
+        /// <summary>Renders a call WITHOUT emitting it, for inline use.</summary>
+        private string CallExpr(IRCall call)
+        {
             var rendered = call.Arguments.ConvertAll(Expr);
 
             // String builtins arrive as a BARE FunctionName, which CallTarget would pass
@@ -1319,22 +1384,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // renamed callee, since `Len(s)` becomes the MEMBER expression `s.length`, so they
             // are rendered whole here.
             if (TryStringBuiltin(call.FunctionName, rendered, out var builtin))
-            {
-                if (IsUsed(call)) Bind(call.Name, builtin);
-                else Line($"{builtin};");
-                return;
-            }
+                return builtin;
 
-            var args = string.Join(", ", rendered);
-            var invocation = $"{CallTarget(call.FunctionName)}({args})";
-
-            // A call that PRODUCES a value binds it, because Expr(IRCall) refers to the
-            // result by name. Emitting a bare statement would discard the value and leave
-            // every reference pointing at an undeclared identifier.
-            if (IsUsed(call))
-                Bind(call.Name, invocation);
-            else
-                Line($"{invocation};");
+            return $"{CallTarget(call.FunctionName)}({string.Join(", ", rendered)})";
         }
 
         public void Visit(IRReturn ret) =>
@@ -1356,7 +1408,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         public void Visit(IRComment comment) => throw NotYet(nameof(IRComment));
         public void Visit(IRArrayAlloc arrayAlloc) => throw NotYet(nameof(IRArrayAlloc));
         public void Visit(IRArrayStore arrayStore) => throw NotYet(nameof(IRArrayStore));
-        public void Visit(IRAwait awaitInst) => throw NotYet(nameof(IRAwait));
+        // `await` binds tighter than most operators but not all, so the operand is
+        // parenthesised — `await a + b` would await only `a`.
+        private string AwaitExpr(IRAwait a) => $"await {Receiver(Expr(a.Expression))}";
+
+        public void Visit(IRAwait awaitInst) => EmitValueOrStatement(awaitInst, AwaitExpr(awaitInst));
         public void Visit(IRYield yieldInst) => throw NotYet(nameof(IRYield));
         // Each of these is emitted into block.Instructions AND handed back as the expression
         // result, so the statement and expression arms must agree: bind when something reads
@@ -1483,10 +1539,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             var savedUsed = _usedOperandNames;
             var savedEmitted = new HashSet<BasicBlock>(_emitted);
             var savedMembers = _memberNames;
+            var savedBound = new HashSet<string>(_boundNames, StringComparer.Ordinal);
 
             CollectUsedOperands(fn);
             _currentFunction = fn;
             _emitted.Clear();
+            _boundNames.Clear();
 
             _declaredNames = new HashSet<string>(StringComparer.Ordinal);
             foreach (var p in fn.Parameters ?? new List<IRVariable>())
@@ -1514,6 +1572,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             _memberNames = savedMembers;
             _emitted.Clear();
             foreach (var b in savedEmitted) _emitted.Add(b);
+            _boundNames.Clear();
+            foreach (var n in savedBound) _boundNames.Add(n);
 
             var parameters = string.Join(", ",
                 (fn.Parameters ?? new List<IRVariable>()).ConvertAll(p => SanitizeName(p.Name)));

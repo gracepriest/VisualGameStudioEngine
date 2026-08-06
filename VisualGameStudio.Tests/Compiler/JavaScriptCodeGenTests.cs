@@ -61,14 +61,15 @@ public class JavaScriptCodeGenTests
     /// <para><b>This is a MOVING canary and is meant to be re-pointed.</b> It must always
     /// name a construct just beyond the implemented frontier, so as Phase 2 lands features
     /// this test goes green-by-accident and has to be aimed further out. It has already moved
-    /// twice: `x = x + 1` (task 13) then Try/Catch (task 19). It now names Async, task 21.
-    /// Re-point it rather than deleting it — the principle it guards outlives any one node.</para>
+    /// three times: `x = x + 1` (task 13), Try/Catch (task 19), Async (task 21). It now names
+    /// an Iterator, task 22. Re-point it rather than deleting it — the principle it guards
+    /// outlives any one node.</para>
     /// </summary>
     [Test]
     public void UnimplementedNode_Throws_RatherThanEmittingNothing()
     {
         var ex = Assert.Catch(() => JsTestSupport.Compile(
-            "Async Function Work() As Task(Of Integer)\nReturn 1\nEnd Function\n" +
+            "Iterator Function Numbers() As IEnumerable(Of Integer)\nYield 1\nEnd Function\n" +
             "Sub Main()\nEnd Sub"));
 
         Assert.That(ex, Is.InstanceOf<System.NotSupportedException>(),
