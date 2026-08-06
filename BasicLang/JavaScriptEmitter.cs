@@ -87,10 +87,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         }
 
         /// <summary>
-        /// The generated JavaScript is a FLAT script — it contains no import or export and
-        /// ends in a bare call to Main(). Nothing in the text marks it as a module, so
-        /// <c>type="module"</c> on the tag is what supplies module semantics in a browser.
-        /// (The execution tests get the same effect by naming their temp file <c>.mjs</c>.)
+        /// <c>type="module"</c> is REQUIRED on the tag, and stays required either way.
+        ///
+        /// <para>The generated JavaScript ends in a bare call to <c>Main()</c> and may now
+        /// contain real <c>import</c> statements, emitted from <c>#JsImport</c> directives. A
+        /// program with no imports still has nothing in its TEXT marking it as a module, so
+        /// the attribute is what supplies module semantics; a program WITH imports would fail
+        /// to parse as a classic script. Both roads lead here. (The execution tests get the
+        /// same effect by naming their temp file <c>.mjs</c>.)</para>
         /// </summary>
         private static string Harness(string scriptFileName, string title)
         {

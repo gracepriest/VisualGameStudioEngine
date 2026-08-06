@@ -214,6 +214,9 @@ public class JavaScriptInteropTests
         var firstFunction = lines.FindIndex(l => l.TrimStart().StartsWith("function "));
 
         Assert.That(firstImport, Is.GreaterThanOrEqualTo(0), "no import emitted");
+        // Guarded too: FindIndex returns -1 when absent, so without this `firstImport < -1`
+        // fails with a message about ORDERING when the real cause is "nothing was emitted".
+        Assert.That(firstFunction, Is.GreaterThanOrEqualTo(0), "no function emitted");
         Assert.That(firstImport, Is.LessThan(firstFunction));
     }
 
