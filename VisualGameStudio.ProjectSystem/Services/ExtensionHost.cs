@@ -412,7 +412,7 @@ public class ExtensionHost : IDisposable
             // this method is currently a no-op on the far side.
             return await _rpc.InvokeWithParameterObjectAsync<JsonElement?>(
                 "provideCompletions",
-                new { languageId, uri, line, column },
+                new { languageId, uri = ToDocumentUri(uri), line, column },
                 cancellationToken);
         }
         catch
@@ -433,7 +433,7 @@ public class ExtensionHost : IDisposable
             // Same as provideCompletions: no handler exists on the JS side today.
             return await _rpc.InvokeWithParameterObjectAsync<JsonElement?>(
                 "provideHover",
-                new { languageId, uri, line, column },
+                new { languageId, uri = ToDocumentUri(uri), line, column },
                 cancellationToken);
         }
         catch
@@ -450,7 +450,7 @@ public class ExtensionHost : IDisposable
     public async Task NotifyDocumentOpenedAsync(string uri, string languageId, int version, string text, CancellationToken ct = default)
     {
         if (!IsRunning || _rpc == null) return;
-        try { await _rpc.NotifyWithParameterObjectAsync("textDocument/didOpen", new { uri, languageId, version, text }); }
+        try { await _rpc.NotifyWithParameterObjectAsync("textDocument/didOpen", new { uri = ToDocumentUri(uri),languageId, version, text }); }
         catch { }
     }
 
@@ -460,7 +460,7 @@ public class ExtensionHost : IDisposable
     public async Task NotifyDocumentChangedAsync(string uri, int version, string text, CancellationToken ct = default)
     {
         if (!IsRunning || _rpc == null) return;
-        try { await _rpc.NotifyWithParameterObjectAsync("textDocument/didChange", new { uri, version, text }); }
+        try { await _rpc.NotifyWithParameterObjectAsync("textDocument/didChange", new { uri = ToDocumentUri(uri),version, text }); }
         catch { }
     }
 
@@ -470,7 +470,7 @@ public class ExtensionHost : IDisposable
     public async Task NotifyDocumentClosedAsync(string uri, CancellationToken ct = default)
     {
         if (!IsRunning || _rpc == null) return;
-        try { await _rpc.NotifyWithParameterObjectAsync("textDocument/didClose", new { uri }); }
+        try { await _rpc.NotifyWithParameterObjectAsync("textDocument/didClose", new { uri = ToDocumentUri(uri) }); }
         catch { }
     }
 
@@ -480,7 +480,7 @@ public class ExtensionHost : IDisposable
     public async Task NotifyDocumentSavedAsync(string uri, string? text = null, CancellationToken ct = default)
     {
         if (!IsRunning || _rpc == null) return;
-        try { await _rpc.NotifyWithParameterObjectAsync("textDocument/didSave", new { uri, text }); }
+        try { await _rpc.NotifyWithParameterObjectAsync("textDocument/didSave", new { uri = ToDocumentUri(uri),text }); }
         catch { }
     }
 
@@ -500,7 +500,7 @@ public class ExtensionHost : IDisposable
     public async Task NotifyActiveEditorChangedAsync(string? uri, string? languageId, CancellationToken ct = default)
     {
         if (!IsRunning || _rpc == null) return;
-        try { await _rpc.NotifyWithParameterObjectAsync("activeEditor/didChange", new { uri, languageId }); }
+        try { await _rpc.NotifyWithParameterObjectAsync("activeEditor/didChange", new { uri = ToDocumentUri(uri),languageId }); }
         catch { }
     }
 
@@ -525,41 +525,101 @@ public class ExtensionHost : IDisposable
         catch { return null; }
     }
 
+    /// <summary>
+    /// Normalises a document identity for the extension host, which keys documents by URI while the
+    /// IDE identifies them by raw filesystem path.
+    ///
+    /// <para>Without this the two ends can never agree. The host stores a document under
+    /// <c>Uri.parse(path).toString()</c>; for <c>C:\proj\a.js</c> the JS scheme regex is lazy, so it
+    /// captures scheme <c>"C"</c>, the backslash normalisation (gated on <c>scheme === 'file'</c>)
+    /// never runs, and the key becomes <c>C:%5Cproj%5Ca.js</c>. Lookup then passes the raw string
+    /// verbatim. Every provider request missed, permanently and silently.</para>
+    ///
+    /// <para>It also decides selector matching: with a raw path the derived scheme is <c>"C"</c>, so
+    /// <c>{ scheme: 'file' }</c> — the most common VS Code selector shape — scores zero.</para>
+    ///
+    /// <para>⚠ BEHAVIOUR CHANGE: every uri string every extension sees changes. That is a correction
+    /// toward the real VS Code contract, which is <c>file:///</c> URIs rather than Windows paths.</para>
+    /// </summary>
+    public static string ToDocumentUri(string pathOrUri)
+    {
+        if (string.IsNullOrWhiteSpace(pathOrUri)) return pathOrUri;
+
+        // Anything that already carries a scheme is left exactly as-is: untitled:, vscode-userdata:
+        // and https: are all legitimate document identities, and rewriting them would break them.
+        if (HasUriScheme(pathOrUri)) return pathOrUri;
+
+        try
+        {
+            return new Uri(pathOrUri).AbsoluteUri;
+        }
+        catch
+        {
+            // Notifications are fire-and-forget; a malformed path must degrade to itself rather
+            // than throw on a path the caller cannot observe.
+            return pathOrUri;
+        }
+    }
+
+    /// <summary>
+    /// Whether a string already carries a URI scheme.
+    ///
+    /// <para>The single-character check is the important part: a Windows drive letter looks exactly
+    /// like a scheme, and treating <c>C:</c> as one is precisely the bug this class of code keeps
+    /// reproducing — it is what the host's own lazy regex does.</para>
+    /// </summary>
+    private static bool HasUriScheme(string value)
+    {
+        var colon = value.IndexOf(':');
+
+        // No colon at all, or a one-letter prefix — i.e. a drive letter, not a scheme.
+        if (colon <= 1) return false;
+        if (!char.IsLetter(value[0])) return false;
+
+        for (var i = 1; i < colon; i++)
+        {
+            var c = value[i];
+            if (!char.IsLetterOrDigit(c) && c != '+' && c != '.' && c != '-') return false;
+        }
+
+        return true;
+    }
+
     public Task<JsonElement?> RequestCompletionAsync(string uri, int line, int character, CancellationToken ct = default)
-        => RequestProviderAsync("textDocument/completion", new { uri, position = new { line, character } }, ct);
+        => RequestProviderAsync("textDocument/completion", new { uri = ToDocumentUri(uri),position = new { line, character } }, ct);
 
     public Task<JsonElement?> RequestHoverAsync(string uri, int line, int character, CancellationToken ct = default)
-        => RequestProviderAsync("textDocument/hover", new { uri, position = new { line, character } }, ct);
+        => RequestProviderAsync("textDocument/hover", new { uri = ToDocumentUri(uri),position = new { line, character } }, ct);
 
     public Task<JsonElement?> RequestDefinitionAsync(string uri, int line, int character, CancellationToken ct = default)
-        => RequestProviderAsync("textDocument/definition", new { uri, position = new { line, character } }, ct);
+        => RequestProviderAsync("textDocument/definition", new { uri = ToDocumentUri(uri),position = new { line, character } }, ct);
 
     public Task<JsonElement?> RequestReferencesAsync(string uri, int line, int character, CancellationToken ct = default)
-        => RequestProviderAsync("textDocument/references", new { uri, position = new { line, character } }, ct);
+        => RequestProviderAsync("textDocument/references", new { uri = ToDocumentUri(uri),position = new { line, character } }, ct);
 
     public Task<JsonElement?> RequestFormattingAsync(string uri, CancellationToken ct = default)
-        => RequestProviderAsync("textDocument/formatting", new { uri }, ct);
+        => RequestProviderAsync("textDocument/formatting", new { uri = ToDocumentUri(uri) }, ct);
 
     public Task<JsonElement?> RequestCodeActionsAsync(string uri, int startLine, int startChar, int endLine, int endChar, CancellationToken ct = default)
-        => RequestProviderAsync("textDocument/codeAction", new { uri, range = new { start = new { line = startLine, character = startChar }, end = new { line = endLine, character = endChar } } }, ct);
+        => RequestProviderAsync("textDocument/codeAction", new { uri = ToDocumentUri(uri),range = new { start = new { line = startLine, character = startChar }, end = new { line = endLine, character = endChar } } }, ct);
 
     public Task<JsonElement?> RequestDocumentSymbolsAsync(string uri, CancellationToken ct = default)
-        => RequestProviderAsync("textDocument/documentSymbol", new { uri }, ct);
+        => RequestProviderAsync("textDocument/documentSymbol", new { uri = ToDocumentUri(uri) }, ct);
 
     public Task<JsonElement?> RequestSignatureHelpAsync(string uri, int line, int character, CancellationToken ct = default)
-        => RequestProviderAsync("textDocument/signatureHelp", new { uri, position = new { line, character } }, ct);
+        => RequestProviderAsync("textDocument/signatureHelp", new { uri = ToDocumentUri(uri),position = new { line, character } }, ct);
 
     public Task<JsonElement?> RequestRenameAsync(string uri, int line, int character, string newName, CancellationToken ct = default)
-        => RequestProviderAsync("textDocument/rename", new { uri, position = new { line, character }, newName }, ct);
+        => RequestProviderAsync("textDocument/rename", new { uri = ToDocumentUri(uri),position = new { line, character }, newName }, ct);
 
     public Task<JsonElement?> RequestFoldingRangesAsync(string uri, CancellationToken ct = default)
-        => RequestProviderAsync("textDocument/foldingRange", new { uri }, ct);
+        => RequestProviderAsync("textDocument/foldingRange", new { uri = ToDocumentUri(uri) }, ct);
 
     public Task<JsonElement?> RequestInlayHintsAsync(string uri, int startLine, int startChar, int endLine, int endChar, CancellationToken ct = default)
-        => RequestProviderAsync("textDocument/inlayHint", new { uri, range = new { start = new { line = startLine, character = startChar }, end = new { line = endLine, character = endChar } } }, ct);
+        => RequestProviderAsync("textDocument/inlayHint", new { uri = ToDocumentUri(uri),range = new { start = new { line = startLine, character = startChar }, end = new { line = endLine, character = endChar } } }, ct);
 
     public Task<JsonElement?> RequestSemanticTokensAsync(string uri, CancellationToken ct = default)
-        => RequestProviderAsync("textDocument/semanticTokens", new { uri }, ct);
+        => RequestProviderAsync("textDocument/semanticTokens", new { uri = ToDocumentUri(uri) }, ct);
 
     #endregion
 
