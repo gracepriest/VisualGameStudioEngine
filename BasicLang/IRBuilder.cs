@@ -3521,6 +3521,24 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(MemberAccessExpressionNode node)
         {
+            // §8.3's enum row (P2a-2 T8c-3). The analyzer folded this member access to its
+            // underlying primitive because the winner's parameter at that index is enum-typed,
+            // so the value is known at compile time.
+            //
+            // ⛔ RETURNING HERE IS DOING TWO JOBS, and the position of this arm is both of
+            // them. It skips the receiver visit, and — because it returns before any
+            // IRFieldAccess is constructed or emitted, and NetSurfaceCollector is IR-driven —
+            // it is ALSO what stops a compile-time constant minting a shim export, a proxy slot
+            // and a ~27 s Native AOT publish round trip. Measured before this change:
+            // FileMode.Open emitted a real bl_net_System_IO_FileMode_Open__… export. Move this
+            // arm below the emission and the value stays correct while the export comes back.
+            if (_semanticAnalyzer?.NetEnumConstants != null
+                && _semanticAnalyzer.NetEnumConstants.TryGetValue(node, out var enumConstant))
+            {
+                _expressionResult = new IRConstant(enumConstant.Value, enumConstant.Type);
+                return;
+            }
+
             node.Object.Accept(this);
             var obj = _expressionResult;
 

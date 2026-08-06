@@ -139,6 +139,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
             _netAnnotations.NetEnumerations;
 
         /// <summary>
+        /// P2a-2 Task 8c-3 — spec §8.3's enum row. Enum-member arguments that were folded to
+        /// their underlying primitive because the winner's parameter at that index is
+        /// enum-typed. <see cref="IRBuilder"/> mints an <c>IRConstant</c> for exactly these
+        /// nodes and returns before emitting an <c>IRFieldAccess</c>, which is also what stops
+        /// a compile-time constant minting a shim export.
+        /// </summary>
+        internal IReadOnlyDictionary<AST.ExpressionNode, Net.NetEnumConstant> NetEnumConstants =>
+            _netAnnotations.NetEnumConstants;
+
+        /// <summary>
         /// P2a-2 Task 4 (§6.3): true when this compilation targets the NATIVE (C++) backend —
         /// which is where §6.5's REAL evidence bar applies (bare unclaimed names are probed
         /// against the resolver) and where BL6024 fires. The C# path retains the narrower
@@ -2949,8 +2959,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
 
                 // §6.5: a .NET-enum member access (FileMode.Open) presents the ENUM type.
-                // Checked before the static-type mapping — the analyzer's own typing of the
-                // access degrades to Object (enums resolve through metadata, not TypeManager).
+                // Checked before the static-type mapping, because enums resolve through
+                // metadata rather than TypeManager.
+                //
+                // ⛔ The typing is BACKEND-DEPENDENT and this comment used to claim otherwise.
+                // MEASURED: FileMode.Open types as the ENUM on --target=cpp and as Object on
+                // --target=csharp, because descriptor retyping is gated on _netNativeBackend
+                // (§6.3's preservation row). Anything keying off "it degrades to Object" is
+                // wrong on the native path — which is the path T8c-3's enum fold runs on.
                 if (TryTypeNetEnumArgument(argument, out var enumSpelling))
                 {
                     arguments.Add(enumSpelling);
@@ -3082,6 +3098,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return true;
             }
 
+            // §8.3's enum row folds at the SLOT, and folds are STAGED rather than recorded as
+            // they are found: a LATER parameter's refusal must not leave a fold recorded on a
+            // call that never lowers. Committed after the loop, immediately before `return
+            // false`, which is the only path where every parameter was accepted.
+            List<(ExpressionNode Node, object Value, TypeInfo Type)> stagedEnumFolds = null;
+
             for (var i = 0; i < winner.Parameters.Count; i++)
             {
                 var parameter = winner.Parameters[i];
@@ -3120,13 +3142,45 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
                 if (IsNetEnumTypeName(parameter.TypeFullName))
                 {
-                    NetWarning("BL6019",
-                        $"'{target}': parameter {position} has enum type "
-                        + $"'{parameter.TypeFullName}' — §8.3's underlying-integral enum "
-                        + "marshaling is not lowered at the native boundary yet.",
-                        line, column);
-                    return true;
+                    // §8.3: an enum crosses as its UNDERLYING INTEGRAL, and only an enum MEMBER
+                    // has a value the native boundary can produce at compile time. Fold that
+                    // and fall through; everything else keeps the refusal.
+                    //
+                    // ⛔ NARROWED, NEVER DELETED. With the refusal gone and the wire now
+                    // Scalar, a non-literal enum argument — fi.Attributes, a local holding one,
+                    // a Flags `Or` — would lower through MarshalNetArgument's Scalar arm as
+                    // GetValueName(argument), i.e. a BasicLang::NetRef, into an int32_t slot.
+                    // NetRef has no integral conversion, so that is a C++ error inside
+                    // generated code the user never wrote: precisely the late failure this
+                    // gate exists to turn into a source-positioned diagnostic.
+                    if (TryFoldNetEnumArgument(
+                            callArguments[i], parameter.TypeFullName,
+                            out var enumValue, out var enumType))
+                    {
+                        (stagedEnumFolds ??=
+                            new List<(ExpressionNode, object, TypeInfo)>())
+                            .Add((callArguments[i], enumValue, enumType));
+                    }
+                    else
+                    {
+                        NetWarning("BL6019",
+                            $"'{target}': parameter {position} has enum type "
+                            + $"'{parameter.TypeFullName}'. §8.3 crosses an enum as its "
+                            + "underlying integral, and only an enum MEMBER (for example "
+                            + "FileMode.Open) has a value the native boundary can produce — an "
+                            + "enum-typed variable or expression is a .NET handle here. Name "
+                            + "the member directly.",
+                            line, column);
+                        return true;
+                    }
                 }
+            }
+
+            // Every parameter was accepted, so the staged folds are safe to commit.
+            if (stagedEnumFolds != null)
+            {
+                foreach (var fold in stagedEnumFolds)
+                    _netAnnotations.RecordNetEnumConstant(fold.Node, fold.Value, fold.Type);
             }
 
             return false;
@@ -3356,6 +3410,56 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
             }
             return false;
+        }
+
+        /// <summary>
+        /// §8.3's enum row, FOLD half: true when <paramref name="argument"/> is an enum MEMBER
+        /// access (<c>FileMode.Open</c>) whose enum type is exactly the winner's parameter type
+        /// at this index — in which case <paramref name="value"/> is that member's constant,
+        /// already coerced to its underlying CLR primitive, and <paramref name="type"/> is the
+        /// BasicLang type the folded constant carries.
+        ///
+        /// <para>Reuses <see cref="TryTypeNetEnumArgument"/>'s shadowing guards wholesale: a
+        /// local, a user-defined type or a claimed name beats the enum, and only a member access
+        /// on a bare identifier qualifies.</para>
+        ///
+        /// <para><b>THE FOLD IS DECIDED BY THE SLOT, NOT THE EXPRESSION.</b> The parameter type
+        /// must match the enum exactly. An enum member handed to a non-enum parameter is left
+        /// alone, which is what keeps this from perturbing overload resolution — the
+        /// overload-probe spelling must stay the ENUM, because the probe synthesizes C# that
+        /// has to compile and <c>File.Open(a0, System.Int32)</c> is CS1503.</para>
+        ///
+        /// <para>⛔ Enum VARIABLES are deliberately out of scope. Only a member ACCESS has a
+        /// value the native boundary can produce at compile time; an enum-typed local or
+        /// expression is a .NET handle here, and folding one would put a <c>NetRef</c> into an
+        /// <c>int32_t</c> slot — a wrong value, not a compile error.</para>
+        /// </summary>
+        private bool TryFoldNetEnumArgument(
+            ExpressionNode argument, string parameterTypeFullName,
+            out object value, out TypeInfo type)
+        {
+            value = null;
+            type = null;
+
+            if (string.IsNullOrEmpty(parameterTypeFullName)) return false;
+            if (!TryTypeNetEnumArgument(argument, out var enumFullName)) return false;
+            if (!string.Equals(enumFullName, parameterTypeFullName, StringComparison.Ordinal))
+                return false;
+
+            var access = (MemberAccessExpressionNode)argument;
+            var constant = NetResolver().EnumMemberConstant(enumFullName, access.MemberName);
+            if (constant == null) return false;
+
+            var underlying = NetResolver().EnumUnderlyingTypeFullName(enumFullName);
+            if (underlying == null) return false;
+            if (!NetMarshalTable.TryGetBasicLangSpelling(underlying, out var spelling)) return false;
+
+            var resolved = ResolveNetTypeName(spelling);
+            if (resolved == null) return false;
+
+            value = constant;
+            type = resolved;
+            return true;
         }
 
         /// <summary>

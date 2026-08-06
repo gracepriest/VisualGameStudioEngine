@@ -504,25 +504,31 @@ namespace BasicLang.Net
 
             var field = symbol.GetMembers()
                 .OfType<IFieldSymbol>()
+                // OrdinalIgnoreCase, matching how TryTypeNetEnumArgument admits the member in
+                // the first place — BasicLang is case-insensitive, so an Ordinal compare here
+                // would silently return null for `FileMode.open` and the fold would vanish
+                // with no diagnostic.
                 .FirstOrDefault(f => f.HasConstantValue &&
-                                     string.Equals(f.MetadataName, memberName, StringComparison.Ordinal));
+                                     string.Equals(f.MetadataName, memberName, StringComparison.OrdinalIgnoreCase));
             if (field?.ConstantValue == null)
                 return null;
 
             // Explicit per-underlying coercion rather than Convert.ChangeType(field.Type):
             // the boxed CLR primitive must match the wire slot the descriptor will claim.
-            return underlying.SpecialType switch
-            {
-                SpecialType.System_SByte  => Convert.ToSByte(field.ConstantValue),
-                SpecialType.System_Byte   => Convert.ToByte(field.ConstantValue),
-                SpecialType.System_Int16  => Convert.ToInt16(field.ConstantValue),
-                SpecialType.System_UInt16 => Convert.ToUInt16(field.ConstantValue),
-                SpecialType.System_Int32  => Convert.ToInt32(field.ConstantValue),
-                SpecialType.System_UInt32 => Convert.ToUInt32(field.ConstantValue),
-                SpecialType.System_Int64  => Convert.ToInt64(field.ConstantValue),
-                SpecialType.System_UInt64 => Convert.ToUInt64(field.ConstantValue),
-                _ => null
-            };
+            // Roslyn ALREADY boxes an enum member's ConstantValue as the underlying primitive,
+            // not as the enum — measured, not assumed. An explicit per-SpecialType coercion
+            // was written here first and then deleted: no mutation could kill it, which is the
+            // definition of dead code in this repo.
+            //
+            // ⛔ The requirement it was protecting is real even though the code was not. Both
+            // the C++ and JavaScript constant emitters end in Value.ToString(), and
+            // Visit(IRConstant) is a no-op on both, so a value boxed as the ENUM would render
+            // as the bare identifier `IgnoreCase` — an undeclared name emitted from a green
+            // build. That requirement is now pinned by a TEST
+            // (NetEnumArgumentTests.EnumMemberConstant_ReturnsTheUnderlyingPrimitive_NotTheEnum
+            // asserts Is.TypeOf<int>()), which is where it belongs: if Roslyn's behaviour ever
+            // changes, the test fails loudly instead of dead code silently covering for it.
+            return field.ConstantValue;
         }
 
         /// <summary>

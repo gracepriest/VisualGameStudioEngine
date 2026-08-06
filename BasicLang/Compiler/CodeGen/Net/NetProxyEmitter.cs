@@ -288,6 +288,23 @@ namespace BasicLang.Compiler.CodeGen.Net
             foreach (var p in member.Parameters ?? Array.Empty<NetParameterDescriptor>())
             {
                 var wire = WireOf(p);
+
+                // ⛔ MUST COME BEFORE THE Kind-KEYED GUARD BELOW. An enum parameter is now a
+                // SCALAR wire (§8.3), so that guard no longer sees it and a ByRef enum would
+                // silently acquire an int32_t* slot. The analyzer refuses ByRef enums at call
+                // sites — but a <NetProxy> DECLARED TYPE projects every member it has with no
+                // call site and no analyzer in front of it, and that is the path this catches.
+                // §8.3 crosses an enum as a by-VALUE row; writing back through one would need
+                // a widening contract the spec does not define.
+                if (p.IsEnum && p.RefKind != NetRefKind.None)
+                {
+                    throw new NotSupportedException(
+                        $"Cannot emit a proxy for '{member}': parameter {index} is a ByRef enum. "
+                        + "§8.3 crosses an enum as its underlying integral, which is a by-value "
+                        + "row only. Take the enum by value, or take its underlying integral "
+                        + "ByRef and convert at the call site.");
+                }
+
                 if (p.RefKind != NetRefKind.None && wire.Kind != WireKind.Scalar
                     && !NetArrayCopy.TryGetFormForArray(p.TypeFullName, out _))
                 {
@@ -491,9 +508,22 @@ namespace BasicLang.Compiler.CodeGen.Net
         /// </para>
         /// </summary>
         private static WireForm WireOf(NetParameterDescriptor parameter) =>
-            parameter != null && parameter.IsDelegate
-                ? Wire.Callback
-                : WireOf(parameter?.TypeFullName);
+            parameter switch
+            {
+                { IsDelegate: true } => Wire.Callback,
+
+                // §8.3's "enums → underlying integral" row. Recursing on the UNDERLYING name
+                // buys all eight legal underlyings from the switch below for free.
+                //
+                // ⛔ THIS ARM MUST NEVER MOVE INTO WireOf(string). That overload also answers
+                // the RESULT direction and feeds §8.4's RequireBlittableScalar, so a
+                // name-keyed enum arm would simultaneously flip enum RESULTS off the handle
+                // wire and open the delegate gate to enum-typed delegate parameters. Only a
+                // PARAMETER may cross as its underlying integral.
+                { IsEnum: true } => WireOf(parameter.EnumUnderlyingTypeFullName),
+
+                _ => WireOf(parameter?.TypeFullName)
+            };
 
         private static WireForm WireOf(string netTypeFullName) => netTypeFullName switch
         {
