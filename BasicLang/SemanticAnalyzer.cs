@@ -3116,10 +3116,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
                 if (NetMarshalTable.MultiSlotConversionPairs.Contains(parameter.TypeFullName))
                 {
+                    // The COUNT is the reason, so it is in the message. "not a single slot" was
+                    // also being shown for Guid and StringBuilder, which each need exactly one —
+                    // it told a user nothing about which rows were one change away from working.
+                    NetMarshalTable.TryGetWireRow(parameter.TypeFullName, out var multiSlotRow);
                     NetWarning("BL6019",
                         $"'{target}': parameter {position} has type "
-                        + $"'{parameter.TypeFullName}', whose §6.4 wire form is not a single "
-                        + "slot — it is not lowered at the native boundary yet.",
+                        + $"'{parameter.TypeFullName}', whose §6.4 wire form is "
+                        + $"{multiSlotRow?.SlotCount} slots — one slot per parameter is baked "
+                        + "into both emitters, so it is not lowered at the native boundary yet.",
                         line, column);
                     return true;
                 }
@@ -3176,7 +3181,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 if (argument is IdentifierExpressionNode) return false;
             }
             else if (!NetMarshalTable.TryGetWireRow(parameter.TypeFullName, out var row)
-                     || row.IsMultiSlot || string.IsNullOrEmpty(row.CWire))
+                     || !row.HasByValueScalarSlot)
             {
                 NetWarning("BL6019",
                     $"'{target}': parameter {position} ('{parameter}') is passed {passing} and "

@@ -505,10 +505,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                         if (row.IsMultiSlot)
                             throw NetLoweringRefusal("BL6019",
                                 $"'{targetDisplay}': parameter {position} has type "
-                                + $"'{paramType}', whose §6.4 wire form is not a single slot — "
-                                + "it is not lowered at the native boundary yet.");
-                        return NetArgEmission.Value(
-                            row.NativeToNet + "(" + GetValueName(argument) + ")");
+                                + $"'{paramType}', whose §6.4 wire form is {row.SlotCount} "
+                                + "slots — one slot per parameter is baked into both emitters, "
+                                + "so it is not lowered at the native boundary yet.");
+                        return MarshalNetConversionArgument(row, index, argument);
                 }
             }
 
@@ -540,6 +540,63 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 + "row, or String) against a matching T[] parameter; List/Dictionary/HashSet, "
                 + "nested element types and handle element types have no v1 copy. Pass Nothing, "
                 + "a .NET-typed value, or a simple array.");
+        }
+
+        /// <summary>
+        /// Spec §6.4 — a single-slot conversion pair crossing OUTBOUND, dispatched on the row's
+        /// <see cref="NetMarshalTable.NetConverterForm"/> rather than on its type name.
+        ///
+        /// <para><b>Why two of the three forms need a PROLOGUE and cannot be an expression.</b>
+        /// Both produce something the callee reads through a pointer, and in both cases that
+        /// something must outlive the call statement. <c>to_net_guid</c> returns <c>void</c> and
+        /// fills a buffer, so there is no expression to write in the first place. <c>StringBuilder</c>
+        /// is subtler and is the one a reviewer should not "simplify": <c>to_net_stringbuilder</c>
+        /// returns an OWNING <c>std::string</c> by value, so the tempting
+        /// <c>to_net_stringbuilder(*x).c_str()</c> hands over a pointer into a temporary that dies
+        /// at the end of the full-expression — a use-after-free the compiler does not diagnose and
+        /// that usually "works" in a smoke test, because the freed bytes are still intact.</para>
+        ///
+        /// <para><b>The temp name is keyed by the parameter INDEX</b>, which is what makes it
+        /// unique: a call can have several conversion arguments and each needs its own buffer.</para>
+        /// </summary>
+        private NetArgEmission MarshalNetConversionArgument(
+            NetWireRow row, int index, IRValue argument)
+        {
+            if (row.ConverterForm == NetConverterForm.Expression)
+                return NetArgEmission.Value(row.NativeToNet + "(" + GetValueName(argument) + ")");
+
+            var temp = "_bl_net_arg" + index.ToString(CultureInfo.InvariantCulture);
+            var declaration = string.Format(row.NativeTempDecl, temp);
+
+            // §8.5's two-layer std: a BasicLang StringBuilder is a shared_ptr (reference
+            // semantics, matching .NET), while the converter takes `const StringBuilder&`.
+            // Guid is a VALUE type and must NOT be dereferenced.
+            var source = row.ConverterForm == NetConverterForm.OwningTemp
+                ? "*" + GetValueName(argument)
+                : GetValueName(argument);
+
+            return row.ConverterForm switch
+            {
+                NetConverterForm.OutBuffer => NetArgEmission.Statements(
+                    new[] { temp },
+                    prologue: new[]
+                    {
+                        declaration + ";",
+                        row.NativeToNet + "(" + source + ", " + temp + ");",
+                    }),
+
+                NetConverterForm.OwningTemp => NetArgEmission.Statements(
+                    new[] { temp + ".c_str()" },
+                    prologue: new[]
+                    {
+                        declaration + " = " + row.NativeToNet + "(" + source + ");",
+                    }),
+
+                _ => throw new NotSupportedException(
+                    $"§6.4 row '{row.NetFullName}' has converter form {row.ConverterForm}, which "
+                    + "MarshalNetConversionArgument does not emit. A new form must be given an "
+                    + "arm here — falling through would emit a slot with no converter at all."),
+            };
         }
 
         /// <summary>
@@ -773,8 +830,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return byRefArray;
             }
 
-            if (!NetMarshalTable.TryGetWireRow(paramType, out var row)
-                || row.IsMultiSlot || string.IsNullOrEmpty(row.CWire))
+            if (!NetMarshalTable.TryGetWireRow(paramType, out var row) || !row.HasByValueScalarSlot)
             {
                 throw NetLoweringRefusal("BL6019",
                     $"'{targetDisplay}': parameter {position} ('{parameter}') is passed "
@@ -944,8 +1000,32 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                         if (row.IsMultiSlot)
                             throw NetLoweringRefusal("BL6019",
                                 $"'{targetDisplay}' returns '{resultType}', whose §6.4 wire "
-                                + "form is not a single slot — it is not lowered at the native "
-                                + "boundary yet.");
+                                + $"form is {row.SlotCount} slots — a proxy has ONE result "
+                                + "out-pointer, so it is not lowered at the native boundary yet.");
+
+                        // §6.4's ONE directional row. This used to be refused as a side effect of
+                        // StringBuilder being flagged multi-slot; now that it lowers OUTBOUND, the
+                        // null converter is the only thing standing between a StringBuilder result
+                        // and `dest = (expr);` — an assignment with no conversion at all.
+                        if (row.NativeFromNet == null)
+                            throw NetLoweringRefusal("BL6019",
+                                $"'{targetDisplay}' returns '{resultType}', which §6.4 defines in "
+                                + "the to-net direction ONLY — there is no conversion back from a "
+                                + "managed value. Use an overload returning String instead.");
+
+                        // The INBOUND direction is expression-shaped: whatever the proxy returned
+                        // is handed straight to the converter. A row whose converter fills a
+                        // caller-owned BUFFER (Guid) cannot be written that way — the buffer would
+                        // have to be an extra argument to the proxy call, which is the same
+                        // one-result-out-pointer limit the multi-slot rows hit above. The outbound
+                        // direction of these rows lowers fine; only results wait.
+                        if (row.ConverterForm != NetConverterForm.Expression)
+                            throw NetLoweringRefusal("BL6019",
+                                $"'{targetDisplay}' returns '{resultType}'. Its §6.4 conversion "
+                                + "writes through a caller-owned buffer, and a proxy has ONE "
+                                + "result out-pointer, so the result direction is not lowered at "
+                                + "the native boundary yet — passing one as an ARGUMENT works.");
+
                         return $"{destination} = {row.NativeFromNet}({expression});";
 
                     default:

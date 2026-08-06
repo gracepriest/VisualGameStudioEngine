@@ -367,6 +367,27 @@ namespace BasicLang.Compiler.CodeGen.Net
             internal static readonly WireForm Boolean =
                 new(WireKind.Scalar, "int32_t", "int32_t*", "bool", "bool");
 
+            /// <summary>
+            /// §6.4's Guid row — 16 bytes in <c>System.Guid.ToByteArray</c> order, borrowed from
+            /// the caller. The out spelling drops <c>const</c> because that direction is written
+            /// THROUGH, the same in/out asymmetry <see cref="String"/> has.
+            ///
+            /// <para>The RESULT direction is not emitted yet (the call site refuses it): filling
+            /// a caller-owned buffer needs the buffer as an extra proxy argument, which is the
+            /// one-result-out-pointer limit the multi-slot rows also hit.</para>
+            /// </summary>
+            internal static readonly WireForm Guid = new(
+                WireKind.Scalar, "const uint8_t*", "uint8_t*", "const uint8_t*", "const uint8_t*");
+
+            /// <summary>
+            /// §6.4's StringBuilder row: crosses BY VALUE as the String wire, to-net ONLY. The
+            /// pointer borrows a <c>std::string</c> the CALL SITE keeps alive across the call —
+            /// unlike <see cref="String"/>'s out direction, nothing here is
+            /// <c>blnet_alloc</c>'d and nothing is freed.
+            /// </summary>
+            internal static readonly WireForm StringBuilder = new(
+                WireKind.Scalar, "const char*", "const char*", "const char*", "const char*");
+
             internal static WireForm Scalar(string cType) =>
                 new(WireKind.Scalar, cType, cType + "*", cType, cType);
         }
@@ -437,13 +458,19 @@ namespace BasicLang.Compiler.CodeGen.Net
             // RAW wire scalar — the CALL SITE converts through blnet_marshal.hpp's
             // to_net_datetime/from_net_datetime (etc.), because this header is deliberately
             // include-free of the P1 types (the marshal header's include-order contract).
-            // Decimal (4 scalars), Guid (16 bytes), DateTimeOffset (the DECLARED scalar
-            // pair) and StringBuilder (directional String) need multi-slot/directional
-            // machinery — Task 8's §8.3 drift completion; until then they stay in the handle
-            // row here AND the analyzer refuses them at resolved call sites, so no BL call
-            // can reach a handle-shaped §6.4 slot.
+            // Decimal (4 scalars) and DateTimeOffset (the DECLARED scalar pair) still need
+            // multi-slot machinery, so they stay in the handle row here AND the analyzer
+            // refuses them at resolved call sites — no BL call can reach a handle-shaped
+            // §6.4 slot.
             "System.DateTime" => Wire.Scalar("uint64_t"),
             "System.TimeSpan" => Wire.Scalar("int64_t"),
+
+            // §6.4 rows that cross on ONE POINTER slot (Task 8c). Both are pure passthrough
+            // here — the proxy forwards the caller's pointer and converts nothing, exactly as
+            // it does for String. The call site owns the buffer and the conversion, which is
+            // what keeps this header free of the P1 types.
+            "System.Guid" => Wire.Guid,
+            "System.Text.StringBuilder" => Wire.StringBuilder,
             _ => Wire.Handle,
         };
 

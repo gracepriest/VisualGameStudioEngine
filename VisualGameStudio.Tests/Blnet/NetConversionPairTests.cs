@@ -408,13 +408,24 @@ public class NetConversionPairTests
                 if (row.IsMultiSlot) continue;
 
                 // std:: is the header's spelling of the same fixed-width type the row names.
+                var flattened = native.Replace("std::", string.Empty);
+
+                // A POINTER row declares its converter parameter as a SIZED ARRAY —
+                // `from_net_guid(const uint8_t in[16])` — which is the same type as
+                // `const uint8_t*` after array-to-pointer decay but not the same spelling.
+                // Accept either. For a by-value row the two forms are identical, so this
+                // widening costs those rows no strictness: `uint64_t`.TrimEnd('*') is itself.
+                var verbatim = fromNet + "(" + row.CWire + " ";
+                var decayed = fromNet + "(" + row.CWire.TrimEnd('*').TrimEnd() + " ";
+
                 Assert.That(
-                    native.Replace("std::", string.Empty),
-                    Does.Contain(fromNet + "(" + row.CWire + " "),
-                    $"'{row.NativeFromNet}' must take the row's wire type '{row.CWire}'. A call "
-                    + "site declares a temporary of exactly that type for §8.3's pointer slot, "
-                    + "and a width mismatch there truncates silently rather than failing to "
-                    + "compile.");
+                    flattened.Contains(verbatim, StringComparison.Ordinal)
+                        || flattened.Contains(decayed, StringComparison.Ordinal),
+                    Is.True,
+                    $"'{row.NativeFromNet}' must take the row's wire type '{row.CWire}' (or its "
+                    + "decayed-array spelling). A call site declares a temporary of exactly that "
+                    + "type for §8.3's pointer slot, and a width mismatch there truncates "
+                    + "silently rather than failing to compile.");
             }
         });
     }

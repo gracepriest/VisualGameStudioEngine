@@ -980,21 +980,32 @@ test AND a receiver-set test proving it now answers "value type".
 
 ### Task 8c: the four remaining §6.4 rows + enum arguments — **blocks Task 13 program #1**
 
-> ⚠⚠ **STATUS 2026-08-05 — PARTIALLY LANDED. VERIFY BEFORE IMPLEMENTING; DO NOT REDO BLIND.**
-> A tree inspection found the four rows already present and wired in **both** directions:
-> `NetMarshalTable.cs:274-287` carries `System.Decimal`, `System.Guid`, `System.DateTimeOffset`
-> and `System.Text.StringBuilder` with `NativeToNet`/`NativeFromNet` functions
-> (`to_net_decimal`/`from_net_decimal`, …), `IsMultiSlot: true` where the arity demands it, and
-> StringBuilder correctly **directional (to-net only)** per §6.4. `NetConversionPairTests.cs`
-> references all six rows, and **no surviving gate limits lowering to DateTime+TimeSpan**.
+> ⛔ **STATUS 2026-08-05 — NOT STARTED. MEASURED, correcting an earlier annotation in this
+> same file that called it "partially landed".**
 >
-> **The genuinely missing piece is the ENUM half**, which matches the measured note below:
-> `FileMode.Open` types as `Object` and lowers to nothing, so enum-member-constant lowering in
-> the FRONT END is the real work. `NetMarshalTable.cs:100-152` already exposes
-> `ResolveEnumUnderlyingType` (§8.3's enum row) for the marshaling side to build on.
+> That earlier note reasoned from `NetMarshalTable.cs:274-287`, which does carry all four rows
+> with `NativeToNet`/`NativeFromNet` converter names and `IsMultiSlot: true`. **That table holds
+> the DESIGN, not the lowering.** Every row is still refused at the call site, with purpose-built
+> messages Task 8 left deliberately. Measured by driving one program per row through
+> parse → analyze → lower:
 >
-> **First step of this task is therefore a verification step, not an implementation step:**
-> write one program per row through the real CLI and see which actually fail.
+> | Shape | Outcome |
+> |---|---|
+> | control (`Integer`) | LOWERED ok — the probe itself is sound |
+> | `Decimal` | BL6019 *"whose §6.4 wire form is not a single slot — it is not lowered at the native boundary yet"* |
+> | `Guid` | BL6019, same message |
+> | `StringBuilder` | BL6019, same message |
+> | enum member (`FileMode.Open`) | BL6019 *"§8.3's underlying-integral enum marshaling is not lowered at the native boundary yet"* |
+> | `DateTimeOffset` | not measured — the probe used `DateTimeOffset.Empty`, which does not exist (only `Guid` has `.Empty`) |
+>
+> So this is real work, not wiring: multi-slot marshaling (Decimal = four scalars, Guid = sixteen
+> bytes, DateTimeOffset = the declared scalar pair, StringBuilder = directional String) plus
+> enum-member-constant lowering in the front end. `NetMarshalTable.cs:100-152` exposes
+> `ResolveEnumUnderlyingType` for the enum half to build on.
+>
+> ⚠ **Durable lesson from the wrong annotation:** a table of converter NAMES is not evidence that
+> anything calls them. Grep for callers, not definitions — the same rule this repo already
+> records from the extensions work.
 
 Detailed designs are recorded in the plan above (commit `c29b4ca`): three distinct
 complications (arity>1 scalars via out-references returning `void`; direction-dependent C type

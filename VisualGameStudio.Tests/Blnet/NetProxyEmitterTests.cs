@@ -98,6 +98,14 @@ public class NetProxyEmitterTests
             // the fixture was believed to provide.
             Member("SumAll", "MyLib.Widen", NetMemberCategory.Method,
                    true, "System.Int32", P("System.Int32[]")),
+            // §6.4's ONE-SLOT POINTER rows (P2a-2 Task 8c). Unlike the DateTime/TimeSpan pairs
+            // above, these appear in the ARGUMENT direction ONLY — that is not an oversight in
+            // the fixture but the shape of the feature: both converters fill a caller-owned
+            // buffer, and a proxy has a single result out-pointer, so the call site refuses a
+            // Guid or StringBuilder RESULT. A member returning one would pin a slot the
+            // boundary cannot actually carry.
+            Member("Stamp", "MyLib.Widen", NetMemberCategory.Method,
+                   true, "System.Int32", P("System.Guid"), P("System.Text.StringBuilder")),
         },
         new[] { "System.Text.RegularExpressions.Regex" });
 
@@ -106,13 +114,13 @@ public class NetProxyEmitterTests
     /// inlined so a fixture change updates ONE number and every count guard follows — a guard
     /// that silently tracked the fixture would assert nothing.
     /// </summary>
-    /// <para>Composition matters here, because the number is not the member count: <b>12 member
+    /// <para>Composition matters here, because the number is not the member count: <b>13 member
     /// slots + 2 §8.6 array-copy helper slots</b> (<c>bl_net_array_new_…</c> and
     /// <c>bl_net_array_read_…</c>, one pair per distinct element form). The helpers are ORDINARY
     /// slots on purpose — as a side channel they would have been exempt from §12.4's
     /// slots-≡-exports comparison — so they belong in this count and in every per-body
     /// assertion that iterates it.</para>
-    internal const int ShapeCount = 14;
+    internal const int ShapeCount = 15;
 
     /// <summary>
     /// <b>The row-by-row tie between <c>NetMarshalTable.WireRows</c>' <c>CWire</c> column and

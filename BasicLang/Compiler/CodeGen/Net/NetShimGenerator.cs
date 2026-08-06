@@ -943,6 +943,24 @@ namespace BasicLang.Compiler.CodeGen.Net
                 new(WireKind.Handle, "ulong", "ulong*", "object");
 
             /// <summary>
+            /// §6.4's Guid row. <c>Scalar</c> kind so <c>Argument</c> routes it through
+            /// <see cref="FromWire"/>, which is where the 16 borrowed bytes become a
+            /// <c>System.Guid</c>. The C column is <c>const uint8_t*</c> / <c>uint8_t*</c>;
+            /// C# has no const pointers, so both directions spell <c>byte*</c>.
+            /// </summary>
+            internal static readonly WireForm Guid =
+                new(WireKind.Scalar, "byte*", "byte*", "System.Guid");
+
+            /// <summary>
+            /// §6.4's StringBuilder row: the String wire, to-net ONLY. Not
+            /// <see cref="WireKind.String"/> — that kind's <c>Argument</c> arm produces a
+            /// <c>string</c>, and its RESULT arm would <c>blnet_alloc</c> a buffer for a
+            /// direction this row does not have.
+            /// </summary>
+            internal static readonly WireForm StringBuilder =
+                new(WireKind.Scalar, "byte*", "byte*", "System.Text.StringBuilder");
+
+            /// <summary>
             /// §8.4's delegate parameter. Same wire as <see cref="Handle"/> — a callback handle is
             /// a <c>ulong</c> — which is what keeps this row's C signature identical to the C
             /// column's <c>Wire.Callback</c> and the signature-parity test comparing equal.
@@ -1028,12 +1046,14 @@ namespace BasicLang.Compiler.CodeGen.Net
             "System.Char" => Wire.Char,
             "System.String" => Wire.String,
             // §6.4 single-slot pairs — SAME rows, SAME order as NetProxyEmitter.WireOf (the
-            // two are compared by NetShimGeneratorTests). The multi-slot pairs (Decimal,
-            // Guid, DateTimeOffset, StringBuilder) stay in the handle row on BOTH sides
-            // until Task 8's drift completion; the analyzer refuses them at resolved call
-            // sites, so no BasicLang call reaches the handle-shaped slot.
+            // two are compared by NetShimGeneratorTests). Decimal and DateTimeOffset stay in
+            // the handle row on BOTH sides until the multi-slot machinery exists; the analyzer
+            // refuses them at resolved call sites, so no BasicLang call reaches the
+            // handle-shaped slot.
             "System.DateTime" => Wire.DateTime,
             "System.TimeSpan" => Wire.TimeSpan,
+            "System.Guid" => Wire.Guid,
+            "System.Text.StringBuilder" => Wire.StringBuilder,
             _ => Wire.Handle,
         };
 
@@ -1046,6 +1066,21 @@ namespace BasicLang.Compiler.CodeGen.Net
                 "char" => "(char)(" + expression + ")",
                 "System.DateTime" => "BlnetMarshal.DateTimeFromWire(" + expression + ")",
                 "System.TimeSpan" => "BlnetMarshal.TimeSpanFromWire(" + expression + ")",
+
+                // GuidFromWire is byte[]-based. Copying through ReadOnlySpan.ToArray() inline
+                // keeps this an EXPRESSION — EmitWrapper has no place to put a statement here —
+                // and the copy is required anyway: the 16 bytes are BORROWED for the duration of
+                // the call, so a Guid built over them must not alias the caller's buffer.
+                "System.Guid" => "BlnetMarshal.GuidFromWire(new global::System.ReadOnlySpan<byte>("
+                                 + expression + ", 16).ToArray())",
+
+                // §6.4's one-way row: the wire value is the UTF-8 CONTENT, so it decodes exactly
+                // as a String parameter does and is then wrapped. Utf8ToString maps a null
+                // pointer to null, which is Nothing — StringBuilderFromWire preserves that rather
+                // than manufacturing an empty builder.
+                "System.Text.StringBuilder" =>
+                    "BlnetMarshal.StringBuilderFromWire(Utf8ToString(" + expression + "))",
+
                 _ => expression,
             };
 
