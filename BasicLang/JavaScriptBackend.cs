@@ -134,8 +134,13 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // the checker gave up: see ForeignName, through which EVERY name-rendering site
             // routes. A `::` TYPE is still refused by the checker, which is why the flag is
             // narrow enough to be safe.
+            //
+            // allowJsImports: true for the same structural reason and only here — #JsImport is
+            // this backend's own directive, and every OTHER backend must refuse it rather than
+            // silently drop it. See the mirror-row note on the checker's honesty matrix.
             ForeignFeatureChecker.Check(module, "JavaScript", rejectCollections: false,
-                ownInlineLanguage: "javascript", allowForeignIdentifiers: true);
+                ownInlineLanguage: "javascript", allowForeignIdentifiers: true,
+                allowJsImports: true);
             JsCapabilityChecker.Check(module);
 
             _module = module;

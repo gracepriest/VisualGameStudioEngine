@@ -25,11 +25,21 @@ namespace BasicLang.Compiler.CodeGen
     /// | Feature                  | C++ | C#        | JavaScript | LLVM      | MSIL      |
     /// |--------------------------|-----|-----------|------------|-----------|-----------|
     /// | #CppInclude headers      | yes | error     | error      | error     | error     |
+    /// | #JsImport modules        | error | error   | yes        | error     | error     |
     /// | :: foreign TYPES         | yes | error     | error      | error     | error     |
     /// | :: foreign EXPRESSIONS   | yes | error     | VERBATIM   | error     | error     |
     /// | Collections (List/...)   | yes | native    | native     | error     | error     |
     /// | Foreign inline code      | yes | error     | error      | error     | error     |
     ///   (cpp{} passthrough)
+    ///
+    /// ⛔ <b>The two directive rows are MIRRORS and must stay symmetric.</b> <c>#CppInclude</c>
+    /// names a C++ header and <c>#JsImport</c> an ES module; each is honoured by exactly one
+    /// backend and is meaningless to every other. Note the C++ column differs between them —
+    /// the C++ backend does not run this checker at all, so its <c>#JsImport</c> refusal lives in
+    /// <c>CppCapabilityChecker.Check</c> (which covers both <c>Generate</c> and the project
+    /// route's <c>GenerateSplit</c>). A directive a backend cannot honour must ERROR, never be
+    /// dropped: a silently-ignored <c>#JsImport</c> is a build that reports success and omits the
+    /// library the program depends on.
     ///
     /// ⛔ <b>The two ':: foreign' rows are one syntax with two meanings, split by POSITION.</b>
     /// A <c>::</c> name in TYPE position (<c>Dim m As std::mutex</c>) is an opaque C++ type that
@@ -81,8 +91,20 @@ namespace BasicLang.Compiler.CodeGen
         /// without that handling does not produce an error; it produces a mangled identifier in a
         /// build that reported success. See <c>JavaScriptCodeGenerator.ForeignName</c>.</para>
         /// </param>
+        /// <param name="allowJsImports">
+        /// True only for a backend that emits real ES <c>import</c> statements — today, JavaScript.
+        ///
+        /// <para>⛔ An OPT-IN rather than a blanket rejection, because unlike <c>#CppInclude</c>
+        /// this checker's own caller list includes the backend the directive is FOR. A naive
+        /// <c>JsImports.Count > 0 → throw</c> would refuse JavaScript itself.</para>
+        ///
+        /// <para>⛔ Do not replace this with a <c>backendName == "JavaScript"</c> test. The name is
+        /// display text for a diagnostic, and making a capability decision out of it means a
+        /// backend renamed for readability silently changes what it accepts.</para>
+        /// </param>
         public static void Check(IRModule module, string backendName, bool rejectCollections,
-            string ownInlineLanguage, bool allowForeignIdentifiers = false)
+            string ownInlineLanguage, bool allowForeignIdentifiers = false,
+            bool allowJsImports = false)
         {
             if (module == null) return;
 
@@ -95,6 +117,18 @@ namespace BasicLang.Compiler.CodeGen
                 throw new ForeignFeatureException(
                     $"The {backendName} backend does not support #CppInclude (C++ header passthrough); " +
                     "it is only available on the C++ backend.");
+            }
+
+            // (1b) #JsImport module specifiers — JavaScript-backend-only passthrough, and the
+            // exact mirror of (1). Without this arm a #JsImport in a C# program preprocesses
+            // clean, rides along on the module, and is SILENTLY DROPPED: `dotnet build` succeeds
+            // and the library the program depends on was never imported. The half-implementation
+            // this backend's capability line exists to prevent, pointing the other way.
+            if (!allowJsImports && module.JsImports != null && module.JsImports.Count > 0)
+            {
+                throw new ForeignFeatureException(
+                    $"The {backendName} backend does not support #JsImport (JavaScript module import); " +
+                    "it is only available on the JavaScript backend.");
             }
 
             // (2) ::-qualified foreign types, and (3, LLVM/MSIL only) collections.

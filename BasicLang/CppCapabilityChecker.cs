@@ -156,6 +156,18 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         {
             var diags = new List<string>();
 
+            // #JsImport names an ES module — a JavaScript-backend-only passthrough with no C++
+            // meaning at all. The MIRROR of ForeignFeatureChecker's #CppInclude arm, which
+            // refuses a C++ header on every managed backend; this is the same refusal pointing
+            // the other way, and it lives HERE rather than in CppCodeGenerator.Generate because
+            // the project route goes through GenerateSplit instead. Both call this checker, so
+            // one arm covers both; a guard written at the Generate site would leave the SHIPPING
+            // path silently dropping the directive — the failure mode the repo already paid for
+            // with three independent backend-dispatch maps.
+            if (module.JsImports != null && module.JsImports.Count > 0)
+                diags.Add("#JsImport (JavaScript module import) is only available on the " +
+                          "JavaScript backend");
+
             _userDefinedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var name in module.Classes.Keys) _userDefinedNames.Add(name);
             foreach (var name in module.Interfaces.Keys) _userDefinedNames.Add(name);

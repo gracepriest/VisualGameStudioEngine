@@ -90,6 +90,69 @@ public class JsCapabilityCheckerTests
     }
 
     /// <summary>
+    /// ⛔ THE MIRROR OF <see cref="Js_CppInclude_ThrowsCleanError"/>, and the reason plan 2
+    /// gained a task 1b.
+    ///
+    /// <para>The <c>#CppInclude</c> precedent has THREE parts — collect, thread onto the module,
+    /// and REFUSE on backends that cannot honour it — and the first cut of <c>#JsImport</c>
+    /// copied only the first two. A <c>#JsImport "./chart.js"</c> in a C#-backend program
+    /// preprocessed clean, rode along on <c>CombinedIR</c>, and was silently DROPPED: the build
+    /// reported success and the import simply never happened. That is the "a refusal beats a half
+    /// implementation" line this backend is built on, violated in the other direction — and it is
+    /// invisible unless a test drives the OTHER backends, because every JavaScript test passes
+    /// either way.</para>
+    ///
+    /// <para>Driven through <c>Program.GenerateCode</c> — the CLI's real dispatch seam — so this
+    /// proves the wiring the backend ships with, not a hand-built generator.</para>
+    /// </summary>
+    [Test]
+    public void JsImport_OnTheCSharpBackend_ThrowsCleanError()
+    {
+        var module = JsTestSupport.BuildModule("#JsImport \"./chart.js\"\nSub Main()\nEnd Sub",
+            runPreprocessor: true);
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => BasicLang.Compiler.Driver.Program.GenerateCode(module, "csharp"));
+
+        Assert.That(ex!.Message, Does.Contain("#JsImport"), "must name the offending directive");
+        Assert.That(ex.Message, Does.Contain("C#"), "must name the backend that refused it");
+    }
+
+    /// <summary>
+    /// The C++ backend does NOT route through <c>ForeignFeatureChecker</c> — it runs its own
+    /// <c>CppCapabilityChecker</c> — so the shared arm cannot cover it and it needs its own
+    /// guard. Placing that guard in the checker rather than in <c>Generate</c> covers
+    /// <c>GenerateSplit</c> (the real project route) at the same time; a guard written at the
+    /// Generate site alone would leave the shipping path silently dropping the directive.
+    /// </summary>
+    [Test]
+    public void JsImport_OnTheCppBackend_ThrowsCleanError()
+    {
+        var module = JsTestSupport.BuildModule("#JsImport \"./chart.js\"\nSub Main()\nEnd Sub",
+            runPreprocessor: true);
+
+        var ex = Assert.Throws<BasicLang.Compiler.CodeGen.CPlusPlus.CppCapabilityException>(
+            () => BasicLang.Compiler.Driver.Program.GenerateCode(module, "cpp"));
+
+        Assert.That(ex!.Message, Does.Contain("#JsImport"));
+    }
+
+    /// <summary>
+    /// The other half of the pair: the refusal must be an OPT-OUT, not a blanket one. The
+    /// checker is shared, and JavaScript calls it too — a naive `JsImports.Count > 0 → throw`
+    /// would refuse the one backend the directive exists for.
+    /// </summary>
+    [Test]
+    public void JsImport_OnJavaScript_IsAccepted()
+    {
+        var module = JsTestSupport.BuildModule("#JsImport \"./chart.js\"\nSub Main()\nEnd Sub",
+            runPreprocessor: true);
+
+        Assert.That(new JavaScriptCodeGenerator().Generate(module),
+            Does.Contain("import \"./chart.js\";"));
+    }
+
+    /// <summary>
     /// Plan task 6, reframed: BL7001 was to reject method overloading, but BasicLang has
     /// none — the SemanticAnalyzer already refuses a second same-named subroutine, for free
     /// subs and class methods alike. A BL7001 arm in JsCapabilityChecker could never fire,
