@@ -1359,11 +1359,23 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // Collections lower to NATIVE JS types. `new List()` would be a ReferenceError —
             // there is no List in JavaScript. Array and Map are reference types, which is what
             // gives these the .NET reference semantics the spec requires, for free.
-            switch (CollectionKindOf(n.ClassName))
+            var kind = CollectionKindOf(n.ClassName);
+            if (kind != CollectionKind.None)
             {
-                case CollectionKind.List: return "[]";
-                case CollectionKind.Dictionary: return "new Map()";
-                case CollectionKind.Set: return "new Set()";
+                // ⛔ Arguments must NOT be forwarded, and must NOT be dropped either.
+                // `New List(Of Integer)(64)` is a CAPACITY — `new Array(64)` would create 64
+                // holes, and ignoring it silently yields an empty list. The copy form
+                // `New List(Of T)(other)` is worse: `new Array(other)` is a ONE-element array.
+                // Neither has a safe silent lowering, so refuse the argument forms.
+                if (n.Arguments != null && n.Arguments.Count > 0)
+                    throw NotYet($"New {n.ClassName}(…) with constructor arguments");
+
+                switch (kind)
+                {
+                    case CollectionKind.List: return "[]";
+                    case CollectionKind.Dictionary: return "new Map()";
+                    case CollectionKind.Set: return "new Set()";
+                }
             }
 
             return $"new {SanitizeName(n.ClassName)}({string.Join(", ", n.Arguments.ConvertAll(Expr))})";
@@ -1541,7 +1553,89 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         public void Visit(IRFieldStore fieldStore) =>
             Line($"{Expr(fieldStore.Object)}.{SanitizeName(fieldStore.FieldName)} = {Expr(fieldStore.Value)};");
         public void Visit(IRTupleElement tupleElement) => throw NotYet(nameof(IRTupleElement));
-        public void Visit(IRTryCatch tryCatch) => throw NotYet(nameof(IRTryCatch));
+        /// <summary>
+        /// Try / Catch / Finally, all three native in JavaScript.
+        ///
+        /// <para>Like IRForEach this is an INSTRUCTION carrying its own blocks, not a
+        /// terminator — so the continuation lives in EndBlock and is emitted here.</para>
+        ///
+        /// <para>A <c>Return</c> inside the try is emitted as a plain <c>return</c>: the
+        /// language guarantees the <c>finally</c> still runs, which is exactly the guarantee
+        /// the C++ backend fails to provide.</para>
+        /// </summary>
+        public void Visit(IRTryCatch tryCatch)
+        {
+            Line("try {");
+            _indentLevel++;
+            EmitNestedBlock(tryCatch.TryBlock, tryCatch.EndBlock);
+            _indentLevel--;
+
+            var clauses = tryCatch.CatchClauses ?? new List<IRCatchClause>();
+            if (clauses.Count > 0)
+            {
+                // JS allows exactly ONE catch binding, so multiple typed clauses would need an
+                // instanceof ladder inside it. Under erasure there is no reliable runtime type
+                // to test against, so more than one clause is refused rather than silently
+                // routed to the first.
+                if (clauses.Count > 1)
+                    throw NotYet("multiple Catch clauses (JavaScript has a single catch binding)");
+
+                var clause = clauses[0];
+                var binding = string.IsNullOrEmpty(clause.VariableName)
+                    ? "_ex"
+                    : SanitizeName(clause.VariableName);
+
+                Line($"}} catch ({binding}) {{");
+                _indentLevel++;
+                EmitNestedBlock(clause.Block, tryCatch.EndBlock);
+                _indentLevel--;
+            }
+            else if (tryCatch.FinallyBlock == null)
+            {
+                // try with neither catch nor finally is not valid JS.
+                Line("} catch (_ex) {");
+                Line("    throw _ex;");
+            }
+
+            if (tryCatch.FinallyBlock != null)
+            {
+                Line("} finally {");
+                _indentLevel++;
+                EmitNestedBlock(tryCatch.FinallyBlock, tryCatch.EndBlock);
+                _indentLevel--;
+            }
+
+            Line("}");
+
+            EmitStructured(tryCatch.EndBlock);
+        }
+
+        /// <summary>
+        /// Emits one arm of a try/catch/finally. The arm's blocks are also in
+        /// <c>function.Blocks</c>, so they are marked emitted to stop the structured walk
+        /// reaching them again, and a branch to the construct's EndBlock emits nothing —
+        /// the continuation belongs to the enclosing statement, not to the arm.
+        /// </summary>
+        private void EmitNestedBlock(BasicBlock block, BasicBlock endBlock)
+        {
+            if (block == null) return;
+
+            _emitted.Add(block);
+            _pendingMerges.Push(endBlock);
+            EmitInstructions(block);
+
+            switch (block.GetTerminator())
+            {
+                case IRConditionalBranch cond: EmitConditional(cond); break;
+                case IRBranch br: EmitBranch(br); break;
+                case IRSwitch sw: EmitSelectCase(sw); break;
+            }
+
+            _pendingMerges.Pop();
+        }
+
+        public void Visit(IRThrow throwInst) =>
+            Line(throwInst.Exception == null ? "throw _ex;" : $"throw {Expr(throwInst.Exception)};");
         public void Visit(IRInlineCode inlineCode) => throw NotYet(nameof(IRInlineCode));
         /// <summary>
         /// <c>For Each</c> → <c>for (const v of collection)</c>.
@@ -1615,7 +1709,6 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // Pure: only needs binding when something reads it.
             if (IsUsed(indexer)) Bind(indexer.Name, IndexerAccess(indexer));
         }
-        public void Visit(IRThrow throwInst) => throw NotYet(nameof(IRThrow));
         public void Visit(IRIndexerStore indexerStore)
         {
             var receiver = Expr(indexerStore.Collection);
