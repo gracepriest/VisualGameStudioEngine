@@ -118,4 +118,61 @@ public class ExtensionHostInboundBindingTests
             "named-argument binding on this channel is case-SENSITIVE; leaving unreferenced options "
             + "that claim otherwise invites a rename that silently unbinds a handler");
     }
+
+    /// <summary>
+    /// <c>languages/publishDiagnostics</c> is what carries an extension's diagnostics to the
+    /// Problems panel — the whole point of running ESLint. <c>languages.js:227</c> sends the key
+    /// <c>collection</c>; the handler named it <c>collectionName</c>, and since that parameter had
+    /// no default the ENTIRE invocation failed to bind, taking <c>uri</c> and <c>diagnostics</c>
+    /// with it. It is a notification, so nothing was logged and nothing failed visibly.
+    ///
+    /// <para>Fired from every DiagnosticCollection mutation (set/delete/clear), so no extension
+    /// diagnostic has ever reached the IDE.</para>
+    /// </summary>
+    [Test]
+    public void PublishDiagnostics_BindsTheKeyTheHostSends()
+    {
+        var signature = SignatureOf("OnPublishDiagnostics(");
+
+        Assert.That(signature, Does.Contain("collection"),
+            "languages.js sends `collection`; a parameter named anything else fails to bind");
+        Assert.That(signature, Does.Not.Contain("collectionName"),
+            "`collectionName` is the name that never bound — StreamJsonRpc matches named arguments "
+            + "by exact parameter name");
+        Assert.That(signature, Does.Contain("= null").Or.Contain("= default"),
+            "a collection-less publish must still bind; a required parameter whose key is absent "
+            + "fails the whole invocation");
+    }
+
+    /// <summary>
+    /// The only inbound mismatch that fails LOUDLY — and it kills extensions outright.
+    /// <c>window.js:81-87</c> sends five keys <c>{ type, message, options, items, extensionId }</c>
+    /// against a four-parameter handler with different names, producing
+    /// <c>-32602 ... supplies 5</c>. Because this is a REQUEST rather than a notification the JS
+    /// promise REJECTS, so <c>vscode.window.showInformationMessage(...)</c> throws inside the
+    /// extension — and an unhandled rejection inside <c>activate()</c> aborts activation.
+    /// </summary>
+    [TestCase("type")]
+    [TestCase("message")]
+    [TestCase("options")]
+    [TestCase("items")]
+    [TestCase("extensionId")]
+    public void ShowMessage_BindsEveryKeyTheHostSends(string key)
+    {
+        Assert.That(SignatureOf("OnShowMessageAsync("), Does.Contain(key),
+            $"window.js sends '{key}'; a handler missing it cannot bind, and because showMessage is "
+            + "a request the rejection propagates into the extension and aborts its activation");
+    }
+
+    /// <summary>Extracts a method's parameter list so assertions cannot match unrelated code.</summary>
+    private static string SignatureOf(string methodPrefix)
+    {
+        var src = HostSource();
+        var idx = src.IndexOf(methodPrefix, StringComparison.Ordinal);
+        Assert.That(idx, Is.GreaterThan(-1), $"premise: {methodPrefix} still exists");
+
+        var close = src.IndexOf(')', idx);
+        Assert.That(close, Is.GreaterThan(-1));
+        return src.Substring(idx, close - idx);
+    }
 }

@@ -189,7 +189,7 @@ public class ExtensionHost : IDisposable
 
             // Register methods the extension host can call back into the IDE
             _rpc.AddLocalRpcMethod("registerCommand", new Action<string, string>(OnRegisterCommand));
-            _rpc.AddLocalRpcMethod("window/showMessage", new Func<string, string, string, string[]?, Task<string?>>(OnShowMessageAsync));
+            _rpc.AddLocalRpcMethod("window/showMessage", new Func<string, string, JsonElement, string, JsonElement, Task<string?>>(OnShowMessageAsync));
             _rpc.AddLocalRpcMethod("outputChannel/create", new Action<string, string>(OnCreateOutputChannel));
             _rpc.AddLocalRpcMethod("outputChannel/append", new Action<string, string>(OnOutputChannelAppend));
             _rpc.AddLocalRpcMethod("statusBar/update", new Action<string, string, string?, string?>(OnSetStatusBarItem));
@@ -693,16 +693,36 @@ public class ExtensionHost : IDisposable
         });
     }
 
-    private async Task<string?> OnShowMessageAsync(string extensionId, string severity, string message, string[]? actions)
+    /// <summary>
+    /// Handles <c>vscode.window.showInformationMessage</c> and friends.
+    ///
+    /// <para>Parameters mirror <c>vscode-api/window.js:81-87</c> exactly —
+    /// <c>{ type, message, options, items, extensionId }</c>. The old signature took four
+    /// differently-named parameters, producing
+    /// <c>-32602 ... parameter(s) ... 4 - 4, but the request supplies 5</c>.</para>
+    ///
+    /// <para>⛔ This is the one inbound mismatch that fails LOUDLY, and it is far worse than the
+    /// silent ones. <c>showMessage</c> is a REQUEST, so the rejection travels back into the
+    /// extension: <c>await vscode.window.showInformationMessage(...)</c> THROWS, and an unhandled
+    /// rejection inside <c>activate()</c> aborts activation. Showing a message on activation is
+    /// commonplace, so this presents as "that extension doesn't work" rather than as a wire bug.</para>
+    ///
+    /// <para><paramref name="items"/> are objects <c>{ title }</c> (window.js:78-80), not strings.
+    /// <paramref name="options"/> is accepted and currently unused; it carries modal/detail hints
+    /// the IDE has nowhere to show yet, and it needs a default because window.js omits the key when
+    /// no options were passed.</para>
+    /// </summary>
+    private async Task<string?> OnShowMessageAsync(
+        string type, string message, JsonElement items, string extensionId, JsonElement options = default)
     {
-        _outputService.WriteLine($"[ExtensionHost] [{severity}] {extensionId}: {message}", OutputCategory.General);
+        _outputService.WriteLine($"[ExtensionHost] [{type}] {extensionId}: {message}", OutputCategory.General);
 
         var eventArgs = new ExtensionMessageEventArgs
         {
             ExtensionId = extensionId,
-            Severity = severity,
+            Severity = type,
             Message = message,
-            Actions = actions?.ToList() ?? new List<string>(),
+            Actions = ExtractActionTitles(items),
             ResponseSource = new TaskCompletionSource<string?>()
         };
 
@@ -724,6 +744,33 @@ public class ExtensionHost : IDisposable
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Projects <c>window.js</c>'s normalised items — <c>[{ title }]</c> — into the plain action
+    /// titles the IDE presents. Tolerates bare strings too, since an extension may bypass the
+    /// facade's normalisation.
+    /// </summary>
+    private static List<string> ExtractActionTitles(JsonElement items)
+    {
+        var titles = new List<string>();
+        if (items.ValueKind != JsonValueKind.Array) return titles;
+
+        foreach (var item in items.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.String)
+            {
+                titles.Add(item.GetString() ?? "");
+            }
+            else if (item.ValueKind == JsonValueKind.Object
+                     && item.TryGetProperty("title", out var title)
+                     && title.ValueKind == JsonValueKind.String)
+            {
+                titles.Add(title.GetString() ?? "");
+            }
+        }
+
+        return titles;
     }
 
     private void OnCreateOutputChannel(string extensionId, string channelName)
@@ -794,13 +841,29 @@ public class ExtensionHost : IDisposable
         });
     }
 
-    private void OnPublishDiagnostics(string uri, JsonElement diagnostics, string? collectionName)
+    /// <summary>
+    /// Carries an extension's diagnostics to the IDE — the path that puts ESLint's findings in the
+    /// Problems panel.
+    ///
+    /// <para>The third parameter is named <c>collection</c> because that is the key
+    /// <c>vscode-api/languages.js:227</c> sends. It was named <c>collectionName</c>, which does not
+    /// bind; and because it had no default, the failure was not partial — the ENTIRE invocation
+    /// failed to bind, taking <c>uri</c> and <c>diagnostics</c> with it. As a notification it
+    /// produced no error response and no log line, so no extension diagnostic has ever reached the
+    /// IDE, from any of set/delete/clear.</para>
+    ///
+    /// <para>The default is required: a publish for a collection-less diagnostic omits the key, and
+    /// a parameter with no default fails binding when its key is absent. Do not "tidy" this name to
+    /// match the event property — <c>languages/disposeDiagnosticCollection</c> uses
+    /// <c>collection</c> too, and renaming the JS would split the pair.</para>
+    /// </summary>
+    private void OnPublishDiagnostics(string uri, JsonElement diagnostics, string? collection = null)
     {
         DiagnosticsReceived?.Invoke(this, new ExtensionDiagnosticsEventArgs
         {
             Uri = uri,
             Diagnostics = diagnostics,
-            CollectionName = collectionName ?? ""
+            CollectionName = collection ?? ""
         });
     }
 
