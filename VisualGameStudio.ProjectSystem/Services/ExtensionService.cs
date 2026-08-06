@@ -263,36 +263,11 @@ public class ExtensionService : IExtensionService
         });
         _extensionHost.ProviderRegistered += (s, e) =>
         {
-            // Extract language IDs from selector and add to tracking set
-            if (!string.IsNullOrEmpty(e.SelectorJson))
+            // Which languages this provider claims decides whether the IDE will ever ASK for it:
+            // the hover and completion paths are gated on HasExtensionProviders(languageId).
+            foreach (var language in ExtractSelectorLanguages(e.SelectorJson))
             {
-                try
-                {
-                    var doc = JsonDocument.Parse(e.SelectorJson);
-                    if (doc.RootElement.TryGetProperty("language", out var langProp))
-                    {
-                        var lang = langProp.GetString();
-                        if (!string.IsNullOrEmpty(lang))
-                        {
-                            _extensionProviderLanguages.TryAdd(lang, 0);
-                        }
-                    }
-                    else if (doc.RootElement.ValueKind == JsonValueKind.Array)
-                    {
-                        foreach (var item in doc.RootElement.EnumerateArray())
-                        {
-                            if (item.TryGetProperty("language", out var itemLang))
-                            {
-                                var lang = itemLang.GetString();
-                                if (!string.IsNullOrEmpty(lang))
-                                {
-                                    _extensionProviderLanguages.TryAdd(lang, 0);
-                                }
-                            }
-                        }
-                    }
-                }
-                catch { }
+                _extensionProviderLanguages.TryAdd(language, 0);
             }
         };
 
@@ -703,6 +678,81 @@ public class ExtensionService : IExtensionService
     #region Extension Provider Methods
 
     public bool HasExtensionProviders(string languageId) => _extensionProviderLanguages.ContainsKey(languageId);
+
+    /// <summary>
+    /// Reads the language ids out of a VS Code document selector.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ ORDER IS LOAD-BEARING: <see cref="JsonElement.TryGetProperty(string, out JsonElement)"/>
+    /// does NOT return false for a non-object — it THROWS
+    /// <see cref="System.InvalidOperationException"/>. The original inline version called it on the
+    /// root before checking for an array, so an array selector threw on the first line, landed in a
+    /// bare <c>catch { }</c>, and the array-handling branch directly beneath it was unreachable.
+    ///
+    /// <para>Arrays are the ordinary case, not an edge case: <c>vscode-api/languages.js</c> puts
+    /// every selector through <c>_normaliseSelector</c>, which wraps objects and bare strings alike
+    /// into an array. So essentially every real selector was discarded, <c>HasExtensionProviders</c>
+    /// stayed false forever, and the IDE never asked any extension for anything — while the log
+    /// cheerfully reported the provider as registered.</para>
+    ///
+    /// <para>Public and static so this can be tested directly; it is pure, while the event handler
+    /// that consumes it is reachable only through a running extension host.</para>
+    /// </remarks>
+    public static IEnumerable<string> ExtractSelectorLanguages(string? selectorJson)
+    {
+        if (string.IsNullOrWhiteSpace(selectorJson)) yield break;
+
+        JsonDocument doc;
+        try
+        {
+            doc = JsonDocument.Parse(selectorJson);
+        }
+        catch (JsonException)
+        {
+            yield break;
+        }
+
+        using (doc)
+        {
+            var root = doc.RootElement;
+
+            if (root.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in root.EnumerateArray())
+                {
+                    var language = LanguageOf(item);
+                    if (language != null) yield return language;
+                }
+            }
+            else
+            {
+                var language = LanguageOf(root);
+                if (language != null) yield return language;
+            }
+        }
+
+        // A selector entry is either a filter object with an optional `language`, or a bare
+        // language string. Anything else — a scheme-only filter, a number — contributes nothing
+        // and must not disturb its neighbours.
+        static string? LanguageOf(JsonElement element)
+        {
+            if (element.ValueKind == JsonValueKind.String)
+            {
+                var bare = element.GetString();
+                return string.IsNullOrEmpty(bare) ? null : bare;
+            }
+
+            if (element.ValueKind == JsonValueKind.Object
+                && element.TryGetProperty("language", out var languageProperty)
+                && languageProperty.ValueKind == JsonValueKind.String)
+            {
+                var language = languageProperty.GetString();
+                return string.IsNullOrEmpty(language) ? null : language;
+            }
+
+            return null;
+        }
+    }
 
     public async Task<JsonElement?> RequestCompletionAsync(string uri, int line, int character, CancellationToken ct = default)
     {
