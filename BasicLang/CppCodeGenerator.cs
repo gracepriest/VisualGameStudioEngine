@@ -4237,10 +4237,28 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // A body's normal exit branches to EndBlock; here that is a legal forward `goto
             // try_end;` (a jump out of the try to the function-scope continuation label), so no
             // loopEnd remap is needed (loopEnd: null).
+            // ⛔ WITH A FINALLY, THE NORMAL EXIT MUST FALL OUT, NOT GOTO. The normal-path
+            // finally copy is emitted at the END of this method, i.e. BETWEEN the last catch
+            // and the (unsuffixed) end label. A `goto try0_end;` from inside the try jumps
+            // clean over it — measured: a Try/Finally that should print 11 printed 1, and a
+            // caught one that should print 12 printed 2, on BOTH paths, exit 0, no warning.
+            // RegionEnd.FallThrough emits nothing at a plain region end, so control leaves the
+            // try{} scope and lands on that copy.
+            //
+            // ⚠ RESIDUAL, and pre-existing: a CONDITIONAL branch to the end block still emits
+            // `goto EndLabelName` under either mode (see the RegionEnd switch in the
+            // conditional-branch helper), so an early conditional exit from a Try still skips
+            // its Finally. That is the shape the finally-duplication design's own comment
+            // already calls out as unsupported; this change fixes the straight-line paths and
+            // does not pretend to fix that one.
+            var fallOutToFinally = tryCatch.FinallyBlock != null
+                ? RegionEnd.FallThrough
+                : RegionEnd.GotoEnd;
+
             WriteLine("try");
             WriteLine("{");
             Indent();
-            EmitInlineRegion(tryCatch.TryBlock, tryCatch.EndBlock, RegionEnd.GotoEnd);
+            EmitInlineRegion(tryCatch.TryBlock, tryCatch.EndBlock, fallOutToFinally);
             Unindent();
             WriteLine("}");
 
@@ -4325,7 +4343,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 WriteLine($"catch (const {exType}& {varName})");
                 WriteLine("{");
                 Indent();
-                EmitInlineRegion(catchClause.Block, tryCatch.EndBlock, RegionEnd.GotoEnd);
+                // Same reason as the try body: with a Finally present, a caught exception's
+                // handler must fall out to the normal-path finally copy rather than goto past
+                // it. Measured before this: the caught case printed 2 instead of 12.
+                EmitInlineRegion(catchClause.Block, tryCatch.EndBlock, fallOutToFinally);
                 Unindent();
                 WriteLine("}");
             }
