@@ -4794,7 +4794,47 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return $"\"{EscapeString(str)}\"";
 
             if (constant.Value is char ch)
+            {
+                // ⛔ NON-ASCII IS REFUSED, NOT EMITTED. BasicLang Char is a UTF-16 code unit
+                // (0..65535), but this backend maps it to an 8-bit C++ `char` and the literal
+                // was spliced in as its RAW UTF-8 BYTES inside single quotes — the measured
+                // emission for "é"c is 27 C3 A9 27, which C++ reads as a MULTICHARACTER literal
+                // of type int and then narrows to its last byte. g++ itself diagnoses this
+                // (-Wmultichar, "overflow ... changes value from 50089 to -87"); the build just
+                // passes -w.
+                //
+                // THREE distinct silent miscompiles fell out of that one byte, all measured:
+                // AscW("é"c) returned 169 instead of 233; two DIFFERENT characters compared
+                // EQUAL, because U+00E9 and U+0429 both end in A9; and a Select Case label on a
+                // non-ASCII Char could never match its own subject.
+                //
+                // ⛔ REFUSING IS DELIBERATE AND IS NOT A STEP TOWARD WIDENING. Widening Char to
+                // 16 bits ALONE would create a worse inconsistency: String maps to std::string,
+                // i.e. UTF-8 BYTES, and Len("é") is already 2 natively against 1 on .NET. A Char
+                // that can hold U+03C0 sitting beside a String that can never index to one
+                // breaks every String/Char seam simultaneously — the fill constructor, `s & c`,
+                // and `cout << c`, which for char16_t is a DELETED overload in C++20. The real
+                // fix is ONE decision about the C++ string representation covering Char, Len,
+                // Mid and indexing together, and it belongs in a spec rather than here.
+                //
+                // ⛔ DO NOT "fix" this by hex-escaping instead. `\x` + ToString("x2") is a
+                // MINIMUM width, so U+0429 emits '\x429', which g++ truncates mod 256 to 0x29 —
+                // ASCII ')'. That converts a harmlessly dead Select Case arm into one that
+                // spuriously matches a real ')'. Measured end to end.
+                if (ch > 0x7F)
+                {
+                    throw new CppCapabilityException(new List<string>
+                    {
+                        $"the Char literal U+{(int)ch:X4} is above U+007F and has no C++ "
+                        + "lowering: this backend represents Char as an 8-bit char, so the "
+                        + "literal would be silently truncated to a single byte — two different "
+                        + "characters could then compare equal, and a Select Case label could "
+                        + "never match. Use a String literal instead, or an ASCII Char."
+                    });
+                }
+
                 return $"'{EscapeChar(ch)}'";
+            }
 
             if (constant.Value is bool b)
                 return b ? "true" : "false";
