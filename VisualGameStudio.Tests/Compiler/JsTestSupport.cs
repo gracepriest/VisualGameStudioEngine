@@ -4,6 +4,7 @@ using System.Linq;
 using NUnit.Framework;
 using BasicLang.Compiler;
 using BasicLang.Compiler.IR;
+using BasicLang.Compiler.IR.Optimization;
 using BasicLang.Compiler.SemanticAnalysis;
 using BasicLang.Compiler.CodeGen.JavaScript;
 
@@ -36,6 +37,7 @@ internal static class JsTestSupport
     {
         string processed = source;
         var cppIncludes = new List<string>();
+        var jsImports = new List<string>();
 
         if (runPreprocessor)
         {
@@ -44,6 +46,7 @@ internal static class JsTestSupport
             Fail(pre.Errors.Count > 0, "preprocess",
                 string.Join("; ", pre.Errors.ConvertAll(e => e.Message)), source);
             cppIncludes = new List<string>(pre.CppIncludes);
+            jsImports = new List<string>(pre.JsImports);
         }
 
         var tokens = new Lexer(processed).Tokenize();
@@ -68,6 +71,10 @@ internal static class JsTestSupport
 
         var module = new IRBuilder(analyzer).Build(ast, "TestModule", sourceFilePath);
         module.CppIncludes.AddRange(cppIncludes);
+        // ⛔ This helper HAND-COPIES what Compiler.cs threads onto the combined module, so a new
+        // preprocessor-collected list is invisible here until it gets a line of its own — the
+        // product code can be entirely correct and the fixture still sees an empty collection.
+        module.JsImports.AddRange(jsImports);
         return module;
     }
 
@@ -93,4 +100,31 @@ internal static class JsTestSupport
     /// <summary>Compile BasicLang source straight to JavaScript text.</summary>
     public static string Compile(string source, bool runPreprocessor = false) =>
         new JavaScriptCodeGenerator().Generate(BuildModule(source, runPreprocessor));
+
+    /// <summary>
+    /// Compile with the standard optimizer passes applied — <b>the IR that actually ships</b>.
+    ///
+    /// <para>All three shipping routes (CLI single-file, CLI project, the IDE's BuildService) run
+    /// <c>OptimizationPipeline.AddStandardPasses()</c> UNCONDITIONALLY; <c>--optimize</c> only
+    /// upgrades standard to aggressive and there is no switch that turns it off. <see cref="Compile"/>
+    /// runs none of it, so a guard pinned only there is pinned to a path no user reaches — the
+    /// hazard CLAUDE.md names, and the one that once hid six live defects behind 351 green tests.
+    /// Pin anything whose correctness the optimizer could disturb through BOTH.</para>
+    ///
+    /// <para>⚠ For a CODEGEN assertion (does this text appear / does this throw) this is enough and
+    /// needs no Node. For a BEHAVIOUR question — did a pass change what the program DOES — text is
+    /// the wrong oracle on this backend and stdout is the right one; see
+    /// <c>JavaScriptOptimizedExecutionTests</c>, which is why that fixture spawns Node.</para>
+    /// </summary>
+    public static string CompileOptimized(string source, bool runPreprocessor = false,
+        string sourceFilePath = "prog.bas")
+    {
+        var module = BuildModule(source, runPreprocessor, sourceFilePath);
+
+        var pipeline = new OptimizationPipeline();
+        pipeline.AddStandardPasses();
+        pipeline.Run(module);
+
+        return new JavaScriptCodeGenerator().Generate(module);
+    }
 }

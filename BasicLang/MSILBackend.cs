@@ -75,6 +75,10 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // (#CppInclude / :: foreign types / cpp{} inline blocks) AND collections
             // (List/Dictionary/HashSet are not yet lowered to IL) with a clean error
             // before any emission. Its own inline language is "msil".
+            //
+            // ⛔ allowForeignIdentifiers stays at its default FALSE — see the note on the C#
+            // backend's call. It is JavaScript-only, because only there does `::name` mean a real
+            // identifier in the target language.
             ForeignFeatureChecker.Check(module, "MSIL", rejectCollections: true, ownInlineLanguage: "msil");
 
             _output.Clear();

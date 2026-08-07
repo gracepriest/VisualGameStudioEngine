@@ -17,6 +17,7 @@ namespace BasicLang.Compiler
         private readonly HashSet<string> _definedSymbols;
         private readonly Stack<ConditionalState> _conditionalStack;
         private readonly List<string> _cppIncludes = new List<string>();
+        private readonly List<string> _jsImports = new List<string>();
 
         public List<PreprocessorError> Errors => _errors;
 
@@ -27,6 +28,16 @@ namespace BasicLang.Compiler
         /// Accumulates across all files processed by this instance; never cleared.
         /// </summary>
         public IReadOnlyList<string> CppIncludes => _cppIncludes;
+
+        /// <summary>
+        /// JavaScript module specifiers collected from #JsImport directives, WITHOUT their
+        /// quotes (e.g. "./chart.js") — the JavaScript backend re-quotes them when it emits
+        /// the ES `import` statement. Unlike <see cref="CppIncludes"/> there is no delimiter
+        /// to preserve: JavaScript has no angle-bracket module form, so a specifier is always
+        /// a quoted string and the quotes carry no meaning worth round-tripping.
+        /// Accumulates across all files processed by this instance; never cleared.
+        /// </summary>
+        public IReadOnlyList<string> JsImports => _jsImports;
 
         public Preprocessor()
         {
@@ -146,6 +157,35 @@ namespace BasicLang.Compiler
                             _cppIncludes.Add("\"" + quote.Groups[1].Value + "\"");
                         else
                             _errors.Add(new PreprocessorError { Line = lineNumber, Message = $"Invalid #CppInclude syntax: {trimmedLine}" });
+                    }
+                    result.AppendLine($"' {line}"); // Comment the directive out of the BasicLang source
+                }
+                // Check for #JsImport directive (JavaScript interop - becomes a real ES
+                // `import` statement; the JS-backend sibling of #CppInclude).
+                else if (trimmedLine.StartsWith("#JsImport", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Same two behaviours as #CppInclude above: collect only inside an active
+                    // conditional so a gated import is skipped, but ALWAYS comment the line out
+                    // regardless of conditional state, because removing it would shift every
+                    // subsequent line number and silently skew the JS source map.
+                    if (IsConditionalActive())
+                    {
+                        // Quoted specifiers only. JavaScript has no angle-bracket module form,
+                        // so <./a.js> is not an alternate spelling to accept — it is a mistake,
+                        // and so is a bare unquoted path.
+                        var quote = Regex.Match(trimmedLine, "#JsImport\\s+\"([^\"]+)\"", RegexOptions.IgnoreCase);
+                        if (!quote.Success)
+                            _errors.Add(new PreprocessorError { Line = lineNumber, Message = $"Invalid #JsImport syntax (expected a quoted module specifier): {trimmedLine}" });
+                        // ⛔ A backslash path is the natural thing for a Windows user to type, and it
+                        // is the one bad specifier that produces NO diagnostic anywhere downstream:
+                        // it collects, it escapes cleanly into the emitted ES `import`, and no module
+                        // loader — browser or Node — resolves it. The result is a clean build and a
+                        // 404 at run time. Reject it here to turn that into a build error. Module
+                        // specifiers are URLs, not OS paths: forward slashes on every platform.
+                        else if (quote.Groups[1].Value.Contains('\\'))
+                            _errors.Add(new PreprocessorError { Line = lineNumber, Message = $"Invalid #JsImport specifier \"{quote.Groups[1].Value}\": JavaScript module specifiers use forward slashes, not backslashes (a backslash path resolves in no module loader)" });
+                        else
+                            _jsImports.Add(quote.Groups[1].Value);
                     }
                     result.AppendLine($"' {line}"); // Comment the directive out of the BasicLang source
                 }

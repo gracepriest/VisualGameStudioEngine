@@ -1387,6 +1387,13 @@ namespace BasicLang.Compiler.IR
         public List<string> CppIncludes { get; set; }
 
         /// <summary>
+        /// Module specifiers from #JsImport, in source order and as written, emitted as real ES
+        /// `import` statements by the JavaScript backend. Sibling of <see cref="CppIncludes"/>:
+        /// same collection shape, different target language.
+        /// </summary>
+        public List<string> JsImports { get; set; }
+
+        /// <summary>
         /// Source path → the number of lines the front end INSERTED above that file's original
         /// content, keyed the way <c>IRFunction.SourceFilePath</c> spells it.
         ///
@@ -1420,6 +1427,7 @@ namespace BasicLang.Compiler.IR
             Namespaces = new List<string>();
             NetUsings = new List<NetUsingDirective>();
             CppIncludes = new List<string>();
+            JsImports = new List<string>();
         }
 
         public IRFunction CreateFunction(string name, TypeInfo returnType)

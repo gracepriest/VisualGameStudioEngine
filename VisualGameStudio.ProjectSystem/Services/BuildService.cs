@@ -755,7 +755,7 @@ public class BuildService : IBuildService
                 if (backend == "javascript")
                 {
                     EmitJavaScriptSite(outputDir, result.GeneratedFileName, generatedCode,
-                        project, jsGenerator);
+                        project, jsGenerator, compilation.CombinedIR.JsImports);
                 }
 
                 var toolchainHint = backend switch
@@ -902,10 +902,16 @@ public class BuildService : IBuildService
     /// against the map's own URL would 404 on every one and devtools would silently show no
     /// original source. A file that cannot be read contributes a null entry rather than
     /// failing the build.</para>
+    ///
+    /// <para>Relative <c>#JsImport</c> targets are copied beside the script by the emitter, with
+    /// the PROJECT directory as their base — same reason as the map above: the output lives in
+    /// <c>bin/…</c> and the user's module does not, so an uncopied <c>./chart.js</c> 404s in the
+    /// browser while the build reports success.</para>
     /// </summary>
     private void EmitJavaScriptSite(string outputDir, string scriptFileName, string generatedCode,
         BasicLangProject project,
-        BasicLang.Compiler.CodeGen.JavaScript.JavaScriptCodeGenerator generator)
+        BasicLang.Compiler.CodeGen.JavaScript.JavaScriptCodeGenerator generator,
+        IReadOnlyList<string> jsImports = null)
     {
         string mapJson = null;
         if (generator != null && generator.SourceMap.Count > 0)
@@ -920,7 +926,12 @@ public class BuildService : IBuildService
         }
 
         BasicLang.Compiler.CodeGen.JavaScript.JavaScriptEmitter.Emit(
-            outputDir, scriptFileName, generatedCode, title: project.Name, sourceMapJson: mapJson);
+            outputDir, scriptFileName, generatedCode, title: project.Name, sourceMapJson: mapJson,
+            jsImports: jsImports,
+            importBaseDirectory: project.ProjectDirectory,
+            // WriteLine, not WriteError: a missing #JsImport target does not fail the build, and
+            // colouring it as an error would make a warning look like one.
+            warn: m => _outputService.WriteLine($"Warning: {m}", OutputCategory.Build));
 
         _outputService.WriteLine($"Site: {Path.Combine(outputDir, "index.html")}", OutputCategory.Build);
     }

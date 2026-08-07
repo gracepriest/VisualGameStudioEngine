@@ -8,8 +8,17 @@ namespace VisualGameStudio.Tests.Compiler;
 /// <summary>
 /// Plan task 5: the JavaScript backend joins the honesty matrix.
 ///
-/// <para>JavaScript's row: <c>#CppInclude</c> ❌ error, <c>::</c> foreign types ❌ error,
+/// <para>JavaScript's row: <c>#CppInclude</c> ❌ error, <c>::</c> foreign <b>TYPES</b> ❌ error,
+/// <c>::</c> foreign <b>EXPRESSIONS</b> ✅ emitted verbatim (plan 2 task 3),
 /// collections ✅ native (List/Dictionary lower to Array/Map, spec).</para>
+///
+/// <para>⛔ <b>The type/expression split is deliberate, not an oversight.</b> <c>::</c> means two
+/// different things by POSITION. In EXPRESSION position it is a raw JavaScript identifier
+/// (<c>::console.log(x)</c>) and lowers verbatim — that is the JS interop escape hatch, covered in
+/// <see cref="JavaScriptInteropTests"/>. In TYPE position it is an opaque C++ passthrough type
+/// (<c>Dim m As std::mutex</c>) with no JavaScript meaning at all; emitting it would mangle to
+/// <c>stdmutex</c>, an undefined identifier. So the two sit side by side below, one rejected and
+/// one not, and neither is a bug in the other.</para>
 ///
 /// <para>The rejection has to happen at BUILD time. Every open C++ backend bug is a
 /// feature that LOOKED supported and produced silently wrong output at runtime; the whole
@@ -30,6 +39,44 @@ public class JsCapabilityCheckerTests
         Assert.That(ex.Message, Does.Contain("std::mutex"));
     }
 
+    /// <summary>
+    /// The sibling of <see cref="Js_ForeignType_ThrowsCleanError"/>, kept adjacent so the pair
+    /// reads as one deliberate distinction rather than two unrelated tests: the SAME <c>::</c>
+    /// syntax in EXPRESSION position is accepted and emitted verbatim.
+    /// </summary>
+    [Test]
+    public void Js_ForeignExpression_IsAccepted()
+    {
+        var module = JsTestSupport.BuildModule("Sub Main()\n::console.log(\"hi\")\nEnd Sub");
+
+        Assert.That(new JavaScriptCodeGenerator().Generate(module),
+            Does.Contain("console.log(\"hi\")"));
+    }
+
+    /// <summary>
+    /// ⛔ REGRESSION GUARD for the five-backend seam. <c>ForeignFeatureChecker</c> is shared, and
+    /// the relaxation that lets <c>::</c> through is opt-in per backend
+    /// (<c>allowForeignIdentifiers</c>). C#, LLVM and MSIL have no way to lower a raw JavaScript
+    /// identifier, so they must keep refusing it outright — if the flag ever became the default,
+    /// or a caller were updated by copy-paste, they would silently strip the <c>::</c> and emit an
+    /// undefined identifier from a green build. That is the exact bug the guard was written for.
+    ///
+    /// <para>Driven through <c>Program.GenerateCode</c> rather than by constructing the three
+    /// generators directly: that is the CLI's real dispatch seam, so this also proves the wiring
+    /// each backend actually ships with.</para>
+    /// </summary>
+    [TestCase("csharp")]
+    [TestCase("llvm")]
+    [TestCase("msil")]
+    public void ForeignIdentifier_IsStillRejectedOnOtherBackends(string backend)
+    {
+        var module = JsTestSupport.BuildModule("Sub Main()\n::console.log(\"hi\")\nEnd Sub");
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => BasicLang.Compiler.Driver.Program.GenerateCode(module, backend));
+        Assert.That(ex!.Message, Does.Contain("::"));
+    }
+
     [Test]
     public void Js_CppInclude_ThrowsCleanError()
     {
@@ -40,6 +87,69 @@ public class JsCapabilityCheckerTests
             () => new JavaScriptCodeGenerator().Generate(module));
 
         Assert.That(ex!.Message, Does.Contain("JavaScript"));
+    }
+
+    /// <summary>
+    /// ⛔ THE MIRROR OF <see cref="Js_CppInclude_ThrowsCleanError"/>, and the reason plan 2
+    /// gained a task 1b.
+    ///
+    /// <para>The <c>#CppInclude</c> precedent has THREE parts — collect, thread onto the module,
+    /// and REFUSE on backends that cannot honour it — and the first cut of <c>#JsImport</c>
+    /// copied only the first two. A <c>#JsImport "./chart.js"</c> in a C#-backend program
+    /// preprocessed clean, rode along on <c>CombinedIR</c>, and was silently DROPPED: the build
+    /// reported success and the import simply never happened. That is the "a refusal beats a half
+    /// implementation" line this backend is built on, violated in the other direction — and it is
+    /// invisible unless a test drives the OTHER backends, because every JavaScript test passes
+    /// either way.</para>
+    ///
+    /// <para>Driven through <c>Program.GenerateCode</c> — the CLI's real dispatch seam — so this
+    /// proves the wiring the backend ships with, not a hand-built generator.</para>
+    /// </summary>
+    [Test]
+    public void JsImport_OnTheCSharpBackend_ThrowsCleanError()
+    {
+        var module = JsTestSupport.BuildModule("#JsImport \"./chart.js\"\nSub Main()\nEnd Sub",
+            runPreprocessor: true);
+
+        var ex = Assert.Throws<ForeignFeatureException>(
+            () => BasicLang.Compiler.Driver.Program.GenerateCode(module, "csharp"));
+
+        Assert.That(ex!.Message, Does.Contain("#JsImport"), "must name the offending directive");
+        Assert.That(ex.Message, Does.Contain("C#"), "must name the backend that refused it");
+    }
+
+    /// <summary>
+    /// The C++ backend does NOT route through <c>ForeignFeatureChecker</c> — it runs its own
+    /// <c>CppCapabilityChecker</c> — so the shared arm cannot cover it and it needs its own
+    /// guard. Placing that guard in the checker rather than in <c>Generate</c> covers
+    /// <c>GenerateSplit</c> (the real project route) at the same time; a guard written at the
+    /// Generate site alone would leave the shipping path silently dropping the directive.
+    /// </summary>
+    [Test]
+    public void JsImport_OnTheCppBackend_ThrowsCleanError()
+    {
+        var module = JsTestSupport.BuildModule("#JsImport \"./chart.js\"\nSub Main()\nEnd Sub",
+            runPreprocessor: true);
+
+        var ex = Assert.Throws<BasicLang.Compiler.CodeGen.CPlusPlus.CppCapabilityException>(
+            () => BasicLang.Compiler.Driver.Program.GenerateCode(module, "cpp"));
+
+        Assert.That(ex!.Message, Does.Contain("#JsImport"));
+    }
+
+    /// <summary>
+    /// The other half of the pair: the refusal must be an OPT-OUT, not a blanket one. The
+    /// checker is shared, and JavaScript calls it too — a naive `JsImports.Count > 0 → throw`
+    /// would refuse the one backend the directive exists for.
+    /// </summary>
+    [Test]
+    public void JsImport_OnJavaScript_IsAccepted()
+    {
+        var module = JsTestSupport.BuildModule("#JsImport \"./chart.js\"\nSub Main()\nEnd Sub",
+            runPreprocessor: true);
+
+        Assert.That(new JavaScriptCodeGenerator().Generate(module),
+            Does.Contain("import \"./chart.js\";"));
     }
 
     /// <summary>

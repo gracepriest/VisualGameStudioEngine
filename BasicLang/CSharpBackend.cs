@@ -171,6 +171,11 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // C++-only passthrough features (#CppInclude / :: foreign types / cpp{}
             // inline blocks) but supports collections natively (rejectCollections:
             // false). Its own inline language is "csharp" — a csharp{} block is fine.
+            //
+            // ⛔ allowForeignIdentifiers stays at its default FALSE. That flag exists for the
+            // JavaScript backend, where `::name` is a raw JS global; C# has no such reading, and
+            // turning it on here would let a `::` name reach SanitizeName and emit `mathlibfreeAdd`
+            // — a compile error at best, and from a build that reported success.
             ForeignFeatureChecker.Check(module, "C#", rejectCollections: false, ownInlineLanguage: "csharp");
 
             _output.Clear();

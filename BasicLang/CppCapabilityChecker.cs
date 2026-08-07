@@ -156,6 +156,18 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         {
             var diags = new List<string>();
 
+            // #JsImport names an ES module — a JavaScript-backend-only passthrough with no C++
+            // meaning at all. The MIRROR of ForeignFeatureChecker's #CppInclude arm, which
+            // refuses a C++ header on every managed backend; this is the same refusal pointing
+            // the other way, and it lives HERE rather than in CppCodeGenerator.Generate because
+            // the project route goes through GenerateSplit instead. Both call this checker, so
+            // one arm covers both; a guard written at the Generate site would leave the SHIPPING
+            // path silently dropping the directive — the failure mode the repo already paid for
+            // with three independent backend-dispatch maps.
+            if (module.JsImports != null && module.JsImports.Count > 0)
+                diags.Add("#JsImport (JavaScript module import) is only available on the " +
+                          "JavaScript backend");
+
             _userDefinedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var name in module.Classes.Keys) _userDefinedNames.Add(name);
             foreach (var name in module.Interfaces.Keys) _userDefinedNames.Add(name);
@@ -308,6 +320,22 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                             foreach (var i in cc.Block.Instructions) CheckInstruction(i, funcName, diags);
                     if (tc.FinallyBlock != null)
                         foreach (var i in tc.FinallyBlock.Instructions) CheckInstruction(i, funcName, diags);
+                    break;
+
+                case IRInlineCode inline:
+                    // An inline block tagged for ANOTHER backend's language. C#/LLVM/MSIL refuse
+                    // this through ForeignFeatureChecker's matching arm; the C++ backend does not
+                    // run that checker, so until this arm existed CppCodeGenerator.Visit(IRInlineCode)
+                    // DROPPED the block and emitted a "// WARNING: … not supported" comment into the
+                    // generated C++ that nobody reads — a do-nothing program from a build that
+                    // reported success. Found by the javascript{ } mirror test in
+                    // JavaScriptInteropTests, but it was already true for csharp{ }, llvm{ } and
+                    // msil{ }: the honesty matrix's last dishonest cell.
+                    if (!string.Equals(inline.Language, "cpp", StringComparison.OrdinalIgnoreCase))
+                        diags.Add($"inline '{inline.Language}' code (a '{inline.Language}{{ }}' " +
+                                  $"passthrough block in '{funcName}') is not supported on the C++ " +
+                                  "backend; inline code written for another backend cannot be " +
+                                  "lowered here");
                     break;
 
                 case IRForEach fe:
