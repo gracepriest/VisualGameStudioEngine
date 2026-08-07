@@ -1568,6 +1568,59 @@ BL6020 INPUTS, never that assertion's subject.
 
 ### Task 13: §12.1 parity oracle extension
 
+> ### ⛔ MEASURED 2026-08-06 — "driver unchanged" is FALSE, and the seven programs are not the ones to write
+>
+> An 8-agent recon compiled a probe per program at HEAD `30a0219`. Do not write rows from the
+> prose below without reading this first.
+>
+> **⛔ CORRECTION 1 — the C++ leg cannot build ANY program with a .NET surface.** Two independent
+> defects, both measured: `BclE2E.CompileToCppOptimized` constructs a bare `new SemanticAnalyzer()`
+> and **never calls `ConfigureNetResolution`**, so .NET resolution is not switched on for that leg
+> at all; and `BclE2E.CompileRun` hands ONE `.cpp` to a bare compiler while any .NET-calling TU
+> `#include`s `blnet_proxies.g.hpp` / `blnet_marshal.hpp` — measured `fatal error C1083`. **Six of
+> the seven programs need a .NET call, so Task 13's FIRST step is a driver change** (route the C++
+> leg through the project/blnet pipeline), not a row. "Driver unchanged" below is wrong.
+>
+> **⛔ CORRECTION 2 — "BLOCKED until Task 8" is STALE.** All six §6.4 rows were measured lowering
+> through real `XmlConvert`/`XmlWriter` calls at this HEAD, four of them round-tripping in BOTH
+> directions. The split-into-DateTime+TimeSpan contingency below is unnecessary and should be
+> deleted. Program 1 remains blocked, but by CORRECTION 1, not by Task 8.
+>
+> **⛔ CORRECTION 3 — program #2's specified shape CANNOT FAIL.** It asks for a SUBCLASS match,
+> i.e. the case where clause 1 correctly wins. On the C++ backend every non-`Exception` clause
+> lowers to `catch (const std::runtime_error&)` and `Visit(IRThrow)` throws a bare
+> `std::runtime_error` carrying only a message — so clause 1 catches EVERYTHING and a positive
+> match agrees on both legs BY ACCIDENT. The NEGATIVE shape is the only discriminating one, and
+> it is a **live miscompile**: `Guid.Parse("not-a-guid")` against `Catch e As
+> InvalidOperationException` prints `IOE` natively where .NET prints `EX` (FormatException and
+> InvalidOperationException are siblings under SystemException). Compiled and RAN, exit 0
+> throughout. Chipped as `task_d7f0a91c`. The C2312 caveat below names the wrong hazard: the
+> real defect is that a SINGLE non-Exception clause is already a catch-all, so "author as
+> derived-then-Exception" avoids a compile error while hiding the semantic bug.
+>
+> **⛔ CORRECTION 4 — a "documented divergence" is structurally inexpressible here.** Programs 4
+> and 5 say "expected output documents the divergence", but `ParityProgram` is
+> `(string Name, string Source)` with NO expected-output column; the driver asserts
+> `cpp == csharp`. Those belong in `CppBclEndToEndTests`' hand-expectation fixture instead.
+>
+> **Per-program status, measured:** #1 §6.4 pairs — lowers, blocked by CORRECTION 1 · #2
+> multi-Catch — native half LANDED (see below), .NET half blocked · #4 array mutated in a .NET
+> call — **no expressible shape**: the C# leg cannot name a .NET array (`Dim parts() As String =
+> …` refused as Object) and `CType(x, String())` is a PARSE ERROR on both backends, while routing
+> through `Object` is then refused by C++ · #5 Char above U+00FF — **`ChrW`/`AscW` are not
+> implemented on the C++ backend at all** (measured C3861 + C2440); also BL `Char` is 8-bit, so
+> even once they exist a value above U+00FF is a guaranteed divergence, not a passing row · #6
+> `Nothing` across the boundary — the RETURN direction is unobservable (`Is Nothing` is a parse
+> error, `IsNothing(x)` emits an undeclared C++ function) · #7 `ToString()` on `Stream` — surface
+> is fine, blocked by CORRECTION 1.
+>
+> **LANDED: one row, `LocalThrowMultiCatch`** — the native half of #2/#3, verified by running the
+> native binary. It emits ZERO blnet includes, which is exactly why it is the one program the
+> single-TU C++ leg can build. Its summary states explicitly what it does NOT prove.
+>
+> **⛔ Step 2's gate below ("13 P1 + 7 new = 20 programs green ×2") is unreachable at this HEAD.**
+> Without the driver change the achievable total is 14.
+
 **Files:**
 - Modify: `VisualGameStudio.Tests/Compiler/BclBackendParityTests.cs` (new `ParityProgram` rows
   after `:786-801`; driver unchanged)
