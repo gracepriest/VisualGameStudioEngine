@@ -2096,13 +2096,95 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         public override void Visit(IRConstant constant) { }
         public override void Visit(IRVariable variable) { }
         
+        /// <summary>
+        /// Render <paramref name="value"/> as a C++ expression of type <c>std::string</c> — THE
+        /// one place a non-String value becomes text on this backend. Returns null when there is
+        /// no rendering that is exactly right, in which case the caller must keep failing rather
+        /// than guess.
+        ///
+        /// <para><b>Why this exists.</b> Four sites used to answer "how does a value become text"
+        /// differently, in ADJACENT LINES of one emitted function: the <c>cstr</c> arm said
+        /// <c>to_string(flag)</c> (which resolves to the INT overload → "1"), the ToString shim
+        /// said <c>flag ? "True" : "False"</c>, Concat said <c>"v=" + flag</c> — POINTER
+        /// ARITHMETIC — and the print arm was correct. Two right, two wrong, same file.</para>
+        ///
+        /// <para>⛔ EVERY ARM RETURNS A <c>std::string</c>, never a bare <c>const char*</c>
+        /// ternary. The two sites that were already correct are only correct because
+        /// <c>cout &lt;&lt;</c> accepts <c>const char*</c>; copying that spelling into a VALUE
+        /// position yields <c>const char* + const char[6]</c>, a hard compile error, as soon as
+        /// the operand lands on the left of a concat.</para>
+        ///
+        /// <para>⛔ <c>Char</c> MUST be <c>std::string(1, c)</c>. <c>std::string(c)</c> is
+        /// ill-formed — a helper written with one uniform <c>std::string(...)</c> wrap compiles
+        /// for every type except the one that most needs it.</para>
+        ///
+        /// <para>⛔ <c>Single</c>/<c>Double</c> are DELIBERATELY ABSENT. <c>std::to_string</c> is
+        /// <c>%f</c> with six decimals — it renders 2.5 as "2.500000" and 1.0/3 as "0.333333",
+        /// wrong for every finite value. Adding it here would trade a loud compile error for a
+        /// silently wrong string, which is the worse failure. The correct lowering is a
+        /// shortest-round-trip formatter (<c>std::to_chars</c> plus fix-ups for .NET's
+        /// exponential thresholds, "NaN" and "∞"); until that exists, floating concat and
+        /// <c>CStr(Double)</c> keep failing at the C++ compiler.</para>
+        /// </summary>
+        private static string StringifyForText(IRValue value, string rendered)
+        {
+            var name = value?.Type?.Name;
+            if (string.IsNullOrEmpty(name)) return null;
+
+            // A String operand still needs the wrap: a literal renders as const char*, so
+            // `"a" & "b"` is `const char* + const char*` — a hard error today, and NOT
+            // constant-folded away by the optimizer.
+            if (string.Equals(name, "String", StringComparison.OrdinalIgnoreCase))
+                return $"std::string({rendered})";
+
+            if (string.Equals(name, "Boolean", StringComparison.OrdinalIgnoreCase))
+                return $"std::string({rendered} ? \"True\" : \"False\")";
+
+            if (string.Equals(name, "Char", StringComparison.OrdinalIgnoreCase))
+                return $"std::string(1, {rendered})";
+
+            // Decimal and the P1 native BCL types carry their own .NET-faithful ToString().
+            if (IsNativeOwnedBclType(name))
+                return $"({rendered}).ToString()";
+
+            return name.ToLowerInvariant() switch
+            {
+                "byte" or "sbyte" or "ubyte" or "short" or "ushort"
+                    or "integer" or "uinteger" or "long" or "ulong"
+                    => $"std::to_string({rendered})",
+                _ => null,
+            };
+        }
+
         public override void Visit(IRBinaryOp binaryOp)
         {
             var left = GetValueName(binaryOp.Left);
             var right = GetValueName(binaryOp.Right);
             var op = MapBinaryOperator(binaryOp.Operation);
             var result = GetValueName(binaryOp);
-            
+
+            // §VB `&` is CONCATENATION, and it was lowering to a bare `+`. With a const char*
+            // on the left that is POINTER ARITHMETIC: `"val=" & True` advanced the literal by 1
+            // and printed "al=", and `"int=" & 6` advanced it by 6 — OUT OF BOUNDS, past the
+            // literal into adjacent .rdata. Measured: one probe printed a fragment of
+            // libstdc++'s own error text. Exit 0, no warning, no diagnostic.
+            //
+            // MapBinaryOperator cannot fix this — it returns operator TEXT and cannot see
+            // operand types — so the coercion belongs here, at the only site that has both.
+            if (binaryOp.Operation == BinaryOpKind.Concat)
+            {
+                var leftText = StringifyForText(binaryOp.Left, left);
+                var rightText = StringifyForText(binaryOp.Right, right);
+                if (leftText != null && rightText != null)
+                {
+                    WriteLine($"{result} = {leftText} + {rightText};");
+                    return;
+                }
+                // Deliberate fall-through for the types StringifyForText refuses (today:
+                // Single/Double). They keep producing a C++ compile error rather than a
+                // plausible-looking wrong string — see that method's note.
+            }
+
             WriteLine($"{result} = {left} {op} {right};");
         }
         
@@ -2863,11 +2945,19 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 "csng" => arg0IsDecimal
                     ? $"static_cast<float>(({args[0]}).ToDouble())"
                     : $"static_cast<float>({args[0]})",
-                // std::to_string has no Decimal overload; the engine's scale-preserving
-                // ToString() is the .NET-faithful rendering.
-                "cstr" => arg0IsDecimal
-                    ? $"({args[0]}).ToString()"
-                    : $"to_string({args[0]})",
+                // ⛔ `to_string` was the WRONG default here: std::to_string has no bool overload,
+                // so CStr(someBoolean) resolved to the INT overload and the native binary printed
+                // "1"/"0" where VB prints "True"/"False" (verified against real vbc, not against
+                // the C# backend). Routed through the one shared stringifier so this arm cannot
+                // drift from Concat and the ToString shim again.
+                //
+                // The `call != null` path matters: HasStdLibEmission and NetClaimPredicateTests
+                // both invoke this arm with a NULL call to probe arm EXISTENCE, so a null there
+                // must fall through to the old text rather than dereference.
+                "cstr" => StringifyForText(
+                        call != null && call.Arguments.Count > 0 ? call.Arguments[0] : null,
+                        args[0])
+                    ?? (arg0IsDecimal ? $"({args[0]}).ToString()" : $"to_string({args[0]})"),
                 // .NET Convert.ToBoolean(decimal) is `value != 0`; IsZeroMag() is the exact
                 // magnitude test (and treats a canonicalized -0 as zero, like .NET).
                 "cbool" => arg0IsDecimal
@@ -3583,6 +3673,26 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     // (The C# backend emits `(bool)(d)` here, which csc rejects — a
                     // pre-existing C#-backend gap, tracked outside P1.)
                     WriteLine($"{result} = !({value}).IsZeroMag();");
+                    return;
+                }
+            }
+
+            // ⛔ A String TARGET must never reach the static_cast fallback below.
+            // `static_cast<std::string>(x)` has no constructor for ANY primitive — measured as
+            // four separate hard g++ errors for bool, int32_t, char and double, all emitted
+            // after BasicLang.exe reported "Compilation successful!" (CppCapabilityChecker's
+            // CheckNativeConversion early-returns when neither side is a native BCL type, so
+            // nothing refuses it first). Routed through the one shared stringifier, which also
+            // makes CType(b, String) agree with CStr(b) and with `&` by construction.
+            //
+            // Single/Double deliberately still fall through to the error — see
+            // StringifyForText's note on why a wrong string is worse than a build break.
+            if (string.Equals(cast.Type?.Name, "String", StringComparison.OrdinalIgnoreCase))
+            {
+                var asText = StringifyForText(cast.Value, value);
+                if (asText != null)
+                {
+                    WriteLine($"{result} = {asText};");
                     return;
                 }
             }
