@@ -1525,6 +1525,70 @@ so arbitrary unmapped names in delegate params stop reaching raw C++.
 
 ### Task 12: §12.3 generated-shim conformance suite
 
+> ### ⛔ MEASURED 2026-08-07 — most of this is ALREADY BUILT, and a PREREQUISITE is missing
+>
+> An 8-agent recon read every Blnet fixture and compiled probes against a purpose-built library.
+> Four claims below are stale, and three live miscompiles surfaced (all chipped).
+>
+> **⛔ CORRECTION 1 — `BlnetGenLib` largely EXISTS, under another name and shape.** It is
+> `NetShimPipelineFixture.ProbeSource` — an inline Roslyn-compiled source string at
+> `VisualGameStudio.Tests/Blnet/NetShimPipelineTests.cs:53-127`, not a directory of `.cs` files.
+> It already covers static method, ctor, property get/set, instance method, `List<int>` return,
+> `int[]`/`string[]` returns, `int[]` by value, `ref int[]`, `IEnumerable<int>` param, `Regex[]`
+> param and a `[RequiresDynamicCode]` member. EXTEND it; do not add a parallel asset.
+>
+> **⛔ CORRECTION 2 — the Task-7b reference-pack finding is ALREADY IMPLEMENTED.**
+> `NetShimPipelineFixture.EmitProbeAssembly` (:141) compiles against the net8.0 ref pack via
+> `ReferencePackAssemblies()` (:173), with the CS0012 rationale in its doc comment. Two traps in
+> the instruction as written: `ReferencePackAssemblies()` is **`private static`**, so "reuse" it
+> literally will not compile — the entry point is `EmitProbeAssembly(directory)`; and **a
+> SECOND, WRONG emitter exists** — `NetDelegateTests.ProbeDir.EmitAssembly` (:741) compiles
+> against the IMPLEMENTATION assemblies and survives only because that fixture never compiles a
+> generated shim against its probe. Copying it reproduces exactly the CS0012 this warns about.
+>
+> **⛔ CORRECTION 3 — a file one letter away already exists.** `BlnetConformanceTests.cs` is the
+> frozen P0 §12.2 hand-shim suite (16 `[TestCase]`s, Integration, NonParallelizable, fresh
+> process per scenario, `PASS <name>`, async-read-before-`WaitForExit`, 60 s hang detector) —
+> precisely the harness this task specifies. LIFT it from `:77-118`; do not rewrite. The
+> near-identical names are a real hazard.
+>
+> **⛔ CORRECTION 4 — Task 11's result-bearing delegate row is NOT real .NET.**
+> `NetDelegateTests.ARunningProgram_DispatchesAResultBearingDelegateInline` (:652) runs a native
+> binary against a **C++ stub lambda** returning canned `{7,3}`; no .NET delegate is ever
+> constructed. §12.3 names this row mandatory, so it is a genuine gap, not a duplicate.
+>
+> **⛔⛔ PREREQUISITE THIS PLAN DOES NOT MENTION — a local of ANY non-curated .NET type is
+> REFUSED on the native backend.** `CppCapabilityChecker.CheckType` (:678-745) never consults
+> `TypeInfo.NetHandleTypeFullName` — ZERO occurrences in that file against FIVE in
+> `CppCodeGenerator.cs` — and decides from the hard-coded five-name `ManagedOwned` set instead,
+> rejecting everything else at :740-743. This gates the instance / ctor / property / indexer /
+> inheritance rows against a purpose-built library ALL AT ONCE. It is the **missed FIFTH site**
+> of the four-site managed-marker rule; codegen already lowers the shape correctly. Chipped as
+> `task_de0ad105`. ⭐ WORKAROUND that works TODAY: static classes plus INLINE static-factory
+> receivers — `Zoo.MakeDog().Speak()` builds and RUNS natively with the .NET-correct answer.
+> Design the library around static factories and most rows unblock with no compiler change.
+> (`New T(...)` on a user type stays unreachable in any position, so the ctor row is only
+> expressible through the five curated framework names.)
+>
+> **THE REAL SCOPE — shapes never executed against real .NET** (everything else in §12.3 is
+> already proven at run level by `NetShimPipelineTests`, `BclNetBackendParityTests`, `Section85`
+> / `Section86` and `CppBclEndToEndTests`): delegate-taking members · property WRITE · boxed
+> value-type receiver / `Unsafe.Unbox` (§8.5 — the documented failure is an INFINITE LOOP) ·
+> `Nothing` as RETURN and as RECEIVER · `out`/`ref` SCALAR slots · StringBuilder · BL6026
+> omitted member in a project that STILL BUILDS · generated-shim handle release · bad-ABI and
+> missing-export handshake against a GENERATED shim.
+>
+> **THREE LIVE MISCOMPILES FOUND WHILE PROBING, all chipped, all blocking a row:**
+> `task_22bf2409` — **`Char` above U+007F is silently corrupted** (`"é"c` prints 169 natively vs
+> 233 on .NET; the literal is emitted as multi-byte UTF-8 inside a single-quoted C++ `char`, so
+> the value dies BEFORE the §8.3 wire conversion, which is correct). Author that row as a PINNED
+> DIVERGENCE, never as parity. · `task_2eccdb05` — an instance call on a constructed-generic
+> receiver is UNGATED, publishes for ~40 s, then emits `t6->Get()` on a `NetRef`; it fails loudly
+> only because `NetRef` has no `operator->`. · Indexer on a USER type: **the two halves of one
+> §12.3 row disagree on the C# backend** — the WRITE lowers correctly and RUNS, the READ lowers
+> to invocation syntax and is CS0149, so a write-only row goes GREEN with the read defect fully
+> present.
+
 **Files:**
 ⛔ **Task-7b review finding — BlnetGenLib MUST be compiled against the net8.0 REFERENCE pack**
 (reuse `NetShimPipelineFixture.ReferencePackAssemblies`). Built against the shared framework's
