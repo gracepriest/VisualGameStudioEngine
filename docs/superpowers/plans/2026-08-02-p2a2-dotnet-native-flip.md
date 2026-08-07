@@ -1620,6 +1620,49 @@ BL6020 INPUTS, never that assertion's subject.
 >
 > **⛔ Step 2's gate below ("13 P1 + 7 new = 20 programs green ×2") is unreachable at this HEAD.**
 > Without the driver change the achievable total is 14.
+>
+> ### ⛔ MEASURED 2026-08-07 — the fix is a SECOND FIXTURE, not a driver change
+>
+> A follow-up recon built and RAN every candidate on both legs. Correcting CORRECTION 1 above:
+> "route the C++ leg through the project/blnet pipeline" names the right pipeline and the wrong
+> edit.
+>
+> **Swapping the existing leg was measured and REJECTED.** All 14 existing rows have an EMPTY
+> .NET surface, so they would pay for the entire shim/proxy pipeline and buy nothing; eight of
+> them exist ONLY in that table and would lose their combined-mode compile-and-run
+> (`CppProjectBuilder` emits SPLIT mode, and `CppSplitEmissionTests` exists because the two modes
+> drift); and `BclE2E.WithoutRuntimeInFailures` — which strips ~1,460 runtime lines from a
+> failure message — has no equivalent on the CLI path. ⛔ **The swap changes the verdict of ZERO
+> of the 14 rows, so it WILL look free.** What changes is what they measure.
+>
+> **LANDED: `VisualGameStudio.Tests/Compiler/BclNetBackendParityTests.cs`,** driving the native
+> leg through the shipped `BasicLang.exe build` on a `<TargetBackend>Cpp</TargetBackend>`
+> project — symmetric with the C# leg, which already spawns the same binary. Three rows, each
+> verified on both legs before being written: `NetWireRoundTrip` (five of the six §6.4 pairs),
+> `NetThrowAndCatch` (#2 and #3 merged), `NetHandleToString` (#7, D-P1's proof —
+> `Stream.Null.ToString()` returns `System.IO.Stream+NullStream`).
+>
+> **⛔ CORRECTION 5 — a .NET call's RESULT is typed `Object` on the C# leg and the assignment is
+> REFUSED.** `Dim d As DateTime = XmlConvert.ToDateTime(...)` is a C#-leg build error while the
+> identical line compiles on `--target=cpp`. `CType(expr, T)` fixes both legs. This is the same
+> defect #4's array hit, generalized to every non-String result — and it means every .NET parity
+> program needs a constraint the original fixture's list does not carry.
+>
+> **⛔ CORRECTION 6 — #7 is NOT "surface is fine".** `BoundaryTypeRegistry.ManagedOwned` is the
+> curated five-name set `{Regex, Uri, Stream, FileInfo, DirectoryInfo}`, so `MemoryStream`,
+> `FileStream` and `StringWriter` are all refused. #7 is writable ONLY with the static type
+> spelled `Stream`. This also independently confirms T8c's note that
+> `File.Open(path, FileMode.Open)` can never work.
+>
+> **⛔ CORRECTION 7 — #1 is FIVE of the six §6.4 pairs, not six.** StringBuilder is
+> parity-UNREACHABLE: no framework vehicle is a `ManagedOwned` name, and §6.4 crosses it BY
+> VALUE while the C# leg holds it by reference, so any mutating vehicle diverges by construction.
+> It stays covered by `NetProxyStubRunTests`.
+>
+> **Revised Step 2 gate: 14 existing + 3 new = 17 programs, in TWO fixtures.** Cost measured at
+> ~100 s per .NET row (cold shim publish, per-directory cache that must NOT be shared or the row
+> stops proving shim generation); full suite ~39 min → ~45 min. The fast subset is unchanged —
+> both fixtures are `[Category("Integration")]`.
 
 **Files:**
 - Modify: `VisualGameStudio.Tests/Compiler/BclBackendParityTests.cs` (new `ParityProgram` rows
