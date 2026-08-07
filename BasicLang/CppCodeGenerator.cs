@@ -4574,6 +4574,30 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (throwInst.Exception is IRNewObject newEx && CppExceptionTypes.IsNetException(newEx.ClassName))
             {
                 var msg = newEx.Arguments.Count > 0 ? GetValueName(newEx.Arguments[0]) : "\"exception\"";
+
+                // ⛔ THE THROWN TYPE MUST SURVIVE THE THROW. This used to emit a bare
+                // `throw std::runtime_error(msg)`, so the declared type existed only in the
+                // source: every typed Catch then emitted a BYTE-IDENTICAL
+                // `catch (const std::runtime_error&)` handler and C++ dispatched to the FIRST
+                // one. Measured — a thrown ArgumentException ran the
+                // `Catch e As InvalidOperationException` body, and swapping the clause order
+                // swapped the answer, proving POSITION rather than TYPE was deciding. Worse, a
+                // clause that could never match still swallowed the exception and stole it
+                // from the correct OUTER handler.
+                //
+                // Carrying the chain routes it into the §11.1 NetException ladder the
+                // generator ALREADY emits above — which does real ';'-delimited element
+                // matching and was correct all along, just never entered. NetException derives
+                // from std::runtime_error, so an outer generic handler still catches it and no
+                // existing catch-all behaviour changes.
+                if (CppExceptionTypes.TryGetInheritanceChain(newEx.ClassName, out var chain))
+                {
+                    WriteLine($"throw BasicLang::NetException(\"{chain}\", {msg});");
+                    return;
+                }
+
+                // A user-defined BL exception type has no .NET chain; the ladder deliberately
+                // skips its arm, so it keeps the plain lowering and the per-clause handlers.
                 WriteLine($"throw std::runtime_error({msg});");
                 return;
             }
