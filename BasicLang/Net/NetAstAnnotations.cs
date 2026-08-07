@@ -234,5 +234,49 @@ namespace BasicLang.Net
 
             _netEnumerations[node] = enumeration;
         }
+
+        // ------------------------------------------------------------------
+        // §8.3 enum-member constants. An enum LITERAL argument whose winner parameter at that
+        // index is enum-typed, folded to its UNDERLYING primitive.
+        //
+        // Read by IRBuilder.Visit(MemberAccessExpressionNode), which mints an IRConstant and
+        // returns BEFORE emitting an IRFieldAccess. That early return is doing two jobs: it
+        // produces the value, and — because NetSurfaceCollector is IR-driven — it is also what
+        // stops a compile-time constant minting a shim export, a proxy slot and an AOT publish
+        // round trip. Measured before the change: FileMode.Open emitted a real
+        // bl_net_System_IO_FileMode_Open__… export.
+        //
+        // Orphan entries are harmless by design (a fold recorded for a call that later refuses
+        // is simply never read), matching CallSiteOrigins' tolerance.
+        // ------------------------------------------------------------------
+
+        private readonly Dictionary<ExpressionNode, NetEnumConstant> _netEnumConstants =
+            new Dictionary<ExpressionNode, NetEnumConstant>(ReferenceEqualityComparer.Instance);
+
+        /// <summary>§8.3 folded enum-member constants, keyed by expression node. Read by IRBuilder.</summary>
+        internal IReadOnlyDictionary<ExpressionNode, NetEnumConstant> NetEnumConstants =>
+            _netEnumConstants;
+
+        internal void RecordNetEnumConstant(
+            ExpressionNode node, object value, BasicLang.Compiler.SemanticAnalysis.TypeInfo type)
+        {
+            if (node == null || value == null || type == null)
+                return;
+
+            _netEnumConstants[node] = new NetEnumConstant(value, type);
+        }
     }
+
+    /// <summary>
+    /// An enum member's value, ALREADY COERCED to its underlying CLR primitive by
+    /// <c>NetTypeResolver.EnumMemberConstant</c>, together with the BasicLang type the folded
+    /// constant carries.
+    ///
+    /// <para>⛔ The coercion happens at capture, not here. Both the C++ and JavaScript constant
+    /// emitters end in <c>Value.ToString()</c>, so a value still boxed as the ENUM would render
+    /// as the bare identifier <c>IgnoreCase</c> — an undeclared name emitted from a green
+    /// build.</para>
+    /// </summary>
+    internal sealed record NetEnumConstant(
+        object Value, BasicLang.Compiler.SemanticAnalysis.TypeInfo Type);
 }
