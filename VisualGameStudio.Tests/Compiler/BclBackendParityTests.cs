@@ -78,6 +78,26 @@ namespace VisualGameStudio.Tests.Compiler;
 ///     would therefore diff on ENCODING alone — a false failure that says nothing about
 ///     the runtime. (This is also why <c>StringBuilder</c>'s byte-vs-UTF-16 <c>Length</c>
 ///     divergence in spec §9 is not exercised here: ASCII makes the two counts equal.)
+/// 11. NO .NET CALLS. This fixture's C++ leg is <c>BclE2E.CompileToCppOptimized</c> plus a
+///     bare single-TU compile; a .NET-calling program emits a TU that <c>#include</c>s
+///     <c>blnet_proxies.g.hpp</c> and dies with <c>fatal error C1083</c> — MEASURED.
+///     .NET-calling rows live in <see cref="BclNetBackendParityTests"/>, whose native leg
+///     drives the shipped <c>BasicLang.exe build</c> on a
+///     <c>&lt;TargetBackend&gt;Cpp&lt;/TargetBackend&gt;</c> project at ~100 s per row.
+///
+/// ── ⛔ DO NOT MERGE THIS FIXTURE WITH ITS .NET SIBLING ────────────────────────────
+/// Routing THIS leg through the project build to absorb <see cref="BclNetBackendParityTests"/>
+/// was measured and rejected. Every row here has an EMPTY .NET surface, so it would pay for
+/// the whole shim/proxy pipeline and gain nothing; eight of these programs exist ONLY in this
+/// table and would lose their combined-mode compile-and-run, since <c>CppProjectBuilder</c>
+/// emits SPLIT mode and <c>CppSplitEmissionTests</c> exists precisely because the two modes
+/// drift; and <c>BclE2E.WithoutRuntimeInFailures</c>, which strips ~1,460 runtime lines out of
+/// a failure message, has no equivalent on the CLI path.
+///
+/// ⛔ The decisive point: the swap changes the verdict of ZERO rows here, so it WILL look free
+/// on a green run. What changes is what these rows MEASURE. If it is done anyway, first port
+/// the parity-only programs into <see cref="CppBclEndToEndTests"/>' table so they keep a
+/// combined-mode compile-and-run.
 ///
 /// ── WHAT THIS ORACLE CANNOT SEE (read before trusting a green run) ────────────────
 /// A differential oracle only catches bugs that behave DIFFERENTLY on the two backends.
