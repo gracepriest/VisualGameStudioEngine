@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 
 namespace BasicLang.Compiler.CodeGen.JavaScript
@@ -68,7 +69,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             string javaScript,
             string title = null,
             string sourceMapJson = null,
-            IReadOnlyList<string> jsImports = null,
+            IReadOnlyList<BasicLang.Compiler.IR.JsImportDirective> jsImports = null,
             string importBaseDirectory = null,
             Action<string> warn = null)
         {
@@ -132,7 +133,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// emits NEXT TO THE SOURCE. And never overwritten, for the same reason
         /// <c>index.html</c> is not: a real <c>package.json</c> there belongs to the user.</para>
         /// </summary>
-        private static void WriteModulePackageJson(IReadOnlyList<string> jsImports,
+        private static void WriteModulePackageJson(
+            IReadOnlyList<BasicLang.Compiler.IR.JsImportDirective> jsImports,
             string outputDirectory, List<string> written)
         {
             if (jsImports == null || jsImports.Count == 0) return;
@@ -154,7 +156,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// where one arm went missing and the build silently produced the wrong thing. One copy
         /// covers all three, and a fourth route gets it for free.</para>
         /// </summary>
-        private static void CopyImportedModules(IReadOnlyList<string> jsImports,
+        private static void CopyImportedModules(
+            IReadOnlyList<BasicLang.Compiler.IR.JsImportDirective> jsImports,
             string outputDirectory, string baseDirectory, Action<string> warn, List<string> written)
         {
             if (jsImports == null || jsImports.Count == 0) return;
@@ -162,7 +165,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             var outputRoot = Path.GetFullPath(outputDirectory);
             var seen = new HashSet<string>(StringComparer.Ordinal);
 
-            foreach (var specifier in jsImports)
+            // ⛔ By SPECIFIER, never by the whole directive. Two clauses importing different
+            // names from one module are two imports to emit but ONE file to copy — deduping on
+            // the directive would copy it twice, and the second copy would race the first.
+            foreach (var specifier in jsImports.Select(i => i.Specifier))
             {
                 if (!IsRelativeFileSpecifier(specifier)) continue;
                 if (!seen.Add(specifier)) continue;   // two files may import the same module

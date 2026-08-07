@@ -17,7 +17,8 @@ namespace BasicLang.Compiler
         private readonly HashSet<string> _definedSymbols;
         private readonly Stack<ConditionalState> _conditionalStack;
         private readonly List<string> _cppIncludes = new List<string>();
-        private readonly List<string> _jsImports = new List<string>();
+        private readonly List<BasicLang.Compiler.IR.JsImportDirective> _jsImports =
+            new List<BasicLang.Compiler.IR.JsImportDirective>();
 
         public List<PreprocessorError> Errors => _errors;
 
@@ -30,14 +31,134 @@ namespace BasicLang.Compiler
         public IReadOnlyList<string> CppIncludes => _cppIncludes;
 
         /// <summary>
-        /// JavaScript module specifiers collected from #JsImport directives, WITHOUT their
-        /// quotes (e.g. "./chart.js") — the JavaScript backend re-quotes them when it emits
-        /// the ES `import` statement. Unlike <see cref="CppIncludes"/> there is no delimiter
-        /// to preserve: JavaScript has no angle-bracket module form, so a specifier is always
-        /// a quoted string and the quotes carry no meaning worth round-tripping.
+        /// JavaScript imports collected from #JsImport directives — the module specifier
+        /// (without quotes) plus any binding clause, already normalised to JavaScript spelling.
+        /// The JavaScript backend re-quotes the specifier when it emits the ES `import`.
+        /// Unlike <see cref="CppIncludes"/> there is no delimiter to preserve: JavaScript has
+        /// no angle-bracket module form, so a specifier is always a quoted string and the
+        /// quotes carry no meaning worth round-tripping.
         /// Accumulates across all files processed by this instance; never cleared.
         /// </summary>
-        public IReadOnlyList<string> JsImports => _jsImports;
+        public IReadOnlyList<BasicLang.Compiler.IR.JsImportDirective> JsImports => _jsImports;
+
+        /// <summary>A JavaScript identifier — what may appear either side of an <c>As</c>.</summary>
+        private const string JsIdent = @"[A-Za-z_$][A-Za-z0-9_$]*";
+
+        /// <summary>
+        /// Parses one <c>#JsImport</c> line into a <see cref="JsImportDirective"/>, or records a
+        /// diagnostic. Four forms, tried MOST SPECIFIC FIRST — the default-import pattern
+        /// (<c>name From "…"</c>) would otherwise swallow <c>* As lib From "…"</c>'s tail.
+        ///
+        /// <para><b>Everything here is validated at parse time.</b> This is the last point where
+        /// a line number is still available; after it, a malformed clause could only be emitted
+        /// verbatim and left for the browser to reject.</para>
+        /// </summary>
+        private void ParseJsImport(string line, int lineNumber)
+        {
+            // The specifier is common to all four forms and is checked ONCE, at the end.
+            string Fail(string message)
+            {
+                _errors.Add(new PreprocessorError { Line = lineNumber, Message = message });
+                return null;
+            }
+
+            var namespaceForm = Regex.Match(line,
+                $@"^#JsImport\s+\*\s+As\s+({JsIdent})\s+From\s+""([^""]+)""\s*$", RegexOptions.IgnoreCase);
+            var namedForm = Regex.Match(line,
+                @"^#JsImport\s+\{([^}]*)\}\s+From\s+""([^""]+)""\s*$", RegexOptions.IgnoreCase);
+            var defaultForm = Regex.Match(line,
+                $@"^#JsImport\s+({JsIdent})\s+From\s+""([^""]+)""\s*$", RegexOptions.IgnoreCase);
+            var bareForm = Regex.Match(line,
+                @"^#JsImport\s+""([^""]+)""\s*$", RegexOptions.IgnoreCase);
+
+            string specifier, clause = null;
+            var bound = new List<string>();
+
+            if (namespaceForm.Success)
+            {
+                specifier = namespaceForm.Groups[2].Value;
+                clause = "* as " + namespaceForm.Groups[1].Value;
+                bound.Add(namespaceForm.Groups[1].Value);
+            }
+            else if (namedForm.Success)
+            {
+                specifier = namedForm.Groups[2].Value;
+
+                var rendered = new List<string>();
+                foreach (var raw in namedForm.Groups[1].Value.Split(','))
+                {
+                    var entry = raw.Trim();
+                    if (entry.Length == 0) continue;   // a trailing comma is legal in ES
+
+                    // `name` or `name As alias`. The alias form is not decoration: it is how a
+                    // user dodges the BL7010 collision this backend raises when an imported name
+                    // clashes with one their own program declares.
+                    var alias = Regex.Match(entry, $@"^({JsIdent})\s+As\s+({JsIdent})$", RegexOptions.IgnoreCase);
+                    var plain = Regex.Match(entry, $@"^({JsIdent})$");
+
+                    if (alias.Success)
+                    {
+                        rendered.Add($"{alias.Groups[1].Value} as {alias.Groups[2].Value}");
+                        bound.Add(alias.Groups[2].Value);
+                    }
+                    else if (plain.Success)
+                    {
+                        rendered.Add(plain.Groups[1].Value);
+                        bound.Add(plain.Groups[1].Value);
+                    }
+                    else
+                    {
+                        Fail($"Invalid #JsImport binding '{entry}': expected a JavaScript name, " +
+                             $"optionally followed by 'As alias'. In: {line}");
+                        return;
+                    }
+                }
+
+                if (rendered.Count == 0)
+                {
+                    Fail($"Invalid #JsImport syntax: '{{ }}' imports no names. Use " +
+                         $"#JsImport \"{specifier}\" if the module is wanted only for its side " +
+                         $"effects. In: {line}");
+                    return;
+                }
+
+                clause = "{ " + string.Join(", ", rendered) + " }";
+            }
+            else if (defaultForm.Success)
+            {
+                specifier = defaultForm.Groups[2].Value;
+                clause = defaultForm.Groups[1].Value;
+                bound.Add(defaultForm.Groups[1].Value);
+            }
+            else if (bareForm.Success)
+            {
+                specifier = bareForm.Groups[1].Value;
+            }
+            else
+            {
+                // Quoted specifiers only. JavaScript has no angle-bracket module form, so
+                // <./a.js> is not an alternate spelling to accept — it is a mistake, and so is
+                // a bare unquoted path.
+                Fail($"Invalid #JsImport syntax (expected a quoted module specifier, optionally " +
+                     $"preceded by a binding clause such as '{{ greet }} From'): {line}");
+                return;
+            }
+
+            // ⛔ A backslash path is the natural thing for a Windows user to type, and it is the
+            // one bad specifier that produces NO diagnostic anywhere downstream: it collects, it
+            // escapes cleanly into the emitted ES `import`, and no module loader — browser or
+            // Node — resolves it. The result is a clean build and a 404 at run time. Module
+            // specifiers are URLs, not OS paths: forward slashes on every platform.
+            if (specifier.Contains('\\'))
+            {
+                Fail($"Invalid #JsImport specifier \"{specifier}\": JavaScript module specifiers " +
+                     "use forward slashes, not backslashes (a backslash path resolves in no " +
+                     "module loader)");
+                return;
+            }
+
+            _jsImports.Add(new BasicLang.Compiler.IR.JsImportDirective(specifier, clause, bound));
+        }
 
         public Preprocessor()
         {
@@ -169,24 +290,7 @@ namespace BasicLang.Compiler
                     // regardless of conditional state, because removing it would shift every
                     // subsequent line number and silently skew the JS source map.
                     if (IsConditionalActive())
-                    {
-                        // Quoted specifiers only. JavaScript has no angle-bracket module form,
-                        // so <./a.js> is not an alternate spelling to accept — it is a mistake,
-                        // and so is a bare unquoted path.
-                        var quote = Regex.Match(trimmedLine, "#JsImport\\s+\"([^\"]+)\"", RegexOptions.IgnoreCase);
-                        if (!quote.Success)
-                            _errors.Add(new PreprocessorError { Line = lineNumber, Message = $"Invalid #JsImport syntax (expected a quoted module specifier): {trimmedLine}" });
-                        // ⛔ A backslash path is the natural thing for a Windows user to type, and it
-                        // is the one bad specifier that produces NO diagnostic anywhere downstream:
-                        // it collects, it escapes cleanly into the emitted ES `import`, and no module
-                        // loader — browser or Node — resolves it. The result is a clean build and a
-                        // 404 at run time. Reject it here to turn that into a build error. Module
-                        // specifiers are URLs, not OS paths: forward slashes on every platform.
-                        else if (quote.Groups[1].Value.Contains('\\'))
-                            _errors.Add(new PreprocessorError { Line = lineNumber, Message = $"Invalid #JsImport specifier \"{quote.Groups[1].Value}\": JavaScript module specifiers use forward slashes, not backslashes (a backslash path resolves in no module loader)" });
-                        else
-                            _jsImports.Add(quote.Groups[1].Value);
-                    }
+                        ParseJsImport(trimmedLine, lineNumber);
                     result.AppendLine($"' {line}"); // Comment the directive out of the BasicLang source
                 }
                 else

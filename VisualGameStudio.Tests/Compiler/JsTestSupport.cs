@@ -37,7 +37,7 @@ internal static class JsTestSupport
     {
         string processed = source;
         var cppIncludes = new List<string>();
-        var jsImports = new List<string>();
+        var jsImports = new List<JsImportDirective>();
 
         if (runPreprocessor)
         {
@@ -46,7 +46,7 @@ internal static class JsTestSupport
             Fail(pre.Errors.Count > 0, "preprocess",
                 string.Join("; ", pre.Errors.ConvertAll(e => e.Message)), source);
             cppIncludes = new List<string>(pre.CppIncludes);
-            jsImports = new List<string>(pre.JsImports);
+            jsImports = new List<JsImportDirective>(pre.JsImports);
         }
 
         var tokens = new Lexer(processed).Tokenize();

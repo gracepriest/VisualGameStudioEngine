@@ -624,14 +624,53 @@ Without this, the headline claim is false for the shipping routes: the project r
    `index.html`). This settles the ESM hazard Task 6 Step 6 flagged as open; browsers were never
    affected.
 
-⚠ **KNOWN LIMITATION, found by running it.** `#JsImport` emits a **side-effect-only**
-`import "./m.js";` — no binding clause, so **no names are bound**. The ordinary modern module
-shape (`export function greet()`) is therefore unusable: import succeeds, copy succeeds, build
-succeeds, and the call dies at runtime with `greet is not defined`. An imported module has to
-publish through `globalThis` until the directive grows a named-import form. Pinned by
-`JavaScriptCliProcessTests.ProjectRoute_JsImport_BindsNoNames_KNOWN`, which goes RED the day
-that changes. **This is the biggest remaining gap in "call any JavaScript library" and deserves
-its own task.**
+~~⚠ **KNOWN LIMITATION, found by running it.** `#JsImport` emits a **side-effect-only**
+`import "./m.js";` — no binding clause, so **no names are bound**.~~
+✅ **CLOSED** by the binding forms below. The bare form still binds nothing, which is correct ES
+(a side-effect import), and is now pinned as such by
+`ProjectRoute_BareJsImport_RunsTheModuleButBindsNoNames` rather than as a gap.
+
+## Follow-up (shipped): `#JsImport` binding forms
+
+**The syntax mirrors ES exactly**, because the person writing one is reading MDN or a package
+README, not a BasicLang manual — the same reasoning that settled plan 2b's decision 2. It costs
+nothing structurally: the preprocessor comments the directive line out BEFORE lexing, so `From`
+and `As` never reach the keyword table, the parser, or any other backend.
+
+| BasicLang | JavaScript |
+|---|---|
+| `#JsImport "./m.js"` | `import "./m.js";` |
+| `#JsImport { greet, other } From "./m.js"` | `import { greet, other } from "./m.js";` |
+| `#JsImport { greet As hi } From "./m.js"` | `import { greet as hi } from "./m.js";` |
+| `#JsImport lib From "./m.js"` | `import lib from "./m.js";` (default) |
+| `#JsImport * As lib From "./m.js"` | `import * as lib from "./m.js";` (namespace) |
+
+- **`IRModule.JsImports` became `List<JsImportDirective>`** — an import has two independent
+  parts, and only one of them is a file path. `JavaScriptEmitter` copies by `Specifier` while the
+  backend emits by `Clause`; one string could serve either, never both.
+- **De-dup keys on clause AND specifier.** `{ a } From "./m.js"` and `{ b } From "./m.js"` are two
+  imports of one module — collapsing on the specifier alone drops `b`, and it surfaces as
+  `b is not defined` at run time. The COPY still de-dupes on specifier alone: two clauses, one file.
+- **Keyword casing is normalised, imported NAMES are not.** BasicLang is case-insensitive, so
+  `AS`/`as`/`As` all arrive — but `import { a AS b }` is a SyntaxError. The names are the opposite
+  case: `{ Greet }` must stay `Greet`, since ES named imports fail at LINK time and a "helpfully
+  corrected" name renders a blank page.
+- **BL7010 — an import binding that collides with a program declaration.** They share one JS
+  module scope and redeclaring an import is a SyntaxError: the module fails to PARSE, so nothing
+  runs at all. Compared on the EMITTED name (via the generator's own `SanitizeName`) and
+  case-SENSITIVELY, because `greet` and `Greet` genuinely coexist in JavaScript. The fix the
+  message suggests is the alias form.
+  - ⛔ Two bugs in the first cut of this check, both caught by boundary tests: class methods
+    **do** appear in `module.Functions` (flattened, unqualified), so it flagged a legal
+    `Class Widget` with a `render` method — fixed by using `CollectMemberImplementations()`, the
+    generator's own predicate; and the same directive written twice de-dupes to one import, so it
+    is not a collision — fixed by walking the de-duplicated list.
+- `::greet(...)` reaches an imported name with no extra work — **measured**, not assumed
+  (`ProjectRoute_ImportedName_IsCallableThroughForeignSyntax`).
+- Milestone re-verified in a browser with an ordinary `export function greet()` and
+  `#JsImport { greet } From "./greet.js"`: renders "Hello from BasicLang", console clean.
+
+Gate: JS suite **523/523** · fast subset **4679 / 2 pre-existing / 1 skipped**.
 
 ⚠ **Test placement deviates from the plan.** These tests live in `JavaScriptCliProcessTests`,
 not `JavaScriptInteropExecutionTests`: the question is an ENTRY-POINT one — what lands in each

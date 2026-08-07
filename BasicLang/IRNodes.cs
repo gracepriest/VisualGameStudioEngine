@@ -1387,11 +1387,18 @@ namespace BasicLang.Compiler.IR
         public List<string> CppIncludes { get; set; }
 
         /// <summary>
-        /// Module specifiers from #JsImport, in source order and as written, emitted as real ES
-        /// `import` statements by the JavaScript backend. Sibling of <see cref="CppIncludes"/>:
-        /// same collection shape, different target language.
+        /// <c>#JsImport</c> directives in source order, emitted as real ES <c>import</c>
+        /// statements by the JavaScript backend. Sibling of <see cref="CppIncludes"/>: same
+        /// role, different target language.
+        ///
+        /// <para>A RECORD rather than a bare specifier string, because an import has two
+        /// independent parts — WHAT to load and WHAT NAMES it brings in — and only the first is
+        /// a file path. <see cref="JavaScriptEmitter"/> copies by
+        /// <see cref="JsImportDirective.Specifier"/> while the backend emits by
+        /// <see cref="JsImportDirective.Clause"/>; a single string could serve one or the other,
+        /// never both.</para>
         /// </summary>
-        public List<string> JsImports { get; set; }
+        public List<JsImportDirective> JsImports { get; set; }
 
         /// <summary>
         /// Source path → the number of lines the front end INSERTED above that file's original
@@ -1427,7 +1434,7 @@ namespace BasicLang.Compiler.IR
             Namespaces = new List<string>();
             NetUsings = new List<NetUsingDirective>();
             CppIncludes = new List<string>();
-            JsImports = new List<string>();
+            JsImports = new List<JsImportDirective>();
         }
 
         public IRFunction CreateFunction(string name, TypeInfo returnType)

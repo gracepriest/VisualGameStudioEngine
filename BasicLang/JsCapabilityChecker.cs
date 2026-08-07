@@ -65,7 +65,93 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             CheckValueAggregates(module);
             CheckOperatorOverloading(module);
             CheckBannedTypes(module);
+            CheckImportNameCollisions(module);
         }
+
+        /// <summary>
+        /// BL7010 — an imported name that collides with something the program declares.
+        ///
+        /// <para>An ES <c>import</c> binding and a generated <c>function</c>/<c>class</c>/
+        /// <c>let</c> land in the SAME module scope, and JavaScript treats a redeclaration of an
+        /// import as a SyntaxError. That is not a runtime error in one corner of the page — the
+        /// module fails to parse, so NOTHING runs and the page is blank. The build, meanwhile,
+        /// reported success.</para>
+        ///
+        /// <para><b>Compared on the EMITTED name</b>, via the generator's own
+        /// <c>SanitizeName</c>: the collision happens in the output, not in the BasicLang source,
+        /// and the two spellings differ (a BasicLang <c>My-Thing</c> emits as <c>MyThing</c>).
+        /// Case-SENSITIVE, deliberately, for the same reason — BasicLang is case-insensitive but
+        /// JavaScript is not, so <c>greet</c> and <c>Greet</c> genuinely do coexist in the
+        /// output and flagging them would be a false positive.</para>
+        ///
+        /// <para>The fix is an alias, which is why the named form accepts one:
+        /// <c>#JsImport { greet As jsGreet } From "./m.js"</c>.</para>
+        /// </summary>
+        private static void CheckImportNameCollisions(IRModule module)
+        {
+            if (module.JsImports == null || module.JsImports.Count == 0) return;
+
+            var declared = new HashSet<string>(StringComparer.Ordinal);
+            void Declare(string name)
+            {
+                if (!string.IsNullOrEmpty(name))
+                    declared.Add(JavaScriptCodeGenerator.SanitizeName(name));
+            }
+
+            // Every TOP-LEVEL binding the generator emits.
+            //
+            // ⛔ Class members are NOT top-level, and they are not absent from module.Functions
+            // either — they flatten into it under their UNQUALIFIED name. Skipping them by the
+            // generator's own predicate (CollectMemberImplementations, which matches on IDENTITY
+            // because the names are exactly what is ambiguous) is what stops a legal
+            // `Class Widget` with a `render` method from blocking an import of `render`. A
+            // hand-rolled "is this a method" rule here would be a second answer to a question
+            // the IR already answers.
+            var memberBodies = module.CollectMemberImplementations();
+            foreach (var f in module.Functions ?? Enumerable.Empty<IRFunction>())
+                if (!memberBodies.Contains(f)) Declare(f.Name);
+
+            foreach (var n in module.Classes?.Keys ?? Enumerable.Empty<string>()) Declare(n);
+            foreach (var n in module.Enums?.Keys ?? Enumerable.Empty<string>()) Declare(n);
+            foreach (var n in module.Delegates?.Keys ?? Enumerable.Empty<string>()) Declare(n);
+            foreach (var g in module.GlobalVariables?.Values ?? Enumerable.Empty<IRVariable>())
+                Declare(g.Name);
+
+            // ⛔ Walk the DE-DUPLICATED directives, matching what the generator emits. The same
+            // directive written twice — two files of one project importing the same thing —
+            // collapses to one import statement, so it binds its name ONCE and is not a
+            // collision. Checking the raw list would refuse an ordinary multi-file project.
+            var emitted = new HashSet<string>(StringComparer.Ordinal);
+            var imported = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var import in module.JsImports)
+            {
+                if (!emitted.Add(import.DedupeKey)) continue;
+
+                foreach (var name in import.BoundNames)
+                {
+                    if (declared.Contains(name))
+                        throw ImportNameCollisionRejection(name, import.Specifier,
+                            "this program already declares it");
+
+                    // Two modules can also collide with EACH OTHER, and that failure is even
+                    // harder to read in a browser: neither module is obviously at fault.
+                    if (!imported.Add(name))
+                        throw ImportNameCollisionRejection(name, import.Specifier,
+                            "another #JsImport already binds it");
+                }
+            }
+        }
+
+        /// <summary>BL7010 — an import binding cannot share a name with anything else in scope.</summary>
+        public static ForeignFeatureException ImportNameCollisionRejection(
+            string name, string specifier, string why) =>
+            new ForeignFeatureException(
+                $"BL7010: the #JsImport of '{name}' from \"{specifier}\" cannot be lowered — " +
+                $"{why}. An import binding and a generated declaration share one JavaScript " +
+                "module scope, and redeclaring an import is a SyntaxError: the module would fail " +
+                "to parse and the whole page would render nothing. Import it under another name " +
+                $"instead — #JsImport {{ {name} As js{name} }} From \"{specifier}\".");
 
         /// <summary>
         /// BL7005 — value aggregates: <c>Structure</c>, <c>Type…End Type</c>, <c>Union</c>.

@@ -911,7 +911,7 @@ public class BuildService : IBuildService
     private void EmitJavaScriptSite(string outputDir, string scriptFileName, string generatedCode,
         BasicLangProject project,
         BasicLang.Compiler.CodeGen.JavaScript.JavaScriptCodeGenerator generator,
-        IReadOnlyList<string> jsImports = null)
+        IReadOnlyList<BasicLang.Compiler.IR.JsImportDirective> jsImports = null)
     {
         string mapJson = null;
         if (generator != null && generator.SourceMap.Count > 0)

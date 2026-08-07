@@ -154,17 +154,19 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // anyway, so this is for a human reading the output in devtools.
             //
             // De-duplicated because two files in one project accumulate into ONE combined module,
-            // and both may import the same library.
+            // and both may import the same library. ⛔ Keyed on the CLAUSE AND the specifier, not
+            // the specifier alone: `{ a } From "./m.js"` and `{ b } From "./m.js"` are two
+            // different imports of one module, and collapsing them would silently drop `b`.
             //
             // ⛔ Emitted through Line(), never by appending to _output — Line() is what maintains
             // _generatedLine, and RecordMapping reads it. A direct Append here would silently
             // shift every source-map segment by the number of imports, sending the debugger to
             // the wrong .bas line in exactly the files that use interop.
             var seenImports = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var specifier in module.JsImports ?? new List<string>())
+            foreach (var import in module.JsImports ?? new List<JsImportDirective>())
             {
-                if (!seenImports.Add(specifier)) continue;
-                Line($"import \"{EscapeJsString(specifier)}\";");
+                if (!seenImports.Add(import.DedupeKey)) continue;
+                Line(import.ToImportStatement(EscapeJsString));
             }
             if (seenImports.Count > 0) Line();
 
@@ -741,8 +743,13 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         /// <summary>
         /// JS identifiers allow letters, digits, _ and $. BasicLang's `Me` is `this`.
+        ///
+        /// <para><c>internal</c> so <c>JsCapabilityChecker</c>'s BL7010 collision check can ask
+        /// what a declaration will actually be CALLED in the output. Re-implementing the rule
+        /// there would put two spellings of "the emitted name" in the compiler, and the check
+        /// would quietly stop matching the day this one changed.</para>
         /// </summary>
-        private static string SanitizeName(string name)
+        internal static string SanitizeName(string name)
         {
             if (string.IsNullOrEmpty(name)) return "_unnamed";
             if (name.Equals("Me", StringComparison.OrdinalIgnoreCase)) return "this";

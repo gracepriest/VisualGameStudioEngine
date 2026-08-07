@@ -258,19 +258,18 @@ public class JavaScriptCliProcessTests
     /// <summary>
     /// Writes a project whose Main.bas imports a sibling helper module.
     ///
-    /// <para>⛔ The helper assigns to <c>globalThis</c> rather than <c>export</c>ing, and that is
-    /// forced, not stylistic: <c>#JsImport</c> emits a SIDE-EFFECT-ONLY <c>import "./helper.js";</c>,
-    /// which binds no names. A module that only exports is imported, evaluated, and then
-    /// unreachable — <c>greet is not defined</c> at runtime from a build that reported success.
-    /// Pinned by <see cref="ProjectRoute_JsImport_BindsNoNames_KNOWN"/>; giving the directive a
-    /// named-import form is a separate piece of work.</para>
+    /// <para>The ORDINARY module shape — <c>export function greet()</c> reached by a named
+    /// import. It could not be written this way at first: <c>#JsImport</c> only had the
+    /// side-effect form, which binds no names, so an exporting module was imported, evaluated,
+    /// and then unreachable (<c>greet is not defined</c>, from a build that reported success).
+    /// The binding forms exist for exactly this.</para>
     /// </summary>
     private async Task WriteImportingProject(string specifier = "./helper.js")
     {
         await File.WriteAllTextAsync(Path.Combine(_dir, "helper.js"),
-            "globalThis.greet = function () { return \"hi from the module\"; };\n");
+            "export function greet() { return \"hi from the module\"; }\n");
         await File.WriteAllTextAsync(Path.Combine(_dir, "Main.bas"),
-            $"#JsImport \"{specifier}\"\n" +
+            $"#JsImport {{ greet }} From \"{specifier}\"\n" +
             "Sub Main()\n" +
             "javascript{ console.log(greet()); }\n" +
             "End Sub\n");
@@ -447,25 +446,21 @@ public class JavaScriptCliProcessTests
     }
 
     /// <summary>
-    /// ⚠ KNOWN LIMITATION, pinned so it is known rather than discovered in a browser.
+    /// The BARE form still binds nothing — and that is CORRECT ES, not a shortfall. A
+    /// side-effect import runs a module for what it does, not for what it exports.
     ///
-    /// <para><c>#JsImport "./m.js"</c> emits a SIDE-EFFECT-ONLY <c>import "./m.js";</c> — the
-    /// module is fetched and evaluated, but NO names are bound. So the ordinary modern module
-    /// shape, <c>export function greet()</c>, is unusable: the import succeeds, the copy
-    /// succeeds, the build succeeds, and the call fails at runtime with
-    /// <c>greet is not defined</c>. Until the directive grows a named-import form, an imported
-    /// module has to publish through <c>globalThis</c>.</para>
-    ///
-    /// <para>Asserting on the failure rather than hiding it: this test goes RED the day the
-    /// directive learns to bind names, which is the signal to rewrite the helper above.</para>
+    /// <para>Kept as an executable statement of the semantics because it was once a real gap:
+    /// with only this form, the ordinary <c>export function greet()</c> module was unusable and
+    /// the failure surfaced in a browser rather than in the build. It now sits beside the
+    /// binding-form tests so the difference reads as a deliberate distinction.</para>
     /// </summary>
     [Test]
-    public async Task ProjectRoute_JsImport_BindsNoNames_KNOWN()
+    public async Task ProjectRoute_BareJsImport_RunsTheModuleButBindsNoNames()
     {
         await File.WriteAllTextAsync(Path.Combine(_dir, "helper.js"),
-            "export function greet() { return \"exported\"; }\n");
+            "console.log(\"side effect\");\nexport function greet() { return \"exported\"; }\n");
         await File.WriteAllTextAsync(Path.Combine(_dir, "Main.bas"),
-            "#JsImport \"./helper.js\"\nSub Main()\njavascript{ console.log(greet()); }\nEnd Sub\n");
+            "#JsImport \"./helper.js\"\nSub Main()\nConsole.WriteLine(\"main\")\nEnd Sub\n");
         await WriteProjectOnly();
 
         var (exit, _, stderr) = await CliTestHarness.RunCli(
@@ -475,17 +470,104 @@ public class JavaScriptCliProcessTests
         var script = Directory.GetFiles(Path.Combine(_dir, "bin"), "Site.js", SearchOption.AllDirectories)
             .Single();
         Assert.That(await File.ReadAllTextAsync(script), Does.Contain("import \"./helper.js\";"),
-            "a side-effect-only import — no binding clause");
+            "no binding clause — the module runs, nothing is named");
 
-        var node = BasicLang.Runtime.NodeLocator.Find();
-        if (node == null) Assert.Ignore("Node.js not found.");
+        // The side effect happens; the export is simply never referenced.
+        Assert.That(RunNodeFile(script), Is.EqualTo("side effect\nmain"));
+    }
 
-        var (nodeExit, _, nodeErr) = CliTestHarness.RunProcess(
-            node!, new[] { script }, Path.GetDirectoryName(script)!, timeoutMs: 60_000);
+    /// <summary>
+    /// ⭐ THE ONE THAT CLOSES THE GAP: an ordinary exporting module, reached by a named import,
+    /// through the real binary, RUN. Text assertions cannot tell a correct import statement
+    /// from one that parses and links to nothing — ES named imports fail at LINK time, so a
+    /// wrong name renders a blank page rather than throwing where you can see it.
+    /// </summary>
+    [TestCase("{ greet }", "greet()", TestName = "ProjectRoute_NamedImport_Runs")]
+    [TestCase("{ greet As hi }", "hi()", TestName = "ProjectRoute_AliasedImport_Runs")]
+    [TestCase("* As lib", "lib.greet()", TestName = "ProjectRoute_NamespaceImport_Runs")]
+    public async Task ProjectRoute_BindingForm_ReachesTheExport(string clause, string call)
+    {
+        await File.WriteAllTextAsync(Path.Combine(_dir, "helper.js"),
+            "export function greet() { return \"reached the export\"; }\n");
+        await File.WriteAllTextAsync(Path.Combine(_dir, "Main.bas"),
+            $"#JsImport {clause} From \"./helper.js\"\n" +
+            $"Sub Main()\njavascript{{ console.log({call}); }}\nEnd Sub\n");
+        await WriteProjectOnly();
 
-        Assert.That(nodeExit, Is.Not.Zero, "an exported name became reachable — #JsImport now " +
-            "binds names, so the globalThis workaround above can be dropped");
-        Assert.That(nodeErr, Does.Contain("greet is not defined"));
+        var (exit, stdout, stderr) = await CliTestHarness.RunCli(
+            _dir, "build", Path.Combine(_dir, "Site.blproj"));
+        Assert.That(exit, Is.Zero, $"CLI build failed.\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+
+        var script = Directory.GetFiles(Path.Combine(_dir, "bin"), "Site.js", SearchOption.AllDirectories)
+            .Single();
+        Assert.That(RunNodeFile(script), Is.EqualTo("reached the export"));
+    }
+
+    /// <summary>A default export, the shape most npm packages present.</summary>
+    [Test]
+    public async Task ProjectRoute_DefaultImport_ReachesTheExport()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_dir, "helper.js"),
+            "export default function () { return \"the default\"; }\n");
+        await File.WriteAllTextAsync(Path.Combine(_dir, "Main.bas"),
+            "#JsImport helper From \"./helper.js\"\n" +
+            "Sub Main()\njavascript{ console.log(helper()); }\nEnd Sub\n");
+        await WriteProjectOnly();
+
+        var (exit, stdout, stderr) = await CliTestHarness.RunCli(
+            _dir, "build", Path.Combine(_dir, "Site.blproj"));
+        Assert.That(exit, Is.Zero, $"CLI build failed.\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+
+        var script = Directory.GetFiles(Path.Combine(_dir, "bin"), "Site.js", SearchOption.AllDirectories)
+            .Single();
+        Assert.That(RunNodeFile(script), Is.EqualTo("the default"));
+    }
+
+    /// <summary>
+    /// ⛔ An imported name is reachable through <c>::</c> too, not only from inside a
+    /// <c>javascript{ }</c> block — which matters because <c>::</c> is the ergonomic form a user
+    /// reaches for first. Nothing in the call path was changed for this, so it is a claim that
+    /// needs measuring rather than assuming.
+    /// </summary>
+    [Test]
+    public async Task ProjectRoute_ImportedName_IsCallableThroughForeignSyntax()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_dir, "helper.js"),
+            "export function shout(s) { console.log(s.toUpperCase()); }\n");
+        await File.WriteAllTextAsync(Path.Combine(_dir, "Main.bas"),
+            "#JsImport { shout } From \"./helper.js\"\n" +
+            "Sub Main()\n::shout(\"through colons\")\nEnd Sub\n");
+        await WriteProjectOnly();
+
+        var (exit, stdout, stderr) = await CliTestHarness.RunCli(
+            _dir, "build", Path.Combine(_dir, "Site.blproj"));
+        Assert.That(exit, Is.Zero, $"CLI build failed.\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+
+        var script = Directory.GetFiles(Path.Combine(_dir, "bin"), "Site.js", SearchOption.AllDirectories)
+            .Single();
+        Assert.That(RunNodeFile(script), Is.EqualTo("THROUGH COLONS"));
+    }
+
+    /// <summary>
+    /// The BL7010 collision, through the real binary: it must fail the BUILD, cleanly, rather
+    /// than emit a module that fails to parse in the browser and renders nothing.
+    /// </summary>
+    [Test]
+    public async Task ProjectRoute_ImportCollidingWithAFunction_FailsTheBuildCleanly()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_dir, "helper.js"),
+            "export function greet() { return \"x\"; }\n");
+        await File.WriteAllTextAsync(Path.Combine(_dir, "Main.bas"),
+            "#JsImport { greet } From \"./helper.js\"\n" +
+            "Sub greet()\nEnd Sub\nSub Main()\nEnd Sub\n");
+        await WriteProjectOnly();
+
+        var (exit, stdout, stderr) = await CliTestHarness.RunCli(
+            _dir, "build", Path.Combine(_dir, "Site.blproj"));
+
+        Assert.That(exit, Is.Not.Zero, $"a colliding import must fail the build.\nSTDOUT:\n{stdout}");
+        Assert.That(stdout + stderr, Does.Contain("BL7010"));
+        Assert.That(stdout + stderr, Does.Not.Contain("Unhandled exception"));
     }
 
     /// <summary>Swallows build chatter — this fixture asserts on behaviour, not on logs.</summary>

@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using NUnit.Framework;
 using BasicLang.Compiler;
 
@@ -33,7 +34,9 @@ public class JavaScriptInteropTests
         var module = JsTestSupport.BuildModule(
             "#JsImport \"./chart.js\"\nSub Main()\nEnd Sub", runPreprocessor: true);
 
-        Assert.That(module.JsImports, Is.EqualTo(new[] { "./chart.js" }));
+        Assert.That(module.JsImports.Select(i => i.Specifier), Is.EqualTo(new[] { "./chart.js" }));
+        Assert.That(module.JsImports.Single().IsSideEffectOnly, Is.True,
+            "a bare #JsImport binds no names — correct ES, not a shortfall");
     }
 
     /// <summary>The directive name is matched case-insensitively, like every other one.</summary>
@@ -43,7 +46,7 @@ public class JavaScriptInteropTests
         var module = JsTestSupport.BuildModule(
             "#jsimport \"./a.js\"\nSub Main()\nEnd Sub", runPreprocessor: true);
 
-        Assert.That(module.JsImports, Is.EqualTo(new[] { "./a.js" }));
+        Assert.That(module.JsImports.Select(i => i.Specifier), Is.EqualTo(new[] { "./a.js" }));
     }
 
     /// <summary>
@@ -160,7 +163,8 @@ public class JavaScriptInteropTests
 
         Assert.That(result.AllErrors.Select(e => e.Message), Is.Empty);
         Assert.That(result.CombinedIR, Is.Not.Null);
-        Assert.That(result.CombinedIR.JsImports, Is.EqualTo(new[] { "./chart.js" }),
+        Assert.That(result.CombinedIR.JsImports.Select(i => i.Specifier),
+            Is.EqualTo(new[] { "./chart.js" }),
             "#JsImport must survive CompileFile's CombineIRModules -> CombinedIR.JsImports join");
     }
 
@@ -181,7 +185,7 @@ public class JavaScriptInteropTests
 
         Assert.That(result.AllErrors.Select(e => e.Message), Is.Empty);
         Assert.That(result.CombinedIR, Is.Not.Null);
-        Assert.That(result.CombinedIR.JsImports,
+        Assert.That(result.CombinedIR.JsImports.Select(i => i.Specifier),
             Is.EquivalentTo(new[] { "./chart.js", "./util.js" }),
             "#JsImport must survive CompileProjectFiles' CombineIRModules -> CombinedIR.JsImports join");
     }
@@ -647,4 +651,239 @@ public class JavaScriptInteropTests
         => Assert.That(
             JsTestSupport.CompileOptimized("Sub Main()\njavascript{ console.log(\"inline\"); }\nEnd Sub"),
             Does.Contain("console.log(\"inline\");"));
+
+    // ==================================================================
+    // #JsImport BINDING FORMS.
+    //
+    // The bare form runs a module for its side effects and binds nothing — correct ES, but it
+    // left the ordinary `export function greet()` module unusable: import ✅, copy ✅, build ✅,
+    // then `greet is not defined` in the browser. These forms mirror ES exactly, because the
+    // person writing one is reading MDN, not a BasicLang manual.
+    // ==================================================================
+
+    private static BasicLang.Compiler.IR.JsImportDirective OneImport(string directive)
+        => JsTestSupport.BuildModule($"{directive}\nSub Main()\nEnd Sub", runPreprocessor: true)
+            .JsImports.Single();
+
+    /// <summary>
+    /// The bare form keeps binding nothing. That is CORRECT ES — a side-effect import — and the
+    /// reason the binding forms had to be added rather than the bare form changed.
+    /// </summary>
+    [Test]
+    public void JsImport_Bare_StillBindsNothing()
+    {
+        var import = OneImport("#JsImport \"./m.js\"");
+
+        Assert.That(import.Clause, Is.Null);
+        Assert.That(import.IsSideEffectOnly, Is.True);
+    }
+
+    [TestCase("#JsImport { greet } From \"./m.js\"", "{ greet }",
+        TestName = "JsImport_Named_Single")]
+    [TestCase("#JsImport { greet, other } From \"./m.js\"", "{ greet, other }",
+        TestName = "JsImport_Named_Several")]
+    [TestCase("#JsImport { greet As hi } From \"./m.js\"", "{ greet as hi }",
+        TestName = "JsImport_Named_Aliased")]
+    [TestCase("#JsImport { greet, other As o } From \"./m.js\"", "{ greet, other as o }",
+        TestName = "JsImport_Named_Mixed")]
+    [TestCase("#JsImport lib From \"./m.js\"", "lib", TestName = "JsImport_Default")]
+    [TestCase("#JsImport * As lib From \"./m.js\"", "* as lib", TestName = "JsImport_Namespace")]
+    public void JsImport_BindingClause_IsParsedAndNormalisedToJavaScript(string directive, string clause)
+    {
+        var import = OneImport(directive);
+
+        Assert.That(import.Specifier, Is.EqualTo("./m.js"));
+        Assert.That(import.Clause, Is.EqualTo(clause));
+    }
+
+    /// <summary>
+    /// ⛔ <c>As</c> and <c>From</c> are normalised to LOWERCASE JavaScript. BasicLang is
+    /// case-insensitive, so a user may reasonably write <c>as</c>, <c>AS</c> or <c>As</c> — but
+    /// <c>import { a AS b }</c> is a SyntaxError, and a build that emits one produces a blank
+    /// page. The keyword casing is ours to fix; the NAMES are not (see the next test).
+    /// </summary>
+    [TestCase("#JsImport { greet as hi } From \"./m.js\"")]
+    [TestCase("#JsImport { greet AS hi } from \"./m.js\"")]
+    [TestCase("#jsimport { greet As hi } FROM \"./m.js\"")]
+    public void JsImport_KeywordCasing_IsNormalised(string directive)
+        => Assert.That(OneImport(directive).Clause, Is.EqualTo("{ greet as hi }"));
+
+    /// <summary>
+    /// ⛔ THE MIRROR of the keyword rule, and the one that matters more: an imported NAME is a
+    /// JavaScript name and its case is load-bearing. <c>{ Greet }</c> must stay <c>Greet</c> —
+    /// helpfully "correcting" it to the BasicLang spelling would import something the module
+    /// does not export, and ES named imports fail at LINK time, so the page renders nothing.
+    /// </summary>
+    [Test]
+    public void JsImport_ImportedNameCasing_IsPreservedExactly()
+        => Assert.That(OneImport("#JsImport { getElementById As Grab } From \"./m.js\"").Clause,
+            Is.EqualTo("{ getElementById as Grab }"));
+
+    [Test]
+    public void JsImport_BoundNames_AreTheLocalNames()
+    {
+        Assert.That(OneImport("#JsImport { a, b As c } From \"./m.js\"").BoundNames,
+            Is.EqualTo(new[] { "a", "c" }), "an alias replaces the imported name locally");
+        Assert.That(OneImport("#JsImport * As lib From \"./m.js\"").BoundNames,
+            Is.EqualTo(new[] { "lib" }));
+        Assert.That(OneImport("#JsImport \"./m.js\"").BoundNames, Is.Empty);
+    }
+
+    // ---------------------------------------------------------------- emission
+
+    [TestCase("#JsImport { greet } From \"./m.js\"", "import { greet } from \"./m.js\";")]
+    [TestCase("#JsImport lib From \"./m.js\"", "import lib from \"./m.js\";")]
+    [TestCase("#JsImport * As lib From \"./m.js\"", "import * as lib from \"./m.js\";")]
+    [TestCase("#JsImport \"./m.js\"", "import \"./m.js\";")]
+    public void JsImport_EmitsTheMatchingEsStatement(string directive, string expected)
+        => Assert.That(JsTestSupport.Compile($"{directive}\nSub Main()\nEnd Sub", runPreprocessor: true),
+            Does.Contain(expected));
+
+    /// <summary>
+    /// ⛔ De-duplication keys on the CLAUSE AND the specifier. Two clauses naming different
+    /// exports of one module are two imports; collapsing them on the specifier alone drops the
+    /// second binding, and the failure surfaces as `other is not defined` at run time.
+    /// </summary>
+    [Test]
+    public void JsImport_SameModuleDifferentClauses_BothSurvive()
+    {
+        var js = JsTestSupport.Compile(
+            "#JsImport { greet } From \"./m.js\"\n#JsImport { other } From \"./m.js\"\n" +
+            "Sub Main()\nEnd Sub", runPreprocessor: true);
+
+        Assert.That(js, Does.Contain("import { greet } from \"./m.js\";"));
+        Assert.That(js, Does.Contain("import { other } from \"./m.js\";"));
+    }
+
+    /// <summary>The identical directive twice is still one import.</summary>
+    [Test]
+    public void JsImport_IdenticalClauseTwice_IsEmittedOnce()
+    {
+        var js = JsTestSupport.Compile(
+            "#JsImport { greet } From \"./m.js\"\n#JsImport { greet } From \"./m.js\"\n" +
+            "Sub Main()\nEnd Sub", runPreprocessor: true);
+
+        Assert.That(Regex.Matches(js, @"import \{ greet \} from").Count, Is.EqualTo(1));
+    }
+
+    // ---------------------------------------------------------------- rejections
+
+    [TestCase("#JsImport { } From \"./m.js\"", "imports no names",
+        TestName = "JsImport_EmptyBraces_IsRejected")]
+    [TestCase("#JsImport { 9bad } From \"./m.js\"", "Invalid #JsImport binding",
+        TestName = "JsImport_NonIdentifierBinding_IsRejected")]
+    [TestCase("#JsImport { a b } From \"./m.js\"", "Invalid #JsImport binding",
+        TestName = "JsImport_TwoNamesNoComma_IsRejected")]
+    [TestCase("#JsImport greet From ./m.js", "Invalid #JsImport syntax",
+        TestName = "JsImport_UnquotedSpecifierWithClause_IsRejected")]
+    [TestCase("#JsImport { greet } \"./m.js\"", "Invalid #JsImport syntax",
+        TestName = "JsImport_ClauseWithoutFrom_IsRejected")]
+    [TestCase("#JsImport * From \"./m.js\"", "Invalid #JsImport syntax",
+        TestName = "JsImport_NamespaceWithoutAlias_IsRejected")]
+    public void JsImport_MalformedClause_IsRejectedByMessage(string directive, string expected)
+        => Assert.That(() => JsTestSupport.BuildModule($"{directive}\nSub Main()\nEnd Sub",
+                runPreprocessor: true),
+            Throws.Exception.With.Message.Contains(expected));
+
+    /// <summary>A trailing comma is legal in ES and must not be an error here either.</summary>
+    [Test]
+    public void JsImport_TrailingComma_IsAccepted()
+        => Assert.That(OneImport("#JsImport { greet, } From \"./m.js\"").Clause,
+            Is.EqualTo("{ greet }"));
+
+    // ---------------------------------------------------------------- BL7010 collisions
+
+    /// <summary>
+    /// ⛔ An import binding and a generated declaration share ONE JavaScript module scope, and
+    /// redeclaring an import is a SyntaxError — not a runtime error in one corner of the page,
+    /// but a parse failure that renders NOTHING. From a build that reported success.
+    /// </summary>
+    [Test]
+    public void JsImport_BindingThatCollidesWithAFunction_IsRejected()
+        => Assert.That(() => JsTestSupport.Compile(
+                "#JsImport { greet } From \"./m.js\"\nSub greet()\nEnd Sub\nSub Main()\nEnd Sub",
+                runPreprocessor: true),
+            Throws.Exception.With.Message.Contains("BL7010"));
+
+    [Test]
+    public void JsImport_BindingThatCollidesWithAClass_IsRejected()
+        => Assert.That(() => JsTestSupport.Compile(
+                "#JsImport * As Widget From \"./m.js\"\nClass Widget\nEnd Class\nSub Main()\nEnd Sub",
+                runPreprocessor: true),
+            Throws.Exception.With.Message.Contains("BL7010"));
+
+    /// <summary>Two modules colliding with each other is even harder to read in a browser —
+    /// neither is obviously at fault — so it is refused at build time too.</summary>
+    [Test]
+    public void JsImport_TwoModulesBindingTheSameName_IsRejected()
+        => Assert.That(() => JsTestSupport.Compile(
+                "#JsImport { greet } From \"./a.js\"\n#JsImport { greet } From \"./b.js\"\n" +
+                "Sub Main()\nEnd Sub", runPreprocessor: true),
+            Throws.Exception.With.Message.Contains("BL7010"));
+
+    /// <summary>The message must name the escape hatch it is asking for.</summary>
+    [Test]
+    public void JsImport_CollisionMessage_SuggestsAnAlias()
+        => Assert.That(() => JsTestSupport.Compile(
+                "#JsImport { greet } From \"./m.js\"\nSub greet()\nEnd Sub\nSub Main()\nEnd Sub",
+                runPreprocessor: true),
+            Throws.Exception.With.Message.Contains("As js"));
+
+    /// <summary>And the alias must actually clear it.</summary>
+    [Test]
+    public void JsImport_AliasedBinding_ClearsTheCollision()
+        => Assert.That(JsTestSupport.Compile(
+                "#JsImport { greet As jsGreet } From \"./m.js\"\nSub greet()\nEnd Sub\n" +
+                "Sub Main()\nEnd Sub", runPreprocessor: true),
+            Does.Contain("import { greet as jsGreet } from \"./m.js\";"));
+
+    /// <summary>
+    /// ⛔ CASE-SENSITIVE, deliberately. BasicLang is case-insensitive but JavaScript is not, so
+    /// `greet` and `Greet` genuinely coexist in the output — refusing that pair would be a false
+    /// positive that blocks a legal program.
+    /// </summary>
+    [Test]
+    public void JsImport_BindingDifferingOnlyInCase_IsNotACollision()
+        => Assert.That(JsTestSupport.Compile(
+                "#JsImport { greet } From \"./m.js\"\nSub Greet()\nEnd Sub\nSub Main()\nEnd Sub",
+                runPreprocessor: true),
+            Does.Contain("import { greet } from \"./m.js\";"));
+
+    /// <summary>
+    /// A CLASS METHOD is a property of a class object, not a module-scope name, so it cannot
+    /// collide. Refusing it would block a legal program for no reason.
+    /// </summary>
+    [Test]
+    public void JsImport_BindingMatchingAClassMethodName_IsNotACollision()
+        => Assert.That(JsTestSupport.Compile(
+                "#JsImport { render } From \"./m.js\"\nClass Widget\nPublic Sub render()\nEnd Sub\n" +
+                "End Class\nSub Main()\nEnd Sub", runPreprocessor: true),
+            Does.Contain("import { render } from \"./m.js\";"));
+
+    /// <summary>
+    /// ⛔ The collision is compared on the EMITTED name, not the BasicLang one. SanitizeName
+    /// drops non-alphanumerics, so a BasicLang identifier can reach the output as a different
+    /// string — and the clash happens there.
+    /// </summary>
+    [Test]
+    public void JsImport_CollisionIsComparedOnTheEmittedName()
+    {
+        var module = JsTestSupport.BuildModule(
+            "#JsImport { greet } From \"./m.js\"\nSub Main()\nEnd Sub", runPreprocessor: true);
+        module.Functions.Add(new BasicLang.Compiler.IR.IRFunction("gr-eet", null));
+
+        Assert.That(() => new BasicLang.Compiler.CodeGen.JavaScript.JavaScriptCodeGenerator()
+                .Generate(module),
+            Throws.Exception.With.Message.Contains("BL7010"),
+            "'gr-eet' emits as 'greet' and collides there, even though the BasicLang names differ");
+    }
+
+    /// <summary>Still refused on the IR that ships — the checker runs before any pass could
+    /// rename or drop a declaration.</summary>
+    [Test]
+    public void Optimized_JsImport_CollisionIsStillRejected()
+        => Assert.That(() => JsTestSupport.CompileOptimized(
+                "#JsImport { greet } From \"./m.js\"\nSub greet()\nEnd Sub\nSub Main()\nEnd Sub",
+                runPreprocessor: true),
+            Throws.Exception.With.Message.Contains("BL7010"));
 }
