@@ -3907,8 +3907,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             BinaryOpKind.Div => "/",
             BinaryOpKind.Mod => "%",
             BinaryOpKind.IntDiv => "/",
-            BinaryOpKind.And => "&&",
-            BinaryOpKind.Or => "||",
+            // VB `And`/`Or` evaluate BOTH operands; C# `&`/`|` on bool do exactly that.
+            // These were `&&`/`||`, which SKIPPED a side effect VB guarantees.
+            BinaryOpKind.And => "&",
+            BinaryOpKind.Or => "|",
+            BinaryOpKind.AndAlso => "&&",
+            BinaryOpKind.OrElse => "||",
             BinaryOpKind.BitwiseAnd => "&",
             BinaryOpKind.BitwiseOr => "|",
             BinaryOpKind.Xor => "^",

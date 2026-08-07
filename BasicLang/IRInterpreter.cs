@@ -445,8 +445,13 @@ namespace BasicLang.Compiler.Interpreter
                 case BinaryOpKind.Ge: return leftNum >= rightNum;
 
                 // Bitwise / Logical
+                // Both operands are already evaluated by the time they reach here, so all four
+                // kinds compute the same VALUE; the pairs differ only in whether the caller
+                // evaluated the right side, which the interpreter cannot un-do.
                 case BinaryOpKind.And: return IsTruthy(left) && IsTruthy(right);
                 case BinaryOpKind.Or: return IsTruthy(left) || IsTruthy(right);
+                case BinaryOpKind.AndAlso: return IsTruthy(left) && IsTruthy(right);
+                case BinaryOpKind.OrElse: return IsTruthy(left) || IsTruthy(right);
                 case BinaryOpKind.Xor: return IsTruthy(left) ^ IsTruthy(right);
                 case BinaryOpKind.Shl: return (int)leftNum << (int)rightNum;
                 case BinaryOpKind.Shr: return (int)leftNum >> (int)rightNum;

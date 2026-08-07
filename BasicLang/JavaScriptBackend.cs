@@ -657,8 +657,13 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // rewrites `x And False` to `False`, discarding the left operand, which is
                 // sound only under short-circuit evaluation. The C# backend and both
                 // interpreters emit `&&` too.
+                // See JavaScriptTypeMapper: `&`/`|` would return a number in JS, so both pairs
+                // render as `&&`/`||` and the And/Or side-effect gap closes with control-flow
+                // lowering rather than with different operator text.
                 case BinaryOpKind.And: return $"({l} && {r})";
                 case BinaryOpKind.Or: return $"({l} || {r})";
+                case BinaryOpKind.AndAlso: return $"({l} && {r})";
+                case BinaryOpKind.OrElse: return $"({l} || {r})";
 
                 default:
                     throw NotYet($"BinaryOpKind.{op.Operation}");

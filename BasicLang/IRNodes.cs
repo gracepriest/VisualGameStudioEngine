@@ -200,8 +200,20 @@ namespace BasicLang.Compiler.IR
         // Arithmetic
         Add, Sub, Mul, Div, Mod, IntDiv,
 
-        // Logical (short-circuit)
+        // Logical. VB has FOUR keywords where C# has two, and the difference is REAL:
+        //   And / Or         evaluate BOTH operands ALWAYS   (C# `&` / `|`)
+        //   AndAlso / OrElse skip the right operand           (C# `&&` / `||`)
+        // The result VALUE is identical for both pairs; only the right operand's SIDE
+        // EFFECTS differ, which is the entire observable content of the distinction.
+        //
+        // ⛔ These were ONE pair until 2026-08-07, and this comment used to label And/Or
+        // "short-circuit", which was simply wrong. IRBuilder collapsed andalso->And and
+        // orelse->Or, so the distinction died at the IR boundary and NO backend could be
+        // correct for both spellings — each got a different half wrong. Measured: the VB
+        // guard idiom `If i <> 0 AndAlso Risky(i)` called Risky anyway on the native
+        // backend and died with STATUS_INTEGER_DIVIDE_BY_ZERO.
         And, Or,
+        AndAlso, OrElse,
 
         // Bitwise
         BitwiseAnd, BitwiseOr, Xor, Shl, Shr,

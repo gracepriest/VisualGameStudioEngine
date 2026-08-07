@@ -60,8 +60,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // .NET's % and JS's % agree on sign: both take the sign of the dividend.
             BinaryOpKind.Mod => "%",
 
+            // JS `&` / `|` on booleans coerce to 32-bit ints and return a NUMBER, so the
+            // non-short-circuit pair cannot use them. Both pairs render as `&&`/`||` here;
+            // JS's own short-circuiting is then a divergence from VB's And/Or for a right
+            // operand with a side effect — the same gap the C++ statement position has, and
+            // it closes the same way (control-flow lowering), not by changing this text.
             BinaryOpKind.And => "&&",
             BinaryOpKind.Or => "||",
+            BinaryOpKind.AndAlso => "&&",
+            BinaryOpKind.OrElse => "||",
 
             BinaryOpKind.BitwiseAnd => "&",
             BinaryOpKind.BitwiseOr => "|",

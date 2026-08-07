@@ -4690,6 +4690,15 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             BinaryOpKind.Mod => "%",
             BinaryOpKind.And => "&",
             BinaryOpKind.Or => "|",
+            // ⚠ `&&`/`||` here only short-circuits where the operand tree is rendered INLINE —
+            // i.e. RenderInline, which is the `When`-guard position. In the statement position
+            // Visit(IRBinaryOp) receives operands IRBuilder has already emitted as separate
+            // instructions, so the right side has been evaluated before this operator text is
+            // ever consulted and no spelling can undo that. Making the statement position
+            // genuinely short-circuit needs control-flow lowering in IRBuilder — deliberately a
+            // separate change, behind an execution test.
+            BinaryOpKind.AndAlso => "&&",
+            BinaryOpKind.OrElse => "||",
             BinaryOpKind.Xor => "^",
             BinaryOpKind.Shl => "<<",
             BinaryOpKind.Shr => ">>",

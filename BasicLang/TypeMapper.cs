@@ -123,6 +123,8 @@ namespace BasicLang.Compiler.CodeGen
             // Bitwise
             _binaryOpMap[BinaryOpKind.And] = "&";
             _binaryOpMap[BinaryOpKind.Or] = "|";
+            _binaryOpMap[BinaryOpKind.AndAlso] = "&&";
+            _binaryOpMap[BinaryOpKind.OrElse] = "||";
             _binaryOpMap[BinaryOpKind.Xor] = "^";
             _binaryOpMap[BinaryOpKind.Shl] = "<<";
             _binaryOpMap[BinaryOpKind.Shr] = ">>";
@@ -242,6 +244,8 @@ namespace BasicLang.Compiler.CodeGen
             // Bitwise
             _binaryOpMap[BinaryOpKind.And] = "&";
             _binaryOpMap[BinaryOpKind.Or] = "|";
+            _binaryOpMap[BinaryOpKind.AndAlso] = "&&";
+            _binaryOpMap[BinaryOpKind.OrElse] = "||";
             _binaryOpMap[BinaryOpKind.Xor] = "^";
             _binaryOpMap[BinaryOpKind.Shl] = "<<";
             _binaryOpMap[BinaryOpKind.Shr] = ">>";
@@ -374,6 +378,11 @@ namespace BasicLang.Compiler.CodeGen
             // Bitwise
             _binaryOpMap[BinaryOpKind.And] = "and";
             _binaryOpMap[BinaryOpKind.Or] = "or";
+            // Mapped so an unmapped-kind lookup cannot throw. These emit the NON-short-circuit
+            // instruction; genuine short-circuiting needs branches, which these backends are
+            // out of scope for (repo policy: MSIL/LLVM are not maintained).
+            _binaryOpMap[BinaryOpKind.AndAlso] = "and";
+            _binaryOpMap[BinaryOpKind.OrElse] = "or";
             _binaryOpMap[BinaryOpKind.Xor] = "xor";
             _binaryOpMap[BinaryOpKind.Shl] = "shl";
             _binaryOpMap[BinaryOpKind.Shr] = "ashr";
@@ -502,6 +511,11 @@ namespace BasicLang.Compiler.CodeGen
             // Bitwise
             _binaryOpMap[BinaryOpKind.And] = "and";
             _binaryOpMap[BinaryOpKind.Or] = "or";
+            // Mapped so an unmapped-kind lookup cannot throw. These emit the NON-short-circuit
+            // instruction; genuine short-circuiting needs branches, which these backends are
+            // out of scope for (repo policy: MSIL/LLVM are not maintained).
+            _binaryOpMap[BinaryOpKind.AndAlso] = "and";
+            _binaryOpMap[BinaryOpKind.OrElse] = "or";
             _binaryOpMap[BinaryOpKind.Xor] = "xor";
             _binaryOpMap[BinaryOpKind.Shl] = "shl";
             _binaryOpMap[BinaryOpKind.Shr] = "shr";
