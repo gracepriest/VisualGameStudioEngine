@@ -195,6 +195,19 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // would hit the temporal dead zone.
             foreach (var irClass in module.Classes.Values)
             {
+                // ⛔ An EXTERN type already exists in the runtime — emit nothing for it.
+                //
+                // MEASURED before this guard, from a build that reported success:
+                //     class Element {
+                //         textContent = "";
+                //         querySelector(sel) { return null; }
+                //     }
+                // Two failures in one. The declaration SHADOWS the real DOM Element, and every
+                // member gets a SYNTHESIZED stub — so `el.querySelector("p")` answered null
+                // instead of reaching the runtime. Member ACCESSES still emit normally; it is
+                // only the declaration that must not exist.
+                if (irClass.IsExtern) continue;
+
                 EmitClass(irClass, module);
                 Line();
             }

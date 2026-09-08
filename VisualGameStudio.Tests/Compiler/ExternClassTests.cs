@@ -164,4 +164,86 @@ public class ExternClassTests
         => Assert.That(JsTestSupport.BuildModule(
             "Class Box\nPublic X As Integer\nEnd Class\nSub Main()\nEnd Sub")
             .Classes["Box"].IsExtern, Is.False);
+
+    // ==================================================================
+    // EMISSION — the highest-value part of the feature.
+    //
+    // ⛔ MEASURED before the fix, and it was worse than "emits a redundant class":
+    //
+    //     class Element {
+    //         textContent = "";
+    //         querySelector(sel) { return null; }   // <-- a SYNTHESIZED body
+    //     }
+    //
+    // Two independent failures from one green build. The declaration SHADOWS the real
+    // runtime type, and every extern method gets a stub that RETURNS NULL — so
+    // `el.querySelector("p")` would quietly yield nothing instead of reaching the DOM.
+    // ==================================================================
+
+    private const string UseElement =
+        ElementDecl + "Sub Main()\nDim e As Element\nConsole.WriteLine(e.textContent)\nEnd Sub";
+
+    [Test]
+    public void ExternClass_EmitsNoClassDeclaration()
+        => Assert.That(JsTestSupport.Compile(UseElement), Does.Not.Contain("class Element"),
+            "emitting the declaration SHADOWS the real runtime type — a runtime failure with " +
+            "no compile error");
+
+    /// <summary>
+    /// ⛔ The stub bodies are the sharper half of the bug. A shadowing class might still
+    /// happen to work if it were empty; `querySelector(sel) { return null; }` cannot — it
+    /// silently answers null for a call that was supposed to reach the runtime.
+    /// </summary>
+    [Test]
+    public void ExternClass_EmitsNoSynthesizedMemberBodies()
+    {
+        var js = JsTestSupport.Compile(UseElement);
+
+        Assert.That(js, Does.Not.Contain("querySelector(sel)"),
+            "a synthesized stub would answer null instead of calling the real member");
+        Assert.That(js, Does.Not.Contain("textContent = \"\""),
+            "a field initialiser would overwrite the runtime object's own property");
+    }
+
+    /// <summary>A member ACCESS still emits, by the declared name, verbatim.</summary>
+    [Test]
+    public void ExternClass_MemberAccessEmitsTheDeclaredName()
+        => Assert.That(JsTestSupport.Compile(UseElement), Does.Contain(".textContent"));
+
+    /// <summary>
+    /// ⭐ THE PAYOFF. A BasicLang user typing <c>.TextContent</c> out of PascalCase habit must
+    /// still emit <c>.textContent</c> — BasicLang is case-insensitive, JavaScript is not, and
+    /// the declared spelling is the only correct one. This works because member names are
+    /// canonicalised to the declaration at IR-build time; without that, this reads a property
+    /// the runtime object does not have and yields undefined.
+    /// </summary>
+    [Test]
+    public void ExternClass_UseSiteCasingIsCanonicalisedToTheDeclaredName()
+    {
+        var js = JsTestSupport.Compile(
+            ElementDecl + "Sub Main()\nDim e As Element\nConsole.WriteLine(e.TextContent)\nEnd Sub");
+
+        Assert.That(js, Does.Contain(".textContent"));
+        Assert.That(js, Does.Not.Contain(".TextContent"));
+    }
+
+    /// <summary>An ORDINARY class must still be emitted — the skip is opt-in, not a blanket.</summary>
+    [Test]
+    public void OrdinaryClass_IsStillEmitted()
+        => Assert.That(JsTestSupport.Compile(
+            "Class Box\nPublic X As Integer\nEnd Class\nSub Main()\nDim b As New Box()\nEnd Sub"),
+            Does.Contain("class Box"));
+
+    // ---- the SHIPPING IR. Every route optimizes unconditionally; JsTestSupport.Compile does not.
+
+    [Test]
+    public void Optimized_ExternClass_StillEmitsNoDeclaration()
+        => Assert.That(JsTestSupport.CompileOptimized(UseElement),
+            Does.Not.Contain("class Element"));
+
+    [Test]
+    public void Optimized_OrdinaryClass_IsStillEmitted()
+        => Assert.That(JsTestSupport.CompileOptimized(
+            "Class Box\nPublic X As Integer\nEnd Class\nSub Main()\nDim b As New Box()\nEnd Sub"),
+            Does.Contain("class Box"));
 }
