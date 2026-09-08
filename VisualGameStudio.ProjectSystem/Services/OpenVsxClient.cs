@@ -377,6 +377,13 @@ public class OpenVsxSearchExtension
     public double? AverageRating { get; set; }
 
     /// <summary>
+    /// Categories (e.g., "Themes", "Programming Languages"). Present so the extensions panel can
+    /// show category chips on a search result without a second request for the detail document.
+    /// </summary>
+    [JsonPropertyName("categories")]
+    public List<string>? Categories { get; set; }
+
+    /// <summary>
     /// Extension ID in publisher.name format.
     /// </summary>
     public string Id => $"{Namespace}.{Name}";

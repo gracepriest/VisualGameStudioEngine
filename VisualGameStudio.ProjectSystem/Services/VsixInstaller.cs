@@ -22,6 +22,14 @@ public class VsixInstaller : IDisposable
     };
 
     private readonly OpenVsxClient _vsxClient;
+
+    /// <summary>
+    /// True when this instance created the client and must therefore dispose it. An INJECTED client
+    /// belongs to whoever passed it — since the container now shares one across the installer and
+    /// the extensions panel, disposing it here would close an HttpClient the panel still searches
+    /// through, and the panel would start reporting every search as a failure.
+    /// </summary>
+    private readonly bool _ownsVsxClient;
     private readonly string _extensionsDir;
     private readonly string _stateFilePath;
     private readonly object _stateLock = new();
@@ -46,6 +54,7 @@ public class VsixInstaller : IDisposable
     public VsixInstaller(OpenVsxClient? vsxClient = null, string? extensionsDir = null)
     {
         _vsxClient = vsxClient ?? new OpenVsxClient();
+        _ownsVsxClient = vsxClient == null;
 
         var userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         _extensionsDir = extensionsDir ?? Path.Combine(userHome, ".vgs", "extensions");
@@ -553,7 +562,10 @@ public class VsixInstaller : IDisposable
     {
         if (!_disposed)
         {
-            _vsxClient.Dispose();
+            if (_ownsVsxClient)
+            {
+                _vsxClient.Dispose();
+            }
             _disposed = true;
         }
     }

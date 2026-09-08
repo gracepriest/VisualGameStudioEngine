@@ -169,7 +169,12 @@ public static class ServiceConfiguration
         // parameter optional — so by-type registration would bind silently with a default client
         // and the real user-profile path, which is precisely the trap the BuildService comment at
         // :28-32 records.
-        services.AddSingleton(sp => new VsixInstaller());
+        // ONE Open VSX client for the whole IDE. There used to be four HTTP paths to this registry
+        // (this client, VsixInstaller's own, ExtensionService's, and the extensions panel's), each
+        // with its own timeout and error handling. The container owns and disposes this one, which
+        // is why neither consumer below may dispose it.
+        services.AddSingleton(sp => new OpenVsxClient());
+        services.AddSingleton(sp => new VsixInstaller(sp.GetRequiredService<OpenVsxClient>()));
         services.AddSingleton<IExtensionService>(sp =>
             new ExtensionService(
                 sp.GetRequiredService<IOutputService>(),
@@ -207,7 +212,10 @@ public static class ServiceConfiguration
         services.AddSingleton<TypeHierarchyViewModel>();
         services.AddSingleton<ThreadsViewModel>();
         services.AddSingleton<TimelineViewModel>();
-        services.AddSingleton<ExtensionsViewModel>();
+        // BY FACTORY, for the reason recorded on the VsixInstaller registration: this ViewModel's
+        // ctor parameter is optional (the designer needs a parameterless path), so by-type
+        // registration would silently build a SECOND registry client rather than fail.
+        services.AddSingleton(sp => new ExtensionsViewModel(sp.GetRequiredService<OpenVsxClient>()));
         services.AddSingleton<ProblemsViewModel>();
 
         // ViewModels (Transient for documents and dialogs)
