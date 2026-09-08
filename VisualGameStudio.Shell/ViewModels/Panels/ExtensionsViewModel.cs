@@ -213,7 +213,17 @@ public partial class ExtensionsViewModel : ViewModelBase, IDisposable
 
                 try
                 {
-                    ZipFile.ExtractToDirectory(tempPath, tempExtractDir, overwriteFiles: true);
+                    // ⛔ SafeZip: a .vsix downloaded from Open VSX is UNTRUSTED third-party input.
+                    // abe151f routed the repo's five other extraction sites through this guard and
+                    // its message claims none remained outside it — this one was missed, and it is
+                    // the only extraction a user can reach through the UI.
+                    //
+                    // Measured, so the change is not oversold: ZipFile.ExtractToDirectory on .NET 8
+                    // already rejects `../x`, `..\x` and `\x` and sanitises an absolute entry into
+                    // the destination, so this is a CONSISTENCY fix rather than a vulnerability fix.
+                    // What it actually buys is all-or-nothing extraction instead of a partial one,
+                    // and a single implementation to reason about.
+                    BasicLang.Runtime.SafeZip.ExtractToDirectory(tempPath, tempExtractDir, overwriteFiles: true);
 
                     // Find the package.json
                     var packageJsonInExt = Path.Combine(tempExtractDir, "extension", "package.json");
