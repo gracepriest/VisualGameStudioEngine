@@ -1103,6 +1103,21 @@ namespace BasicLang.Compiler
                 return ParseInterface();
             }
 
+            // ⛔ Inside an Extern Class this arm is reached by the MOST LIKELY mistake — writing
+            // a member body — and the generic suggestion below actively misleads there: it
+            // lists Sub and Function as valid, which they are, so the reader concludes the
+            // parser is confused rather than that bodies are the problem. An extern member is a
+            // SIGNATURE; the body is dropped by the reader's own eye, not by the compiler.
+            if (_parsingExternClass)
+                throw new ParseException(
+                    $"Unexpected token in Extern Class: '{Peek().Lexeme}' ({Peek().Type})",
+                    Peek(),
+                    "An Extern Class declares a type that ALREADY EXISTS in the target runtime, " +
+                    "so its members are signatures only: write the declaration line and nothing " +
+                    "else — no body, no 'End Sub'/'End Function'. (A body here could never run, " +
+                    "because nothing is emitted for an extern type.) For a type you want " +
+                    "BasicLang itself to define, drop the 'Extern'.");
+
             throw new ParseException(
                 $"Unexpected token in class: '{Peek().Lexeme}' ({Peek().Type})",
                 Peek(),

@@ -113,4 +113,40 @@ public class ExternClassTests
     public void OrdinaryClass_IsNotExtern()
         => Assert.That(Parse("Class Box\nPublic X As Integer\nEnd Class\nSub Main()\nEnd Sub")
             .Declarations.OfType<ClassNode>().Single().IsExtern, Is.False);
+
+    // ------------------------------------------------------------------
+    // A member WITH a body.
+    //
+    // ⛔ It was ALREADY refused before this was written — but by the generic
+    // "Unexpected token in class: 'Console'" arm, whose suggestion lists the valid member
+    // kinds. The user wrote a perfectly ordinary Sub body; nothing told them an extern member
+    // cannot have one, so the message taught the wrong model. A refusal that misdirects is
+    // barely better than no refusal.
+    // ------------------------------------------------------------------
+
+    private static string[] ParseErrors(string source)
+    {
+        var parser = new Parser(new Lexer(source).Tokenize());
+        parser.Parse();
+        return parser.Errors.Select(e => e.ToString()).ToArray();
+    }
+
+    [Test]
+    public void ExternMemberWithABody_IsRefusedAndSaysWhy()
+    {
+        var errors = string.Join(" | ", ParseErrors(
+            "Extern Class Element\nPublic Sub click()\nConsole.WriteLine(1)\nEnd Sub\n" +
+            "End Class\nSub Main()\nEnd Sub"));
+
+        Assert.That(errors, Is.Not.Empty, "a body that can never run must not be accepted");
+        Assert.That(errors, Does.Contain("Extern"),
+            "the diagnostic must name the thing that makes a body invalid here");
+    }
+
+    /// <summary>The same body in an ORDINARY class is still perfectly legal.</summary>
+    [Test]
+    public void OrdinaryMemberWithABody_IsStillAccepted()
+        => Assert.That(ParseErrors(
+            "Class Box\nPublic Sub click()\nConsole.WriteLine(1)\nEnd Sub\nEnd Class\n" +
+            "Sub Main()\nEnd Sub"), Is.Empty);
 }
