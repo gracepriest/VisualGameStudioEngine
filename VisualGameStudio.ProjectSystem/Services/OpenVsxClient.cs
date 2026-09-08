@@ -183,36 +183,41 @@ public class OpenVsxClient : IDisposable
     /// <param name="destinationPath">Local path to save the .vsix file.</param>
     /// <param name="progress">Optional progress reporter (bytes downloaded, total bytes).</param>
     /// <param name="ct">Cancellation token.</param>
+    /// <remarks>
+    /// Delegates to <see cref="FileDownloader"/>, which is this method's own loop lifted out and
+    /// fixed of three hazards it had. Keeping the signature means callers are unaffected.
+    ///
+    /// <list type="number">
+    /// <item><b>A 30-second cap on the whole transfer.</b> The constructor sets
+    /// <c>Timeout = 30s</c> on <c>_httpClient</c>, which is right for the JSON API calls — but under
+    /// <c>ResponseHeadersRead</c> that timeout covers the BODY read too, so any VSIX taking longer
+    /// than 30 seconds was aborted mid-stream. FileDownloader uses an infinite client timeout and a
+    /// per-call deadline instead.</item>
+    /// <item><b>No staging.</b> It streamed straight into <c>File.Create(destinationPath)</c>, so a
+    /// failed transfer left a TRUNCATED .vsix exactly where a valid one belongs — which then
+    /// extracts as a corrupt archive rather than reporting a download failure. FileDownloader
+    /// stages through <c>.partial</c> and moves only on success.</item>
+    /// <item><b><c>Accept: application/json</c> on a binary GET</b>, inherited from the shared
+    /// client's headers. Wrong for a .vsix, and a strict CDN may answer 406.</item>
+    /// </list>
+    ///
+    /// <para>The deadline is generous because extension packages are large and a user on a slow
+    /// link should not be cut off; a caller wanting a tighter bound cancels through
+    /// <paramref name="ct"/>.</para>
+    /// </remarks>
     public async Task DownloadVsixToFileAsync(
         string downloadUrl,
         string destinationPath,
         IProgress<(long bytesDownloaded, long totalBytes)>? progress = null,
         CancellationToken ct = default)
     {
-        using var response = await _httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead, ct);
-        response.EnsureSuccessStatusCode();
-
-        var totalBytes = response.Content.Headers.ContentLength ?? -1L;
-
-        var dir = Path.GetDirectoryName(destinationPath);
-        if (!string.IsNullOrEmpty(dir))
-        {
-            Directory.CreateDirectory(dir);
-        }
-
-        using var contentStream = await response.Content.ReadAsStreamAsync(ct);
-        using var fileStream = File.Create(destinationPath);
-
-        var buffer = new byte[81920]; // 80KB buffer
-        var totalRead = 0L;
-        int bytesRead;
-
-        while ((bytesRead = await contentStream.ReadAsync(buffer, ct)) > 0)
-        {
-            await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), ct);
-            totalRead += bytesRead;
-            progress?.Report((totalRead, totalBytes));
-        }
+        using var downloader = new FileDownloader();
+        await downloader.DownloadAsync(
+            downloadUrl,
+            destinationPath,
+            deadline: TimeSpan.FromMinutes(10),
+            progress: progress,
+            ct: ct);
     }
 
     /// <summary>

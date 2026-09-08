@@ -135,7 +135,123 @@ public class OpenVsxClientCharacterizationTests
         Assert.That(result.Extensions, Is.Null.Or.Empty);
     }
 
+    // -------------------------------------------------------------- download leg
+
+    /// <summary>
+    /// A failed transfer must leave NOTHING at the destination.
+    ///
+    /// <para>The original streamed straight into the final path via <c>File.Create</c>, so a
+    /// mid-transfer failure left a TRUNCATED .vsix sitting where a valid one belongs — which then
+    /// extracts as a corrupt archive rather than reporting a download failure. Staging through
+    /// <c>.partial</c> and moving only on success is what makes the failure honest.</para>
+    /// </summary>
+    [Test]
+    public void Download_LeavesNoFileBehindWhenTheTransferFails()
+    {
+        var destination = Path.Combine(Path.GetTempPath(), $"vgs-dl-{Guid.NewGuid():N}.vsix");
+
+        // Declares 4096 bytes, sends 16, then drops the connection.
+        using var server = new LoopbackTruncated(declaredLength: 4096, actuallySend: 16);
+        using var client = new OpenVsxClient(server.BaseUrl);
+
+        Assert.That(async () => await client.DownloadVsixToFileAsync(server.BaseUrl + "/x.vsix", destination),
+            Throws.Exception, "a truncated body must surface as a failure, not a short file");
+
+        Assert.That(File.Exists(destination), Is.False,
+            "a truncated .vsix at the destination extracts as a corrupt archive instead of "
+            + "reporting that the download failed");
+        Assert.That(File.Exists(destination + ".partial"), Is.False, "the staging file must be cleaned up");
+    }
+
+    /// <summary>
+    /// The binary GET must not advertise <c>Accept: application/json</c>. The client sets that
+    /// header for the whole HttpClient because its other calls are API queries; carrying it onto a
+    /// .vsix fetch is wrong and can make a strict CDN answer 406.
+    /// </summary>
+    [Test]
+    public async Task Download_DoesNotAskForJsonWhenFetchingABinary()
+    {
+        var destination = Path.Combine(Path.GetTempPath(), $"vgs-dl-{Guid.NewGuid():N}.vsix");
+        using var server = new LoopbackBinary(new byte[] { 1, 2, 3, 4 });
+        using var client = new OpenVsxClient(server.BaseUrl);
+
+        try
+        {
+            await client.DownloadVsixToFileAsync(server.BaseUrl + "/x.vsix", destination);
+
+            var accept = server.LastAccept ?? "";
+            Assert.That(accept, Does.Not.Contain("application/json"),
+                "this request fetches a binary; the JSON Accept belongs to the API calls only");
+            Assert.That(server.LastUserAgent, Is.Not.Null.And.Not.Empty,
+                "a User-Agent is load-bearing — some hosts reject requests without one");
+        }
+        finally
+        {
+            try { File.Delete(destination); } catch { }
+        }
+    }
+
+    [Test]
+    public async Task Download_WritesTheExactBytes()
+    {
+        var payload = Enumerable.Range(0, 5000).Select(i => (byte)(i % 256)).ToArray();
+        var destination = Path.Combine(Path.GetTempPath(), $"vgs-dl-{Guid.NewGuid():N}.vsix");
+
+        using var server = new LoopbackBinary(payload);
+        using var client = new OpenVsxClient(server.BaseUrl);
+
+        try
+        {
+            await client.DownloadVsixToFileAsync(server.BaseUrl + "/x.vsix", destination);
+            Assert.That(File.ReadAllBytes(destination), Is.EqualTo(payload));
+        }
+        finally
+        {
+            try { File.Delete(destination); } catch { }
+        }
+    }
+
     // ------------------------------------------------------------------ helpers
+
+    /// <summary>Serves a byte payload and records the request headers it saw.</summary>
+    private sealed class LoopbackBinary : LoopbackBase
+    {
+        private readonly byte[] _payload;
+        public string? LastAccept { get; private set; }
+        public string? LastUserAgent { get; private set; }
+
+        public LoopbackBinary(byte[] payload) => _payload = payload;
+
+        protected override void Respond(HttpListenerContext ctx)
+        {
+            LastAccept = ctx.Request.Headers["Accept"];
+            LastUserAgent = ctx.Request.Headers["User-Agent"];
+            ctx.Response.ContentType = "application/octet-stream";
+            ctx.Response.ContentLength64 = _payload.Length;
+            ctx.Response.OutputStream.Write(_payload, 0, _payload.Length);
+        }
+    }
+
+    /// <summary>Promises more bytes than it sends, then drops the connection mid-body.</summary>
+    private sealed class LoopbackTruncated : LoopbackBase
+    {
+        private readonly int _declared;
+        private readonly int _send;
+
+        public LoopbackTruncated(int declaredLength, int actuallySend)
+        {
+            _declared = declaredLength;
+            _send = actuallySend;
+        }
+
+        protected override void Respond(HttpListenerContext ctx)
+        {
+            ctx.Response.ContentLength64 = _declared;
+            ctx.Response.OutputStream.Write(new byte[_send], 0, _send);
+            ctx.Response.OutputStream.Flush();
+            ctx.Response.Abort();
+        }
+    }
 
     /// <summary>Serves one fixed JSON body on loopback, on a port the OS chooses.</summary>
     private sealed class LoopbackJson : LoopbackBase
