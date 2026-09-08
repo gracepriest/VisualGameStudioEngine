@@ -74,8 +74,11 @@ public class OpenVsxClient : IDisposable
         }
         catch (Exception ex)
         {
+            // Deliberately does NOT throw: search runs on a keystroke path, where an exception is
+            // worse than a message. But it must not report failure as emptiness either — the
+            // caller gets the reason and decides how to show it.
             System.Diagnostics.Debug.WriteLine($"OpenVSX search failed: {ex.Message}");
-            return new OpenVsxSearchResult();
+            return new OpenVsxSearchResult { Error = ex.Message };
         }
     }
 
@@ -273,6 +276,22 @@ public class OpenVsxClient : IDisposable
 /// </summary>
 public class OpenVsxSearchResult
 {
+    /// <summary>
+    /// Why the query failed, or <c>null</c> when it succeeded. An empty
+    /// <see cref="Extensions"/> list with a null error means the registry genuinely matched
+    /// nothing; a non-null error means the answer is unknown.
+    ///
+    /// <para>Without this the two are indistinguishable, and the UI can only ever say "No
+    /// extensions found" — including when the registry is unreachable. That is the same failure the
+    /// panel already shipped once: nothing threw, so it truthfully reported nothing.</para>
+    ///
+    /// <para>⛔ <see cref="JsonIgnoreAttribute"/> is load-bearing. Open VSX itself returns an
+    /// <c>error</c> field on some responses, so without this a server could populate the IDE's own
+    /// failure channel. This reports OUR transport and parse failures, never the payload's.</para>
+    /// </summary>
+    [JsonIgnore]
+    public string? Error { get; set; }
+
     /// <summary>
     /// Total number of matching extensions.
     /// </summary>

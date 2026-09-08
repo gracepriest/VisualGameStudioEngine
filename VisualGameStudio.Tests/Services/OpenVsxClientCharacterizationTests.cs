@@ -101,31 +101,35 @@ public class OpenVsxClientCharacterizationTests
     }
 
     /// <summary>
-    /// ⚠ CHARACTERIZES A KNOWN DEFECT rather than endorsing it.
+    /// A failed query must be DISTINGUISHABLE from an empty one.
     ///
-    /// <para><c>SearchAsync</c> catches every exception and returns an empty result, so a 500, a DNS
-    /// failure and a genuinely empty result are indistinguishable to the caller. That is
-    /// structurally the SAME defect the panel just shipped and fixed, now sitting in the client we
-    /// are about to promote. This test exists so the behaviour is recorded and so the step that adds
-    /// an error channel has something to deliberately break.</para>
+    /// <para>These replace two tests that recorded the opposite as a known defect. Search used to
+    /// catch every exception and return an empty result, so a 500, a DNS failure and a genuinely
+    /// empty search all looked identical to the caller — structurally the same bug the panel
+    /// shipped and fixed, sitting in the client being promoted to replace it. Promoting it
+    /// unchanged would have reintroduced that bug under a better class name.</para>
+    ///
+    /// <para>It still does not throw: search runs on a keystroke path and an exception there is
+    /// worse than a message. The result carries the reason instead.</para>
     /// </summary>
     [Test]
-    public async Task Search_SwallowsServerErrors_KNOWN_DEFECT()
+    public async Task Search_ReportsAServerErrorRatherThanPretendingItFoundNothing()
     {
         using var server = new LoopbackStatus(HttpStatusCode.InternalServerError);
         using var client = new OpenVsxClient(server.BaseUrl);
 
         var result = await client.SearchAsync("anything");
 
-        Assert.That(result, Is.Not.Null, "it returns a result rather than throwing");
-        Assert.That(result.Extensions, Is.Null.Or.Empty,
-            "KNOWN DEFECT: a server error is reported to the caller as 'no results'. When the error "
-            + "channel lands, this test should be REPLACED, not loosened");
+        Assert.That(result, Is.Not.Null, "a keystroke-path query must not throw");
+        Assert.That(result.Extensions, Is.Null.Or.Empty);
+        Assert.That(result.Error, Is.Not.Null.And.Not.Empty,
+            "without this the UI can only say 'No extensions found' when the registry is down");
+        Assert.That(result.Error, Does.Contain("500").Or.Contain("500 (Internal Server Error)").IgnoreCase,
+            "the message must carry something actionable, not just 'failed'");
     }
 
-    /// <summary>Malformed JSON degrades the same way — recorded for the same reason.</summary>
     [Test]
-    public async Task Search_SwallowsMalformedJson_KNOWN_DEFECT()
+    public async Task Search_ReportsMalformedJsonRatherThanPretendingItFoundNothing()
     {
         using var server = new LoopbackJson("{ this is not json");
         using var client = new OpenVsxClient(server.BaseUrl);
@@ -133,6 +137,53 @@ public class OpenVsxClientCharacterizationTests
         var result = await client.SearchAsync("anything");
 
         Assert.That(result.Extensions, Is.Null.Or.Empty);
+        Assert.That(result.Error, Is.Not.Null.And.Not.Empty);
+    }
+
+    /// <summary>A successful search must NOT set the error, or every caller learns to ignore it.</summary>
+    [Test]
+    public async Task Search_LeavesTheErrorUnsetWhenItSucceeds()
+    {
+        using var server = new LoopbackJson(RealSearchPayload);
+        using var client = new OpenVsxClient(server.BaseUrl);
+
+        var result = await client.SearchAsync("eslint");
+
+        Assert.That(result.Error, Is.Null);
+    }
+
+    /// <summary>
+    /// A genuinely empty result is a SUCCESS, not an error. This is the distinction the whole change
+    /// exists to make, so it is asserted from both sides.
+    /// </summary>
+    [Test]
+    public async Task Search_TreatsAGenuinelyEmptyResultAsSuccess()
+    {
+        using var server = new LoopbackJson("""{ "offset": 0, "totalSize": 0, "extensions": [] }""");
+        using var client = new OpenVsxClient(server.BaseUrl);
+
+        var result = await client.SearchAsync("nothing-matches-this");
+
+        Assert.That(result.Extensions, Is.Empty);
+        Assert.That(result.Error, Is.Null, "no matches is an answer, not a failure");
+    }
+
+    /// <summary>
+    /// The error channel must not be settable from the wire. Open VSX itself returns an "error"
+    /// field on some responses, so an unmarked property would let a server populate the IDE's own
+    /// failure channel.
+    /// </summary>
+    [Test]
+    public async Task Search_DoesNotLetTheServerPopulateTheErrorChannel()
+    {
+        using var server = new LoopbackJson("""{ "totalSize": 0, "extensions": [], "error": "injected" }""");
+        using var client = new OpenVsxClient(server.BaseUrl);
+
+        var result = await client.SearchAsync("x");
+
+        Assert.That(result.Error, Is.Null,
+            "the error channel reports OUR transport/parse failures; binding it from the payload "
+            + "would let a response fake one");
     }
 
     // -------------------------------------------------------------- download leg
