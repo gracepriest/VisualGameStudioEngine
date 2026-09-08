@@ -10,6 +10,66 @@
 
 ---
 
+## ✅ STATUS: Tasks 1–9 COMPLETE. Milestone verified in a browser.
+
+**Gate (full suite, because this touches `Parser.cs` and `SemanticAnalyzer.cs`): 5467 passed /
+5 failed — all five MEASURED pre-existing.** The four known ones, plus
+`CppFinallyExecutionTests.Finally_RunsAfterACaughtException`, which is NEW but **fails on
+pristine `origin/master` too** (verified in a scratch worktree at `54eeda2`): the C++ program
+prints `2` instead of `12`, i.e. the catch body runs and `Finally` is skipped. That is the other
+session's in-flight `Finally` work — `a29d65b` fixed some paths and not this one — and is
+unrelated to this plan. ⚠ **Worth telling that session: their gate did not cover this case.**
+
+A hand-declared DOM slice, compiled through the real CLI and served over HTTP, renders
+**"Typed DOM from BasicLang"** with a clean console — the first time the DOM is reached with
+TYPE CHECKING rather than through call-only `::` or an unchecked `javascript{ }` block:
+
+```basiclang
+Extern Class Element
+    Public Property textContent As String
+End Class
+Extern Class Document
+    Public Function getElementById(id As String) As Element
+End Class
+
+Sub Main()
+    Dim doc As Document
+    javascript{ doc = document; }
+    Dim out As Element
+    out = doc.getElementById("out")
+    out.textContent = "Typed DOM from BasicLang"
+End Sub
+```
+
+### What execution found that the plan did not predict
+
+1. **The emission bug was worse than "a redundant class".** MEASURED before the guard:
+   `class Element { textContent = ""; querySelector(sel) { return null; } }`. Two failures in
+   one — the declaration SHADOWS the real type, *and* every member got a SYNTHESIZED stub, so
+   `el.querySelector("p")` answered **null**. An empty shadowing class might have happened to
+   work; a null-returning stub cannot.
+2. **Task 2 was a diagnostic fix, not a semantic check.** A member with a body was ALREADY
+   refused — by the generic "Unexpected token in class" arm, whose suggestion lists Sub and
+   Function as valid members. The user concluded the parser was confused rather than that
+   bodies are the problem. A refusal that misdirects is barely better than none.
+3. **The mirror test caught one for the FOURTH time on this backend.** C# emitted a real
+   `public class Element` with a null-returning `querySelector` — a fake type that compiles,
+   runs, and answers null.
+4. **The roster guard was blind, and had been for two fixtures' whole lives.**
+   `RosterCoversEveryJavaScriptIntegrationFixture` discovered by NAME PREFIX
+   (`JavaScript`/`Js`). Widening it for `ExternClassExecutionTests` immediately surfaced
+   `BooleanOperatorExecutionTests` and `MemberCasingExecutionTests` — both driving
+   `JavaScriptExecutionTests.RunJs`, both never rostered, both uncounted by the floor. Pin
+   18 → 21.
+5. **The open question is answered: an extern type IS obtainable.** A `javascript{ }` block
+   binds the local (the declaration emits `let api;` in the same scope) and members then reach
+   the real object. No extra task needed.
+6. ⚠ Recorded for 2c: BL7007 admits ANY name ending in `Exception`, so a generated declaration
+   file could omit one and the omission would not be caught. Pinned by
+   `Bl7007_AdmitsAnyExceptionSuffixedName_KNOWN`.
+
+---
+
 ## Scope: this is plan 2b, narrowed
 
 The plan-2 outline bundled four independent subsystems. **This plan is the first only** — the language feature, declared in ordinary `.bas` files. It ships working software on its own: a user hand-declares the DOM surface they touch and gets typed, checked access, with no `::` call-only limit and no untyped block.
