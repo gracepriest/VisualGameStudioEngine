@@ -66,7 +66,51 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             CheckOperatorOverloading(module);
             CheckBannedTypes(module);
             CheckImportNameCollisions(module);
+            CheckStdLibSurfaceCollisions(module);
         }
+
+        /// <summary>
+        /// The library surface this backend lowers natively — the ONE list, read both by the
+        /// allow-list and by BL7011. Kept as a single source because a name that is "supported"
+        /// and a name that "may not be redeclared" are the same set, and two copies would drift.
+        /// </summary>
+        private static readonly string[] StdLibSurfaceNames =
+            { "Console", "Math", "Random", "DateTime", "Regex" };
+
+        /// <summary>
+        /// BL7011 — a declared type whose name collides with the stdlib surface.
+        ///
+        /// <para>⛔ <c>console</c> and <c>Console</c> are THE SAME KEY. <c>IRModule.Classes</c> is
+        /// <c>OrdinalIgnoreCase</c>, and <c>Console</c> is already the surface this backend
+        /// lowers (<c>Console.WriteLine</c> → <c>console.log</c>). So the exact-JavaScript-name
+        /// rule that makes every other extern declaration correct does NOT save you here:
+        /// <c>Extern Class console</c> looks distinct from <c>Console</c> and is not.</para>
+        ///
+        /// <para>Not limited to extern types, deliberately — the case-insensitive key is a
+        /// property of the IR, so an ordinary <c>Class console</c> collides just as hard. Before
+        /// this arm both were accepted silently.</para>
+        /// </summary>
+        private static void CheckStdLibSurfaceCollisions(IRModule module)
+        {
+            foreach (var name in DeclaredTypeNames(module))
+                foreach (var reserved in StdLibSurfaceNames)
+                    if (string.Equals(name, reserved, StringComparison.OrdinalIgnoreCase))
+                        throw new ForeignFeatureException(
+                            $"BL7011: this program declares a type named '{name}', which collides " +
+                            $"with the '{reserved}' library surface the JavaScript backend already " +
+                            "provides. Type names are matched case-INSENSITIVELY, so a different " +
+                            $"casing is the same name — '{name}' and '{reserved}' cannot coexist. " +
+                            $"Rename the declaration; {reserved} is already available (for example " +
+                            "Console.WriteLine lowers to console.log), so it does not need " +
+                            "declaring.");
+        }
+
+        /// <summary>Every type name this module declares, across all four declaration kinds.</summary>
+        private static IEnumerable<string> DeclaredTypeNames(IRModule module) =>
+            (module.Classes?.Keys ?? Enumerable.Empty<string>())
+            .Concat(module.Interfaces?.Keys ?? Enumerable.Empty<string>())
+            .Concat(module.Enums?.Keys ?? Enumerable.Empty<string>())
+            .Concat(module.Delegates?.Keys ?? Enumerable.Empty<string>());
 
         /// <summary>
         /// BL7010 — an imported name that collides with something the program declares.
@@ -346,8 +390,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 "Task", "Func", "Action",
 
                 // The stdlib surface kept by user decision: genuine JS equivalents exist.
-                "Console", "Math", "Random", "DateTime", "Regex",
             };
+
+            foreach (var name in StdLibSurfaceNames) allowed.Add(name);
 
             foreach (var name in module.Classes?.Keys ?? Enumerable.Empty<string>()) allowed.Add(name);
             foreach (var name in module.Interfaces?.Keys ?? Enumerable.Empty<string>()) allowed.Add(name);

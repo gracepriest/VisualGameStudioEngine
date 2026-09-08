@@ -315,4 +315,75 @@ public class ExternClassTests
 
         Assert.DoesNotThrow(() => BasicLang.Compiler.Driver.Program.GenerateCode(module, backend));
     }
+
+    // ------------------------------------------------------------------
+    // BL7011 — an extern name that collides with the stdlib surface.
+    //
+    // ⛔ `console` and `Console` are THE SAME KEY: IRModule.Classes is OrdinalIgnoreCase, and
+    // Console is already the stdlib surface (Console.WriteLine lowers to console.log). The
+    // exact-JavaScript-name rule that makes every other extern declaration correct does NOT
+    // save you here — declaring `Extern Class console` looks distinct and is not.
+    //
+    // The right answer is to leave `console` out of any DOM declarations entirely; this
+    // diagnostic is what says so instead of letting the collision act at a distance.
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void ExternClass_CollidingWithTheStdLibSurface_IsRejected()
+        => Assert.That(() => JsTestSupport.Compile(
+                "Extern Class console\nPublic Sub log(msg As String)\nEnd Class\n" +
+                "Sub Main()\nEnd Sub"),
+            Throws.Exception.With.Message.Contains("BL7011"));
+
+    /// <summary>The message must say what to do instead, not merely refuse.</summary>
+    [Test]
+    public void ExternClass_CollisionMessage_SaysTheStdLibAlreadyCoversIt()
+        => Assert.That(() => JsTestSupport.Compile(
+                "Extern Class console\nPublic Sub log(msg As String)\nEnd Class\n" +
+                "Sub Main()\nEnd Sub"),
+            Throws.Exception.With.Message.Contains("Console"));
+
+    /// <summary>An unrelated extern name is of course fine.</summary>
+    [Test]
+    public void ExternClass_WithAnUnrelatedName_IsNotACollision()
+        => Assert.DoesNotThrow(() => JsTestSupport.Compile(ElementDecl + "Sub Main()\nEnd Sub"));
+
+    /// <summary>
+    /// ⚠ An ORDINARY class named `console` collides just as hard — the case-insensitive key is
+    /// a property of the IR, not of Extern. Pinned so the diagnostic is not accidentally
+    /// narrowed to extern declarations later.
+    /// </summary>
+    [Test]
+    public void OrdinaryClass_CollidingWithTheStdLibSurface_IsAlsoRejected()
+        => Assert.That(() => JsTestSupport.Compile(
+                "Class console\nPublic X As Integer\nEnd Class\nSub Main()\nEnd Sub"),
+            Throws.Exception.With.Message.Contains("BL7011"));
+
+    /// <summary>
+    /// Every name on the surface, not just the one that motivated the rule. `Math` is the one
+    /// a user is most likely to reach for innocently.
+    /// </summary>
+    [TestCase("Math")]
+    [TestCase("Random")]
+    [TestCase("Regex")]
+    [TestCase("DateTime")]
+    public void ExternClass_AnyStdLibSurfaceName_IsRejected(string name)
+        => Assert.That(() => JsTestSupport.Compile(
+                $"Extern Class {name}\nPublic Sub f()\nEnd Class\nSub Main()\nEnd Sub"),
+            Throws.Exception.With.Message.Contains("BL7011"));
+
+    /// <summary>
+    /// ⚠ MEASURED, and recorded for plan 2c rather than fixed here. BL7007's allow-list admits
+    /// ANY name ending in "Exception" (IsExceptionName), so an undeclared one passes the type
+    /// gate without being declared anywhere. That is harmless today — a user must still declare
+    /// the type to use it — but it means a GENERATED declaration file could omit e.g.
+    /// DOMException and the omission would not be caught. This test states the current
+    /// behaviour so 2c discovers it here instead of in a browser.
+    /// </summary>
+    [Test]
+    public void Bl7007_AdmitsAnyExceptionSuffixedName_KNOWN()
+        => Assert.DoesNotThrow(() => JsTestSupport.Compile(
+            "Sub F(e As SomeUndeclaredException)\nEnd Sub\nSub Main()\nEnd Sub"),
+            "if this now throws, BL7007's exception-by-suffix rule was tightened — good, but " +
+            "plan 2c's note about generated declarations needs updating");
 }
