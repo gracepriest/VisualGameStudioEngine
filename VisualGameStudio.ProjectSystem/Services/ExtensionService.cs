@@ -57,7 +57,6 @@ public class ExtensionService : IExtensionService
 
     private readonly string _extensionsDir;
     private readonly string _stateFile;
-    private readonly HttpClient _httpClient;
     private readonly IOutputService _outputService;
     private readonly ITextMateService? _textMateService;
     private readonly ISnippetService? _snippetService;
@@ -65,10 +64,22 @@ public class ExtensionService : IExtensionService
     private readonly IKeybindingService? _keybindingService;
 
     /// <summary>
-    /// The Open VSX acquisition layer, when the container supplied one. Null in tests and in any
-    /// direct construction, where the inline install path is used instead.
+    /// The Open VSX acquisition layer: extract, validate, copy, record. ALWAYS present — when the
+    /// container supplies none, one is constructed over this service's own extensions directory, so
+    /// there is exactly one implementation of "put a .vsix on disk" rather than one per caller.
+    ///
+    /// <para>⛔ It is acquisition ONLY. It never loads a contribution, activates, or speaks to the
+    /// host — that half stays here, and keeping the two halves apart is what stops an install from
+    /// registering an extension twice.</para>
     /// </summary>
-    private readonly VsixInstaller? _vsixInstaller;
+    private readonly VsixInstaller _vsixInstaller;
+
+    /// <summary>
+    /// True when this service constructed the installer itself and must therefore dispose it. An
+    /// INJECTED installer belongs to the container, which disposes its own singletons — disposing it
+    /// here would close an HttpClient still owned by someone else.
+    /// </summary>
+    private readonly bool _ownsVsixInstaller;
     private TextMateRegistrar? _textMateRegistrar;
     private ExtensionHost? _extensionHost;
     private bool _disposed;
@@ -81,12 +92,15 @@ public class ExtensionService : IExtensionService
     /// <c>~/.vgs/extensions</c>. Production passes nothing and is unaffected.
     /// </param>
     /// <param name="vsixInstaller">
-    /// The Open VSX acquisition layer (download, extract, manifest validation, copy). Optional so
-    /// existing tests and any direct construction keep working; when absent this service falls back
-    /// to its own inline install path.
+    /// The Open VSX acquisition layer (download, extract, manifest validation, copy). Optional, but
+    /// NOT a feature toggle: when it is absent one is built over <paramref name="extensionsRoot"/>'s
+    /// own extensions directory, so the install path is the same code either way. The parameter
+    /// exists so the container can own the lifetime of the instance the IDE uses (it holds an
+    /// HttpClient through OpenVsxClient), not so a second install implementation can survive.
     ///
-    /// <para>Injected rather than constructed here so the container owns its lifetime (it holds an
-    /// HttpClient), and so a test can point it at a temp extensions root.</para>
+    /// <para>The fallback is safe in tests precisely because it inherits this service's extensions
+    /// directory — a self-constructed installer can only ever write where this service already
+    /// writes, never into the developer's real <c>~/.vgs/extensions</c>.</para>
     /// </param>
     public ExtensionService(
         IOutputService outputService,
@@ -102,7 +116,6 @@ public class ExtensionService : IExtensionService
         _snippetService = snippetService;
         _commandService = commandService;
         _keybindingService = keybindingService;
-        _vsixInstaller = vsixInstaller;
 
         if (_textMateService != null)
         {
@@ -114,9 +127,14 @@ public class ExtensionService : IExtensionService
                        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".vgs");
         _extensionsDir = Path.Combine(root, "extensions");
         _stateFile = Path.Combine(root, "extensions-state.json");
-        _httpClient = new HttpClient();
 
         Directory.CreateDirectory(_extensionsDir);
+
+        // Assigned only now, because the fallback needs _extensionsDir. Constructing it any earlier
+        // would silently point it at the real user profile even when a test passed extensionsRoot.
+        _vsixInstaller = vsixInstaller ?? new VsixInstaller(extensionsDir: _extensionsDir);
+        _ownsVsixInstaller = vsixInstaller == null;
+
         LoadState();
     }
 
@@ -332,108 +350,19 @@ public class ExtensionService : IExtensionService
                 return new ExtensionInstallResult { Success = false, Error = "Package file not found" };
             }
 
-            var extension = Path.GetExtension(packagePath).ToLowerInvariant();
-            if (extension != ".vsix" && extension != ".zip")
+            var packageExtension = Path.GetExtension(packagePath).ToLowerInvariant();
+            if (packageExtension != ".vsix" && packageExtension != ".zip")
             {
                 return new ExtensionInstallResult { Success = false, Error = "Invalid package format. Use .vsix or .zip" };
             }
 
-            // Create temp directory for extraction
-            var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
-            Directory.CreateDirectory(tempDir);
+            // ACQUISITION — extract, validate the manifest, copy into place, record. Delegated so
+            // that the extraction guard, the layout flattening and the manifest rules exist once
+            // rather than once per caller. This method used to carry its own copy of all three.
+            var info = await _vsixInstaller.InstallVsixAsync(packagePath, cancellationToken);
 
-            try
-            {
-                // Extract package.
-                // ⛔ SafeZip: this package came from Open VSX and is UNTRUSTED — an entry
-                // named `../x` would be written outside tempDir.
-                BasicLang.Runtime.SafeZip.ExtractToDirectory(packagePath, tempDir);
-
-                // Find package.json (might be in extension/ subdirectory for vsix)
-                var manifestPath = Path.Combine(tempDir, "package.json");
-                if (!File.Exists(manifestPath))
-                {
-                    manifestPath = Path.Combine(tempDir, "extension", "package.json");
-                }
-
-                if (!File.Exists(manifestPath))
-                {
-                    return new ExtensionInstallResult { Success = false, Error = "No package.json found in package" };
-                }
-
-                // Load manifest
-                var manifestJson = await File.ReadAllTextAsync(manifestPath, cancellationToken);
-                var manifest = JsonSerializer.Deserialize<ExtensionManifest>(manifestJson, JsonOptions);
-
-                if (manifest == null || string.IsNullOrEmpty(manifest.Name))
-                {
-                    return new ExtensionInstallResult { Success = false, Error = "Invalid package.json" };
-                }
-
-                var extensionId = $"{manifest.Publisher}.{manifest.Name}";
-                var installDirName = $"{extensionId}-{manifest.Version}";
-                var installDir = Path.Combine(_extensionsDir, installDirName);
-
-                // Remove existing installation (any version)
-                foreach (var existingDir in Directory.GetDirectories(_extensionsDir))
-                {
-                    var dirName = Path.GetFileName(existingDir);
-                    if (dirName.StartsWith(extensionId + "-", StringComparison.OrdinalIgnoreCase) ||
-                        dirName.Equals(extensionId, StringComparison.OrdinalIgnoreCase))
-                    {
-                        try { Directory.Delete(existingDir, true); } catch { }
-                    }
-                }
-
-                // Copy files to install directory
-                var sourceDir = File.Exists(Path.Combine(tempDir, "package.json"))
-                    ? tempDir
-                    : Path.Combine(tempDir, "extension");
-
-                CopyDirectory(sourceDir, installDir);
-
-                // Load the installed extension
-                var ext = await LoadExtensionFromDirectoryAsync(installDir);
-                if (ext != null)
-                {
-                    _extensions.RemoveAll(e => e.Id == ext.Id);
-                    _extensions.Add(ext);
-                    ExtensionInstalled?.Invoke(this, new ExtensionEventArgs(ext));
-                    SaveState();
-
-                    _outputService.WriteLine($"[Extensions] Installed: {ext.Name} ({ext.Id} v{ext.Version})", OutputCategory.General);
-
-                    // Activate static contributions immediately
-                    await LoadContributionsAsync(ext);
-
-                    // Mark pure static extensions as active
-                    if (string.IsNullOrEmpty(ext.Manifest?.Main))
-                    {
-                        ext.IsActive = true;
-                        ext.Status = ExtensionStatus.Active;
-                    }
-
-                    // If the host is running and extension has '*' activation, activate JS too
-                    if (_extensionHost?.IsRunning == true && ext.ActivationEvents.Contains("*"))
-                    {
-                        await ActivateAsync(ext.Id);
-                    }
-
-                    return new ExtensionInstallResult
-                    {
-                        Success = true,
-                        Extension = ext,
-                        RequiresRestart = ext.Manifest?.Main != null && _extensionHost?.IsRunning != true
-                    };
-                }
-
-                return new ExtensionInstallResult { Success = false, Error = "Failed to load installed extension" };
-            }
-            finally
-            {
-                // Cleanup temp directory
-                try { Directory.Delete(tempDir, true); } catch { }
-            }
+            // RUNTIME — everything the installer deliberately does not do.
+            return await RegisterInstalledExtensionAsync(info.InstallPath);
         }
         catch (Exception ex)
         {
@@ -445,31 +374,70 @@ public class ExtensionService : IExtensionService
     {
         try
         {
-            var tempFile = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid()}.vsix");
+            // The download leg is delegated too, and that is the point of doing it: the copy this
+            // method used to own read the whole response into memory before writing, sent no
+            // User-Agent, and inherited HttpClient's 100-second default — which silently truncates
+            // a large extension on a slow link into a "corrupt zip". The installer's leg streams
+            // through FileDownloader with a ten-minute deadline.
+            var info = await _vsixInstaller.InstallFromUrlAsync(url, cancellationToken);
 
-            try
-            {
-                using var response = await _httpClient.GetAsync(url, cancellationToken);
-                response.EnsureSuccessStatusCode();
-
-                using var fs = File.Create(tempFile);
-                await response.Content.CopyToAsync(fs, cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                return new ExtensionInstallResult { Success = false, Error = $"Download failed: {ex.Message}" };
-            }
-
-            var result = await InstallFromFileAsync(tempFile, cancellationToken);
-
-            try { File.Delete(tempFile); } catch { }
-
-            return result;
+            return await RegisterInstalledExtensionAsync(info.InstallPath);
         }
         catch (Exception ex)
         {
             return new ExtensionInstallResult { Success = false, Error = ex.Message };
         }
+    }
+
+    /// <summary>
+    /// The runtime half of an install: make an extension already on disk LIVE.
+    ///
+    /// <para>⛔ This is the ONLY place an install registers an extension, and the reason both install
+    /// entry points funnel through it. A caller that follows an install with a discovery pass
+    /// registers everything a second time — duplicated commands and keybindings that fire twice,
+    /// with a symptom that surfaces nowhere near its cause.</para>
+    /// </summary>
+    private async Task<ExtensionInstallResult> RegisterInstalledExtensionAsync(string installDir)
+    {
+        var ext = await LoadExtensionFromDirectoryAsync(installDir);
+        if (ext == null)
+        {
+            return new ExtensionInstallResult { Success = false, Error = "Failed to load installed extension" };
+        }
+
+        // Discovery sets this on every pass; install did not, so an extension stayed without a path
+        // until the next discovery — and uninstall reads it.
+        ext.InstallPath = installDir;
+
+        _extensions.RemoveAll(e => e.Id == ext.Id);
+        _extensions.Add(ext);
+        ExtensionInstalled?.Invoke(this, new ExtensionEventArgs(ext));
+        SaveState();
+
+        _outputService.WriteLine($"[Extensions] Installed: {ext.Name} ({ext.Id} v{ext.Version})", OutputCategory.General);
+
+        // Activate static contributions immediately
+        await LoadContributionsAsync(ext);
+
+        // Mark pure static extensions as active
+        if (string.IsNullOrEmpty(ext.Manifest?.Main))
+        {
+            ext.IsActive = true;
+            ext.Status = ExtensionStatus.Active;
+        }
+
+        // If the host is running and extension has '*' activation, activate JS too
+        if (_extensionHost?.IsRunning == true && ext.ActivationEvents.Contains("*"))
+        {
+            await ActivateAsync(ext.Id);
+        }
+
+        return new ExtensionInstallResult
+        {
+            Success = true,
+            Extension = ext,
+            RequiresRestart = ext.Manifest?.Main != null && _extensionHost?.IsRunning != true
+        };
     }
 
     public Task<bool> UninstallAsync(string extensionId)
@@ -1939,6 +1907,12 @@ public class ExtensionService : IExtensionService
         _disposed = true;
 
         _extensionHost?.Dispose();
-        _httpClient.Dispose();
+
+        // Only when we built it. An injected installer is a container singleton with a longer
+        // lifetime than this service, and disposing it here would close an HttpClient still in use.
+        if (_ownsVsixInstaller)
+        {
+            _vsixInstaller.Dispose();
+        }
     }
 }

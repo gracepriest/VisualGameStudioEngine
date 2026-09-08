@@ -204,6 +204,37 @@ public class VsixInstaller : IDisposable
     }
 
     /// <summary>
+    /// Downloads a .vsix from an already-resolved URL and installs it in one step.
+    /// </summary>
+    /// <remarks>
+    /// The sibling of <see cref="DownloadAndInstallAsync"/> for callers that hold a download URL
+    /// rather than a publisher/name pair — the extensions panel gets one straight out of an Open VSX
+    /// search result and would otherwise have to resolve it a second time.
+    ///
+    /// <para>It routes through <see cref="OpenVsxClient.DownloadVsixToFileAsync"/> so the download
+    /// gets the streaming, deadline and User-Agent handling that the hand-rolled copies of this leg
+    /// did not have.</para>
+    /// </remarks>
+    /// <param name="downloadUrl">Direct URL to the .vsix file.</param>
+    /// <param name="ct">Cancellation token.</param>
+    public async Task<ExtensionInfo> InstallFromUrlAsync(string downloadUrl, CancellationToken ct = default)
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "vgs-extensions");
+        Directory.CreateDirectory(tempDir);
+
+        var tempPath = Path.Combine(tempDir, $"download-{Guid.NewGuid():N}.vsix");
+        try
+        {
+            await _vsxClient.DownloadVsixToFileAsync(downloadUrl, tempPath, ct: ct);
+            return await InstallVsixAsync(tempPath, ct);
+        }
+        finally
+        {
+            try { File.Delete(tempPath); } catch { }
+        }
+    }
+
+    /// <summary>
     /// Downloads an extension from Open VSX and installs it in one step.
     /// </summary>
     /// <param name="publisher">Publisher namespace.</param>
