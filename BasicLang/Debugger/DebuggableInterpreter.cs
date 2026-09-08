@@ -1518,6 +1518,8 @@ namespace BasicLang.Debugger
                 BinaryOpKind.Ge => l >= r,
                 BinaryOpKind.And => (l != 0) && (r != 0),
                 BinaryOpKind.Or => (l != 0) || (r != 0),
+                BinaryOpKind.AndAlso => (l != 0) && (r != 0),
+                BinaryOpKind.OrElse => (l != 0) || (r != 0),
                 BinaryOpKind.Xor => ((l != 0) && (r == 0)) || ((l == 0) && (r != 0)),
                 _ => 0
             };

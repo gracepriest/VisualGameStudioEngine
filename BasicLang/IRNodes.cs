@@ -200,8 +200,20 @@ namespace BasicLang.Compiler.IR
         // Arithmetic
         Add, Sub, Mul, Div, Mod, IntDiv,
 
-        // Logical (short-circuit)
+        // Logical. VB has FOUR keywords where C# has two, and the difference is REAL:
+        //   And / Or         evaluate BOTH operands ALWAYS   (C# `&` / `|`)
+        //   AndAlso / OrElse skip the right operand           (C# `&&` / `||`)
+        // The result VALUE is identical for both pairs; only the right operand's SIDE
+        // EFFECTS differ, which is the entire observable content of the distinction.
+        //
+        // ⛔ These were ONE pair until 2026-08-07, and this comment used to label And/Or
+        // "short-circuit", which was simply wrong. IRBuilder collapsed andalso->And and
+        // orelse->Or, so the distinction died at the IR boundary and NO backend could be
+        // correct for both spellings — each got a different half wrong. Measured: the VB
+        // guard idiom `If i <> 0 AndAlso Risky(i)` called Risky anyway on the native
+        // backend and died with STATUS_INTEGER_DIVIDE_BY_ZERO.
         And, Or,
+        AndAlso, OrElse,
 
         // Bitwise
         BitwiseAnd, BitwiseOr, Xor, Shl, Shr,
@@ -1387,6 +1399,20 @@ namespace BasicLang.Compiler.IR
         public List<string> CppIncludes { get; set; }
 
         /// <summary>
+        /// <c>#JsImport</c> directives in source order, emitted as real ES <c>import</c>
+        /// statements by the JavaScript backend. Sibling of <see cref="CppIncludes"/>: same
+        /// role, different target language.
+        ///
+        /// <para>A RECORD rather than a bare specifier string, because an import has two
+        /// independent parts — WHAT to load and WHAT NAMES it brings in — and only the first is
+        /// a file path. <see cref="JavaScriptEmitter"/> copies by
+        /// <see cref="JsImportDirective.Specifier"/> while the backend emits by
+        /// <see cref="JsImportDirective.Clause"/>; a single string could serve one or the other,
+        /// never both.</para>
+        /// </summary>
+        public List<JsImportDirective> JsImports { get; set; }
+
+        /// <summary>
         /// Source path → the number of lines the front end INSERTED above that file's original
         /// content, keyed the way <c>IRFunction.SourceFilePath</c> spells it.
         ///
@@ -1420,6 +1446,7 @@ namespace BasicLang.Compiler.IR
             Namespaces = new List<string>();
             NetUsings = new List<NetUsingDirective>();
             CppIncludes = new List<string>();
+            JsImports = new List<JsImportDirective>();
         }
 
         public IRFunction CreateFunction(string name, TypeInfo returnType)

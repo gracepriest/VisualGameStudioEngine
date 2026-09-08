@@ -20,16 +20,23 @@ namespace VisualGameStudio.Tests.Compiler;
 /// and — for LLVM/MSIL — collections, with a CLEAN typed error rather than
 /// silently emitting broken code.
 ///
-/// | Feature                | C++ | C#        | JavaScript | LLVM      | MSIL      |
-/// |------------------------|-----|-----------|------------|-----------|-----------|
-/// | #CppInclude headers    | ✅  | ❌ error  | ❌ error   | ❌ error  | ❌ error  |
-/// | :: foreign types       | ✅  | ❌ error  | ❌ error   | ❌ error  | ❌ error  |
-/// | Collections (List/...) | ✅  | ✅ native | ✅ native  | ❌ error  | ❌ error  |
+/// | Feature                  | C++ | C#        | JavaScript | LLVM      | MSIL      |
+/// |--------------------------|-----|-----------|------------|-----------|-----------|
+/// | #CppInclude headers      | ✅  | ❌ error  | ❌ error   | ❌ error  | ❌ error  |
+/// | :: foreign TYPES         | ✅  | ❌ error  | ❌ error   | ❌ error  | ❌ error  |
+/// | :: foreign EXPRESSIONS   | ✅  | ❌ error  | ✅ verbatim| ❌ error  | ❌ error  |
+/// | Collections (List/...)   | ✅  | ✅ native | ✅ native  | ❌ error  | ❌ error  |
 ///
 /// C# and JavaScript accept collections natively; they only reject the passthrough
 /// features. JavaScript's own coverage lives in JsCapabilityCheckerTests — it additionally
 /// rejects ByRef, Long, Char, value Structure, operator overloading and .NET BCL types
 /// (BL7002-BL7007), which have no JS equivalent and would otherwise be silently wrong.
+///
+/// <para>⛔ The two <c>::</c> rows differ ONLY for JavaScript, and only by POSITION. In
+/// EXPRESSION position <c>::name</c> is a raw JavaScript identifier and is emitted verbatim
+/// (plan 2 task 3, opted in via <c>ForeignFeatureChecker.Check(allowForeignIdentifiers: true)</c>);
+/// in TYPE position it is still an opaque C++ type that cannot lower. C#/LLVM/MSIL keep refusing
+/// BOTH — every test in this fixture asserts that, and the flag must never become their default.</para>
 /// </summary>
 [TestFixture]
 public class ForeignFeatureGuardTests

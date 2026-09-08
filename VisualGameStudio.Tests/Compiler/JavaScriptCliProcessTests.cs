@@ -246,6 +246,330 @@ public class JavaScriptCliProcessTests
             Is.EqualTo("14"));
     }
 
+    // ---------------------------------------------------------------- #JsImport reaches output
+    //
+    // Plan 2 task 5. Without the copy the feature is FALSE for every shipping route while every
+    // unit test passes: the project routes emit into bin/<config>/<tfm>/ and the user's
+    // ./helper.js stays in the project directory, so the emitted `import "./helper.js"` 404s in
+    // the browser from a build that reported success. These live here, not in the interop
+    // fixture, because the question is an ENTRY-POINT one — what lands in each route's output
+    // directory — and this fixture already owns both routes plus the Node harness.
+
+    /// <summary>
+    /// Writes a project whose Main.bas imports a sibling helper module.
+    ///
+    /// <para>The ORDINARY module shape — <c>export function greet()</c> reached by a named
+    /// import. It could not be written this way at first: <c>#JsImport</c> only had the
+    /// side-effect form, which binds no names, so an exporting module was imported, evaluated,
+    /// and then unreachable (<c>greet is not defined</c>, from a build that reported success).
+    /// The binding forms exist for exactly this.</para>
+    /// </summary>
+    private async Task WriteImportingProject(string specifier = "./helper.js")
+    {
+        await File.WriteAllTextAsync(Path.Combine(_dir, "helper.js"),
+            "export function greet() { return \"hi from the module\"; }\n");
+        await File.WriteAllTextAsync(Path.Combine(_dir, "Main.bas"),
+            $"#JsImport {{ greet }} From \"{specifier}\"\n" +
+            "Sub Main()\n" +
+            "javascript{ console.log(greet()); }\n" +
+            "End Sub\n");
+        await WriteProjectOnly();
+    }
+
+    /// <summary>
+    /// THE headline case. Note the assertion is on the module sitting BESIDE the script, not on
+    /// it existing somewhere — a test that hand-places the file in the output directory would
+    /// pass with the copy removed entirely.
+    /// </summary>
+    [Test]
+    public async Task ProjectRoute_RelativeJsImport_IsCopiedBesideTheScript()
+    {
+        await WriteImportingProject();
+
+        var (exit, stdout, stderr) = await CliTestHarness.RunCli(
+            _dir, "build", Path.Combine(_dir, "Site.blproj"));
+        Assert.That(exit, Is.Zero, $"CLI build failed.\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+
+        var script = Directory.GetFiles(Path.Combine(_dir, "bin"), "Site.js", SearchOption.AllDirectories)
+            .Single();
+        var siteDir = Path.GetDirectoryName(script)!;
+
+        Assert.That(File.Exists(Path.Combine(siteDir, "helper.js")), Is.True,
+            "an imported relative module must be copied beside the emitted script, or the " +
+            "browser 404s on it");
+        Assert.That(RunNodeFile(script), Is.EqualTo("hi from the module"));
+    }
+
+    /// <summary>
+    /// The IDE route reaches JavaScriptEmitter through BuildService, which is a SEPARATE call
+    /// site from the CLI's two. Putting the copy inside Emit is what makes one implementation
+    /// cover all three; this is the test that would have caught patching only the CLI.
+    /// </summary>
+    [Test]
+    public async Task IdeBuildPath_RelativeJsImport_IsCopiedBesideTheScript()
+    {
+        await WriteImportingProject();
+
+        var project = await new VisualGameStudio.ProjectSystem.Serialization.ProjectSerializer()
+            .LoadAsync(Path.Combine(_dir, "Site.blproj"));
+        var result = await new VisualGameStudio.ProjectSystem.Services.BuildService(
+            new SilentOutput()).BuildProjectAsync(project);
+
+        Assert.That(result.Success, Is.True, "the IDE build failed");
+        Assert.That(File.Exists(Path.Combine(result.OutputPath!, "helper.js")), Is.True,
+            "the IDE route did not copy the imported module");
+        Assert.That(RunNodeFile(Path.Combine(result.OutputPath!, result.GeneratedFileName)),
+            Is.EqualTo("hi from the module"));
+    }
+
+    /// <summary>
+    /// ⛔ THE SELF-COPY. The single-file route writes its output NEXT TO THE SOURCE, so source
+    /// and destination are the same file and <c>File.Copy</c> throws IOException — a crash on
+    /// the most ordinary program this feature has.
+    /// </summary>
+    [Test]
+    public async Task SingleFile_RelativeJsImport_DoesNotFailCopyingTheModuleOntoItself()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_dir, "helper.js"),
+            "globalThis.greet = function () { return \"hi from the module\"; };\n");
+        await File.WriteAllTextAsync(Path.Combine(_dir, "prog.bas"),
+            "#JsImport \"./helper.js\"\nSub Main()\njavascript{ console.log(greet()); }\nEnd Sub\n");
+
+        var (exit, stdout, stderr) = await CliTestHarness.RunCli(
+            _dir, Path.Combine(_dir, "prog.bas"), "--target=javascript");
+
+        Assert.That(exit, Is.Zero, $"CLI failed.\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+        Assert.That(await File.ReadAllTextAsync(Path.Combine(_dir, "helper.js")),
+            Does.Contain("hi from the module"), "the source module must be left intact");
+        Assert.That(RunNodeFile(Path.Combine(_dir, "prog.js")), Is.EqualTo("hi from the module"));
+    }
+
+    /// <summary>
+    /// Bare specifiers are package-manager territory — a stated non-goal — so they must be left
+    /// completely alone: emitted as written, nothing copied, no error. (Not RUN: resolving
+    /// "lodash" would need a node_modules, which is exactly the thing being declined.)
+    /// </summary>
+    [Test]
+    public async Task ProjectRoute_BareSpecifier_IsNotCopiedAndIsNotAnError()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_dir, "Main.bas"),
+            "#JsImport \"lodash\"\nSub Main()\nConsole.WriteLine(1)\nEnd Sub\n");
+        await WriteProjectOnly();
+
+        var (exit, stdout, stderr) = await CliTestHarness.RunCli(
+            _dir, "build", Path.Combine(_dir, "Site.blproj"));
+
+        Assert.That(exit, Is.Zero, $"a bare specifier must not fail the build.\nSTDERR:\n{stderr}");
+
+        var script = Directory.GetFiles(Path.Combine(_dir, "bin"), "Site.js", SearchOption.AllDirectories)
+            .Single();
+        Assert.That(await File.ReadAllTextAsync(script), Does.Contain("import \"lodash\";"));
+        Assert.That(Directory.GetFiles(Path.GetDirectoryName(script)!, "lodash*"), Is.Empty);
+    }
+
+    /// <summary>
+    /// A module the compiler never reads must not fail the build — the user may be serving it
+    /// from elsewhere, or about to add it. But it must SAY so: silence here is how a 404 in the
+    /// browser becomes a mystery.
+    /// </summary>
+    [Test]
+    public async Task ProjectRoute_MissingRelativeTarget_WarnsRatherThanFails()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_dir, "Main.bas"),
+            "#JsImport \"./absent.js\"\nSub Main()\nConsole.WriteLine(1)\nEnd Sub\n");
+        await WriteProjectOnly();
+
+        var (exit, stdout, stderr) = await CliTestHarness.RunCli(
+            _dir, "build", Path.Combine(_dir, "Site.blproj"));
+
+        Assert.That(exit, Is.Zero, $"a missing module must not fail the build.\nSTDERR:\n{stderr}");
+        Assert.That(stdout + stderr, Does.Contain("absent.js"), "the warning must name the file");
+    }
+
+    /// <summary>
+    /// ⛔ CONTAINMENT. `../escape.js` is a legal ES specifier that resolves ABOVE the output
+    /// directory. Copying it would write outside the build output — and one more `..` would
+    /// reach the project directory and overwrite a source file. Refused, warned, build still
+    /// succeeds.
+    /// </summary>
+    [Test]
+    public async Task ProjectRoute_ParentRelativeImport_IsNotCopiedOutsideTheOutputDirectory()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_dir, "escape.js"), "export const x = 1;\n");
+        await File.WriteAllTextAsync(Path.Combine(_dir, "Main.bas"),
+            "#JsImport \"../escape.js\"\nSub Main()\nConsole.WriteLine(1)\nEnd Sub\n");
+        await WriteProjectOnly();
+
+        var (exit, stdout, stderr) = await CliTestHarness.RunCli(
+            _dir, "build", Path.Combine(_dir, "Site.blproj"));
+
+        Assert.That(exit, Is.Zero, $"STDERR:\n{stderr}");
+        Assert.That(stdout + stderr, Does.Contain("escape.js"), "the refusal must name the file");
+
+        var script = Directory.GetFiles(Path.Combine(_dir, "bin"), "Site.js", SearchOption.AllDirectories)
+            .Single();
+        var siteParent = Path.GetDirectoryName(Path.GetDirectoryName(script)!)!;
+        Assert.That(File.Exists(Path.Combine(siteParent, "escape.js")), Is.False,
+            "nothing may be written above the output directory");
+    }
+
+    /// <summary>
+    /// A site with imports must carry a package.json declaring module scope, or `node Site.js`
+    /// dies with "Cannot use import statement outside a module" on any Node before 22.7 — so
+    /// whether the emitted site runs would depend on the reader's Node version. A site WITHOUT
+    /// imports must not get one: the single-file route emits next to the user's source.
+    /// </summary>
+    [Test]
+    public async Task ProjectRoute_PackageJsonIsWrittenOnlyWhenThereAreImports()
+    {
+        await WriteImportingProject();
+        var (exit, _, stderr) = await CliTestHarness.RunCli(
+            _dir, "build", Path.Combine(_dir, "Site.blproj"));
+        Assert.That(exit, Is.Zero, stderr);
+
+        var withImports = Path.GetDirectoryName(
+            Directory.GetFiles(Path.Combine(_dir, "bin"), "Site.js", SearchOption.AllDirectories).Single())!;
+        Assert.That(await File.ReadAllTextAsync(Path.Combine(withImports, "package.json")),
+            Does.Contain("\"module\""));
+
+        Directory.Delete(Path.Combine(_dir, "bin"), recursive: true);
+        await File.WriteAllTextAsync(Path.Combine(_dir, "Main.bas"),
+            "Sub Main()\nConsole.WriteLine(1)\nEnd Sub\n");
+
+        (exit, _, stderr) = await CliTestHarness.RunCli(_dir, "build", Path.Combine(_dir, "Site.blproj"));
+        Assert.That(exit, Is.Zero, stderr);
+
+        var noImports = Path.GetDirectoryName(
+            Directory.GetFiles(Path.Combine(_dir, "bin"), "Site.js", SearchOption.AllDirectories).Single())!;
+        Assert.That(File.Exists(Path.Combine(noImports, "package.json")), Is.False,
+            "a program with no imports must leave the output directory alone");
+    }
+
+    /// <summary>
+    /// The BARE form still binds nothing — and that is CORRECT ES, not a shortfall. A
+    /// side-effect import runs a module for what it does, not for what it exports.
+    ///
+    /// <para>Kept as an executable statement of the semantics because it was once a real gap:
+    /// with only this form, the ordinary <c>export function greet()</c> module was unusable and
+    /// the failure surfaced in a browser rather than in the build. It now sits beside the
+    /// binding-form tests so the difference reads as a deliberate distinction.</para>
+    /// </summary>
+    [Test]
+    public async Task ProjectRoute_BareJsImport_RunsTheModuleButBindsNoNames()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_dir, "helper.js"),
+            "console.log(\"side effect\");\nexport function greet() { return \"exported\"; }\n");
+        await File.WriteAllTextAsync(Path.Combine(_dir, "Main.bas"),
+            "#JsImport \"./helper.js\"\nSub Main()\nConsole.WriteLine(\"main\")\nEnd Sub\n");
+        await WriteProjectOnly();
+
+        var (exit, _, stderr) = await CliTestHarness.RunCli(
+            _dir, "build", Path.Combine(_dir, "Site.blproj"));
+        Assert.That(exit, Is.Zero, stderr);
+
+        var script = Directory.GetFiles(Path.Combine(_dir, "bin"), "Site.js", SearchOption.AllDirectories)
+            .Single();
+        Assert.That(await File.ReadAllTextAsync(script), Does.Contain("import \"./helper.js\";"),
+            "no binding clause — the module runs, nothing is named");
+
+        // The side effect happens; the export is simply never referenced.
+        Assert.That(RunNodeFile(script), Is.EqualTo("side effect\nmain"));
+    }
+
+    /// <summary>
+    /// ⭐ THE ONE THAT CLOSES THE GAP: an ordinary exporting module, reached by a named import,
+    /// through the real binary, RUN. Text assertions cannot tell a correct import statement
+    /// from one that parses and links to nothing — ES named imports fail at LINK time, so a
+    /// wrong name renders a blank page rather than throwing where you can see it.
+    /// </summary>
+    [TestCase("{ greet }", "greet()", TestName = "ProjectRoute_NamedImport_Runs")]
+    [TestCase("{ greet As hi }", "hi()", TestName = "ProjectRoute_AliasedImport_Runs")]
+    [TestCase("* As lib", "lib.greet()", TestName = "ProjectRoute_NamespaceImport_Runs")]
+    public async Task ProjectRoute_BindingForm_ReachesTheExport(string clause, string call)
+    {
+        await File.WriteAllTextAsync(Path.Combine(_dir, "helper.js"),
+            "export function greet() { return \"reached the export\"; }\n");
+        await File.WriteAllTextAsync(Path.Combine(_dir, "Main.bas"),
+            $"#JsImport {clause} From \"./helper.js\"\n" +
+            $"Sub Main()\njavascript{{ console.log({call}); }}\nEnd Sub\n");
+        await WriteProjectOnly();
+
+        var (exit, stdout, stderr) = await CliTestHarness.RunCli(
+            _dir, "build", Path.Combine(_dir, "Site.blproj"));
+        Assert.That(exit, Is.Zero, $"CLI build failed.\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+
+        var script = Directory.GetFiles(Path.Combine(_dir, "bin"), "Site.js", SearchOption.AllDirectories)
+            .Single();
+        Assert.That(RunNodeFile(script), Is.EqualTo("reached the export"));
+    }
+
+    /// <summary>A default export, the shape most npm packages present.</summary>
+    [Test]
+    public async Task ProjectRoute_DefaultImport_ReachesTheExport()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_dir, "helper.js"),
+            "export default function () { return \"the default\"; }\n");
+        await File.WriteAllTextAsync(Path.Combine(_dir, "Main.bas"),
+            "#JsImport helper From \"./helper.js\"\n" +
+            "Sub Main()\njavascript{ console.log(helper()); }\nEnd Sub\n");
+        await WriteProjectOnly();
+
+        var (exit, stdout, stderr) = await CliTestHarness.RunCli(
+            _dir, "build", Path.Combine(_dir, "Site.blproj"));
+        Assert.That(exit, Is.Zero, $"CLI build failed.\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+
+        var script = Directory.GetFiles(Path.Combine(_dir, "bin"), "Site.js", SearchOption.AllDirectories)
+            .Single();
+        Assert.That(RunNodeFile(script), Is.EqualTo("the default"));
+    }
+
+    /// <summary>
+    /// ⛔ An imported name is reachable through <c>::</c> too, not only from inside a
+    /// <c>javascript{ }</c> block — which matters because <c>::</c> is the ergonomic form a user
+    /// reaches for first. Nothing in the call path was changed for this, so it is a claim that
+    /// needs measuring rather than assuming.
+    /// </summary>
+    [Test]
+    public async Task ProjectRoute_ImportedName_IsCallableThroughForeignSyntax()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_dir, "helper.js"),
+            "export function shout(s) { console.log(s.toUpperCase()); }\n");
+        await File.WriteAllTextAsync(Path.Combine(_dir, "Main.bas"),
+            "#JsImport { shout } From \"./helper.js\"\n" +
+            "Sub Main()\n::shout(\"through colons\")\nEnd Sub\n");
+        await WriteProjectOnly();
+
+        var (exit, stdout, stderr) = await CliTestHarness.RunCli(
+            _dir, "build", Path.Combine(_dir, "Site.blproj"));
+        Assert.That(exit, Is.Zero, $"CLI build failed.\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+
+        var script = Directory.GetFiles(Path.Combine(_dir, "bin"), "Site.js", SearchOption.AllDirectories)
+            .Single();
+        Assert.That(RunNodeFile(script), Is.EqualTo("THROUGH COLONS"));
+    }
+
+    /// <summary>
+    /// The BL7010 collision, through the real binary: it must fail the BUILD, cleanly, rather
+    /// than emit a module that fails to parse in the browser and renders nothing.
+    /// </summary>
+    [Test]
+    public async Task ProjectRoute_ImportCollidingWithAFunction_FailsTheBuildCleanly()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_dir, "helper.js"),
+            "export function greet() { return \"x\"; }\n");
+        await File.WriteAllTextAsync(Path.Combine(_dir, "Main.bas"),
+            "#JsImport { greet } From \"./helper.js\"\n" +
+            "Sub greet()\nEnd Sub\nSub Main()\nEnd Sub\n");
+        await WriteProjectOnly();
+
+        var (exit, stdout, stderr) = await CliTestHarness.RunCli(
+            _dir, "build", Path.Combine(_dir, "Site.blproj"));
+
+        Assert.That(exit, Is.Not.Zero, $"a colliding import must fail the build.\nSTDOUT:\n{stdout}");
+        Assert.That(stdout + stderr, Does.Contain("BL7010"));
+        Assert.That(stdout + stderr, Does.Not.Contain("Unhandled exception"));
+    }
+
     /// <summary>Swallows build chatter — this fixture asserts on behaviour, not on logs.</summary>
     private sealed class SilentOutput : VisualGameStudio.Core.Abstractions.Services.IOutputService
     {

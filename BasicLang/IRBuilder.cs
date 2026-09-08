@@ -3050,8 +3050,11 @@ namespace BasicLang.Compiler.IR
                     "\\=" => BinaryOpKind.IntDiv,        // Integer division assignment
                     "%=" or "Mod=" => BinaryOpKind.Mod,  // Modulo assignment
                     "&=" => BinaryOpKind.Concat,         // String concatenation assignment
-                    "And=" => BinaryOpKind.And,          // Bitwise AND assignment
-                    "Or=" => BinaryOpKind.Or,            // Bitwise OR assignment
+                    // NON-short-circuit, which is right for a compound assignment: `a And= b`
+                    // must evaluate b. (The old "Bitwise" comments were stale — SemanticAnalyzer
+                    // rejects integral operands for And/Or, so these are Boolean-only here.)
+                    "And=" => BinaryOpKind.And,
+                    "Or=" => BinaryOpKind.Or,
                     "Xor=" => BinaryOpKind.Xor,          // Bitwise XOR assignment
                     "<<=" => BinaryOpKind.Shl,           // Left shift assignment
                     ">>=" => BinaryOpKind.Shr,           // Right shift assignment
@@ -3311,11 +3314,49 @@ namespace BasicLang.Compiler.IR
             else
             {
                 var opKind = MapBinaryOperator(node.Operator);
+
+                // ⛔ NEITHER BACKEND READS IRBinaryOp.Type. Both render `{left} {op} {right}`
+                // and let the TARGET language pick the operator semantics, so a Double-typed
+                // division of two int32_t operands still performs C-family INTEGER division
+                // and merely widens the already-truncated result. Measured: the temp was
+                // correctly `double t0` and the program still printed 3 for 7 / 2 — the
+                // emission assertion passed while the executable was wrong.
+                //
+                // So widen the OPERANDS, not just the result. IRCast is the right seam: it is
+                // already handled by both interpreters, every backend, IROperandWalker,
+                // IRPrettyPrinter and CppCapabilityChecker, so one insertion here moves every
+                // consumer at once instead of repeating the coercion per backend.
+                //
+                // IntDiv is deliberately excluded — `\` must keep truncating.
+                if (opKind == BinaryOpKind.Div && resultType != null && resultType.IsFloatingPoint())
+                {
+                    left = WidenDivisionOperand(left, resultType);
+                    right = WidenDivisionOperand(right, resultType);
+                }
+
                 result = new IRBinaryOp(tempName, opKind, left, right, resultType);
             }
 
             EmitInstruction(result);
             _expressionResult = result;
+        }
+
+        /// <summary>
+        /// Widen an integral operand of a floating-point division to the result type, so the
+        /// target language divides in floating point rather than truncating first. Non-integral
+        /// operands are returned unchanged, so this is a no-op once both sides already match.
+        /// </summary>
+        private IRValue WidenDivisionOperand(IRValue operand, TypeInfo targetType)
+        {
+            var sourceType = operand?.Type;
+            if (sourceType == null || !sourceType.IsIntegral())
+                return operand;
+
+            var castName = _currentFunction.GetNextTempName();
+            var cast = new IRCast(castName, operand, sourceType, targetType,
+                                  DetermineCastKind(sourceType, targetType));
+            EmitInstruction(cast);
+            return cast;
         }
 
         public void Visit(UnaryExpressionNode node)
@@ -3483,6 +3524,24 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(MemberAccessExpressionNode node)
         {
+            // §8.3's enum row (P2a-2 T8c-3). The analyzer folded this member access to its
+            // underlying primitive because the winner's parameter at that index is enum-typed,
+            // so the value is known at compile time.
+            //
+            // ⛔ RETURNING HERE IS DOING TWO JOBS, and the position of this arm is both of
+            // them. It skips the receiver visit, and — because it returns before any
+            // IRFieldAccess is constructed or emitted, and NetSurfaceCollector is IR-driven —
+            // it is ALSO what stops a compile-time constant minting a shim export, a proxy slot
+            // and a ~27 s Native AOT publish round trip. Measured before this change:
+            // FileMode.Open emitted a real bl_net_System_IO_FileMode_Open__… export. Move this
+            // arm below the emission and the value stays correct while the export comes back.
+            if (_semanticAnalyzer?.NetEnumConstants != null
+                && _semanticAnalyzer.NetEnumConstants.TryGetValue(node, out var enumConstant))
+            {
+                _expressionResult = new IRConstant(enumConstant.Value, enumConstant.Type);
+                return;
+            }
+
             node.Object.Accept(this);
             var obj = _expressionResult;
 
@@ -4085,8 +4144,9 @@ namespace BasicLang.Compiler.IR
                 case "\\": return BinaryOpKind.IntDiv;
                 case "%": return BinaryOpKind.Mod;
                 case "&": return BinaryOpKind.Concat;
-                case "&&": return BinaryOpKind.And;
-                case "||": return BinaryOpKind.Or;
+                // C-style spellings mean what they mean in C: these SHORT-CIRCUIT.
+                case "&&": return BinaryOpKind.AndAlso;
+                case "||": return BinaryOpKind.OrElse;
                 case "^": return BinaryOpKind.Xor;
                 case "<<": return BinaryOpKind.Shl;
                 case ">>": return BinaryOpKind.Shr;
@@ -4095,8 +4155,14 @@ namespace BasicLang.Compiler.IR
             return (op ?? string.Empty).ToLowerInvariant() switch
             {
                 "mod" => BinaryOpKind.Mod,
-                "and" or "andalso" => BinaryOpKind.And,
-                "or" or "orelse" => BinaryOpKind.Or,
+                // ⛔ These four are DISTINCT and must stay distinct. Collapsing andalso->And
+                // and orelse->Or killed the short-circuit/non-short-circuit distinction at the
+                // IR boundary, after the lexer, parser and analyzer had all carried it
+                // faithfully — so every backend downstream got one of the two spellings wrong.
+                "and" => BinaryOpKind.And,
+                "andalso" => BinaryOpKind.AndAlso,
+                "or" => BinaryOpKind.Or,
+                "orelse" => BinaryOpKind.OrElse,
                 "xor" => BinaryOpKind.Xor,
                 "shl" => BinaryOpKind.Shl,
                 "shr" => BinaryOpKind.Shr,

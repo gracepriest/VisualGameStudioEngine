@@ -1092,6 +1092,64 @@ test AND a receiver-set test proving it now answers "value type".
 > a Guid result is the candidate but its overload-probe path is UNVERIFIED).
 > Full 13-edit map + 9 new tests with their mutations: recon `wf_90fc13e8-724`.
 
+> ### ⛔ 8c-3 (ENUM) — MEASURED 2026-08-06 through the REAL CLI. Three claims in this file are FALSE.
+>
+> A 9-agent recon re-ran every enum claim as an actual compile. Do not trust the prose below it.
+>
+> | # | Probe | Result |
+> |---|---|---|
+> | **M1** | `System.IO.File.Open(…)` fully qualified | `BL6017 … 'System.Object' has no member 'File'` — **the qualified spelling is broken for EVERY .NET member**, so the bare-identifier detector misses nothing |
+> | **M2** | `Dim n As Integer = CType(FileMode.Open, Integer)` | **compiles**, emitting `t0 = BasicLang::net::bl_net_System_IO_FileMode_Open__…();` |
+> | **M3** | that same C++ compiled standalone | `error: invalid static_cast from type 'NetRef' to 'int32_t'` — **a green BasicLang build emitting uncompilable C++** (chipped) |
+> | **M4** | `fi.Attributes = FileAttributes.ReadOnly` | **`Compilation successful!`** — an enum parameter ALREADY crosses end-to-end on the handle wire, ungated |
+> | **M5** | `fi.Attributes = 1` | `Cannot assign value of type 'Integer' to 'FileAttributes'` |
+> | **M6** | `Dim s = File.OpenRead(…)` | refused — `FileStream` is not ManagedOwned |
+> | **M7/M8** | `File.SetAttributes(p, FileAttributes.ReadOnly)`, `New Regex(s, RegexOptions…)` | BL6019 on cpp, clean on csharp |
+>
+> **⛔ CORRECTION 1 — "`FileMode.Open` types as `Object` and lowers to NOTHING" is FALSE at this HEAD.**
+> It lowers to a REAL shim export returning a GCHandle (M2). That sentence (from an earlier
+> session, repeated in this file and in auto-memory) drove the whole "front-end constant
+> lowering" framing. The framing survives, but for a different reason: the fold must also
+> SUPPRESS an export that exists today.
+>
+> **⛔ CORRECTION 2 — enums are NOT uniformly refused.** M4 ships today through the synthesized
+> setter, whose value parameter comes from `NetAccessorSynthesis`, not from Roslyn. Any design
+> that retypes enum member access to the underlying integral turns M4 into M5 — **a regression on
+> a currently-clean program.** `NetMemberResultTypeInfo` is ALSO the result-direction function,
+> so that edit would additionally write a `uint64_t` handle into an `int32_t` destination: a
+> wrong value, not a compile error. **Rejected on measurement, not taste.**
+>
+> **⛔ CORRECTION 3 — `File.Open(path, FileMode.Open)`, this plan's canonical shape, will NOT work
+> after this change either** (M6, `FileStream` is not ManagedOwned). The real end-to-end targets
+> are `File.SetAttributes` (void result) and `New Regex(s, RegexOptions.IgnoreCase)`.
+>
+> **CHOSEN SHAPE — "fold at the SLOT, not at the expression."** The analyzer, inside the
+> already-native-gated `ReportUnlowerableWinnerParameters`, folds an enum-LITERAL argument to an
+> `IRConstant` of the underlying primitive **only when the winner's parameter at that index is
+> enum-typed**, recording it in a 4th `NetAstAnnotations` side table. `IRBuilder.Visit(MemberAccess)`
+> mints the constant and **returns before emitting**, so no `IRFieldAccess` exists, so the
+> collector mints no export — which is what removes M2's export. Three consequences are
+> load-bearing: the analyzer's TYPING of the member access is unchanged (forces M4 to keep
+> working); the underlying type rides ONLY on `NetParameterDescriptor` and is deliberately NOT
+> propagated by `NetAccessorSynthesis` (so the setter's value parameter keeps the handle wire —
+> positions with NO analyzer gate); and the C#-path preservation comes free because the recording
+> site is already `if (!_netNativeBackend) return false;`.
+>
+> **Enum VARIABLES are OUT OF SCOPE** and every omitted shape keeps an existing measured refusal
+> (`fi.Attributes` as an argument · `Dim m As FileMode` · flag `Or` · ByRef · arrays · results ·
+> delegate signatures). The `:3121` arm is **NARROWED, never deleted** — deleting it is the exact
+> miscompile (`NetRef` into an `int32_t` slot, and M3 proves `NetRef` has no integral conversion).
+>
+> ⚠ **`TryMapArgumentType` must KEEP spelling the enum** — it feeds `NetOverloadProbe`, which
+> synthesizes C# and requires it to compile; `File.Open(a0, System.Int32)` is CS1503 and the call
+> would stop resolving. Wiring `ResolveEnumUnderlyingType` in there (an obvious-looking one-liner)
+> BREAKS the feature.
+>
+> ⭐ **T15 is the only test that proves the VALUE crossed** rather than the shape compiling:
+> `New Regex("A", RegexOptions.IgnoreCase)` prints True, `RegexOptions.None` prints False.
+> Everything else is satisfied by a wire carrying a wrong number.
+> Full 15-edit map + 15 tests with mutations: recon `wf_d88ef1ba-49e`.
+
 Detailed designs are recorded in the plan above (commit `c29b4ca`): three distinct
 complications (arity>1 scalars via out-references returning `void`; direction-dependent C type
 at arity 1 for Guid — the same shape String already has; one-way StringBuilder), the managed-side
@@ -1467,6 +1525,70 @@ so arbitrary unmapped names in delegate params stop reaching raw C++.
 
 ### Task 12: §12.3 generated-shim conformance suite
 
+> ### ⛔ MEASURED 2026-08-07 — most of this is ALREADY BUILT, and a PREREQUISITE is missing
+>
+> An 8-agent recon read every Blnet fixture and compiled probes against a purpose-built library.
+> Four claims below are stale, and three live miscompiles surfaced (all chipped).
+>
+> **⛔ CORRECTION 1 — `BlnetGenLib` largely EXISTS, under another name and shape.** It is
+> `NetShimPipelineFixture.ProbeSource` — an inline Roslyn-compiled source string at
+> `VisualGameStudio.Tests/Blnet/NetShimPipelineTests.cs:53-127`, not a directory of `.cs` files.
+> It already covers static method, ctor, property get/set, instance method, `List<int>` return,
+> `int[]`/`string[]` returns, `int[]` by value, `ref int[]`, `IEnumerable<int>` param, `Regex[]`
+> param and a `[RequiresDynamicCode]` member. EXTEND it; do not add a parallel asset.
+>
+> **⛔ CORRECTION 2 — the Task-7b reference-pack finding is ALREADY IMPLEMENTED.**
+> `NetShimPipelineFixture.EmitProbeAssembly` (:141) compiles against the net8.0 ref pack via
+> `ReferencePackAssemblies()` (:173), with the CS0012 rationale in its doc comment. Two traps in
+> the instruction as written: `ReferencePackAssemblies()` is **`private static`**, so "reuse" it
+> literally will not compile — the entry point is `EmitProbeAssembly(directory)`; and **a
+> SECOND, WRONG emitter exists** — `NetDelegateTests.ProbeDir.EmitAssembly` (:741) compiles
+> against the IMPLEMENTATION assemblies and survives only because that fixture never compiles a
+> generated shim against its probe. Copying it reproduces exactly the CS0012 this warns about.
+>
+> **⛔ CORRECTION 3 — a file one letter away already exists.** `BlnetConformanceTests.cs` is the
+> frozen P0 §12.2 hand-shim suite (16 `[TestCase]`s, Integration, NonParallelizable, fresh
+> process per scenario, `PASS <name>`, async-read-before-`WaitForExit`, 60 s hang detector) —
+> precisely the harness this task specifies. LIFT it from `:77-118`; do not rewrite. The
+> near-identical names are a real hazard.
+>
+> **⛔ CORRECTION 4 — Task 11's result-bearing delegate row is NOT real .NET.**
+> `NetDelegateTests.ARunningProgram_DispatchesAResultBearingDelegateInline` (:652) runs a native
+> binary against a **C++ stub lambda** returning canned `{7,3}`; no .NET delegate is ever
+> constructed. §12.3 names this row mandatory, so it is a genuine gap, not a duplicate.
+>
+> **⛔⛔ PREREQUISITE THIS PLAN DOES NOT MENTION — a local of ANY non-curated .NET type is
+> REFUSED on the native backend.** `CppCapabilityChecker.CheckType` (:678-745) never consults
+> `TypeInfo.NetHandleTypeFullName` — ZERO occurrences in that file against FIVE in
+> `CppCodeGenerator.cs` — and decides from the hard-coded five-name `ManagedOwned` set instead,
+> rejecting everything else at :740-743. This gates the instance / ctor / property / indexer /
+> inheritance rows against a purpose-built library ALL AT ONCE. It is the **missed FIFTH site**
+> of the four-site managed-marker rule; codegen already lowers the shape correctly. Chipped as
+> `task_de0ad105`. ⭐ WORKAROUND that works TODAY: static classes plus INLINE static-factory
+> receivers — `Zoo.MakeDog().Speak()` builds and RUNS natively with the .NET-correct answer.
+> Design the library around static factories and most rows unblock with no compiler change.
+> (`New T(...)` on a user type stays unreachable in any position, so the ctor row is only
+> expressible through the five curated framework names.)
+>
+> **THE REAL SCOPE — shapes never executed against real .NET** (everything else in §12.3 is
+> already proven at run level by `NetShimPipelineTests`, `BclNetBackendParityTests`, `Section85`
+> / `Section86` and `CppBclEndToEndTests`): delegate-taking members · property WRITE · boxed
+> value-type receiver / `Unsafe.Unbox` (§8.5 — the documented failure is an INFINITE LOOP) ·
+> `Nothing` as RETURN and as RECEIVER · `out`/`ref` SCALAR slots · StringBuilder · BL6026
+> omitted member in a project that STILL BUILDS · generated-shim handle release · bad-ABI and
+> missing-export handshake against a GENERATED shim.
+>
+> **THREE LIVE MISCOMPILES FOUND WHILE PROBING, all chipped, all blocking a row:**
+> `task_22bf2409` — **`Char` above U+007F is silently corrupted** (`"é"c` prints 169 natively vs
+> 233 on .NET; the literal is emitted as multi-byte UTF-8 inside a single-quoted C++ `char`, so
+> the value dies BEFORE the §8.3 wire conversion, which is correct). Author that row as a PINNED
+> DIVERGENCE, never as parity. · `task_2eccdb05` — an instance call on a constructed-generic
+> receiver is UNGATED, publishes for ~40 s, then emits `t6->Get()` on a `NetRef`; it fails loudly
+> only because `NetRef` has no `operator->`. · Indexer on a USER type: **the two halves of one
+> §12.3 row disagree on the C# backend** — the WRITE lowers correctly and RUNS, the READ lowers
+> to invocation syntax and is CS0149, so a write-only row goes GREEN with the read defect fully
+> present.
+
 **Files:**
 ⛔ **Task-7b review finding — BlnetGenLib MUST be compiled against the net8.0 REFERENCE pack**
 (reuse `NetShimPipelineFixture.ReferencePackAssemblies`). Built against the shared framework's
@@ -1509,6 +1631,102 @@ BL6020 INPUTS, never that assertion's subject.
   implicitly re-proves the cache); commit (`test(p2a2): generated-shim conformance suite`).
 
 ### Task 13: §12.1 parity oracle extension
+
+> ### ⛔ MEASURED 2026-08-06 — "driver unchanged" is FALSE, and the seven programs are not the ones to write
+>
+> An 8-agent recon compiled a probe per program at HEAD `30a0219`. Do not write rows from the
+> prose below without reading this first.
+>
+> **⛔ CORRECTION 1 — the C++ leg cannot build ANY program with a .NET surface.** Two independent
+> defects, both measured: `BclE2E.CompileToCppOptimized` constructs a bare `new SemanticAnalyzer()`
+> and **never calls `ConfigureNetResolution`**, so .NET resolution is not switched on for that leg
+> at all; and `BclE2E.CompileRun` hands ONE `.cpp` to a bare compiler while any .NET-calling TU
+> `#include`s `blnet_proxies.g.hpp` / `blnet_marshal.hpp` — measured `fatal error C1083`. **Six of
+> the seven programs need a .NET call, so Task 13's FIRST step is a driver change** (route the C++
+> leg through the project/blnet pipeline), not a row. "Driver unchanged" below is wrong.
+>
+> **⛔ CORRECTION 2 — "BLOCKED until Task 8" is STALE.** All six §6.4 rows were measured lowering
+> through real `XmlConvert`/`XmlWriter` calls at this HEAD, four of them round-tripping in BOTH
+> directions. The split-into-DateTime+TimeSpan contingency below is unnecessary and should be
+> deleted. Program 1 remains blocked, but by CORRECTION 1, not by Task 8.
+>
+> **⛔ CORRECTION 3 — program #2's specified shape CANNOT FAIL.** It asks for a SUBCLASS match,
+> i.e. the case where clause 1 correctly wins. On the C++ backend every non-`Exception` clause
+> lowers to `catch (const std::runtime_error&)` and `Visit(IRThrow)` throws a bare
+> `std::runtime_error` carrying only a message — so clause 1 catches EVERYTHING and a positive
+> match agrees on both legs BY ACCIDENT. The NEGATIVE shape is the only discriminating one, and
+> it is a **live miscompile**: `Guid.Parse("not-a-guid")` against `Catch e As
+> InvalidOperationException` prints `IOE` natively where .NET prints `EX` (FormatException and
+> InvalidOperationException are siblings under SystemException). Compiled and RAN, exit 0
+> throughout. Chipped as `task_d7f0a91c`. The C2312 caveat below names the wrong hazard: the
+> real defect is that a SINGLE non-Exception clause is already a catch-all, so "author as
+> derived-then-Exception" avoids a compile error while hiding the semantic bug.
+>
+> **⛔ CORRECTION 4 — a "documented divergence" is structurally inexpressible here.** Programs 4
+> and 5 say "expected output documents the divergence", but `ParityProgram` is
+> `(string Name, string Source)` with NO expected-output column; the driver asserts
+> `cpp == csharp`. Those belong in `CppBclEndToEndTests`' hand-expectation fixture instead.
+>
+> **Per-program status, measured:** #1 §6.4 pairs — lowers, blocked by CORRECTION 1 · #2
+> multi-Catch — native half LANDED (see below), .NET half blocked · #4 array mutated in a .NET
+> call — **no expressible shape**: the C# leg cannot name a .NET array (`Dim parts() As String =
+> …` refused as Object) and `CType(x, String())` is a PARSE ERROR on both backends, while routing
+> through `Object` is then refused by C++ · #5 Char above U+00FF — **`ChrW`/`AscW` are not
+> implemented on the C++ backend at all** (measured C3861 + C2440); also BL `Char` is 8-bit, so
+> even once they exist a value above U+00FF is a guaranteed divergence, not a passing row · #6
+> `Nothing` across the boundary — the RETURN direction is unobservable (`Is Nothing` is a parse
+> error, `IsNothing(x)` emits an undeclared C++ function) · #7 `ToString()` on `Stream` — surface
+> is fine, blocked by CORRECTION 1.
+>
+> **LANDED: one row, `LocalThrowMultiCatch`** — the native half of #2/#3, verified by running the
+> native binary. It emits ZERO blnet includes, which is exactly why it is the one program the
+> single-TU C++ leg can build. Its summary states explicitly what it does NOT prove.
+>
+> **⛔ Step 2's gate below ("13 P1 + 7 new = 20 programs green ×2") is unreachable at this HEAD.**
+> Without the driver change the achievable total is 14.
+>
+> ### ⛔ MEASURED 2026-08-07 — the fix is a SECOND FIXTURE, not a driver change
+>
+> A follow-up recon built and RAN every candidate on both legs. Correcting CORRECTION 1 above:
+> "route the C++ leg through the project/blnet pipeline" names the right pipeline and the wrong
+> edit.
+>
+> **Swapping the existing leg was measured and REJECTED.** All 14 existing rows have an EMPTY
+> .NET surface, so they would pay for the entire shim/proxy pipeline and buy nothing; eight of
+> them exist ONLY in that table and would lose their combined-mode compile-and-run
+> (`CppProjectBuilder` emits SPLIT mode, and `CppSplitEmissionTests` exists because the two modes
+> drift); and `BclE2E.WithoutRuntimeInFailures` — which strips ~1,460 runtime lines from a
+> failure message — has no equivalent on the CLI path. ⛔ **The swap changes the verdict of ZERO
+> of the 14 rows, so it WILL look free.** What changes is what they measure.
+>
+> **LANDED: `VisualGameStudio.Tests/Compiler/BclNetBackendParityTests.cs`,** driving the native
+> leg through the shipped `BasicLang.exe build` on a `<TargetBackend>Cpp</TargetBackend>`
+> project — symmetric with the C# leg, which already spawns the same binary. Three rows, each
+> verified on both legs before being written: `NetWireRoundTrip` (five of the six §6.4 pairs),
+> `NetThrowAndCatch` (#2 and #3 merged), `NetHandleToString` (#7, D-P1's proof —
+> `Stream.Null.ToString()` returns `System.IO.Stream+NullStream`).
+>
+> **⛔ CORRECTION 5 — a .NET call's RESULT is typed `Object` on the C# leg and the assignment is
+> REFUSED.** `Dim d As DateTime = XmlConvert.ToDateTime(...)` is a C#-leg build error while the
+> identical line compiles on `--target=cpp`. `CType(expr, T)` fixes both legs. This is the same
+> defect #4's array hit, generalized to every non-String result — and it means every .NET parity
+> program needs a constraint the original fixture's list does not carry.
+>
+> **⛔ CORRECTION 6 — #7 is NOT "surface is fine".** `BoundaryTypeRegistry.ManagedOwned` is the
+> curated five-name set `{Regex, Uri, Stream, FileInfo, DirectoryInfo}`, so `MemoryStream`,
+> `FileStream` and `StringWriter` are all refused. #7 is writable ONLY with the static type
+> spelled `Stream`. This also independently confirms T8c's note that
+> `File.Open(path, FileMode.Open)` can never work.
+>
+> **⛔ CORRECTION 7 — #1 is FIVE of the six §6.4 pairs, not six.** StringBuilder is
+> parity-UNREACHABLE: no framework vehicle is a `ManagedOwned` name, and §6.4 crosses it BY
+> VALUE while the C# leg holds it by reference, so any mutating vehicle diverges by construction.
+> It stays covered by `NetProxyStubRunTests`.
+>
+> **Revised Step 2 gate: 14 existing + 3 new = 17 programs, in TWO fixtures.** Cost measured at
+> ~100 s per .NET row (cold shim publish, per-directory cache that must NOT be shared or the row
+> stops proving shim generation); full suite ~39 min → ~45 min. The fast subset is unchanged —
+> both fixtures are `[Category("Integration")]`.
 
 **Files:**
 - Modify: `VisualGameStudio.Tests/Compiler/BclBackendParityTests.cs` (new `ParityProgram` rows

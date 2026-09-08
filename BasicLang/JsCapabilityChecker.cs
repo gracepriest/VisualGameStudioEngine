@@ -52,6 +52,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// BL7008 is raised from the generator rather than from this walk: whether a call is
         /// LINQ at all depends on the RECEIVER being a sequence, which only the generator
         /// knows (it tracks chained results that the IR types as plain Object).
+        ///
+        /// BL7009 (interior '::' namespace) is likewise generator-raised — it guards the raw-JS
+        /// passthrough that ForeignFeatureChecker now lets through for this backend, and the
+        /// leading-vs-interior distinction is only meaningful at the name-rendering sites.
         /// </remarks>
         public static void Check(IRModule module)
         {
@@ -61,7 +65,93 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             CheckValueAggregates(module);
             CheckOperatorOverloading(module);
             CheckBannedTypes(module);
+            CheckImportNameCollisions(module);
         }
+
+        /// <summary>
+        /// BL7010 — an imported name that collides with something the program declares.
+        ///
+        /// <para>An ES <c>import</c> binding and a generated <c>function</c>/<c>class</c>/
+        /// <c>let</c> land in the SAME module scope, and JavaScript treats a redeclaration of an
+        /// import as a SyntaxError. That is not a runtime error in one corner of the page — the
+        /// module fails to parse, so NOTHING runs and the page is blank. The build, meanwhile,
+        /// reported success.</para>
+        ///
+        /// <para><b>Compared on the EMITTED name</b>, via the generator's own
+        /// <c>SanitizeName</c>: the collision happens in the output, not in the BasicLang source,
+        /// and the two spellings differ (a BasicLang <c>My-Thing</c> emits as <c>MyThing</c>).
+        /// Case-SENSITIVE, deliberately, for the same reason — BasicLang is case-insensitive but
+        /// JavaScript is not, so <c>greet</c> and <c>Greet</c> genuinely do coexist in the
+        /// output and flagging them would be a false positive.</para>
+        ///
+        /// <para>The fix is an alias, which is why the named form accepts one:
+        /// <c>#JsImport { greet As jsGreet } From "./m.js"</c>.</para>
+        /// </summary>
+        private static void CheckImportNameCollisions(IRModule module)
+        {
+            if (module.JsImports == null || module.JsImports.Count == 0) return;
+
+            var declared = new HashSet<string>(StringComparer.Ordinal);
+            void Declare(string name)
+            {
+                if (!string.IsNullOrEmpty(name))
+                    declared.Add(JavaScriptCodeGenerator.SanitizeName(name));
+            }
+
+            // Every TOP-LEVEL binding the generator emits.
+            //
+            // ⛔ Class members are NOT top-level, and they are not absent from module.Functions
+            // either — they flatten into it under their UNQUALIFIED name. Skipping them by the
+            // generator's own predicate (CollectMemberImplementations, which matches on IDENTITY
+            // because the names are exactly what is ambiguous) is what stops a legal
+            // `Class Widget` with a `render` method from blocking an import of `render`. A
+            // hand-rolled "is this a method" rule here would be a second answer to a question
+            // the IR already answers.
+            var memberBodies = module.CollectMemberImplementations();
+            foreach (var f in module.Functions ?? Enumerable.Empty<IRFunction>())
+                if (!memberBodies.Contains(f)) Declare(f.Name);
+
+            foreach (var n in module.Classes?.Keys ?? Enumerable.Empty<string>()) Declare(n);
+            foreach (var n in module.Enums?.Keys ?? Enumerable.Empty<string>()) Declare(n);
+            foreach (var n in module.Delegates?.Keys ?? Enumerable.Empty<string>()) Declare(n);
+            foreach (var g in module.GlobalVariables?.Values ?? Enumerable.Empty<IRVariable>())
+                Declare(g.Name);
+
+            // ⛔ Walk the DE-DUPLICATED directives, matching what the generator emits. The same
+            // directive written twice — two files of one project importing the same thing —
+            // collapses to one import statement, so it binds its name ONCE and is not a
+            // collision. Checking the raw list would refuse an ordinary multi-file project.
+            var emitted = new HashSet<string>(StringComparer.Ordinal);
+            var imported = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var import in module.JsImports)
+            {
+                if (!emitted.Add(import.DedupeKey)) continue;
+
+                foreach (var name in import.BoundNames)
+                {
+                    if (declared.Contains(name))
+                        throw ImportNameCollisionRejection(name, import.Specifier,
+                            "this program already declares it");
+
+                    // Two modules can also collide with EACH OTHER, and that failure is even
+                    // harder to read in a browser: neither module is obviously at fault.
+                    if (!imported.Add(name))
+                        throw ImportNameCollisionRejection(name, import.Specifier,
+                            "another #JsImport already binds it");
+                }
+            }
+        }
+
+        /// <summary>BL7010 — an import binding cannot share a name with anything else in scope.</summary>
+        public static ForeignFeatureException ImportNameCollisionRejection(
+            string name, string specifier, string why) =>
+            new ForeignFeatureException(
+                $"BL7010: the #JsImport of '{name}' from \"{specifier}\" cannot be lowered — " +
+                $"{why}. An import binding and a generated declaration share one JavaScript " +
+                "module scope, and redeclaring an import is a SyntaxError: the module would fail " +
+                "to parse and the whole page would render nothing. Import it under another name " +
+                $"instead — #JsImport {{ {name} As js{name} }} From \"{specifier}\".");
 
         /// <summary>
         /// BL7005 — value aggregates: <c>Structure</c>, <c>Type…End Type</c>, <c>Union</c>.
@@ -522,6 +612,40 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         public static bool IsUnlowerableLinqOperator(string method) =>
             !string.IsNullOrEmpty(method) && UnlowerableLinq.Contains(method);
+
+        /// <summary>
+        /// BL7009 — a <c>::</c> name carrying an INTERIOR namespace qualification.
+        ///
+        /// <para>A LEADING <c>::</c> is this backend's raw-JavaScript escape hatch:
+        /// <c>::console.log(x)</c> means "emit <c>console.log(x)</c> verbatim". An INTERIOR
+        /// <c>::</c> is the OTHER thing the same syntax means — a C++ namespace qualification
+        /// (<c>mathlib::freeAdd</c>, <c>std::mutex</c>) — and JavaScript has no namespaces at all.
+        /// There is no lowering: stripping the separator yields <c>mathlibfreeAdd</c>, an
+        /// undefined identifier that reaches the browser from a build that reported success.</para>
+        ///
+        /// <para>Raised from the generator rather than from the walk above because that is where
+        /// the distinction is visible — <c>ForeignFeatureChecker</c> now waves every <c>::</c>
+        /// VALUE through for this backend, so the name-rendering sites are the gate.</para>
+        /// </summary>
+        public static ForeignFeatureException ForeignNamespaceRejection(string name) =>
+            new ForeignFeatureException(
+                $"BL7009: '{name}' cannot be lowered to JavaScript — the '::' inside it is a C++ " +
+                "namespace qualification, and JavaScript has no namespaces. Only a LEADING '::' " +
+                "is a JavaScript passthrough: '::console.log(x)' emits 'console.log(x)' verbatim. " +
+                "For anything else, use a javascript{ } block.");
+
+        /// <summary>
+        /// BL7009 — a `::` with NOTHING after it.
+        ///
+        /// <para>Unreachable through the parser today, and guarded anyway: the helper that raises
+        /// it is the boundary deciding what reaches the browser UNCHECKED, and `"::"` is the one
+        /// input whose SUCCESS path yields an empty name — reported as a passthrough that emits
+        /// nothing at all, silently deleting the callee from the output.</para>
+        /// </summary>
+        public static ForeignFeatureException EmptyForeignNameRejection() =>
+            new ForeignFeatureException(
+                "BL7009: '::' names nothing. A JavaScript passthrough is a LEADING '::' followed " +
+                "by the raw JavaScript name, as in '::console.log(x)'.");
 
         /// <summary>BL7008 — a LINQ operator with no faithful Array-method lowering.</summary>
         public static ForeignFeatureException LinqRejection(string method) =>

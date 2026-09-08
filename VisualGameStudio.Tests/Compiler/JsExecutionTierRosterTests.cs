@@ -52,6 +52,7 @@ public class JsExecutionTierRosterTests
         typeof(JavaScriptStdLibTests),
         typeof(JavaScriptOptimizedExecutionTests),
         typeof(JavaScriptCliProcessTests),
+        typeof(JavaScriptInteropExecutionTests),
     };
 
     /// <summary>
@@ -80,7 +81,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(17),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(18),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

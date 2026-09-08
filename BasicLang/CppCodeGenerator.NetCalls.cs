@@ -475,7 +475,18 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return MarshalNetByRefArgument(targetDisplay, parameter, position, argument);
 
             var isNullConstant = argument is IRConstant { Value: null };
-            var paramType = parameter.TypeFullName;
+
+            // §8.3's "enums → underlying integral" row: look the wire up by the UNDERLYING
+            // type, so TryGetWireRow below finds System.Int32 instead of missing on the enum's
+            // own name and falling through to the handle row. This is the call-site third of
+            // the same change NetProxyEmitter.WireOf and NetShimGenerator.WireOf make; all
+            // three project from NetMarshalTable.WireRows and a row present in one but not the
+            // others is a SILENT wire mismatch.
+            //
+            // ⛔ The ByRef branch returned ABOVE this, so a ByRef enum keeps its own name,
+            // misses WireRows and stays refused — deliberately: §8.3's enum row is by-value
+            // only, and both emitters now refuse a ByRef enum explicitly for the same reason.
+            var paramType = parameter.EnumUnderlyingTypeFullName ?? parameter.TypeFullName;
 
             // §8.4 FIRST, and authoritatively: delegate-ness rides the surface (D-P9) rather
             // than being guessed from a type name, and a delegate parameter's name is never in

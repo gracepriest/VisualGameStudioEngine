@@ -598,9 +598,16 @@ namespace BasicLang.Compiler.Driver
                 if (IsJavaScriptTarget(backend))
                 {
                     var scriptName = outputFileName + extension;
+                    // Relative #JsImport targets resolve against the PROJECT directory and are
+                    // copied beside the script: output lands in bin/<config>/<tfm>/ while the
+                    // user's ./chart.js stays where they put it, so without the copy the
+                    // emitted import 404s in the browser from a build that reported success.
                     JavaScriptEmitter.Emit(outputDir, scriptName, generatedCode,
                         title: project.ProjectName,
-                        sourceMapJson: BuildSourceMapJson(generator, scriptName, projectDir));
+                        sourceMapJson: BuildSourceMapJson(generator, scriptName, projectDir),
+                        jsImports: combinedIR.JsImports,
+                        importBaseDirectory: projectDir,
+                        warn: m => Console.Error.WriteLine($"  Warning: {m}"));
                     Console.WriteLine($"  Site written to: {outputDir}");
                 }
 
@@ -1153,8 +1160,15 @@ namespace BasicLang.Compiler.Driver
                         var scriptName = Path.GetFileName(actualOutputPath);
                         var hadHarness = File.Exists(Path.Combine(siteDir, JavaScriptEmitter.HarnessName));
 
+                        // The base is the SOURCE file's directory, which on this route is
+                        // usually the output directory too — so the module is already in place
+                        // and the copy is a no-op (guarded, because File.Copy over itself
+                        // throws). It stops being a no-op the moment -o points elsewhere.
                         JavaScriptEmitter.Emit(siteDir, scriptName, outputCode,
-                            sourceMapJson: BuildSourceMapJson(generator, scriptName, siteDir));
+                            sourceMapJson: BuildSourceMapJson(generator, scriptName, siteDir),
+                            jsImports: result.CombinedIR?.JsImports,
+                            importBaseDirectory: Path.GetDirectoryName(Path.GetFullPath(filePath)),
+                            warn: m => Console.Error.WriteLine($"  Warning: {m}"));
 
                         if (!hadHarness)
                             Console.WriteLine($"  Harness written to: {Path.Combine(siteDir, JavaScriptEmitter.HarnessName)}");

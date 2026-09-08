@@ -217,6 +217,7 @@ namespace BasicLang.Compiler
         InlineCpp,         // cpp{ ... }
         InlineLLVM,        // llvm{ ... }
         InlineMSIL,        // msil{ ... }
+        InlineJavaScript,  // javascript{ ... }
         InlineCode,        // Generic inline code token with content
 
         // Preprocessor Directives
@@ -560,10 +561,16 @@ namespace BasicLang.Compiler
             { "StdCall", TokenType.StdCall },
 
             // Inline Code Blocks
+            // ⛔ The spelling here IS the language tag: the scan arm lowercases the matched
+            // identifier and hands it to IRInlineCode.Language, which ForeignFeatureChecker
+            // compares against each backend's `ownInlineLanguage`. So "javascript" — not "js" —
+            // because the JavaScript backend passes ownInlineLanguage: "javascript", and a `js`
+            // keyword would produce a block the lexer accepts and the checker then rejects.
             { "csharp", TokenType.InlineCSharp },
             { "cpp", TokenType.InlineCpp },
             { "llvm", TokenType.InlineLLVM },
             { "msil", TokenType.InlineMSIL },
+            { "javascript", TokenType.InlineJavaScript },
 
             // Built-in Functions (special syntax, not regular function calls)
             { "AddressOf", TokenType.AddressOf },
@@ -1287,9 +1294,10 @@ namespace BasicLang.Compiler
                     value = identifier.Equals("True", StringComparison.OrdinalIgnoreCase);
                 }
 
-                // Handle inline code blocks: csharp{ }, cpp{ }, llvm{ }, msil{ }
+                // Handle inline code blocks: csharp{ }, cpp{ }, llvm{ }, msil{ }, javascript{ }
                 if (type == TokenType.InlineCSharp || type == TokenType.InlineCpp ||
-                    type == TokenType.InlineLLVM || type == TokenType.InlineMSIL)
+                    type == TokenType.InlineLLVM || type == TokenType.InlineMSIL ||
+                    type == TokenType.InlineJavaScript)
                 {
                     SkipWhitespace();
                     if (!IsAtEnd() && Peek() == '{')
@@ -1300,6 +1308,17 @@ namespace BasicLang.Compiler
                         AddToken(TokenType.InlineCode, $"{language}{{{code}}}", new InlineCodeValue(language, code), startLine, startColumn);
                         return;
                     }
+
+                    // No '{' follows, so this is NOT an inline block — it is an ordinary name,
+                    // and these five are CONTEXTUAL keywords. Falling back to Identifier keeps
+                    // `Dim javascript As Integer` legal; without it, adding a language tag to
+                    // this table silently steals a plausible variable name from every program.
+                    // The four pre-existing tags get the same treatment because the alternative
+                    // — a bare tag token no parser arm handles — is a confusing error, never a
+                    // useful one. The whitespace consumed above emits no tokens, so skipping it
+                    // on this path costs nothing.
+                    AddToken(TokenType.Identifier, identifier, identifier, startLine, startColumn);
+                    return;
                 }
 
                 AddToken(type, identifier, value, startLine, startColumn);

@@ -483,6 +483,55 @@ namespace BasicLang.Net
         }
 
         /// <summary>
+        /// The constant value of an ENUM MEMBER, coerced to the CLR primitive of the enum's
+        /// underlying type — <c>1</c> as an <see cref="int"/> for
+        /// <c>System.Text.RegularExpressions.RegexOptions.IgnoreCase</c>. Null when the type
+        /// does not resolve, is not an enum, has no such member, or the member carries no
+        /// constant.
+        ///
+        /// <para>⛔ <b>THE COERCION IS LOAD-BEARING, NOT TIDINESS.</b> Both
+        /// <c>CppCodeGenerator</c>'s and <c>JavaScriptBackend</c>'s constant emitters end in
+        /// <c>Value.ToString()</c>, and <c>Visit(IRConstant)</c> is a no-op on both. A value
+        /// still boxed as the ENUM would render as the bare identifier <c>IgnoreCase</c> — an
+        /// undeclared name emitted from a GREEN build, which is the silent-miscompile shape
+        /// this whole task exists to remove.</para>
+        /// </summary>
+        internal object EnumMemberConstant(string enumFullName, string memberName)
+        {
+            var symbol = Lookup(enumFullName).Symbol;
+            if (symbol is not { TypeKind: TypeKind.Enum, EnumUnderlyingType: { } underlying })
+                return null;
+
+            var field = symbol.GetMembers()
+                .OfType<IFieldSymbol>()
+                // OrdinalIgnoreCase, matching how TryTypeNetEnumArgument admits the member in
+                // the first place — BasicLang is case-insensitive, so an Ordinal compare here
+                // would silently return null for `FileMode.open` and the fold would vanish
+                // with no diagnostic.
+                .FirstOrDefault(f => f.HasConstantValue &&
+                                     string.Equals(f.MetadataName, memberName, StringComparison.OrdinalIgnoreCase));
+            if (field?.ConstantValue == null)
+                return null;
+
+            // Explicit per-underlying coercion rather than Convert.ChangeType(field.Type):
+            // the boxed CLR primitive must match the wire slot the descriptor will claim.
+            // Roslyn ALREADY boxes an enum member's ConstantValue as the underlying primitive,
+            // not as the enum — measured, not assumed. An explicit per-SpecialType coercion
+            // was written here first and then deleted: no mutation could kill it, which is the
+            // definition of dead code in this repo.
+            //
+            // ⛔ The requirement it was protecting is real even though the code was not. Both
+            // the C++ and JavaScript constant emitters end in Value.ToString(), and
+            // Visit(IRConstant) is a no-op on both, so a value boxed as the ENUM would render
+            // as the bare identifier `IgnoreCase` — an undeclared name emitted from a green
+            // build. That requirement is now pinned by a TEST
+            // (NetEnumArgumentTests.EnumMemberConstant_ReturnsTheUnderlyingPrimitive_NotTheEnum
+            // asserts Is.TypeOf<int>()), which is where it belongs: if Roslyn's behaviour ever
+            // changes, the test fails loudly instead of dead code silently covering for it.
+            return field.ConstantValue;
+        }
+
+        /// <summary>
         /// True when <paramref name="fullName"/> resolves and derives from
         /// <c>System.Exception</c> (or IS it). Spec §11.1's ladder-trigger completion (P2a-2
         /// Task 4): a catch clause whose type resolves as a .NET exception gets a
@@ -1304,8 +1353,27 @@ namespace BasicLang.Net
             IEnumerable<IParameterSymbol> parameters) =>
             parameters
                 .Select(p => new NetParameterDescriptor(
-                    RefKindOf(p.RefKind), TypeName(p.Type), DelegateInvokeSignatureOf(p.Type)))
+                    RefKindOf(p.RefKind), TypeName(p.Type), DelegateInvokeSignatureOf(p.Type),
+                    EnumUnderlyingOf(p.Type)))
                 .ToList();
+
+        /// <summary>
+        /// §8.3's "enums → underlying integral" row, read straight off the parameter's symbol.
+        ///
+        /// <para>Deliberately symbol-based rather than the name-keyed
+        /// <see cref="EnumUnderlyingTypeFullName"/>: <c>Describe</c> is static, and this is the
+        /// ONE place a descriptor is built from Roslyn — the same reason
+        /// <c>DelegateInvokeSignatureOf</c> beside it is shaped this way. Neither emitter can
+        /// recover this later; both see only a type name.</para>
+        ///
+        /// <para>⛔ Only PARAMETERS get this. <c>NetAccessorSynthesis</c> builds its value
+        /// parameter by hand and must keep spelling the enum itself, or the ungated
+        /// property-write path starts putting a handle into a scalar slot.</para>
+        /// </summary>
+        private static string EnumUnderlyingOf(ITypeSymbol type) =>
+            type is INamedTypeSymbol { TypeKind: TypeKind.Enum, EnumUnderlyingType: { } underlying }
+                ? TypeName(underlying)
+                : null;
 
         /// <summary>
         /// P2a-2 Task 11 / decision D-P9: a delegate parameter's <c>Invoke</c> signature rendered

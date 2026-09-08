@@ -210,8 +210,14 @@ public class JavaScriptSourceMapTests
 [TestFixture]
 public class JavaScriptGeneratorSourceMapTests
 {
-    /// <summary>Decodes `mappings` into (generatedLine, sourceLine) pairs, both 0-based.</summary>
-    private static List<(int generated, int source)> Decode(string json)
+    /// <summary>
+    /// Decodes `mappings` into (generatedLine, sourceLine) pairs, both 0-based.
+    ///
+    /// <para><b>internal, not private</b>, so JavaScriptInteropTests can assert that #JsImport
+    /// emission leaves source-map positions alone. A second copy of a VLQ decoder in another
+    /// fixture would drift from this one and quietly stop testing the same thing.</para>
+    /// </summary>
+    internal static List<(int generated, int source)> Decode(string json)
     {
         var mappings = JsonDocument.Parse(json).RootElement.GetProperty("mappings").GetString() ?? "";
         var result = new List<(int, int)>();

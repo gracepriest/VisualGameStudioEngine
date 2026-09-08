@@ -229,6 +229,34 @@ git commit -m "feat(js): #JsImport collects module specifiers onto IRModule"
 
 ---
 
+## Task 1b: `#JsImport` must be REFUSED on backends that cannot honour it
+
+**Found by the Task 1 code-quality review. Not in the original plan, and it would have been lost.**
+
+The `#CppInclude` precedent has THREE parts and Task 1 copied two: collect, thread, **and reject
+on backends that cannot honour it**. `ForeignFeatureChecker.cs:64` throws when a non-C++ backend
+sees a non-empty `module.CppIncludes`, and `JsCapabilityCheckerTests.cs:34`
+(`Js_CppInclude_ThrowsCleanError`) pins the mirror direction.
+
+Nothing rejects `JsImports`. `#JsImport "./chart.js"` in a **C#-backend** program preprocesses
+clean, lands on `CombinedIR`, and is **silently dropped** — precisely the "a refusal beats a half
+implementation" line this backend is built on, violated in the other direction.
+
+**Files:** `BasicLang/ForeignFeatureChecker.cs` (the arm at `:64` and the matrix comment at
+`:25-31`); test in `JsCapabilityCheckerTests.cs` beside `Js_CppInclude_ThrowsCleanError`.
+
+- [ ] **Step 1: Failing tests** — a `#JsImport` program compiled for the C# backend throws
+  `ForeignFeatureException` naming the directive; the same program on JavaScript does not.
+- [ ] **Step 2:** Run, confirm the C# case currently passes silently (that IS the bug).
+- [ ] **Step 3:** Add the symmetric arm. ⚠ The checker is SHARED and the JS backend calls it with
+  `backendName: "JavaScript"` — a naive `JsImports.Count > 0 → throw` breaks JavaScript itself.
+  Gate it the same way Task 3 gates `::`, with an explicit parameter rather than a name test.
+  ⚠ The C++ backend does not route through this checker at all and needs its own guard.
+  Scope per project direction: **C# and C++ only**; LLVM/MSIL are out of scope.
+- [ ] **Step 4:** Add a `#JsImport` row to the matrix comment. Run, commit.
+
+---
+
 ## Task 2: `#JsImport` emits real `import` statements
 
 **Files:**
@@ -502,6 +530,28 @@ git commit -am "feat(js): :: passes raw JavaScript identifiers through unmangled
 
 ⛔ There is **no `js{}` today** — inline blocks are lexer keywords and there are exactly four. And the tag is lowercased at `:1299`, so the keyword spelling must match the `ownInlineLanguage` string passed at `JavaScriptBackend.cs:129-130`. **Use the keyword `javascript`**, matching that string, rather than adding `js` and then having to normalise two spellings in the checker.
 
+### ⛔ Two things this task's plan got wrong — MEASURED during execution
+
+1. **There is a FIFTH list, in the SemanticAnalyzer.** `Visit(InlineCodeNode)`
+   (`SemanticAnalyzer.cs:6397`) carries its own `{ "csharp", "cpp", "llvm", "msil" }` allow-list
+   and errors with *"Unsupported inline code language"*. The lexer changes alone make
+   `javascript{ }` **lex** and then **fail analysis** — every codegen test dies in
+   `JsTestSupport`'s parse/analyze guard, not at `NotYet(IRInlineCode)` as the plan predicted.
+   Same "N independent lists, add an arm to N−1" shape the repo has paid for repeatedly; this
+   one at least fails loudly.
+2. **The C++ backend SILENTLY DROPS a foreign inline block**, and always has.
+   `CppCodeGenerator.Visit(IRInlineCode)` emits `// WARNING: Inline <lang> code not supported`
+   into the generated C++ and continues — a do-nothing program from a build that reported
+   success. C#/LLVM/MSIL refuse this through `ForeignFeatureChecker`'s inline arm; C++ does not
+   run that checker and never got the guard. Fixed the same way Task 1b fixed `#JsImport`: an
+   arm in `CppCapabilityChecker.CheckInstruction`, which covers `Generate` **and**
+   `GenerateSplit`. It was already true for `csharp{ }`/`llvm{ }`/`msil{ }` — the honesty
+   matrix's last dishonest cell, found only because the `javascript{ }` mirror test drove it.
+
+Also settled here rather than deferred to a release note: the scan arm now falls back to
+`Identifier` when no `{` follows, so all five tags are CONTEXTUAL keywords. `Dim javascript As
+Integer` stays legal — see the risk row at the end of this plan.
+
 - [ ] **Step 1: Write the failing tests**
 
 ```csharp
@@ -559,6 +609,74 @@ git commit -am "feat(js): javascript{} inline blocks emit verbatim"
 Without this, the headline claim is false for the shipping routes: the project route writes `.js` into `bin/<config>/<tfm>/` while a user's `./chart.js` stays in the project directory, so the emitted `import "./chart.js"` 404s in the browser. An execution test that hand-writes the helper module into the temp directory **hides** this.
 
 ⛔ **THREE emit call sites, not two.** `BuildService.cs:922` is the IDE route — and it is the one this task's own test drives, since `result.OutputPath` comes from `BuildProjectAsync`. Putting the copy inside `JavaScriptEmitter.Emit` covers all three at once; patching call sites would reproduce the repo's documented "three independent maps, a missing arm is silent" failure.
+
+### ⛔ Measured during execution — two more rules, and one real limitation
+
+4. **Containment, not just self-copy.** `../shared/util.js` is a legal ES specifier that resolves
+   ABOVE the output directory. Copying it writes outside the build output, and one more `..`
+   reaches the project directory and overwrites a source file. Refused with a warning, reusing
+   `SafeZip.IsWithin` — the repo's one containment predicate — rather than growing a second.
+5. **Node needs `package.json` `{"type":"module"}`.** Node parses `.js` as CommonJS unless told
+   otherwise; automatic detection only became the default in **22.7**, so whether the emitted
+   site runs under Node depends on the reader's version. Written into the output directory
+   **only when the program has imports** (so a plain program leaves the user's directory alone —
+   the single-file route emits NEXT TO THE SOURCE) and **only when absent** (same rule as
+   `index.html`). This settles the ESM hazard Task 6 Step 6 flagged as open; browsers were never
+   affected.
+
+~~⚠ **KNOWN LIMITATION, found by running it.** `#JsImport` emits a **side-effect-only**
+`import "./m.js";` — no binding clause, so **no names are bound**.~~
+✅ **CLOSED** by the binding forms below. The bare form still binds nothing, which is correct ES
+(a side-effect import), and is now pinned as such by
+`ProjectRoute_BareJsImport_RunsTheModuleButBindsNoNames` rather than as a gap.
+
+## Follow-up (shipped): `#JsImport` binding forms
+
+**The syntax mirrors ES exactly**, because the person writing one is reading MDN or a package
+README, not a BasicLang manual — the same reasoning that settled plan 2b's decision 2. It costs
+nothing structurally: the preprocessor comments the directive line out BEFORE lexing, so `From`
+and `As` never reach the keyword table, the parser, or any other backend.
+
+| BasicLang | JavaScript |
+|---|---|
+| `#JsImport "./m.js"` | `import "./m.js";` |
+| `#JsImport { greet, other } From "./m.js"` | `import { greet, other } from "./m.js";` |
+| `#JsImport { greet As hi } From "./m.js"` | `import { greet as hi } from "./m.js";` |
+| `#JsImport lib From "./m.js"` | `import lib from "./m.js";` (default) |
+| `#JsImport * As lib From "./m.js"` | `import * as lib from "./m.js";` (namespace) |
+
+- **`IRModule.JsImports` became `List<JsImportDirective>`** — an import has two independent
+  parts, and only one of them is a file path. `JavaScriptEmitter` copies by `Specifier` while the
+  backend emits by `Clause`; one string could serve either, never both.
+- **De-dup keys on clause AND specifier.** `{ a } From "./m.js"` and `{ b } From "./m.js"` are two
+  imports of one module — collapsing on the specifier alone drops `b`, and it surfaces as
+  `b is not defined` at run time. The COPY still de-dupes on specifier alone: two clauses, one file.
+- **Keyword casing is normalised, imported NAMES are not.** BasicLang is case-insensitive, so
+  `AS`/`as`/`As` all arrive — but `import { a AS b }` is a SyntaxError. The names are the opposite
+  case: `{ Greet }` must stay `Greet`, since ES named imports fail at LINK time and a "helpfully
+  corrected" name renders a blank page.
+- **BL7010 — an import binding that collides with a program declaration.** They share one JS
+  module scope and redeclaring an import is a SyntaxError: the module fails to PARSE, so nothing
+  runs at all. Compared on the EMITTED name (via the generator's own `SanitizeName`) and
+  case-SENSITIVELY, because `greet` and `Greet` genuinely coexist in JavaScript. The fix the
+  message suggests is the alias form.
+  - ⛔ Two bugs in the first cut of this check, both caught by boundary tests: class methods
+    **do** appear in `module.Functions` (flattened, unqualified), so it flagged a legal
+    `Class Widget` with a `render` method — fixed by using `CollectMemberImplementations()`, the
+    generator's own predicate; and the same directive written twice de-dupes to one import, so it
+    is not a collision — fixed by walking the de-duplicated list.
+- `::greet(...)` reaches an imported name with no extra work — **measured**, not assumed
+  (`ProjectRoute_ImportedName_IsCallableThroughForeignSyntax`).
+- Milestone re-verified in a browser with an ordinary `export function greet()` and
+  `#JsImport { greet } From "./greet.js"`: renders "Hello from BasicLang", console clean.
+
+Gate: JS suite **523/523** · fast subset **4679 / 2 pre-existing / 1 skipped**.
+
+⚠ **Test placement deviates from the plan.** These tests live in `JavaScriptCliProcessTests`,
+not `JavaScriptInteropExecutionTests`: the question is an ENTRY-POINT one — what lands in each
+route's output directory — and that fixture already owns both CLI routes, the IDE route, the
+Node harness and a `SilentOutput`. Duplicating that scaffolding to honour the plan's filename
+would have been the drift this repo keeps paying for.
 
 **Three things to specify before writing code:**
 
@@ -660,9 +778,25 @@ Add cases to `JavaScriptCliProcessTests` using `VisualGameStudio.Tests\bin\Relea
 
 Add `JavaScriptInteropExecutionTests` to `JsExecutionTierRosterTests.ExecutionTier` and bump `RosterIsPinned` from 17 to 18. The name prefix `JavaScript` means discovery finds it; the class-level `[Category("Integration")]` means `EveryFixtureIsStillCategorisedIntegration` passes. `JavaScriptInteropTests` (codegen) must **not** be rostered and must **not** carry a class-level category.
 
-- [ ] **Step 6: THE MILESTONE — a real web page, verified by a human**
+- [x] **Step 6: THE MILESTONE — a real web page. ✅ DONE 2026-08-06.**
 
-This is what makes "BasicLang produces web sites" true, and it cannot be automated here (Node has no DOM).
+**It works.** Compiled through the real
+`VisualGameStudio.Tests\bin\Release\net8.0\BasicLang.exe`, served over HTTP, loaded in a browser:
+the page renders **"Hello from BasicLang"**, with no console errors.
+
+Verified, in order:
+
+| | Result |
+|---|---|
+| `BasicLang.exe page.bas --target=javascript` | ✅ `page.js`, `index.html`, `page.js.map`, **`package.json`** |
+| Emitted script | `import "./greet.js";` at the top, then `function Main() { document.getElementById("out").textContent = greet("BasicLang"); }` |
+| Page over `http://127.0.0.1:…` (**not** `file://` — ES modules are CORS-gated and a `file://` origin is opaque) | ✅ renders **"Hello from BasicLang"**, console clean |
+| Source map | `sources: ["page.bas"]`, **`sourcesContent` inlined**, generated line 5 → **page.bas line 4** — the `javascript{ … }` line, which is exactly what a devtools breakpoint binds to |
+
+⚠ `greet.js` publishes through `globalThis`, not `export` — forced by the side-effect-only import
+(see the Task 5 limitation above). That is the shape a user has to write today.
+
+The original checklist, kept for reproduction:
 
 ⛔ The milestone uses `javascript{ … }`, **not** `::`. A `::` member assignment does not compile (see the limitations table at the top of this plan) — an earlier draft of this plan used one and it was wrong. Add a codegen assertion for this exact program in `JavaScriptInteropTests` first, so the headline example is guarded by a test rather than only by a checklist.
 
@@ -690,7 +824,12 @@ This is what makes "BasicLang produces web sites" true, and it cannot be automat
 7. Set a devtools breakpoint on the javascript{} line; confirm it lands on the .bas line.
 ```
 
-⚠ **Node/ESM hazard to settle before this step.** Task 2 makes the emitted file contain `import`, but both shipping routes still write `X.js`. Node parses `.js` as CommonJS unless a `package.json` says `"type":"module"`; automatic detection only became the default in Node 22.7. The unit tier already sidesteps this by writing `program.mjs` (`JavaScriptExecutionTests.cs:38-40`), but `JavaScriptCliProcessTests.RunNodeFile` runs the real `.js`. Decide one of: emit `.mjs`, emit a `package.json` beside the output, or document a Node floor. Browsers are unaffected — `type="module"` on the script tag settles it there.
+✅ **The Node/ESM hazard is SETTLED** (Task 5): the emitter writes a `package.json` containing
+`{"type":"module"}` into the output directory, but only when the program has imports and only
+when absent. Node parses `.js` as CommonJS unless told otherwise and automatic detection only
+became the default in 22.7, so without it whether the emitted site runs under Node depended on
+the reader's version. Browsers were never affected — `type="module"` on the script tag settles
+it there.
 
 - [ ] **Step 7: Update the spec's status line**
 

@@ -1,7 +1,5 @@
 using System.Diagnostics;
 using System.IO;
-using BasicLang.Compiler.CodeGen.JavaScript;
-using BasicLang.Compiler.IR.Optimization;
 using NUnit.Framework;
 
 namespace VisualGameStudio.Tests.Compiler;
@@ -28,19 +26,22 @@ namespace VisualGameStudio.Tests.Compiler;
 [NonParallelizable]
 public class JavaScriptOptimizedExecutionTests
 {
-    /// <summary>Compile with the standard passes applied, exactly as every shipping route does.</summary>
-    private static string CompileOptimized(string source)
-    {
-        var module = JsTestSupport.BuildModule(source, sourceFilePath: "prog.bas");
+    /// <summary>
+    /// Compile with the standard passes applied, exactly as every shipping route does.
+    ///
+    /// <para>Delegates to <see cref="JsTestSupport.CompileOptimized"/> — ONE definition of "the IR
+    /// that ships", shared with the codegen-only optimized fixtures that need no Node. A second
+    /// copy here would let the two drift about which passes "optimized" means.</para>
+    /// </summary>
+    private static string CompileOptimized(string source) => JsTestSupport.CompileOptimized(source);
 
-        var pipeline = new OptimizationPipeline();
-        pipeline.AddStandardPasses();
-        pipeline.Run(module);
-
-        return new JavaScriptCodeGenerator().Generate(module);
-    }
-
-    private static string RunOptimized(string source) => RunNode(CompileOptimized(source));
+    /// <summary>
+    /// Compile with the shipping passes and RUN it. <c>internal</c> so sibling execution
+    /// fixtures can reach the optimized path without a second copy of the Node harness —
+    /// two copies would drift about timeouts, .mjs and the exit-code assertion, and the
+    /// point of this fixture is that the optimized path is exercised the SAME way.
+    /// </summary>
+    internal static string RunOptimized(string source) => RunNode(CompileOptimized(source));
 
     /// <summary>
     /// Runs a JS string under Node.
@@ -343,4 +344,41 @@ public class JavaScriptOptimizedExecutionTests
         => AssertSameOutput(
             "Sub Main()\nConsole.WriteLine(Sqr(16))\nConsole.WriteLine(Abs(-3))\n" +
             "Console.WriteLine(Round(2.5))\nEnd Sub");
+
+    // ---------------------------------------------------------------- features plan 2 added
+    //
+    // Both interop channels are OPAQUE to the optimizer in different ways, and each has a
+    // matching way to go wrong. A `::` name is a foreign IDENTIFIER, so copy propagation and CSE
+    // can hand the renderer a different node than IRBuilder produced — and this generator
+    // renders an operand tree INLINE when a consumer is mis-pointed, which duplicates side
+    // effects rather than failing. An inline block has no operands and no result, so nothing
+    // proves it live to dead-code elimination.
+
+    [Test]
+    public void Optimized_ForeignCallStillWorks()
+        => AssertSameOutput("Sub Main()\n::console.log(\"hi\")\nEnd Sub");
+
+    /// <summary>An inline block is opaque to the optimizer — confirm it is not dropped as dead.</summary>
+    [Test]
+    public void Optimized_InlineJavaScriptSurvives()
+        => AssertSameOutput("Sub Main()\njavascript{ console.log(\"inline\"); }\nEnd Sub");
+
+    /// <summary>
+    /// A foreign call sitting beside folded constants: the arm that made Visit(IRConstant)
+    /// throw, now with a `::` name in the same block.
+    /// </summary>
+    [Test]
+    public void Optimized_ForeignCallBesideFoldedConstants()
+        => AssertSameOutput(
+            "Sub Main()\nDim x As Integer = 2 + 3 * 4\n::console.log(\"hi\")\nConsole.WriteLine(x)\nEnd Sub");
+
+    /// <summary>
+    /// The two channels interleaved, which is what the milestone program actually looks like:
+    /// an inline block reading a BasicLang local whose initialiser the optimizer folded away.
+    /// </summary>
+    [Test]
+    public void Optimized_InlineBlockReadingAFoldedLocal()
+        => AssertSameOutput(
+            "Sub Main()\nDim n As Integer = 20 + 22\njavascript{ console.log(n); }\n" +
+            "::console.log(\"after\")\nEnd Sub");
 }

@@ -78,6 +78,26 @@ namespace VisualGameStudio.Tests.Compiler;
 ///     would therefore diff on ENCODING alone — a false failure that says nothing about
 ///     the runtime. (This is also why <c>StringBuilder</c>'s byte-vs-UTF-16 <c>Length</c>
 ///     divergence in spec §9 is not exercised here: ASCII makes the two counts equal.)
+/// 11. NO .NET CALLS. This fixture's C++ leg is <c>BclE2E.CompileToCppOptimized</c> plus a
+///     bare single-TU compile; a .NET-calling program emits a TU that <c>#include</c>s
+///     <c>blnet_proxies.g.hpp</c> and dies with <c>fatal error C1083</c> — MEASURED.
+///     .NET-calling rows live in <see cref="BclNetBackendParityTests"/>, whose native leg
+///     drives the shipped <c>BasicLang.exe build</c> on a
+///     <c>&lt;TargetBackend&gt;Cpp&lt;/TargetBackend&gt;</c> project at ~100 s per row.
+///
+/// ── ⛔ DO NOT MERGE THIS FIXTURE WITH ITS .NET SIBLING ────────────────────────────
+/// Routing THIS leg through the project build to absorb <see cref="BclNetBackendParityTests"/>
+/// was measured and rejected. Every row here has an EMPTY .NET surface, so it would pay for
+/// the whole shim/proxy pipeline and gain nothing; eight of these programs exist ONLY in this
+/// table and would lose their combined-mode compile-and-run, since <c>CppProjectBuilder</c>
+/// emits SPLIT mode and <c>CppSplitEmissionTests</c> exists precisely because the two modes
+/// drift; and <c>BclE2E.WithoutRuntimeInFailures</c>, which strips ~1,460 runtime lines out of
+/// a failure message, has no equivalent on the CLI path.
+///
+/// ⛔ The decisive point: the swap changes the verdict of ZERO rows here, so it WILL look free
+/// on a green run. What changes is what these rows MEASURE. If it is done anyway, first port
+/// the parity-only programs into <see cref="CppBclEndToEndTests"/>' table so they keep a
+/// combined-mode compile-and-run.
 ///
 /// ── WHAT THIS ORACLE CANNOT SEE (read before trusting a green run) ────────────────
 /// A differential oracle only catches bugs that behave DIFFERENTLY on the two backends.
@@ -779,6 +799,71 @@ End Module";
  End Sub
 End Module";
 
+    /// <summary>
+    /// Spec §11.1 WITHOUT a .NET call — the native half of P2a-2 plan programs 2 and 3. Pins a
+    /// local <c>Throw</c> caught by a SUBCLASS clause (<c>ArgumentNullException</c> caught by
+    /// <c>Catch e As ArgumentException</c>), an EXACT-type clause, a non-throwing <c>Try</c>,
+    /// and real CONTROL FLOW inside a catch body (an <c>If</c> plus a <c>For</c>).
+    ///
+    /// <para>The control flow is the point: the C++ backend emits the
+    /// <c>catch (const BasicLang::NetException&amp;)</c> ladder even for a program with no .NET
+    /// surface, so each catch body is emitted TWICE and C++ labels are function-scoped — the
+    /// ladder's copies must carry the <c>_nex</c> suffix or the TU fails to compile on a
+    /// redefined label.</para>
+    ///
+    /// <para>The <c>If</c> condition comes from a Decimal division rather than a literal
+    /// because the IR constant folder never folds Decimal constants; a literal condition folds
+    /// to <c>if (true)</c> and stops being a live runtime decision.</para>
+    ///
+    /// <para>⛔ <b>WHAT THIS ROW DOES NOT PROVE, deliberately.</b> On the C++ backend every
+    /// non-<c>Exception</c> clause lowers to <c>catch (const std::runtime_error&amp;)</c> — and
+    /// <c>Visit(IRThrow)</c> throws a bare <c>std::runtime_error</c> carrying only a message —
+    /// so clause 1 catches EVERYTHING and no type discrimination exists. This program agrees on
+    /// both legs because the thrown type genuinely matches clause 1: it is a POSITIVE-match
+    /// test only. The discriminating case (a thrown type that must SKIP clause 1) currently
+    /// diverges — measured: <c>Guid.Parse("not-a-guid")</c> against a
+    /// <c>Catch e As InvalidOperationException</c> prints IOE natively where .NET prints EX —
+    /// and is chipped as <c>task_d7f0a91c</c> rather than pinned here, because the row would be
+    /// red until the backend carries an exception's type at runtime.</para>
+    /// </summary>
+    private const string LocalThrowMultiCatchProgram = @"Module M
+ Sub Main()
+  Dim one As Decimal = 1
+  Dim two As Decimal = 2
+  Dim half As Decimal = one / two
+  Try
+   Throw New ArgumentNullException(""boom"")
+  Catch e As ArgumentException
+   Console.WriteLine(""SUBCLASS-MATCH"")
+   If half < one Then
+    Console.WriteLine(""catch-branch-then"")
+   Else
+    Console.WriteLine(""catch-branch-else"")
+   End If
+   For i As Integer = 1 To 3
+    Console.WriteLine(i)
+   Next
+  Catch b As Exception
+   Console.WriteLine(""EX"")
+  End Try
+  Try
+   Console.WriteLine(""no-throw"")
+  Catch e As ArgumentException
+   Console.WriteLine(""AE2"")
+  Catch b As Exception
+   Console.WriteLine(""EX2"")
+  End Try
+  Try
+   Throw New ArgumentException(""plain"")
+  Catch e As ArgumentException
+   Console.WriteLine(""EXACT-MATCH"")
+  Catch b As Exception
+   Console.WriteLine(""EX3"")
+  End Try
+  Console.WriteLine(""after"")
+ End Sub
+End Module";
+
     // ------------------------------------------------------------------
     // THE TABLE. One row per program; there is no expected-output column.
     // ------------------------------------------------------------------
@@ -798,6 +883,7 @@ End Module";
         new ParityProgram("SByteByte", SByteByteProgram),
         new ParityProgram("StdlibDates", StdlibDatesProgram),
         new ParityProgram("TryCatch", TryCatchProgram),
+        new ParityProgram("LocalThrowMultiCatch", LocalThrowMultiCatchProgram),
     };
 
     public static IEnumerable<TestCaseData> ParityCases() =>

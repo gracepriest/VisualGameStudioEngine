@@ -161,6 +161,25 @@ public class TypeInfo
                 // types in either direction.
                 if (Name == "Decimal" && other.IsIntegral())
                     return true;
+
+                // NARROWING, permitted deliberately. Now that `/` correctly yields Double,
+                // `Dim x As Integer = a / b` would otherwise stop compiling — and BasicLang
+                // has NO `Option Strict` directive, so there would be no way for existing
+                // source to opt out of the stricter rule. (`Option Public` is the only Option
+                // form the language implements; `Option Explicit` does not even parse.)
+                //
+                // The conversion lowers exactly the way the EXPLICIT CInt() already does —
+                // truncation, not VB's banker's rounding — so programs that compile today
+                // keep compiling AND keep their current value. Only the value that was never
+                // stored into an integer changes, which is precisely the reported bug.
+                // ...and integral-to-integral narrowing, for the same reason and by the same
+                // rule. `(a / b) \ c` compiles today; once `/` is Double, VB converts the
+                // floating operand to Long before `\`, so that expression is now Long and
+                // returning it from an Integer function is a NARROWING. Permitting the
+                // floating case but not this one would leave the language half-strict and
+                // would still regress working source.
+                if (IsIntegral() && (other.IsFloatingPoint() || other.IsIntegral()))
+                    return true;
             }
             
             // Check inheritance

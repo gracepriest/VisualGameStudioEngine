@@ -139,6 +139,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
             _netAnnotations.NetEnumerations;
 
         /// <summary>
+        /// P2a-2 Task 8c-3 — spec §8.3's enum row. Enum-member arguments that were folded to
+        /// their underlying primitive because the winner's parameter at that index is
+        /// enum-typed. <see cref="IRBuilder"/> mints an <c>IRConstant</c> for exactly these
+        /// nodes and returns before emitting an <c>IRFieldAccess</c>, which is also what stops
+        /// a compile-time constant minting a shim export.
+        /// </summary>
+        internal IReadOnlyDictionary<AST.ExpressionNode, Net.NetEnumConstant> NetEnumConstants =>
+            _netAnnotations.NetEnumConstants;
+
+        /// <summary>
         /// P2a-2 Task 4 (§6.3): true when this compilation targets the NATIVE (C++) backend —
         /// which is where §6.5's REAL evidence bar applies (bare unclaimed names are probed
         /// against the resolver) and where BL6024 fires. The C# path retains the narrower
@@ -2949,8 +2959,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
 
                 // §6.5: a .NET-enum member access (FileMode.Open) presents the ENUM type.
-                // Checked before the static-type mapping — the analyzer's own typing of the
-                // access degrades to Object (enums resolve through metadata, not TypeManager).
+                // Checked before the static-type mapping, because enums resolve through
+                // metadata rather than TypeManager.
+                //
+                // ⛔ The typing is BACKEND-DEPENDENT and this comment used to claim otherwise.
+                // MEASURED: FileMode.Open types as the ENUM on --target=cpp and as Object on
+                // --target=csharp, because descriptor retyping is gated on _netNativeBackend
+                // (§6.3's preservation row). Anything keying off "it degrades to Object" is
+                // wrong on the native path — which is the path T8c-3's enum fold runs on.
                 if (TryTypeNetEnumArgument(argument, out var enumSpelling))
                 {
                     arguments.Add(enumSpelling);
@@ -3082,6 +3098,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return true;
             }
 
+            // §8.3's enum row folds at the SLOT, and folds are STAGED rather than recorded as
+            // they are found: a LATER parameter's refusal must not leave a fold recorded on a
+            // call that never lowers. Committed after the loop, immediately before `return
+            // false`, which is the only path where every parameter was accepted.
+            List<(ExpressionNode Node, object Value, TypeInfo Type)> stagedEnumFolds = null;
+
             for (var i = 0; i < winner.Parameters.Count; i++)
             {
                 var parameter = winner.Parameters[i];
@@ -3120,13 +3142,45 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
                 if (IsNetEnumTypeName(parameter.TypeFullName))
                 {
-                    NetWarning("BL6019",
-                        $"'{target}': parameter {position} has enum type "
-                        + $"'{parameter.TypeFullName}' — §8.3's underlying-integral enum "
-                        + "marshaling is not lowered at the native boundary yet.",
-                        line, column);
-                    return true;
+                    // §8.3: an enum crosses as its UNDERLYING INTEGRAL, and only an enum MEMBER
+                    // has a value the native boundary can produce at compile time. Fold that
+                    // and fall through; everything else keeps the refusal.
+                    //
+                    // ⛔ NARROWED, NEVER DELETED. With the refusal gone and the wire now
+                    // Scalar, a non-literal enum argument — fi.Attributes, a local holding one,
+                    // a Flags `Or` — would lower through MarshalNetArgument's Scalar arm as
+                    // GetValueName(argument), i.e. a BasicLang::NetRef, into an int32_t slot.
+                    // NetRef has no integral conversion, so that is a C++ error inside
+                    // generated code the user never wrote: precisely the late failure this
+                    // gate exists to turn into a source-positioned diagnostic.
+                    if (TryFoldNetEnumArgument(
+                            callArguments[i], parameter.TypeFullName,
+                            out var enumValue, out var enumType))
+                    {
+                        (stagedEnumFolds ??=
+                            new List<(ExpressionNode, object, TypeInfo)>())
+                            .Add((callArguments[i], enumValue, enumType));
+                    }
+                    else
+                    {
+                        NetWarning("BL6019",
+                            $"'{target}': parameter {position} has enum type "
+                            + $"'{parameter.TypeFullName}'. §8.3 crosses an enum as its "
+                            + "underlying integral, and only an enum MEMBER (for example "
+                            + "FileMode.Open) has a value the native boundary can produce — an "
+                            + "enum-typed variable or expression is a .NET handle here. Name "
+                            + "the member directly.",
+                            line, column);
+                        return true;
+                    }
                 }
+            }
+
+            // Every parameter was accepted, so the staged folds are safe to commit.
+            if (stagedEnumFolds != null)
+            {
+                foreach (var fold in stagedEnumFolds)
+                    _netAnnotations.RecordNetEnumConstant(fold.Node, fold.Value, fold.Type);
             }
 
             return false;
@@ -3356,6 +3410,56 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
             }
             return false;
+        }
+
+        /// <summary>
+        /// §8.3's enum row, FOLD half: true when <paramref name="argument"/> is an enum MEMBER
+        /// access (<c>FileMode.Open</c>) whose enum type is exactly the winner's parameter type
+        /// at this index — in which case <paramref name="value"/> is that member's constant,
+        /// already coerced to its underlying CLR primitive, and <paramref name="type"/> is the
+        /// BasicLang type the folded constant carries.
+        ///
+        /// <para>Reuses <see cref="TryTypeNetEnumArgument"/>'s shadowing guards wholesale: a
+        /// local, a user-defined type or a claimed name beats the enum, and only a member access
+        /// on a bare identifier qualifies.</para>
+        ///
+        /// <para><b>THE FOLD IS DECIDED BY THE SLOT, NOT THE EXPRESSION.</b> The parameter type
+        /// must match the enum exactly. An enum member handed to a non-enum parameter is left
+        /// alone, which is what keeps this from perturbing overload resolution — the
+        /// overload-probe spelling must stay the ENUM, because the probe synthesizes C# that
+        /// has to compile and <c>File.Open(a0, System.Int32)</c> is CS1503.</para>
+        ///
+        /// <para>⛔ Enum VARIABLES are deliberately out of scope. Only a member ACCESS has a
+        /// value the native boundary can produce at compile time; an enum-typed local or
+        /// expression is a .NET handle here, and folding one would put a <c>NetRef</c> into an
+        /// <c>int32_t</c> slot — a wrong value, not a compile error.</para>
+        /// </summary>
+        private bool TryFoldNetEnumArgument(
+            ExpressionNode argument, string parameterTypeFullName,
+            out object value, out TypeInfo type)
+        {
+            value = null;
+            type = null;
+
+            if (string.IsNullOrEmpty(parameterTypeFullName)) return false;
+            if (!TryTypeNetEnumArgument(argument, out var enumFullName)) return false;
+            if (!string.Equals(enumFullName, parameterTypeFullName, StringComparison.Ordinal))
+                return false;
+
+            var access = (MemberAccessExpressionNode)argument;
+            var constant = NetResolver().EnumMemberConstant(enumFullName, access.MemberName);
+            if (constant == null) return false;
+
+            var underlying = NetResolver().EnumUnderlyingTypeFullName(enumFullName);
+            if (underlying == null) return false;
+            if (!NetMarshalTable.TryGetBasicLangSpelling(underlying, out var spelling)) return false;
+
+            var resolved = ResolveNetTypeName(spelling);
+            if (resolved == null) return false;
+
+            value = constant;
+            type = resolved;
+            return true;
         }
 
         /// <summary>
@@ -6387,8 +6491,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(InlineCodeNode node)
         {
-            // Validate the language is one of the supported targets
-            var supportedLanguages = new[] { "csharp", "cpp", "llvm", "msil" };
+            // Validate the language is one of the supported targets.
+            //
+            // ⛔ THE SECOND LIST. The lexer's keyword table (BasicLangLexer._keywords) decides
+            // which tags LEX as an inline block; this decides which ones ANALYZE. They are
+            // independent, and a tag present in one and missing from the other is a construct
+            // the compiler accepts at one stage and rejects at the next. Adding a backend means
+            // adding it here too — which is exactly what was missed when javascript{ } landed,
+            // and only a test that compiled a real block caught it.
+            var supportedLanguages = new[] { "csharp", "cpp", "llvm", "msil", "javascript" };
             if (!supportedLanguages.Contains(node.Language.ToLower()))
             {
                 Error($"Unsupported inline code language '{node.Language}'. Supported languages: {string.Join(", ", supportedLanguages)}", node.Line, node.Column);
@@ -7160,16 +7271,57 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             // checks don't cascade a second, misleading error.
                             resultType = leftType.Name == "Decimal" ? leftType : rightType;
                         }
+
+                        // VB.NET: `/` is FLOATING-POINT division ALWAYS. 7 / 2 is 3.5, typed
+                        // Double; `\` is the integer operator. Sharing this arm's
+                        // GetCommonType typed Integer / Integer as Integer, and BOTH backends
+                        // then inherited C-family truncation — neither backend was at fault.
+                        //
+                        // Decimal and Single keep their own width: Decimal has no implicit
+                        // conversion to Double in either direction (promoting it would lose
+                        // precision), and promoting Single would change the result type.
+                        if (NormalizeOperator(node.Operator) == "/"
+                            && resultType != null
+                            && !resultType.Name.Equals("Decimal", StringComparison.OrdinalIgnoreCase)
+                            && !resultType.Name.Equals("Single", StringComparison.OrdinalIgnoreCase))
+                        {
+                            resultType = _typeManager.DoubleType;
+                        }
                     }
                     break;
 
                 case "\\":
-                    // Integer division
-                    if (!leftType.IsIntegral() || !rightType.IsIntegral())
+                    // Integer division. VB.NET types the result by the WIDENED operand type
+                    // — Long \ Integer is Long, Byte \ Byte is Byte — not by a fixed Integer.
+                    //
+                    // Hardcoding Integer here was wrong in both directions. Downward it
+                    // truncated: the C++ backend hoists the quotient into a temp of THIS
+                    // type, so `Long \ Long` produced `int32_t t0 = a / b` under an int64_t
+                    // return, and 9000000000 \ 2 yields 205032704 — well-defined modulo 2^32,
+                    // a plain assignment rather than brace-init, so no narrowing diagnostic
+                    // fires anywhere. Upward it leaked as a spurious user-visible error:
+                    // returning `a \ b` from a Byte function was rejected as a narrowing
+                    // conversion from the phantom Integer.
+                    if (!leftType.IsNumeric() || !rightType.IsNumeric())
                     {
-                        Error($"Integer division requires integral operands", node.Line, node.Column);
+                        Error($"Integer division requires numeric operands", node.Line, node.Column);
+                        resultType = _typeManager.IntegerType;
                     }
-                    resultType = _typeManager.IntegerType;
+                    else if (!leftType.IsIntegral() || !rightType.IsIntegral())
+                    {
+                        // A floating operand is NOT an error: VB.NET rounds it to Long and
+                        // then divides. Rejecting it used to be harmless because `/` yielded
+                        // an integral type, so `(a / b) \ c` type-checked. Now that `/` is
+                        // correctly Double, keeping the old rejection would turn that
+                        // expression — which compiles today — into a hard error. This
+                        // relaxation is REQUIRED BY the `/` change, not optional cleanup.
+                        resultType = _typeManager.LongType;
+                    }
+                    else
+                    {
+                        resultType = _typeManager.GetCommonType(leftType, rightType)
+                                     ?? _typeManager.IntegerType;
+                    }
                     break;
 
                 case "&":
@@ -8266,7 +8418,76 @@ namespace BasicLang.Compiler.SemanticAnalysis
                       node.Line, node.Column);
             }
 
+            RejectImpossibleConversion(node, targetType);
+
             SetNodeType(node, targetType);
+        }
+
+        /// <summary>
+        /// Refuse a <c>CType</c>/<c>DirectCast</c> between categories that have no conversion
+        /// in either direction — a reference and a scalar.
+        ///
+        /// <para>Nothing in this visitor read the SOURCE type, so a cast between ANY two types
+        /// type-checked and the breakage surfaced downstream: <c>CS0030</c> from csc, an
+        /// invalid <c>static_cast</c> from g++, or — for a Boolean target on the native
+        /// backend — no error at all, because a handle type has an
+        /// <c>explicit operator bool()</c> that the cast binds to as an exact match, silently
+        /// yielding handle-truthiness instead of a value. That last row is why this check
+        /// belongs in the front end rather than in the C++ capability checker: no
+        /// "does the generated code compile" gate can catch a program that compiles and lies.
+        /// It is also why this is not a C++ bug — the C# backend has the same hole.</para>
+        ///
+        /// <para>DELIBERATELY NOT REFUSED HERE:</para>
+        /// <list type="bullet">
+        /// <item><description><c>Object</c> in either position — the universal box, legal in
+        /// VB both ways, and the type a .NET enum member takes on the C#-backend path, so
+        /// refusing it would regress a currently-working program.</description></item>
+        /// <item><description><b>BasicLang</b> enums — enum-to-integral is a real VB conversion.
+        /// ⚠ MEASURED, and NOT what an earlier version of this comment claimed: a <b>.NET</b>
+        /// enum never reaches this arm, because on the native path it types as a Class-kind
+        /// handle rather than <c>TypeKind.Enum</c>. So <c>CType(FileMode.Open, Integer)</c> is
+        /// refused by the reference/scalar rule below — and that is what CLOSED chip
+        /// task_0c803e75, which was previously a GREEN build emitting
+        /// <c>static_cast&lt;int32_t&gt;(NetRef)</c>. The C# leg is unaffected: there the same
+        /// expression types as <c>Object</c>, takes the exemption above, and still emits
+        /// <c>(int)(FileMode.Open)</c>. That leaves a deliberate and LOUD backend divergence
+        /// instead of a silent miscompile; making the native side actually convert is a
+        /// lowering change, not a change to this check.</description></item>
+        /// <item><description><c>String</c> — real conversions exist in both directions.</description></item>
+        /// <item><description>Unrelated class-to-class, which is also broken, but where
+        /// inheritance, interfaces and generics make the judgement materially different.</description></item>
+        /// </list>
+        /// </summary>
+        private void RejectImpossibleConversion(CastExpressionNode node, TypeInfo targetType)
+        {
+            var sourceType = GetNodeType(node.Expression);
+            if (sourceType == null || targetType == null)
+                return;
+
+            if (sourceType.Name == "Object" || targetType.Name == "Object")
+                return;
+            if (sourceType.Kind == TypeKind.Enum || targetType.Kind == TypeKind.Enum)
+                return;
+            if (sourceType.Name == "String" || targetType.Name == "String")
+                return;
+
+            static bool IsScalar(TypeInfo t) =>
+                t.IsNumeric() || t.Name == "Boolean" || t.Name == "Char";
+
+            // ⛔ SCALAR-NESS WINS OVER Kind. Not every primitive is registered with a
+            // primitive TypeKind — SByte reports Class — so keying purely on Kind refused
+            // CType(sbyteValue, Integer), a perfectly ordinary widening. Anything numeric,
+            // Boolean or Char is a value here no matter how its Kind was registered.
+            static bool IsReference(TypeInfo t) =>
+                (t.Kind == TypeKind.Class || t.Kind == TypeKind.Interface) && !IsScalar(t);
+
+            if ((IsReference(sourceType) && IsScalar(targetType)) ||
+                (IsScalar(sourceType) && IsReference(targetType)))
+            {
+                Error($"Cannot convert '{sourceType.Name}' to '{targetType.Name}': no such " +
+                      $"conversion exists",
+                      node.Line, node.Column);
+            }
         }
     }
 }

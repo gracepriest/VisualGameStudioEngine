@@ -985,6 +985,17 @@ namespace BasicLang.Compiler.CodeGen.Net
                 // -shaped, so Invocation needs no knowledge of it.
                 WireKind.MultiScalar => MultiScalarArgument(p),
 
+                // §8.3: the wire carries the enum's UNDERLYING integral, so the managed side
+                // must cast it back before handing it to the callee — a bare int in a
+                // FileMode position is CS1503. The wire Kind here is Scalar, which is why this
+                // is a guarded arm rather than a Kind case.
+                //
+                // ⛔ Getting this wrong fails LATE: the generated C# is not compiled until the
+                // Native AOT publish, ~27 s downstream, and the error names a line in
+                // obj/gen/shim rather than anything the user wrote.
+                _ when p.Descriptor.IsEnum =>
+                    "(" + Qualified(p.Descriptor.TypeFullName) + ")" + FromWire(p.Wire, p.Name),
+
                 _ => FromWire(p.Wire, p.Name),
             };
         }
@@ -1133,9 +1144,21 @@ namespace BasicLang.Compiler.CodeGen.Net
         /// ARGUMENTS, so <see cref="WireKind.Callback"/> never reaches a result-shaped switch.
         /// </summary>
         private static WireForm WireOf(NetParameterDescriptor parameter) =>
-            parameter != null && parameter.IsDelegate
-                ? Wire.Callback
-                : WireOf(parameter?.TypeFullName);
+            parameter switch
+            {
+                { IsDelegate: true } => Wire.Callback,
+
+                // §8.3's "enums → underlying integral" row — the exact mirror of
+                // NetProxyEmitter.WireOf(NetParameterDescriptor). If only ONE of the two
+                // emitters carries this arm, §12.4's slots-≡-exports oracle fails with a
+                // signature mismatch rather than an explanation, and through a function
+                // pointer a one-sided width change is stack corruption, not a warning.
+                //
+                // ⛔ Never move it into WireOf(string) — see the proxy emitter's note.
+                { IsEnum: true } => WireOf(parameter.EnumUnderlyingTypeFullName),
+
+                _ => WireOf(parameter?.TypeFullName)
+            };
 
         private static WireForm WireOf(string netTypeFullName) => netTypeFullName switch
         {
@@ -1280,7 +1303,24 @@ namespace BasicLang.Compiler.CodeGen.Net
             var parameters = new List<ParameterPlan>();
             var index = 0;
             foreach (var p in member.Parameters ?? (IReadOnlyList<NetParameterDescriptor>)Array.Empty<NetParameterDescriptor>())
+            {
+                // ⛔ MIRRORS NetProxyEmitter's ByRef-enum refusal, and must STAY mirrored. An
+                // enum parameter is now a SCALAR wire (§8.3), so nothing else on this path
+                // would notice a ByRef enum. If only ONE emitter refuses, §12.4's
+                // slots-≡-exports oracle reports a bare count mismatch instead of the reason,
+                // and the two sides end up disagreeing about a slot's shape — which, through a
+                // function pointer, is stack corruption rather than a diagnostic.
+                if (p.IsEnum && p.RefKind != NetRefKind.None)
+                {
+                    throw new NotSupportedException(
+                        $"Cannot emit a shim export for '{member}': parameter {index} is a ByRef "
+                        + "enum. §8.3 crosses an enum as its underlying integral, which is a "
+                        + "by-value row only. Take the enum by value, or take its underlying "
+                        + "integral ByRef and convert at the call site.");
+                }
+
                 parameters.Add(new ParameterPlan(p, WireOf(p), index++));
+            }
 
             return new SlotPlan(
                 exportName,

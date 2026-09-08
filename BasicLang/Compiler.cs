@@ -260,7 +260,13 @@ namespace BasicLang.Compiler
                     // preprocessing across all units) onto the module the C++
                     // backend generates from.
                     if (result.CombinedIR != null)
+                    {
                         result.CombinedIR.CppIncludes.AddRange(_preprocessor.CppIncludes);
+                        // Same join for #JsImport specifiers. ⛔ This threading exists at TWO
+                        // sites — here (CompileFile) and in CompileProjectFiles — and updating
+                        // only one makes the other route silently drop every import.
+                        result.CombinedIR.JsImports.AddRange(_preprocessor.JsImports);
+                    }
 
                     // Apply optimizations
                     if (result.CombinedIR != null)
@@ -422,7 +428,12 @@ namespace BasicLang.Compiler
                 // preprocessing across all units) onto the module the C++
                 // backend generates from.
                 if (result.CombinedIR != null)
+                {
                     result.CombinedIR.CppIncludes.AddRange(_preprocessor.CppIncludes);
+                    // Same join for #JsImport specifiers — the project route. See the sibling
+                    // comment in CompileFile: both sites must be kept in step.
+                    result.CombinedIR.JsImports.AddRange(_preprocessor.JsImports);
+                }
 
                 if (result.CombinedIR != null)
                 {

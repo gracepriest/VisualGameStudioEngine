@@ -2096,13 +2096,95 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         public override void Visit(IRConstant constant) { }
         public override void Visit(IRVariable variable) { }
         
+        /// <summary>
+        /// Render <paramref name="value"/> as a C++ expression of type <c>std::string</c> — THE
+        /// one place a non-String value becomes text on this backend. Returns null when there is
+        /// no rendering that is exactly right, in which case the caller must keep failing rather
+        /// than guess.
+        ///
+        /// <para><b>Why this exists.</b> Four sites used to answer "how does a value become text"
+        /// differently, in ADJACENT LINES of one emitted function: the <c>cstr</c> arm said
+        /// <c>to_string(flag)</c> (which resolves to the INT overload → "1"), the ToString shim
+        /// said <c>flag ? "True" : "False"</c>, Concat said <c>"v=" + flag</c> — POINTER
+        /// ARITHMETIC — and the print arm was correct. Two right, two wrong, same file.</para>
+        ///
+        /// <para>⛔ EVERY ARM RETURNS A <c>std::string</c>, never a bare <c>const char*</c>
+        /// ternary. The two sites that were already correct are only correct because
+        /// <c>cout &lt;&lt;</c> accepts <c>const char*</c>; copying that spelling into a VALUE
+        /// position yields <c>const char* + const char[6]</c>, a hard compile error, as soon as
+        /// the operand lands on the left of a concat.</para>
+        ///
+        /// <para>⛔ <c>Char</c> MUST be <c>std::string(1, c)</c>. <c>std::string(c)</c> is
+        /// ill-formed — a helper written with one uniform <c>std::string(...)</c> wrap compiles
+        /// for every type except the one that most needs it.</para>
+        ///
+        /// <para>⛔ <c>Single</c>/<c>Double</c> are DELIBERATELY ABSENT. <c>std::to_string</c> is
+        /// <c>%f</c> with six decimals — it renders 2.5 as "2.500000" and 1.0/3 as "0.333333",
+        /// wrong for every finite value. Adding it here would trade a loud compile error for a
+        /// silently wrong string, which is the worse failure. The correct lowering is a
+        /// shortest-round-trip formatter (<c>std::to_chars</c> plus fix-ups for .NET's
+        /// exponential thresholds, "NaN" and "∞"); until that exists, floating concat and
+        /// <c>CStr(Double)</c> keep failing at the C++ compiler.</para>
+        /// </summary>
+        private static string StringifyForText(IRValue value, string rendered)
+        {
+            var name = value?.Type?.Name;
+            if (string.IsNullOrEmpty(name)) return null;
+
+            // A String operand still needs the wrap: a literal renders as const char*, so
+            // `"a" & "b"` is `const char* + const char*` — a hard error today, and NOT
+            // constant-folded away by the optimizer.
+            if (string.Equals(name, "String", StringComparison.OrdinalIgnoreCase))
+                return $"std::string({rendered})";
+
+            if (string.Equals(name, "Boolean", StringComparison.OrdinalIgnoreCase))
+                return $"std::string({rendered} ? \"True\" : \"False\")";
+
+            if (string.Equals(name, "Char", StringComparison.OrdinalIgnoreCase))
+                return $"std::string(1, {rendered})";
+
+            // Decimal and the P1 native BCL types carry their own .NET-faithful ToString().
+            if (IsNativeOwnedBclType(name))
+                return $"({rendered}).ToString()";
+
+            return name.ToLowerInvariant() switch
+            {
+                "byte" or "sbyte" or "ubyte" or "short" or "ushort"
+                    or "integer" or "uinteger" or "long" or "ulong"
+                    => $"std::to_string({rendered})",
+                _ => null,
+            };
+        }
+
         public override void Visit(IRBinaryOp binaryOp)
         {
             var left = GetValueName(binaryOp.Left);
             var right = GetValueName(binaryOp.Right);
             var op = MapBinaryOperator(binaryOp.Operation);
             var result = GetValueName(binaryOp);
-            
+
+            // §VB `&` is CONCATENATION, and it was lowering to a bare `+`. With a const char*
+            // on the left that is POINTER ARITHMETIC: `"val=" & True` advanced the literal by 1
+            // and printed "al=", and `"int=" & 6` advanced it by 6 — OUT OF BOUNDS, past the
+            // literal into adjacent .rdata. Measured: one probe printed a fragment of
+            // libstdc++'s own error text. Exit 0, no warning, no diagnostic.
+            //
+            // MapBinaryOperator cannot fix this — it returns operator TEXT and cannot see
+            // operand types — so the coercion belongs here, at the only site that has both.
+            if (binaryOp.Operation == BinaryOpKind.Concat)
+            {
+                var leftText = StringifyForText(binaryOp.Left, left);
+                var rightText = StringifyForText(binaryOp.Right, right);
+                if (leftText != null && rightText != null)
+                {
+                    WriteLine($"{result} = {leftText} + {rightText};");
+                    return;
+                }
+                // Deliberate fall-through for the types StringifyForText refuses (today:
+                // Single/Double). They keep producing a C++ compile error rather than a
+                // plausible-looking wrong string — see that method's note.
+            }
+
             WriteLine($"{result} = {left} {op} {right};");
         }
         
@@ -2596,17 +2678,39 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private static string GetArg(List<string> args, int index) => index < args.Count ? args[index] : "0";
 
         /// <summary>
-        /// Widen a Byte/SByte console argument for printing (spec §14.6). <c>cout</c>
-        /// streams <c>int8_t</c>/<c>uint8_t</c> as a CHARACTER — <c>Console.WriteLine(b)</c>
-        /// with b = 65 printed 'A' — while .NET (and the C# backend) print the NUMBER.
-        /// Wrapping the arg in <c>static_cast&lt;int32_t&gt;</c> restores parity. Char is
-        /// deliberately NOT wrapped: .NET prints a Char as its character too.
+        /// Coerce a console argument so <c>cout</c> renders it the way .NET does.
+        ///
+        /// <para>Byte/SByte (spec §14.6): <c>cout</c> streams <c>int8_t</c>/<c>uint8_t</c> as a
+        /// CHARACTER — <c>Console.WriteLine(b)</c> with b = 65 printed 'A' — while .NET (and
+        /// the C# backend) print the NUMBER. Char is deliberately NOT wrapped: .NET prints a
+        /// Char as its character too.</para>
+        ///
+        /// <para>Boolean: <c>cout</c> streams a bool as 1/0, while .NET, VB and the C# backend
+        /// all print True/False.</para>
         /// </summary>
         private static string NumericPrintArg(string rendered, IRCall call, int index)
         {
-            var typeName = call != null && index < call.Arguments.Count
-                ? call.Arguments[index]?.Type?.Name
+            var argument = call != null && index < call.Arguments.Count
+                ? call.Arguments[index]
                 : null;
+            if (argument == null) return rendered;
+
+            // ⛔ THE OUTER PARENTHESES ARE LOAD-BEARING, NOT STYLE. Every caller splices this
+            // into `cout << {arg} << endl`, and `<<` binds TIGHTER than `?:`. Without them,
+            // `cout << flag ? "True" : "False"` parses as `(cout << flag) ? ... : ...` — which
+            // COMPILES CLEAN, prints 1, and discards both strings. The generated source reads
+            // as fixed while nothing changed. Both forms were hand-compiled to confirm it, and
+            // CppBooleanPrintingTests.BooleanArgument_IsParenthesized is the only test that
+            // fails when they are dropped — the obvious ones stay green.
+            //
+            // The type name alone is sufficient, including for a literal `Console.WriteLine(True)`
+            // and for an optimizer-folded comparison: both arrive as constants that DO carry a
+            // Boolean type. An extra `argument is IRConstant { Value: bool }` disjunct was tried
+            // and deleted — no mutation could kill it, which is the definition of dead code.
+            if (string.Equals(argument.Type?.Name, "Boolean", StringComparison.OrdinalIgnoreCase))
+                return $"({rendered} ? \"True\" : \"False\")";
+
+            var typeName = argument.Type?.Name;
             if (typeName == null) return rendered;
             return typeName.ToLowerInvariant() is "byte" or "sbyte" or "ubyte"
                 ? $"static_cast<int32_t>({rendered})"
@@ -2841,11 +2945,19 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 "csng" => arg0IsDecimal
                     ? $"static_cast<float>(({args[0]}).ToDouble())"
                     : $"static_cast<float>({args[0]})",
-                // std::to_string has no Decimal overload; the engine's scale-preserving
-                // ToString() is the .NET-faithful rendering.
-                "cstr" => arg0IsDecimal
-                    ? $"({args[0]}).ToString()"
-                    : $"to_string({args[0]})",
+                // ⛔ `to_string` was the WRONG default here: std::to_string has no bool overload,
+                // so CStr(someBoolean) resolved to the INT overload and the native binary printed
+                // "1"/"0" where VB prints "True"/"False" (verified against real vbc, not against
+                // the C# backend). Routed through the one shared stringifier so this arm cannot
+                // drift from Concat and the ToString shim again.
+                //
+                // The `call != null` path matters: HasStdLibEmission and NetClaimPredicateTests
+                // both invoke this arm with a NULL call to probe arm EXISTENCE, so a null there
+                // must fall through to the old text rather than dereference.
+                "cstr" => StringifyForText(
+                        call != null && call.Arguments.Count > 0 ? call.Arguments[0] : null,
+                        args[0])
+                    ?? (arg0IsDecimal ? $"({args[0]}).ToString()" : $"to_string({args[0]})"),
                 // .NET Convert.ToBoolean(decimal) is `value != 0`; IsZeroMag() is the exact
                 // magnitude test (and treats a canonicalized -0 as zero, like .NET).
                 "cbool" => arg0IsDecimal
@@ -3565,6 +3677,26 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 }
             }
 
+            // ⛔ A String TARGET must never reach the static_cast fallback below.
+            // `static_cast<std::string>(x)` has no constructor for ANY primitive — measured as
+            // four separate hard g++ errors for bool, int32_t, char and double, all emitted
+            // after BasicLang.exe reported "Compilation successful!" (CppCapabilityChecker's
+            // CheckNativeConversion early-returns when neither side is a native BCL type, so
+            // nothing refuses it first). Routed through the one shared stringifier, which also
+            // makes CType(b, String) agree with CStr(b) and with `&` by construction.
+            //
+            // Single/Double deliberately still fall through to the error — see
+            // StringifyForText's note on why a wrong string is worse than a build break.
+            if (string.Equals(cast.Type?.Name, "String", StringComparison.OrdinalIgnoreCase))
+            {
+                var asText = StringifyForText(cast.Value, value);
+                if (asText != null)
+                {
+                    WriteLine($"{result} = {asText};");
+                    return;
+                }
+            }
+
             var targetType = MapType(cast.Type);
             WriteLine($"{result} = static_cast<{targetType}>({value});");
         }
@@ -4105,10 +4237,28 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // A body's normal exit branches to EndBlock; here that is a legal forward `goto
             // try_end;` (a jump out of the try to the function-scope continuation label), so no
             // loopEnd remap is needed (loopEnd: null).
+            // ⛔ WITH A FINALLY, THE NORMAL EXIT MUST FALL OUT, NOT GOTO. The normal-path
+            // finally copy is emitted at the END of this method, i.e. BETWEEN the last catch
+            // and the (unsuffixed) end label. A `goto try0_end;` from inside the try jumps
+            // clean over it — measured: a Try/Finally that should print 11 printed 1, and a
+            // caught one that should print 12 printed 2, on BOTH paths, exit 0, no warning.
+            // RegionEnd.FallThrough emits nothing at a plain region end, so control leaves the
+            // try{} scope and lands on that copy.
+            //
+            // ⚠ RESIDUAL, and pre-existing: a CONDITIONAL branch to the end block still emits
+            // `goto EndLabelName` under either mode (see the RegionEnd switch in the
+            // conditional-branch helper), so an early conditional exit from a Try still skips
+            // its Finally. That is the shape the finally-duplication design's own comment
+            // already calls out as unsupported; this change fixes the straight-line paths and
+            // does not pretend to fix that one.
+            var fallOutToFinally = tryCatch.FinallyBlock != null
+                ? RegionEnd.FallThrough
+                : RegionEnd.GotoEnd;
+
             WriteLine("try");
             WriteLine("{");
             Indent();
-            EmitInlineRegion(tryCatch.TryBlock, tryCatch.EndBlock, RegionEnd.GotoEnd);
+            EmitInlineRegion(tryCatch.TryBlock, tryCatch.EndBlock, fallOutToFinally);
             Unindent();
             WriteLine("}");
 
@@ -4193,7 +4343,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 WriteLine($"catch (const {exType}& {varName})");
                 WriteLine("{");
                 Indent();
-                EmitInlineRegion(catchClause.Block, tryCatch.EndBlock, RegionEnd.GotoEnd);
+                // Same reason as the try body: with a Finally present, a caught exception's
+                // handler must fall out to the normal-path finally copy rather than goto past
+                // it. Measured before this: the caught case printed 2 instead of 12.
+                EmitInlineRegion(catchClause.Block, tryCatch.EndBlock, fallOutToFinally);
                 Unindent();
                 WriteLine("}");
             }
@@ -4421,6 +4574,30 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (throwInst.Exception is IRNewObject newEx && CppExceptionTypes.IsNetException(newEx.ClassName))
             {
                 var msg = newEx.Arguments.Count > 0 ? GetValueName(newEx.Arguments[0]) : "\"exception\"";
+
+                // ⛔ THE THROWN TYPE MUST SURVIVE THE THROW. This used to emit a bare
+                // `throw std::runtime_error(msg)`, so the declared type existed only in the
+                // source: every typed Catch then emitted a BYTE-IDENTICAL
+                // `catch (const std::runtime_error&)` handler and C++ dispatched to the FIRST
+                // one. Measured — a thrown ArgumentException ran the
+                // `Catch e As InvalidOperationException` body, and swapping the clause order
+                // swapped the answer, proving POSITION rather than TYPE was deciding. Worse, a
+                // clause that could never match still swallowed the exception and stole it
+                // from the correct OUTER handler.
+                //
+                // Carrying the chain routes it into the §11.1 NetException ladder the
+                // generator ALREADY emits above — which does real ';'-delimited element
+                // matching and was correct all along, just never entered. NetException derives
+                // from std::runtime_error, so an outer generic handler still catches it and no
+                // existing catch-all behaviour changes.
+                if (CppExceptionTypes.TryGetInheritanceChain(newEx.ClassName, out var chain))
+                {
+                    WriteLine($"throw BasicLang::NetException(\"{chain}\", {msg});");
+                    return;
+                }
+
+                // A user-defined BL exception type has no .NET chain; the ladder deliberately
+                // skips its arm, so it keeps the plain lowering and the per-clause handlers.
                 WriteLine($"throw std::runtime_error({msg});");
                 return;
             }
@@ -4441,9 +4618,17 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             }
             else
             {
-                // For non-C++ inline code, emit a comment indicating it's not supported
-                WriteLine($"// WARNING: Inline {inlineCode.Language} code not supported in C++ backend");
-                WriteLine($"// Original code ({inlineCode.Code.Length} chars) was skipped");
+                // Unreachable through Generate/GenerateSplit — CppCapabilityChecker refuses a
+                // foreign-tagged block before either emits anything. Kept as a THROW rather than
+                // the warning comment it used to be: this generator is constructible directly,
+                // and skipping a block the author wrote is a do-nothing program from a build
+                // that reported success. A refusal beats a half implementation.
+                throw new CppCapabilityException(new List<string>
+                {
+                    $"inline '{inlineCode.Language}' code (a '{inlineCode.Language}{{ }}' passthrough " +
+                    "block) is not supported on the C++ backend; inline code written for another " +
+                    "backend cannot be lowered here"
+                });
             }
         }
 
@@ -4550,13 +4735,33 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             BinaryOpKind.Mod => "%",
             BinaryOpKind.And => "&",
             BinaryOpKind.Or => "|",
+            // ⚠ `&&`/`||` here only short-circuits where the operand tree is rendered INLINE —
+            // i.e. RenderInline, which is the `When`-guard position. In the statement position
+            // Visit(IRBinaryOp) receives operands IRBuilder has already emitted as separate
+            // instructions, so the right side has been evaluated before this operator text is
+            // ever consulted and no spelling can undo that. Making the statement position
+            // genuinely short-circuit needs control-flow lowering in IRBuilder — deliberately a
+            // separate change, behind an execution test.
+            BinaryOpKind.AndAlso => "&&",
+            BinaryOpKind.OrElse => "||",
             BinaryOpKind.Xor => "^",
             BinaryOpKind.Shl => "<<",
             BinaryOpKind.Shr => ">>",
             BinaryOpKind.Concat => "+",
-            _ => "?"
+            // `\` (integer division). Both operands are integral by the time we get here
+            // (SemanticAnalyzer rejects floating operands), so C++ `/` on integers already
+            // truncates toward zero exactly as VB requires. The RESULT WIDTH is what makes
+            // this safe: SemanticAnalyzer types the result by the widened operand type, so
+            // the temp this lands in is int64_t for a 64-bit division. It used to be
+            // hardcoded to Integer, which would have made this arm emit a silent modulo-2^32
+            // truncation instead of the loud syntax error the missing arm produced.
+            BinaryOpKind.IntDiv => "/",
+            _ => throw new NotSupportedException(
+                $"The C++ backend has no operator text for BinaryOpKind.{op}. " +
+                "Returning a placeholder here would emit invalid C++ while the compiler " +
+                "reported success — add an arm above instead.")
         };
-        
+
         private string MapUnaryOperator(UnaryOpKind op) => op switch
         {
             UnaryOpKind.Neg => "-",
@@ -4571,7 +4776,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // emitted a literal "?" INTO THE GENERATED SOURCE — invalid C++, silently, with no
             // capability refusal to catch it.
             UnaryOpKind.AddressOf => "",
-            _ => "?"
+            _ => throw new NotSupportedException(
+                $"The C++ backend has no operator text for UnaryOpKind.{op}. " +
+                "Returning a placeholder here would emit invalid C++ while the compiler " +
+                "reported success — add an arm above instead.")
         };
         
         private string MapCompareOperator(CompareKind cmp) => cmp switch
@@ -4582,7 +4790,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             CompareKind.Le => "<=",
             CompareKind.Gt => ">",
             CompareKind.Ge => ">=",
-            _ => "?"
+            _ => throw new NotSupportedException(
+                $"The C++ backend has no operator text for CompareKind.{cmp}. " +
+                "Returning a placeholder here would emit invalid C++ while the compiler " +
+                "reported success — add an arm above instead.")
         };
 
         private bool IsNamedDestination(IRValue value)
@@ -4637,7 +4848,47 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return $"\"{EscapeString(str)}\"";
 
             if (constant.Value is char ch)
+            {
+                // ⛔ NON-ASCII IS REFUSED, NOT EMITTED. BasicLang Char is a UTF-16 code unit
+                // (0..65535), but this backend maps it to an 8-bit C++ `char` and the literal
+                // was spliced in as its RAW UTF-8 BYTES inside single quotes — the measured
+                // emission for "é"c is 27 C3 A9 27, which C++ reads as a MULTICHARACTER literal
+                // of type int and then narrows to its last byte. g++ itself diagnoses this
+                // (-Wmultichar, "overflow ... changes value from 50089 to -87"); the build just
+                // passes -w.
+                //
+                // THREE distinct silent miscompiles fell out of that one byte, all measured:
+                // AscW("é"c) returned 169 instead of 233; two DIFFERENT characters compared
+                // EQUAL, because U+00E9 and U+0429 both end in A9; and a Select Case label on a
+                // non-ASCII Char could never match its own subject.
+                //
+                // ⛔ REFUSING IS DELIBERATE AND IS NOT A STEP TOWARD WIDENING. Widening Char to
+                // 16 bits ALONE would create a worse inconsistency: String maps to std::string,
+                // i.e. UTF-8 BYTES, and Len("é") is already 2 natively against 1 on .NET. A Char
+                // that can hold U+03C0 sitting beside a String that can never index to one
+                // breaks every String/Char seam simultaneously — the fill constructor, `s & c`,
+                // and `cout << c`, which for char16_t is a DELETED overload in C++20. The real
+                // fix is ONE decision about the C++ string representation covering Char, Len,
+                // Mid and indexing together, and it belongs in a spec rather than here.
+                //
+                // ⛔ DO NOT "fix" this by hex-escaping instead. `\x` + ToString("x2") is a
+                // MINIMUM width, so U+0429 emits '\x429', which g++ truncates mod 256 to 0x29 —
+                // ASCII ')'. That converts a harmlessly dead Select Case arm into one that
+                // spuriously matches a real ')'. Measured end to end.
+                if (ch > 0x7F)
+                {
+                    throw new CppCapabilityException(new List<string>
+                    {
+                        $"the Char literal U+{(int)ch:X4} is above U+007F and has no C++ "
+                        + "lowering: this backend represents Char as an 8-bit char, so the "
+                        + "literal would be silently truncated to a single byte — two different "
+                        + "characters could then compare equal, and a Select Case label could "
+                        + "never match. Use a String literal instead, or an ASCII Char."
+                    });
+                }
+
                 return $"'{EscapeChar(ch)}'";
+            }
 
             if (constant.Value is bool b)
                 return b ? "true" : "false";
