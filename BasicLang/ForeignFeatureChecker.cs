@@ -26,6 +26,7 @@ namespace BasicLang.Compiler.CodeGen
     /// |--------------------------|-----|-----------|------------|-----------|-----------|
     /// | #CppInclude headers      | yes | error     | error      | error     | error     |
     /// | #JsImport modules        | error | error   | yes        | error     | error     |
+    /// | Extern Class             | error | error   | yes        | error     | error     |
     /// | :: foreign TYPES         | yes | error     | error      | error     | error     |
     /// | :: foreign EXPRESSIONS   | yes | error     | VERBATIM   | error     | error     |
     /// | Collections (List/...)   | yes | native    | native     | error     | error     |
@@ -102,9 +103,21 @@ namespace BasicLang.Compiler.CodeGen
         /// display text for a diagnostic, and making a capability decision out of it means a
         /// backend renamed for readability silently changes what it accepts.</para>
         /// </param>
+        /// <param name="allowExternClasses">
+        /// True only for a backend whose target runtime can actually SUPPLY the declared type —
+        /// today, JavaScript.
+        ///
+        /// <para>⛔ An <c>Extern Class</c> says "this type already exists out there". On a
+        /// backend where it does not, there are only two possible behaviours and both are wrong:
+        /// emit a declaration (a fake type that compiles, runs, and answers null — MEASURED on
+        /// the C# backend) or drop it (an undefined name). So it must be refused.</para>
+        ///
+        /// <para>⛔ Opt-in, and never a <c>backendName</c> test — same reasoning as
+        /// <paramref name="allowJsImports"/>.</para>
+        /// </param>
         public static void Check(IRModule module, string backendName, bool rejectCollections,
             string ownInlineLanguage, bool allowForeignIdentifiers = false,
-            bool allowJsImports = false)
+            bool allowJsImports = false, bool allowExternClasses = false)
         {
             if (module == null) return;
 
@@ -129,6 +142,26 @@ namespace BasicLang.Compiler.CodeGen
                 throw new ForeignFeatureException(
                     $"The {backendName} backend does not support #JsImport (JavaScript module import); " +
                     "it is only available on the JavaScript backend.");
+            }
+
+            // (1c) Extern Class — a type declared as ALREADY EXISTING in the target runtime.
+            //
+            // MEASURED on the C# backend before this arm: `Extern Class Element` emitted a real
+            // `public class Element` whose `querySelector` returned null. Not a compile error —
+            // a fake type that compiles, runs, and silently answers null for every call meant to
+            // reach a runtime object. Dropping it instead would be no better (an undefined name).
+            // The only honest answer on a backend that cannot supply the type is to refuse.
+            if (!allowExternClasses && module.Classes != null)
+            {
+                foreach (var cls in module.Classes.Values)
+                    if (cls != null && cls.IsExtern)
+                        throw new ForeignFeatureException(
+                            $"The {backendName} backend does not support 'Extern Class " +
+                            $"{cls.Name}'. An Extern Class declares a type that already exists in " +
+                            "the TARGET RUNTIME, which today means JavaScript — there is nothing " +
+                            $"for the {backendName} backend to bind it to, and emitting a " +
+                            "declaration would create a fake type that compiles and then answers " +
+                            "null. Guard it with #IfDef, or build for the JavaScript target.");
             }
 
             // (2) ::-qualified foreign types, and (3, LLVM/MSIL only) collections.

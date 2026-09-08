@@ -428,6 +428,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             var classType = new TypeInfo(classNode.Name, TypeKind.Class);
             classType.IsAbstract = classNode.IsAbstract;
+            classType.IsExtern = classNode.IsExtern;
 
             var symbol = new Symbol(classNode.Name, SymbolKind.Class, classType, 0, 0)
             {
@@ -4557,6 +4558,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             // Set abstract flag
             classType.IsAbstract = node.IsAbstract;
+            // ⛔ Both registration sites must set this. The other is the IMPORTED-class path;
+            // a flag set in only one place is correct for single-file programs and silently
+            // wrong the moment the declaration arrives from another unit.
+            classType.IsExtern = node.IsExtern;
 
             // Set base class
             if (node.BaseClass != null)
@@ -8336,6 +8341,18 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (type != null && type.IsAbstract)
             {
                 Error($"Cannot create an instance of abstract class '{type.Name}'", node.Line, node.Column);
+            }
+
+            // ⛔ Nor an EXTERN class. Nothing is emitted for it, so there is no constructor to
+            // call — left alone this reaches the browser as "Element is not a constructor", a
+            // runtime error from a build that reported success. An extern value is OBTAINED
+            // from the runtime (a call that returns one, or a javascript{ } block), never built.
+            if (type != null && type.IsExtern)
+            {
+                Error($"Cannot create an instance of Extern Class '{type.Name}' — it declares a " +
+                      "type that already exists in the target runtime, so BasicLang emits no " +
+                      "constructor for it. Obtain one from the runtime instead (a function that " +
+                      "returns one, or a javascript{ } block).", node.Line, node.Column);
             }
 
             // Analyze arguments first to get their types

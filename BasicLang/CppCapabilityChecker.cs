@@ -215,6 +215,17 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 diags.Add("#JsImport (JavaScript module import) is only available on the " +
                           "JavaScript backend");
 
+            // Extern Class — same reasoning, same reason it lives HERE rather than in
+            // CppCodeGenerator.Generate: the project route goes through GenerateSplit, and a
+            // guard at the Generate site would leave the SHIPPING path unguarded. An extern type
+            // exists in a JavaScript runtime; C++ has nothing to bind it to, and emitting a
+            // class for it would be a fake type that compiles.
+            foreach (var cls in module.Classes?.Values ?? Enumerable.Empty<IRClass>())
+                if (cls != null && cls.IsExtern)
+                    diags.Add($"'Extern Class {cls.Name}' declares a type that already exists in " +
+                              "the target RUNTIME (today, JavaScript) — it is not available on " +
+                              "the C++ backend");
+
             _userDefinedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var name in module.Classes.Keys) _userDefinedNames.Add(name);
             foreach (var name in module.Interfaces.Keys) _userDefinedNames.Add(name);

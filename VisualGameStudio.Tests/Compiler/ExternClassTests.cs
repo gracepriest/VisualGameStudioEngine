@@ -246,4 +246,73 @@ public class ExternClassTests
         => Assert.That(JsTestSupport.CompileOptimized(
             "Class Box\nPublic X As Integer\nEnd Class\nSub Main()\nDim b As New Box()\nEnd Sub"),
             Does.Contain("class Box"));
+
+    // ------------------------------------------------------------------
+    // `New` on an extern class.
+    //
+    // Nothing is emitted for the type, so there is no constructor to call. Left alone this
+    // reaches the browser as `Element is not a constructor` — a runtime error from a green
+    // build, which is the shape this backend refuses everywhere else.
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void ExternClass_New_IsRefused()
+        => Assert.That(() => JsTestSupport.Compile(
+                ElementDecl + "Sub Main()\nDim e As New Element()\nEnd Sub"),
+            Throws.Exception,
+            "nothing is emitted for an extern type, so there is no constructor to call");
+
+    /// <summary>
+    /// ⛔ The EXPRESSION-TEMPORARY shape, which binds to no declared local. That split — a
+    /// declared position versus a transient — is exactly where ForeignFeatureChecker documents
+    /// its own guards having had a blind spot, so it is checked separately rather than assumed
+    /// to be covered by the Dim case.
+    /// </summary>
+    [Test]
+    public void ExternClass_NewAsAnExpressionTemporary_IsRefused()
+        => Assert.That(() => JsTestSupport.Compile(
+                ElementDecl + "Sub Main()\nConsole.WriteLine(New Element())\nEnd Sub"),
+            Throws.Exception);
+
+    /// <summary>`New` on an ORDINARY class is of course untouched.</summary>
+    [Test]
+    public void OrdinaryClass_New_IsStillAllowed()
+        => Assert.That(JsTestSupport.Compile(
+            "Class Box\nPublic X As Integer\nEnd Class\nSub Main()\nDim b As New Box()\nEnd Sub"),
+            Does.Contain("new Box()"));
+
+    // ------------------------------------------------------------------
+    // ⛔ THE MIRROR TEST: does the OTHER backend refuse it?
+    //
+    // On this backend that question has found a silently-dropped feature EVERY time it has
+    // been asked — #JsImport on C#/C++, and foreign inline blocks on C++ (broken since they
+    // existed). An Extern Class names a type in a JavaScript runtime; C# and C++ have no such
+    // type, so emitting or ignoring the declaration are both wrong.
+    // ------------------------------------------------------------------
+
+    [TestCase("csharp")]
+    [TestCase("cpp")]
+    public void ExternClass_IsRejectedOnOtherBackends(string backend)
+    {
+        var module = JsTestSupport.BuildModule(ElementDecl + "Sub Main()\nEnd Sub");
+
+        Assert.That(() => BasicLang.Compiler.Driver.Program.GenerateCode(module, backend),
+            Throws.Exception,
+            $"the {backend} backend silently accepted a type that only exists in a JS runtime");
+    }
+
+    [Test]
+    public void ExternClass_IsAcceptedOnJavaScript()
+        => Assert.DoesNotThrow(() => JsTestSupport.Compile(ElementDecl + "Sub Main()\nEnd Sub"));
+
+    /// <summary>An ORDINARY class must still compile on those backends.</summary>
+    [TestCase("csharp")]
+    [TestCase("cpp")]
+    public void OrdinaryClass_IsStillAcceptedOnOtherBackends(string backend)
+    {
+        var module = JsTestSupport.BuildModule(
+            "Class Box\nPublic X As Integer\nEnd Class\nSub Main()\nEnd Sub");
+
+        Assert.DoesNotThrow(() => BasicLang.Compiler.Driver.Program.GenerateCode(module, backend));
+    }
 }
