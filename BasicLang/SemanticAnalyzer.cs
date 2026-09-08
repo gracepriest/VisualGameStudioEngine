@@ -8442,11 +8442,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// <item><description><c>Object</c> in either position — the universal box, legal in
         /// VB both ways, and the type a .NET enum member takes on the C#-backend path, so
         /// refusing it would regress a currently-working program.</description></item>
-        /// <item><description>Enums — enum-to-integral is a real VB conversion and is already
-        /// correct on the C# backend. It is the literal repro of chip task_0c803e75 on the
-        /// native backend, but the fix there is the enum lowering work (P2a-2 T8c-3), which
-        /// makes the operand a constant so <c>static_cast&lt;int32_t&gt;(3)</c> becomes valid
-        /// — refusing it here would have to be un-refused a task later.</description></item>
+        /// <item><description><b>BasicLang</b> enums — enum-to-integral is a real VB conversion.
+        /// ⚠ MEASURED, and NOT what an earlier version of this comment claimed: a <b>.NET</b>
+        /// enum never reaches this arm, because on the native path it types as a Class-kind
+        /// handle rather than <c>TypeKind.Enum</c>. So <c>CType(FileMode.Open, Integer)</c> is
+        /// refused by the reference/scalar rule below — and that is what CLOSED chip
+        /// task_0c803e75, which was previously a GREEN build emitting
+        /// <c>static_cast&lt;int32_t&gt;(NetRef)</c>. The C# leg is unaffected: there the same
+        /// expression types as <c>Object</c>, takes the exemption above, and still emits
+        /// <c>(int)(FileMode.Open)</c>. That leaves a deliberate and LOUD backend divergence
+        /// instead of a silent miscompile; making the native side actually convert is a
+        /// lowering change, not a change to this check.</description></item>
         /// <item><description><c>String</c> — real conversions exist in both directions.</description></item>
         /// <item><description>Unrelated class-to-class, which is also broken, but where
         /// inheritance, interfaces and generics make the judgement materially different.</description></item>

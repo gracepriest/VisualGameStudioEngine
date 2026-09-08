@@ -32,6 +32,53 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             ["DivideByZeroException"] = "System.DivideByZeroException"
         };
 
+        /// <summary>
+        /// The ';'-delimited .NET inheritance chain, most-derived FIRST — the exact shape
+        /// <c>BasicLang::NetException::Matches</c> walks with ELEMENT equality.
+        ///
+        /// <para><b>Why a BL-thrown exception needs this.</b> <c>Throw New XException(msg)</c>
+        /// used to lower to a bare <c>throw std::runtime_error(msg)</c>, carrying only the
+        /// message. Every typed <c>Catch</c> therefore emitted a BYTE-IDENTICAL
+        /// <c>catch (const std::runtime_error&amp;)</c> handler, so C++ dispatched to the FIRST
+        /// one and the declared type was never consulted. Two wrong behaviours followed, both
+        /// measured: a thrown <c>ArgumentException</c> ran an
+        /// <c>InvalidOperationException</c> handler, and — worse — a clause whose type could
+        /// never match still SWALLOWED the exception and stole it from the correct outer
+        /// handler.</para>
+        ///
+        /// <para>⛔ <c>ArithmeticException</c> appears in two chains but is NOT one of the 12
+        /// catchable names. That is deliberate and correct: a chain records what the exception
+        /// IS, which is independent of what this backend lets you name in a Catch. Dropping it
+        /// would silently make <c>OverflowException</c> not an <c>ArithmeticException</c>.</para>
+        /// </summary>
+        private static readonly Dictionary<string, string> Chains = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Exception"] = "System.Exception",
+            ["SystemException"] = "System.SystemException;System.Exception",
+            ["ApplicationException"] = "System.ApplicationException;System.Exception",
+            ["ArgumentException"] = "System.ArgumentException;System.SystemException;System.Exception",
+            ["ArgumentNullException"] = "System.ArgumentNullException;System.ArgumentException;System.SystemException;System.Exception",
+            ["InvalidOperationException"] = "System.InvalidOperationException;System.SystemException;System.Exception",
+            ["NotImplementedException"] = "System.NotImplementedException;System.SystemException;System.Exception",
+            ["NullReferenceException"] = "System.NullReferenceException;System.SystemException;System.Exception",
+            ["IndexOutOfRangeException"] = "System.IndexOutOfRangeException;System.SystemException;System.Exception",
+            ["FormatException"] = "System.FormatException;System.SystemException;System.Exception",
+            ["OverflowException"] = "System.OverflowException;System.ArithmeticException;System.SystemException;System.Exception",
+            ["DivideByZeroException"] = "System.DivideByZeroException;System.ArithmeticException;System.SystemException;System.Exception",
+        };
+
+        /// <summary>
+        /// The inheritance chain for a BL exception type name, for a <c>Throw</c> that must
+        /// carry its own identity. False for a user-defined type, which has no .NET chain —
+        /// those keep the plain <c>std::runtime_error</c> lowering.
+        /// </summary>
+        public static bool TryGetInheritanceChain(string name, out string chain)
+        {
+            if (name != null && Chains.TryGetValue(name, out chain)) return true;
+            chain = null;
+            return false;
+        }
+
         private static readonly HashSet<string> Names = new(FullNames.Keys, StringComparer.OrdinalIgnoreCase);
 
         public static bool IsNetException(string name) => name != null && Names.Contains(name);

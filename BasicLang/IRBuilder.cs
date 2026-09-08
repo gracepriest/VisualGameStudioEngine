@@ -3050,8 +3050,11 @@ namespace BasicLang.Compiler.IR
                     "\\=" => BinaryOpKind.IntDiv,        // Integer division assignment
                     "%=" or "Mod=" => BinaryOpKind.Mod,  // Modulo assignment
                     "&=" => BinaryOpKind.Concat,         // String concatenation assignment
-                    "And=" => BinaryOpKind.And,          // Bitwise AND assignment
-                    "Or=" => BinaryOpKind.Or,            // Bitwise OR assignment
+                    // NON-short-circuit, which is right for a compound assignment: `a And= b`
+                    // must evaluate b. (The old "Bitwise" comments were stale — SemanticAnalyzer
+                    // rejects integral operands for And/Or, so these are Boolean-only here.)
+                    "And=" => BinaryOpKind.And,
+                    "Or=" => BinaryOpKind.Or,
                     "Xor=" => BinaryOpKind.Xor,          // Bitwise XOR assignment
                     "<<=" => BinaryOpKind.Shl,           // Left shift assignment
                     ">>=" => BinaryOpKind.Shr,           // Right shift assignment
@@ -4141,8 +4144,9 @@ namespace BasicLang.Compiler.IR
                 case "\\": return BinaryOpKind.IntDiv;
                 case "%": return BinaryOpKind.Mod;
                 case "&": return BinaryOpKind.Concat;
-                case "&&": return BinaryOpKind.And;
-                case "||": return BinaryOpKind.Or;
+                // C-style spellings mean what they mean in C: these SHORT-CIRCUIT.
+                case "&&": return BinaryOpKind.AndAlso;
+                case "||": return BinaryOpKind.OrElse;
                 case "^": return BinaryOpKind.Xor;
                 case "<<": return BinaryOpKind.Shl;
                 case ">>": return BinaryOpKind.Shr;
@@ -4151,8 +4155,14 @@ namespace BasicLang.Compiler.IR
             return (op ?? string.Empty).ToLowerInvariant() switch
             {
                 "mod" => BinaryOpKind.Mod,
-                "and" or "andalso" => BinaryOpKind.And,
-                "or" or "orelse" => BinaryOpKind.Or,
+                // ⛔ These four are DISTINCT and must stay distinct. Collapsing andalso->And
+                // and orelse->Or killed the short-circuit/non-short-circuit distinction at the
+                // IR boundary, after the lexer, parser and analyzer had all carried it
+                // faithfully — so every backend downstream got one of the two spellings wrong.
+                "and" => BinaryOpKind.And,
+                "andalso" => BinaryOpKind.AndAlso,
+                "or" => BinaryOpKind.Or,
+                "orelse" => BinaryOpKind.OrElse,
                 "xor" => BinaryOpKind.Xor,
                 "shl" => BinaryOpKind.Shl,
                 "shr" => BinaryOpKind.Shr,
