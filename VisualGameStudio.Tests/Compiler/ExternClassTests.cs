@@ -149,4 +149,19 @@ public class ExternClassTests
         => Assert.That(ParseErrors(
             "Class Box\nPublic Sub click()\nConsole.WriteLine(1)\nEnd Sub\nEnd Class\n" +
             "Sub Main()\nEnd Sub"), Is.Empty);
+
+    // ------------------------------------------------------------------
+    // The flag has to REACH the backends, which read IR and never see the AST.
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void ExternClass_IsExternSurvivesToTheIr()
+        => Assert.That(JsTestSupport.BuildModule(ElementDecl + "Sub Main()\nEnd Sub")
+            .Classes["Element"].IsExtern, Is.True);
+
+    [Test]
+    public void OrdinaryClass_IsNotExternInTheIr()
+        => Assert.That(JsTestSupport.BuildModule(
+            "Class Box\nPublic X As Integer\nEnd Class\nSub Main()\nEnd Sub")
+            .Classes["Box"].IsExtern, Is.False);
 }

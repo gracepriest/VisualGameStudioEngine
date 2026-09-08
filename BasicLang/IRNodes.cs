@@ -1733,6 +1733,17 @@ namespace BasicLang.Compiler.IR
         /// <summary>True for BasicLang Structure declarations: value semantics on all backends.</summary>
         public bool IsStruct { get; set; }
 
+        /// <summary>
+        /// True for <c>Extern Class</c>: the type ALREADY EXISTS in the target runtime, so the
+        /// backend must emit NOTHING for it and its members carry signatures, not bodies.
+        ///
+        /// <para>⛔ A backend that emits a declaration anyway SHADOWS the real type —
+        /// <c>class Element {}</c> over the DOM's Element — which fails at run time from a build
+        /// that reported success. A backend with no such runtime concept must REFUSE the
+        /// program rather than ignore the flag.</para>
+        /// </summary>
+        public bool IsExtern { get; set; }
+
         public IRClass(string name)
         {
             Name = name;
