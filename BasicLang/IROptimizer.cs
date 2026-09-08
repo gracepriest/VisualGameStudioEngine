@@ -2081,7 +2081,20 @@ namespace BasicLang.Compiler.IR.Optimization
                     return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), binOp.Left);
                 if (IsTrue(binOp.Left))
                     return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), binOp.Right);
-                if (IsFalse(binOp.Right) || IsFalse(binOp.Left))
+                // ⛔ UNLIKE THE TWO ARMS ABOVE, THIS ONE DISCARDS THE OTHER OPERAND ENTIRELY.
+                // Those discard whichever side IsTrue matched, and IsTrue only matches an
+                // IRConstant — so they drop a literal and can never lose work. This arm drops
+                // the OTHER side, which may be a call.
+                //
+                // VB's `And` is NON-short-circuiting: `False And Probe()` must still call
+                // Probe. Ungated, this fired on exactly that shape and produced two defects at
+                // once, both measured: a dead store `t3 = false;` to a temp the declaration
+                // pass never emitted (CS0103 — generated C# that will not compile), and a
+                // DOUBLE evaluation, because the consumer re-renders the original operand tree
+                // inline rather than reading the folded temp. `AndAlso` was unaffected only
+                // because it is a different BinaryOpKind and never reached here.
+                if ((IsFalse(binOp.Right) && IsSideEffectFree(binOp.Left))
+                    || (IsFalse(binOp.Left) && IsSideEffectFree(binOp.Right)))
                     return new IRAssignment(
                         new IRVariable(binOp.Name, binOp.Type),
                         new IRConstant(false, new TypeInfo("Boolean", TypeKind.Primitive)));
@@ -2094,7 +2107,10 @@ namespace BasicLang.Compiler.IR.Optimization
                     return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), binOp.Left);
                 if (IsFalse(binOp.Left))
                     return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), binOp.Right);
-                if (IsTrue(binOp.Right) || IsTrue(binOp.Left))
+                // Same asymmetry as the And arm above — this one discards the OTHER operand,
+                // so it needs the same guard. `True Or Probe()` must still call Probe.
+                if ((IsTrue(binOp.Right) && IsSideEffectFree(binOp.Left))
+                    || (IsTrue(binOp.Left) && IsSideEffectFree(binOp.Right)))
                     return new IRAssignment(
                         new IRVariable(binOp.Name, binOp.Type),
                         new IRConstant(true, new TypeInfo("Boolean", TypeKind.Primitive)));
@@ -2126,6 +2142,21 @@ namespace BasicLang.Compiler.IR.Optimization
             }
             return false;
         }
+
+        /// <summary>
+        /// True when evaluating <paramref name="value"/> cannot be OBSERVED, so a rewrite may
+        /// drop it: a literal, or a read of an already-computed temp or local.
+        ///
+        /// <para>An <see cref="IRVariable"/> counts as free precisely BECAUSE the work that
+        /// produced it is a separate instruction that still executes — dropping the reference
+        /// loses the value, never the effect. Anything else (a call, or an operator tree that
+        /// may contain one) does NOT qualify: the operand IS the work.</para>
+        ///
+        /// <para>Deliberately conservative. A false negative costs one missed constant fold; a
+        /// false positive silently deletes a user's function call.</para>
+        /// </summary>
+        private static bool IsSideEffectFree(IRValue value) =>
+            value is IRConstant or IRVariable;
 
         private bool IsTrue(IRValue value)
         {
