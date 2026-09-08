@@ -159,11 +159,23 @@ public static class ServiceConfiguration
         services.AddSingleton<IWorkspaceService, WorkspaceService>();
         services.AddSingleton<ITaskRunnerService, TaskRunnerService>();
         services.AddSingleton<ITextMateService, TextMateService>();
+        // The Open VSX acquisition layer: download → extract → validate manifest → copy into
+        // ~/.vgs/extensions. FACTORY-registered for the same reasons as ClangdInstaller (:83) and
+        // LldbDapInstaller (:90) — the CONTAINER disposes it (it owns an HttpClient through
+        // OpenVsxClient), and DI never has to guess at its ctor.
+        //
+        // ⛔ NOT AddSingleton<VsixInstaller>() by type. Its ctor is
+        // `VsixInstaller(OpenVsxClient? = null, string? = null)` (VsixInstaller.cs:46) — every
+        // parameter optional — so by-type registration would bind silently with a default client
+        // and the real user-profile path, which is precisely the trap the BuildService comment at
+        // :28-32 records.
+        services.AddSingleton(sp => new VsixInstaller());
         services.AddSingleton<IExtensionService>(sp =>
             new ExtensionService(
                 sp.GetRequiredService<IOutputService>(),
                 sp.GetRequiredService<ITextMateService>(),
-                sp.GetRequiredService<ISnippetService>()));
+                sp.GetRequiredService<ISnippetService>(),
+                vsixInstaller: sp.GetRequiredService<VsixInstaller>()));
         services.AddSingleton<FileSearchService>();
 
         // Shell Services

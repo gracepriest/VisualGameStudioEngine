@@ -63,6 +63,12 @@ public class ExtensionService : IExtensionService
     private readonly ISnippetService? _snippetService;
     private readonly ICommandService? _commandService;
     private readonly IKeybindingService? _keybindingService;
+
+    /// <summary>
+    /// The Open VSX acquisition layer, when the container supplied one. Null in tests and in any
+    /// direct construction, where the inline install path is used instead.
+    /// </summary>
+    private readonly VsixInstaller? _vsixInstaller;
     private TextMateRegistrar? _textMateRegistrar;
     private ExtensionHost? _extensionHost;
     private bool _disposed;
@@ -74,19 +80,29 @@ public class ExtensionService : IExtensionService
     /// that exercised install would have WRITTEN — inside the developer's own
     /// <c>~/.vgs/extensions</c>. Production passes nothing and is unaffected.
     /// </param>
+    /// <param name="vsixInstaller">
+    /// The Open VSX acquisition layer (download, extract, manifest validation, copy). Optional so
+    /// existing tests and any direct construction keep working; when absent this service falls back
+    /// to its own inline install path.
+    ///
+    /// <para>Injected rather than constructed here so the container owns its lifetime (it holds an
+    /// HttpClient), and so a test can point it at a temp extensions root.</para>
+    /// </param>
     public ExtensionService(
         IOutputService outputService,
         ITextMateService? textMateService = null,
         ISnippetService? snippetService = null,
         ICommandService? commandService = null,
         IKeybindingService? keybindingService = null,
-        string? extensionsRoot = null)
+        string? extensionsRoot = null,
+        VsixInstaller? vsixInstaller = null)
     {
         _outputService = outputService;
         _textMateService = textMateService;
         _snippetService = snippetService;
         _commandService = commandService;
         _keybindingService = keybindingService;
+        _vsixInstaller = vsixInstaller;
 
         if (_textMateService != null)
         {
