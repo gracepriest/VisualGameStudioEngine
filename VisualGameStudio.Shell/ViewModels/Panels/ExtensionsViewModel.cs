@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using System.IO.Compression;
 using System.Net.Http;
 using System.Text.Json;
 using System.Timers;
@@ -179,109 +178,44 @@ public partial class ExtensionsViewModel : ViewModelBase, IDisposable
                 return;
             }
 
-            // Download VSIX to temp file
-            var tempPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid()}.vsix");
-            try
+            // The panel used to download, extract and copy the .vsix itself — a third copy of an
+            // install, beside ExtensionService's and VsixInstaller's, with its own extraction, its
+            // own idea of a valid manifest and its own HttpClient. It now asks the service, which
+            // owns acquisition (through VsixInstaller) and runtime registration alike.
+            if (_extensionService == null)
             {
-                using var response = await _httpClient.GetAsync(extension.DownloadUrl);
-                response.EnsureSuccessStatusCode();
-
-                await using (var fs = File.Create(tempPath))
-                {
-                    await response.Content.CopyToAsync(fs);
-                }
-
-                // Extract the VSIX (which is a ZIP) to the extensions directory
-                var extensionId = $"{extension.Publisher}.{extension.Name}";
-                var installDirName = $"{extensionId}-{extension.Version}";
-                var installDir = Path.Combine(_extensionsDirectory, installDirName);
-
-                // Remove old versions
-                foreach (var dir in Directory.GetDirectories(_extensionsDirectory))
-                {
-                    var dirName = Path.GetFileName(dir);
-                    if (dirName.StartsWith(extensionId + "-", StringComparison.OrdinalIgnoreCase) ||
-                        dirName.Equals(extensionId, StringComparison.OrdinalIgnoreCase))
-                    {
-                        try { Directory.Delete(dir, true); } catch { }
-                    }
-                }
-
-                // Extract VSIX to temp dir, then copy content to install dir
-                var tempExtractDir = Path.Combine(Path.GetTempPath(), $"vgs-extract-{Guid.NewGuid():N}");
-                Directory.CreateDirectory(tempExtractDir);
-
-                try
-                {
-                    // ⛔ SafeZip: a .vsix downloaded from Open VSX is UNTRUSTED third-party input.
-                    // abe151f routed the repo's five other extraction sites through this guard and
-                    // its message claims none remained outside it — this one was missed, and it is
-                    // the only extraction a user can reach through the UI.
-                    //
-                    // Measured, so the change is not oversold: ZipFile.ExtractToDirectory on .NET 8
-                    // already rejects `../x`, `..\x` and `\x` and sanitises an absolute entry into
-                    // the destination, so this is a CONSISTENCY fix rather than a vulnerability fix.
-                    // What it actually buys is all-or-nothing extraction instead of a partial one,
-                    // and a single implementation to reason about.
-                    BasicLang.Runtime.SafeZip.ExtractToDirectory(tempPath, tempExtractDir, overwriteFiles: true);
-
-                    // Find the package.json
-                    var packageJsonInExt = Path.Combine(tempExtractDir, "extension", "package.json");
-                    var packageJsonRoot = Path.Combine(tempExtractDir, "package.json");
-
-                    string sourceDir;
-                    if (File.Exists(packageJsonInExt))
-                    {
-                        sourceDir = Path.Combine(tempExtractDir, "extension");
-                    }
-                    else if (File.Exists(packageJsonRoot))
-                    {
-                        sourceDir = tempExtractDir;
-                    }
-                    else
-                    {
-                        StatusMessage = $"Failed to install {extension.DisplayName}: no package.json found in VSIX.";
-                        return;
-                    }
-
-                    // Copy extension content to install directory
-                    CopyDirectory(sourceDir, installDir);
-                }
-                finally
-                {
-                    try { Directory.Delete(tempExtractDir, true); } catch { }
-                }
-
-                extension.IsInstalled = true;
-                extension.IsEnabled = true;
-                extension.InstallPath = installDir;
-                extension.Status = "Installed";
-
-                // Add to installed list if not already there
-                if (!InstalledExtensions.Any(e => e.Namespace == extension.Namespace))
-                {
-                    InstalledExtensions.Add(extension);
-                }
-
-                // Activate via ExtensionService if available
-                if (_extensionService != null)
-                {
-                    // Re-discover to pick up the new extension
-                    await _extensionService.DiscoverExtensionsAsync();
-                    var ext = _extensionService.GetExtension(extensionId);
-                    if (ext != null)
-                    {
-                        await _extensionService.ActivateAsync(ext.Id);
-                        extension.IsActive = true;
-                    }
-                }
-
-                StatusMessage = $"{extension.DisplayName} installed successfully.";
+                // Only reachable from the designer's parameterless ctor; MainWindowViewModel hands
+                // the service over at startup and ExtensionsPanelWiringTests guards that it does.
+                StatusMessage = $"Failed to install {extension.DisplayName}: the extension service is unavailable.";
+                return;
             }
-            finally
+
+            var result = await _extensionService.InstallFromUrlAsync(extension.DownloadUrl);
+
+            if (!result.Success)
             {
-                try { File.Delete(tempPath); } catch { }
+                StatusMessage = $"Failed to install {extension.DisplayName}: {result.Error}";
+                return;
             }
+
+            // ⛔ NO DiscoverExtensionsAsync AND NO ActivateAsync HERE. Both used to follow the
+            // hand-rolled install, and both are now already done: InstallFromUrlAsync loads the
+            // contributions and activates. Calling them again re-registers the same extension —
+            // duplicated commands and keybindings that fire twice, surfacing nowhere near the cause.
+            extension.IsInstalled = true;
+            extension.IsEnabled = true;
+            extension.InstallPath = result.Extension?.InstallPath ?? "";
+            extension.IsActive = result.Extension?.IsActive ?? false;
+            extension.Status = result.RequiresRestart ? "Restart required" : "Installed";
+
+            if (!InstalledExtensions.Any(e => e.Namespace == extension.Namespace))
+            {
+                InstalledExtensions.Add(extension);
+            }
+
+            StatusMessage = result.RequiresRestart
+                ? $"{extension.DisplayName} installed — restart to activate."
+                : $"{extension.DisplayName} installed successfully.";
         }
         catch (Exception ex)
         {
@@ -290,21 +224,6 @@ public partial class ExtensionsViewModel : ViewModelBase, IDisposable
         finally
         {
             IsInstalling = false;
-        }
-    }
-
-    private static void CopyDirectory(string source, string destination)
-    {
-        Directory.CreateDirectory(destination);
-
-        foreach (var file in Directory.GetFiles(source))
-        {
-            File.Copy(file, Path.Combine(destination, Path.GetFileName(file)), true);
-        }
-
-        foreach (var dir in Directory.GetDirectories(source))
-        {
-            CopyDirectory(dir, Path.Combine(destination, Path.GetFileName(dir)));
         }
     }
 
