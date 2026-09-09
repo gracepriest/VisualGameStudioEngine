@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using BasicLang.Compiler.CodeGen.Net;
 using BasicLang.Compiler.ProjectSystem;
 using NUnit.Framework;
 
@@ -153,10 +154,13 @@ public class NetGeneratedShimConformanceTests
     /// writable. A real <c>FileStream</c> is seekable, so <c>Position</c> genuinely round-trips;
     /// <c>Stream.Null</c> would have read back 0 whether or not the setter ever crossed.</para>
     /// </summary>
-    [Test]
-    public void ANamedPropertySetter_CrossesAndTheGetterReadsItBack()
-    {
-        var built = BuildOnce("ConfProperty", new Dictionary<string, string>(StringComparer.Ordinal)
+    /// <summary>
+    /// The property program's sources, hoisted so the §9.3 handshake row below can reuse the SAME
+    /// memoized build instead of paying a second AOT publish. <see cref="BuildOnce"/> keys on the
+    /// project name, so both callers must pass this exact dictionary.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, string> PropertyProgram =
+        new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["Program.bas"] = """
                 Using System.IO
@@ -174,7 +178,12 @@ public class NetGeneratedShimConformanceTests
                  End Sub
                 End Module
                 """,
-        });
+        };
+
+    [Test]
+    public void ANamedPropertySetter_CrossesAndTheGetterReadsItBack()
+    {
+        var built = BuildOnce("ConfProperty", PropertyProgram);
 
         AssertBuilt(built.Result, "the §12.3 named-property program");
 
@@ -292,5 +301,62 @@ public class NetGeneratedShimConformanceTests
             "the failure must still be the nullptr-to-NetRef conversion. A DIFFERENT build "
             + "failure here means this row is now pinning something else entirely and is no "
             + "longer evidence about §8.2.\n" + text);
+    }
+
+    // =====================================================================================
+    // §9.3 — the startup handshake's FAILURE modes.
+    // =====================================================================================
+
+    /// <summary>
+    /// §9.3: a missing shim must fail the startup handshake with the SPECIFIED exit code.
+    ///
+    /// <para><c>NetProxyEmitter.StartupFailureExitCode</c> is 3, and its own doc comment says the
+    /// handshake tests and the emitter "cannot disagree about it" — yet nothing in the suite
+    /// asserted it. A constant no test reads is a constant the emitter can change freely.</para>
+    ///
+    /// <para>The generated startup TU loads the shim by BARE NAME, so the OS resolves it from the
+    /// executable's own directory. Deleting it there is exactly the real-world failure: a build
+    /// that succeeded but whose phase-7 deployment did not happen.</para>
+    ///
+    /// <para>⚠ The program runs in a COPY of the output directory, never the shared build's own.
+    /// <see cref="BuildOnce"/> memoizes that directory and the property row above still needs it
+    /// intact; deleting the shim in place would make the two tests order-dependent — green alone,
+    /// red together, or vice versa. Costs no publish: the build is reused.</para>
+    /// </summary>
+    [Test]
+    public void AMissingShim_FailsTheStartupHandshake_WithTheSpecifiedExitCode()
+    {
+        var built = BuildOnce("ConfProperty", PropertyProgram);
+        AssertBuilt(built.Result, "the §12.3 named-property program");
+
+        var sourceDir = Path.GetDirectoryName(built.Result.ExecutablePath)!;
+        var sandbox = NetShimPipelineFixture.NewTempDir("blnet-conf-noshim-");
+        Dirs.Add(sandbox);
+        foreach (var file in Directory.GetFiles(sourceDir))
+            File.Copy(file, Path.Combine(sandbox, Path.GetFileName(file)));
+
+        var shimName = NetProxyEmitter.ShimModuleFileName(
+            NetShimGenerator.ShimAssemblyName("ConfProperty"));
+        var shimPath = Path.Combine(sandbox, shimName);
+
+        Assert.That(File.Exists(shimPath), Is.True,
+            "guard: the shim must be present in the copy before we remove it, or this test "
+            + "proves nothing. Looked for " + shimName + " in " + sandbox);
+        File.Delete(shimPath);
+
+        var exe = Path.Combine(sandbox, Path.GetFileName(built.Result.ExecutablePath)!);
+        var (exitCode, stdout, stderr) = RunAllowingFailure(exe);
+        var dump = $"exit={exitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}";
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exitCode, Is.EqualTo(NetProxyEmitter.StartupFailureExitCode),
+                $"§9.3 specifies exit {NetProxyEmitter.StartupFailureExitCode} for a failed "
+                + "startup handshake. 0 would mean the program ran happily without the .NET side, "
+                + "which is worse than crashing.\n" + dump);
+            Assert.That(stdout, Does.Not.Contain("3"),
+                "the program must not have reached its first .NET call and printed a result.\n"
+                + dump);
+        });
     }
 }
