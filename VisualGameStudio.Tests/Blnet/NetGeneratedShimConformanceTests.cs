@@ -79,6 +79,46 @@ public class NetGeneratedShimConformanceTests
             NetShimPipelineFixture.TryDeleteDir(dir);
     }
 
+    /// <summary>
+    /// Run a built program that is EXPECTED to fail, returning its exit code and both streams
+    /// instead of asserting success.
+    ///
+    /// <para><c>NetShimPipelineFixture.Run</c> asserts <c>ExitCode == 0</c>, which is right for a
+    /// happy-path row and unusable for §8.2's handle-0 rule, where dying IS the specified
+    /// behaviour. Note <c>NetProxyEmitter.StartupFailureExitCode</c> (3) is asserted NOWHERE in
+    /// the suite, so a row that pins an exit code needs this path.</para>
+    ///
+    /// <para>⛔ Both streams are drained CONCURRENTLY. Reading stdout to end and only then
+    /// reading stderr deadlocks if the child fills the stderr pipe buffer while we are blocked on
+    /// stdout — and the WaitForExit timeout does not save you, because the block is in the read,
+    /// not the wait. A failing program is exactly the one likely to write a lot to stderr.</para>
+    /// </summary>
+    private static (int ExitCode, string StdOut, string StdErr) RunAllowingFailure(string exePath)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo(exePath)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = Path.GetDirectoryName(exePath)!,
+        };
+        using var process = System.Diagnostics.Process.Start(psi)!;
+        var outTask = process.StandardOutput.ReadToEndAsync();
+        var errTask = process.StandardError.ReadToEndAsync();
+
+        if (!process.WaitForExit(60_000))
+        {
+            try { process.Kill(entireProcessTree: true); } catch { /* already gone */ }
+            Assert.Fail("the built program did not exit within 60s — a §8.2 row must fail fast, "
+                        + "not hang.");
+        }
+
+        return (process.ExitCode,
+                outTask.GetAwaiter().GetResult().Replace("\r\n", "\n"),
+                errTask.GetAwaiter().GetResult().Replace("\r\n", "\n"));
+    }
+
     private static void AssertBuilt(CppProjectBuildResult result, string label)
     {
         Assert.That(result.Success, Is.True,
@@ -130,6 +170,7 @@ public class NetGeneratedShimConformanceTests
                   s.Position = 11
                   Console.WriteLine(s.Position)
                   Console.WriteLine(s.CanWrite)
+                  Console.WriteLine(Convert.ToInt32("A"c))
                  End Sub
                 End Module
                 """,
@@ -138,12 +179,118 @@ public class NetGeneratedShimConformanceTests
         AssertBuilt(built.Result, "the §12.3 named-property program");
 
         Assert.That(NetShimPipelineFixture.Run(built.Result.ExecutablePath!),
-            Is.EqualTo("3\n11\nTrue\n"),
+            Is.EqualTo("3\n11\nTrue\n65\n"),
             "These are .NET's own answers for a seekable FileStream, asserted rather than "
             + "whatever the backend happens to produce. A repeated first value means the setter "
             + "never crossed and the getter is reading a stale or default Position; '0' twice "
             + "means the handle is not the same object across statements (the fresh-handle-per-"
             + "call failure the summary describes); a missing 'True' means the Boolean result row "
-            + "regressed.");
+            + "regressed. The trailing 65 is §8.3's Char row crossing as an ARGUMENT to a real "
+            + ".NET static (Convert.ToInt32) and coming back as Int32 — .NET's answer for 'A'.");
+    }
+
+    /// <summary>
+    /// §12.3's Char row, non-ASCII half — authored as a PINNED DIVERGENCE, which is the only
+    /// honest way to write it.
+    ///
+    /// <para>The plan specifies this row as parity and records the old symptom: <c>"é"c</c>
+    /// printing 169 where .NET says 233, because the literal was emitted as multi-byte UTF-8
+    /// inside a single-quoted C++ <c>char</c> and died BEFORE the §8.3 wire conversion. That
+    /// symptom is STALE — the backend now REFUSES the literal outright, so authoring "169 vs 233"
+    /// would fail for the wrong reason.</para>
+    ///
+    /// <para>⛔ The refusal is deliberate and is NOT a step toward widening: this backend
+    /// represents Char as an 8-bit <c>char</c>, so U+00E9 and U+0429 would both truncate to A9 and
+    /// compare EQUAL. A build error is the correct behaviour, and pinning it here stops a future
+    /// "fix" from silently restoring the truncation. This row costs no publish — the capability
+    /// checker refuses long before phase 5.</para>
+    ///
+    /// <para>⛔ <c>Convert.ToInt32</c>, never <c>AscW</c>/<c>ChrW</c>: those are CS0103 on the C#
+    /// backend too, so a row written with them fails on both legs for an unrelated reason.</para>
+    /// </summary>
+    [Test]
+    public void ANonAsciiCharLiteral_IsRefusedAtBuild_NotSilentlyTruncated()
+    {
+        var dir = NetShimPipelineFixture.NewTempDir("blnet-conf-char-");
+        Dirs.Add(dir);
+        File.WriteAllText(Path.Combine(dir, "Program.bas"), """
+            Module Program
+             Sub Main()
+              Console.WriteLine(Convert.ToInt32("é"c))
+             End Sub
+            End Module
+            """);
+
+        var projectPath = NetShimPipelineFixture.WriteProject(dir, "ConfCharRefusal");
+        var result = CppProjectBuilder.Build(ProjectFile.Load(projectPath), "Release");
+
+        Assert.That(result.Success, Is.False,
+            "a non-ASCII Char literal must FAIL the native build. If this starts succeeding, the "
+            + "backend either widened Char (a real change — update this row to parity) or "
+            + "reinstated the silent 8-bit truncation (a miscompile — U+00E9 and U+0429 both end "
+            + "in A9 and would compare equal).");
+
+        var text = NetShimPipelineFixture.Diagnostics(result) + "\n" + result.RawToolchainOutput;
+        Assert.That(text, Does.Contain("U+00E9").And.Contain("above U+007F"),
+            "the refusal must NAME the offending code point and the limit, so the message is "
+            + "actionable. Got:\n" + text);
+    }
+
+    /// <summary>
+    /// §8.2's handle-0 rule with <c>Nothing</c> as the RECEIVER.
+    ///
+    /// <para><c>Nothing</c> crosses as handle 0, and the generated shim guards every handle
+    /// argument against 0 before consulting the table
+    /// (<c>NetShimGeneratorTests.HandleArgumentsAreGuardedAgainstZeroBeforeTheTableIsConsulted</c>).
+    /// So a call on a null receiver must fail in a CONTROLLED way — a detected bad handle — not
+    /// by dereferencing 0 or by silently answering a default.</para>
+    ///
+    /// <para>⛔ <b>PINNED DIVERGENCE — the row does not reach runtime at all.</b> §12.3 wants this
+    /// proven at run level and the plan expects a controlled failure. MEASURED: it does not
+    /// COMPILE. <c>CType(Nothing, Stream)</c> emits <c>static_cast&lt;NetRef&gt;(nullptr)</c> and
+    /// MSVC rejects it — <c>C2440: cannot convert from 'nullptr' to 'BasicLang::NetRef'</c>, with
+    /// notes ruling out all three NetRef constructors. So §8.2's handle-0 rule is not implemented
+    /// for <c>Nothing</c> in a handle slot: <c>MapType</c> answers a handle DEFAULT with
+    /// <c>{}</c> (the empty handle), but a CAST to a handle type has no such arm.</para>
+    ///
+    /// <para>Two shapes were rejected before this one, and both are recorded rather than quietly
+    /// swapped: bare <c>Dim s As Stream = Nothing</c> is <b>BL3001</b> (Nothing types as Object,
+    /// so BasicLang demands the cast), and the cast form is the C2440 above. Chipped —
+    /// see the chip for the repro. This test pins the CURRENT behaviour so the day it changes is
+    /// deliberate; when the emission is fixed, replace it with the runtime row §12.3 actually
+    /// asks for rather than deleting it.</para>
+    /// </summary>
+    [Test]
+    public void NothingInAHandleSlot_DoesNotYetCompile_PinnedDivergence()
+    {
+        var dir = NetShimPipelineFixture.NewTempDir("blnet-conf-null-");
+        Dirs.Add(dir);
+        File.WriteAllText(Path.Combine(dir, "Program.bas"), """
+            Using System.IO
+
+            Module Program
+             Sub Main()
+              Dim s As Stream = CType(Nothing, Stream)
+              Console.WriteLine("before")
+              Console.WriteLine(s.CanRead)
+              Console.WriteLine("after")
+             End Sub
+            End Module
+            """);
+
+        var projectPath = NetShimPipelineFixture.WriteProject(dir, "ConfNullReceiver");
+        var result = CppProjectBuilder.Build(ProjectFile.Load(projectPath), "Release");
+        var text = NetShimPipelineFixture.Diagnostics(result) + "\n" + result.RawToolchainOutput;
+
+        Assert.That(result.Success, Is.False,
+            "Nothing in a handle slot is currently expected NOT to build. If this starts "
+            + "succeeding the emission was fixed — good — and this row should become the RUNTIME "
+            + "row §12.3 asks for (call on a null receiver fails in a controlled way), not be "
+            + "deleted.\n" + text);
+
+        Assert.That(text, Does.Contain("NetRef"),
+            "the failure must still be the nullptr-to-NetRef conversion. A DIFFERENT build "
+            + "failure here means this row is now pinning something else entirely and is no "
+            + "longer evidence about §8.2.\n" + text);
     }
 }
