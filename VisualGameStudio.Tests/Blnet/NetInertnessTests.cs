@@ -445,6 +445,88 @@ public class NetInertnessTests
     }
 
     /// <summary>
+    /// §8.5's managed marker is the FIFTH site — chip task_de0ad105.
+    ///
+    /// <para><c>CppCodeGenerator</c> tests <c>TypeInfo.NetHandleTypeFullName</c> at six executable
+    /// sites and lowers a handle-typed value to <c>BasicLang::NetRef</c>. <c>CppCapabilityChecker</c>
+    /// tested it at NONE, deciding instead from the hard-coded five-name <c>ManagedOwned</c> set,
+    /// so it REFUSED the very shape codegen lowers correctly — "no C++ mapping exists for this
+    /// type" over a type the backend maps fine.</para>
+    ///
+    /// <para><b>Why an INFERRED local specifically.</b> The marker is minted in exactly one place,
+    /// <c>SemanticAnalyzer.NetHandleResultTypeInfo</c>, reachable only from a member RESULT. So
+    /// <c>Dim e = Encoding.GetEncoding(…)</c> carries it and <c>Dim e As Encoding</c> does not —
+    /// MEASURED both ways against the guard. An annotated local, a parameter and a field stay
+    /// refused, and widening THAT is a front-end change, not this one. This test therefore pins
+    /// the half that is actually fixed, and the companion below pins the half that is not, so a
+    /// future reader cannot mistake the scope.</para>
+    ///
+    /// <para>⭐ It is not a marginal shape. An inferred local is the only way a program can hold
+    /// ONE handle across statements without a curated name: the documented static-factory
+    /// workaround (<c>Zoo.MakeDog().Speak()</c>) mints a fresh handle per call and so can never
+    /// observe handle identity — which is exactly what a §12.3 property write-then-read-back row
+    /// needs.</para>
+    /// </summary>
+    [Test]
+    public void AnInferredLocalOfAHandleType_IsNotRefusedByTheCapabilityChecker()
+    {
+        var source = """
+            Using System.Text
+
+            Module M
+             Sub Main()
+              Dim e = Encoding.GetEncoding("utf-8")
+              Console.WriteLine(e.WebName)
+             End Sub
+            End Module
+            """;
+
+        var (result, _) = EmitViaBuilder(new Dictionary<string, string> { ["Main.bas"] = source });
+
+        Assert.That(TranspileErrors(result),
+            Has.None.Contains("no C++ mapping exists for this type"),
+            "The capability checker refused a local whose type carries the §8.5 handle marker. "
+            + "CppCodeGenerator.MapType lowers exactly this to BasicLang::NetRef, so the checker "
+            + "is refusing a shape the backend supports — the missed fifth site of the "
+            + "managed-marker rule (task_de0ad105).");
+    }
+
+    /// <summary>
+    /// The other half of task_de0ad105, pinned as a KNOWN LIMITATION rather than left implicit.
+    /// An annotated local and a parameter do NOT carry the marker, because nothing but a member
+    /// result mints it — so both are still refused, and this test says so out loud. If it ever
+    /// goes red, the front end started propagating the marker and the message here (and the
+    /// scope note above) needs updating rather than the assertion being deleted.
+    /// </summary>
+    [Test]
+    public void AnAnnotatedLocalOrParameterOfAHandleType_IsStillRefused()
+    {
+        var source = """
+            Using System.Text
+
+            Module M
+             Sub Consume(enc As Encoding)
+              Console.WriteLine(enc.WebName)
+             End Sub
+
+             Sub Main()
+              Dim e As Encoding = Encoding.GetEncoding("utf-8")
+              Consume(e)
+             End Sub
+            End Module
+            """;
+
+        var (result, _) = EmitViaBuilder(new Dictionary<string, string> { ["Main.bas"] = source });
+
+        Assert.That(TranspileErrors(result),
+            Has.Some.Contains("no C++ mapping exists for this type"),
+            "An annotated local / parameter is expected to STILL be refused: the marker is minted "
+            + "only by NetHandleResultTypeInfo, off a member result. If this passes now, the "
+            + "front end began carrying the marker into annotations and task_de0ad105's second "
+            + "half is done — update this test deliberately, do not just delete it.");
+    }
+
+    /// <summary>
     /// Constraint (a) from the Task 8 review: <see cref="NetTypeResolver"/> REQUIRES generic arity
     /// and never guesses, so an UNCLAIMED generic must be asked for as <c>Queue`1</c>.
     ///
