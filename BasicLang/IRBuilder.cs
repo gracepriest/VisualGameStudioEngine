@@ -3016,7 +3016,12 @@ namespace BasicLang.Compiler.IR
                         throw new Exception($"Exit {node.Kind} outside of loop");
                     }
                     var loopContext = _loopStack.Peek();
-                    EmitInstruction(new IRBranch(loopContext.BreakTarget));
+                    // ⛔ IsLoopExit is the whole point. This branch and the one that ends an
+                    // ordinary iteration both target BreakTarget and are otherwise identical, so
+                    // this is the ONLY place the distinction still exists. Dropping it forced
+                    // every backend to guess it back from block position — and the C++ backend
+                    // guessed `continue;`, turning Exit For into Continue For (task_4cc381f1).
+                    EmitInstruction(new IRBranch(loopContext.BreakTarget) { IsLoopExit = true });
                     break;
 
                 case ExitKind.Sub:

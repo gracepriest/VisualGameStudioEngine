@@ -4480,7 +4480,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 switch (inst)
                 {
                     case IRBranch br when br.Target == endBlock:
-                        EmitRegionEnd(endBlock, endMode);
+                        EmitRegionEnd(endBlock, endMode, br.IsLoopExit);
                         break;
                     case IRConditionalBranch cb when cb.TrueTarget == endBlock || cb.FalseTarget == endBlock:
                         EmitConditionalBranchToEnd(cb, endBlock, endMode);
@@ -4492,12 +4492,24 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             }
         }
 
-        /// <summary>Lower a whole-block branch to the region's EndBlock per the enclosing construct.</summary>
-        private void EmitRegionEnd(BasicBlock endBlock, RegionEnd endMode)
+        /// <summary>
+        /// Lower a whole-block branch to the region's EndBlock per the enclosing construct.
+        ///
+        /// <para><paramref name="isLoopExit"/> separates the two branches that are otherwise
+        /// IDENTICAL in the IR: an explicit <c>Exit For</c> versus the branch that ends an
+        /// ordinary iteration. Both target the loop's EndBlock. Emitting <c>continue;</c> for
+        /// both — which this did — makes <c>Exit For</c> behave as <c>Continue For</c>, a silent
+        /// miscompile from a build that reported success (task_4cc381f1). ⛔ It cannot be
+        /// recovered positionally: an <c>If</c> in the body yields a merge block that also
+        /// branches here and must stay <c>continue</c>, so the flag comes from the front end.</para>
+        /// </summary>
+        private void EmitRegionEnd(BasicBlock endBlock, RegionEnd endMode, bool isLoopExit = false)
         {
             switch (endMode)
             {
-                case RegionEnd.LoopContinue: WriteLine("continue;"); break;
+                case RegionEnd.LoopContinue:
+                    WriteLine(isLoopExit ? "break;" : "continue;");
+                    break;
                 case RegionEnd.GotoEnd: WriteLine($"goto {EndLabelName(endBlock)};"); break;
                 case RegionEnd.FallThrough: /* emit nothing — fall out of the { } scope */ break;
             }
