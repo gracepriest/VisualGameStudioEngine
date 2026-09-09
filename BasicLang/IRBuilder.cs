@@ -1289,8 +1289,30 @@ namespace BasicLang.Compiler.IR
             _currentBlock = null;
         }
 
+        /// <summary>
+        /// Lowers a property's accessors into <c>get_X</c>/<c>set_X</c> functions on the module.
+        ///
+        /// <para>⚠ <b>Saves and restores the build context rather than nulling it</b>, matching
+        /// every other site here that creates a nested function (the interface default-impl,
+        /// lambda and operator paths all do). This method used to end with
+        /// <c>_currentFunction = _currentBlock = null</c>, which is only safe because nothing
+        /// today visits a property while a function is being built — BasicLang has no top-level
+        /// statements and no function-local classes, so <c>Visit(ClassNode)</c> is only reached
+        /// from the declaration walk.</para>
+        ///
+        /// <para>⛔ That is a thin guarantee for a SILENT failure mode: <see cref="EmitInstruction"/>
+        /// discards instructions outright when <c>_currentBlock</c> is null — no error, no
+        /// warning — so the day either of those grammar facts changes, everything after a
+        /// property would vanish from the output with a clean build. Restoring costs two locals
+        /// and removes the trap. <b>This is hardening, not a bug fix: no reachable input
+        /// misbehaves today</b> (measured across full/auto properties, classes in Modules, .mod
+        /// files, and the multi-file project route, on the C#, C++ and JavaScript backends).</para>
+        /// </summary>
         public void Visit(PropertyNode node)
         {
+            var savedFunction = _currentFunction;
+            var savedBlock = _currentBlock;
+
             var propertyType = node.PropertyType != null
                 ? _semanticAnalyzer.GetNodeType(node) ?? new TypeInfo("Object", TypeKind.Class)
                 : new TypeInfo("Object", TypeKind.Class);
@@ -1339,8 +1361,8 @@ namespace BasicLang.Compiler.IR
                 }
             }
 
-            _currentFunction = null;
-            _currentBlock = null;
+            _currentFunction = savedFunction;
+            _currentBlock = savedBlock;
         }
 
         public void Visit(MyBaseExpressionNode node)
@@ -3016,7 +3038,12 @@ namespace BasicLang.Compiler.IR
                         throw new Exception($"Exit {node.Kind} outside of loop");
                     }
                     var loopContext = _loopStack.Peek();
-                    EmitInstruction(new IRBranch(loopContext.BreakTarget));
+                    // ⛔ IsLoopExit is the whole point. This branch and the one that ends an
+                    // ordinary iteration both target BreakTarget and are otherwise identical, so
+                    // this is the ONLY place the distinction still exists. Dropping it forced
+                    // every backend to guess it back from block position — and the C++ backend
+                    // guessed `continue;`, turning Exit For into Continue For (task_4cc381f1).
+                    EmitInstruction(new IRBranch(loopContext.BreakTarget) { IsLoopExit = true });
                     break;
 
                 case ExitKind.Sub:

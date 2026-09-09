@@ -382,7 +382,26 @@ namespace BasicLang.Compiler.IR
     public class IRBranch : IRInstruction
     {
         public BasicBlock Target { get; set; }
-        
+
+        /// <summary>
+        /// True when this branch is an explicit <c>Exit For/Do/While</c> — a deliberate escape
+        /// from the loop — rather than the branch that ends an ordinary iteration.
+        ///
+        /// <para><b>Both are <c>IRBranch(loop.BreakTarget)</c> and are otherwise identical</b>,
+        /// which is a real problem for a backend: C++ needs <c>break;</c> for the first and
+        /// <c>continue;</c> for the second, and JavaScript needs <c>break</c> vs fall-through.
+        /// Without this flag each backend has to guess the difference back from block position,
+        /// and the obvious guess is WRONG — an <c>If</c> inside the body produces a merge block
+        /// that also branches to the loop's end block and must NOT become a break. That guess
+        /// shipped as a silent miscompile: <c>Exit For</c> inside a <c>For Each</c> behaved as
+        /// <c>Continue For</c> on the C++ backend (chip task_4cc381f1).</para>
+        ///
+        /// <para>Set by <c>IRBuilder.Visit(ExitStatementNode)</c>, which is the only place that
+        /// knows the user wrote <c>Exit</c>. Consumers that do not care may ignore it: a branch
+        /// is still a branch to the same target.</para>
+        /// </summary>
+        public bool IsLoopExit { get; set; }
+
         public IRBranch(BasicBlock target)
         {
             Target = target;

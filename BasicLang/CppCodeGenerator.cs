@@ -4586,7 +4586,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 switch (inst)
                 {
                     case IRBranch br when br.Target == endBlock:
-                        EmitRegionEnd(endBlock, endMode, endLabel);
+                        EmitRegionEnd(endBlock, endMode, br.IsLoopExit, endLabel);
                         break;
                     case IRConditionalBranch cb when cb.TrueTarget == endBlock || cb.FalseTarget == endBlock:
                         EmitConditionalBranchToEnd(cb, endBlock, endMode, endLabel);
@@ -4615,12 +4615,28 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// loop — control fell from <c>if0_end_nex</c> into the ElseIf arm, printed its body, and
         /// jumped back. It compiled cleanly. Use <paramref name="endLabel"/> to retarget the jump
         /// instead of switching to FallThrough.</para>
+        ///
+        /// <para><paramref name="isLoopExit"/> separates the two branches that are otherwise
+        /// IDENTICAL in the IR: an explicit <c>Exit For</c> versus the branch that ends an
+        /// ordinary iteration. Both target the loop's EndBlock. Emitting <c>continue;</c> for
+        /// both — which this did — makes <c>Exit For</c> behave as <c>Continue For</c>, a silent
+        /// miscompile from a build that reported success (task_4cc381f1). ⛔ It cannot be
+        /// recovered positionally: an <c>If</c> in the body yields a merge block that also
+        /// branches here and must stay <c>continue</c>, so the flag comes from the front end.</para>
+        ///
+        /// <para>⚠ The two parameters are INDEPENDENT and address different arms —
+        /// <paramref name="endLabel"/> retargets <c>GotoEnd</c>, <paramref name="isLoopExit"/>
+        /// splits <c>LoopContinue</c>. They arrived as separate fixes and a merge that kept only
+        /// one would silently reinstate the other's bug.</para>
         /// </summary>
-        private void EmitRegionEnd(BasicBlock endBlock, RegionEnd endMode, string endLabel = null)
+        private void EmitRegionEnd(BasicBlock endBlock, RegionEnd endMode,
+            bool isLoopExit = false, string endLabel = null)
         {
             switch (endMode)
             {
-                case RegionEnd.LoopContinue: WriteLine("continue;"); break;
+                case RegionEnd.LoopContinue:
+                    WriteLine(isLoopExit ? "break;" : "continue;");
+                    break;
                 case RegionEnd.GotoEnd: WriteLine($"goto {endLabel ?? EndLabelName(endBlock)};"); break;
                 case RegionEnd.FallThrough: /* emit nothing — fall out of the { } scope */ break;
             }

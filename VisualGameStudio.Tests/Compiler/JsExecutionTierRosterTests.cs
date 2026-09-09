@@ -88,8 +88,9 @@ public class JsExecutionTierRosterTests
     /// </summary>
     private static readonly HashSet<string> NotJavaScriptExecution = new()
     {
-        // Compiles and runs real C++ through CppToolchain — nothing to do with Node.
+        // Compile and run real C++ through CppToolchain — nothing to do with Node.
         "CppFinallyExecutionTests",
+        "CppExitForExecutionTests",
     };
 
     /// <summary>Counts NUnit cases: a [TestCase]-driven method contributes one per attribute.</summary>
