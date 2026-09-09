@@ -33,6 +33,15 @@ public class NetProxyEmitterTests
     private static NetParameterDescriptor P(string type, NetRefKind refKind = NetRefKind.None) =>
         new(refKind, type);
 
+    /// <summary>
+    /// §8.4's DELEGATE parameter. Separate from <see cref="P"/> because delegate-ness is carried,
+    /// not derived: <c>DelegateInvokeSignature</c> is the only thing that makes
+    /// <c>NetParameterDescriptor.IsDelegate</c> true, and both emitters key the Callback wire row
+    /// off it.
+    /// </summary>
+    private static NetParameterDescriptor PDelegate(string type, string invokeSignature) =>
+        new(NetRefKind.None, type, invokeSignature);
+
     private static NetMemberDescriptor Member(
         string name, string declaringType, NetMemberCategory kind, bool isStatic,
         string type, params NetParameterDescriptor[] parameters) =>
@@ -117,6 +126,33 @@ public class NetProxyEmitterTests
                    true, "System.Decimal", P("System.Decimal")),
             Member("Stamped", "MyLib.Widen", NetMemberCategory.Method,
                    true, "System.DateTimeOffset", P("System.DateTimeOffset")),
+            // §8.4's CALLBACK row (P2a-2 Task 12 Step 0). Until this member existed the surface
+            // had no delegate parameter at all, so WireKind.Callback — a row BOTH emitters carry —
+            // never reached ExportSignaturesMatchTheProxyTableSlotSignatures, the ONLY assertion
+            // that compares the C function-pointer signature against the C# export signature
+            // through a type table belonging to neither producer.
+            //
+            // ⛔ THE NAME ORACLE IS NOT THIS ORACLE. NetDelegateTests.
+            // ADelegateBearingSurface_KeepsSlotsAndExportsEqual already covers a delegate-bearing
+            // surface, but it compares SlotNames against SurfaceDerivedExportNames — NAMES. It
+            // passes whether the callback parameter is spelled uint64_t/ulong on both sides or
+            // uint64_t on one and something narrower on the other, and a width mismatch through a
+            // function pointer is stack corruption, not a warning. Only a SIGNATURE comparison
+            // sees that, and this member is what puts the row in front of it.
+            //
+            // The dispatcher this member requires is a MANAGED helper, deliberately neither a slot
+            // nor an export, so it must NOT change ShapeCount — only the member itself does.
+            //
+            // ⛔ THE INVOKE SIGNATURE MUST BE BLITTABLE SCALARS. §8.4 v1 admits nothing else:
+            // NetShimGenerator.RequireBlittableScalar (:580) throws NotSupportedException for a
+            // Handle, String or struct slot, pointing at the spec rather than emitting. MEASURED
+            // while writing this — a MatchEvaluator (System.String(Match)) is REFUSED, because
+            // Match is a Handle. That refusal is correct and load-bearing, so the row here uses
+            // the shape the gate admits; widening it is a spec change, not a fixture change.
+            Member("Fold", "MyLib.Widen", NetMemberCategory.Method,
+                   true, "System.Int32",
+                   P("System.Int32"),
+                   PDelegate("MyLib.IntFn", "System.Int32(System.Int32,System.Int32)")),
         },
         new[] { "System.Text.RegularExpressions.Regex" });
 
@@ -131,7 +167,7 @@ public class NetProxyEmitterTests
     /// slots on purpose — as a side channel they would have been exempt from §12.4's
     /// slots-≡-exports comparison — so they belong in this count and in every per-body
     /// assertion that iterates it.</para>
-    internal const int ShapeCount = 17;
+    internal const int ShapeCount = 18;
 
     /// <summary>
     /// <b>The row-by-row tie between <c>NetMarshalTable.WireRows</c>' <c>CWire</c> column and
