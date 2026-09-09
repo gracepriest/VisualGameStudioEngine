@@ -737,6 +737,27 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         {
             if (type == null) return;
 
+            // §8.5's MANAGED MARKER — THE FIFTH SITE (chip task_de0ad105), and it must be tested
+            // FIRST, before every Kind- and name-keyed arm below. That ordering is the same rule
+            // CppCodeGenerator states at MapType, BareCollectionType and IsCollectionType: a
+            // handle-represented .NET List(Of Integer) is NAMED "List" and a handle String[] is
+            // NAMED "String" with Kind=Array, so any arm that reads the name or the Kind first
+            // decides on a spelling that does not describe what the value actually is.
+            //
+            // WHY IT BELONGS HERE AT ALL. This checker decided a type's legality from the
+            // hard-coded five-name ManagedOwned set and _userDefinedNames, and refused everything
+            // else at the bottom of this method — while CppCodeGenerator, at six executable sites,
+            // already lowers anything carrying this marker to BasicLang::NetRef. The checker was
+            // refusing shapes the backend supports. Codegen was never the missing half.
+            //
+            // ⚠ SCOPE, MEASURED BOTH WAYS. The marker is minted in exactly one place —
+            // SemanticAnalyzer.NetHandleResultTypeInfo — reachable only from a member RESULT. So
+            // this admits `Dim e = Encoding.GetEncoding(…)` and does NOT admit `Dim e As Encoding`,
+            // a parameter, or a field: those annotations never carry the marker. Both halves are
+            // pinned by tests (NetInertnessTests), so the limit is recorded rather than implied.
+            // Carrying the marker into annotations is a front-end change, not this one.
+            if (type.NetHandleTypeFullName != null) return;
+
             if (type.Kind == TypeKind.Array)
             {
                 CheckType(type.ElementType, where, diags);
