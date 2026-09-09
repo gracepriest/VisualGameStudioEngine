@@ -520,7 +520,19 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// </summary>
         protected override string MapType(TypeInfo type)
         {
-            if (type == null) return base.MapType(type);
+            // ⛔ NOT base.MapType FOR NULL. The shared base answers a null type with the literal
+            // string "object" (ICodeGenerator.MapType) — a C# type name, which is correct for
+            // the C# backend and is NOT a C++ type. It reached the generated source verbatim as
+            // `object t2 = {};` and g++ reported "'object' was not declared in this scope", from
+            // a build BasicLang had already reported as successful.
+            //
+            // MEASURED: an untyped temp is produced for a Console.WriteLine inside a Finally,
+            // whose body is emitted twice. It is DEAD either way — every WriteLine renders
+            // inline as `cout << …` and no temp is read — so the declaration is noise; but it
+            // must at least be VALID noise. "void*" is this backend's own answer for Object
+            // (_typeMap["Object"]), which is what the other dead temps in the same function
+            // already get.
+            if (type == null) return "void*";
             if (type.Kind == TypeKind.TypeParameter) return SanitizeName(type.Name);
 
             // P2a-2 Task 9 (spec §8.5) — THE CATEGORY MARKER, TESTED FIRST. ORDER IS THE WHOLE
