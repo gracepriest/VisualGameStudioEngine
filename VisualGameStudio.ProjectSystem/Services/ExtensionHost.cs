@@ -201,6 +201,18 @@ public class ExtensionHost : IDisposable
             _rpc.AddLocalRpcMethod("webview/create", new Action<string, string, string, string?>(OnWebviewCreate));
             _rpc.AddLocalRpcMethod("webview/setHtml", new Action<string, string>(OnWebviewSetHtml));
             _rpc.AddLocalRpcMethod("workspace/applyEdit", new Func<JsonElement, Task<bool>>(OnApplyEditAsync));
+
+            // workspace.fs — REQUESTS, so an unregistered one is not a silent no-op like the
+            // notifications above: it returns a JSON-RPC error, which rejects the promise the
+            // extension is awaiting, usually inside activate(). These eight were unhandled.
+            _rpc.AddLocalRpcMethod("workspace/fs/readFile", new Func<string, string>(OnFsReadFile));
+            _rpc.AddLocalRpcMethod("workspace/fs/writeFile", new Action<string, string>(OnFsWriteFile));
+            _rpc.AddLocalRpcMethod("workspace/fs/stat", new Func<string, ExtensionFileStat>(OnFsStat));
+            _rpc.AddLocalRpcMethod("workspace/fs/readDirectory", new Func<string, List<object[]>>(OnFsReadDirectory));
+            _rpc.AddLocalRpcMethod("workspace/fs/createDirectory", new Action<string>(OnFsCreateDirectory));
+            _rpc.AddLocalRpcMethod("workspace/fs/delete", new Action<string, JsonElement>(OnFsDelete));
+            _rpc.AddLocalRpcMethod("workspace/fs/rename", new Action<string, string, JsonElement>(OnFsRename));
+            _rpc.AddLocalRpcMethod("workspace/fs/copy", new Action<string, string, JsonElement>(OnFsCopy));
             _rpc.AddLocalRpcMethod("extensionActivated", new Action<string>(OnExtensionActivated));
             _rpc.AddLocalRpcMethod("log", new Action<string, string>(OnLog));
             _rpc.AddLocalRpcMethod("ready", new Action(OnReady));
@@ -543,6 +555,66 @@ public class ExtensionHost : IDisposable
     /// toward the real VS Code contract, which is <c>file:///</c> URIs rather than Windows paths.</para>
     /// </summary>
     public static string ToDocumentUri(string pathOrUri)
+    {
+        return ToDocumentUriCore(pathOrUri);
+    }
+
+    #region workspace.fs handlers
+
+    // Thin adapters. The work lives in ExtensionFileSystem so it can be tested without a process;
+    // these exist only to match the wire shape.
+    //
+    // ⛔ PARAMETER NAMES ARE THE CONTRACT. StreamJsonRpc binds the JS side's parameter object by
+    // EXACT, CASE-SENSITIVE NAME and rejects unknown keys, so `uri`, `content`, `source`, `target`
+    // and `options` are fixed by workspace.js:125-184 — renaming one silently unbinds the call.
+    //
+    // ⛔ `options` MUST have a default. workspace.js passes `options` straight through, and when the
+    // extension omits it the value is `undefined` — which JSON.stringify DROPS, so the key never
+    // arrives. A parameter with no default fails to bind when its key is absent, which is the exact
+    // defect that killed treeView/create.
+
+    private static string OnFsReadFile(string uri) => ExtensionFileSystem.ReadFile(uri);
+
+    private static void OnFsWriteFile(string uri, string content) =>
+        ExtensionFileSystem.WriteFile(uri, content);
+
+    private static ExtensionFileStat OnFsStat(string uri) => ExtensionFileSystem.Stat(uri);
+
+    private static List<object[]> OnFsReadDirectory(string uri) =>
+        ExtensionFileSystem.ReadDirectory(uri);
+
+    private static void OnFsCreateDirectory(string uri) => ExtensionFileSystem.CreateDirectory(uri);
+
+    private static void OnFsDelete(string uri, JsonElement options = default) =>
+        ExtensionFileSystem.Delete(uri, BoolOption(options, "recursive"));
+
+    private static void OnFsRename(string source, string target, JsonElement options = default) =>
+        ExtensionFileSystem.Rename(source, target, BoolOption(options, "overwrite"));
+
+    private static void OnFsCopy(string source, string target, JsonElement options = default) =>
+        ExtensionFileSystem.Copy(source, target, BoolOption(options, "overwrite"));
+
+    /// <summary>
+    /// Reads one boolean out of an optional options object, defaulting to false.
+    ///
+    /// <para>⛔ The <c>ValueKind</c> check comes FIRST and is not defensive padding:
+    /// <see cref="JsonElement.TryGetProperty(string, out JsonElement)"/> THROWS
+    /// <see cref="InvalidOperationException"/> on a non-object — it does not return false. An omitted
+    /// options key arrives as <c>Undefined</c>, and <c>options: null</c> arrives as <c>Null</c>;
+    /// probing either would throw out of the handler and turn a defaulted flag into a failed
+    /// request.</para>
+    /// </summary>
+    private static bool BoolOption(JsonElement options, string name)
+    {
+        if (options.ValueKind != JsonValueKind.Object) return false;
+        if (!options.TryGetProperty(name, out var value)) return false;
+
+        return value.ValueKind == JsonValueKind.True;
+    }
+
+    #endregion
+
+    private static string ToDocumentUriCore(string pathOrUri)
     {
         if (string.IsNullOrWhiteSpace(pathOrUri)) return pathOrUri;
 

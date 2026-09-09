@@ -74,8 +74,11 @@ public class OpenVsxClient : IDisposable
         }
         catch (Exception ex)
         {
+            // Deliberately does NOT throw: search runs on a keystroke path, where an exception is
+            // worse than a message. But it must not report failure as emptiness either — the
+            // caller gets the reason and decides how to show it.
             System.Diagnostics.Debug.WriteLine($"OpenVSX search failed: {ex.Message}");
-            return new OpenVsxSearchResult();
+            return new OpenVsxSearchResult { Error = ex.Message };
         }
     }
 
@@ -183,36 +186,41 @@ public class OpenVsxClient : IDisposable
     /// <param name="destinationPath">Local path to save the .vsix file.</param>
     /// <param name="progress">Optional progress reporter (bytes downloaded, total bytes).</param>
     /// <param name="ct">Cancellation token.</param>
+    /// <remarks>
+    /// Delegates to <see cref="FileDownloader"/>, which is this method's own loop lifted out and
+    /// fixed of three hazards it had. Keeping the signature means callers are unaffected.
+    ///
+    /// <list type="number">
+    /// <item><b>A 30-second cap on the whole transfer.</b> The constructor sets
+    /// <c>Timeout = 30s</c> on <c>_httpClient</c>, which is right for the JSON API calls — but under
+    /// <c>ResponseHeadersRead</c> that timeout covers the BODY read too, so any VSIX taking longer
+    /// than 30 seconds was aborted mid-stream. FileDownloader uses an infinite client timeout and a
+    /// per-call deadline instead.</item>
+    /// <item><b>No staging.</b> It streamed straight into <c>File.Create(destinationPath)</c>, so a
+    /// failed transfer left a TRUNCATED .vsix exactly where a valid one belongs — which then
+    /// extracts as a corrupt archive rather than reporting a download failure. FileDownloader
+    /// stages through <c>.partial</c> and moves only on success.</item>
+    /// <item><b><c>Accept: application/json</c> on a binary GET</b>, inherited from the shared
+    /// client's headers. Wrong for a .vsix, and a strict CDN may answer 406.</item>
+    /// </list>
+    ///
+    /// <para>The deadline is generous because extension packages are large and a user on a slow
+    /// link should not be cut off; a caller wanting a tighter bound cancels through
+    /// <paramref name="ct"/>.</para>
+    /// </remarks>
     public async Task DownloadVsixToFileAsync(
         string downloadUrl,
         string destinationPath,
         IProgress<(long bytesDownloaded, long totalBytes)>? progress = null,
         CancellationToken ct = default)
     {
-        using var response = await _httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead, ct);
-        response.EnsureSuccessStatusCode();
-
-        var totalBytes = response.Content.Headers.ContentLength ?? -1L;
-
-        var dir = Path.GetDirectoryName(destinationPath);
-        if (!string.IsNullOrEmpty(dir))
-        {
-            Directory.CreateDirectory(dir);
-        }
-
-        using var contentStream = await response.Content.ReadAsStreamAsync(ct);
-        using var fileStream = File.Create(destinationPath);
-
-        var buffer = new byte[81920]; // 80KB buffer
-        var totalRead = 0L;
-        int bytesRead;
-
-        while ((bytesRead = await contentStream.ReadAsync(buffer, ct)) > 0)
-        {
-            await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), ct);
-            totalRead += bytesRead;
-            progress?.Report((totalRead, totalBytes));
-        }
+        using var downloader = new FileDownloader();
+        await downloader.DownloadAsync(
+            downloadUrl,
+            destinationPath,
+            deadline: TimeSpan.FromMinutes(10),
+            progress: progress,
+            ct: ct);
     }
 
     /// <summary>
@@ -268,6 +276,22 @@ public class OpenVsxClient : IDisposable
 /// </summary>
 public class OpenVsxSearchResult
 {
+    /// <summary>
+    /// Why the query failed, or <c>null</c> when it succeeded. An empty
+    /// <see cref="Extensions"/> list with a null error means the registry genuinely matched
+    /// nothing; a non-null error means the answer is unknown.
+    ///
+    /// <para>Without this the two are indistinguishable, and the UI can only ever say "No
+    /// extensions found" — including when the registry is unreachable. That is the same failure the
+    /// panel already shipped once: nothing threw, so it truthfully reported nothing.</para>
+    ///
+    /// <para>⛔ <see cref="JsonIgnoreAttribute"/> is load-bearing. Open VSX itself returns an
+    /// <c>error</c> field on some responses, so without this a server could populate the IDE's own
+    /// failure channel. This reports OUR transport and parse failures, never the payload's.</para>
+    /// </summary>
+    [JsonIgnore]
+    public string? Error { get; set; }
+
     /// <summary>
     /// Total number of matching extensions.
     /// </summary>
@@ -351,6 +375,13 @@ public class OpenVsxSearchExtension
     /// </summary>
     [JsonPropertyName("averageRating")]
     public double? AverageRating { get; set; }
+
+    /// <summary>
+    /// Categories (e.g., "Themes", "Programming Languages"). Present so the extensions panel can
+    /// show category chips on a search result without a second request for the detail document.
+    /// </summary>
+    [JsonPropertyName("categories")]
+    public List<string>? Categories { get; set; }
 
     /// <summary>
     /// Extension ID in publisher.name format.

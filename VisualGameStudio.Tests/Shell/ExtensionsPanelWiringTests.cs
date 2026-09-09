@@ -115,4 +115,49 @@ public class ExtensionsPanelWiringTests
             "MainWindowViewModel must call extensions.SetExtensionService(extensionService) — otherwise " +
             "the panel's _extensionService stays null and Install silently skips discovery/activation.");
     }
+
+    /// <summary>
+    /// ⛔ THE DOUBLE-REGISTRATION GUARD, at the one call site that used to trip it.
+    ///
+    /// <para>The panel installed an extension by hand and then called
+    /// <c>DiscoverExtensionsAsync</c> to make the service notice it. Now that install is delegated
+    /// to <c>InstallFromUrlAsync</c> — which loads contributions and activates itself — that
+    /// follow-up would register the same extension a SECOND time: duplicated commands, keybindings
+    /// that fire twice, and a symptom that appears nowhere near this file.</para>
+    ///
+    /// <para>The ViewModel mkdirs the real ~/.vgs/extensions in its constructor and has no seam for
+    /// a temp root, so this is asserted against the source rather than by driving an install —
+    /// same reason as the guard above.</para>
+    /// </summary>
+    [Test]
+    public void InstallingFromThePanelDoesNotRegisterTheExtensionTwice()
+    {
+        var path = FindRepoFile("VisualGameStudio.Shell", "ViewModels", "Panels", "ExtensionsViewModel.cs");
+        if (path == null)
+        {
+            Assert.Ignore("ExtensionsViewModel.cs not found from the test base directory — skipping source guard.");
+            return;
+        }
+
+        var src = File.ReadAllText(path);
+
+        var installStart = src.IndexOf("private async Task InstallAsync(", StringComparison.Ordinal);
+        Assert.That(installStart, Is.GreaterThanOrEqualTo(0), "InstallAsync must still exist");
+
+        var installEnd = src.IndexOf("private async Task UninstallAsync(", StringComparison.Ordinal);
+        Assert.That(installEnd, Is.GreaterThan(installStart),
+            "UninstallAsync must still follow InstallAsync — it bounds the region under test");
+
+        var installBody = src[installStart..installEnd];
+
+        Assert.That(installBody, Does.Contain("InstallFromUrlAsync("),
+            "the panel must delegate the install to IExtensionService rather than downloading and " +
+            "extracting the .vsix itself");
+        Assert.That(installBody, Does.Not.Contain("DiscoverExtensionsAsync("),
+            "InstallFromUrlAsync already registers the extension; a discovery pass after it " +
+            "registers everything a second time");
+        Assert.That(installBody, Does.Not.Contain("ActivateAsync("),
+            "InstallFromUrlAsync already activates; activating again re-enters the host for an " +
+            "extension that is already live");
+    }
 }

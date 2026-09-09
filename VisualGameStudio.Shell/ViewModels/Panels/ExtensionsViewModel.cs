@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using System.IO.Compression;
 using System.Net.Http;
 using System.Text.Json;
 using System.Timers;
@@ -7,6 +6,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Core.Abstractions.ViewModels;
+using VisualGameStudio.ProjectSystem.Services;
 
 namespace VisualGameStudio.Shell.ViewModels.Panels;
 
@@ -18,22 +18,17 @@ namespace VisualGameStudio.Shell.ViewModels.Panels;
 /// </summary>
 public partial class ExtensionsViewModel : ViewModelBase, IDisposable
 {
-    private static readonly HttpClient _httpClient = new()
-    {
-        Timeout = TimeSpan.FromSeconds(30)
-    };
+    /// <summary>
+    /// The registry client. The panel used to hold its own HttpClient, its own base URLs and its own
+    /// copy of the response DTOs — the last of the four Open VSX clients that existed in this repo.
+    /// </summary>
+    private readonly OpenVsxClient _openVsxClient;
 
-    private const string OpenVsxSearchUrl = "https://open-vsx.org/api/-/search";
-    private const string OpenVsxApiUrl = "https://open-vsx.org/api";
-
-    // Open VSX responds in camelCase; System.Text.Json matches property names
-    // case-sensitively by default, so every search result was silently dropped
-    // (Deserialize returned a non-null object with a null Extensions list, so
-    // nothing threw and the panel reported "No extensions found").
-    private static readonly JsonSerializerOptions _jsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true
-    };
+    /// <summary>
+    /// True when this ViewModel created the client — i.e. the designer's parameterless path. The
+    /// container's client is shared with VsixInstaller and outlives this panel.
+    /// </summary>
+    private readonly bool _ownsOpenVsxClient;
 
     private readonly System.Timers.Timer _searchDebounceTimer;
     private CancellationTokenSource? _searchCts;
@@ -84,8 +79,15 @@ public partial class ExtensionsViewModel : ViewModelBase, IDisposable
     [ObservableProperty]
     private int _selectedDetailTab;
 
-    public ExtensionsViewModel()
+    /// <param name="openVsxClient">
+    /// The shared registry client. Optional so the designer's parameterless construction still
+    /// works; the container passes its singleton, which is the same instance VsixInstaller uses.
+    /// </param>
+    public ExtensionsViewModel(OpenVsxClient? openVsxClient = null)
     {
+        _openVsxClient = openVsxClient ?? new OpenVsxClient();
+        _ownsOpenVsxClient = openVsxClient == null;
+
         var userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         _extensionsDirectory = Path.Combine(userHome, ".vgs", "extensions");
 
@@ -179,99 +181,44 @@ public partial class ExtensionsViewModel : ViewModelBase, IDisposable
                 return;
             }
 
-            // Download VSIX to temp file
-            var tempPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid()}.vsix");
-            try
+            // The panel used to download, extract and copy the .vsix itself — a third copy of an
+            // install, beside ExtensionService's and VsixInstaller's, with its own extraction, its
+            // own idea of a valid manifest and its own HttpClient. It now asks the service, which
+            // owns acquisition (through VsixInstaller) and runtime registration alike.
+            if (_extensionService == null)
             {
-                using var response = await _httpClient.GetAsync(extension.DownloadUrl);
-                response.EnsureSuccessStatusCode();
-
-                await using (var fs = File.Create(tempPath))
-                {
-                    await response.Content.CopyToAsync(fs);
-                }
-
-                // Extract the VSIX (which is a ZIP) to the extensions directory
-                var extensionId = $"{extension.Publisher}.{extension.Name}";
-                var installDirName = $"{extensionId}-{extension.Version}";
-                var installDir = Path.Combine(_extensionsDirectory, installDirName);
-
-                // Remove old versions
-                foreach (var dir in Directory.GetDirectories(_extensionsDirectory))
-                {
-                    var dirName = Path.GetFileName(dir);
-                    if (dirName.StartsWith(extensionId + "-", StringComparison.OrdinalIgnoreCase) ||
-                        dirName.Equals(extensionId, StringComparison.OrdinalIgnoreCase))
-                    {
-                        try { Directory.Delete(dir, true); } catch { }
-                    }
-                }
-
-                // Extract VSIX to temp dir, then copy content to install dir
-                var tempExtractDir = Path.Combine(Path.GetTempPath(), $"vgs-extract-{Guid.NewGuid():N}");
-                Directory.CreateDirectory(tempExtractDir);
-
-                try
-                {
-                    ZipFile.ExtractToDirectory(tempPath, tempExtractDir, overwriteFiles: true);
-
-                    // Find the package.json
-                    var packageJsonInExt = Path.Combine(tempExtractDir, "extension", "package.json");
-                    var packageJsonRoot = Path.Combine(tempExtractDir, "package.json");
-
-                    string sourceDir;
-                    if (File.Exists(packageJsonInExt))
-                    {
-                        sourceDir = Path.Combine(tempExtractDir, "extension");
-                    }
-                    else if (File.Exists(packageJsonRoot))
-                    {
-                        sourceDir = tempExtractDir;
-                    }
-                    else
-                    {
-                        StatusMessage = $"Failed to install {extension.DisplayName}: no package.json found in VSIX.";
-                        return;
-                    }
-
-                    // Copy extension content to install directory
-                    CopyDirectory(sourceDir, installDir);
-                }
-                finally
-                {
-                    try { Directory.Delete(tempExtractDir, true); } catch { }
-                }
-
-                extension.IsInstalled = true;
-                extension.IsEnabled = true;
-                extension.InstallPath = installDir;
-                extension.Status = "Installed";
-
-                // Add to installed list if not already there
-                if (!InstalledExtensions.Any(e => e.Namespace == extension.Namespace))
-                {
-                    InstalledExtensions.Add(extension);
-                }
-
-                // Activate via ExtensionService if available
-                if (_extensionService != null)
-                {
-                    // Re-discover to pick up the new extension
-                    await _extensionService.DiscoverExtensionsAsync();
-                    var ext = _extensionService.GetExtension(extensionId);
-                    if (ext != null)
-                    {
-                        await _extensionService.ActivateAsync(ext.Id);
-                        extension.IsActive = true;
-                    }
-                }
-
-                StatusMessage = $"{extension.DisplayName} installed successfully.";
+                // Only reachable from the designer's parameterless ctor; MainWindowViewModel hands
+                // the service over at startup and ExtensionsPanelWiringTests guards that it does.
+                StatusMessage = $"Failed to install {extension.DisplayName}: the extension service is unavailable.";
+                return;
             }
-            finally
+
+            var result = await _extensionService.InstallFromUrlAsync(extension.DownloadUrl);
+
+            if (!result.Success)
             {
-                try { File.Delete(tempPath); } catch { }
+                StatusMessage = $"Failed to install {extension.DisplayName}: {result.Error}";
+                return;
             }
+
+            // ⛔ NO DiscoverExtensionsAsync AND NO ActivateAsync HERE. Both used to follow the
+            // hand-rolled install, and both are now already done: InstallFromUrlAsync loads the
+            // contributions and activates. Calling them again re-registers the same extension —
+            // duplicated commands and keybindings that fire twice, surfacing nowhere near the cause.
+            extension.IsInstalled = true;
+            extension.IsEnabled = true;
+            extension.InstallPath = result.Extension?.InstallPath ?? "";
+            extension.IsActive = result.Extension?.IsActive ?? false;
+            extension.Status = result.RequiresRestart ? "Restart required" : "Installed";
+
+            if (!InstalledExtensions.Any(e => e.Namespace == extension.Namespace))
+            {
+                InstalledExtensions.Add(extension);
+            }
+
+            StatusMessage = result.RequiresRestart
+                ? $"{extension.DisplayName} installed — restart to activate."
+                : $"{extension.DisplayName} installed successfully.";
         }
         catch (Exception ex)
         {
@@ -280,21 +227,6 @@ public partial class ExtensionsViewModel : ViewModelBase, IDisposable
         finally
         {
             IsInstalling = false;
-        }
-    }
-
-    private static void CopyDirectory(string source, string destination)
-    {
-        Directory.CreateDirectory(destination);
-
-        foreach (var file in Directory.GetFiles(source))
-        {
-            File.Copy(file, Path.Combine(destination, Path.GetFileName(file)), true);
-        }
-
-        foreach (var dir in Directory.GetDirectories(source))
-        {
-            CopyDirectory(dir, Path.Combine(destination, Path.GetFileName(dir)));
         }
     }
 
@@ -427,12 +359,26 @@ public partial class ExtensionsViewModel : ViewModelBase, IDisposable
             IsSearching = true;
             ActiveFilter = string.IsNullOrEmpty(query) ? ActiveFilter : "Search";
 
-            var url = $"{OpenVsxSearchUrl}?query={Uri.EscapeDataString(query)}&size=30&sortBy={sortBy}&sortOrder={sortOrder}";
+            var searchResult = await _openVsxClient.SearchAsync(
+                query, sortBy: sortBy, sortOrder: sortOrder, limit: 30, ct: token);
 
-            var response = await _httpClient.GetStringAsync(url, token);
-            var searchResult = JsonSerializer.Deserialize<OpenVsxSearchResult>(response, _jsonOptions);
-
+            // ⛔ Cancellation is checked BEFORE the error channel, and the order is load-bearing.
+            // SearchAsync deliberately never throws — it turns every failure into Error, INCLUDING
+            // the OperationCanceledException raised when the next keystroke supersedes this search.
+            // Reading Error first would flash "Search failed: A task was canceled" at anyone typing
+            // faster than the 400ms debounce.
             if (token.IsCancellationRequested) return;
+
+            // An empty list now means the registry genuinely matched nothing; a non-null Error means
+            // the answer is unknown. The panel could previously only ever say "No extensions found",
+            // including when Open VSX was down (9da01b0).
+            if (searchResult.Error != null)
+            {
+                SearchResults.Clear();
+                HasSearchResults = false;
+                StatusMessage = $"Search failed: {searchResult.Error}";
+                return;
+            }
 
             SearchResults.Clear();
 
@@ -442,16 +388,21 @@ public partial class ExtensionsViewModel : ViewModelBase, IDisposable
                 {
                     var item = new ExtensionItemViewModel
                     {
-                        Name = ext.Name ?? "",
-                        DisplayName = ext.DisplayName ?? ext.Name ?? "",
+                        Name = ext.Name,
+                        DisplayName = ext.DisplayName ?? ext.Name,
                         Description = ext.Description ?? "",
-                        Version = ext.Version ?? "",
-                        Publisher = ext.Namespace ?? "",
+                        Version = ext.Version,
+                        Publisher = ext.Namespace,
                         Namespace = $"{ext.Namespace}.{ext.Name}",
-                        IconUrl = ext.Files?.Icon,
-                        DownloadUrl = ext.Files?.Download,
+                        // The shared DTO models Open VSX's `files` as the dictionary it actually is,
+                        // rather than the fixed four-property shape the panel's own copy assumed.
+                        IconUrl = ext.Files.GetValueOrDefault("icon"),
+                        DownloadUrl = ext.Files.GetValueOrDefault("download"),
                         Rating = ext.AverageRating ?? 0,
-                        InstallCount = ext.DownloadCount ?? 0,
+                        // Open VSX counts downloads in a long; the panel binds an int. Saturating
+                        // rather than casting, because an unchecked narrowing would wrap a very
+                        // popular extension's count to a negative number.
+                        InstallCount = (int)Math.Min(ext.DownloadCount, int.MaxValue),
                         IsInstalled = InstalledExtensions.Any(
                             i => string.Equals(i.Namespace, $"{ext.Namespace}.{ext.Name}", StringComparison.OrdinalIgnoreCase))
                     };
@@ -492,16 +443,13 @@ public partial class ExtensionsViewModel : ViewModelBase, IDisposable
     {
         try
         {
-            var url = $"{OpenVsxApiUrl}/{extension.Publisher}/{extension.Name}";
-            var response = await _httpClient.GetStringAsync(url);
-            var detail = JsonSerializer.Deserialize<OpenVsxExtensionDetail>(response, _jsonOptions);
+            var detail = await _openVsxClient.GetExtensionAsync(extension.Publisher, extension.Name);
 
             if (detail != null)
             {
                 extension.DetailMarkdown = detail.Description ?? extension.Description;
-                extension.DownloadUrl = detail.Files?.Download;
-                if (detail.DownloadCount.HasValue)
-                    extension.InstallCount = detail.DownloadCount.Value;
+                extension.DownloadUrl = detail.Files?.GetValueOrDefault("download");
+                extension.InstallCount = (int)Math.Min(detail.DownloadCount, int.MaxValue);
             }
         }
         catch
@@ -653,6 +601,13 @@ public partial class ExtensionsViewModel : ViewModelBase, IDisposable
         _searchCts?.Cancel();
         _searchCts?.Dispose();
         _searchCts = null;
+
+        // Only the designer's self-built client. The container's is shared with VsixInstaller and
+        // disposing it here would break installs.
+        if (_ownsOpenVsxClient)
+        {
+            _openVsxClient.Dispose();
+        }
     }
 }
 
@@ -673,42 +628,6 @@ internal class ExtensionMetadata
     public DateTime InstalledDate { get; set; }
 }
 
-// --- Open VSX API response models ---
-
-internal class OpenVsxSearchResult
-{
-    public List<OpenVsxExtension>? Extensions { get; set; }
-    public int TotalSize { get; set; }
-}
-
-internal class OpenVsxExtension
-{
-    public string? Name { get; set; }
-    public string? Namespace { get; set; }
-    public string? DisplayName { get; set; }
-    public string? Description { get; set; }
-    public string? Version { get; set; }
-    public double? AverageRating { get; set; }
-    public int? DownloadCount { get; set; }
-    public List<string>? Categories { get; set; }
-    public OpenVsxFiles? Files { get; set; }
-}
-
-internal class OpenVsxExtensionDetail
-{
-    public string? Name { get; set; }
-    public string? Namespace { get; set; }
-    public string? DisplayName { get; set; }
-    public string? Description { get; set; }
-    public string? Version { get; set; }
-    public int? DownloadCount { get; set; }
-    public OpenVsxFiles? Files { get; set; }
-}
-
-internal class OpenVsxFiles
-{
-    public string? Download { get; set; }
-    public string? Icon { get; set; }
-    public string? Readme { get; set; }
-    public string? Changelog { get; set; }
-}
+// The Open VSX response models that used to live here were a second, thinner copy of the ones in
+// OpenVsxClient.cs — same wire format, different C# shape (a fixed four-property `files` object
+// where the API returns a dictionary), and no error channel. They went with the HttpClient.

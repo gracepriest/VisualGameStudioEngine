@@ -159,11 +159,28 @@ public static class ServiceConfiguration
         services.AddSingleton<IWorkspaceService, WorkspaceService>();
         services.AddSingleton<ITaskRunnerService, TaskRunnerService>();
         services.AddSingleton<ITextMateService, TextMateService>();
+        // The Open VSX acquisition layer: download → extract → validate manifest → copy into
+        // ~/.vgs/extensions. FACTORY-registered for the same reasons as ClangdInstaller (:83) and
+        // LldbDapInstaller (:90) — the CONTAINER disposes it (it owns an HttpClient through
+        // OpenVsxClient), and DI never has to guess at its ctor.
+        //
+        // ⛔ NOT AddSingleton<VsixInstaller>() by type. Its ctor is
+        // `VsixInstaller(OpenVsxClient? = null, string? = null)` (VsixInstaller.cs:46) — every
+        // parameter optional — so by-type registration would bind silently with a default client
+        // and the real user-profile path, which is precisely the trap the BuildService comment at
+        // :28-32 records.
+        // ONE Open VSX client for the whole IDE. There used to be four HTTP paths to this registry
+        // (this client, VsixInstaller's own, ExtensionService's, and the extensions panel's), each
+        // with its own timeout and error handling. The container owns and disposes this one, which
+        // is why neither consumer below may dispose it.
+        services.AddSingleton(sp => new OpenVsxClient());
+        services.AddSingleton(sp => new VsixInstaller(sp.GetRequiredService<OpenVsxClient>()));
         services.AddSingleton<IExtensionService>(sp =>
             new ExtensionService(
                 sp.GetRequiredService<IOutputService>(),
                 sp.GetRequiredService<ITextMateService>(),
-                sp.GetRequiredService<ISnippetService>()));
+                sp.GetRequiredService<ISnippetService>(),
+                vsixInstaller: sp.GetRequiredService<VsixInstaller>()));
         services.AddSingleton<FileSearchService>();
 
         // Shell Services
@@ -195,7 +212,10 @@ public static class ServiceConfiguration
         services.AddSingleton<TypeHierarchyViewModel>();
         services.AddSingleton<ThreadsViewModel>();
         services.AddSingleton<TimelineViewModel>();
-        services.AddSingleton<ExtensionsViewModel>();
+        // BY FACTORY, for the reason recorded on the VsixInstaller registration: this ViewModel's
+        // ctor parameter is optional (the designer needs a parameterless path), so by-type
+        // registration would silently build a SECOND registry client rather than fail.
+        services.AddSingleton(sp => new ExtensionsViewModel(sp.GetRequiredService<OpenVsxClient>()));
         services.AddSingleton<ProblemsViewModel>();
 
         // ViewModels (Transient for documents and dialogs)

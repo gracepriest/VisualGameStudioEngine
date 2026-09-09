@@ -22,6 +22,14 @@ public class VsixInstaller : IDisposable
     };
 
     private readonly OpenVsxClient _vsxClient;
+
+    /// <summary>
+    /// True when this instance created the client and must therefore dispose it. An INJECTED client
+    /// belongs to whoever passed it — since the container now shares one across the installer and
+    /// the extensions panel, disposing it here would close an HttpClient the panel still searches
+    /// through, and the panel would start reporting every search as a failure.
+    /// </summary>
+    private readonly bool _ownsVsxClient;
     private readonly string _extensionsDir;
     private readonly string _stateFilePath;
     private readonly object _stateLock = new();
@@ -46,6 +54,7 @@ public class VsixInstaller : IDisposable
     public VsixInstaller(OpenVsxClient? vsxClient = null, string? extensionsDir = null)
     {
         _vsxClient = vsxClient ?? new OpenVsxClient();
+        _ownsVsxClient = vsxClient == null;
 
         var userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         _extensionsDir = extensionsDir ?? Path.Combine(userHome, ".vgs", "extensions");
@@ -200,6 +209,37 @@ public class VsixInstaller : IDisposable
         {
             // Clean up temp extraction directory
             try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// Downloads a .vsix from an already-resolved URL and installs it in one step.
+    /// </summary>
+    /// <remarks>
+    /// The sibling of <see cref="DownloadAndInstallAsync"/> for callers that hold a download URL
+    /// rather than a publisher/name pair — the extensions panel gets one straight out of an Open VSX
+    /// search result and would otherwise have to resolve it a second time.
+    ///
+    /// <para>It routes through <see cref="OpenVsxClient.DownloadVsixToFileAsync"/> so the download
+    /// gets the streaming, deadline and User-Agent handling that the hand-rolled copies of this leg
+    /// did not have.</para>
+    /// </remarks>
+    /// <param name="downloadUrl">Direct URL to the .vsix file.</param>
+    /// <param name="ct">Cancellation token.</param>
+    public async Task<ExtensionInfo> InstallFromUrlAsync(string downloadUrl, CancellationToken ct = default)
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "vgs-extensions");
+        Directory.CreateDirectory(tempDir);
+
+        var tempPath = Path.Combine(tempDir, $"download-{Guid.NewGuid():N}.vsix");
+        try
+        {
+            await _vsxClient.DownloadVsixToFileAsync(downloadUrl, tempPath, ct: ct);
+            return await InstallVsixAsync(tempPath, ct);
+        }
+        finally
+        {
+            try { File.Delete(tempPath); } catch { }
         }
     }
 
@@ -522,7 +562,10 @@ public class VsixInstaller : IDisposable
     {
         if (!_disposed)
         {
-            _vsxClient.Dispose();
+            if (_ownsVsxClient)
+            {
+                _vsxClient.Dispose();
+            }
             _disposed = true;
         }
     }
