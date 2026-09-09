@@ -53,6 +53,16 @@ public class JsExecutionTierRosterTests
         typeof(JavaScriptOptimizedExecutionTests),
         typeof(JavaScriptCliProcessTests),
         typeof(JavaScriptInteropExecutionTests),
+        typeof(ExternClassExecutionTests),
+
+        // ⛔ These two were MISSING for as long as they have existed. Both drive
+        // JavaScriptExecutionTests.RunJs — they are squarely in the tier — but neither name
+        // starts with "JavaScript" or "Js", and the discovery guard below matched on exactly
+        // those prefixes. So the test whose whole purpose is "catch a node-spawning fixture
+        // that never got added to the roster" could not see them, and the floor never counted
+        // their cases. Found only when the predicate was widened for ExternClassExecutionTests.
+        typeof(BooleanOperatorExecutionTests),
+        typeof(MemberCasingExecutionTests),
     };
 
     /// <summary>
@@ -65,6 +75,22 @@ public class JsExecutionTierRosterTests
     /// number is the backstop for the diffuse case — many tests removed across many files.</para>
     /// </summary>
     private const int MinimumExecutionCases = 150;
+
+    /// <summary>
+    /// Fixtures the widened name match sweeps up that are NOT part of the JavaScript execution
+    /// tier — they run a different toolchain entirely.
+    ///
+    /// <para>An explicit deny-list is not ideal, but it is strictly better than the alternative
+    /// it replaced: matching on a name PREFIX silently excluded real JS fixtures (see the
+    /// roster's note on BooleanOperatorExecutionTests). Landing here is now a deliberate edit
+    /// with a stated reason, not an accident of naming. Add an entry only for a fixture that
+    /// genuinely does not use <c>JavaScriptExecutionTests.RunJs</c>.</para>
+    /// </summary>
+    private static readonly HashSet<string> NotJavaScriptExecution = new()
+    {
+        // Compiles and runs real C++ through CppToolchain — nothing to do with Node.
+        "CppFinallyExecutionTests",
+    };
 
     /// <summary>Counts NUnit cases: a [TestCase]-driven method contributes one per attribute.</summary>
     private static int CaseCount(Type fixture)
@@ -81,7 +107,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(18),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(21),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 
@@ -150,8 +176,16 @@ public class JsExecutionTierRosterTests
         var discovered = typeof(JavaScriptExecutionTests).Assembly.GetTypes()
             .Where(t => t.IsClass && !t.IsAbstract)
             .Where(t => t.Namespace == typeof(JavaScriptExecutionTests).Namespace)
+            // ⛔ WIDENED, and it immediately paid for itself. A prefix list is a guard that
+            // stops working the moment a fixture is given a reasonable name:
+            // ExternClassExecutionTests, BooleanOperatorExecutionTests and
+            // MemberCasingExecutionTests all spawn Node and matched NEITHER "JavaScript" nor
+            // "Js", so the last two sat outside the roster for their whole lives — the exact
+            // omission this test exists to catch, invisible to it.
             .Where(t => t.Name.StartsWith("JavaScript", StringComparison.Ordinal) ||
-                        t.Name.StartsWith("Js", StringComparison.Ordinal))
+                        t.Name.StartsWith("Js", StringComparison.Ordinal) ||
+                        t.Name.EndsWith("ExecutionTests", StringComparison.Ordinal))
+            .Where(t => !NotJavaScriptExecution.Contains(t.Name))
             .Where(t => t.GetCustomAttributes<CategoryAttribute>(true).Any(c => c.Name == "Integration"))
             .ToList();
 

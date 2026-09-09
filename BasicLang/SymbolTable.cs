@@ -54,6 +54,14 @@ public class TypeInfo
         public bool IsFixedLengthString { get; set; }
         public int FixedStringLength { get; set; } // For fixed-length strings
         public bool IsAbstract { get; set; } // For abstract classes
+
+        /// <summary>
+        /// True for a type declared with <c>Extern Class</c>: it already exists in the target
+        /// runtime, so BasicLang emits no declaration and — the reason this lives on TypeInfo
+        /// rather than only on the IR — there is no CONSTRUCTOR to call. <c>New</c> on one is
+        /// refused for the same reason <see cref="IsAbstract"/> refuses it: nothing to construct.
+        /// </summary>
+        public bool IsExtern { get; set; }
         // A ::-qualified suffix for a foreign C++ type that follows its generic args,
         // e.g. "::iterator" in std::vector(Of Integer)::iterator -> std::vector<int32_t>::iterator.
         public string ForeignSuffix { get; set; }

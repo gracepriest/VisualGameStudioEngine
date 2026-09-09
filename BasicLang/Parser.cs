@@ -125,19 +125,20 @@ namespace BasicLang.Compiler
             if (Check(TokenType.Public) || Check(TokenType.Private) || Check(TokenType.Friend) ||
                 Check(TokenType.Protected) ||
                 Check(TokenType.Async) || Check(TokenType.Iterator) || Check(TokenType.Inline) ||
-                Check(TokenType.Shared))
+                Check(TokenType.Shared) || Check(TokenType.Extern))
             {
                 var access = AccessModifier.Private;  // Default for top-level
                 bool isAsync = false;
                 bool isIterator = false;
                 bool isInline = false;
                 bool isStatic = false;
+                bool isExtern = false;
 
                 // Parse modifiers in any order
                 while (Check(TokenType.Public) || Check(TokenType.Private) || Check(TokenType.Friend) ||
                        Check(TokenType.Protected) ||
                        Check(TokenType.Async) || Check(TokenType.Iterator) || Check(TokenType.Inline) ||
-                       Check(TokenType.Shared))
+                       Check(TokenType.Shared) || Check(TokenType.Extern))
                 {
                     if (Match(TokenType.Public)) access = AccessModifier.Public;
                     else if (Match(TokenType.Private)) access = AccessModifier.Private;
@@ -153,6 +154,31 @@ namespace BasicLang.Compiler
                     else if (Match(TokenType.Iterator)) isIterator = true;
                     else if (Match(TokenType.Inline)) isInline = true;
                     else if (Match(TokenType.Shared)) isStatic = true;
+                    else if (Match(TokenType.Extern)) isExtern = true;
+                }
+
+                // ⛔ THE SECOND PARSER EDIT. `Public Extern Class` never reaches ParseExtern —
+                // the modifier loop above consumes `Public`, so dispatch happens HERE instead.
+                // Bare `Extern Class` working says nothing about this path.
+                if (isExtern)
+                {
+                    if (!Check(TokenType.Class))
+                        throw new ParseException(
+                            "'Extern' as a modifier is only valid on a Class. Use " +
+                            "'Extern Function'/'Extern Sub' (with per-backend bodies) or " +
+                            "'Extern Dim' for the other extern forms.", Peek());
+
+                    // A silently-dropped modifier teaches the wrong model, so say so.
+                    if (isAsync || isIterator || isInline || isStatic)
+                        throw new ParseException(
+                            "'Extern Class' cannot be combined with Async, Iterator, Inline or " +
+                            "Shared — an extern type is a declaration of something that already " +
+                            "exists in the target runtime, so those modifiers have nothing to " +
+                            "apply to.", Peek());
+
+                    var externCls = ParseClass(isExtern: true);
+                    externCls.Access = access;
+                    return externCls;
                 }
 
                 if (Check(TokenType.Function))
@@ -712,13 +738,28 @@ namespace BasicLang.Compiler
         // Classes and Interfaces
         // ====================================================================
 
-        private ClassNode ParseClass()
+        /// <summary>
+        /// True while the members of an <c>Extern Class</c> are being parsed, which makes
+        /// <see cref="ParseClassMember"/> read SIGNATURES instead of bodies.
+        ///
+        /// <para>A field rather than a parameter threaded through every member helper, because
+        /// <see cref="ParseClassMember"/> is reached through several arms and only two of them
+        /// need to know. Saved and restored around <see cref="ParseClass"/> so a nested class
+        /// (or a parse that unwinds through Synchronize) cannot leave it set.</para>
+        /// </summary>
+        private bool _parsingExternClass;
+
+        private ClassNode ParseClass(bool isExtern = false)
         {
             var token = Consume(TokenType.Class, "Expected 'Class'");
             var node = new ClassNode(token.Line, token.Column);
 
             node.Name = Consume(TokenType.Identifier, "Expected class name").Lexeme;
+            node.IsExtern = isExtern;
             _context.Push($"Class '{node.Name}'");
+
+            var wasParsingExtern = _parsingExternClass;
+            _parsingExternClass = isExtern;
 
             try
             {
@@ -780,6 +821,7 @@ namespace BasicLang.Compiler
             }
             finally
             {
+                _parsingExternClass = wasParsingExtern;
                 _context.Pop();
             }
 
@@ -910,7 +952,11 @@ namespace BasicLang.Compiler
             // Function declaration
             if (Check(TokenType.Function))
             {
-                var func = ParseFunction();
+                // ⛔ An EXTERN member is a signature, not an implementation — the type already
+                // exists in the runtime and nothing is emitted for it. Reuses the INTERFACE
+                // parsers, which read exactly this shape already; a second body-less parser
+                // would drift from them and would not inherit their progress-invariant fix.
+                var func = _parsingExternClass ? ParseInterfaceFunction() : ParseFunction();
                 func.Access = access;
                 func.IsStatic = isStatic;
                 func.IsVirtual = isVirtual;
@@ -931,6 +977,18 @@ namespace BasicLang.Compiler
                     var ctor = ParseConstructor();
                     ctor.Access = access;
                     return ctor;
+                }
+
+                // ⛔ Not a ternary: an interface Sub is a FunctionNode while an ordinary one is a
+                // SubroutineNode — different types, and only the extern path wants the former.
+                // (Both are body-less-capable; the difference is which node the rest of the
+                // pipeline already knows how to treat as a signature.)
+                if (_parsingExternClass)
+                {
+                    var externSub = ParseInterfaceSub();
+                    externSub.Access = access;
+                    externSub.IsStatic = isStatic;
+                    return externSub;
                 }
 
                 var sub = ParseSubroutine();
@@ -1044,6 +1102,21 @@ namespace BasicLang.Compiler
             {
                 return ParseInterface();
             }
+
+            // ⛔ Inside an Extern Class this arm is reached by the MOST LIKELY mistake — writing
+            // a member body — and the generic suggestion below actively misleads there: it
+            // lists Sub and Function as valid, which they are, so the reader concludes the
+            // parser is confused rather than that bodies are the problem. An extern member is a
+            // SIGNATURE; the body is dropped by the reader's own eye, not by the compiler.
+            if (_parsingExternClass)
+                throw new ParseException(
+                    $"Unexpected token in Extern Class: '{Peek().Lexeme}' ({Peek().Type})",
+                    Peek(),
+                    "An Extern Class declares a type that ALREADY EXISTS in the target runtime, " +
+                    "so its members are signatures only: write the declaration line and nothing " +
+                    "else — no body, no 'End Sub'/'End Function'. (A body here could never run, " +
+                    "because nothing is emitted for an extern type.) For a type you want " +
+                    "BasicLang itself to define, drop the 'Extern'.");
 
             throw new ParseException(
                 $"Unexpected token in class: '{Peek().Lexeme}' ({Peek().Type})",
@@ -1772,6 +1845,19 @@ namespace BasicLang.Compiler
 
                 ConsumeNewlines();
                 return varNode;
+            }
+
+            // Extern Class Name ... End Class — a declaration-only type.
+            //
+            // Delegates to ParseClass so there is ONE class parser and only the flag differs.
+            // ParseClass accepts body-less members when _parsingExternClass is set, reusing the
+            // INTERFACE member parsers rather than growing a second body-less parser that would
+            // drift from them (and would not inherit their progress-invariant fix).
+            if (Check(TokenType.Class))
+            {
+                var externClass = ParseClass(isExtern: true);
+                externClass.IsExtern = true;
+                return externClass;
             }
 
             var node = new ExternDeclarationNode(token.Line, token.Column);
