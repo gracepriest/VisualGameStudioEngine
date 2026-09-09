@@ -520,7 +520,19 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// </summary>
         protected override string MapType(TypeInfo type)
         {
-            if (type == null) return base.MapType(type);
+            // ⛔ NOT base.MapType FOR NULL. The shared base answers a null type with the literal
+            // string "object" (ICodeGenerator.MapType) — a C# type name, which is correct for
+            // the C# backend and is NOT a C++ type. It reached the generated source verbatim as
+            // `object t2 = {};` and g++ reported "'object' was not declared in this scope", from
+            // a build BasicLang had already reported as successful.
+            //
+            // MEASURED: an untyped temp is produced for a Console.WriteLine inside a Finally,
+            // whose body is emitted twice. It is DEAD either way — every WriteLine renders
+            // inline as `cout << …` and no temp is read — so the declaration is noise; but it
+            // must at least be VALID noise. "void*" is this backend's own answer for Object
+            // (_typeMap["Object"]), which is what the other dead temps in the same function
+            // already get.
+            if (type == null) return "void*";
             if (type.Kind == TypeKind.TypeParameter) return SanitizeName(type.Name);
 
             // P2a-2 Task 9 (spec §8.5) — THE CATEGORY MARKER, TESTED FIRST. ORDER IS THE WHOLE
@@ -4237,28 +4249,69 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // A body's normal exit branches to EndBlock; here that is a legal forward `goto
             // try_end;` (a jump out of the try to the function-scope continuation label), so no
             // loopEnd remap is needed (loopEnd: null).
-            // ⛔ WITH A FINALLY, THE NORMAL EXIT MUST FALL OUT, NOT GOTO. The normal-path
-            // finally copy is emitted at the END of this method, i.e. BETWEEN the last catch
-            // and the (unsuffixed) end label. A `goto try0_end;` from inside the try jumps
-            // clean over it — measured: a Try/Finally that should print 11 printed 1, and a
-            // caught one that should print 12 printed 2, on BOTH paths, exit 0, no warning.
-            // RegionEnd.FallThrough emits nothing at a plain region end, so control leaves the
-            // try{} scope and lands on that copy.
+            // ⛔ WITH A FINALLY, THE NORMAL EXIT MUST REACH THE FINALLY COPY — BY RETARGETING
+            // THE JUMP, NOT BY DROPPING IT. The normal-path finally copy is emitted at the END
+            // of this method, i.e. BETWEEN the last catch and the (unsuffixed) end label. A
+            // `goto try0_end;` from inside the try jumps clean over it — measured: a Try/Finally
+            // that should print 11 printed 1, and a caught one that should print 12 printed 2,
+            // on BOTH paths, exit 0, no warning.
             //
-            // ⚠ RESIDUAL, and pre-existing: a CONDITIONAL branch to the end block still emits
-            // `goto EndLabelName` under either mode (see the RegionEnd switch in the
-            // conditional-branch helper), so an early conditional exit from a Try still skips
-            // its Finally. That is the shape the finally-duplication design's own comment
-            // already calls out as unsupported; this change fixes the straight-line paths and
-            // does not pretend to fix that one.
-            var fallOutToFinally = tryCatch.FinallyBlock != null
-                ? RegionEnd.FallThrough
-                : RegionEnd.GotoEnd;
+            // ⛔⛔ THE FIRST FIX FOR THAT USED RegionEnd.FallThrough, AND THAT WAS WRONG. The
+            // region's branch to its EndBlock is NOT necessarily its last emitted instruction —
+            // blocks emit in CREATION order, and an If's merge block (which carries that branch)
+            // is created before the elseif/else arms. So for any body containing an If the exit
+            // landed mid-region, FallThrough emitted nothing there, and control fell into the
+            // next block's label: MEASURED as an infinite loop that compiled cleanly. Every body
+            // here therefore stays on RegionEnd.GotoEnd and passes the finally-entry label as
+            // the jump TARGET. See EmitRegionEnd.
+            //
+            // ✅ That also closes what this comment used to record as an unfixable residual: a
+            // CONDITIONAL branch to the end block goes through the same retargeting (see
+            // EmitBranchArm), so an early conditional exit from a Try now runs its Finally too.
+
+            // ⛔ THE §11.1 LADDER CANNOT USE FallThrough. Its arms live INSIDE a
+            // `catch (const NetException&)` whose last statement is a bare `throw;` (reached
+            // when no arm matched), so an arm that fell out would RETHROW instead of
+            // continuing. It needs an explicit jump — but jumping to the end label skips the
+            // normal-path finally copy, which is exactly the bug the per-clause handlers had.
+            //
+            // So a Finally gets its own entry label, emitted immediately before that copy, and
+            // the ladder arms jump THERE. MEASURED regression this repairs: once BL throws
+            // began carrying a chain they started entering the ladder rather than the
+            // per-clause handlers, and a caught exception stopped running its Finally —
+            // `Catch` + `Finally` yielded 2 where VB requires 12. The fast subset could not see
+            // it: these are Integration tests.
+            // ⛔ LabelName, NOT EndLabelName + "_fin". EndLabelName is DELIBERATELY unsuffixed:
+            // the end block is written once, at function scope, so a goto leaving a suffixed
+            // region must target that one name. This label is the opposite kind — an INTERIOR
+            // label of the try construct, emitted inline right here — so it is re-emitted once
+            // per enclosing finally copy and must carry _regionLabelSuffix like every other
+            // interior label.
+            //
+            // MEASURED: appending "_fin" to the unsuffixed name defined `try1_end_fin:` TWICE
+            // for a Try/Finally nested inside another Finally — C2045 / clang "redefinition of
+            // label" — while the sibling labels in the same emission correctly read
+            // if0_end_fex_fex, _fex_fnorm, _fnorm_fex, _fnorm_fnorm. Caught by
+            // Cpp_FinallyInsideFinally_ControlFlow_NoDuplicateLabels.
+            //
+            // Captured HERE, before the method starts mutating _regionLabelSuffix (+"_nex" for
+            // the ladder, +"_fex"/"_fnorm" for the two finally copies). At this point the
+            // suffix is the ENCLOSING region's, which is exactly what both the ladder's goto
+            // and the label definition below need: they must agree with each other, and differ
+            // between the enclosing copies.
+            var afterCatchLabel = tryCatch.FinallyBlock != null
+                ? LabelName(tryCatch.EndBlock.Name + ".fin")
+                : EndLabelName(tryCatch.EndBlock);
 
             WriteLine("try");
             WriteLine("{");
             Indent();
-            EmitInlineRegion(tryCatch.TryBlock, tryCatch.EndBlock, fallOutToFinally);
+            // The try body's normal exit JUMPS to the finally-entry label (or, with no Finally,
+            // to the end label — byte-identical to before). It does not fall out of the try
+            // scope: a mid-region exit has nothing to fall out of, and is simply lost. See
+            // EmitRegionEnd — MEASURED as an infinite loop for a Try/Finally whose body holds an
+            // If/ElseIf, which is a29d65b's shape, not this change's.
+            EmitInlineRegion(tryCatch.TryBlock, tryCatch.EndBlock, RegionEnd.GotoEnd, afterCatchLabel);
             Unindent();
             WriteLine("}");
 
@@ -4324,7 +4377,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     // binding would be dead and could shadow a user local in the arm.
                     if (!string.IsNullOrEmpty(catchClause.VariableName))
                         WriteLine($"const BasicLang::NetException& {SanitizeName(catchClause.VariableName)} = __nex;");
-                    EmitInlineRegion(catchClause.Block, tryCatch.EndBlock, RegionEnd.GotoEnd);
+                    // ⛔ GotoEnd RETARGETED, never FallThrough-plus-a-trailing-goto. The two are
+                    // NOT equivalent: GotoEnd emits the jump at the branch instruction's own
+                    // position, which is mid-region whenever the arm body contains an If (the
+                    // merge block carrying that branch is created before the elseif/else blocks
+                    // and regions emit in creation order). A trailing goto lands after the whole
+                    // region, so the mid-region exit silently vanishes and control falls into the
+                    // next block's label — MEASURED as an infinite loop, compiling cleanly. See
+                    // EmitRegionEnd. With no Finally, endLabel IS the end label, so the emission
+                    // is byte-identical to before the finally-entry label existed.
+                    EmitInlineRegion(catchClause.Block, tryCatch.EndBlock, RegionEnd.GotoEnd, afterCatchLabel);
                     Unindent();
                     WriteLine("}");
                 }
@@ -4344,9 +4406,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 WriteLine("{");
                 Indent();
                 // Same reason as the try body: with a Finally present, a caught exception's
-                // handler must fall out to the normal-path finally copy rather than goto past
-                // it. Measured before this: the caught case printed 2 instead of 12.
-                EmitInlineRegion(catchClause.Block, tryCatch.EndBlock, fallOutToFinally);
+                // handler must reach the normal-path finally copy rather than goto past it.
+                // Measured before this: the caught case printed 2 instead of 12. It gets there
+                // by JUMPING to the finally-entry label, not by falling out — see EmitRegionEnd
+                // for why falling out loses a mid-region exit.
+                EmitInlineRegion(catchClause.Block, tryCatch.EndBlock, RegionEnd.GotoEnd, afterCatchLabel);
                 Unindent();
                 WriteLine("}");
             }
@@ -4374,6 +4438,15 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 WriteLine("throw;");
                 Unindent();
                 WriteLine("}");
+
+                // The finally-entry label: where the §11.1 ladder's arms jump so a caught
+                // exception still runs its Finally. The try body and the per-clause handlers
+                // reach this copy by falling out of their scopes and do not need the label —
+                // it is emitted unconditionally because a label with no jump to it is
+                // harmless, while a jump with no label is a compile error.
+                Unindent();
+                WriteLine($"{afterCatchLabel}: ;");
+                Indent();
 
                 // Normal path; braces scope the duplicated body against redeclarations.
                 WriteLine("{");
@@ -4427,7 +4500,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// <paramref name="endMode"/> selects how a branch to <paramref name="endBlock"/> (the
         /// construct's EndBlock) is lowered for the enclosing native construct.
         /// </summary>
-        private void EmitInlineRegion(BasicBlock entry, BasicBlock endBlock, RegionEnd endMode)
+        /// <param name="endLabel">
+        /// Overrides the label a <see cref="RegionEnd.GotoEnd"/> jump targets. Null means the
+        /// function-scope end label. ⛔ This exists because a region's branch to its EndBlock is
+        /// NOT necessarily its last emitted instruction — see <see cref="EmitRegionEnd"/>.
+        /// </param>
+        private void EmitInlineRegion(BasicBlock entry, BasicBlock endBlock, RegionEnd endMode, string endLabel = null)
         {
             var region = ComputeInlineRegion(entry, endBlock);
             // Blocks a NESTED structured construct owns are emitted by that construct's own Visit
@@ -4460,7 +4538,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     Indent();
                 }
 
-                EmitRegionInstructions(block, endBlock, endMode);
+                EmitRegionInstructions(block, endBlock, endMode, endLabel);
             }
         }
 
@@ -4470,7 +4548,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// to the normal goto/if-goto emitted by <see cref="Visit(IRBranch)"/>/
         /// <see cref="Visit(IRConditionalBranch)"/>.
         /// </summary>
-        private void EmitRegionInstructions(BasicBlock block, BasicBlock endBlock, RegionEnd endMode)
+        private void EmitRegionInstructions(BasicBlock block, BasicBlock endBlock, RegionEnd endMode, string endLabel = null)
         {
             foreach (var inst in block.Instructions)
             {
@@ -4480,10 +4558,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 switch (inst)
                 {
                     case IRBranch br when br.Target == endBlock:
-                        EmitRegionEnd(endBlock, endMode, br.IsLoopExit);
+                        EmitRegionEnd(endBlock, endMode, br.IsLoopExit, endLabel);
                         break;
                     case IRConditionalBranch cb when cb.TrueTarget == endBlock || cb.FalseTarget == endBlock:
-                        EmitConditionalBranchToEnd(cb, endBlock, endMode);
+                        EmitConditionalBranchToEnd(cb, endBlock, endMode, endLabel);
                         break;
                     default:
                         inst.Accept(this);
@@ -4495,6 +4573,21 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// <summary>
         /// Lower a whole-block branch to the region's EndBlock per the enclosing construct.
         ///
+        /// <para>⛔ <b>FallThrough IS NOT "GotoEnd MINUS THE JUMP".</b> The jump is emitted HERE,
+        /// at the branch instruction's own position, which is only the end of the emitted region
+        /// when the block carrying that branch happens to be emitted LAST. Region blocks are
+        /// emitted in CREATION order (<see cref="ComputeInlineRegion"/>), and IRBuilder creates an
+        /// If's merge block — the one that ends up carrying the branch to the EndBlock — BEFORE
+        /// the blocks of its elseif/else arms. So the moment a region contains an If, the branch
+        /// lands MID-region and "fall out of the { } scope" is false: the next region block's
+        /// label is emitted immediately after, and control falls into it.</para>
+        ///
+        /// <para>MEASURED: emitting the region under FallThrough and appending one goto after it
+        /// turned <c>Catch ex As Exception / If a Then … ElseIf b Then …</c> into an infinite
+        /// loop — control fell from <c>if0_end_nex</c> into the ElseIf arm, printed its body, and
+        /// jumped back. It compiled cleanly. Use <paramref name="endLabel"/> to retarget the jump
+        /// instead of switching to FallThrough.</para>
+        ///
         /// <para><paramref name="isLoopExit"/> separates the two branches that are otherwise
         /// IDENTICAL in the IR: an explicit <c>Exit For</c> versus the branch that ends an
         /// ordinary iteration. Both target the loop's EndBlock. Emitting <c>continue;</c> for
@@ -4502,15 +4595,21 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// miscompile from a build that reported success (task_4cc381f1). ⛔ It cannot be
         /// recovered positionally: an <c>If</c> in the body yields a merge block that also
         /// branches here and must stay <c>continue</c>, so the flag comes from the front end.</para>
+        ///
+        /// <para>⚠ The two parameters are INDEPENDENT and address different arms —
+        /// <paramref name="endLabel"/> retargets <c>GotoEnd</c>, <paramref name="isLoopExit"/>
+        /// splits <c>LoopContinue</c>. They arrived as separate fixes and a merge that kept only
+        /// one would silently reinstate the other's bug.</para>
         /// </summary>
-        private void EmitRegionEnd(BasicBlock endBlock, RegionEnd endMode, bool isLoopExit = false)
+        private void EmitRegionEnd(BasicBlock endBlock, RegionEnd endMode,
+            bool isLoopExit = false, string endLabel = null)
         {
             switch (endMode)
             {
                 case RegionEnd.LoopContinue:
                     WriteLine(isLoopExit ? "break;" : "continue;");
                     break;
-                case RegionEnd.GotoEnd: WriteLine($"goto {EndLabelName(endBlock)};"); break;
+                case RegionEnd.GotoEnd: WriteLine($"goto {endLabel ?? EndLabelName(endBlock)};"); break;
                 case RegionEnd.FallThrough: /* emit nothing — fall out of the { } scope */ break;
             }
         }
@@ -4526,22 +4625,22 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// A conditional branch where one arm is the region's EndBlock and the other an interior
         /// label. The end arm is lowered per <paramref name="endMode"/>; the interior arm is a goto.
         /// </summary>
-        private void EmitConditionalBranchToEnd(IRConditionalBranch cb, BasicBlock endBlock, RegionEnd endMode)
+        private void EmitConditionalBranchToEnd(IRConditionalBranch cb, BasicBlock endBlock, RegionEnd endMode, string endLabel = null)
         {
             var condition = GetValueName(cb.Condition);
             WriteLine($"if ({condition}) {{");
             Indent();
-            EmitBranchArm(cb.TrueTarget, endBlock, endMode);
+            EmitBranchArm(cb.TrueTarget, endBlock, endMode, endLabel);
             Unindent();
             WriteLine("}");
             WriteLine("else {");
             Indent();
-            EmitBranchArm(cb.FalseTarget, endBlock, endMode);
+            EmitBranchArm(cb.FalseTarget, endBlock, endMode, endLabel);
             Unindent();
             WriteLine("}");
         }
 
-        private void EmitBranchArm(BasicBlock target, BasicBlock endBlock, RegionEnd endMode)
+        private void EmitBranchArm(BasicBlock target, BasicBlock endBlock, RegionEnd endMode, string endLabel = null)
         {
             if (target == endBlock)
             {
@@ -4555,7 +4654,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     // finally-duplication design does not fully support; the goto keeps it valid.
                     case RegionEnd.GotoEnd:
                     case RegionEnd.FallThrough:
-                        WriteLine($"goto {EndLabelName(endBlock)};");
+                        WriteLine($"goto {endLabel ?? EndLabelName(endBlock)};");
                         break;
                 }
             }

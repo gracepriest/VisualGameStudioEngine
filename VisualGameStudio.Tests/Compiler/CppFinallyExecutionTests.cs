@@ -87,38 +87,35 @@ End Sub
     }
 
     /// <summary>
-    /// EXACTLY ONCE, not merely "at least once". The finally body is emitted TWICE — a normal
-    /// copy and an exception copy — so a fix that let both run would satisfy the two tests
-    /// above (11 and 12 would become 21 and 22, but a laxer assertion would not notice).
-    /// Counting catches that; the counter also proves the Try body ran first.
+    /// EXACTLY ONCE and IN ORDER. The finally body is emitted TWICE — a normal copy and an
+    /// exception copy — so a fix letting both run would still satisfy the two tests above (11
+    /// and 12 would simply become 21 and 22). Printing catches that directly: a second copy
+    /// shows up as a second "finally" line.
     ///
-    /// <para>⛔ The Finally deliberately does NOT contain a <c>Console.WriteLine</c>. That
-    /// emits an <c>Object</c>-typed temp which lowers to a nonexistent C++ <c>object</c> type
-    /// — <c>'object' was not declared in this scope</c> — from a build BasicLang reports as
-    /// successful. Confirmed PRE-EXISTING by A/B against the un-fixed generator, and chipped
-    /// separately. Using a WriteLine here would fail this test for an unrelated reason.</para>
+    /// <para>This ALSO regression-tests a separate bug it used to be written around. A
+    /// <c>Console.WriteLine</c> inside a Finally produced an UNTYPED temp, and the shared base
+    /// <c>ICodeGenerator.MapType</c> answers a null type with the literal string
+    /// <c>"object"</c> — a C# type name — which reached the generated C++ verbatim as
+    /// <c>object t2 = {};</c> and failed g++ with <c>'object' was not declared in this
+    /// scope</c>, from a build BasicLang reported as successful. So this test used an integer
+    /// accumulator instead. It no longer has to: <c>CppCodeGenerator.MapType</c> now answers
+    /// null with <c>void*</c>, this backend's own mapping for Object.</para>
     /// </summary>
     [Test]
     public void Finally_RunsExactlyOnce_AndAfterTheBody()
     {
         var output = Run(@"
-Function Count(n As Integer) As Integer
-    Dim acc As Integer = n
-    Try
-        acc = acc * 10
-    Finally
-        acc = acc + 1
-    End Try
-    Return acc
-End Function
-
 Sub Main()
-    Console.WriteLine(Count(1))
+    Try
+        Console.WriteLine(""body"")
+    Finally
+        Console.WriteLine(""finally"")
+    End Try
+    Console.WriteLine(""after"")
 End Sub
 ");
-        // 1 * 10 = 10, then +1 once = 11. Twice would be 12; Finally-before-body would be 20.
-        Assert.That(output.Trim(), Is.EqualTo("11"),
-            "12 means both emitted copies ran; 20 means the Finally ran before the Try body; "
-            + "10 means it did not run at all.");
+        Assert.That(output.Trim(), Is.EqualTo("body\nfinally\nafter"),
+            "two 'finally' lines mean both emitted copies ran; a missing one means neither "
+            + "did; and a build failure here is the untyped-temp defect returning.");
     }
 }
