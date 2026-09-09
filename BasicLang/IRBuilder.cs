@@ -724,7 +724,8 @@ namespace BasicLang.Compiler.IR
             {
                 BaseClass = node.BaseClass,
                 Namespace = _currentNamespace,
-                IsAbstract = node.IsAbstract
+                IsAbstract = node.IsAbstract,
+                IsExtern = node.IsExtern
             };
 
             // Copy generic parameters and constraints

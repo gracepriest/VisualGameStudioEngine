@@ -138,9 +138,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // allowJsImports: true for the same structural reason and only here — #JsImport is
             // this backend's own directive, and every OTHER backend must refuse it rather than
             // silently drop it. See the mirror-row note on the checker's honesty matrix.
+            // allowExternClasses: true because a JS runtime is exactly what an Extern Class
+            // declares a type IN. Every other backend must refuse it — see the checker's arm.
             ForeignFeatureChecker.Check(module, "JavaScript", rejectCollections: false,
                 ownInlineLanguage: "javascript", allowForeignIdentifiers: true,
-                allowJsImports: true);
+                allowJsImports: true, allowExternClasses: true);
             JsCapabilityChecker.Check(module);
 
             _module = module;
@@ -195,6 +197,19 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // would hit the temporal dead zone.
             foreach (var irClass in module.Classes.Values)
             {
+                // ⛔ An EXTERN type already exists in the runtime — emit nothing for it.
+                //
+                // MEASURED before this guard, from a build that reported success:
+                //     class Element {
+                //         textContent = "";
+                //         querySelector(sel) { return null; }
+                //     }
+                // Two failures in one. The declaration SHADOWS the real DOM Element, and every
+                // member gets a SYNTHESIZED stub — so `el.querySelector("p")` answered null
+                // instead of reaching the runtime. Member ACCESSES still emit normally; it is
+                // only the declaration that must not exist.
+                if (irClass.IsExtern) continue;
+
                 EmitClass(irClass, module);
                 Line();
             }

@@ -383,6 +383,22 @@ namespace BasicLang.Compiler.AST
         public List<ASTNode> Members { get; set; }
         public bool IsAbstract { get; set; }  // MustInherit
 
+        /// <summary>
+        /// Declaration-only: the type ALREADY EXISTS in the target runtime, so nothing is
+        /// emitted for it and its members carry signatures rather than bodies.
+        ///
+        /// <para><c>Extern</c> is deliberately overloaded. <c>Extern Function</c> with a body
+        /// says HOW to define something per backend; <c>Extern Class</c> with no body says it is
+        /// already defined. The unifying reading is "defined outside BasicLang" — no new keyword
+        /// and no new concept for the user.</para>
+        ///
+        /// <para>⛔ A backend that CANNOT honour this must refuse the program, never ignore the
+        /// flag: emitting the declaration would SHADOW the real runtime type
+        /// (<c>class Element {}</c> over the DOM's Element), which fails at run time from a
+        /// build that reported success.</para>
+        /// </summary>
+        public bool IsExtern { get; set; }
+
         public ClassNode(int line, int column) : base(line, column)
         {
             Access = AccessModifier.Private;  // Default to Private for multi-file
