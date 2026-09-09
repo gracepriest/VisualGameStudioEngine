@@ -4391,6 +4391,34 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     WriteLine("}");
                 }
                 _regionLabelSuffix = savedSuffix;
+
+                // ⛔ A THIRD FINALLY COPY, ON THE UNMATCHED PATH. The bare `throw;` below is
+                // reached when no arm matched, and it is INSIDE a handler of this same try
+                // block — so C++ [except.handle]/3 says this block's other handlers are not
+                // considered for it. The Finally's exception copy lives in the sibling
+                // `catch (...)` and therefore CANNOT see this rethrow: the body was emitted and
+                // simply never reached. MEASURED: `fin` missing entirely while the exception
+                // still propagated to the caller. The Finally has to run HERE, before the throw.
+                //
+                // Retargeted GotoEnd, not FallThrough — a Finally body containing an If puts its
+                // exit in the merge block, which is created before the ElseIf arms and so is not
+                // emitted last; FallThrough would drop that exit and fall into the next arm. See
+                // EmitRegionEnd. The label is captured at the ENCLOSING suffix so it is unique
+                // per enclosing copy while the region's own gotos, emitted under "_fnex", still
+                // target this one captured name.
+                if (tryCatch.FinallyBlock != null)
+                {
+                    var propagationLabel = LabelName(tryCatch.EndBlock.Name + ".fnex");
+                    WriteLine("{");
+                    Indent();
+                    _regionLabelSuffix = savedSuffix + "_fnex";
+                    EmitInlineRegion(tryCatch.FinallyBlock, tryCatch.EndBlock, RegionEnd.GotoEnd, propagationLabel);
+                    _regionLabelSuffix = savedSuffix;
+                    Unindent();
+                    WriteLine($"{propagationLabel}: ;");
+                    WriteLine("}");
+                }
+
                 WriteLine("throw;");
                 Unindent();
                 WriteLine("}");
