@@ -627,4 +627,82 @@ public class NetGeneratedShimConformanceTests
             "the throw/catch must still WORK, lowered natively to std::runtime_error and what(). "
             + "Proving inertness with a program that no longer runs correctly would be worthless.");
     }
+
+    // =====================================================================================
+    // §12.3 — a NAMED static call, and typed-catch SELECTIVITY.
+    // =====================================================================================
+
+    /// <summary>
+    /// Typed-catch SELECTIVITY — authored as a PINNED DIVERGENCE, because measuring it found the
+    /// shape does not compile at all.
+    ///
+    /// <para><b>Why the row was attempted.</b> A coverage audit showed the existing typed-catch
+    /// row (<c>TypedCatchOfABaseType_MatchesTheGeneratedShimsChain</c>) proves the POSITIVE
+    /// direction only: it has exactly ONE clause, and it is the one that must match. A
+    /// <c>NetException::Matches</c> returning <c>true</c> unconditionally — or a shim emitting
+    /// every element of every chain — passes it unchanged. Selectivity needs a clause that must
+    /// NOT fire, an INTERMEDIATE base that must, and a later catch-all that must LOSE.</para>
+    ///
+    /// <para>⛔ <b>MEASURED: two .NET-typed Catch clauses cannot coexist.</b></para>
+    /// <code>
+    /// error C2312: 'const std::runtime_error &amp;': is caught by
+    ///              'const std::runtime_error &amp;' on line 42
+    /// </code>
+    /// <para>Every .NET exception type maps to <c>std::runtime_error</c>
+    /// (<c>MapCatchType</c>), so the PER-CLAUSE handlers emitted after the §11.1 ladder become
+    /// duplicate C++ handlers and the second is unreachable. One clause compiles; two do not. The
+    /// ladder itself is fine — it is an if/else-if chain over <c>Matches()</c> and handles many
+    /// clauses — but it is not what breaks.</para>
+    ///
+    /// <para>So selectivity is not merely untested, it is currently INEXPRESSIBLE: any program
+    /// that could distinguish "matches the right clause" from "matches everything" needs at least
+    /// two clauses. Chipped. This row pins the diagnostic so the fix is
+    /// noticed; when it lands, replace this with the runtime selectivity row described above
+    /// rather than deleting it.</para>
+    ///
+    /// <para>⚠ The named STATIC-call half of this row was split out — it is a separate concern and
+    /// hit an unrelated publish problem. <c>Convert.ToInt32</c> in the property program above is
+    /// already a real .NET static crossing.</para>
+    /// </summary>
+    [Test]
+    public void TwoDotNetTypedCatchClauses_DoNotYetCompile_PinnedDivergence()
+    {
+        var dir = NetShimPipelineFixture.NewTempDir("blnet-conf-multicatch-");
+        Dirs.Add(dir);
+        File.WriteAllText(Path.Combine(dir, "Program.bas"), """
+            Using System.Text.RegularExpressions
+
+            Module Program
+             Sub Main()
+              Try
+               Dim R As New Regex("[")
+               Console.WriteLine("WRONG-no-throw")
+              Catch ex As InvalidOperationException
+               Console.WriteLine("WRONG-unrelated-clause")
+              Catch ex As ArgumentException
+               Console.WriteLine("caught-intermediate")
+              Catch ex As Exception
+               Console.WriteLine("WRONG-root-clause")
+              End Try
+              Console.WriteLine("done")
+             End Sub
+            End Module
+            """);
+
+        var projectPath = NetShimPipelineFixture.WriteProject(dir, "ConfMultiCatch");
+        var result = CppProjectBuilder.Build(ProjectFile.Load(projectPath), "Release");
+        var text = NetShimPipelineFixture.Diagnostics(result) + "\n" + result.RawToolchainOutput;
+
+        Assert.That(result.Success, Is.False,
+            "Two .NET-typed Catch clauses are currently expected NOT to build. If this starts "
+            + "succeeding the duplicate-handler defect was fixed — replace this row with the "
+            + "runtime SELECTIVITY row (unrelated clause must not fire, intermediate base must, "
+            + "trailing catch-all must lose), do not delete it.\n" + text);
+
+        Assert.That(text, Does.Contain("C2312").Or.Contain("is caught by"),
+            "the failure must still be the DUPLICATE C++ HANDLER — every .NET exception type maps "
+            + "to std::runtime_error, so the per-clause handlers collide. A different failure "
+            + "means this row is pinning something else and is no longer evidence about "
+            + "multi-clause catch.\n" + text);
+    }
 }
