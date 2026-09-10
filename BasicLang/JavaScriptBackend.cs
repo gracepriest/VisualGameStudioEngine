@@ -578,7 +578,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case IRCompare c2:
                     return Bound(c2) ? SanitizeName(c2.Name) : CompareExprInline(c2);
                 case IRUnaryOp u:
-                    return Bound(u) ? SanitizeName(u.Name) : $"({UnaryOpToken(u.Operation)}{ExprInline(u.Operand)})";
+                    return Bound(u) ? SanitizeName(u.Name) : UnaryText(u.Operation, ExprInline(u.Operand));
                 case IRCall call:
                     return Bound(call) ? SanitizeName(call.Name) : CallExpr(call);
 
@@ -677,7 +677,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case IRVariable v: return SanitizeName(v.Name);
                 case IRBinaryOp b: return BinaryExprInline(b);
                 case IRCompare cm: return CompareExprInline(cm);
-                case IRUnaryOp u: return $"({UnaryOpToken(u.Operation)}{ExprInline(u.Operand)})";
+                case IRUnaryOp u: return UnaryText(u.Operation, ExprInline(u.Operand));
                 default:
                     // A call inside a guard WAS emitted (only the guard's own operator tree is
                     // suppressed), so the by-name path is right for it.
@@ -798,7 +798,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             }
         }
 
-        private string UnaryExpr(IRUnaryOp op) => $"({UnaryOpToken(op.Operation)}{Expr(op.Operand)})";
+        private string UnaryExpr(IRUnaryOp op) => UnaryText(op.Operation, Expr(op.Operand));
+
+        /// <summary>
+        /// A unary operation as text. <c>AddressOf</c> is the one operator with no JavaScript
+        /// token — a function is already a value — so it renders as the bare operand rather
+        /// than a parenthesised no-op (<c>f = (Greet)</c>).
+        /// </summary>
+        private static string UnaryText(UnaryOpKind kind, string operand) =>
+            kind == UnaryOpKind.AddressOf ? operand : $"({UnaryOpToken(kind)}{operand})";
 
         private static string UnaryOpToken(UnaryOpKind kind)
         {
@@ -807,6 +815,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case UnaryOpKind.Neg: return "-";
                 case UnaryOpKind.Not: return "!";
                 case UnaryOpKind.BitwiseNot: return "~";
+                // A function is already a first-class value in JavaScript: `AddressOf Greet`
+                // is the reference `Greet`, exactly as the C# backend renders a method group.
+                // (UnaryText renders it bare; this arm only keeps the token table total.)
+                case UnaryOpKind.AddressOf: return "";
                 default:
                     throw NotYet($"UnaryOpKind.{kind}");
             }
@@ -2394,6 +2406,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             var kind = ReceiverKind(mc.Object);
 
+            // Sort needs the ELEMENT TYPE, which the static rename table cannot see.
+            if (kind == CollectionKind.List && string.Equals(mc.MethodName, "Sort", StringComparison.OrdinalIgnoreCase))
+                return ListSort(mc, receiver, args);
+
             if (TryCollectionMethod(kind, mc.MethodName, receiver, args, out var collection))
                 return collection;
 
@@ -2504,6 +2520,28 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             var order = descending ? "kb < ka ? -1 : kb > ka ? 1 : 0" : "ka < kb ? -1 : ka > kb ? 1 : 0";
             return $"{receiver}.slice().sort((a, b) => {{ const ka = ({keySelector})(a), " +
                    $"kb = ({keySelector})(b); return {order}; }})";
+        }
+
+        /// <summary>
+        /// <c>List.Sort</c>. With a comparer it is <c>Array.prototype.sort</c>'s contract exactly
+        /// — negative / zero / positive — so <c>l.Sort(AddressOf Desc)</c> is <c>l.sort(Desc)</c>.
+        ///
+        /// <para>⛔ Without one, JavaScript's default sort is LEXICOGRAPHIC even for numbers:
+        /// <c>[10, 9, 1].sort()</c> is <c>[1, 10, 9]</c>, from a build that succeeded. So a
+        /// numeric element type gets a numeric comparator, <c>String</c> keeps the default, and
+        /// any other element type is refused rather than silently misordered.</para>
+        /// </summary>
+        private string ListSort(IRInstanceMethodCall mc, string receiver, List<string> args)
+        {
+            if (args.Count == 1) return $"{receiver}.sort({args[0]})";
+            if (args.Count != 0) throw NotYet("List.Sort with more than one argument");
+
+            var element = mc.Object?.Type?.GenericArguments?.FirstOrDefault();
+            if (element != null && element.IsNumeric()) return $"{receiver}.sort((a, b) => a - b)";
+            if (element != null && element.Name.Equals("String", StringComparison.OrdinalIgnoreCase))
+                return $"{receiver}.sort()";
+
+            throw NotYet($"List.Sort() on elements of type '{element?.Name ?? "unknown"}' (no default ordering)");
         }
 
         /// <summary>
