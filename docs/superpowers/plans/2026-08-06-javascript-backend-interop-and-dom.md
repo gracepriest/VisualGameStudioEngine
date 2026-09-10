@@ -938,6 +938,13 @@ So a user writing `element.TextContent` out of BasicLang habit would emit `.Text
 
 This is the same shape as the operator bug fixed in `cd4f04d`: case-insensitive front end, case-sensitive back end.
 
+### Plan 2c — DONE Sep 10 (`.bli` + `dom-core.bli`), scoped
+
+- **`.bli`** is a declaration-file extension across the compiler resolver, `ProjectFile`'s glob, Core's `FileExtensions`/`LanguageFileTypes`, the highlighting loader, TextMate, the Solution Explorer, the status bar, the preview server's MIME map and the VS Code extension. Never an entry point: `BasicCompiler.IsEntryLikeFile` skips it, `CompileFile` and `BasicLang.exe x.bli` refuse it. `BliDeclarationFileTests` pins the load-bearing lists by name.
+- **`lib/js/dom-core.bli`** ships beside `BasicLang.exe` (`BasicCompiler.DomDeclarationsPath`) and is auto-included in every JavaScript build on BOTH routes — `WithJavaScriptDeclarations` runs inside `CompileProjectFiles`, and `CompileFile` delegates there for a JS target. Backend-gated, so C#/C++ never see an `Element`. Curated by hand: `Document`, `Element`, `CSSStyleDeclaration`, `DOMTokenList`, `DomEvent` (`Event` is a keyword; the type name is never emitted), `Window`, `Location`. `console` deliberately absent (BL7011).
+- **No new syntax for the runtime objects** — `Dim d As Document = ::document`, a typed local from a foreign value, which Task 7 made legal. The `.d.ts` generator (plan 3) is NOT built; the file is hand-curated.
+- Found on the way: `TypeInfo.Members` was case-SENSITIVE (a mis-cased Function call typed `Object` on every backend), and the task_8f4dcdb2 canonicalisation only saw the current unit's classes — both fixed (`eb79bb4`), which is what makes `el.TextContent` reach `textContent` from a `.bli`.
+
 ### Work 2b must cover that this plan does not
 
 - **⛔ FIRST: chip `task_8f4dcdb2`** (declared-name canonicalisation), per Decision 2 above. Everything else in 2b is silently wrong without it.

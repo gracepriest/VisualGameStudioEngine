@@ -718,10 +718,10 @@ Same five-step TDD shape per task, each with a codegen assertion **and** an exec
 
 ### Task 28: IDE F5
 
-- [ ] Wire the Run path so a `<TargetBackend>JavaScript</TargetBackend>` project builds, starts `WebPreviewServer`, and opens the system browser at the served URL.
-- [ ] Server stops on debug-end, alongside the existing `RestorePreDebugPanels` teardown.
-- [ ] Manual verification: create a JS project from a template, press F5, see output in the browser and a breakpoint land on a `.bas` line in devtools.
-- [ ] Commit.
+- [x] Wire the Run path so a `<TargetBackend>JavaScript</TargetBackend>` project builds, starts `WebPreviewServer`, and opens the system browser at the served URL. (`MainWindowViewModel.StartJavaScriptPreviewAsync`, shared by F5 and Ctrl+F5.)
+- [x] Server stops on debug-end, alongside the existing `RestorePreDebugPanels` teardown. (Unconditional `StopWebPreview()` on debug-end — `RestorePreDebugPanels` itself returns early for a preview that never started a DAP session.)
+- [x] Verification (Sep 10): a project built through the CLI project route (`build Site.blproj`, the same `CompileProjectFiles` engine the IDE's BuildService calls) was served on 127.0.0.1 and opened in a browser. The page rendered DOM created from BasicLang (typed `Document`/`Element` via the shipped `dom-core.bli`), the console showed the program's output (a post-test loop, a typed `Catch` on the emitted exception hierarchy), two clicks drove an `Event` → lambda handler → `heading.textContent = "Clicks: 2"`, and the served `Site.js.map` was Source Map v3 with `sources: ["Main.bas"]`, embedded `sourcesContent` and non-empty mappings — the substrate a devtools breakpoint binds to. ⚠ NOT done by hand: the literal F5 keypress in the IDE and setting a breakpoint in devtools (the wiring is covered by `JavaScriptProjectBuildTests` + `WebPreviewServerTests`; the map by `JavaScriptSourceMapTests`).
+- [x] Commit.
 
 ---
 
