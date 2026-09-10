@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using BasicLang.Compiler.CodeGen.Net;
 using BasicLang.Compiler.ProjectSystem;
 using NUnit.Framework;
@@ -50,7 +51,19 @@ public class NetGeneratedShimConformanceTests
     /// <c>NetShimPipelineTests.BuildOnce</c> rather than sharing it, because that one is private
     /// and its <c>[OneTimeTearDown]</c> owns its own directories.
     /// </summary>
-    private static SharedBuild BuildOnce(string projectName, IReadOnlyDictionary<string, string> files)
+    /// <param name="withProbe">
+    /// Emit <c>NetShimPipelineFixture</c>'s probe assembly (<c>Aot.Probe</c>) into the project
+    /// directory and reference it. ⛔ Use THIS, never a hand-rolled emitter: it compiles against
+    /// the net8.0 REFERENCE pack, and the other emitter in this suite
+    /// (<c>NetDelegateTests.ProbeDir.EmitAssembly</c>) compiles against IMPLEMENTATION assemblies,
+    /// which bakes in a <c>System.Private.CoreLib</c> reference and makes every use of the probe's
+    /// types CS0012 inside the generated shim.
+    /// </param>
+    /// <param name="extraItemGroupXml">Appended after the reference item group — e.g. a
+    /// <c>&lt;NetProxy&gt;</c> declaration.</param>
+    private static SharedBuild BuildOnce(
+        string projectName, IReadOnlyDictionary<string, string> files,
+        bool withProbe = false, string extraItemGroupXml = "")
     {
         var key = projectName;
         return Builds.GetOrAdd(key, _ => new Lazy<SharedBuild>(() =>
@@ -60,7 +73,14 @@ public class NetGeneratedShimConformanceTests
             foreach (var file in files)
                 File.WriteAllText(Path.Combine(dir, file.Key), file.Value);
 
-            var projectPath = NetShimPipelineFixture.WriteProject(dir, projectName);
+            var itemGroupXml = extraItemGroupXml;
+            if (withProbe)
+            {
+                var probe = NetShimPipelineFixture.EmitProbeAssembly(dir);
+                itemGroupXml = NetShimPipelineFixture.ReferenceItemGroup(probe) + extraItemGroupXml;
+            }
+
+            var projectPath = NetShimPipelineFixture.WriteProject(dir, projectName, itemGroupXml);
             var stopwatch = Stopwatch.StartNew();
             var result = CppProjectBuilder.Build(ProjectFile.Load(projectPath), "Release");
             stopwatch.Stop();
@@ -358,5 +378,191 @@ public class NetGeneratedShimConformanceTests
                 "the program must not have reached its first .NET call and printed a result.\n"
                 + dump);
         });
+    }
+
+    // =====================================================================================
+    // §7.2 / §11.4 — an omitted member is a WARNING, and the project still ships.
+    // =====================================================================================
+
+    /// <summary>
+    /// §12.3's "<c>&lt;NetProxy&gt;</c> omitted-member BL6026-and-still-builds" row, at RUN level.
+    ///
+    /// <para>The emit-level half was already proven — <c>NetSurfaceCollectorTests</c> asserts the
+    /// omission, the single BL6026, its warning severity and its message. But it does so with a
+    /// FAKE toolchain and phase 5 switched off, so nothing showed that a real project carrying
+    /// that warning publishes a shim, links, and RUNS. "Still builds" was the untested half of the
+    /// claim.</para>
+    ///
+    /// <para><c>&lt;NetProxy Include="Aot.Probe.AotProbe"/&gt;</c> declares a static class whose
+    /// only member is <c>[RequiresDynamicCode]</c>, so §7.2 omits it and announces BL6026 — a
+    /// DECLARED surface that ends up empty. The program meanwhile calls <c>Bag</c> through
+    /// ordinary call-site reachability, so the build has real work to do. Both halves matter: a
+    /// project that only had the omitted type would prove "builds" trivially, with no shim to
+    /// publish and nothing to run.</para>
+    ///
+    /// <para>⚠ BL6026 is NOT BL6020. BL6020 is the AOT-hostile-member diagnostic on the ILC side;
+    /// BL6026 is §7.2's omission, and §11.4 marks only BL6026 as always-a-warning. Asserting the
+    /// wrong code here would pass for the wrong reason, since this same probe member is what the
+    /// BL6020 fixture uses too.</para>
+    /// </summary>
+    [Test]
+    public void AnOmittedMemberWarnsWithBl6026_AndTheProjectStillPublishesAndRuns()
+    {
+        var built = BuildOnce(
+            "ConfOmitted",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Program.bas"] = """
+                    Using Aot.Probe
+
+                    Module Program
+                     Sub Main()
+                      Dim Vals = Bag.Values()
+                      Console.WriteLine(Vals(0))
+                      Console.WriteLine(Bag.Sum(Vals))
+                     End Sub
+                    End Module
+                    """,
+            },
+            withProbe: true,
+            extraItemGroupXml:
+                "\n  <ItemGroup>\n    <NetProxy Include=\"Aot.Probe.AotProbe\" />\n  </ItemGroup>");
+
+        AssertBuilt(built.Result, "the §7.2 omitted-member program");
+
+        var bl6026 = built.Result.Diagnostics.Where(d => d.Code == "BL6026").ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(bl6026, Is.Not.Empty,
+                "the declared type's [RequiresDynamicCode] member must be omitted WITH a BL6026. "
+                + "No BL6026 means either the omission stopped happening or it went silent — the "
+                + "silent form is worse, because the member simply vanishes from the surface. "
+                + "Diagnostics: " + NetShimPipelineFixture.Diagnostics(built.Result));
+            Assert.That(bl6026.TrueForAll(d => d.IsWarning), Is.True,
+                "§11.4 marks BL6026 as ALWAYS a warning — an omitted declared member must not "
+                + "fail a native build. If this became an error the whole row is moot: the build "
+                + "would already have failed above.");
+        });
+
+        Assert.That(NetShimPipelineFixture.Run(built.Result.ExecutablePath!),
+            Is.EqualTo("7\n24\n"),
+            "the project carrying a BL6026 must still publish its shim, link, and produce .NET's "
+            + "answers — 7 is Values()(0) and 24 is Sum(7+8+9). This is the half the emit-level "
+            + "test could not reach: it ran with a fake toolchain and phase 5 off.");
+    }
+
+    // =====================================================================================
+    // §8.4 — delegates, the row §12.3 calls mandatory.
+    // =====================================================================================
+
+    /// <summary>
+    /// §12.3's result-bearing delegate row, plus the <c>long</c> and <c>void</c> shapes.
+    ///
+    /// <para>⛔ <b>This row is NOT a duplicate of Task 11's, and the difference is the whole
+    /// point.</b> <c>NetDelegateTests.ARunningProgram_DispatchesAResultBearingDelegateInline</c>
+    /// runs a native binary against a C++ STUB LAMBDA returning canned values — no .NET delegate
+    /// is ever constructed, and the real startup TU is skipped. Here a BasicLang lambda becomes an
+    /// actual <c>Aot.Probe.IntFn</c> inside the shim, is invoked by .NET, and its result crosses
+    /// back.</para>
+    ///
+    /// <para><b>The <c>-9</c> before the <c>1</c> is the load-bearing part.</b> It proves the
+    /// callback runs INLINE, during the call, rather than being queued and dispatched afterwards —
+    /// a deferred implementation would print <c>1</c> first and still "work".</para>
+    ///
+    /// <para>⚠ <b>double/float are deliberately absent.</b> They pass §8.4's blittable-scalar gate
+    /// and then TRUNCATE on the wire — .NET's 3 and 2.75 arrive as 2 and 2, with a clean build
+    /// (chip <c>task_75064f2e</c>). Writing this row with only <c>int</c> is exactly the
+    /// shape-substitution trap: the green tick would sit on top of a live numeric miscompile. The
+    /// <c>long</c> and NEGATIVE values here are the cheap insurance — they would catch a width or
+    /// sign error even though they cannot catch the floating-point one.</para>
+    /// </summary>
+    [Test]
+    public void ADelegateCrossesAsARealDotNetDelegate_AndDispatchesInline()
+    {
+        var built = BuildOnce(
+            "ConfDelegate",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Program.bas"] = """
+                    Using Aot.Probe
+
+                    Module Program
+                     Sub Main()
+                      ' EVERY lambda parameter is annotated because BasicLang does NOT infer them
+                      ' from the target delegate's signature — measured: `Function(a, b) a - b` at
+                      ' an IntFn slot is BL3001 "Cannot infer type for lambda parameter 'a'".
+                      ' Required spelling, not a workaround.
+                      Console.WriteLine(Callbacks.Fold(10, Function(a As Integer, b As Integer) a - b))
+                      Console.WriteLine(Callbacks.Big(Function(v As Long) v - 1))
+                      Console.WriteLine(Callbacks.Run(Sub(v As Integer) Console.WriteLine(v)))
+                     End Sub
+                    End Module
+                    """,
+            },
+            withProbe: true);
+
+        AssertBuilt(built.Result, "the §8.4 delegate program");
+
+        Assert.That(NetShimPipelineFixture.Run(built.Result.ExecutablePath!),
+            Is.EqualTo("7\n-4000000001\n-9\n1\n"),
+            "7 is Fold(10, a-b) = f(10,3) = 10-3, so the BasicLang lambda really became an IntFn "
+            + ".NET invoked and the result came back. -4000000001 is the long slot carrying a "
+            + "value no 32-bit path survives, and it is NEGATIVE so a sign error shows. The -9 "
+            + "MUST precede the 1: that ordering is what proves the void callback dispatched "
+            + "INLINE rather than being deferred until after the call returned.");
+    }
+
+    // =====================================================================================
+    // §8.3 — out / ref SCALAR slots, written by real .NET and read back natively.
+    // =====================================================================================
+
+    /// <summary>
+    /// §12.3's <c>ref</c>/<c>out</c> row at run level.
+    ///
+    /// <para>These were stub-proven only (<c>NetProxyStubRunTests</c>): the stub asserts the wire
+    /// SHAPE — that a by-ref scalar travels as a pointer — but never that a real .NET method wrote
+    /// through that pointer and the native caller read the new value back. Those are different
+    /// claims, and only the second is what a user experiences.</para>
+    ///
+    /// <para><c>TryDouble</c> returns a Boolean AS WELL AS writing its <c>out</c> slot, so one call
+    /// proves both directions at once: a shim that dropped the write entirely would still return
+    /// <c>True</c> and, without the second line, look correct.</para>
+    ///
+    /// <para>⚠ Scalars are NATIVE here — no handle is involved — which is why this needs no
+    /// capability work and is not blocked by anything. The gap was purely that nothing ran it end
+    /// to end.</para>
+    /// </summary>
+    [Test]
+    public void OutAndRefScalarSlots_AreWrittenByDotNet_AndReadBackNatively()
+    {
+        var built = BuildOnce(
+            "ConfSlots",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Program.bas"] = """
+                    Using Aot.Probe
+
+                    Module Program
+                     Sub Main()
+                      Dim R As Integer = 0
+                      Console.WriteLine(Slots.TryDouble(21, R))
+                      Console.WriteLine(R)
+                      Dim B As Integer = 10
+                      Slots.Bump(B)
+                      Console.WriteLine(B)
+                     End Sub
+                    End Module
+                    """,
+            },
+            withProbe: true);
+
+        AssertBuilt(built.Result, "the §8.3 out/ref scalar program");
+
+        Assert.That(NetShimPipelineFixture.Run(built.Result.ExecutablePath!),
+            Is.EqualTo("True\n42\n15\n"),
+            "True is TryDouble's ordinary Boolean result; 42 is its OUT slot, and a 0 there means "
+            + "the shim called .NET but threw the write away — the exact failure a shape-only "
+            + "stub test cannot see. 15 is the REF slot: 10 sent in, +5 applied by .NET, read "
+            + "back natively. A 10 means the ref travelled by value.");
     }
 }

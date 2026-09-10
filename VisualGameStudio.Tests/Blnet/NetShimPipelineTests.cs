@@ -123,6 +123,51 @@ internal static class NetShimPipelineFixture
 
                 public static int CountRx(System.Text.RegularExpressions.Regex[] rx) => rx.Length;
             }
+
+            // ---- P2a-2 Task 12 (spec §8.4) — the CALLBACK rows ----
+            // A NEW type, deliberately: Widget is <NetProxy>-declared by two fixtures and
+            // projects its WHOLE surface, so a member added there changes what those tests see.
+            // An unreferenced type contributes to no surface at all, so this is inert until a
+            // call site or a <NetProxy> item names it.
+            //
+            // ⛔ EVERY SLOT HERE IS A BLITTABLE SCALAR, and that is a hard constraint, not a
+            // stylistic one: §8.4 v1 admits nothing else. NetShimGenerator.RequireBlittableScalar
+            // throws for a Handle, String or struct slot and points at the spec — a MatchEvaluator
+            // (System.String(Match)) is REFUSED, because Match is a Handle.
+            //
+            // ⚠ double/float are ADMITTED by that gate and then TRUNCATE on the wire (.NET 3 and
+            // 2.75 arrive as 2 and 2, with a clean build) — chip task_75064f2e. They are
+            // deliberately ABSENT here: a row that cannot yet be authored honestly must not be
+            // faked with an int that happens to work.
+            public delegate int IntFn(int a, int b);
+            public delegate long LongFn(long v);
+            public delegate void VoidFn(int v);
+
+            public static class Callbacks
+            {
+                public static int Fold(int seed, IntFn f) => f(seed, 3);
+                public static long Big(LongFn f) => f(-4000000000L);
+                public static int Run(VoidFn f) { f(-9); return 1; }
+            }
+
+            // ---- P2a-2 Task 12 — §8.3's out/ref SCALAR slots ----
+            // Only stub-proven until now (NetProxyStubRunTests): the stub asserts the wire shape,
+            // never that a real .NET method wrote through the pointer and the native caller read
+            // the new value back. Scalar locals are native, so no handle is involved and this
+            // needs no capability work — the gap was purely that nothing ran it end to end.
+            //
+            // TryDouble returns a Boolean AS WELL AS writing its out slot, so one call proves both
+            // directions at once: a shim that dropped the write would still return True.
+            public static class Slots
+            {
+                public static bool TryDouble(int v, out int result)
+                {
+                    result = v * 2;
+                    return true;
+                }
+
+                public static void Bump(ref int v) => v += 5;
+            }
         }
         """;
 
