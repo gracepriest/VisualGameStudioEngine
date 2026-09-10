@@ -335,7 +335,8 @@ public class LanguageServerDescriptorTests
     /// </summary>
     private static readonly Dictionary<string, string[]> ExpectedExtensions = new()
     {
-        ["basiclang"] = new[] { ".bas", ".bl", ".mod", ".cls", ".class" },
+        // .bli — declaration files (plan 2c): served by the BasicLang server like any other unit.
+        ["basiclang"] = new[] { ".bas", ".bl", ".mod", ".cls", ".class", ".bli" },
         // .c is deliberately absent — C is not routed in Phase 3a.
         ["clangd"] = new[] { ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh", ".hxx", ".inl" }
     };
