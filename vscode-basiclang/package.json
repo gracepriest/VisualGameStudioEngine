@@ -40,7 +40,7 @@
       {
         "id": "basiclang",
         "aliases": ["BasicLang", "BASIC", "basiclang"],
-        "extensions": [".bl", ".bas", ".cls", ".mod"],
+        "extensions": [".bl", ".bas", ".cls", ".mod", ".bli"],
         "configuration": "./language-configuration.json"
       },
       {

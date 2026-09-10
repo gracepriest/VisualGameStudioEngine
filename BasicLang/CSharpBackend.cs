@@ -925,7 +925,60 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         /// <summary>
         /// Generate a C# class from IRClass
         /// </summary>
+        /// <summary>
+        /// Fields and properties of the class being generated, and of its bases — the names an
+        /// unqualified identifier inside one of its methods can resolve to.
+        ///
+        /// <para>⛔ MEASURED without this: <c>Total = Total + x</c> inside a method emitted an
+        /// EMPTY body. IRBuilder lowers that assignment as an IRBinaryOp RENAMED to
+        /// <c>Total</c> (no IRAssignment), and <see cref="IsNamedDestination"/> knew only
+        /// parameters, locals and globals — so a field-named result looked like an unused SSA
+        /// temp and was skipped, from a build that reported success. C++ and JavaScript both
+        /// emitted the statement.</para>
+        /// </summary>
+        private HashSet<string> _currentClassMemberNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        private HashSet<string> CollectMemberNames(IRClass irClass)
+        {
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            var current = irClass;
+            while (current != null && seen.Add(current.Name))
+            {
+                foreach (var f in current.Fields ?? new List<IRField>())
+                    if (f?.Name != null) names.Add(f.Name);
+                foreach (var p in current.Properties ?? new List<IRProperty>())
+                    if (p?.Name != null) names.Add(p.Name);
+
+                if (string.IsNullOrEmpty(current.BaseClass) || _currentModule?.Classes == null) break;
+                _currentModule.Classes.TryGetValue(current.BaseClass, out current);
+            }
+
+            return names;
+        }
+
+        /// <summary>The events of the class being generated, by name — what a <c>raise_X</c> call resolves against.</summary>
+        private Dictionary<string, IREvent> _currentClassEvents = new Dictionary<string, IREvent>(StringComparer.OrdinalIgnoreCase);
+
         private void GenerateClass(IRClass irClass)
+        {
+            _currentClassMemberNames = CollectMemberNames(irClass);
+            _currentClassEvents = new Dictionary<string, IREvent>(StringComparer.OrdinalIgnoreCase);
+            foreach (var evt in irClass.Events ?? new List<IREvent>())
+                if (evt?.Name != null) _currentClassEvents[evt.Name] = evt;
+            try
+            {
+                GenerateClassBody(irClass);
+            }
+            finally
+            {
+                _currentClassMemberNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                _currentClassEvents = new Dictionary<string, IREvent>(StringComparer.OrdinalIgnoreCase);
+            }
+        }
+
+        private void GenerateClassBody(IRClass irClass)
         {
             // Class declaration with generic parameters
             var className = SanitizeName(irClass.Name);
@@ -1155,7 +1208,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         {
             var access = MapAccessModifier(evt.Access);
             var staticMod = evt.IsStatic ? "static " : "";
-            var delegateType = SanitizeName(evt.DelegateType);
+            // The full TypeInfo when the IR carries it — `Action<int>`, not `Action`.
+            var delegateType = evt.Type != null ? MapType(evt.Type) : SanitizeName(evt.DelegateType);
             var name = SanitizeName(evt.Name);
             WriteLine($"{access} {staticMod}event {delegateType} {name};");
         }
@@ -1577,11 +1631,32 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     {
                         var instr = instructions[i];
 
+                        // A CALL renamed after the variable it assigns — `Total = Add(Total, x)`
+                        // — is a store, not a statement call. Found by review: the branch below
+                        // excludes IRCall, so it fell to GenerateInlineStatement and only the
+                        // call was emitted; the accumulator never changed.
+                        if (instr is IRCall namedCall && IsNamedDestination(namedCall))
+                        {
+                            sb.Append($"{new string(' ', _indentLevel * 4)}{GetValueName(namedCall)} = {EmitExpression(namedCall)};\n");
+                            continue;
+                        }
+
                         // Skip pure value computations (temps) - they get inlined
-                        // into the expressions that consume them
-                        if (instr is IRValue && !(instr is IRCall) && !(instr is IRStore) &&
+                        // into the expressions that consume them.
+                        //
+                        // ⛔ Unless the result is NAMED AFTER A VARIABLE — IRBuilder lowers
+                        // `total = total + x` as an IRBinaryOp renamed to `total`, with no
+                        // IRAssignment. Skipping that "temp" emitted an EMPTY lambda body, and
+                        // a Sub lambda accumulating into a captured local (or a field) silently
+                        // did nothing. Measured: the same program summed to 6 on C++ and JS
+                        // and printed 0 here.
+                        if (instr is IRValue namedValue && !(instr is IRCall) && !(instr is IRStore) &&
                             !(instr is IRAlloca) && !(instr is IRAssignment))
                         {
+                            if (IsNamedDestination(namedValue))
+                            {
+                                sb.Append($"{new string(' ', _indentLevel * 4)}{GetValueName(namedValue)} = {EmitExpression(namedValue)};\n");
+                            }
                             continue;
                         }
 
@@ -1661,7 +1736,11 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     if (instr is not IRValue v) continue;
                     if (string.IsNullOrEmpty(v.Name)) continue;
 
-                    if (_declaredIdentifiers.Contains(v.Name))
+                    // A result named after a variable OR (when IRBuilder renamed it) a class
+                    // member is an assignment, not a temp — registering it here would inline
+                    // `Total + x` into every later read of `Total`.
+                    if (_declaredIdentifiers.Contains(v.Name) ||
+                        (v.NamedAfterVariable && _currentClassMemberNames.Contains(v.Name)))
                         continue;
 
                     // first definition wins (good enough for simple SSA-style temp regs)
@@ -2626,7 +2705,14 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         {
             if (value == null) return false;
             if (string.IsNullOrEmpty(value.Name)) return false;
-            return _declaredIdentifiers.Contains(value.Name);
+            if (_declaredIdentifiers.Contains(value.Name)) return true;
+
+            // A class member is a destination ONLY for a value IRBuilder actually RENAMED after
+            // it. Found by review: matching every value by name made an ordinary temp `t0` in
+            // a class with a field `t0` a write to that field, and a call temp was emitted as
+            // `t0 = Bump();` and then inlined AGAIN at its use. A local or parameter of the same
+            // name shadows a member in C# exactly as it does in BasicLang.
+            return value.NamedAfterVariable && _currentClassMemberNames.Contains(value.Name);
         }
 
         private string GetValueName(IRValue value)
@@ -2704,9 +2790,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                             }
                         }
 
-                        // If it's a real variable, use its name; if it's a temp "register",
-                        // try to inline its defining value.
-                        if (_declaredIdentifiers.Contains(v.Name) || v.IsParameter || v.IsGlobal)
+                        // If it's a real variable (or a member of the class being generated),
+                        // use its name; if it's a temp "register", try to inline its defining value.
+                        if (_declaredIdentifiers.Contains(v.Name) || v.IsParameter || v.IsGlobal ||
+                            _currentClassMemberNames.Contains(v.Name))
                         {
                             var varName = GetValueName(v);
 
@@ -3068,6 +3155,19 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         public void Visit(IRCall call)
         {
             var functionName = call.FunctionName;
+
+            // RaiseEvent X(args) arrives as a call named raise_X (IRBuilder's convention).
+            // MEASURED before this arm: emitted verbatim, CS0103 — nothing defined raise_X, so
+            // no event had ever been raised on this backend. The event IS the delegate here:
+            // invoke it if anyone subscribed. Only for an event of the class being generated,
+            // so a user function that happens to be called raise_Foo is left alone.
+            if (functionName != null && functionName.StartsWith("raise_", StringComparison.Ordinal) &&
+                _currentClassEvents.TryGetValue(functionName.Substring("raise_".Length), out var raisedEvent))
+            {
+                var raiseArgs = string.Join(", ", call.Arguments.Select(a => EmitExpression(a)));
+                WriteLine($"{SanitizeName(raisedEvent.Name)}?.Invoke({raiseArgs});");
+                return;
+            }
 
             // Handle event subscription: Delegate.Combine -> +=
             if (functionName == "Delegate.Combine" && call.Arguments.Count >= 2)

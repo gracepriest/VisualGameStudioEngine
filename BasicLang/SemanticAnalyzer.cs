@@ -5157,7 +5157,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 TryRetypeLiteralToDecimal(node.Initializer, varType);
                 var initType = GetNodeType(node.Initializer);
 
-                if (initType != null && !varType.IsAssignableFrom(initType)
+                // A `::` foreign VALUE converts to whatever it is declared as — `Dim v As Integer
+                // = ::getValue()` used to die here ("Cannot assign value of type '::getValue' to
+                // variable of type 'Integer'"), the first wall a `::` user hit. Plan 2 Task 7.
+                if (initType != null && initType.Kind != TypeKind.Foreign && !varType.IsAssignableFrom(initType)
                     && !IsNumericLiteralAssignable(node.Initializer, varType, initType))
                 {
                     var errorMsg = $"Cannot assign value of type '{initType.Name}' to variable of type '{varType.Name}'";
@@ -6120,8 +6123,30 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(EventDeclarationNode node)
         {
-            // Resolve the event type (delegate type)
-            var eventType = node.EventType != null ? ResolveTypeReference(node.EventType) : _typeManager.GetType("EventHandler");
+            // Resolve the event type (delegate type):
+            //   Event X As T            → T
+            //   Event X(p As P, …)      → Action(Of P, …), built structurally like a lambda's type
+            //   Event X                 → EventHandler (the .NET default)
+            TypeInfo eventType;
+            if (node.EventType != null)
+            {
+                eventType = ResolveTypeReference(node.EventType);
+            }
+            else if (node.HasParameterList)
+            {
+                eventType = new TypeInfo("Action", TypeKind.Delegate);
+                foreach (var p in node.Parameters)
+                    eventType.GenericArguments.Add(
+                        (p.Type != null ? ResolveTypeReference(p.Type) : null) ?? _typeManager.ObjectType);
+            }
+            else
+            {
+                eventType = _typeManager.GetType("EventHandler");
+            }
+
+            // Recorded on the node so IRBuilder can carry the REAL type — the IR used to keep
+            // only a name, which dropped `Action(Of Integer)` to `Action` on C#.
+            SetNodeType(node, eventType);
 
             // Register the event as a symbol
             var eventSymbol = new Symbol(node.Name, SymbolKind.Event, eventType, node.Line, node.Column);
@@ -7109,6 +7134,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     // Type checking deferred to instantiation time
                 }
+                // A `::` FOREIGN member has no knowable type, so an assignment to it has nothing
+                // to check; a foreign VALUE likewise converts to whatever it is stored in. This
+                // used to refuse `::document.title = "hi"` ("Cannot assign value of type 'String'
+                // to '::document::title'"), which made `::` call-only — plan 2 Task 7.
+                else if (targetType.Kind == TypeKind.Foreign || valueType.Kind == TypeKind.Foreign)
+                {
+                    // Opaque on both sides; the backend renders the member verbatim.
+                }
                 else if (!targetType.IsAssignableFrom(valueType))
                 {
                     var errorMsg = $"Cannot assign value of type '{valueType.Name}' to '{targetType.Name}'";
@@ -7456,6 +7489,34 @@ namespace BasicLang.Compiler.SemanticAnalysis
             SetNodeType(node, resultType);
         }
 
+        /// <summary>
+        /// The delegate type <c>AddressOf f</c> denotes — <c>Action(Of P…)</c> for a Sub,
+        /// <c>Func(Of P…, R)</c> for a Function — built structurally, exactly as a lambda's type
+        /// is (Visit(LambdaExpressionNode)), so the two unify at every consumer.
+        ///
+        /// <para>⛔ Not <c>Pointer To &lt;return type&gt;</c>. That discarded the parameter list
+        /// entirely and LEAKED as a type NAME into every backend for the everyday
+        /// <c>Dim f = AddressOf Greet</c>: <c>Pointer To Void f = Greet;</c> (CS1002) on C#,
+        /// <c>'Pointer' was not declared</c> on C++, BL7007 on JavaScript — chips task_4392b185
+        /// and task_e7c50371. A non-function operand keeps the pointer type.</para>
+        /// </summary>
+        private TypeInfo DelegateTypeOf(Symbol symbol)
+        {
+            if (symbol == null) return null;
+            if (symbol.Kind != SymbolKind.Function && symbol.Kind != SymbolKind.Subroutine) return null;
+
+            var returnType = symbol.ReturnType;
+            var isSub = symbol.Kind == SymbolKind.Subroutine ||
+                        returnType == null ||
+                        returnType.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
+
+            var delegateType = new TypeInfo(isSub ? "Action" : "Func", TypeKind.Delegate);
+            foreach (var p in symbol.Parameters ?? new List<Symbol>())
+                delegateType.GenericArguments.Add(p.Type ?? _typeManager.ObjectType);
+            if (!isSub) delegateType.GenericArguments.Add(returnType);
+            return delegateType;
+        }
+
         public void Visit(UnaryExpressionNode node)
         {
             node.Operand.Accept(this);
@@ -7520,7 +7581,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     break;
 
                 case "AddressOf":
-                    resultType = _typeManager.CreatePointerType(operandType);
+                    resultType = DelegateTypeOf(GetNodeSymbol(node.Operand))
+                                 ?? _typeManager.CreatePointerType(operandType);
                     break;
 
                 case "Deref":

@@ -179,6 +179,13 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 Line();
             }
 
+            // The exception hierarchy this program needs, BEFORE any user class: a user
+            // `class MyError extends Exception` hits the temporal dead zone otherwise.
+            EmitExceptionPrelude(module);
+
+            // Module-level Dims, also before classes — a static field initialiser may read one.
+            EmitGlobals(module);
+
             // Class and interface member bodies also live in module.Functions, under their
             // UNQUALIFIED name — `Class A.Handle` and `Class B.Handle` are both "Handle".
             // Emitting them here would produce two top-level `function Handle()` declarations
@@ -233,22 +240,162 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         }
 
         /// <summary>
+        /// The .NET exception classes this program mentions (transitive closure, base first)
+        /// as real JS classes rooted at <c>Exception extends Error</c>. Nothing is emitted for
+        /// a program that mentions none. See <see cref="JsExceptionTypes"/> for the why.
+        ///
+        /// <para>The root sets <c>name</c> from <c>new.target</c> so a subclass reports its own
+        /// name, exposes <c>Message</c> for the BasicLang surface, and carries <c>Wrap</c>,
+        /// which the catch-all arm uses so a NATIVE JS error (a TypeError from a null
+        /// dereference) bound to <c>Catch e As Exception</c> still answers <c>e.Message</c>.</para>
+        /// </summary>
+        private void EmitExceptionPrelude(IRModule module)
+        {
+            var required = JsExceptionTypes.CollectRequired(module);
+            if (required.Count == 0) return;
+
+            foreach (var name in required)
+            {
+                var baseName = JsExceptionTypes.BaseOf(name);
+                if (baseName != null)
+                {
+                    Line($"class {name} extends {baseName} {{}}");
+                    continue;
+                }
+
+                Line($"class {name} extends Error {{");
+                _indentLevel++;
+                Line("constructor(message) {");
+                _indentLevel++;
+                Line("super(message === undefined || message === null ? \"\" : String(message));");
+                Line("this.name = new.target.name;");
+                _indentLevel--;
+                Line("}");
+                Line("get Message() { return this.message; }");
+                Line("ToString() { return this.name + \": \" + this.message; }");
+                Line("static Wrap(e) {");
+                _indentLevel++;
+                Line($"if (e instanceof {name}) return e;");
+                Line($"const wrapped = new {name}(e instanceof Error ? e.message : String(e));");
+                Line("wrapped.InnerNative = e;");
+                Line("return wrapped;");
+                _indentLevel--;
+                Line("}");
+                _indentLevel--;
+                Line("}");
+            }
+
+            Line();
+        }
+
+        /// <summary>
+        /// Module-level <c>Dim</c>s as top-level <c>let</c>s.
+        ///
+        /// <para>MEASURED before this: <c>module.GlobalVariables</c> was never emitted, and a
+        /// function's <c>n = n + 1</c> came out as <c>const n = ((n + 1) | 0)</c> — IRBuilder
+        /// renames the result to the variable it assigns, and <see cref="Bind"/> knew only
+        /// locals and members — so Node died with "Cannot access 'n' before initialization"
+        /// from a build that reported success. <see cref="DeclareGlobals"/> is the other half:
+        /// inside every body the globals count as declared, so that rename is an assignment.</para>
+        ///
+        /// <para>Only a CONSTANT initializer is lowered. IRBuilder evaluates a module-level
+        /// initializer with no current function, so anything else has already lost its
+        /// instructions (EmitInstruction drops them when there is no block) — a call or a
+        /// <c>New</c> here would be a silently defaulted global. Refuse instead.</para>
+        /// </summary>
+        private void EmitGlobals(IRModule module)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var any = false;
+
+            foreach (var g in module.GlobalVariables?.Values ?? Enumerable.Empty<IRVariable>())
+            {
+                if (g?.Name == null) continue;
+
+                // JavaScript has ONE top-level scope; two modules' same-named globals would be
+                // a duplicate `let` — a SyntaxError — or, mangled apart, a silent split.
+                if (!seen.Add(g.Name))
+                    throw NotYet($"two module-level variables named '{g.Name}' in one program");
+
+                string init;
+                switch (g.InitialValue)
+                {
+                    case null:
+                        init = ArrayInitializer(g.Type) ?? TypeMapper.GetDefaultValue(g.Type);
+                        break;
+                    case IRConstant constant:
+                        init = Expr(constant);
+                        break;
+                    default:
+                        throw NotYet($"a module-level initializer for '{g.Name}' that is not a constant");
+                }
+
+                Line($"let {SanitizeName(g.Name)} = {init};");
+                any = true;
+            }
+
+            if (any) Line();
+        }
+
+        /// <summary>
+        /// A local's declaration initializer: a sized array's allocation, else the type's
+        /// DEFAULT value. ⛔ Never a bare <c>let x;</c> — a BasicLang local is default-initialised
+        /// (<c>Dim n As Integer</c> is 0), and a bare <c>let</c> is <c>undefined</c>, which
+        /// propagates as NaN through arithmetic rather than raising. Fields and globals already
+        /// defaulted; locals did not, and a read-before-write printed "undefined".
+        /// </summary>
+        private string LocalInitializer(TypeInfo type) =>
+            ArrayInitializer(type) ?? TypeMapper.GetDefaultValue(type);
+
+        /// <summary>
+        /// Module-level Dims, in their OWN set — not in <see cref="_declaredNames"/>, which is
+        /// the function's parameters and locals. The three are consulted in scope order by
+        /// <see cref="Bind"/> and <see cref="VariableRef"/>: locals/parameters, then class
+        /// members, then globals. Found by review: with the globals mixed into the declared
+        /// set, a local sharing a global's name lost its <c>let</c>, and a field sharing a
+        /// global's name was written as the global.
+        /// </summary>
+        private readonly HashSet<string> _globalNames = new HashSet<string>(StringComparer.Ordinal);
+
+        private void DeclareGlobals()
+        {
+            _globalNames.Clear();
+            foreach (var g in _module?.GlobalVariables?.Values ?? Enumerable.Empty<IRVariable>())
+                if (g?.Name != null) _globalNames.Add(g.Name);
+        }
+
+        /// <summary>
         /// Names that resolve to <c>this.X</c> inside the method currently being emitted:
         /// the class's fields and properties, plus its bases'.
         /// </summary>
         private HashSet<string> _memberNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>The events of the class being emitted, by name — what a <c>raise_X</c> call resolves against.</summary>
+        private Dictionary<string, IREvent> _currentClassEvents = new Dictionary<string, IREvent>(StringComparer.OrdinalIgnoreCase);
+
         private void EmitClass(IRClass irClass, IRModule module)
         {
-            // Events have no JS form, and RaiseEvent lowers to a call to `raise_X` that
-            // nothing defines — emitting the class without the member would be silently
-            // broken, so refuse.
-            if (irClass.Events != null && irClass.Events.Count > 0)
-                throw NotYet($"Events (on class '{irClass.Name}')");
+            _currentClassEvents = new Dictionary<string, IREvent>(StringComparer.OrdinalIgnoreCase);
+            foreach (var evt in irClass.Events ?? new List<IREvent>())
+                if (evt?.Name != null) _currentClassEvents[evt.Name] = evt;
+
+            _currentClassMethods = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            {
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var current = irClass;
+                while (current != null && seen.Add(current.Name))
+                {
+                    foreach (var m in current.Methods ?? new List<IRMethod>())
+                        if (m?.Name != null && !m.IsStatic && !_currentClassMethods.ContainsKey(m.Name))
+                            _currentClassMethods[m.Name] = m.Name;
+                    if (string.IsNullOrEmpty(current.BaseClass)) break;
+                    module.Classes.TryGetValue(current.BaseClass, out current);
+                }
+            }
 
             var header = $"class {SanitizeName(irClass.Name)}";
             if (!string.IsNullOrEmpty(irClass.BaseClass))
-                header += $" extends {SanitizeName(irClass.BaseClass)}";
+                header += $" extends {ClassReference(irClass.BaseClass)}";
 
             // Interfaces and generic parameters ERASE — JS has neither.
             Line(header + " {");
@@ -267,6 +414,13 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 Line($"{(field.IsStatic ? "static " : "")}{SanitizeName(field.Name)} = {init};");
             }
 
+            // An event is a Set of handlers on the INSTANCE: AddHandler is `add`, RemoveHandler
+            // `delete`, RaiseEvent iterates (see TryEventCall). Per instance, so two objects of
+            // the class have separate subscribers, and a Set so a handler added twice fires once
+            // — the closest JS reading of a multicast delegate.
+            foreach (var evt in irClass.Events ?? new List<IREvent>())
+                Line($"{(evt.IsStatic ? "static " : "")}{SanitizeName(evt.Name)} = new Set();");
+
             foreach (var prop in irClass.Properties ?? new List<IRProperty>())
                 EmitProperty(prop, members);
 
@@ -278,10 +432,13 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             _indentLevel--;
             Line("}");
+
+            _currentClassEvents = new Dictionary<string, IREvent>(StringComparer.OrdinalIgnoreCase);
+            _currentClassMethods = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         }
 
         /// <summary>
-        /// Fields and properties of a class AND of its bases — the set an unqualified
+        /// Fields, properties and events of a class AND of its bases — the set an unqualified
         /// reference inside a method must resolve to <c>this.</c>.
         /// </summary>
         private static HashSet<string> MemberNames(IRClass irClass, IRModule module)
@@ -296,6 +453,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     if (f?.Name != null) names.Add(f.Name);
                 foreach (var p in current.Properties ?? new List<IRProperty>())
                     if (p?.Name != null) names.Add(p.Name);
+                foreach (var e in current.Events ?? new List<IREvent>())
+                    if (e?.Name != null) names.Add(e.Name);
 
                 if (string.IsNullOrEmpty(current.BaseClass)) break;
                 module.Classes.TryGetValue(current.BaseClass, out current);
@@ -385,7 +544,6 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             _forEachEnds.Clear();
             _boundNames.Clear();
             _sequenceValued.Clear();
-            _armDepth = 0;
 
             Line(signature + " {");
             _indentLevel++;
@@ -399,11 +557,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             foreach (var local in impl.LocalVariables ?? new List<IRVariable>())
             {
                 if (!_declaredNames.Add(local.Name)) continue;
-                var init = ArrayInitializer(local.Type);
-                Line(init == null
-                    ? $"let {SanitizeName(local.Name)};"
-                    : $"let {SanitizeName(local.Name)} = {init};");
+                Line($"let {SanitizeName(local.Name)} = {LocalInitializer(local.Type)};");
             }
+
+            // Globals after the locals — see Visit(IRFunction) for why the order matters.
+            DeclareGlobals();
 
             EmitStructured(impl.EntryBlock ?? impl.Blocks?.FirstOrDefault());
 
@@ -465,7 +623,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case IRCompare c2:
                     return Bound(c2) ? SanitizeName(c2.Name) : CompareExprInline(c2);
                 case IRUnaryOp u:
-                    return Bound(u) ? SanitizeName(u.Name) : $"({UnaryOpToken(u.Operation)}{ExprInline(u.Operand)})";
+                    return Bound(u) ? SanitizeName(u.Name) : UnaryText(u, ExprInline(u.Operand));
                 case IRCall call:
                     return Bound(call) ? SanitizeName(call.Name) : CallExpr(call);
 
@@ -564,7 +722,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case IRVariable v: return SanitizeName(v.Name);
                 case IRBinaryOp b: return BinaryExprInline(b);
                 case IRCompare cm: return CompareExprInline(cm);
-                case IRUnaryOp u: return $"({UnaryOpToken(u.Operation)}{ExprInline(u.Operand)})";
+                case IRUnaryOp u: return UnaryText(u, ExprInline(u.Operand));
                 default:
                     // A call inside a guard WAS emitted (only the guard's own operator tree is
                     // suppressed), so the by-name path is right for it.
@@ -685,7 +843,65 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             }
         }
 
-        private string UnaryExpr(IRUnaryOp op) => $"({UnaryOpToken(op.Operation)}{Expr(op.Operand)})";
+        private string UnaryExpr(IRUnaryOp op) => UnaryText(op, Expr(op.Operand));
+
+        /// <summary>
+        /// A unary operation as text. <c>AddressOf</c> is the one operator with no JavaScript
+        /// token — a function is already a value — so it renders as the bare operand rather
+        /// than a parenthesised no-op (<c>f = (Greet)</c>).
+        ///
+        /// <para>⛔ An INSTANCE METHOD of the class being emitted must be BOUND. Member bodies
+        /// are not top-level functions, so the bare name is a ReferenceError; and the event
+        /// lowering invokes handlers as <c>h(args)</c>, so an unbound <c>this.M</c> loses
+        /// <c>this</c> at the first field access. Found by review: <c>AddHandler Clicked,
+        /// AddressOf OnClicked</c> inside the class was a ReferenceError from a green build.</para>
+        /// </summary>
+        private string UnaryText(IRUnaryOp op, string operand)
+        {
+            if (op.Operation != UnaryOpKind.AddressOf)
+                return $"({UnaryOpToken(op.Operation)}{operand})";
+
+            if (op.Operand is IRVariable v && v.Name != null &&
+                _currentClassMethods.TryGetValue(v.Name, out var declared))
+                return $"this.{SanitizeName(declared)}.bind(this)";
+
+            // `AddressOf obj.Method` (obj may be Me) is an IRFieldAccess whose field is a METHOD
+            // of the receiver's class. A .NET delegate to an instance method captures the
+            // instance, so the reference is bound to the RECEIVER: `recv.Method.bind(recv)`.
+            // Checked structurally — the receiver is usually bound to a temp first, so its
+            // rendered text is `t0`, never `this`.
+            if (op.Operand is IRFieldAccess fa && fa.FieldName != null &&
+                DeclaredInstanceMethod(fa.Object?.Type?.Name, fa.FieldName) is string viaReceiver)
+            {
+                var receiver = Expr(fa.Object);
+                return $"{receiver}.{SanitizeName(viaReceiver)}.bind({receiver})";
+            }
+
+            if (operand.StartsWith("this.", StringComparison.Ordinal))
+                return $"{operand}.bind(this)";
+
+            return operand;
+        }
+
+        /// <summary>The methods of the class being emitted (and its bases), use-site name → declared name.</summary>
+        private Dictionary<string, string> _currentClassMethods = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>The declared name of an INSTANCE method <paramref name="member"/> on the class <paramref name="typeName"/> (or a base), else null.</summary>
+        private string DeclaredInstanceMethod(string typeName, string member)
+        {
+            if (string.IsNullOrEmpty(typeName) || string.IsNullOrEmpty(member) || _module?.Classes == null) return null;
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            while (!string.IsNullOrEmpty(typeName) && seen.Add(typeName) &&
+                   _module.Classes.TryGetValue(typeName, out var cls) && cls != null)
+            {
+                foreach (var m in cls.Methods ?? new List<IRMethod>())
+                    if (m?.Name != null && !m.IsStatic && string.Equals(m.Name, member, StringComparison.OrdinalIgnoreCase))
+                        return m.Name;
+                typeName = cls.BaseClass;
+            }
+            return null;
+        }
 
         private static string UnaryOpToken(UnaryOpKind kind)
         {
@@ -694,6 +910,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case UnaryOpKind.Neg: return "-";
                 case UnaryOpKind.Not: return "!";
                 case UnaryOpKind.BitwiseNot: return "~";
+                // A function is already a first-class value in JavaScript: `AddressOf Greet`
+                // is the reference `Greet`, exactly as the C# backend renders a method group.
+                // (UnaryText renders it bare; this arm only keeps the token table total.)
+                case UnaryOpKind.AddressOf: return "";
                 default:
                     throw NotYet($"UnaryOpKind.{kind}");
             }
@@ -884,7 +1104,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             IRIndexerAccess ix => IsForeignValue(ix.Collection),
             IRCall call => HasForeignMarker(call.FunctionName),
             IRNewObject n => HasForeignMarker(n.ClassName),
-            _ => HasForeignMarker(value.Name)
+            // A LOCAL holding a `::` value (`Dim el = ::document.getElementById("x")`) carries
+            // no `::` in its name; its inferred TYPE is what says its members are raw JS.
+            _ => HasForeignMarker(value.Name) || value.Type?.Kind == TypeKind.Foreign
         };
 
         private static bool HasForeignMarker(string name) =>
@@ -1212,19 +1434,32 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// </summary>
         private HashSet<string> _sequenceValued = new HashSet<string>(StringComparer.Ordinal);
 
-        private void Bind(string name, string expression)
+        private void Bind(string name, string expression) => Bind(name, expression, allowMember: false);
+
+        /// <summary>
+        /// Binds a value-producing instruction's result. The member arm is taken only for a
+        /// value IRBuilder RENAMED after a variable (<see cref="IRValue.NamedAfterVariable"/>) —
+        /// a temp that merely shares a member's name (<c>t0</c>) is still a temp.
+        /// </summary>
+        private void Bind(IRValue value, string expression) =>
+            Bind(value?.Name, expression, allowMember: value?.NamedAfterVariable == true);
+
+        private void Bind(string name, string expression, bool allowMember)
         {
             if (!string.IsNullOrEmpty(name)) _boundNames.Add(name);
             var js = SanitizeName(name);
 
-            // Already in scope — assign.
+            // A parameter or local — assign.
             if (_declaredNames.Contains(name)) { Line($"{js} = {expression};"); return; }
 
             // A CLASS MEMBER. `Count = Count + 1` produces an IRBinaryOp named `Count`
             // (IRBuilder renames a result to the variable it initialises), so a `const` here
             // would declare a fresh local and the member would never change — the method
-            // would silently do nothing.
-            if (_memberNames.Contains(name)) { Line($"this.{js} = {expression};"); return; }
+            // would silently do nothing. Checked BEFORE the globals: class scope is nearer.
+            if (allowMember && _memberNames.Contains(name)) { Line($"this.{js} = {expression};"); return; }
+
+            // A module-level Dim — assign.
+            if (_globalNames.Contains(name)) { Line($"{js} = {expression};"); return; }
 
             Line($"const {js} = {expression};");
         }
@@ -1315,11 +1550,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // An array's SIZE is not in the instruction stream — Dim a(4) emits only an
                 // IRAlloca with Size == 1. The element count lives on the DECLARATION, so
                 // allocation belongs here.
-                var init = ArrayInitializer(local.Type);
-                Line(init == null
-                    ? $"let {SanitizeName(local.Name)};"
-                    : $"let {SanitizeName(local.Name)} = {init};");
+                Line($"let {SanitizeName(local.Name)} = {LocalInitializer(local.Type)};");
             }
+
+            // Globals live in their own set (see DeclareGlobals): a local that shares a
+            // global's name keeps its own `let` and shadows it.
+            DeclareGlobals();
 
             // EntryBlock-rooted, following terminators — never a walk of function.Blocks.
             EmitStructured(function.EntryBlock ?? function.Blocks?.FirstOrDefault());
@@ -1356,13 +1592,6 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         private readonly Stack<BasicBlock> _forEachEnds = new Stack<BasicBlock>();
 
         /// <summary>
-        /// How many conditional ARMS deep the current emission is, within the nearest
-        /// enclosing <c>For Each</c> body. Zero means the straight-line path — where a branch
-        /// to the loop end is simply the end of an iteration, not an exit.
-        /// </summary>
-        private int _armDepth;
-
-        /// <summary>
         /// Merge blocks an ENCLOSING construct will emit once it closes. A branch to one of
         /// these emits nothing rather than inlining the continuation into the branch body.
         /// </summary>
@@ -1385,23 +1614,41 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// both belong to <c>if0.end</c>. Derived from the prefix before the FIRST dot, so
         /// nested ElseIf blocks resolve to the outer If's end.
         /// </summary>
-        private BasicBlock FindMergeBlock(BasicBlock branchTarget)
+        private BasicBlock FindMergeBlock(BasicBlock branchTarget) => FindSibling(branchTarget, "end");
+
+        /// <summary>
+        /// The block <c>{prefix}.{suffix}</c> that shares <paramref name="block"/>'s prefix —
+        /// <c>do0.body</c> → <c>do0.cond</c> / <c>do0.end</c>. IRBuilder names every block a
+        /// construct creates with one prefix, so this is how a body finds its own header and
+        /// its own exit without guessing from position.
+        /// </summary>
+        private BasicBlock FindSibling(BasicBlock block, string suffix)
         {
-            var name = branchTarget?.Name;
+            var name = block?.Name;
             if (name == null || _currentFunction?.Blocks == null) return null;
 
             var dot = name.IndexOf('.');
             if (dot <= 0) return null;
 
-            var end = name.Substring(0, dot) + ".end";
+            var wanted = name.Substring(0, dot) + "." + suffix;
             foreach (var b in _currentFunction.Blocks)
-                if (b.Name == end) return b;
+                if (b.Name == wanted) return b;
             return null;
         }
 
         private void EmitStructured(BasicBlock block)
         {
             if (block == null || _emitted.Contains(block)) return;
+
+            // A body reached BEFORE its own header is a post-test loop: `Do … Loop While`
+            // branches into the body first and the condition block follows it. Pre-test loops
+            // never arrive here this way — their header is emitted (and marked) before it
+            // hands the body to EmitLoop — so "header not yet emitted" is the whole test.
+            if (IsPostTestLoopBody(block, out var header))
+            {
+                EmitPostTestLoop(block, header);
+                return;
+            }
 
             if (IsLoopHeader(block))
             {
@@ -1466,26 +1713,158 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             var cond = header.GetTerminator() as IRConditionalBranch;
             if (cond == null) throw NotYet("a loop header with no conditional terminator");
 
-            // A post-test Do…Loop branches into the BODY first, so by the time the header is
-            // reached the body is already emitted and this would produce `while (true) {}` —
-            // an infinite loop at runtime from a build that succeeded. Refuse instead.
-            if (_emitted.Contains(cond.TrueTarget))
-                throw NotYet("post-test Do…Loop (body precedes the condition)");
+            var (body, end, leaveWhenTrue) = ResolveLoopArms(header, cond);
+
+            // The body of a pre-test loop is only ever reached THROUGH its header. If it is
+            // already emitted the CFG is a shape this walk does not know, and `while (true) {}`
+            // would be an infinite loop from a build that succeeded. Refuse instead.
+            if (_emitted.Contains(body))
+                throw NotYet("a loop whose body was emitted before its header");
 
             Line("while (true) {");
             _indentLevel++;
 
+            // Header instructions FIRST, then the test: Expr renders an operand by name only
+            // once its instruction has been emitted, and inline otherwise — rendering the
+            // condition before its temps exist would re-evaluate the whole operand tree.
             EmitInstructions(header);
-            Line($"if (!{Expr(cond.Condition)}) break;");
+            Line(ExitTest(cond, leaveWhenTrue));
 
-            _loopEnds.Push(cond.FalseTarget);
-            EmitStructured(cond.TrueTarget);
+            _loopEnds.Push(end);
+            EmitStructured(body);
             _loopEnds.Pop();
 
             _indentLevel--;
             Line("}");
 
-            EmitStructured(cond.FalseTarget);
+            EmitStructured(end);
+        }
+
+        /// <summary>
+        /// Which arm of a loop header's branch is the body and which is the exit, and whether
+        /// the loop leaves on a TRUE condition (<c>Until</c>) or a false one (<c>While</c>).
+        ///
+        /// <para>⛔ <b>Not "TrueTarget is the body".</b> IRBuilder lowers <c>Until</c> by SWAPPING
+        /// the targets — <c>condbr c, end, body</c> — so that assumption emitted the loop's
+        /// CONTINUATION inside the loop and its real body after it, for a program that compiled
+        /// cleanly and printed the wrong thing. The exit is identified by IDENTITY with the
+        /// header's own <c>.end</c> sibling; whichever arm is not the exit is the body.</para>
+        /// </summary>
+        private (BasicBlock Body, BasicBlock End, bool LeaveWhenTrue) ResolveLoopArms(BasicBlock header, IRConditionalBranch cond)
+        {
+            var end = FindSibling(header, "end");
+
+            if (end != null && cond.FalseTarget == end)
+                return (cond.TrueTarget, end, false);     // While: leave when the condition is false
+
+            if (end != null && cond.TrueTarget == end)
+                return (cond.FalseTarget, end, true);      // Until: leave when the condition is true
+
+            throw NotYet("a loop header whose branch does not target the loop's own .end block");
+        }
+
+        /// <summary>The <c>break</c> guard for a loop header. Call only AFTER the header's instructions are emitted.</summary>
+        private string ExitTest(IRConditionalBranch cond, bool leaveWhenTrue) =>
+            leaveWhenTrue ? $"if ({Expr(cond.Condition)}) break;" : $"if (!{Expr(cond.Condition)}) break;";
+
+        /// <summary>
+        /// A <c>.body</c> block whose <c>.cond</c> sibling has not been emitted yet. Every
+        /// pre-test loop marks its header emitted before it reaches the body, so an unemitted
+        /// header can only mean the walk entered through the body — the post-test shape. The
+        /// header must also branch back to this body, which rules out a stray name match.
+        /// </summary>
+        private bool IsPostTestLoopBody(BasicBlock block, out BasicBlock header)
+        {
+            header = null;
+            if (block?.Name == null || !block.Name.EndsWith(".body", StringComparison.Ordinal)) return false;
+
+            var cond = FindSibling(block, "cond");
+            if (cond == null || _emitted.Contains(cond)) return false;
+
+            var loopsBack = cond.GetTerminator() switch
+            {
+                IRConditionalBranch cb => cb.TrueTarget == block || cb.FalseTarget == block,
+                IRBranch br => br.Target == block,
+                _ => false
+            };
+            if (!loopsBack) return false;
+
+            header = cond;
+            return true;
+        }
+
+        /// <summary>
+        /// <c>Do … Loop While/Until</c> and the condition-less <c>Do … Loop</c>:
+        /// <c>while (true) { body; condition-instructions; if (…) break; }</c>.
+        ///
+        /// <para><b>Why not <c>do { … } while (c)</c>.</b> The condition's instructions live in
+        /// the header block — its temps are declared where they are computed — and inside a
+        /// <c>do</c> body they would be block-scoped <c>const</c>s the <c>while (c)</c> clause
+        /// cannot see. Running them at the END of a <c>while (true)</c> body keeps them in scope
+        /// and re-evaluates them after every iteration, which is what post-test means.</para>
+        ///
+        /// <para>The body's own terminator is the branch to the header; it is pushed as a
+        /// pending merge so that branch emits nothing and control simply falls into the
+        /// condition. <c>Exit Do</c> branches to the <c>.end</c> block, which is on
+        /// <see cref="_loopEnds"/> and so becomes <c>break</c>. Nothing else targets the header:
+        /// BasicLang has no <c>Continue</c> statement, so a <c>continue</c> that would skip the
+        /// condition instructions cannot arise.</para>
+        /// </summary>
+        private void EmitPostTestLoop(BasicBlock body, BasicBlock header)
+        {
+            _emitted.Add(body);
+            _emitted.Add(header);
+
+            BasicBlock end;
+            IRConditionalBranch exitCond = null;
+            var leaveWhenTrue = false;
+            switch (header.GetTerminator())
+            {
+                case IRConditionalBranch cond:
+                    (_, end, leaveWhenTrue) = ResolveLoopArms(header, cond);
+                    exitCond = cond;
+                    break;
+
+                case IRBranch:
+                    // `Do … Loop` with no condition: the header is a bare back-edge and the
+                    // only way out is Exit Do. Its .end still exists and carries the continuation.
+                    end = FindSibling(header, "end");
+                    break;
+
+                default:
+                    throw NotYet("a post-test loop header with neither a conditional nor an unconditional back-edge");
+            }
+
+            Line("while (true) {");
+            _indentLevel++;
+
+            _loopEnds.Push(end);
+            _pendingMerges.Push(header);
+
+            EmitInstructions(body);
+            switch (body.GetTerminator())
+            {
+                case IRConditionalBranch cond: EmitConditional(cond); break;
+                case IRBranch br: EmitBranch(br); break;
+                case IRSwitch sw: EmitSelectCase(sw); break;
+            }
+
+            _pendingMerges.Pop();
+
+            // Header instructions first, THEN the test — see EmitLoop for why the order matters.
+            EmitInstructions(header);
+            if (exitCond != null)
+            {
+                RecordMapping(exitCond.SourceLine);
+                Line(ExitTest(exitCond, leaveWhenTrue));
+            }
+
+            _loopEnds.Pop();
+
+            _indentLevel--;
+            Line("}");
+
+            EmitStructured(end);
         }
 
         private void EmitConditional(IRConditionalBranch cond)
@@ -1495,9 +1874,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             Line($"if ({Expr(cond.Condition)}) {{");
             _indentLevel++;
-            _armDepth++;
             EmitStructured(cond.TrueTarget);
-            _armDepth--;
             _indentLevel--;
 
             // No `else` when the false path IS the merge point — that is a bare `If … End If`.
@@ -1505,9 +1882,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             {
                 Line("} else {");
                 _indentLevel++;
-                _armDepth++;
                 EmitStructured(cond.FalseTarget);
-                _armDepth--;
                 _indentLevel--;
             }
 
@@ -1560,9 +1935,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 first = false;
                 _indentLevel++;
                 _pendingMerges.Push(sw.EndBlock);
-                _armDepth++;
                 EmitStructured(target);
-                _armDepth--;
                 _pendingMerges.Pop();
                 _indentLevel--;
             }
@@ -1671,12 +2044,18 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         {
             if (br.Target == null) return;
 
-            // For Each: fall-through and Exit For are the same branch to the same block, so
-            // only POSITION separates them — inside a conditional arm it is an exit, on the
-            // straight-line path it is the end of an iteration and needs no statement.
+            // For Each: fall-through and Exit For are the same branch to the same block.
+            // IRBranch.IsLoopExit (chip task_4cc381f1) is the ONLY thing that tells them apart
+            // — the end of an iteration emits nothing, a real exit is `break`.
+            //
+            // ⛔ Not position. This used to guess "inside a conditional arm ⇒ exit", which
+            // called a bare `Exit For` as the body's last statement undecidable and lowered it
+            // as fall-through — every element printed. The flag is set at the one place the
+            // distinction still exists (Visit(ExitStatementNode)), and the optimized-IR tests
+            // pin that the shipping passes carry it through.
             if (_forEachEnds.Contains(br.Target))
             {
-                if (_armDepth > 0) Line("break;");
+                if (br.IsLoopExit) Line("break;");
                 return;
             }
 
@@ -1732,9 +2111,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         // Value-producing instructions declare their result, and every later reference is by
         // name (see Expr). `const` because the IR is SSA — each temp is assigned exactly once,
         // so a rebind would be a bug worth having the JS engine catch.
-        public void Visit(IRBinaryOp binaryOp) => Bind(binaryOp.Name, BinaryExpr(binaryOp));
+        public void Visit(IRBinaryOp binaryOp) => Bind(binaryOp, BinaryExpr(binaryOp));
 
-        public void Visit(IRUnaryOp unaryOp) => Bind(unaryOp.Name, UnaryExpr(unaryOp));
+        public void Visit(IRUnaryOp unaryOp) => Bind(unaryOp, UnaryExpr(unaryOp));
         // VariableRef, not SanitizeName: an assignment whose target is an unqualified class
         // member must become `this.X = …`, or it writes a fresh global instead.
         public void Visit(IRAssignment assignment) =>
@@ -1772,9 +2151,56 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (call.ByRefArguments != null && call.ByRefArguments.Contains(true))
                 throw JsCapabilityChecker.ByRefArgumentRejection(call.FunctionName);
 
+            if (TryEventCall(call, out var eventStatement))
+            {
+                Line(eventStatement);
+                return;
+            }
+
             var invocationText = CallExpr(call);
-            if (IsUsed(call)) Bind(call.Name, invocationText);
+            if (IsUsed(call)) Bind(call, invocationText);
             else Line($"{invocationText};");
+        }
+
+        /// <summary>
+        /// The three event statements, which IRBuilder lowers to CALLS by convention:
+        /// <c>AddHandler e, h</c> → <c>Delegate.Combine(e, h)</c>, <c>RemoveHandler</c> →
+        /// <c>Delegate.Remove</c>, <c>RaiseEvent X(args)</c> → <c>raise_X(args)</c>. An event
+        /// is a Set of handlers on the instance (see EmitClass), so these are <c>add</c>,
+        /// <c>delete</c>, and a loop. MEASURED before: the whole class was refused, and had it
+        /// not been, <c>raise_X</c> would have been a call to nothing.
+        ///
+        /// <para><c>raise_X</c> is honoured only for an event of the class being emitted, so a
+        /// user function that happens to be called <c>raise_Foo</c> is left alone.</para>
+        /// </summary>
+        private bool TryEventCall(IRCall call, out string statement)
+        {
+            statement = null;
+            var name = call.FunctionName ?? string.Empty;
+            var args = call.Arguments ?? new List<IRValue>();
+
+            if (name == "Delegate.Combine" && args.Count == 2)
+            {
+                statement = $"{Expr(args[0])}.add({Expr(args[1])});";
+                return true;
+            }
+
+            if (name == "Delegate.Remove" && args.Count == 2)
+            {
+                statement = $"{Expr(args[0])}.delete({Expr(args[1])});";
+                return true;
+            }
+
+            const string raisePrefix = "raise_";
+            if (name.StartsWith(raisePrefix, StringComparison.Ordinal) &&
+                _currentClassEvents.TryGetValue(name.Substring(raisePrefix.Length), out var evt))
+            {
+                var rendered = string.Join(", ", args.ConvertAll(Expr));
+                statement = $"for (const h of this.{SanitizeName(evt.Name)}) h({rendered});";
+                return true;
+            }
+
+            return false;
         }
 
         /// <summary>Renders a call WITHOUT emitting it, for inline use.</summary>
@@ -1827,7 +2253,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             throw NotYet(nameof(IRCast));
         }
-        public void Visit(IRCompare compare) => Bind(compare.Name, CompareExpr(compare));
+        public void Visit(IRCompare compare) => Bind(compare, CompareExpr(compare));
         public void Visit(IRSwitch switchInst) => throw NotYet(nameof(IRSwitch));
         public void Visit(IRLabel label) => throw NotYet(nameof(IRLabel));
         public void Visit(IRComment comment) => throw NotYet(nameof(IRComment));
@@ -1881,7 +2307,29 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 }
             }
 
-            return $"new {SanitizeName(n.ClassName)}({string.Join(", ", n.Arguments.ConvertAll(Expr))})";
+            return $"new {ClassReference(n.ClassName)}({string.Join(", ", n.Arguments.ConvertAll(Expr))})";
+        }
+
+        /// <summary>
+        /// A class name as JavaScript will resolve it — in the DECLARATION's casing.
+        /// BasicLang is case-insensitive and JavaScript is not, so <c>New myerror()</c> against
+        /// <c>Class MyError</c> must emit <c>new MyError()</c>; the IR carries the use-site
+        /// spelling. A provided exception type maps to its canonical .NET spelling, and a
+        /// <c>…Exception</c> that is neither declared nor provided is refused (BL7012) rather
+        /// than emitted as a name nothing defines.
+        /// </summary>
+        private string ClassReference(string name)
+        {
+            if (_module?.Classes != null && _module.Classes.TryGetValue(name, out var declared))
+                return SanitizeName(declared.Name);
+
+            var canonical = JsExceptionTypes.Canonical(name);
+            if (canonical != null) return canonical;
+
+            if (JsExceptionTypes.LooksLikeException(name))
+                throw JsCapabilityChecker.UnknownExceptionRejection(name);
+
+            return SanitizeName(name);
         }
 
         private enum CollectionKind { None, List, Dictionary, Set }
@@ -1919,7 +2367,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         private void EmitValueOrStatement(IRValue value, string expression)
         {
-            if (IsUsed(value)) Bind(value.Name, expression);
+            if (IsUsed(value)) Bind(value, expression);
             else Line($"{expression};");
         }
         /// <summary>
@@ -1997,18 +2445,28 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             _boundNames.Clear();
             _sequenceValued.Clear();
 
-            _declaredNames = new HashSet<string>(StringComparer.Ordinal);
+            // ⛔ The ENCLOSING scope's names stay declared inside the lambda. An arrow function
+            // captures by lexical scope, so an assignment to a captured local must be an
+            // assignment — MEASURED with a fresh set: `Sub(x) total = total + x` emitted
+            // `const total = ((total + x) | 0)` inside the arrow (IRBuilder names the result
+            // after the variable), a TDZ ReferenceError, and the accumulator never changed.
+            // The lambda's OWN parameters and locals still shadow: they are tracked separately
+            // so a `Dim y` inside the lambda gets its own `let` even when a `y` exists outside.
+            _declaredNames = new HashSet<string>(savedDeclared ?? Enumerable.Empty<string>(), StringComparer.Ordinal);
+            DeclareGlobals();
+            var own = new HashSet<string>(StringComparer.Ordinal);
             foreach (var p in fn.Parameters ?? new List<IRVariable>())
+            {
                 _declaredNames.Add(p.Name);
+                own.Add(p.Name);
+            }
 
             _indentLevel = savedIndent + 1;
             foreach (var local in fn.LocalVariables ?? new List<IRVariable>())
             {
-                if (!_declaredNames.Add(local.Name)) continue;
-                var init = ArrayInitializer(local.Type);
-                Line(init == null
-                    ? $"let {SanitizeName(local.Name)};"
-                    : $"let {SanitizeName(local.Name)} = {init};");
+                if (!own.Add(local.Name)) continue;
+                _declaredNames.Add(local.Name);
+                Line($"let {SanitizeName(local.Name)} = {LocalInitializer(local.Type)};");
             }
 
             EmitStructured(fn.EntryBlock ?? fn.Blocks?.FirstOrDefault());
@@ -2094,6 +2552,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             }
 
             var kind = ReceiverKind(mc.Object);
+
+            // Sort needs the ELEMENT TYPE, which the static rename table cannot see.
+            if (kind == CollectionKind.List && string.Equals(mc.MethodName, "Sort", StringComparison.OrdinalIgnoreCase))
+                return ListSort(mc, receiver, args);
 
             if (TryCollectionMethod(kind, mc.MethodName, receiver, args, out var collection))
                 return collection;
@@ -2208,6 +2670,28 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         }
 
         /// <summary>
+        /// <c>List.Sort</c>. With a comparer it is <c>Array.prototype.sort</c>'s contract exactly
+        /// — negative / zero / positive — so <c>l.Sort(AddressOf Desc)</c> is <c>l.sort(Desc)</c>.
+        ///
+        /// <para>⛔ Without one, JavaScript's default sort is LEXICOGRAPHIC even for numbers:
+        /// <c>[10, 9, 1].sort()</c> is <c>[1, 10, 9]</c>, from a build that succeeded. So a
+        /// numeric element type gets a numeric comparator, <c>String</c> keeps the default, and
+        /// any other element type is refused rather than silently misordered.</para>
+        /// </summary>
+        private string ListSort(IRInstanceMethodCall mc, string receiver, List<string> args)
+        {
+            if (args.Count == 1) return $"{receiver}.sort({args[0]})";
+            if (args.Count != 0) throw NotYet("List.Sort with more than one argument");
+
+            var element = mc.Object?.Type?.GenericArguments?.FirstOrDefault();
+            if (element != null && element.IsNumeric()) return $"{receiver}.sort((a, b) => a - b)";
+            if (element != null && element.Name.Equals("String", StringComparison.OrdinalIgnoreCase))
+                return $"{receiver}.sort()";
+
+            throw NotYet($"List.Sort() on elements of type '{element?.Name ?? "unknown"}' (no default ordering)");
+        }
+
+        /// <summary>
         /// Renames a collection method onto its native JS equivalent. Emitting the BasicLang
         /// name verbatim would call a member that does not exist — an Array has
         /// <c>push</c>, not <c>Add</c>.
@@ -2229,6 +2713,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     case "indexof" when args.Count == 1: result = $"{receiver}.indexOf({args[0]})"; return true;
                     case "removeat" when args.Count == 1: result = $"{receiver}.splice({args[0]}, 1)"; return true;
                     case "insert" when args.Count == 2: result = $"{receiver}.splice({args[0]}, 0, {args[1]})"; return true;
+                    // List.ForEach(Sub(x) …) is the everyday shape a Sub lambda appears in.
+                    // MEASURED before this arm: emitted verbatim, "items.ForEach is not a function".
+                    case "foreach" when args.Count == 1: result = $"{receiver}.forEach({args[0]})"; return true;
                     // Array has no Clear; length = 0 empties it IN PLACE, which preserves the
                     // reference every alias holds. Assigning a fresh [] would not.
                     case "clear" when args.Count == 0: result = $"({receiver}.length = 0)"; return true;
@@ -2319,8 +2806,17 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             return $"{receiver}.{SanitizeName(fa.FieldName)}";
         }
         // Statement-only: it has no Name and can never be an operand.
-        public void Visit(IRFieldStore fieldStore) =>
-            Line($"{Expr(fieldStore.Object)}.{SanitizeName(fieldStore.FieldName)} = {Expr(fieldStore.Value)};");
+        //
+        // A member of a FOREIGN object is raw JavaScript, spelled by the user — the same rule
+        // FieldAccess applies on reads (SanitizeName would turn `::obj.Me = 1` into `obj.this`).
+        // Reachable since plan 2 Task 7 let a `::` member be assigned at all.
+        public void Visit(IRFieldStore fieldStore)
+        {
+            var member = IsForeignValue(fieldStore.Object)
+                ? (ForeignName(fieldStore.FieldName, out var foreign) ? foreign : fieldStore.FieldName)
+                : SanitizeName(fieldStore.FieldName);
+            Line($"{Expr(fieldStore.Object)}.{member} = {Expr(fieldStore.Value)};");
+        }
         public void Visit(IRTupleElement tupleElement) => throw NotYet(nameof(IRTupleElement));
         /// <summary>
         /// Try / Catch / Finally, all three native in JavaScript.
@@ -2342,22 +2838,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             var clauses = tryCatch.CatchClauses ?? new List<IRCatchClause>();
             if (clauses.Count > 0)
             {
-                // JS allows exactly ONE catch binding, so multiple typed clauses would need an
-                // instanceof ladder inside it. Under erasure there is no reliable runtime type
-                // to test against, so more than one clause is refused rather than silently
-                // routed to the first.
-                if (clauses.Count > 1)
-                    throw NotYet("multiple Catch clauses (JavaScript has a single catch binding)");
-
-                var clause = clauses[0];
-                var binding = string.IsNullOrEmpty(clause.VariableName)
-                    ? "_ex"
-                    : SanitizeName(clause.VariableName);
-
-                Line($"}} catch ({binding}) {{");
-                _indentLevel++;
-                EmitNestedBlock(clause.Block, tryCatch.EndBlock);
-                _indentLevel--;
+                EmitCatchLadder(clauses, tryCatch.EndBlock);
             }
             else if (tryCatch.FinallyBlock == null)
             {
@@ -2377,6 +2858,103 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             Line("}");
 
             EmitStructured(tryCatch.EndBlock);
+        }
+
+        /// <summary>
+        /// The <c>Catch</c> clauses as one JS <c>catch (_ex)</c> holding an <c>instanceof</c>
+        /// ladder — JavaScript has a single catch binding, and typed selection is done by hand:
+        /// <code>
+        ///   } catch (_ex) {
+        ///       if (_ex instanceof InvalidOperationException) { const e = _ex; … }
+        ///       else if (_ex instanceof ArgumentException)    { const a = _ex; … }
+        ///       else { throw _ex; }
+        ///   }
+        /// </code>
+        ///
+        /// <para>⛔ <b>The binding is ALWAYS <c>_ex</c>, and the user's variable is a
+        /// <c>const</c> inside its arm.</b> Two things depend on that. A bare <c>Throw</c> lowers
+        /// to <c>throw _ex;</c> (Visit(IRThrow)), so the name must exist whatever the clause
+        /// called its variable — before this, <c>Catch e As Exception … Throw</c> was a
+        /// ReferenceError. And the typed test must run on the RAW object: a clause's variable is
+        /// bound only once its arm is chosen.</para>
+        ///
+        /// <para><b>A single typed clause gets the same guard.</b> MEASURED: <c>Catch e As
+        /// FormatException</c> around a thrown <c>ArgumentException</c> printed the clause's body
+        /// and stole the exception from the correct outer handler — the over-catch that shipped.
+        /// A non-matching exception is rethrown, never swallowed.</para>
+        ///
+        /// <para><b><c>Catch e As Exception</c> (and an untyped <c>Catch</c>) is the catch-all</b>,
+        /// as <c>catch (Exception)</c> is in .NET, so it takes a native JS error too; its variable
+        /// is bound through <c>Exception.Wrap</c> so <c>e.Message</c> answers for a TypeError as
+        /// well. A catch-all CLOSES the ladder: clauses after it can never be selected, exactly
+        /// as in .NET (where they are a compile error), so they are not emitted.</para>
+        /// </summary>
+        private void EmitCatchLadder(List<IRCatchClause> clauses, BasicBlock endBlock)
+        {
+            Line("} catch (_ex) {");
+            _indentLevel++;
+
+            var closed = false;
+            for (var i = 0; i < clauses.Count; i++)
+            {
+                var test = CatchTest(clauses[i]);
+
+                if (test == null)
+                {
+                    // The catch-all. As the FIRST clause there is no ladder at all.
+                    if (i == 0)
+                    {
+                        EmitCatchArm(clauses[i], endBlock, catchAll: true);
+                    }
+                    else
+                    {
+                        Line("} else {");
+                        _indentLevel++;
+                        EmitCatchArm(clauses[i], endBlock, catchAll: true);
+                        _indentLevel--;
+                        Line("}");
+                    }
+                    closed = true;
+                    break;
+                }
+
+                Line(i == 0 ? $"if ({test}) {{" : $"}} else if ({test}) {{");
+                _indentLevel++;
+                EmitCatchArm(clauses[i], endBlock, catchAll: false);
+                _indentLevel--;
+            }
+
+            if (!closed)
+            {
+                Line("} else {");
+                _indentLevel++;
+                Line("throw _ex;");
+                _indentLevel--;
+                Line("}");
+            }
+
+            _indentLevel--;
+        }
+
+        private void EmitCatchArm(IRCatchClause clause, BasicBlock endBlock, bool catchAll)
+        {
+            if (!string.IsNullOrEmpty(clause.VariableName))
+                Line($"const {SanitizeName(clause.VariableName)} = {(catchAll ? "Exception.Wrap(_ex)" : "_ex")};");
+
+            EmitNestedBlock(clause.Block, endBlock);
+        }
+
+        /// <summary>
+        /// The <c>instanceof</c> test for a clause, or null for the catch-all (untyped, or
+        /// typed <c>Exception</c> — the root of every exception this backend can see).
+        /// </summary>
+        private string CatchTest(IRCatchClause clause)
+        {
+            var name = clause.ExceptionType?.Name;
+            if (string.IsNullOrEmpty(name)) return null;
+
+            var reference = ClassReference(name);
+            return reference == "Exception" ? null : $"_ex instanceof {reference}";
         }
 
         /// <summary>
@@ -2447,12 +3025,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// emitted here and EndBlock is marked emitted.</para>
         ///
         /// <para><b>Fall-through and <c>Exit For</c> are the same branch.</b> Both emit
-        /// <c>IRBranch(EndBlock)</c>, so only POSITION separates them: the body block's own
-        /// terminator is the natural end of an iteration, while a branch from any NESTED block
-        /// is a real exit and becomes <c>break</c>. One case stays undecidable — a bare
-        /// unconditional <c>Exit For</c> as the body's last statement, where the exit IS the
-        /// body terminator. It lowers as fall-through, matching the other backends; that is a
-        /// known limitation rather than an oversight.</para>
+        /// <c>IRBranch(EndBlock)</c>; <c>IRBranch.IsLoopExit</c> is what separates them, and
+        /// <see cref="EmitBranch"/> reads it. (Position used to be the guess, which made a
+        /// bare <c>Exit For</c> as the body's last statement undecidable — it is not any more.)</para>
         /// </summary>
         public void Visit(IRForEach forEach)
         {
@@ -2466,12 +3041,6 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 _emitted.Add(body);
                 _forEachEnds.Push(forEach.EndBlock);
 
-                // The body starts on the STRAIGHT-LINE path. A branch to EndBlock reached
-                // without entering a conditional arm is the natural end of an iteration and
-                // emits nothing; one reached from inside an arm is a real `Exit For`.
-                var savedDepth = _armDepth;
-                _armDepth = 0;
-
                 EmitInstructions(body);
                 switch (body.GetTerminator())
                 {
@@ -2480,7 +3049,6 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     case IRSwitch sw: EmitSelectCase(sw); break;
                 }
 
-                _armDepth = savedDepth;
                 _forEachEnds.Pop();
             }
 

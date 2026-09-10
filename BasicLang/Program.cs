@@ -169,6 +169,14 @@ namespace BasicLang.Compiler.Driver
                         return await HandleBuildCommand(new[] { fileArg });
                     }
 
+                    // A .bli is resolvable (so a project may include it) but is declarations,
+                    // not a program — `BasicLang.exe dom-core.bli` must not "compile" it.
+                    if (BasicCompiler.IsDeclarationFile(fileArg))
+                    {
+                        Console.Error.WriteLine($"Error: '{fileArg}' is a declaration file (.bli), not a program. Compile the .bas that uses it; a .bli in the same project is picked up automatically.");
+                        return 1;
+                    }
+
                     return CompileFile(fileArg, args);
                 }
                 catch (Exception ex)

@@ -169,13 +169,27 @@ namespace BasicLang.Compiler.CodeGen
             // globals, class members, interface signatures) via the shared
             // ModuleTypeWalker, recursing generic arguments and array element types.
             //
-            // ⛔ DELIBERATELY NOT gated on allowForeignIdentifiers. This is the TYPE side of the
-            // split; see the class remarks. It also does the load-bearing work of keeping the
-            // JavaScript relaxation narrow: `Dim el = ::document.getElementById("x")` infers a
-            // Foreign-typed local and is refused HERE, which is what stops a '::' value being
-            // stored and reused as if the backend had a type for it.
+            // ⛔ The TYPE side of the split (see the class remarks) is NOT gated on
+            // allowForeignIdentifiers as a whole: an ANNOTATED foreign type — `Dim m As
+            // std::mutex` — is a C++ type that genuinely does not lower anywhere else, and stays
+            // refused on every backend. What the relaxation admits, and ONLY for a backend that
+            // asked for it, is the INFERRED Foreign type of a local initialised from a `::`
+            // value: `Dim el = ::document.getElementById("x")`. The local's type is opaque there
+            // by construction, and the backend renders its members verbatim (plan 2 Task 7).
+            // Told apart by IRVariable.IsInferredType, by the INSTANCE of the TypeInfo — a
+            // TypeInfo overrides Equals, and two unrelated Foreign types could compare equal.
+            var inferredForeign = new HashSet<TypeInfo>(ReferenceEqualityComparer.Instance);
+            if (allowForeignIdentifiers && module.Functions != null)
+                foreach (var func in module.Functions)
+                    foreach (var local in func?.LocalVariables ?? new List<IRVariable>())
+                        if (local?.IsInferredType == true && local.Type?.Kind == TypeKind.Foreign)
+                            inferredForeign.Add(local.Type);
+
             foreach (var type in ModuleTypeWalker.AllTypes(module))
+            {
+                if (type != null && inferredForeign.Contains(type)) continue;
                 CheckType(type, backendName, rejectCollections);
+            }
 
             // (4) Instruction-level scan of function bodies. The declared-type walk
             // above misses constructs that never bind to a declared local/field/

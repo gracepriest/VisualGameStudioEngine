@@ -38,6 +38,7 @@ public class JsExecutionTierRosterTests
         typeof(JavaScriptExecutionTests),
         typeof(JavaScriptNumericTests),
         typeof(JavaScriptControlFlowTests),
+        typeof(JavaScriptDoLoopTests),
         typeof(JavaScriptStringExecutionTests),
         typeof(JavaScriptArrayTests),
         typeof(JavaScriptClassTests),
@@ -45,7 +46,16 @@ public class JsExecutionTierRosterTests
         typeof(JavaScriptForEachTests),
         typeof(JavaScriptSelectCaseTests),
         typeof(JavaScriptExceptionTests),
+        typeof(JavaScriptCatchDiscriminationTests),
+        typeof(BaseConstructorCallExecutionTests),
         typeof(JavaScriptLambdaTests),
+        typeof(JavaScriptMethodLambdaTests),
+        typeof(JavaScriptModuleVariableTests),
+        typeof(SubLambdaStatementExecutionTests),
+        typeof(JavaScriptAddressOfTests),
+        typeof(JavaScriptEventTests),
+        typeof(JavaScriptForeignStateTests),
+        typeof(DomDeclarationsExecutionTests),
         typeof(JavaScriptAsyncTests),
         typeof(JavaScriptIteratorTests),
         typeof(JavaScriptGenericsLinqTests),
@@ -91,6 +101,8 @@ public class JsExecutionTierRosterTests
         // Compile and run real C++ through CppToolchain — nothing to do with Node.
         "CppFinallyExecutionTests",
         "CppExitForExecutionTests",
+        // Builds and runs the C# backend's output through the CLI and dotnet — no Node.
+        "CSharpFieldAssignmentExecutionTests",
     };
 
     /// <summary>Counts NUnit cases: a [TestCase]-driven method contributes one per attribute.</summary>
@@ -108,7 +120,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(21),
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(31),
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

@@ -102,7 +102,13 @@ public class TypeInfo
             GenericArguments = new List<TypeInfo>();
             TupleElementTypes = new List<TypeInfo>();
             TupleElementNames = new List<string>();
-            Members = new Dictionary<string, Symbol>();
+            // ⛔ Case-INSENSITIVE, like every other name in the language. MEASURED with a
+            // case-sensitive table: `Dim n As Integer = b.twice(3)` against `Function Twice`
+            // missed the lookup, typed the call Object, and failed with "Cannot assign value
+            // of type 'Object' to variable of type 'Integer'" on every backend — while the
+            // statement form `c.bump()` (no type needed) sailed through. The key keeps the
+            // DECLARED spelling, which is what the backends must emit (task_8f4dcdb2).
+            Members = new Dictionary<string, Symbol>(StringComparer.OrdinalIgnoreCase);
         }
         
         public bool IsNumeric()

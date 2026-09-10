@@ -58,7 +58,7 @@ public static class HighlightingLoader
         {
             HighlightingManager.Instance.RegisterHighlighting(
                 "BasicLang",
-                new[] { ".bas", ".bl", ".basic", ".mod", ".cls", ".class" },
+                new[] { ".bas", ".bl", ".basic", ".mod", ".cls", ".class", ".bli" },
                 definition);
             _isRegistered = true;
         }
@@ -117,7 +117,7 @@ public static class HighlightingLoader
         {
             HighlightingManager.Instance.RegisterHighlighting(
                 "BasicLang",
-                new[] { ".bas", ".bl", ".basic", ".mod", ".cls", ".class" },
+                new[] { ".bas", ".bl", ".basic", ".mod", ".cls", ".class", ".bli" },
                 definition);
             _basicLangDefinition = definition;
         }

@@ -62,6 +62,42 @@ public class JavaScriptForEachTests
             "Console.WriteLine(\"after\")"),
             Is.EqualTo("1\n2\nafter"));
 
+    /// <summary>
+    /// The case the positional guess called UNDECIDABLE: a bare <c>Exit For</c> as the body's
+    /// last statement, where the exit IS the body's terminator. It lowered as fall-through —
+    /// every element printed. <c>IRBranch.IsLoopExit</c> (chip task_4cc381f1) carries the
+    /// distinction from IRBuilder, so position no longer has to guess.
+    /// </summary>
+    [Test]
+    public void ForEach_BareExitFor_AsTheLastStatement_Breaks()
+        => Assert.That(Run(
+            Filled +
+            "For Each n As Integer In a\nConsole.WriteLine(n)\nExit For\nNext\n" +
+            "Console.WriteLine(\"after\")"),
+            Is.EqualTo("1\nafter"));
+
+    /// <summary>
+    /// The mirror: an If's MERGE block also branches to the loop end, and that branch is the
+    /// end of an iteration, not an exit — reading the flag must not turn it into a break.
+    /// </summary>
+    [Test]
+    public void ForEach_IfMergeAtTheEndOfTheBody_IsNotAnExit()
+        => Assert.That(Run(
+            Filled +
+            "For Each n As Integer In a\n" +
+            "If n = 2 Then\nConsole.WriteLine(\"two\")\nEnd If\n" +
+            "Console.WriteLine(n)\nNext\n" +
+            "Console.WriteLine(\"after\")"),
+            Is.EqualTo("1\ntwo\n2\n3\nafter"));
+
+    /// <summary>The flag must survive the shipping passes — a pass that rebuilt the branch would silently drop it.</summary>
+    [TestCase("For Each n As Integer In a\nConsole.WriteLine(n)\nExit For\nNext", "1")]
+    [TestCase("For Each n As Integer In a\nIf n = 3 Then\nExit For\nEnd If\nConsole.WriteLine(n)\nNext", "1\n2")]
+    [TestCase("For Each n As Integer In a\nIf n = 2 Then\nConsole.WriteLine(\"two\")\nEnd If\nConsole.WriteLine(n)\nNext", "1\ntwo\n2\n3")]
+    public void Optimized_ExitFor_InForEach(string loop, string expected)
+        => Assert.That(JavaScriptOptimizedExecutionTests.RunOptimized($"Sub Main()\n{Filled}{loop}\nEnd Sub"),
+            Is.EqualTo(expected));
+
     /// <summary>An empty array iterates zero times rather than once.</summary>
     [Test]
     public void ForEach_OverAnEmptyRange_RunsZeroTimes()

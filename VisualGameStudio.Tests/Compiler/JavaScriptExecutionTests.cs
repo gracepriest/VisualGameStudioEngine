@@ -29,7 +29,20 @@ public class JavaScriptExecutionTests
         if (node == null)
             Assert.Ignore("Node.js not found — the JS execution tier cannot run on this machine.");
 
-        var js = JsTestSupport.Compile(basicLangSource);
+        return RunNodeScript(JsTestSupport.Compile(basicLangSource));
+    }
+
+    /// <summary>
+    /// Run an already-generated script under Node, return trimmed stdout. Split from
+    /// <see cref="RunJs"/> so a fixture that compiles through a DIFFERENT route (BasicCompiler,
+    /// with the shipped DOM declarations) shares the one Node harness — a second copy would
+    /// drift about timeouts, .mjs and the exit-code assertion.
+    /// </summary>
+    internal static string RunNodeScript(string js)
+    {
+        var node = BasicLang.Runtime.NodeLocator.Find();
+        if (node == null)
+            Assert.Ignore("Node.js not found — the JS execution tier cannot run on this machine.");
 
         var dir = Path.Combine(Path.GetTempPath(), "BasicLang_JsExec_" + Path.GetRandomFileName());
         Directory.CreateDirectory(dir);

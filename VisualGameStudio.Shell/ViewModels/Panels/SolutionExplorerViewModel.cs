@@ -347,7 +347,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
             // Add source files
             var sourceExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                ".bas", ".bl", ".mod", ".cls", ".class", ".json", ".xml", ".blproj",
+                ".bas", ".bl", ".mod", ".cls", ".class", ".bli", ".json", ".xml", ".blproj",
                 ".cpp", ".h", ".hpp", ".c", ".cc", ".cxx"
             };
 
@@ -1158,7 +1158,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         var ext = Path.GetExtension(fileName).ToLowerInvariant();
         return ext switch
         {
-            ".bas" or ".bl" or ".mod" or ".cls" or ".class"
+            ".bas" or ".bl" or ".mod" or ".cls" or ".class" or ".bli"
                 or ".cpp" or ".cc" or ".cxx" or ".c" or ".h" or ".hpp" => ProjectItemType.Compile,
             ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".ico" => ProjectItemType.Resource,
             _ => ProjectItemType.Content
@@ -2331,6 +2331,7 @@ public class FileTypeIconTextConverter : IValueConverter
             {
                 ".mod" => "M",             // Module file
                 ".cls" or ".class" => "C", // Class file
+                ".bli" => "D",             // Declaration file (Extern Class declarations)
                 _ => (string?)null         // Let the fallback handle it
             };
         }
@@ -2361,6 +2362,7 @@ public class FileExtensionIconConverter : IValueConverter
             ".bas" or ".bl" => "#569CD6",   // Blue for BasicLang
             ".mod" => "#4FC3F7",               // Light blue for Module
             ".cls" or ".class" => "#66BB6A",   // Green for Class
+            ".bli" => "#B39DDB",               // Lavender for a declaration file
             ".cs" => "#68217A",             // Purple for C#
             ".vb" => "#00539C",             // Dark blue for VB
             ".cpp" or ".c" or ".h" => "#F34B7D", // Red for C/C++

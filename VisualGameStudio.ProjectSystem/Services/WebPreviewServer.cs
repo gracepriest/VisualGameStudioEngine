@@ -262,6 +262,7 @@ namespace VisualGameStudio.ProjectSystem.Services
                 [".bas"] = "text/plain",   // a source map may reference the original next to it
                 [".mod"] = "text/plain",
                 [".cls"] = "text/plain",
+                [".bli"] = "text/plain",
                 [".wav"] = "audio/wav",
                 [".mp3"] = "audio/mpeg",
                 [".ogg"] = "audio/ogg",

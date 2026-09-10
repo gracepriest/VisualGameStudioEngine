@@ -12,7 +12,11 @@ namespace BasicLang.Compiler
     public class ModuleResolver
     {
         private readonly List<string> _searchPaths;
-        private static readonly string[] SupportedExtensions = { ".bas", ".bl", ".basic", ".mod", ".cls", ".class" };
+        // .bli — a DECLARATION file (Extern Class declarations of types that exist in the target
+        // runtime, e.g. the DOM for the JavaScript backend). Resolved and compiled like any other
+        // unit, but never an entry point: BasicCompiler.IsEntryLikeFile and the CLI refuse it as
+        // a program. Plan 2c.
+        private static readonly string[] SupportedExtensions = { ".bas", ".bl", ".basic", ".mod", ".cls", ".class", ".bli" };
 
         /// <summary>
         /// File extensions that denote implicit class files

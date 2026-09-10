@@ -90,7 +90,16 @@ namespace BasicLang.Compiler.IR
     public abstract class IRValue : IRInstruction
     {
         public string Name { get; set; }
-        
+
+        /// <summary>
+        /// True when IRBuilder RENAMED this result after the variable it initialises or assigns
+        /// (<c>x = a + b</c> is one IRBinaryOp named <c>x</c>; no IRAssignment follows). This is
+        /// how a backend tells "a result that IS an assignment to <c>x</c>" from "a compiler temp
+        /// that merely shares <c>x</c>'s name" — a class with a field called <c>t0</c> used to have
+        /// every SSA temp <c>t0</c> emitted as a write to that field on C#.
+        /// </summary>
+        public bool NamedAfterVariable { get; set; }
+
         protected IRValue(string name, TypeInfo type) : base(type)
         {
             Name = name;
@@ -1730,6 +1739,13 @@ namespace BasicLang.Compiler.IR
         public AccessModifier Access { get; set; }
         public string DelegateType { get; set; }
         public bool IsStatic { get; set; }
+
+        /// <summary>
+        /// The event's delegate type with its generic arguments. <see cref="DelegateType"/> is
+        /// only the NAME, which is why C# emitted <c>event Action Clicked</c> for
+        /// <c>Event Clicked As Action(Of Integer)</c>. Null only for IR built without an analyzer.
+        /// </summary>
+        public TypeInfo Type { get; set; }
     }
 
     /// <summary>

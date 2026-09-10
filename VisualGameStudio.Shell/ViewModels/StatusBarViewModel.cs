@@ -238,6 +238,7 @@ public partial class StatusBarViewModel : ViewModelBase
             ".bl" => "BasicLang",
             ".mod" => "BasicLang Module",
             ".cls" or ".class" => "BasicLang Class",
+            ".bli" => "BasicLang Declarations",
             ".blproj" => "BasicLang Project",
             ".cs" => "C#",
             ".vb" => "Visual Basic",

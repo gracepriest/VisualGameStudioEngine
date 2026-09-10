@@ -37,6 +37,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The DOM declarations the JavaScript backend auto-includes (plan 2c). Shipped
+         beside BasicLang.exe as lib/js/dom-core.bli; BasicCompiler.DomDeclarationsPath
+         probes exactly that path. -->
+    <None Include="lib\js\dom-core.bli" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Ships RaylibWrapper.dll next to BasicLang.exe: EngineDeployment probes the
          compiler's own directory to auto-inject the engine reference for game apps.
          Not a compile-time reference — the compiler never uses wrapper types, it

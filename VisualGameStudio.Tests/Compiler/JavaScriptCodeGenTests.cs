@@ -61,11 +61,13 @@ public class JavaScriptCodeGenTests
     /// <para><b>This is a MOVING canary and is meant to be re-pointed.</b> It must always
     /// name a construct just beyond the implemented frontier, so as Phase 2 lands features
     /// this test goes green-by-accident and has to be aimed further out. It has already moved
-    /// four times: `x = x + 1` (task 13), Try/Catch (task 19), Async (task 21), Iterator
-    /// (task 22). It now names a SECOND Catch clause — task 19 built one, and JavaScript's
-    /// single catch binding means a second needs type dispatch inside the one handler, which
-    /// nothing has built. Re-point it rather than deleting it — the principle it guards
-    /// outlives any one node.</para>
+    /// five times: `x = x + 1` (task 13), Try/Catch (task 19), Async (task 21), Iterator
+    /// (task 22), a second Catch clause (now an instanceof ladder). It now names a COMPUTED
+    /// base-constructor argument — `MyBase.New(n &amp; "!")` — which JS forbids before
+    /// <c>super()</c> because the argument's instructions would have to run first, an ordering
+    /// the IR does not mark; only constants and plain parameters lower. (Reachable at all only
+    /// since <c>MyBase.New</c> parses.) Re-point it rather than deleting it — the principle it
+    /// guards outlives any one node.</para>
     ///
     /// <para><b>What it must NOT name: a construct the capability checker REFUSES.</b> Those
     /// throw ForeignFeatureException by design and are permanent, so they would pin the canary
@@ -78,11 +80,11 @@ public class JavaScriptCodeGenTests
     public void UnimplementedNode_Throws_RatherThanEmittingNothing()
     {
         var ex = Assert.Catch(() => JsTestSupport.Compile(
-            "Sub Main()\n" +
-            "Try\nConsole.WriteLine(1)\n" +
-            "Catch a As ArgumentException\nConsole.WriteLine(2)\n" +
-            "Catch e As Exception\nConsole.WriteLine(3)\n" +
-            "End Try\nEnd Sub"));
+            "Class Animal\nPublic Name As String\n" +
+            "Public Sub New(n As String)\nName = n\nEnd Sub\nEnd Class\n" +
+            "Class Dog\nInherits Animal\n" +
+            "Public Sub New(n As String)\nMyBase.New(n & \"!\")\nEnd Sub\nEnd Class\n" +
+            "Sub Main()\nDim d As New Dog(\"rex\")\nConsole.WriteLine(d.Name)\nEnd Sub"));
 
         Assert.That(ex, Is.InstanceOf<System.NotSupportedException>(),
             "unimplemented lowering must surface as NotSupportedException, not silence");

@@ -373,17 +373,23 @@ public class ExternClassTests
             Throws.Exception.With.Message.Contains("BL7011"));
 
     /// <summary>
-    /// ⚠ MEASURED, and recorded for plan 2c rather than fixed here. BL7007's allow-list admits
-    /// ANY name ending in "Exception" (IsExceptionName), so an undeclared one passes the type
-    /// gate without being declared anywhere. That is harmless today — a user must still declare
-    /// the type to use it — but it means a GENERATED declaration file could omit e.g.
-    /// DOMException and the omission would not be caught. This test states the current
-    /// behaviour so 2c discovers it here instead of in a browser.
+    /// The exception-by-suffix rule is GONE. BL7007's allow-list used to admit ANY name ending
+    /// in "Exception", on the promise that the generator erased it to <c>Error</c> — which it
+    /// never did, so <c>Throw New SomeUndeclaredException()</c> was a ReferenceError from a green
+    /// build. An undeclared exception name is now BL7012, with the provided hierarchy on the
+    /// allow-list instead (JsExceptionTypes). For plan 2c this is the better world: a GENERATED
+    /// declaration file that omits e.g. DOMException is caught at build time, not in a browser.
     /// </summary>
     [Test]
-    public void Bl7007_AdmitsAnyExceptionSuffixedName_KNOWN()
+    public void UndeclaredExceptionSuffixedName_IsRejected_BL7012()
+        => Assert.That(() => JsTestSupport.Compile(
+                "Sub F(e As SomeUndeclaredException)\nEnd Sub\nSub Main()\nEnd Sub"),
+            Throws.Exception.With.Message.Contains("BL7012"));
+
+    /// <summary>…and an Extern Class IS a declaration, so a runtime-provided exception type is admitted through it.</summary>
+    [Test]
+    public void ExternDeclaredExceptionType_IsAdmitted()
         => Assert.DoesNotThrow(() => JsTestSupport.Compile(
-            "Sub F(e As SomeUndeclaredException)\nEnd Sub\nSub Main()\nEnd Sub"),
-            "if this now throws, BL7007's exception-by-suffix rule was tightened — good, but " +
-            "plan 2c's note about generated declarations needs updating");
+            "Extern Class DOMException\nPublic Function ToString() As String\nEnd Class\n" +
+            "Sub F(e As DOMException)\nEnd Sub\nSub Main()\nEnd Sub"));
 }

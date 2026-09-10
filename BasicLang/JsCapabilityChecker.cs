@@ -93,6 +93,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         private static void CheckStdLibSurfaceCollisions(IRModule module)
         {
             foreach (var name in DeclaredTypeNames(module))
+            {
                 foreach (var reserved in StdLibSurfaceNames)
                     if (string.Equals(name, reserved, StringComparison.OrdinalIgnoreCase))
                         throw new ForeignFeatureException(
@@ -103,7 +104,32 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                             $"Rename the declaration; {reserved} is already available (for example " +
                             "Console.WriteLine lowers to console.log), so it does not need " +
                             "declaring.");
+
+                // The exception hierarchy is emitted as real JS classes; a user class of the
+                // same name would be a second `class ArgumentException` — a SyntaxError that
+                // stops the whole module parsing.
+                if (JsExceptionTypes.IsProvided(name))
+                    throw new ForeignFeatureException(
+                        $"BL7011: this program declares a type named '{name}', which collides " +
+                        $"with the '{JsExceptionTypes.Canonical(name)}' exception type the " +
+                        "JavaScript backend already provides (names are matched " +
+                        "case-insensitively). Rename the declaration, or derive from the " +
+                        "provided type instead — `Inherits Exception`.");
+            }
         }
+
+        /// <summary>
+        /// BL7012 — an exception type that is neither provided by the backend nor declared by
+        /// the program. Under the governing rule it is REJECTED, not erased: emitting the name
+        /// would be a ReferenceError at the <c>Throw</c>, from a build that reported success.
+        /// </summary>
+        public static ForeignFeatureException UnknownExceptionRejection(string name) =>
+            new ForeignFeatureException(
+                $"BL7012: '{name}' is not an exception type the JavaScript backend provides, and " +
+                "this program does not declare it — there is no .NET base class library in a " +
+                "browser, so the name would be undefined at the Throw. Declare it " +
+                $"(Class {name} / Inherits Exception / End Class) or use one of the provided " +
+                $"types: {string.Join(", ", JsExceptionTypes.ProvidedNames)}.");
 
         /// <summary>Every type name this module declares, across all four declaration kinds.</summary>
         private static IEnumerable<string> DeclaredTypeNames(IRModule module) =>
@@ -348,8 +374,20 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             foreach (var (type, where) in DeclaredTypePositions(module))
                 CheckTypeTree(type, where, allowed);
 
+            // The backstop walk sees the same inferred-Foreign locals DeclaredTypePositions
+            // skips (plan 2 Task 7); told apart by TypeInfo INSTANCE, since TypeInfo overrides
+            // Equals and two unrelated Foreign types could compare equal.
+            var inferredForeign = new HashSet<TypeInfo>(ReferenceEqualityComparer.Instance);
+            foreach (var f in module.Functions ?? Enumerable.Empty<IRFunction>())
+                foreach (var v in f?.LocalVariables ?? Enumerable.Empty<IRVariable>())
+                    if (v?.IsInferredType == true && v.Type?.Kind == TypeKind.Foreign)
+                        inferredForeign.Add(v.Type);
+
             foreach (var type in ModuleTypeWalker.AllTypes(module))
+            {
+                if (type != null && inferredForeign.Contains(type)) continue;
                 CheckTypeTree(type, "this program", allowed);
+            }
         }
 
         /// <summary>
@@ -394,6 +432,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             foreach (var name in StdLibSurfaceNames) allowed.Add(name);
 
+            // The exception hierarchy the generator emits on demand (JsExceptionTypes) — the
+            // ONE list, so "may be named" and "will exist at runtime" cannot drift apart.
+            foreach (var name in JsExceptionTypes.ProvidedNames) allowed.Add(name);
+
             foreach (var name in module.Classes?.Keys ?? Enumerable.Empty<string>()) allowed.Add(name);
             foreach (var name in module.Interfaces?.Keys ?? Enumerable.Empty<string>()) allowed.Add(name);
             foreach (var name in module.Enums?.Keys ?? Enumerable.Empty<string>()) allowed.Add(name);
@@ -415,20 +457,6 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         }
 
         /// <summary>
-        /// Exceptions are admitted by SUFFIX rather than by a fixed list. Under erasure every
-        /// BasicLang exception becomes a JS <c>Error</c>, so a broad rule costs nothing, while
-        /// a fixed list would reject <c>Catch ex As FileNotFoundException</c> on a program
-        /// that runs perfectly well.
-        ///
-        /// <para>⚠ COUPLING: this is only sound while the generator's exception lowering
-        /// (plan task 20) erases unknown exception type NAMES to <c>Error</c>. If that lowering
-        /// ever emits the BasicLang name verbatim, <c>Throw New FooException(...)</c> becomes
-        /// an undefined JS identifier. Change the two together.</para>
-        /// </summary>
-        private static bool IsExceptionName(string name) =>
-            name != null && name.EndsWith("Exception", StringComparison.OrdinalIgnoreCase);
-
-        /// <summary>
         /// Every declared type position, paired with a human description of where it is.
         /// Mirrors ModuleTypeWalker's coverage and adds the three containers it never
         /// visits: delegates, extern declarations, and enum underlying types.
@@ -442,7 +470,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 foreach (var p in f.Parameters ?? Enumerable.Empty<IRVariable>())
                     yield return (p?.Type, $"parameter '{p?.Name}' of {fn}");
                 foreach (var v in f.LocalVariables ?? Enumerable.Empty<IRVariable>())
+                {
+                    // A local INFERRED from a `::` value (`Dim el = ::document.getElementById(…)`)
+                    // has an opaque Foreign type by construction — the generator renders its
+                    // members verbatim. ForeignFeatureChecker admits exactly this shape for this
+                    // backend (plan 2 Task 7); an ANNOTATED foreign type never reaches here.
+                    if (v?.IsInferredType == true && v.Type?.Kind == TypeKind.Foreign) continue;
                     yield return (v?.Type, $"local variable '{v?.Name}' in {fn}");
+                }
             }
 
             foreach (var g in module.GlobalVariables?.Values ?? Enumerable.Empty<IRVariable>())
@@ -462,7 +497,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // so ModuleTypeWalker explicitly skips them and cannot back this up. Measured
                 // missed rejection: `Public Event Tick As Long` compiled clean with no BL7003.
                 foreach (var e in c.Events ?? Enumerable.Empty<IREvent>())
-                    yield return (NamedType(e?.DelegateType), $"the type of event '{c.Name}.{e?.Name}'");
+                    yield return (e?.Type ?? NamedType(e?.DelegateType), $"the type of event '{c.Name}.{e?.Name}'");
             }
 
             foreach (var i in module.Interfaces?.Values ?? Enumerable.Empty<IRInterface>())
@@ -536,9 +571,16 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // generic 'T' is a placeholder, not a type to resolve.
             if (type.Kind != TypeKind.TypeParameter &&
                 !string.IsNullOrEmpty(name) &&
-                !allowed.Contains(name) &&
-                !IsExceptionName(name))
+                !allowed.Contains(name))
             {
+                // ⛔ An unknown `…Exception` used to be ADMITTED here by suffix, on the promise
+                // that the generator erased it to `Error`. The generator never did: the name
+                // went out verbatim and every Throw of it was a ReferenceError. Now the
+                // provided hierarchy is on the allow-list above and anything else is refused
+                // with a message that says how to declare it.
+                if (JsExceptionTypes.LooksLikeException(name))
+                    throw UnknownExceptionRejection(name);
+
                 throw new ForeignFeatureException(
                     $"BL7007: '{type.Name}' is not available on the JavaScript backend — there " +
                     "is no .NET base class library in a browser. Supported types are the " +

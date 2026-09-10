@@ -1150,7 +1150,19 @@ namespace BasicLang.Compiler
             {
                 Advance();  // consume MyBase
                 Consume(TokenType.Dot, "Expected '.' after MyBase");
-                Consume(TokenType.New, "Expected 'New' after MyBase.");
+
+                // ⛔ Never TokenType.New here. The lexer demotes EVERY keyword that follows a
+                // '.' to an Identifier so that member names can be keywords (obj.Property), so
+                // `MyBase.New` arrives as Identifier("New") and a Consume(TokenType.New) can
+                // never succeed — this branch was unreachable for as long as it existed, and
+                // no base constructor was ever called. Match the demoted lexeme by name instead.
+                if (Check(TokenType.New) ||
+                    (Check(TokenType.Identifier) &&
+                     string.Equals(Peek().Lexeme, "New", StringComparison.OrdinalIgnoreCase)))
+                    Advance();
+                else
+                    throw new ParseException($"Expected 'New' after MyBase. but found {Peek().Type}",
+                        Peek(), GetSuggestionForExpectedToken(TokenType.New));
                 Consume(TokenType.LeftParen, "Expected '(' after MyBase.New");
 
                 if (!Check(TokenType.RightParen))
@@ -1247,8 +1259,23 @@ namespace BasicLang.Compiler
 
             node.Name = Consume(TokenType.Identifier, "Expected event name").Lexeme;
 
-            // Event can have delegate type: Event Click As EventHandler
-            // Or inline signature: Event Click(sender As Object, args As String)
+            // Inline signature: Event Click(sender As Object, args As String). MEASURED before
+            // this arm: "Unexpected token in class: '('" on every backend — the comment below
+            // promised the shape and nothing parsed it.
+            if (Match(TokenType.LeftParen))
+            {
+                node.HasParameterList = true;
+                if (!Check(TokenType.RightParen))
+                {
+                    do
+                    {
+                        node.Parameters.Add(ParseParameter());
+                    } while (Match(TokenType.Comma));
+                }
+                Consume(TokenType.RightParen, "Expected ')' after event parameters");
+            }
+
+            // Delegate type: Event Click As EventHandler
             if (Match(TokenType.As))
             {
                 node.EventType = ParseTypeReference();
@@ -4277,7 +4304,12 @@ namespace BasicLang.Compiler
                 var token = Previous();
                 var unary = new UnaryExpressionNode(token.Line, token.Column);
                 unary.Operator = "AddressOf";
-                unary.Operand = ParsePrimary();
+                // ⛔ The operand is the whole member chain, not a primary. With ParsePrimary,
+                // `AddressOf Me.OnClicked` parsed as `(AddressOf Me).OnClicked` — the enclosing
+                // postfix loop applied `.OnClicked` to the AddressOf node — which lowered to an
+                // UNBOUND method read and a TypeError at the handler's first field access.
+                // Found by review.
+                unary.Operand = ParsePostfix();
                 unary.IsPostfix = false;
                 return unary;
             }
@@ -4528,13 +4560,19 @@ namespace BasicLang.Compiler
                 lambda.ReturnType = ParseTypeReference();
             }
 
-            // Check if this is a single-line or multi-line lambda
+            // Single-line vs multi-line is decided by whether a NEWLINE follows the parameter
+            // list — which is what the language says — not by peeking for a statement keyword.
+            //
+            // ⛔ The keyword peek (Dim/If/For/…) it replaces mis-parsed two everyday shapes,
+            // both MEASURED: a multi-line Sub lambda whose first statement is a call or an
+            // assignment fell through to the single-line path and left its End Sub dangling;
+            // and a single-line `Sub(x) total = total + x` was parsed with ParseExpression, in
+            // which `=` is EQUALITY — the lambda computed a boolean, discarded it, and the
+            // accumulator never changed, from a build that succeeded on every backend.
+            var multiLine = Check(TokenType.Newline);
             SkipNewlines();
 
-            // Multi-line lambda: check for statements after newline
-            if (Check(TokenType.Dim) || Check(TokenType.If) || Check(TokenType.For) ||
-                Check(TokenType.While) || Check(TokenType.Do) || Check(TokenType.Try) ||
-                Check(TokenType.Return) || Check(TokenType.Throw))
+            if (multiLine)
             {
                 // Multi-line lambda with statements
                 lambda.StatementBody = new BlockNode(token.Line, token.Column);
@@ -4561,10 +4599,21 @@ namespace BasicLang.Compiler
 
                 Consume(endToken, $"Expected '{(isFunction ? "End Function" : "End Sub")}' to close lambda");
             }
+            else if (isFunction)
+            {
+                // Single-line Function lambda: an expression, and its value is the result.
+                lambda.Body = ParseExpression();
+            }
             else
             {
-                // Single-line expression lambda
-                lambda.Body = ParseExpression();
+                // Single-line Sub lambda: ONE statement (an assignment or a call). It has no
+                // value, so there is nothing an expression could mean here.
+                lambda.StatementBody = new BlockNode(token.Line, token.Column);
+                var stmt = ParseStatement();
+                if (stmt != null)
+                {
+                    lambda.StatementBody.Statements.Add(stmt);
+                }
             }
 
             return lambda;

@@ -39,12 +39,19 @@ public class JavaScriptExceptionTests
             "Try\nConsole.WriteLine(\"body\")\nFinally\nConsole.WriteLine(\"finally\")\nEnd Try"),
             Is.EqualTo("body\nfinally"));
 
+    /// <summary>
+    /// ⛔ Prints the MESSAGE, not just "caught". This test originally asserted only "caught" and
+    /// was a FALSE PASS: <c>new Exception("boom")</c> was emitted verbatim with nothing defining
+    /// <c>Exception</c>, so the line threw a ReferenceError — which the catch then caught. The
+    /// exception being caught was never the one the program threw, and only its message can
+    /// tell the two apart. See JavaScriptCatchDiscriminationTests.
+    /// </summary>
     [Test]
     public void Throw_IsCaught()
         => Assert.That(InMain(
             "Try\nThrow New Exception(\"boom\")\nConsole.WriteLine(\"unreached\")\n" +
-            "Catch ex As Exception\nConsole.WriteLine(\"caught\")\nEnd Try"),
-            Is.EqualTo("caught"));
+            "Catch ex As Exception\nConsole.WriteLine(\"caught \" & ex.Message)\nEnd Try"),
+            Is.EqualTo("caught boom"));
 
     [Test]
     public void Finally_RunsAfterAnExceptionIsCaught()
