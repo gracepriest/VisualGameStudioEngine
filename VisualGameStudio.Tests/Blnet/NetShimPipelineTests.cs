@@ -142,12 +142,19 @@ internal static class NetShimPipelineFixture
             public delegate int IntFn(int a, int b);
             public delegate long LongFn(long v);
             public delegate void VoidFn(int v);
+            public delegate double DblFn(double v);
 
             public static class Callbacks
             {
                 public static int Fold(int seed, IntFn f) => f(seed, 3);
                 public static long Big(LongFn f) => f(-4000000000L);
                 public static int Run(VoidFn f) { f(-9); return 1; }
+
+                // The double slot exists ONLY to pin task_75064f2e as a divergence. It is admitted
+                // by §8.4's blittable-scalar gate and then truncated on the wire (value casts to
+                // uint64 on both halves). 1.5 is chosen because a truncating cast destroys it
+                // visibly: 1.5 -> 1, doubled -> 2, where .NET says 3.
+                public static double Dbl(DblFn f) => f(1.5);
             }
 
             // ---- P2a-2 Task 12 — §8.3's out/ref SCALAR slots ----
