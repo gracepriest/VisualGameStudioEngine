@@ -565,4 +565,66 @@ public class NetGeneratedShimConformanceTests
             + "stub test cannot see. 15 is the REF slot: 10 sent in, +5 applied by .NET, read "
             + "back natively. A 10 means the ref travelled by value.");
     }
+
+    // =====================================================================================
+    // §12.3's inertness row — naming a .NET type is not the same as USING one.
+    // =====================================================================================
+
+    /// <summary>
+    /// The empty-surface <c>Try</c>/<c>Catch ex As Exception</c> program: one of §12.3's four
+    /// explicitly called-out rows.
+    ///
+    /// <para><c>Exception</c> and <c>ArgumentException</c> are .NET names, and the C++ backend has
+    /// a whole §11.1 NetException ladder for them — but this program calls no .NET MEMBER, so the
+    /// surface is empty and the boundary must stay completely inert: no shim published, nothing
+    /// deployed, and the throw/catch lowered natively to <c>std::runtime_error</c> and
+    /// <c>what()</c>.</para>
+    ///
+    /// <para><b>The analyzer half was already proven</b> —
+    /// <c>NetFlipTests.ThrowAndCatchWithMessage_InsideAGenericBody_DrawsNoNetFindings</c> asserts
+    /// no .NET diagnostics for this shape. But it runs at <c>Analyze</c> level. Nothing showed
+    /// that such a program BUILDS and RUNS with no shim beside it, which is the actual promise: a
+    /// user who merely writes <c>Catch ex As Exception</c> must not start paying for an AOT
+    /// publish.</para>
+    ///
+    /// <para>⛔ The absence assertion is the load-bearing one. Asserting only the stdout would
+    /// pass just as happily if the build had published a shim nobody needed — the cost regression
+    /// that inertness exists to prevent, and one that is invisible in program output.</para>
+    /// </summary>
+    [Test]
+    public void AnEmptySurfaceTryCatchProgram_RunsNatively_AndPublishesNoShim()
+    {
+        var built = BuildOnce("ConfInert", new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["Program.bas"] = """
+                Module Program
+                 Sub Main()
+                  Try
+                   Throw New ArgumentException("boom")
+                  Catch ex As Exception
+                   Console.WriteLine("caught " & ex.Message)
+                  End Try
+                  Console.WriteLine("done")
+                 End Sub
+                End Module
+                """,
+        });
+
+        AssertBuilt(built.Result, "the empty-surface try/catch program");
+
+        var outputDir = Path.GetDirectoryName(built.Result.ExecutablePath)!;
+        var shimName = NetProxyEmitter.ShimModuleFileName(
+            NetShimGenerator.ShimAssemblyName("ConfInert"));
+
+        Assert.That(File.Exists(Path.Combine(outputDir, shimName)), Is.False,
+            "a program that names .NET exception types but calls no .NET MEMBER has an empty "
+            + "surface and must publish NO shim. Finding " + shimName + " here means naming a "
+            + "type was enough to trigger an AOT publish — a silent cost regression that no "
+            + "program output would reveal.");
+
+        Assert.That(NetShimPipelineFixture.Run(built.Result.ExecutablePath!),
+            Is.EqualTo("caught boom\ndone\n"),
+            "the throw/catch must still WORK, lowered natively to std::runtime_error and what(). "
+            + "Proving inertness with a program that no longer runs correctly would be worthless.");
+    }
 }
