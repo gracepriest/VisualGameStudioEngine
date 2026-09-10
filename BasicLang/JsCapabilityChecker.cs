@@ -374,8 +374,20 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             foreach (var (type, where) in DeclaredTypePositions(module))
                 CheckTypeTree(type, where, allowed);
 
+            // The backstop walk sees the same inferred-Foreign locals DeclaredTypePositions
+            // skips (plan 2 Task 7); told apart by TypeInfo INSTANCE, since TypeInfo overrides
+            // Equals and two unrelated Foreign types could compare equal.
+            var inferredForeign = new HashSet<TypeInfo>(ReferenceEqualityComparer.Instance);
+            foreach (var f in module.Functions ?? Enumerable.Empty<IRFunction>())
+                foreach (var v in f?.LocalVariables ?? Enumerable.Empty<IRVariable>())
+                    if (v?.IsInferredType == true && v.Type?.Kind == TypeKind.Foreign)
+                        inferredForeign.Add(v.Type);
+
             foreach (var type in ModuleTypeWalker.AllTypes(module))
+            {
+                if (type != null && inferredForeign.Contains(type)) continue;
                 CheckTypeTree(type, "this program", allowed);
+            }
         }
 
         /// <summary>
@@ -458,7 +470,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 foreach (var p in f.Parameters ?? Enumerable.Empty<IRVariable>())
                     yield return (p?.Type, $"parameter '{p?.Name}' of {fn}");
                 foreach (var v in f.LocalVariables ?? Enumerable.Empty<IRVariable>())
+                {
+                    // A local INFERRED from a `::` value (`Dim el = ::document.getElementById(…)`)
+                    // has an opaque Foreign type by construction — the generator renders its
+                    // members verbatim. ForeignFeatureChecker admits exactly this shape for this
+                    // backend (plan 2 Task 7); an ANNOTATED foreign type never reaches here.
+                    if (v?.IsInferredType == true && v.Type?.Kind == TypeKind.Foreign) continue;
                     yield return (v?.Type, $"local variable '{v?.Name}' in {fn}");
+                }
             }
 
             foreach (var g in module.GlobalVariables?.Values ?? Enumerable.Empty<IRVariable>())

@@ -312,46 +312,40 @@ public class JavaScriptInteropTests
         => Assert.That(() => JsTestSupport.Compile("Sub Main()\nDim m As std::mutex\nEnd Sub"),
             Throws.TypeOf<BasicLang.Compiler.CodeGen.ForeignFeatureException>());
 
-    /// <summary>
-    /// ⚠ KNOWN LIMITATION, pinned so it is known rather than discovered. Assignment to a `::`
-    /// member is a SEMANTIC ANALYZER error, raised before any backend, so relaxing
-    /// ForeignFeatureChecker cannot reach it. Use javascript{ } for stateful DOM work.
-    /// </summary>
-    [Test]
-    public void ForeignMemberAssignment_IsStillRejected_KNOWN()
-        => Assert.That(() => JsTestSupport.Compile("Sub Main()\n::document.title = \"hi\"\nEnd Sub"),
-            Throws.Exception.With.Message.Contains("Cannot assign"));
+    // ---- The three limitations plan 2 pinned as _KNOWN are LIFTED (Task 7). Each was a
+    // different component — the analyzer's assignment check, ForeignFeatureChecker's
+    // declared-type walk, the analyzer's initializer check — and each is now inverted here so a
+    // regression in any one of them is caught by name. Behaviour: JavaScriptForeignStateTests.
 
-    /// <summary>
-    /// ⚠ KNOWN LIMITATION. An inferred local from a `::` expression gets a Foreign type, which
-    /// CheckType rejects — so a `::` value cannot be stored and reused.
-    /// </summary>
+    /// <summary>Was a SemanticAnalyzer error: a foreign member has no knowable type, so there is nothing to check.</summary>
     [Test]
-    public void ForeignValueInALocal_IsStillRejected_KNOWN()
-        => Assert.That(() => JsTestSupport.Compile(
-                "Sub Main()\nDim el = ::document.getElementById(\"out\")\nEnd Sub"),
-            Throws.TypeOf<BasicLang.Compiler.CodeGen.ForeignFeatureException>());
+    public void ForeignMemberAssignment_Compiles()
+        => Assert.That(JsTestSupport.Compile("Sub Main()\n::document.title = \"hi\"\nEnd Sub"),
+            Does.Contain("document.title = \"hi\";"));
 
-    /// <summary>
-    /// ⚠ KNOWN LIMITATION, and <b>the first wall a user actually hits</b> — so it is pinned
-    /// separately from the inferred-local form above rather than assumed to be the same case.
-    ///
-    /// <para>Declaring the type does NOT rescue the value. `Dim v As Integer = ::getValue()`
-    /// dies EARLIER and in a different component: the SemanticAnalyzer types the initializer as
-    /// `::getValue` and refuses the assignment outright — <i>"Cannot assign value of type
-    /// '::getValue' to variable of type 'Integer'"</i> — so no backend flag can reach it and
-    /// relaxing ForeignFeatureChecker further would change nothing.</para>
-    ///
-    /// <para>Together with the two pins above, the honest statement of the hatch's scope is:
-    /// <b>`::` works in CALL and ARGUMENT position only. A `::` value cannot be STORED at all</b>,
-    /// by inference or by declaration. Reach for <c>javascript{ }</c> when you need to keep one.</para>
-    /// </summary>
+    /// <summary>Was refused by ForeignFeatureChecker: the local's INFERRED type is Foreign. An ANNOTATED one still is (see ForeignType_IsStillRejected).</summary>
     [Test]
-    public void ForeignValueInATypedLocal_IsStillRejected_KNOWN()
-        => Assert.That(() => JsTestSupport.Compile(
-                "Sub Main()\nDim v As Integer = ::getValue()\nEnd Sub"),
-            Throws.Exception.With.Message.Contains(
-                "Cannot assign value of type '::getValue' to variable of type 'Integer'"));
+    public void ForeignValueInALocal_Compiles()
+    {
+        var js = JsTestSupport.Compile(
+            "Sub Main()\nDim el = ::document.getElementById(\"out\")\nEnd Sub");
+
+        // The call is emitted verbatim (through an SSA temp) and its value reaches the local.
+        Assert.That(js, Does.Contain("= document.getElementById(\"out\");"));
+        Assert.That(js, Does.Contain("el = "));
+    }
+
+    /// <summary>Was an analyzer error ("Cannot assign value of type '::getValue' to variable of type 'Integer'"): a foreign VALUE converts to whatever it is stored in.</summary>
+    [Test]
+    public void ForeignValueInATypedLocal_Compiles()
+    {
+        var js = JsTestSupport.Compile(
+            "Sub Main()\nDim v As Integer = ::getValue()\nConsole.WriteLine(v)\nEnd Sub");
+
+        // The call is emitted verbatim (through an SSA temp) and its value reaches the local.
+        Assert.That(js, Does.Contain("= getValue();"));
+        Assert.That(js, Does.Contain("v = "));
+    }
 
     /// <summary>
     /// ⛔ THE MEASURED MISCOMPILE. `.Length` on a FOREIGN receiver must reach the output exactly

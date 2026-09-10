@@ -5157,7 +5157,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 TryRetypeLiteralToDecimal(node.Initializer, varType);
                 var initType = GetNodeType(node.Initializer);
 
-                if (initType != null && !varType.IsAssignableFrom(initType)
+                // A `::` foreign VALUE converts to whatever it is declared as — `Dim v As Integer
+                // = ::getValue()` used to die here ("Cannot assign value of type '::getValue' to
+                // variable of type 'Integer'"), the first wall a `::` user hit. Plan 2 Task 7.
+                if (initType != null && initType.Kind != TypeKind.Foreign && !varType.IsAssignableFrom(initType)
                     && !IsNumericLiteralAssignable(node.Initializer, varType, initType))
                 {
                     var errorMsg = $"Cannot assign value of type '{initType.Name}' to variable of type '{varType.Name}'";
@@ -7130,6 +7133,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 if (targetType.Kind == TypeKind.TypeParameter || valueType.Kind == TypeKind.TypeParameter)
                 {
                     // Type checking deferred to instantiation time
+                }
+                // A `::` FOREIGN member has no knowable type, so an assignment to it has nothing
+                // to check; a foreign VALUE likewise converts to whatever it is stored in. This
+                // used to refuse `::document.title = "hi"` ("Cannot assign value of type 'String'
+                // to '::document::title'"), which made `::` call-only — plan 2 Task 7.
+                else if (targetType.Kind == TypeKind.Foreign || valueType.Kind == TypeKind.Foreign)
+                {
+                    // Opaque on both sides; the backend renders the member verbatim.
                 }
                 else if (!targetType.IsAssignableFrom(valueType))
                 {

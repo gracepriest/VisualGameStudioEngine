@@ -13,10 +13,10 @@ An earlier draft of this plan proposed `::document.getElementById("out").textCon
 | Form | Result |
 |---|---|
 | `::console.log("hi")` — a CALL | Reaches `RejectInlineForeign` — ✅ **this plan's Task 3 enables it** |
-| `::document.getElementById("x").textContent = "hi"` — member ASSIGNMENT | ❌ `Cannot assign value of type 'String' to '::document::getElementById::textContent'` — a **SemanticAnalyzer** error, raised before any backend. Task 3 relaxes `ForeignFeatureChecker` and does **not** touch this. |
-| `Dim el = ::document.getElementById("x")` — storing a `::` value | ❌ rejected by `CheckType`'s `TypeKind.Foreign` arm. The local's INFERRED type is Foreign, so the declared-type walk catches it (documented at `ForeignFeatureGuardTests.cs:498-507`). |
+| `::document.getElementById("x").textContent = "hi"` — member ASSIGNMENT | ✅ **since Task 7 (Sep 10)** — was a **SemanticAnalyzer** error (`Cannot assign value of type 'String' to '::document::getElementById::textContent'`); a Foreign target now accepts any value. |
+| `Dim el = ::document.getElementById("x")` — storing a `::` value | ✅ **since Task 7** — was rejected by `CheckType`'s `TypeKind.Foreign` arm; an INFERRED Foreign local is now admitted (annotated `Dim m As std::mutex` still refused). |
 
-So after this plan: **you can call raw JavaScript, but you cannot assign to a JS property through `::`, and you cannot store a `::` result in a variable.**
+So after this plan (Tasks 1–6): **you can call raw JavaScript, but you cannot assign to a JS property through `::`, and you cannot store a `::` result in a variable.** Task 7 (done Sep 10) lifted both — see `JavaScriptForeignStateTests`.
 
 That is why `javascript{ … }` (Task 4) is the universal hatch and carries the milestone — it has no such limits. Task 7 is **optional** and lifts both `::` restrictions if the user wants the sugar to be complete.
 
@@ -845,9 +845,9 @@ it there.
 
 Two independent restrictions, in two different components:
 
-- [ ] **Step 1: Member assignment.** `::document.title = "hi"` fails in the **SemanticAnalyzer** with "Cannot assign value of type 'String' to '::document::title'" — nothing to do with `ForeignFeatureChecker`. Find the assignment type-check and let a Foreign-typed target accept any value: a foreign member has no knowable type, so the check has nothing to check. Pin with the `_KNOWN` test from Task 3, inverted.
+- [x] **Step 1: Member assignment.** `::document.title = "hi"` fails in the **SemanticAnalyzer** with "Cannot assign value of type 'String' to '::document::title'" — nothing to do with `ForeignFeatureChecker`. Find the assignment type-check and let a Foreign-typed target accept any value: a foreign member has no knowable type, so the check has nothing to check. Pin with the `_KNOWN` test from Task 3, inverted. **DONE Sep 10** — both analyzer checks (assignment and initializer) step aside when either side is Foreign; the JS backend's `IRFieldStore` emits a foreign member verbatim.
 
-- [ ] **Step 2: Inferred locals.** `Dim el = ::document.getElementById("x")` fails in `CheckType`'s `TypeKind.Foreign` arm (`ForeignFeatureChecker.cs:197-202`) because the local's INFERRED type is Foreign. Distinguish an **annotated** `Dim m As std::mutex` — which must stay rejected, since a C++ type genuinely does not lower — from an **inferred** one. ⚠ `ForeignFeatureGuardTests.cs:498-507` documents this exact behaviour for the other backends and must keep passing for them.
+- [x] **Step 2: Inferred locals.** `Dim el = ::document.getElementById("x")` fails in `CheckType`'s `TypeKind.Foreign` arm (`ForeignFeatureChecker.cs:197-202`) because the local's INFERRED type is Foreign. Distinguish an **annotated** `Dim m As std::mutex` — which must stay rejected, since a C++ type genuinely does not lower — from an **inferred** one. ⚠ `ForeignFeatureGuardTests.cs:498-507` documents this exact behaviour for the other backends and must keep passing for them. **DONE Sep 10** — told apart by `IRVariable.IsInferredType`, by TypeInfo INSTANCE (TypeInfo overrides Equals), and only when `allowForeignIdentifiers`; `JsCapabilityChecker` skips the same locals. A local whose inferred type is Foreign counts as a foreign receiver for its members. Behaviour: `JavaScriptForeignStateTests` (12 execution cases under Node with a `javascript{ }` prelude standing in for the DOM).
 
 - [ ] **Step 3:** Execution tests for both, through Node with a DOM shim. Then the milestone in Task 6 Step 6 can be rewritten in `::` form, which is what a user would reach for first.
 

@@ -1020,7 +1020,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             IRIndexerAccess ix => IsForeignValue(ix.Collection),
             IRCall call => HasForeignMarker(call.FunctionName),
             IRNewObject n => HasForeignMarker(n.ClassName),
-            _ => HasForeignMarker(value.Name)
+            // A LOCAL holding a `::` value (`Dim el = ::document.getElementById("x")`) carries
+            // no `::` in its name; its inferred TYPE is what says its members are raw JS.
+            _ => HasForeignMarker(value.Name) || value.Type?.Kind == TypeKind.Foreign
         };
 
         private static bool HasForeignMarker(string name) =>
@@ -2710,8 +2712,17 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             return $"{receiver}.{SanitizeName(fa.FieldName)}";
         }
         // Statement-only: it has no Name and can never be an operand.
-        public void Visit(IRFieldStore fieldStore) =>
-            Line($"{Expr(fieldStore.Object)}.{SanitizeName(fieldStore.FieldName)} = {Expr(fieldStore.Value)};");
+        //
+        // A member of a FOREIGN object is raw JavaScript, spelled by the user — the same rule
+        // FieldAccess applies on reads (SanitizeName would turn `::obj.Me = 1` into `obj.this`).
+        // Reachable since plan 2 Task 7 let a `::` member be assigned at all.
+        public void Visit(IRFieldStore fieldStore)
+        {
+            var member = IsForeignValue(fieldStore.Object)
+                ? (ForeignName(fieldStore.FieldName, out var foreign) ? foreign : fieldStore.FieldName)
+                : SanitizeName(fieldStore.FieldName);
+            Line($"{Expr(fieldStore.Object)}.{member} = {Expr(fieldStore.Value)};");
+        }
         public void Visit(IRTupleElement tupleElement) => throw NotYet(nameof(IRTupleElement));
         /// <summary>
         /// Try / Catch / Finally, all three native in JavaScript.
