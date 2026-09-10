@@ -708,7 +708,16 @@ namespace BasicLang.Compiler.AST
     {
         public string Name { get; set; }
         public AccessModifier Access { get; set; }
-        public TypeReference EventType { get; set; }  // The delegate type
+        public TypeReference EventType { get; set; }  // The delegate type (`Event X As T`)
+
+        /// <summary>
+        /// The inline signature — <c>Event Clicked(count As Integer)</c>, the canonical VB
+        /// shape. The parameters DEFINE the delegate type (an <c>Action</c> of them).
+        /// <see cref="HasParameterList"/> distinguishes <c>Event Tick()</c> (an Action with no
+        /// parameters) from a bare <c>Event Tick</c> (which keeps the EventHandler default).
+        /// </summary>
+        public List<ParameterNode> Parameters { get; set; } = new List<ParameterNode>();
+        public bool HasParameterList { get; set; }
 
         public EventDeclarationNode(int line, int column) : base(line, column)
         {

@@ -958,9 +958,15 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             return names;
         }
 
+        /// <summary>The events of the class being generated, by name — what a <c>raise_X</c> call resolves against.</summary>
+        private Dictionary<string, IREvent> _currentClassEvents = new Dictionary<string, IREvent>(StringComparer.OrdinalIgnoreCase);
+
         private void GenerateClass(IRClass irClass)
         {
             _currentClassMemberNames = CollectMemberNames(irClass);
+            _currentClassEvents = new Dictionary<string, IREvent>(StringComparer.OrdinalIgnoreCase);
+            foreach (var evt in irClass.Events ?? new List<IREvent>())
+                if (evt?.Name != null) _currentClassEvents[evt.Name] = evt;
             try
             {
                 GenerateClassBody(irClass);
@@ -968,6 +974,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             finally
             {
                 _currentClassMemberNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                _currentClassEvents = new Dictionary<string, IREvent>(StringComparer.OrdinalIgnoreCase);
             }
         }
 
@@ -1201,7 +1208,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         {
             var access = MapAccessModifier(evt.Access);
             var staticMod = evt.IsStatic ? "static " : "";
-            var delegateType = SanitizeName(evt.DelegateType);
+            // The full TypeInfo when the IR carries it — `Action<int>`, not `Action`.
+            var delegateType = evt.Type != null ? MapType(evt.Type) : SanitizeName(evt.DelegateType);
             var name = SanitizeName(evt.Name);
             WriteLine($"{access} {staticMod}event {delegateType} {name};");
         }
@@ -3132,6 +3140,19 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         public void Visit(IRCall call)
         {
             var functionName = call.FunctionName;
+
+            // RaiseEvent X(args) arrives as a call named raise_X (IRBuilder's convention).
+            // MEASURED before this arm: emitted verbatim, CS0103 — nothing defined raise_X, so
+            // no event had ever been raised on this backend. The event IS the delegate here:
+            // invoke it if anyone subscribed. Only for an event of the class being generated,
+            // so a user function that happens to be called raise_Foo is left alone.
+            if (functionName != null && functionName.StartsWith("raise_", StringComparison.Ordinal) &&
+                _currentClassEvents.TryGetValue(functionName.Substring("raise_".Length), out var raisedEvent))
+            {
+                var raiseArgs = string.Join(", ", call.Arguments.Select(a => EmitExpression(a)));
+                WriteLine($"{SanitizeName(raisedEvent.Name)}?.Invoke({raiseArgs});");
+                return;
+            }
 
             // Handle event subscription: Delegate.Combine -> +=
             if (functionName == "Delegate.Combine" && call.Arguments.Count >= 2)

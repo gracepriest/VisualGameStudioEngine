@@ -350,13 +350,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// </summary>
         private HashSet<string> _memberNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>The events of the class being emitted, by name — what a <c>raise_X</c> call resolves against.</summary>
+        private Dictionary<string, IREvent> _currentClassEvents = new Dictionary<string, IREvent>(StringComparer.OrdinalIgnoreCase);
+
         private void EmitClass(IRClass irClass, IRModule module)
         {
-            // Events have no JS form, and RaiseEvent lowers to a call to `raise_X` that
-            // nothing defines — emitting the class without the member would be silently
-            // broken, so refuse.
-            if (irClass.Events != null && irClass.Events.Count > 0)
-                throw NotYet($"Events (on class '{irClass.Name}')");
+            _currentClassEvents = new Dictionary<string, IREvent>(StringComparer.OrdinalIgnoreCase);
+            foreach (var evt in irClass.Events ?? new List<IREvent>())
+                if (evt?.Name != null) _currentClassEvents[evt.Name] = evt;
 
             var header = $"class {SanitizeName(irClass.Name)}";
             if (!string.IsNullOrEmpty(irClass.BaseClass))
@@ -379,6 +380,13 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 Line($"{(field.IsStatic ? "static " : "")}{SanitizeName(field.Name)} = {init};");
             }
 
+            // An event is a Set of handlers on the INSTANCE: AddHandler is `add`, RemoveHandler
+            // `delete`, RaiseEvent iterates (see TryEventCall). Per instance, so two objects of
+            // the class have separate subscribers, and a Set so a handler added twice fires once
+            // — the closest JS reading of a multicast delegate.
+            foreach (var evt in irClass.Events ?? new List<IREvent>())
+                Line($"{(evt.IsStatic ? "static " : "")}{SanitizeName(evt.Name)} = new Set();");
+
             foreach (var prop in irClass.Properties ?? new List<IRProperty>())
                 EmitProperty(prop, members);
 
@@ -390,10 +398,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             _indentLevel--;
             Line("}");
+
+            _currentClassEvents = new Dictionary<string, IREvent>(StringComparer.OrdinalIgnoreCase);
         }
 
         /// <summary>
-        /// Fields and properties of a class AND of its bases — the set an unqualified
+        /// Fields, properties and events of a class AND of its bases — the set an unqualified
         /// reference inside a method must resolve to <c>this.</c>.
         /// </summary>
         private static HashSet<string> MemberNames(IRClass irClass, IRModule module)
@@ -408,6 +418,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     if (f?.Name != null) names.Add(f.Name);
                 foreach (var p in current.Properties ?? new List<IRProperty>())
                     if (p?.Name != null) names.Add(p.Name);
+                foreach (var e in current.Events ?? new List<IREvent>())
+                    if (e?.Name != null) names.Add(e.Name);
 
                 if (string.IsNullOrEmpty(current.BaseClass)) break;
                 module.Classes.TryGetValue(current.BaseClass, out current);
@@ -497,7 +509,6 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             _forEachEnds.Clear();
             _boundNames.Clear();
             _sequenceValued.Clear();
-            _armDepth = 0;
 
             Line(signature + " {");
             _indentLevel++;
@@ -1482,13 +1493,6 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         private readonly Stack<BasicBlock> _forEachEnds = new Stack<BasicBlock>();
 
         /// <summary>
-        /// How many conditional ARMS deep the current emission is, within the nearest
-        /// enclosing <c>For Each</c> body. Zero means the straight-line path — where a branch
-        /// to the loop end is simply the end of an iteration, not an exit.
-        /// </summary>
-        private int _armDepth;
-
-        /// <summary>
         /// Merge blocks an ENCLOSING construct will emit once it closes. A branch to one of
         /// these emits nothing rather than inlining the continuation into the branch body.
         /// </summary>
@@ -1771,9 +1775,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             Line($"if ({Expr(cond.Condition)}) {{");
             _indentLevel++;
-            _armDepth++;
             EmitStructured(cond.TrueTarget);
-            _armDepth--;
             _indentLevel--;
 
             // No `else` when the false path IS the merge point — that is a bare `If … End If`.
@@ -1781,9 +1783,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             {
                 Line("} else {");
                 _indentLevel++;
-                _armDepth++;
                 EmitStructured(cond.FalseTarget);
-                _armDepth--;
                 _indentLevel--;
             }
 
@@ -1836,9 +1836,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 first = false;
                 _indentLevel++;
                 _pendingMerges.Push(sw.EndBlock);
-                _armDepth++;
                 EmitStructured(target);
-                _armDepth--;
                 _pendingMerges.Pop();
                 _indentLevel--;
             }
@@ -1947,12 +1945,18 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         {
             if (br.Target == null) return;
 
-            // For Each: fall-through and Exit For are the same branch to the same block, so
-            // only POSITION separates them — inside a conditional arm it is an exit, on the
-            // straight-line path it is the end of an iteration and needs no statement.
+            // For Each: fall-through and Exit For are the same branch to the same block.
+            // IRBranch.IsLoopExit (chip task_4cc381f1) is the ONLY thing that tells them apart
+            // — the end of an iteration emits nothing, a real exit is `break`.
+            //
+            // ⛔ Not position. This used to guess "inside a conditional arm ⇒ exit", which
+            // called a bare `Exit For` as the body's last statement undecidable and lowered it
+            // as fall-through — every element printed. The flag is set at the one place the
+            // distinction still exists (Visit(ExitStatementNode)), and the optimized-IR tests
+            // pin that the shipping passes carry it through.
             if (_forEachEnds.Contains(br.Target))
             {
-                if (_armDepth > 0) Line("break;");
+                if (br.IsLoopExit) Line("break;");
                 return;
             }
 
@@ -2048,9 +2052,56 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (call.ByRefArguments != null && call.ByRefArguments.Contains(true))
                 throw JsCapabilityChecker.ByRefArgumentRejection(call.FunctionName);
 
+            if (TryEventCall(call, out var eventStatement))
+            {
+                Line(eventStatement);
+                return;
+            }
+
             var invocationText = CallExpr(call);
             if (IsUsed(call)) Bind(call.Name, invocationText);
             else Line($"{invocationText};");
+        }
+
+        /// <summary>
+        /// The three event statements, which IRBuilder lowers to CALLS by convention:
+        /// <c>AddHandler e, h</c> → <c>Delegate.Combine(e, h)</c>, <c>RemoveHandler</c> →
+        /// <c>Delegate.Remove</c>, <c>RaiseEvent X(args)</c> → <c>raise_X(args)</c>. An event
+        /// is a Set of handlers on the instance (see EmitClass), so these are <c>add</c>,
+        /// <c>delete</c>, and a loop. MEASURED before: the whole class was refused, and had it
+        /// not been, <c>raise_X</c> would have been a call to nothing.
+        ///
+        /// <para><c>raise_X</c> is honoured only for an event of the class being emitted, so a
+        /// user function that happens to be called <c>raise_Foo</c> is left alone.</para>
+        /// </summary>
+        private bool TryEventCall(IRCall call, out string statement)
+        {
+            statement = null;
+            var name = call.FunctionName ?? string.Empty;
+            var args = call.Arguments ?? new List<IRValue>();
+
+            if (name == "Delegate.Combine" && args.Count == 2)
+            {
+                statement = $"{Expr(args[0])}.add({Expr(args[1])});";
+                return true;
+            }
+
+            if (name == "Delegate.Remove" && args.Count == 2)
+            {
+                statement = $"{Expr(args[0])}.delete({Expr(args[1])});";
+                return true;
+            }
+
+            const string raisePrefix = "raise_";
+            if (name.StartsWith(raisePrefix, StringComparison.Ordinal) &&
+                _currentClassEvents.TryGetValue(name.Substring(raisePrefix.Length), out var evt))
+            {
+                var rendered = string.Join(", ", args.ConvertAll(Expr));
+                statement = $"for (const h of this.{SanitizeName(evt.Name)}) h({rendered});";
+                return true;
+            }
+
+            return false;
         }
 
         /// <summary>Renders a call WITHOUT emitting it, for inline use.</summary>
@@ -2869,12 +2920,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// emitted here and EndBlock is marked emitted.</para>
         ///
         /// <para><b>Fall-through and <c>Exit For</c> are the same branch.</b> Both emit
-        /// <c>IRBranch(EndBlock)</c>, so only POSITION separates them: the body block's own
-        /// terminator is the natural end of an iteration, while a branch from any NESTED block
-        /// is a real exit and becomes <c>break</c>. One case stays undecidable — a bare
-        /// unconditional <c>Exit For</c> as the body's last statement, where the exit IS the
-        /// body terminator. It lowers as fall-through, matching the other backends; that is a
-        /// known limitation rather than an oversight.</para>
+        /// <c>IRBranch(EndBlock)</c>; <c>IRBranch.IsLoopExit</c> is what separates them, and
+        /// <see cref="EmitBranch"/> reads it. (Position used to be the guess, which made a
+        /// bare <c>Exit For</c> as the body's last statement undecidable — it is not any more.)</para>
         /// </summary>
         public void Visit(IRForEach forEach)
         {
@@ -2888,12 +2936,6 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 _emitted.Add(body);
                 _forEachEnds.Push(forEach.EndBlock);
 
-                // The body starts on the STRAIGHT-LINE path. A branch to EndBlock reached
-                // without entering a conditional arm is the natural end of an iteration and
-                // emits nothing; one reached from inside an arm is a real `Exit For`.
-                var savedDepth = _armDepth;
-                _armDepth = 0;
-
                 EmitInstructions(body);
                 switch (body.GetTerminator())
                 {
@@ -2902,7 +2944,6 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     case IRSwitch sw: EmitSelectCase(sw); break;
                 }
 
-                _armDepth = savedDepth;
                 _forEachEnds.Pop();
             }
 

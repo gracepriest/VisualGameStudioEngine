@@ -478,7 +478,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // so ModuleTypeWalker explicitly skips them and cannot back this up. Measured
                 // missed rejection: `Public Event Tick As Long` compiled clean with no BL7003.
                 foreach (var e in c.Events ?? Enumerable.Empty<IREvent>())
-                    yield return (NamedType(e?.DelegateType), $"the type of event '{c.Name}.{e?.Name}'");
+                    yield return (e?.Type ?? NamedType(e?.DelegateType), $"the type of event '{c.Name}.{e?.Name}'");
             }
 
             foreach (var i in module.Interfaces?.Values ?? Enumerable.Empty<IRInterface>())

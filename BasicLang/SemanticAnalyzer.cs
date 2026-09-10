@@ -6120,8 +6120,30 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(EventDeclarationNode node)
         {
-            // Resolve the event type (delegate type)
-            var eventType = node.EventType != null ? ResolveTypeReference(node.EventType) : _typeManager.GetType("EventHandler");
+            // Resolve the event type (delegate type):
+            //   Event X As T            → T
+            //   Event X(p As P, …)      → Action(Of P, …), built structurally like a lambda's type
+            //   Event X                 → EventHandler (the .NET default)
+            TypeInfo eventType;
+            if (node.EventType != null)
+            {
+                eventType = ResolveTypeReference(node.EventType);
+            }
+            else if (node.HasParameterList)
+            {
+                eventType = new TypeInfo("Action", TypeKind.Delegate);
+                foreach (var p in node.Parameters)
+                    eventType.GenericArguments.Add(
+                        (p.Type != null ? ResolveTypeReference(p.Type) : null) ?? _typeManager.ObjectType);
+            }
+            else
+            {
+                eventType = _typeManager.GetType("EventHandler");
+            }
+
+            // Recorded on the node so IRBuilder can carry the REAL type — the IR used to keep
+            // only a name, which dropped `Action(Of Integer)` to `Action` on C#.
+            SetNodeType(node, eventType);
 
             // Register the event as a symbol
             var eventSymbol = new Symbol(node.Name, SymbolKind.Event, eventType, node.Line, node.Column);

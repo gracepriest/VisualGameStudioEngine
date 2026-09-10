@@ -1259,8 +1259,23 @@ namespace BasicLang.Compiler
 
             node.Name = Consume(TokenType.Identifier, "Expected event name").Lexeme;
 
-            // Event can have delegate type: Event Click As EventHandler
-            // Or inline signature: Event Click(sender As Object, args As String)
+            // Inline signature: Event Click(sender As Object, args As String). MEASURED before
+            // this arm: "Unexpected token in class: '('" on every backend — the comment below
+            // promised the shape and nothing parsed it.
+            if (Match(TokenType.LeftParen))
+            {
+                node.HasParameterList = true;
+                if (!Check(TokenType.RightParen))
+                {
+                    do
+                    {
+                        node.Parameters.Add(ParseParameter());
+                    } while (Match(TokenType.Comma));
+                }
+                Consume(TokenType.RightParen, "Expected ')' after event parameters");
+            }
+
+            // Delegate type: Event Click As EventHandler
             if (Match(TokenType.As))
             {
                 node.EventType = ParseTypeReference();

@@ -1678,11 +1678,13 @@ namespace BasicLang.Compiler.IR
             // Add event to the current class
             if (_currentClassName != null && _module.Classes.TryGetValue(_currentClassName, out var irClass))
             {
+                var eventType = _semanticAnalyzer.GetNodeType(node);
                 var irEvent = new IREvent
                 {
                     Name = node.Name,
                     Access = MapAccessModifier(node.Access),
-                    DelegateType = node.EventType?.Name ?? "EventHandler",
+                    DelegateType = eventType?.Name ?? node.EventType?.Name ?? "EventHandler",
+                    Type = eventType,
                     IsStatic = false
                 };
                 irClass.Events.Add(irEvent);

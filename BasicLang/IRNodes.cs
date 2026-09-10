@@ -1730,6 +1730,13 @@ namespace BasicLang.Compiler.IR
         public AccessModifier Access { get; set; }
         public string DelegateType { get; set; }
         public bool IsStatic { get; set; }
+
+        /// <summary>
+        /// The event's delegate type with its generic arguments. <see cref="DelegateType"/> is
+        /// only the NAME, which is why C# emitted <c>event Action Clicked</c> for
+        /// <c>Event Clicked As Action(Of Integer)</c>. Null only for IR built without an analyzer.
+        /// </summary>
+        public TypeInfo Type { get; set; }
     }
 
     /// <summary>
