@@ -1150,7 +1150,19 @@ namespace BasicLang.Compiler
             {
                 Advance();  // consume MyBase
                 Consume(TokenType.Dot, "Expected '.' after MyBase");
-                Consume(TokenType.New, "Expected 'New' after MyBase.");
+
+                // ⛔ Never TokenType.New here. The lexer demotes EVERY keyword that follows a
+                // '.' to an Identifier so that member names can be keywords (obj.Property), so
+                // `MyBase.New` arrives as Identifier("New") and a Consume(TokenType.New) can
+                // never succeed — this branch was unreachable for as long as it existed, and
+                // no base constructor was ever called. Match the demoted lexeme by name instead.
+                if (Check(TokenType.New) ||
+                    (Check(TokenType.Identifier) &&
+                     string.Equals(Peek().Lexeme, "New", StringComparison.OrdinalIgnoreCase)))
+                    Advance();
+                else
+                    throw new ParseException($"Expected 'New' after MyBase. but found {Peek().Type}",
+                        Peek(), GetSuggestionForExpectedToken(TokenType.New));
                 Consume(TokenType.LeftParen, "Expected '(' after MyBase.New");
 
                 if (!Check(TokenType.RightParen))

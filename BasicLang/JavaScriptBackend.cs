@@ -179,6 +179,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 Line();
             }
 
+            // The exception hierarchy this program needs, BEFORE any user class: a user
+            // `class MyError extends Exception` hits the temporal dead zone otherwise.
+            EmitExceptionPrelude(module);
+
             // Class and interface member bodies also live in module.Functions, under their
             // UNQUALIFIED name — `Class A.Handle` and `Class B.Handle` are both "Handle".
             // Emitting them here would produce two top-level `function Handle()` declarations
@@ -233,6 +237,55 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         }
 
         /// <summary>
+        /// The .NET exception classes this program mentions (transitive closure, base first)
+        /// as real JS classes rooted at <c>Exception extends Error</c>. Nothing is emitted for
+        /// a program that mentions none. See <see cref="JsExceptionTypes"/> for the why.
+        ///
+        /// <para>The root sets <c>name</c> from <c>new.target</c> so a subclass reports its own
+        /// name, exposes <c>Message</c> for the BasicLang surface, and carries <c>Wrap</c>,
+        /// which the catch-all arm uses so a NATIVE JS error (a TypeError from a null
+        /// dereference) bound to <c>Catch e As Exception</c> still answers <c>e.Message</c>.</para>
+        /// </summary>
+        private void EmitExceptionPrelude(IRModule module)
+        {
+            var required = JsExceptionTypes.CollectRequired(module);
+            if (required.Count == 0) return;
+
+            foreach (var name in required)
+            {
+                var baseName = JsExceptionTypes.BaseOf(name);
+                if (baseName != null)
+                {
+                    Line($"class {name} extends {baseName} {{}}");
+                    continue;
+                }
+
+                Line($"class {name} extends Error {{");
+                _indentLevel++;
+                Line("constructor(message) {");
+                _indentLevel++;
+                Line("super(message === undefined || message === null ? \"\" : String(message));");
+                Line("this.name = new.target.name;");
+                _indentLevel--;
+                Line("}");
+                Line("get Message() { return this.message; }");
+                Line("ToString() { return this.name + \": \" + this.message; }");
+                Line("static Wrap(e) {");
+                _indentLevel++;
+                Line($"if (e instanceof {name}) return e;");
+                Line($"const wrapped = new {name}(e instanceof Error ? e.message : String(e));");
+                Line("wrapped.InnerNative = e;");
+                Line("return wrapped;");
+                _indentLevel--;
+                Line("}");
+                _indentLevel--;
+                Line("}");
+            }
+
+            Line();
+        }
+
+        /// <summary>
         /// Names that resolve to <c>this.X</c> inside the method currently being emitted:
         /// the class's fields and properties, plus its bases'.
         /// </summary>
@@ -248,7 +301,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             var header = $"class {SanitizeName(irClass.Name)}";
             if (!string.IsNullOrEmpty(irClass.BaseClass))
-                header += $" extends {SanitizeName(irClass.BaseClass)}";
+                header += $" extends {ClassReference(irClass.BaseClass)}";
 
             // Interfaces and generic parameters ERASE — JS has neither.
             Line(header + " {");
@@ -2031,7 +2084,29 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 }
             }
 
-            return $"new {SanitizeName(n.ClassName)}({string.Join(", ", n.Arguments.ConvertAll(Expr))})";
+            return $"new {ClassReference(n.ClassName)}({string.Join(", ", n.Arguments.ConvertAll(Expr))})";
+        }
+
+        /// <summary>
+        /// A class name as JavaScript will resolve it — in the DECLARATION's casing.
+        /// BasicLang is case-insensitive and JavaScript is not, so <c>New myerror()</c> against
+        /// <c>Class MyError</c> must emit <c>new MyError()</c>; the IR carries the use-site
+        /// spelling. A provided exception type maps to its canonical .NET spelling, and a
+        /// <c>…Exception</c> that is neither declared nor provided is refused (BL7012) rather
+        /// than emitted as a name nothing defines.
+        /// </summary>
+        private string ClassReference(string name)
+        {
+            if (_module?.Classes != null && _module.Classes.TryGetValue(name, out var declared))
+                return SanitizeName(declared.Name);
+
+            var canonical = JsExceptionTypes.Canonical(name);
+            if (canonical != null) return canonical;
+
+            if (JsExceptionTypes.LooksLikeException(name))
+                throw JsCapabilityChecker.UnknownExceptionRejection(name);
+
+            return SanitizeName(name);
         }
 
         private enum CollectionKind { None, List, Dictionary, Set }
@@ -2492,22 +2567,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             var clauses = tryCatch.CatchClauses ?? new List<IRCatchClause>();
             if (clauses.Count > 0)
             {
-                // JS allows exactly ONE catch binding, so multiple typed clauses would need an
-                // instanceof ladder inside it. Under erasure there is no reliable runtime type
-                // to test against, so more than one clause is refused rather than silently
-                // routed to the first.
-                if (clauses.Count > 1)
-                    throw NotYet("multiple Catch clauses (JavaScript has a single catch binding)");
-
-                var clause = clauses[0];
-                var binding = string.IsNullOrEmpty(clause.VariableName)
-                    ? "_ex"
-                    : SanitizeName(clause.VariableName);
-
-                Line($"}} catch ({binding}) {{");
-                _indentLevel++;
-                EmitNestedBlock(clause.Block, tryCatch.EndBlock);
-                _indentLevel--;
+                EmitCatchLadder(clauses, tryCatch.EndBlock);
             }
             else if (tryCatch.FinallyBlock == null)
             {
@@ -2527,6 +2587,103 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             Line("}");
 
             EmitStructured(tryCatch.EndBlock);
+        }
+
+        /// <summary>
+        /// The <c>Catch</c> clauses as one JS <c>catch (_ex)</c> holding an <c>instanceof</c>
+        /// ladder — JavaScript has a single catch binding, and typed selection is done by hand:
+        /// <code>
+        ///   } catch (_ex) {
+        ///       if (_ex instanceof InvalidOperationException) { const e = _ex; … }
+        ///       else if (_ex instanceof ArgumentException)    { const a = _ex; … }
+        ///       else { throw _ex; }
+        ///   }
+        /// </code>
+        ///
+        /// <para>⛔ <b>The binding is ALWAYS <c>_ex</c>, and the user's variable is a
+        /// <c>const</c> inside its arm.</b> Two things depend on that. A bare <c>Throw</c> lowers
+        /// to <c>throw _ex;</c> (Visit(IRThrow)), so the name must exist whatever the clause
+        /// called its variable — before this, <c>Catch e As Exception … Throw</c> was a
+        /// ReferenceError. And the typed test must run on the RAW object: a clause's variable is
+        /// bound only once its arm is chosen.</para>
+        ///
+        /// <para><b>A single typed clause gets the same guard.</b> MEASURED: <c>Catch e As
+        /// FormatException</c> around a thrown <c>ArgumentException</c> printed the clause's body
+        /// and stole the exception from the correct outer handler — the over-catch that shipped.
+        /// A non-matching exception is rethrown, never swallowed.</para>
+        ///
+        /// <para><b><c>Catch e As Exception</c> (and an untyped <c>Catch</c>) is the catch-all</b>,
+        /// as <c>catch (Exception)</c> is in .NET, so it takes a native JS error too; its variable
+        /// is bound through <c>Exception.Wrap</c> so <c>e.Message</c> answers for a TypeError as
+        /// well. A catch-all CLOSES the ladder: clauses after it can never be selected, exactly
+        /// as in .NET (where they are a compile error), so they are not emitted.</para>
+        /// </summary>
+        private void EmitCatchLadder(List<IRCatchClause> clauses, BasicBlock endBlock)
+        {
+            Line("} catch (_ex) {");
+            _indentLevel++;
+
+            var closed = false;
+            for (var i = 0; i < clauses.Count; i++)
+            {
+                var test = CatchTest(clauses[i]);
+
+                if (test == null)
+                {
+                    // The catch-all. As the FIRST clause there is no ladder at all.
+                    if (i == 0)
+                    {
+                        EmitCatchArm(clauses[i], endBlock, catchAll: true);
+                    }
+                    else
+                    {
+                        Line("} else {");
+                        _indentLevel++;
+                        EmitCatchArm(clauses[i], endBlock, catchAll: true);
+                        _indentLevel--;
+                        Line("}");
+                    }
+                    closed = true;
+                    break;
+                }
+
+                Line(i == 0 ? $"if ({test}) {{" : $"}} else if ({test}) {{");
+                _indentLevel++;
+                EmitCatchArm(clauses[i], endBlock, catchAll: false);
+                _indentLevel--;
+            }
+
+            if (!closed)
+            {
+                Line("} else {");
+                _indentLevel++;
+                Line("throw _ex;");
+                _indentLevel--;
+                Line("}");
+            }
+
+            _indentLevel--;
+        }
+
+        private void EmitCatchArm(IRCatchClause clause, BasicBlock endBlock, bool catchAll)
+        {
+            if (!string.IsNullOrEmpty(clause.VariableName))
+                Line($"const {SanitizeName(clause.VariableName)} = {(catchAll ? "Exception.Wrap(_ex)" : "_ex")};");
+
+            EmitNestedBlock(clause.Block, endBlock);
+        }
+
+        /// <summary>
+        /// The <c>instanceof</c> test for a clause, or null for the catch-all (untyped, or
+        /// typed <c>Exception</c> — the root of every exception this backend can see).
+        /// </summary>
+        private string CatchTest(IRCatchClause clause)
+        {
+            var name = clause.ExceptionType?.Name;
+            if (string.IsNullOrEmpty(name)) return null;
+
+            var reference = ClassReference(name);
+            return reference == "Exception" ? null : $"_ex instanceof {reference}";
         }
 
         /// <summary>
