@@ -1631,6 +1631,16 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     {
                         var instr = instructions[i];
 
+                        // A CALL renamed after the variable it assigns — `Total = Add(Total, x)`
+                        // — is a store, not a statement call. Found by review: the branch below
+                        // excludes IRCall, so it fell to GenerateInlineStatement and only the
+                        // call was emitted; the accumulator never changed.
+                        if (instr is IRCall namedCall && IsNamedDestination(namedCall))
+                        {
+                            sb.Append($"{new string(' ', _indentLevel * 4)}{GetValueName(namedCall)} = {EmitExpression(namedCall)};\n");
+                            continue;
+                        }
+
                         // Skip pure value computations (temps) - they get inlined
                         // into the expressions that consume them.
                         //
@@ -1726,10 +1736,11 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     if (instr is not IRValue v) continue;
                     if (string.IsNullOrEmpty(v.Name)) continue;
 
-                    // A result named after a variable OR a class member is an assignment, not
-                    // a temp — registering it here would inline `Total + x` into every later
-                    // read of `Total`.
-                    if (_declaredIdentifiers.Contains(v.Name) || _currentClassMemberNames.Contains(v.Name))
+                    // A result named after a variable OR (when IRBuilder renamed it) a class
+                    // member is an assignment, not a temp — registering it here would inline
+                    // `Total + x` into every later read of `Total`.
+                    if (_declaredIdentifiers.Contains(v.Name) ||
+                        (v.NamedAfterVariable && _currentClassMemberNames.Contains(v.Name)))
                         continue;
 
                     // first definition wins (good enough for simple SSA-style temp regs)
@@ -2694,10 +2705,14 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         {
             if (value == null) return false;
             if (string.IsNullOrEmpty(value.Name)) return false;
-            // A class member is a destination too — see _currentClassMemberNames. A local or
-            // parameter of the same name shadows it in C# exactly as it does in BasicLang, and
-            // the emitted text is the same either way.
-            return _declaredIdentifiers.Contains(value.Name) || _currentClassMemberNames.Contains(value.Name);
+            if (_declaredIdentifiers.Contains(value.Name)) return true;
+
+            // A class member is a destination ONLY for a value IRBuilder actually RENAMED after
+            // it. Found by review: matching every value by name made an ordinary temp `t0` in
+            // a class with a field `t0` a write to that field, and a call temp was emitted as
+            // `t0 = Bump();` and then inlined AGAIN at its use. A local or parameter of the same
+            // name shadows a member in C# exactly as it does in BasicLang.
+            return value.NamedAfterVariable && _currentClassMemberNames.Contains(value.Name);
         }
 
         private string GetValueName(IRValue value)

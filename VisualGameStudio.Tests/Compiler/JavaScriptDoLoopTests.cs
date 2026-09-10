@@ -66,6 +66,11 @@ public class JavaScriptDoLoopTests
             "the Until form swaps the branch targets; a lowering that assumes TrueTarget is the " +
             "body puts the continuation INSIDE the loop");
 
+    /// <summary>
+    /// Pins the zero-iteration semantics. ⚠ It does NOT discriminate the swapped-arm miscompile
+    /// (the old lowering printed "done" here too — the continuation ran inside the loop and
+    /// returned); the sibling <see cref="DoUntil_PreTest_RunsUntilTrue"/> is the one that does.
+    /// </summary>
     [Test]
     public void DoUntil_PreTest_TrueAtEntry_RunsZeroTimes()
         => Assert.That(Run(CountUp + "Do Until i = 0\nConsole.WriteLine(\"never\")\nLoop\nConsole.WriteLine(\"done\")"),

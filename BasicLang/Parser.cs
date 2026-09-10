@@ -4304,7 +4304,12 @@ namespace BasicLang.Compiler
                 var token = Previous();
                 var unary = new UnaryExpressionNode(token.Line, token.Column);
                 unary.Operator = "AddressOf";
-                unary.Operand = ParsePrimary();
+                // ⛔ The operand is the whole member chain, not a primary. With ParsePrimary,
+                // `AddressOf Me.OnClicked` parsed as `(AddressOf Me).OnClicked` — the enclosing
+                // postfix loop applied `.OnClicked` to the AddressOf node — which lowered to an
+                // UNBOUND method read and a TypeError at the handler's first field access.
+                // Found by review.
+                unary.Operand = ParsePostfix();
                 unary.IsPostfix = false;
                 return unary;
             }

@@ -68,6 +68,41 @@ public class JavaScriptModuleVariableTests
     [Test]
     public void Optimized_ModuleLevelDim_IsSharedAcrossFunctions()
         => Assert.That(JavaScriptOptimizedExecutionTests.RunOptimized(Shared), Is.EqualTo("12"));
+
+    // ---------------------------------------------------------------- shadowing (review findings)
+    //
+    // ⛔ Found by the branch review, not by the fixture: seeding the declared-name set with the
+    // globals BEFORE the locals loop meant a local with a global's name never got its `let` — every
+    // write went to the global, and a bare `Dim` read the global's value instead of 0.
+
+    /// <summary>A local of the same name as a module-level Dim is its own variable.</summary>
+    [Test]
+    public void LocalDim_ShadowsAModuleLevelDim()
+        => Assert.That(Run(
+            "Dim count As Integer = 10\n" +
+            "Sub Show()\nConsole.WriteLine(count)\nEnd Sub\n" +
+            "Sub Main()\nDim count As Integer = 5\nConsole.WriteLine(count)\nShow()\nEnd Sub"),
+            Is.EqualTo("5\n10"));
+
+    [Test]
+    public void LocalDim_WithoutInitializer_StartsAtDefault_NotTheGlobal()
+        => Assert.That(Run(
+            "Dim count As Integer = 10\n" +
+            "Sub Main()\nDim count As Integer\nConsole.WriteLine(count)\nEnd Sub"),
+            Is.EqualTo("0"));
+
+    /// <summary>
+    /// Inside a class, an unqualified name is the FIELD before it is a same-named module-level
+    /// Dim — class scope is nearer than module scope. (IRBuilder resolved it to the global.)
+    /// </summary>
+    [Test]
+    public void ClassField_NamedLikeAModuleLevelDim_IsTheFieldInsideTheClass()
+        => Assert.That(Run(
+            "Dim Total As Integer = 100\n" +
+            "Class Counter\nPublic Total As Integer\n" +
+            "Public Sub Add(n As Integer)\nTotal = Total + n\nEnd Sub\nEnd Class\n" +
+            "Sub Main()\nDim c As New Counter()\nc.Add(5)\nConsole.WriteLine(c.Total)\nConsole.WriteLine(Total)\nEnd Sub"),
+            Is.EqualTo("5\n100"));
 }
 
 /// <summary>Codegen-side contract, no Node.</summary>

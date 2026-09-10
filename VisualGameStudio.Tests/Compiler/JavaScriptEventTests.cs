@@ -135,6 +135,35 @@ public class JavaScriptEventTests
             "AddHandler a.Clicked, AddressOf OnClicked\na.Press()\nb.Press()\nConsole.WriteLine(\"done\")\nEnd Sub"),
             Is.EqualTo("clicked\ndone"));
 
+    // ---------------------------------------------------------------- handlers that are instance methods
+    //
+    // ⛔ Found by the branch review: `AddressOf OnClicked` inside the class rendered the bare
+    // name (a ReferenceError — member bodies are not top-level functions), and `AddressOf
+    // Me.OnClicked` rendered `this.OnClicked` UNBOUND, so `hits` inside the handler was a
+    // TypeError once the event invoked it as `h(args)`.
+
+    private const string SelfSubscribing =
+        "Class Button\nPublic Event Clicked(count As Integer)\nPrivate hits As Integer\n" +
+        "Public Sub Watch()\nAddHandler Clicked, AddressOf OnClicked\nEnd Sub\n" +
+        "Private Sub OnClicked(c As Integer)\nhits = hits + c\nConsole.WriteLine(\"hits \" & hits)\nEnd Sub\n" +
+        "Public Sub Press()\nRaiseEvent Clicked(1)\nEnd Sub\nEnd Class\n" +
+        "Sub Main()\nDim b As New Button()\nb.Watch()\nb.Press()\nb.Press()\nEnd Sub";
+
+    [Test]
+    public void AddressOfAnInstanceMethod_InsideItsOwnClass_KeepsThis()
+        => Assert.That(Run(SelfSubscribing), Is.EqualTo("hits 1\nhits 2"));
+
+    [Test]
+    public void AddressOfMeDotMethod_KeepsThis()
+        => Assert.That(Run(SelfSubscribing.Replace("AddressOf OnClicked", "AddressOf Me.OnClicked")),
+            Is.EqualTo("hits 1\nhits 2"));
+
+    /// <summary>The C# mirror of the same program — `this.OnClicked` is a bound method group there.</summary>
+    [Test]
+    public void AddressOfAnInstanceMethod_InsideItsOwnClass_CSharp()
+        => Assert.That(CliTestHarness.CompileRunCSharp(SelfSubscribing).Replace("\r\n", "\n").Trim(),
+            Is.EqualTo("hits 1\nhits 2"));
+
     // ---------------------------------------------------------------- the SHIPPING IR
 
     [Test]

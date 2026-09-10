@@ -218,6 +218,57 @@ namespace BasicLang.Compiler.IR
             return new IRVariable(name, type, version);
         }
 
+        /// <summary>
+        /// Renames a freshly-built result to the variable it initialises or assigns — the IR
+        /// then carries no separate IRAssignment — and MARKS it (<see cref="IRValue.NamedAfterVariable"/>),
+        /// which is how a backend tells that result from a temp that merely shares the name.
+        /// False when the value must flow through an IRAssignment instead: constants, variables,
+        /// and a `::`-qualified FOREIGN call — its result is an opaque pseudo-type with no
+        /// declarable C++ temp, and a renamed foreign call is emitted as a bare statement that
+        /// DROPS the assignment (the declaration path always guarded this; the assignment path
+        /// did not, and `v = ::next_id()` left v untouched on C++ — found by review).
+        /// </summary>
+        private static bool TryRenameToVariable(IRValue value, IRVariable target)
+        {
+            switch (value)
+            {
+                case IRCall call when call.Type?.Kind == TypeKind.Foreign:
+                    return false;
+                case IRCall:
+                case IRAwait:
+                case IRBinaryOp:
+                case IRUnaryOp:
+                case IRCompare:
+                    value.Name = target.Name;
+                    value.NamedAfterVariable = true;
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>
+        /// Whether <paramref name="name"/> is a field or property of the class whose member is
+        /// being built (or of a base). Class scope is NEARER than module scope, so an unqualified
+        /// name inside a method is the member before it is a same-named module-level Dim.
+        /// </summary>
+        private bool IsCurrentClassMember(string name)
+        {
+            if (string.IsNullOrEmpty(_currentClassName) || _module?.Classes == null) return false;
+
+            var typeName = _currentClassName;
+            var guard = 0;
+            while (!string.IsNullOrEmpty(typeName) && guard++ < 64 &&
+                   _module.Classes.TryGetValue(typeName, out var cls) && cls != null)
+            {
+                if (cls.Fields.Any(f => string.Equals(f?.Name, name, StringComparison.OrdinalIgnoreCase)) ||
+                    cls.Properties.Any(p => string.Equals(p?.Name, name, StringComparison.OrdinalIgnoreCase)))
+                    return true;
+                typeName = cls.BaseClass;
+            }
+            return false;
+        }
+
         private IRVariable GetOrCreateVariable(string name, TypeInfo type)
         {
             // Check for existing version
@@ -226,8 +277,10 @@ namespace BasicLang.Compiler.IR
                 return _variableVersions[name].Peek();
             }
 
-            // Check global
-            if (_globalVariables.ContainsKey(name))
+            // Check global — unless the name is a member of the class being built: found by
+            // review, `Total = Total + n` inside Counter.Add resolved to a module-level `Total`
+            // and mutated the global while the field stayed 0.
+            if (_globalVariables.ContainsKey(name) && !IsCurrentClassMember(name))
             {
                 return _globalVariables[name];
             }
@@ -603,27 +656,7 @@ namespace BasicLang.Compiler.IR
                     // then folds declaration + init into `auto x = ns::f(args);` and renders
                     // the call inline. Renaming it to the local would emit a bare statement
                     // that DROPS the assignment.
-                    if (initValue is IRCall call && call.Type?.Kind != TypeKind.Foreign)
-                    {
-                        call.Name = localVar.Name;
-                    }
-                    else if (initValue is IRAwait awaitVal)
-                    {
-                        awaitVal.Name = localVar.Name;
-                    }
-                    else if (initValue is IRBinaryOp binOp)
-                    {
-                        binOp.Name = localVar.Name;
-                    }
-                    else if (initValue is IRUnaryOp unaryOp)
-                    {
-                        unaryOp.Name = localVar.Name;
-                    }
-                    else if (initValue is IRCompare compare)
-                    {
-                        compare.Name = localVar.Name;
-                    }
-                    else
+                    if (!TryRenameToVariable(initValue, localVar))
                     {
                         // For constants, variables, or other values, emit an assignment
                         EmitInstruction(new IRAssignment(localVar, initValue));
@@ -3146,51 +3179,38 @@ namespace BasicLang.Compiler.IR
             }
 
             // Store to target
-            if (node.Target is IdentifierExpressionNode idExpr)
+            if (node.Target is IdentifierExpressionNode idExpr && idExpr.IsForeignQualified)
+            {
+                // A `::`-qualified foreign GLOBAL is an opaque target: no local is created for
+                // it, it is typed Foreign so every backend renders the name verbatim, and the
+                // value always flows through an IRAssignment. Reachable since the analyzer
+                // admits a Foreign target (plan 2 Task 7); found by review — it used to become
+                // an Integer-typed local named "::counter", which the C++ backend sanitised to
+                // `counter = 5;` and so wrote a same-named LOCAL instead of the global.
+                var foreignTarget = new IRVariable(idExpr.Name, new TypeInfo(idExpr.Name, TypeKind.Foreign));
+                EmitInstruction(new IRAssignment(foreignTarget, value));
+            }
+            else if (node.Target is IdentifierExpressionNode idExpr2)
             {
                 // Check if this identifier is an imported symbol from another module
-                var symbol = _semanticAnalyzer.GetNodeSymbol(idExpr);
+                var symbol = _semanticAnalyzer.GetNodeSymbol(idExpr2);
 
                 IRVariable targetVar;
                 if (symbol != null && symbol.IsImported && !string.IsNullOrEmpty(symbol.SourceModule))
                 {
                     // This is an imported variable from another module
-                    targetVar = new IRVariable(idExpr.Name, value.Type);
+                    targetVar = new IRVariable(idExpr2.Name, value.Type);
                     targetVar.IsGlobal = true;
                     targetVar.ModuleName = symbol.SourceModule;
                 }
                 else
                 {
-                    targetVar = GetOrCreateVariable(idExpr.Name, value.Type);
+                    targetVar = GetOrCreateVariable(idExpr2.Name, value.Type);
                 }
 
-                // Optimization: If the value is a direct call or binary op result,
-                // rename it to the target variable instead of creating a separate assignment
-                if (value is IRCall call)
-                {
-                    // Rename the call's result to the target variable
-                    call.Name = targetVar.Name;
-                    // No need to emit IRAssignment - the call now directly assigns to target
-                }
-                else if (value is IRBinaryOp binOp)
-                {
-                    // Rename the binary op's result to the target variable
-                    binOp.Name = targetVar.Name;
-                    // No need to emit IRAssignment
-                }
-                else if (value is IRUnaryOp unaryOp)
-                {
-                    // Rename the unary op's result to the target variable
-                    unaryOp.Name = targetVar.Name;
-                    // No need to emit IRAssignment
-                }
-                else if (value is IRCompare compare)
-                {
-                    // Rename the compare result to the target variable
-                    compare.Name = targetVar.Name;
-                    // No need to emit IRAssignment
-                }
-                else
+                // Optimization: rename a fresh result to the target instead of a separate
+                // assignment — with the same guards as the declaration path.
+                if (!TryRenameToVariable(value, targetVar))
                 {
                     // For constants, variables, or other values, emit an assignment
                     EmitInstruction(new IRAssignment(targetVar, value));

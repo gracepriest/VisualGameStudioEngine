@@ -337,11 +337,31 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (any) Line();
         }
 
-        /// <summary>Globals are in scope in every body — an assignment to one must not become a fresh <c>const</c>.</summary>
+        /// <summary>
+        /// A local's declaration initializer: a sized array's allocation, else the type's
+        /// DEFAULT value. ⛔ Never a bare <c>let x;</c> — a BasicLang local is default-initialised
+        /// (<c>Dim n As Integer</c> is 0), and a bare <c>let</c> is <c>undefined</c>, which
+        /// propagates as NaN through arithmetic rather than raising. Fields and globals already
+        /// defaulted; locals did not, and a read-before-write printed "undefined".
+        /// </summary>
+        private string LocalInitializer(TypeInfo type) =>
+            ArrayInitializer(type) ?? TypeMapper.GetDefaultValue(type);
+
+        /// <summary>
+        /// Module-level Dims, in their OWN set — not in <see cref="_declaredNames"/>, which is
+        /// the function's parameters and locals. The three are consulted in scope order by
+        /// <see cref="Bind"/> and <see cref="VariableRef"/>: locals/parameters, then class
+        /// members, then globals. Found by review: with the globals mixed into the declared
+        /// set, a local sharing a global's name lost its <c>let</c>, and a field sharing a
+        /// global's name was written as the global.
+        /// </summary>
+        private readonly HashSet<string> _globalNames = new HashSet<string>(StringComparer.Ordinal);
+
         private void DeclareGlobals()
         {
+            _globalNames.Clear();
             foreach (var g in _module?.GlobalVariables?.Values ?? Enumerable.Empty<IRVariable>())
-                if (g?.Name != null) _declaredNames.Add(g.Name);
+                if (g?.Name != null) _globalNames.Add(g.Name);
         }
 
         /// <summary>
@@ -358,6 +378,20 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             _currentClassEvents = new Dictionary<string, IREvent>(StringComparer.OrdinalIgnoreCase);
             foreach (var evt in irClass.Events ?? new List<IREvent>())
                 if (evt?.Name != null) _currentClassEvents[evt.Name] = evt;
+
+            _currentClassMethods = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            {
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var current = irClass;
+                while (current != null && seen.Add(current.Name))
+                {
+                    foreach (var m in current.Methods ?? new List<IRMethod>())
+                        if (m?.Name != null && !m.IsStatic && !_currentClassMethods.ContainsKey(m.Name))
+                            _currentClassMethods[m.Name] = m.Name;
+                    if (string.IsNullOrEmpty(current.BaseClass)) break;
+                    module.Classes.TryGetValue(current.BaseClass, out current);
+                }
+            }
 
             var header = $"class {SanitizeName(irClass.Name)}";
             if (!string.IsNullOrEmpty(irClass.BaseClass))
@@ -400,6 +434,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             Line("}");
 
             _currentClassEvents = new Dictionary<string, IREvent>(StringComparer.OrdinalIgnoreCase);
+            _currentClassMethods = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -516,18 +551,17 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             foreach (var line in prologue ?? new List<string>()) Line(line);
 
             _declaredNames = new HashSet<string>(StringComparer.Ordinal);
-            DeclareGlobals();
             foreach (var p in impl.Parameters ?? new List<IRVariable>())
                 _declaredNames.Add(p.Name);
 
             foreach (var local in impl.LocalVariables ?? new List<IRVariable>())
             {
                 if (!_declaredNames.Add(local.Name)) continue;
-                var init = ArrayInitializer(local.Type);
-                Line(init == null
-                    ? $"let {SanitizeName(local.Name)};"
-                    : $"let {SanitizeName(local.Name)} = {init};");
+                Line($"let {SanitizeName(local.Name)} = {LocalInitializer(local.Type)};");
             }
+
+            // Globals after the locals — see Visit(IRFunction) for why the order matters.
+            DeclareGlobals();
 
             EmitStructured(impl.EntryBlock ?? impl.Blocks?.FirstOrDefault());
 
@@ -589,7 +623,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case IRCompare c2:
                     return Bound(c2) ? SanitizeName(c2.Name) : CompareExprInline(c2);
                 case IRUnaryOp u:
-                    return Bound(u) ? SanitizeName(u.Name) : UnaryText(u.Operation, ExprInline(u.Operand));
+                    return Bound(u) ? SanitizeName(u.Name) : UnaryText(u, ExprInline(u.Operand));
                 case IRCall call:
                     return Bound(call) ? SanitizeName(call.Name) : CallExpr(call);
 
@@ -688,7 +722,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case IRVariable v: return SanitizeName(v.Name);
                 case IRBinaryOp b: return BinaryExprInline(b);
                 case IRCompare cm: return CompareExprInline(cm);
-                case IRUnaryOp u: return UnaryText(u.Operation, ExprInline(u.Operand));
+                case IRUnaryOp u: return UnaryText(u, ExprInline(u.Operand));
                 default:
                     // A call inside a guard WAS emitted (only the guard's own operator tree is
                     // suppressed), so the by-name path is right for it.
@@ -809,15 +843,65 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             }
         }
 
-        private string UnaryExpr(IRUnaryOp op) => UnaryText(op.Operation, Expr(op.Operand));
+        private string UnaryExpr(IRUnaryOp op) => UnaryText(op, Expr(op.Operand));
 
         /// <summary>
         /// A unary operation as text. <c>AddressOf</c> is the one operator with no JavaScript
         /// token — a function is already a value — so it renders as the bare operand rather
         /// than a parenthesised no-op (<c>f = (Greet)</c>).
+        ///
+        /// <para>⛔ An INSTANCE METHOD of the class being emitted must be BOUND. Member bodies
+        /// are not top-level functions, so the bare name is a ReferenceError; and the event
+        /// lowering invokes handlers as <c>h(args)</c>, so an unbound <c>this.M</c> loses
+        /// <c>this</c> at the first field access. Found by review: <c>AddHandler Clicked,
+        /// AddressOf OnClicked</c> inside the class was a ReferenceError from a green build.</para>
         /// </summary>
-        private static string UnaryText(UnaryOpKind kind, string operand) =>
-            kind == UnaryOpKind.AddressOf ? operand : $"({UnaryOpToken(kind)}{operand})";
+        private string UnaryText(IRUnaryOp op, string operand)
+        {
+            if (op.Operation != UnaryOpKind.AddressOf)
+                return $"({UnaryOpToken(op.Operation)}{operand})";
+
+            if (op.Operand is IRVariable v && v.Name != null &&
+                _currentClassMethods.TryGetValue(v.Name, out var declared))
+                return $"this.{SanitizeName(declared)}.bind(this)";
+
+            // `AddressOf obj.Method` (obj may be Me) is an IRFieldAccess whose field is a METHOD
+            // of the receiver's class. A .NET delegate to an instance method captures the
+            // instance, so the reference is bound to the RECEIVER: `recv.Method.bind(recv)`.
+            // Checked structurally — the receiver is usually bound to a temp first, so its
+            // rendered text is `t0`, never `this`.
+            if (op.Operand is IRFieldAccess fa && fa.FieldName != null &&
+                DeclaredInstanceMethod(fa.Object?.Type?.Name, fa.FieldName) is string viaReceiver)
+            {
+                var receiver = Expr(fa.Object);
+                return $"{receiver}.{SanitizeName(viaReceiver)}.bind({receiver})";
+            }
+
+            if (operand.StartsWith("this.", StringComparison.Ordinal))
+                return $"{operand}.bind(this)";
+
+            return operand;
+        }
+
+        /// <summary>The methods of the class being emitted (and its bases), use-site name → declared name.</summary>
+        private Dictionary<string, string> _currentClassMethods = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>The declared name of an INSTANCE method <paramref name="member"/> on the class <paramref name="typeName"/> (or a base), else null.</summary>
+        private string DeclaredInstanceMethod(string typeName, string member)
+        {
+            if (string.IsNullOrEmpty(typeName) || string.IsNullOrEmpty(member) || _module?.Classes == null) return null;
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            while (!string.IsNullOrEmpty(typeName) && seen.Add(typeName) &&
+                   _module.Classes.TryGetValue(typeName, out var cls) && cls != null)
+            {
+                foreach (var m in cls.Methods ?? new List<IRMethod>())
+                    if (m?.Name != null && !m.IsStatic && string.Equals(m.Name, member, StringComparison.OrdinalIgnoreCase))
+                        return m.Name;
+                typeName = cls.BaseClass;
+            }
+            return null;
+        }
 
         private static string UnaryOpToken(UnaryOpKind kind)
         {
@@ -1350,19 +1434,32 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// </summary>
         private HashSet<string> _sequenceValued = new HashSet<string>(StringComparer.Ordinal);
 
-        private void Bind(string name, string expression)
+        private void Bind(string name, string expression) => Bind(name, expression, allowMember: false);
+
+        /// <summary>
+        /// Binds a value-producing instruction's result. The member arm is taken only for a
+        /// value IRBuilder RENAMED after a variable (<see cref="IRValue.NamedAfterVariable"/>) —
+        /// a temp that merely shares a member's name (<c>t0</c>) is still a temp.
+        /// </summary>
+        private void Bind(IRValue value, string expression) =>
+            Bind(value?.Name, expression, allowMember: value?.NamedAfterVariable == true);
+
+        private void Bind(string name, string expression, bool allowMember)
         {
             if (!string.IsNullOrEmpty(name)) _boundNames.Add(name);
             var js = SanitizeName(name);
 
-            // Already in scope — assign.
+            // A parameter or local — assign.
             if (_declaredNames.Contains(name)) { Line($"{js} = {expression};"); return; }
 
             // A CLASS MEMBER. `Count = Count + 1` produces an IRBinaryOp named `Count`
             // (IRBuilder renames a result to the variable it initialises), so a `const` here
             // would declare a fresh local and the member would never change — the method
-            // would silently do nothing.
-            if (_memberNames.Contains(name)) { Line($"this.{js} = {expression};"); return; }
+            // would silently do nothing. Checked BEFORE the globals: class scope is nearer.
+            if (allowMember && _memberNames.Contains(name)) { Line($"this.{js} = {expression};"); return; }
+
+            // A module-level Dim — assign.
+            if (_globalNames.Contains(name)) { Line($"{js} = {expression};"); return; }
 
             Line($"const {js} = {expression};");
         }
@@ -1443,7 +1540,6 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // matches BasicLang scoping — a `Dim` inside an If branch is visible after it,
             // whereas a JS `let` at the assignment site would not be.
             _declaredNames = new HashSet<string>(StringComparer.Ordinal);
-            DeclareGlobals();
             foreach (var p in function.Parameters ?? new List<IRVariable>())
                 _declaredNames.Add(p.Name);
 
@@ -1454,11 +1550,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // An array's SIZE is not in the instruction stream — Dim a(4) emits only an
                 // IRAlloca with Size == 1. The element count lives on the DECLARATION, so
                 // allocation belongs here.
-                var init = ArrayInitializer(local.Type);
-                Line(init == null
-                    ? $"let {SanitizeName(local.Name)};"
-                    : $"let {SanitizeName(local.Name)} = {init};");
+                Line($"let {SanitizeName(local.Name)} = {LocalInitializer(local.Type)};");
             }
+
+            // Globals live in their own set (see DeclareGlobals): a local that shares a
+            // global's name keeps its own `let` and shadows it.
+            DeclareGlobals();
 
             // EntryBlock-rooted, following terminators — never a walk of function.Blocks.
             EmitStructured(function.EntryBlock ?? function.Blocks?.FirstOrDefault());
@@ -2014,9 +2111,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         // Value-producing instructions declare their result, and every later reference is by
         // name (see Expr). `const` because the IR is SSA — each temp is assigned exactly once,
         // so a rebind would be a bug worth having the JS engine catch.
-        public void Visit(IRBinaryOp binaryOp) => Bind(binaryOp.Name, BinaryExpr(binaryOp));
+        public void Visit(IRBinaryOp binaryOp) => Bind(binaryOp, BinaryExpr(binaryOp));
 
-        public void Visit(IRUnaryOp unaryOp) => Bind(unaryOp.Name, UnaryExpr(unaryOp));
+        public void Visit(IRUnaryOp unaryOp) => Bind(unaryOp, UnaryExpr(unaryOp));
         // VariableRef, not SanitizeName: an assignment whose target is an unqualified class
         // member must become `this.X = …`, or it writes a fresh global instead.
         public void Visit(IRAssignment assignment) =>
@@ -2061,7 +2158,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             }
 
             var invocationText = CallExpr(call);
-            if (IsUsed(call)) Bind(call.Name, invocationText);
+            if (IsUsed(call)) Bind(call, invocationText);
             else Line($"{invocationText};");
         }
 
@@ -2156,7 +2253,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             throw NotYet(nameof(IRCast));
         }
-        public void Visit(IRCompare compare) => Bind(compare.Name, CompareExpr(compare));
+        public void Visit(IRCompare compare) => Bind(compare, CompareExpr(compare));
         public void Visit(IRSwitch switchInst) => throw NotYet(nameof(IRSwitch));
         public void Visit(IRLabel label) => throw NotYet(nameof(IRLabel));
         public void Visit(IRComment comment) => throw NotYet(nameof(IRComment));
@@ -2270,7 +2367,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         private void EmitValueOrStatement(IRValue value, string expression)
         {
-            if (IsUsed(value)) Bind(value.Name, expression);
+            if (IsUsed(value)) Bind(value, expression);
             else Line($"{expression};");
         }
         /// <summary>
@@ -2369,10 +2466,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             {
                 if (!own.Add(local.Name)) continue;
                 _declaredNames.Add(local.Name);
-                var init = ArrayInitializer(local.Type);
-                Line(init == null
-                    ? $"let {SanitizeName(local.Name)};"
-                    : $"let {SanitizeName(local.Name)} = {init};");
+                Line($"let {SanitizeName(local.Name)} = {LocalInitializer(local.Type)};");
             }
 
             EmitStructured(fn.EntryBlock ?? fn.Blocks?.FirstOrDefault());

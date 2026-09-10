@@ -59,6 +59,42 @@ public class CSharpFieldAssignmentCodeGenTests
     // Cannot assign value of type 'Integer' to 'Total'") — a front-end limitation on every
     // backend, not a codegen one. The member-name walk here already covers bases for the day
     // the analyzer resolves them.
+
+    // ---------------------------------------------------------------- review findings
+
+    /// <summary>
+    /// ⛔ A lambda assignment whose VALUE IS A CALL: IRBuilder renames the call to the target
+    /// exactly as it renames a binary op, and the lambda emitter's named-destination branch
+    /// excluded IRCall — so `Total = Add(Total, x)` emitted `Add(Total, x);` and never stored.
+    /// </summary>
+    [Test]
+    public void LambdaAssignment_FromACall_IsEmitted()
+        => Assert.That(Cs(
+                "Class Counter\nPublic Total As Integer\n" +
+                "Public Function Add(a As Integer, b As Integer) As Integer\nReturn a + b\nEnd Function\n" +
+                "Public Sub AddAll(items As List(Of Integer))\nitems.ForEach(Sub(x As Integer) Total = Add(Total, x))\nEnd Sub\n" +
+                "End Class\nSub Main()\nEnd Sub"),
+            Does.Contain("Total = Add(Total, x);"));
+
+    /// <summary>
+    /// ⛔ A member named like an SSA temp (`t0`): the member-name arm of IsNamedDestination matched
+    /// every temp of that name, so an ordinary intermediate `t0 = n * 2` was emitted as a write to
+    /// the field, and a call temp was emitted as `t0 = Bump();` and then inlined AGAIN at its use.
+    /// Only a value IRBuilder actually renamed after a variable is a destination.
+    /// </summary>
+    [Test]
+    public void AMemberNamedLikeATemp_IsNotClobberedByTemps()
+    {
+        var cs = Cs(
+            "Class Timer\nPublic t0 As Integer\nPrivate calls As Integer\n" +
+            "Public Function Twice(n As Integer) As Integer\nReturn n * 2\nEnd Function\n" +
+            "Public Function Bump() As Integer\ncalls = calls + 1\nReturn calls\nEnd Function\n" +
+            "Public Function Bumps() As Integer\nReturn Bump() + 1\nEnd Function\n" +
+            "End Class\nSub Main()\nEnd Sub");
+
+        Assert.That(cs, Does.Not.Contain("t0 = n * 2;"), "a temp clobbered the field");
+        Assert.That(cs, Does.Not.Contain("t0 = Bump();"), "a call temp was evaluated once as a field write and again at its use");
+    }
 }
 
 /// <summary>And it runs, through the CLI — the shipping route.</summary>
@@ -73,4 +109,27 @@ public class CSharpFieldAssignmentExecutionTests
                 "Public Sub Bump(x As Integer)\nTotal = Total + x\nEnd Sub\nEnd Class\n" +
                 "Sub Main()\nDim c As New Counter()\nc.Bump(5)\nc.Bump(2)\nConsole.WriteLine(c.Total)\nEnd Sub").Trim(),
             Is.EqualTo("7"));
+
+    [Test]
+    public void LambdaAssignment_FromACall_ActuallyStores()
+        => Assert.That(CliTestHarness.CompileRunCSharp(
+                "Class Counter\nPublic Total As Integer\n" +
+                "Public Function Add(a As Integer, b As Integer) As Integer\nReturn a + b\nEnd Function\n" +
+                "Public Sub AddAll(items As List(Of Integer))\nitems.ForEach(Sub(x As Integer) Total = Add(Total, x))\nEnd Sub\n" +
+                "End Class\n" +
+                "Sub Main()\nDim c As New Counter()\nDim xs As New List(Of Integer)()\nxs.Add(1)\nxs.Add(2)\nxs.Add(3)\n" +
+                "c.AddAll(xs)\nConsole.WriteLine(c.Total)\nEnd Sub").Trim(),
+            Is.EqualTo("6"));
+
+    [Test]
+    public void AMemberNamedLikeATemp_IsNotClobbered_AndCallsRunOnce()
+        => Assert.That(CliTestHarness.CompileRunCSharp(
+                "Class Timer\nPublic t0 As Integer\nPrivate calls As Integer\n" +
+                "Public Function Twice(n As Integer) As Integer\nReturn n * 2\nEnd Function\n" +
+                "Public Function Bump() As Integer\ncalls = calls + 1\nReturn calls\nEnd Function\n" +
+                "Public Function Bumps() As Integer\nReturn Bump() + 1\nEnd Function\n" +
+                "End Class\n" +
+                "Sub Main()\nDim t As New Timer()\nt.t0 = 100\nConsole.WriteLine(t.Twice(5))\nConsole.WriteLine(t.t0)\n" +
+                "Console.WriteLine(t.Bumps())\nConsole.WriteLine(t.Bump())\nEnd Sub").Replace("\r\n", "\n").Trim(),
+            Is.EqualTo("10\n100\n2\n2"));
 }
