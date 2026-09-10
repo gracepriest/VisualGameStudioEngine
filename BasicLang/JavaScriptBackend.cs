@@ -1385,23 +1385,41 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// both belong to <c>if0.end</c>. Derived from the prefix before the FIRST dot, so
         /// nested ElseIf blocks resolve to the outer If's end.
         /// </summary>
-        private BasicBlock FindMergeBlock(BasicBlock branchTarget)
+        private BasicBlock FindMergeBlock(BasicBlock branchTarget) => FindSibling(branchTarget, "end");
+
+        /// <summary>
+        /// The block <c>{prefix}.{suffix}</c> that shares <paramref name="block"/>'s prefix —
+        /// <c>do0.body</c> → <c>do0.cond</c> / <c>do0.end</c>. IRBuilder names every block a
+        /// construct creates with one prefix, so this is how a body finds its own header and
+        /// its own exit without guessing from position.
+        /// </summary>
+        private BasicBlock FindSibling(BasicBlock block, string suffix)
         {
-            var name = branchTarget?.Name;
+            var name = block?.Name;
             if (name == null || _currentFunction?.Blocks == null) return null;
 
             var dot = name.IndexOf('.');
             if (dot <= 0) return null;
 
-            var end = name.Substring(0, dot) + ".end";
+            var wanted = name.Substring(0, dot) + "." + suffix;
             foreach (var b in _currentFunction.Blocks)
-                if (b.Name == end) return b;
+                if (b.Name == wanted) return b;
             return null;
         }
 
         private void EmitStructured(BasicBlock block)
         {
             if (block == null || _emitted.Contains(block)) return;
+
+            // A body reached BEFORE its own header is a post-test loop: `Do … Loop While`
+            // branches into the body first and the condition block follows it. Pre-test loops
+            // never arrive here this way — their header is emitted (and marked) before it
+            // hands the body to EmitLoop — so "header not yet emitted" is the whole test.
+            if (IsPostTestLoopBody(block, out var header))
+            {
+                EmitPostTestLoop(block, header);
+                return;
+            }
 
             if (IsLoopHeader(block))
             {
@@ -1466,26 +1484,158 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             var cond = header.GetTerminator() as IRConditionalBranch;
             if (cond == null) throw NotYet("a loop header with no conditional terminator");
 
-            // A post-test Do…Loop branches into the BODY first, so by the time the header is
-            // reached the body is already emitted and this would produce `while (true) {}` —
-            // an infinite loop at runtime from a build that succeeded. Refuse instead.
-            if (_emitted.Contains(cond.TrueTarget))
-                throw NotYet("post-test Do…Loop (body precedes the condition)");
+            var (body, end, leaveWhenTrue) = ResolveLoopArms(header, cond);
+
+            // The body of a pre-test loop is only ever reached THROUGH its header. If it is
+            // already emitted the CFG is a shape this walk does not know, and `while (true) {}`
+            // would be an infinite loop from a build that succeeded. Refuse instead.
+            if (_emitted.Contains(body))
+                throw NotYet("a loop whose body was emitted before its header");
 
             Line("while (true) {");
             _indentLevel++;
 
+            // Header instructions FIRST, then the test: Expr renders an operand by name only
+            // once its instruction has been emitted, and inline otherwise — rendering the
+            // condition before its temps exist would re-evaluate the whole operand tree.
             EmitInstructions(header);
-            Line($"if (!{Expr(cond.Condition)}) break;");
+            Line(ExitTest(cond, leaveWhenTrue));
 
-            _loopEnds.Push(cond.FalseTarget);
-            EmitStructured(cond.TrueTarget);
+            _loopEnds.Push(end);
+            EmitStructured(body);
             _loopEnds.Pop();
 
             _indentLevel--;
             Line("}");
 
-            EmitStructured(cond.FalseTarget);
+            EmitStructured(end);
+        }
+
+        /// <summary>
+        /// Which arm of a loop header's branch is the body and which is the exit, and whether
+        /// the loop leaves on a TRUE condition (<c>Until</c>) or a false one (<c>While</c>).
+        ///
+        /// <para>⛔ <b>Not "TrueTarget is the body".</b> IRBuilder lowers <c>Until</c> by SWAPPING
+        /// the targets — <c>condbr c, end, body</c> — so that assumption emitted the loop's
+        /// CONTINUATION inside the loop and its real body after it, for a program that compiled
+        /// cleanly and printed the wrong thing. The exit is identified by IDENTITY with the
+        /// header's own <c>.end</c> sibling; whichever arm is not the exit is the body.</para>
+        /// </summary>
+        private (BasicBlock Body, BasicBlock End, bool LeaveWhenTrue) ResolveLoopArms(BasicBlock header, IRConditionalBranch cond)
+        {
+            var end = FindSibling(header, "end");
+
+            if (end != null && cond.FalseTarget == end)
+                return (cond.TrueTarget, end, false);     // While: leave when the condition is false
+
+            if (end != null && cond.TrueTarget == end)
+                return (cond.FalseTarget, end, true);      // Until: leave when the condition is true
+
+            throw NotYet("a loop header whose branch does not target the loop's own .end block");
+        }
+
+        /// <summary>The <c>break</c> guard for a loop header. Call only AFTER the header's instructions are emitted.</summary>
+        private string ExitTest(IRConditionalBranch cond, bool leaveWhenTrue) =>
+            leaveWhenTrue ? $"if ({Expr(cond.Condition)}) break;" : $"if (!{Expr(cond.Condition)}) break;";
+
+        /// <summary>
+        /// A <c>.body</c> block whose <c>.cond</c> sibling has not been emitted yet. Every
+        /// pre-test loop marks its header emitted before it reaches the body, so an unemitted
+        /// header can only mean the walk entered through the body — the post-test shape. The
+        /// header must also branch back to this body, which rules out a stray name match.
+        /// </summary>
+        private bool IsPostTestLoopBody(BasicBlock block, out BasicBlock header)
+        {
+            header = null;
+            if (block?.Name == null || !block.Name.EndsWith(".body", StringComparison.Ordinal)) return false;
+
+            var cond = FindSibling(block, "cond");
+            if (cond == null || _emitted.Contains(cond)) return false;
+
+            var loopsBack = cond.GetTerminator() switch
+            {
+                IRConditionalBranch cb => cb.TrueTarget == block || cb.FalseTarget == block,
+                IRBranch br => br.Target == block,
+                _ => false
+            };
+            if (!loopsBack) return false;
+
+            header = cond;
+            return true;
+        }
+
+        /// <summary>
+        /// <c>Do … Loop While/Until</c> and the condition-less <c>Do … Loop</c>:
+        /// <c>while (true) { body; condition-instructions; if (…) break; }</c>.
+        ///
+        /// <para><b>Why not <c>do { … } while (c)</c>.</b> The condition's instructions live in
+        /// the header block — its temps are declared where they are computed — and inside a
+        /// <c>do</c> body they would be block-scoped <c>const</c>s the <c>while (c)</c> clause
+        /// cannot see. Running them at the END of a <c>while (true)</c> body keeps them in scope
+        /// and re-evaluates them after every iteration, which is what post-test means.</para>
+        ///
+        /// <para>The body's own terminator is the branch to the header; it is pushed as a
+        /// pending merge so that branch emits nothing and control simply falls into the
+        /// condition. <c>Exit Do</c> branches to the <c>.end</c> block, which is on
+        /// <see cref="_loopEnds"/> and so becomes <c>break</c>. Nothing else targets the header:
+        /// BasicLang has no <c>Continue</c> statement, so a <c>continue</c> that would skip the
+        /// condition instructions cannot arise.</para>
+        /// </summary>
+        private void EmitPostTestLoop(BasicBlock body, BasicBlock header)
+        {
+            _emitted.Add(body);
+            _emitted.Add(header);
+
+            BasicBlock end;
+            IRConditionalBranch exitCond = null;
+            var leaveWhenTrue = false;
+            switch (header.GetTerminator())
+            {
+                case IRConditionalBranch cond:
+                    (_, end, leaveWhenTrue) = ResolveLoopArms(header, cond);
+                    exitCond = cond;
+                    break;
+
+                case IRBranch:
+                    // `Do … Loop` with no condition: the header is a bare back-edge and the
+                    // only way out is Exit Do. Its .end still exists and carries the continuation.
+                    end = FindSibling(header, "end");
+                    break;
+
+                default:
+                    throw NotYet("a post-test loop header with neither a conditional nor an unconditional back-edge");
+            }
+
+            Line("while (true) {");
+            _indentLevel++;
+
+            _loopEnds.Push(end);
+            _pendingMerges.Push(header);
+
+            EmitInstructions(body);
+            switch (body.GetTerminator())
+            {
+                case IRConditionalBranch cond: EmitConditional(cond); break;
+                case IRBranch br: EmitBranch(br); break;
+                case IRSwitch sw: EmitSelectCase(sw); break;
+            }
+
+            _pendingMerges.Pop();
+
+            // Header instructions first, THEN the test — see EmitLoop for why the order matters.
+            EmitInstructions(header);
+            if (exitCond != null)
+            {
+                RecordMapping(exitCond.SourceLine);
+                Line(ExitTest(exitCond, leaveWhenTrue));
+            }
+
+            _loopEnds.Pop();
+
+            _indentLevel--;
+            Line("}");
+
+            EmitStructured(end);
         }
 
         private void EmitConditional(IRConditionalBranch cond)
