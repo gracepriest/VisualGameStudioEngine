@@ -1589,6 +1589,64 @@ so arbitrary unmapped names in delegate params stop reaching raw C++.
 > to invocation syntax and is CS0149, so a write-only row goes GREEN with the read defect fully
 > present.
 
+> ### ✅ CLOSED 2026-09-10 — every authorable row landed; five defects chipped; handle release deferred by decision
+>
+> Fixture: `VisualGameStudio.Tests/Blnet/NetGeneratedShimConformanceTests.cs` (15 test methods),
+> commits `cfadb33` → `ff38a45`, plus `8e40c6a` (drift oracle sees the callback row) and
+> `7dc72ed` (§8.5 fifth site). Step 3: full suite green twice consecutively at `ff38a45` —
+> run 1: 5584 passed / 4 failed / 2 skipped / 5590 total, 1h57m, stderr empty;
+> run 2: 5584 passed / 4 failed / 2 skipped / 5590 total, 1h45m, stderr empty (run 2's first
+> attempt was killed externally by a parallel worktree's suite and rerun from scratch). The 4
+> failures each time are the standing baseline (`SearchSnippets` ×2,
+> `Cli_Build_CppProject_ProjectReference_Warns…`, `NonEx_variants…`).
+>
+> **Landed as parity (execution tests, .NET's answers asserted):** named property WRITE then
+> read-back on a non-curated handle (the §8.5 fifth-site fix is what makes this expressible —
+> the static-factory workaround mints a fresh handle per call and can never observe a write) ·
+> Char ASCII via `Convert.ToInt32` (never `AscW`/`ChrW`: CS0103 on the C# leg too) · §9.3
+> missing DLL, missing core export (bogus module = the test assembly itself) and wrong ABI (a
+> seven-export C stub built at test time, drift-guarded against `BlnetContract.CoreExportNames`)
+> · BL6026 omitted member AND the project still publishes/links/runs · delegates int/long/void
+> against a REAL `Aot.Probe.IntFn` (`-9` before `1` proves inline dispatch) · `out`/`ref`
+> scalars written by .NET and read back · empty-surface Try/Catch publishes NO shim (the absence
+> assertion is the load-bearing one) · a named static call (`Regex.Escape`).
+>
+> **Pinned divergences, each with a chip and a "replace, don't delete" note:** `double`
+> delegate slot truncates on the wire, pinned at the WRONG value so the fix goes red
+> (`task_75064f2e`) · `Nothing` in a handle slot emits `static_cast<NetRef>(nullptr)` — and
+> bare `= Nothing` is BL3001, so no spelling works (`task_72ddf7c0`) · two .NET-typed Catch
+> clauses collide as duplicate `std::runtime_error` handlers, C2312 — so typed-catch
+> SELECTIVITY is not untested but INEXPRESSIBLE (`task_7e06be74`) · indexer READ on a
+> non-generic receiver types `System.Object` at the analyzer, and the `CType` workaround fails
+> one stage later because a cast never mints the handle marker (`task_b1b8cf9d`) · a shim with
+> core exports but no MEMBER export passes the handshake and fail-fasts silently at first call —
+> `blnet_bind_all` binds slots with no null check (`task_68a7198a`).
+>
+> **Corrections to the 2026-08-07 annotation above, all measured:** `task_de0ad105` was fixed
+> and was never a blocker in the stated sense — but the workaround it recommended cannot
+> express a property round-trip, so the fix mattered MORE, not less · the plan's line numbers
+> were NOT stale (`Measure-Object -Line` drops blank lines) · `task_22bf2409` (Char > U+007F
+> printing 169) is stale: it is a positioned build refusal now, and the row pins THAT ·
+> `CppBclEndToEndTests` cannot host a .NET-calling program at all (bare `SemanticAnalyzer`, no
+> `ConfigureNetResolution`) · the Milestone row contains NO .NET static call (`Console` is
+> native-claimed) · the existing typed-catch row proves the positive direction only.
+>
+> **Deferred by decision (option a): handle lifetime + release.** No oracle exists —
+> `HandleTable.AliveCount` (`BlnetShimSources.cs`) is never exported, and the generated shim has
+> no debug-export pattern. Exporting it cannot go in the core table without bumping the ABI
+> (rule C7, invalidating P0's frozen shim), so it would need a non-core, §12.4-exempt debug
+> export — precisely the exemption the "slots ≡ exports" oracle polices. That is a product and
+> spec decision, taken separately if at all. Also not authorable without product change: the
+> boxed value-type receiver as a row (emission-proven with a mutation oracle; Section85 runs the
+> enumerator shape) and inheritance from a non-curated static base — both `task_de0ad105`
+> Part B, a front-end change to carry the marker into annotations.
+>
+> ⛔ **The standing lesson, recorded in the fixture header: shape substitution.** When a row
+> will not compile, rewriting it into the shape that does deletes the coverage it existed for
+> and the suite goes green over a live defect. Author §12.3's shape first; finish an
+> unbuildable row as a pinned divergence naming its chip. Five recon claims died under a
+> compiler during this task; agent consensus is not measurement.
+
 **Files:**
 ⛔ **Task-7b review finding — BlnetGenLib MUST be compiled against the net8.0 REFERENCE pack**
 (reuse `NetShimPipelineFixture.ReferencePackAssemblies`). Built against the shared framework's
@@ -1625,10 +1683,12 @@ BL6020 INPUTS, never that assertion's subject.
 
 **Steps:**
 
-- [ ] **Step 1:** build `BlnetGenLib` + harness skeleton; first 5 scenarios red-then-green.
-- [ ] **Step 2:** remaining scenarios in 2-3 batches, each batch red-then-green.
-- [ ] **Step 3:** full suite green twice consecutively (publish cache makes run 2 cheap — also
+- [x] **Step 1:** build `BlnetGenLib` + harness skeleton; first 5 scenarios red-then-green.
+  (Done as an in-place extension of `NetShimPipelineFixture.ProbeSource`, per Correction 1.)
+- [x] **Step 2:** remaining scenarios in 2-3 batches, each batch red-then-green.
+- [x] **Step 3:** full suite green twice consecutively (publish cache makes run 2 cheap — also
   implicitly re-proves the cache); commit (`test(p2a2): generated-shim conformance suite`).
+  (Runs recorded in the closing annotation above; landed as per-row commits, not one.)
 
 ### Task 13: §12.1 parity oracle extension
 
