@@ -664,6 +664,39 @@ public class NetGeneratedShimConformanceTests
     /// hit an unrelated publish problem. <c>Convert.ToInt32</c> in the property program above is
     /// already a real .NET static crossing.</para>
     /// </summary>
+    /// <summary>
+    /// A NAMED static .NET call. The Milestone row is cited for "instance + static calls", but it
+    /// contains no .NET static call at all: its only static-shaped call is
+    /// <c>Console.WriteLine</c>, and <c>Console</c> is deliberately claimed for NATIVE handling —
+    /// <c>NetClaimPredicate</c> calls routing it through the shim "the single most dangerous
+    /// mistake in P2a". Other fixtures make static calls incidentally, inside larger §8.5/§8.6
+    /// diffs. <c>Regex.Escape</c> is the named row: a static on a curated type, String in and
+    /// String out, so both String directions cross in one call.
+    /// </summary>
+    [Test]
+    public void AStaticDotNetCall_CrossesWithStringInAndStringOut()
+    {
+        var built = BuildOnce("ConfStatic", new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["Program.bas"] = """
+                Using System.Text.RegularExpressions
+
+                Module Program
+                 Sub Main()
+                  Console.WriteLine(Regex.Escape("a.b"))
+                 End Sub
+                End Module
+                """,
+        });
+
+        AssertBuilt(built.Result, "the static-call program");
+
+        Assert.That(NetShimPipelineFixture.Run(built.Result.ExecutablePath!),
+            Is.EqualTo("a\\.b\n"),
+            "Regex.Escape(\"a.b\") is .NET's own answer for a real STATIC crossing with a String "
+            + "argument and a String result. 'a.b' unchanged means the call never reached .NET.");
+    }
+
     [Test]
     public void TwoDotNetTypedCatchClauses_DoNotYetCompile_PinnedDivergence()
     {
