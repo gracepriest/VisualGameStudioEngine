@@ -90,37 +90,55 @@ public class BooleanOperatorCodeGenTests
     /// hover text describing their short-circuit behaviour, and the FORMATTER auto-capitalised
     /// `andalso` into `AndAlso` as you typed: the IDE actively steered users into a spelling
     /// the compiler rejected.
+    ///
+    /// <para>⛔ <b>These assert on <c>__sc</c>, not on <c>&amp;&amp;</c>, and that is a
+    /// STRENGTHENING.</b> They originally used the emitted <c>&amp;&amp;</c> as proof the keyword
+    /// had parsed — but <c>And</c> emits <c>&amp;&amp;</c> too, so the proxy could not tell the
+    /// short-circuit operator from the non-short-circuit one. <c>AndAlso</c>/<c>OrElse</c> now
+    /// lower to CONTROL FLOW (chip task_c8db4a58 — pre-evaluating both operands destroyed
+    /// short-circuiting), and the <c>__sc</c> carrier is emitted by that lowering and ONLY by
+    /// it. So this proves the keyword parsed AND reached the short-circuit kind, which
+    /// <c>&amp;&amp;</c> never did. Behaviour is covered by
+    /// <c>ShortCircuitOperatorTests</c>, which runs the programs.</para>
     /// </summary>
     [Test]
     public void AndAlso_Parses()
         => Assert.That(
             Js("Dim a As Boolean = True\nDim b As Boolean = False\nDim c As Boolean = a AndAlso b\nConsole.WriteLine(c)"),
-            Does.Contain("&&"));
+            Does.Contain("__sc"));
 
     [Test]
     public void OrElse_Parses()
         => Assert.That(
             Js("Dim a As Boolean = True\nDim b As Boolean = False\nDim c As Boolean = a OrElse b\nConsole.WriteLine(c)"),
-            Does.Contain("||"));
+            Does.Contain("__sc"));
 
     [TestCase("andalso")]
     [TestCase("ANDALSO")]
     public void AndAlso_IsCaseInsensitive(string spelling)
         => Assert.That(
             Js($"Dim a As Boolean = True\nDim b As Boolean = False\nDim c As Boolean = a {spelling} b\nConsole.WriteLine(c)"),
-            Does.Contain("&&"));
+            Does.Contain("__sc"));
 
     /// <summary>
     /// ⚠ The lexer scans one maximal alphanumeric run, so <c>AndAlso</c> is a single token —
     /// it must NOT be read as <c>And</c> followed by an identifier <c>Also</c>. A file using
     /// both spellings proves the longer keyword does not shadow the shorter one either.
+    ///
+    /// <para>⛔ This asserted ONLY <c>&amp;&amp;</c> and became a FALSE PASS the moment
+    /// <c>AndAlso</c> stopped emitting one: the <c>&amp;&amp;</c> it saw came from the bare
+    /// <c>And</c>, so the half the test is named for went unchecked while it stayed green. Both
+    /// halves are now asserted separately — that is the entire point of the expression.</para>
     /// </summary>
     [Test]
     public void AndAlso_AndBareAnd_CoexistInOneExpression()
-        => Assert.That(
-            Js("Dim a As Boolean = True\nDim b As Boolean = True\nDim c As Boolean = False\n" +
-               "Dim r As Boolean = a AndAlso b And c\nConsole.WriteLine(r)"),
-            Does.Contain("&&"));
+    {
+        var js = Js("Dim a As Boolean = True\nDim b As Boolean = True\nDim c As Boolean = False\n" +
+                    "Dim r As Boolean = a AndAlso b And c\nConsole.WriteLine(r)");
+
+        Assert.That(js, Does.Contain("__sc"), "the AndAlso half — short-circuit control flow");
+        Assert.That(js, Does.Contain("&&"), "the bare And half — a plain non-short-circuit operator");
+    }
 
     /// <summary>
     /// Parser.cs has TWO independent expression parsers with different operator tables — a
@@ -132,11 +150,11 @@ public class BooleanOperatorCodeGenTests
     {
         // Declaration initialiser — recursive-descent chain.
         Assert.That(Js("Dim a As Boolean = True\nDim r As Boolean = a AndAlso a\nConsole.WriteLine(r)"),
-            Does.Contain("&&"));
+            Does.Contain("__sc"));
 
         // Assignment to an existing local — the continuation chain.
         Assert.That(Js("Dim a As Boolean = True\nDim r As Boolean = False\nr = a AndAlso a\nConsole.WriteLine(r)"),
-            Does.Contain("&&"));
+            Does.Contain("__sc"));
     }
 
     // ---------------------------------------------------------------- what stays refused
