@@ -343,6 +343,273 @@ public class NetGeneratedShimConformanceTests
     /// intact; deleting the shim in place would make the two tests order-dependent — green alone,
     /// red together, or vice versa. Costs no publish: the build is reused.</para>
     /// </summary>
+    /// <summary>
+    /// Copy a memoized build's output directory into a fresh sandbox and return the paths a §9.3
+    /// failure-mode row needs. The copy is the whole point: the memoized directory is shared with
+    /// the happy-path rows, so mutating it in place would make tests order-dependent.
+    /// </summary>
+    private static (string Exe, string ShimPath) SandboxCopy(SharedBuild built, string projectName, string tag)
+    {
+        var sourceDir = Path.GetDirectoryName(built.Result.ExecutablePath)!;
+        var sandbox = NetShimPipelineFixture.NewTempDir("blnet-conf-" + tag + "-");
+        Dirs.Add(sandbox);
+        foreach (var file in Directory.GetFiles(sourceDir))
+            File.Copy(file, Path.Combine(sandbox, Path.GetFileName(file)));
+
+        var shimName = NetProxyEmitter.ShimModuleFileName(NetShimGenerator.ShimAssemblyName(projectName));
+        var shimPath = Path.Combine(sandbox, shimName);
+        Assert.That(File.Exists(shimPath), Is.True,
+            "guard: the deployed shim must be present in the copy before this row replaces or "
+            + "removes it, or the row proves nothing. Looked for " + shimName + " in " + sandbox);
+
+        return (Path.Combine(sandbox, Path.GetFileName(built.Result.ExecutablePath)!), shimPath);
+    }
+
+    /// <summary>
+    /// §9.3: a shim that LOADS but lacks a CORE export must fail the handshake with the specified
+    /// message, stream and exit code.
+    ///
+    /// <para>The startup TU's contract (NetProxyEmitter, the <c>BlnetStartupFail</c> emission):
+    /// every startup failure writes ONE line to STDERR and exits 3, and a missing core export
+    /// reads <c>blnet: shim is missing export '&lt;name&gt;'</c>. This row is the first to assert
+    /// the message and the stream; the missing-DLL row above asserts only the exit code.</para>
+    ///
+    /// <para>The bogus module is this test assembly itself: a valid PE that <c>LoadLibrary</c>
+    /// maps, guaranteed present, and guaranteed to export no <c>blnet_*</c> symbol. No new asset,
+    /// and no dependence on what else happens to be on the machine.</para>
+    /// </summary>
+    [Test]
+    public void AShimMissingACoreExport_FailsTheHandshake_OnStderrWithExitThree()
+    {
+        var built = BuildOnce("ConfProperty", PropertyProgram);
+        AssertBuilt(built.Result, "the §12.3 named-property program");
+
+        var (exe, shimPath) = SandboxCopy(built, "ConfProperty", "noexport");
+        File.Copy(typeof(NetGeneratedShimConformanceTests).Assembly.Location, shimPath, overwrite: true);
+
+        var (exitCode, stdout, stderr) = RunAllowingFailure(exe);
+        var dump = $"exit={exitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}";
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exitCode, Is.EqualTo(NetProxyEmitter.StartupFailureExitCode),
+                "§9.3: a shim missing a core export must exit "
+                + NetProxyEmitter.StartupFailureExitCode + ".\n" + dump);
+            Assert.That(stderr, Does.Contain("blnet: shim is missing export '"),
+                "§9.3: the failure must name itself on STDERR as a missing export. A 'failed to "
+                + "load' line instead means the OS refused to map the bogus module and this row is "
+                + "exercising the wrong failure mode.\n" + dump);
+            Assert.That(stdout, Is.Empty,
+                "nothing may reach stdout: the program must die in the handshake, before Main.\n"
+                + dump);
+        });
+    }
+
+    /// <summary>
+    /// §9.3: a shim with every CORE export but none of the surface's MEMBER exports — PINNED
+    /// DIVERGENCE, chip <c>task_68a7198a</c>.
+    ///
+    /// <para><b>Written asserting the spec, and it failed as predicted.</b> The startup TU's two
+    /// binding steps differ: <c>blnet_bind_core</c> reports its first missing symbol, but
+    /// <c>blnet_bind_all</c> assigns each member slot from <c>blnet_get_symbol</c> with NO check.
+    /// MEASURED with a program that prints <c>before</c> ahead of its first .NET call: with the
+    /// real shim it prints <c>before</c> then <c>after</c>; with the hand shim it prints
+    /// <c>before</c> and DIES — exit 0xC0000409 (fail-fast), nothing on stderr. So the handshake
+    /// PASSED, <c>Main</c> ran, and the first .NET call went through a null slot. §9.3 promises a
+    /// (message, stream, exit code) contract for startup failures; this mode delivers none of the
+    /// three, which is the worst shape a failure can take.</para>
+    ///
+    /// <para>The <c>before</c> line is the load-bearing assertion: it is what distinguishes
+    /// "died in the handshake" from "survived the handshake and died at first use", and only the
+    /// second is this defect. The exact fail-fast code is recorded here but asserted loosely — it
+    /// is the least stable part of the signature; the silent, post-handshake death is the pin.
+    /// When <c>blnet_bind_all</c> learns to check, replace this with a row asserting exit 3 and
+    /// <c>blnet: shim is missing export 'bl_net_…'</c> on stderr; do not delete it.</para>
+    ///
+    /// <para>The module used is the P0 hand shim, <c>BlnetTestShim.dll</c> — a real Native AOT
+    /// shared library exporting <c>blnet_abi_version</c>, <c>blnet_initialize</c> and the rest of
+    /// the core set, and none of a generated surface's <c>bl_net_*</c> members. Exactly the shape
+    /// this row needs, and already built by the test project.</para>
+    /// </summary>
+    [Test]
+    public void AShimMissingAMemberExport_SurvivesTheHandshake_AndDiesSilentlyAtFirstCall_PinnedDivergence()
+    {
+        // TestDirectory is <repo>\VisualGameStudio.Tests\bin\Release\net8.0; THREE levels up is the
+        // test project, which owns TestAssets. (Four lands at the repo root, where nothing exists
+        // — measured. An off-by-one here would have made this row Assert.Ignore forever, which in
+        // a conformance suite reads as a pass. Hence the split check below.)
+        var testProject = Path.GetFullPath(Path.Combine(
+            TestContext.CurrentContext.TestDirectory, "..", "..", ".."));
+        var assetDir = Path.Combine(testProject, "TestAssets", "BlnetTestShim");
+        Assert.That(Directory.Exists(assetDir), Is.True,
+            "the P0 hand-shim SOURCE directory is source-controlled and must exist — its absence "
+            + "means this path is wrong, not that the shim is unpublished. Looked in: " + assetDir);
+
+        var handShim = Path.Combine(
+            assetDir, "bin", "Release", "net8.0", "win-x64", "native", "BlnetTestShim.dll");
+        if (!File.Exists(handShim))
+            Assert.Ignore("the P0 hand shim is not PUBLISHED on this machine (source present, "
+                          + "native output absent): " + handShim);
+
+        // Its OWN program, not the shared property one: the first statement must be a plain
+        // native print so that "before" appearing proves the handshake passed and Main ran.
+        // The property program's first statement is a .NET ctor, which cannot tell "died in
+        // the handshake" from "died at first use" — the only distinction this row exists for.
+        var built = BuildOnce("ConfMemberExport", new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["Program.bas"] = """
+                Using System.Text.RegularExpressions
+
+                Module Program
+                 Sub Main()
+                  Console.WriteLine("before")
+                  Dim R As New Regex("a")
+                  Console.WriteLine("after")
+                 End Sub
+                End Module
+                """,
+        });
+        AssertBuilt(built.Result, "the member-export program");
+
+        var (exe, shimPath) = SandboxCopy(built, "ConfMemberExport", "nomember");
+        File.Copy(handShim, shimPath, overwrite: true);
+
+        var (exitCode, stdout, stderr) = RunAllowingFailure(exe);
+        var dump = $"exit={exitCode} (0x{unchecked((uint)exitCode):X8})\nstdout:\n{stdout}\nstderr:\n{stderr}";
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stdout, Is.EqualTo("before\n"),
+                "PINNED: 'before' alone. Its presence proves the handshake PASSED and Main ran; "
+                + "the absence of 'after' proves the first .NET call killed the process. If "
+                + "'after' appears, a member export was found that should not exist; if 'before' "
+                + "is missing, the death moved INTO the handshake and this row is pinning "
+                + "something else.\n" + dump);
+            Assert.That(stderr, Is.Empty,
+                "PINNED: the death is SILENT — no §9.3 line. The day this carries "
+                + "\"blnet: shim is missing export 'bl_net_\", blnet_bind_all learned to check: "
+                + "promote this row to the contract (exit 3 + that line).\n" + dump);
+            Assert.That(exitCode, Is.Not.EqualTo(0).And.Not.EqualTo(NetProxyEmitter.StartupFailureExitCode),
+                "the process must not report success, and it does NOT currently reach the "
+                + "contracted exit 3 — measured 0xC0000409 (fail-fast), asserted loosely because "
+                + "the exact code is the least stable part of the signature.\n" + dump);
+        });
+    }
+
+    /// <summary>
+    /// §9.3's third and last handshake mode: a shim that loads and exports every core symbol but
+    /// answers the WRONG ABI version.
+    ///
+    /// <para>No asset on the machine has this shape — the P0 hand shim answers the right version
+    /// — so the row BUILDS one: a seven-export C stub whose <c>blnet_abi_version</c> returns
+    /// <c>AbiVersion + 1</c>, compiled at test time with the same compiler
+    /// <c>CppCompile.FindRunCompiler</c> discovers, using a DLL variant of its template
+    /// (<c>/LD</c> for cl, <c>-shared</c> for g++/clang++). The other six bodies are trivial and
+    /// never run: <c>blnet_startup</c> checks the ABI BEFORE calling <c>initialize</c>.</para>
+    ///
+    /// <para>⛔ <b>Drift guard, not a hand-typed list.</b> The stub must export exactly
+    /// <c>BlnetContract.CoreExportNames</c>. If the contract ever grows an eighth core export
+    /// (rule C7 bumps the ABI), this row would otherwise stop testing "bad ABI" and silently start
+    /// testing "missing export" — same exit code, different message — so the names are asserted
+    /// equivalent up front and the failure names the drift.</para>
+    ///
+    /// <para><c>BLNET_CALL</c> is <c>__cdecl</c>, which is undecorated for <c>extern "C"</c> on
+    /// x64, so the exported names match the contract's spelling exactly.</para>
+    /// </summary>
+    [Test]
+    public void AShimWithTheWrongAbiVersion_FailsTheHandshake_NamingBothVersions()
+    {
+        if (!System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
+                System.Runtime.InteropServices.OSPlatform.Windows))
+            Assert.Ignore("the stub uses __declspec(dllexport); this row is Windows-only like its siblings.");
+
+        var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
+        if (compiler == null)
+            Assert.Ignore("no C++ compiler found — this row compiles a stub shim.");
+
+        var contract = BasicLang.Compiler.CodeGen.CPlusPlus.BlnetContract.CoreExportNames;
+        var stubNames = new[]
+        {
+            "blnet_abi_version", "blnet_initialize", "blnet_addref", "blnet_release",
+            "blnet_alloc", "blnet_free", "blnet_last_error",
+        };
+        Assert.That(contract, Is.EquivalentTo(stubNames),
+            "DRIFT: the core export set changed. This stub must export exactly the contract's core "
+            + "names, or a missing one makes blnet_bind_core fail FIRST and this row silently "
+            + "becomes a missing-export row. Update the stub AND this list together.");
+
+        var wrongAbi = BasicLang.Compiler.CodeGen.CPlusPlus.BlnetContract.AbiVersion + 1;
+        var stubSource =
+            "#include <cstdint>\n"
+            + "extern \"C\" {\n"
+            + $"__declspec(dllexport) int32_t __cdecl blnet_abi_version(void) {{ return {wrongAbi}; }}\n"
+            + "__declspec(dllexport) int32_t __cdecl blnet_initialize(int32_t, const void*) { return 0; }\n"
+            + "__declspec(dllexport) int32_t __cdecl blnet_addref(uint64_t) { return 0; }\n"
+            + "__declspec(dllexport) int32_t __cdecl blnet_release(uint64_t) { return 0; }\n"
+            + "__declspec(dllexport) void* __cdecl blnet_alloc(int64_t) { return nullptr; }\n"
+            + "__declspec(dllexport) void __cdecl blnet_free(void*) { }\n"
+            + "__declspec(dllexport) int32_t __cdecl blnet_last_error(char**, char**) { return 0; }\n"
+            + "}\n";
+
+        var built = BuildOnce("ConfProperty", PropertyProgram);
+        AssertBuilt(built.Result, "the §12.3 named-property program");
+        var (exe, shimPath) = SandboxCopy(built, "ConfProperty", "badabi");
+
+        // Compile the stub in its own directory (cl drops .obj files in the cwd).
+        var stubDir = Path.Combine(Path.GetDirectoryName(shimPath)!, "stub");
+        Directory.CreateDirectory(stubDir);
+        var stubCpp = Path.Combine(stubDir, "badabi.cpp");
+        var stubDll = Path.Combine(stubDir, "badabi.dll");
+        File.WriteAllText(stubCpp, stubSource);
+
+        var (compilerExe, exeTemplate) = compiler.Value;
+        var dllTemplate = exeTemplate.Contains("cl /nologo", StringComparison.Ordinal)
+            ? exeTemplate.Replace("/EHsc", "/EHsc /LD", StringComparison.Ordinal)
+            : exeTemplate.Replace("-std=c++20", "-std=c++20 -shared", StringComparison.Ordinal);
+        Assert.That(dllTemplate, Is.Not.EqualTo(exeTemplate),
+            "could not derive a DLL build from the discovered compiler template: " + exeTemplate);
+
+        var psi = new System.Diagnostics.ProcessStartInfo(compilerExe, string.Format(dllTemplate, stubCpp, stubDll))
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = stubDir,
+        };
+        using (var cc = System.Diagnostics.Process.Start(psi)!)
+        {
+            var ccOut = cc.StandardOutput.ReadToEndAsync();
+            var ccErr = cc.StandardError.ReadToEndAsync();
+            Assert.That(cc.WaitForExit(120_000), Is.True, "the stub compile did not finish.");
+            Assert.That(cc.ExitCode, Is.EqualTo(0),
+                "the stub shim failed to compile, so nothing below means anything:\n"
+                + ccOut.GetAwaiter().GetResult() + "\n" + ccErr.GetAwaiter().GetResult());
+        }
+        Assert.That(File.Exists(stubDll), Is.True, "the stub compile reported success but produced no DLL: " + stubDll);
+
+        File.Copy(stubDll, shimPath, overwrite: true);
+
+        var (exitCode, stdout, stderr) = RunAllowingFailure(exe);
+        var dump = $"exit={exitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}";
+        var expectedLine = "blnet: shim ABI " + wrongAbi + ", expected "
+                           + BasicLang.Compiler.CodeGen.CPlusPlus.BlnetContract.AbiVersion;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exitCode, Is.EqualTo(NetProxyEmitter.StartupFailureExitCode),
+                "§9.3: an ABI mismatch must exit " + NetProxyEmitter.StartupFailureExitCode
+                + ".\n" + dump);
+            Assert.That(stderr, Does.Contain(expectedLine),
+                "§9.3: the failure must name BOTH versions on STDERR — the shim's and the one "
+                + "the program was built against — so a user can tell which side is stale. "
+                + "Expected the line: " + expectedLine + "\n" + dump);
+            Assert.That(stdout, Is.Empty,
+                "nothing may reach stdout: the ABI check runs before initialize, before Main.\n"
+                + dump);
+        });
+    }
+
     [Test]
     public void AMissingShim_FailsTheStartupHandshake_WithTheSpecifiedExitCode()
     {
@@ -377,6 +644,13 @@ public class NetGeneratedShimConformanceTests
             Assert.That(stdout, Does.Not.Contain("3"),
                 "the program must not have reached its first .NET call and printed a result.\n"
                 + dump);
+            // Tightened after reading the startup TU's contract: every startup failure writes
+            // ONE line to STDERR, and the missing-module one reads "blnet: failed to load '...'".
+            // Originally this row asserted only the exit code, which a crash could also produce.
+            Assert.That(stderr, Does.Contain("blnet: failed to load '"),
+                "§9.3: a missing shim must be reported on STDERR as a load failure naming the "
+                + "module, not merely exit 3 — exit 3 alone cannot distinguish the contracted "
+                + "message from an unrelated early death.\n" + dump);
         });
     }
 
@@ -626,5 +900,207 @@ public class NetGeneratedShimConformanceTests
             Is.EqualTo("caught boom\ndone\n"),
             "the throw/catch must still WORK, lowered natively to std::runtime_error and what(). "
             + "Proving inertness with a program that no longer runs correctly would be worthless.");
+    }
+
+    // =====================================================================================
+    // §12.3 — a NAMED static call, and typed-catch SELECTIVITY.
+    // =====================================================================================
+
+    /// <summary>
+    /// Typed-catch SELECTIVITY — authored as a PINNED DIVERGENCE, because measuring it found the
+    /// shape does not compile at all.
+    ///
+    /// <para><b>Why the row was attempted.</b> A coverage audit showed the existing typed-catch
+    /// row (<c>TypedCatchOfABaseType_MatchesTheGeneratedShimsChain</c>) proves the POSITIVE
+    /// direction only: it has exactly ONE clause, and it is the one that must match. A
+    /// <c>NetException::Matches</c> returning <c>true</c> unconditionally — or a shim emitting
+    /// every element of every chain — passes it unchanged. Selectivity needs a clause that must
+    /// NOT fire, an INTERMEDIATE base that must, and a later catch-all that must LOSE.</para>
+    ///
+    /// <para>⛔ <b>MEASURED: two .NET-typed Catch clauses cannot coexist.</b></para>
+    /// <code>
+    /// error C2312: 'const std::runtime_error &amp;': is caught by
+    ///              'const std::runtime_error &amp;' on line 42
+    /// </code>
+    /// <para>Every .NET exception type maps to <c>std::runtime_error</c>
+    /// (<c>MapCatchType</c>), so the PER-CLAUSE handlers emitted after the §11.1 ladder become
+    /// duplicate C++ handlers and the second is unreachable. One clause compiles; two do not. The
+    /// ladder itself is fine — it is an if/else-if chain over <c>Matches()</c> and handles many
+    /// clauses — but it is not what breaks.</para>
+    ///
+    /// <para>So selectivity is not merely untested, it is currently INEXPRESSIBLE: any program
+    /// that could distinguish "matches the right clause" from "matches everything" needs at least
+    /// two clauses. Chipped. This row pins the diagnostic so the fix is
+    /// noticed; when it lands, replace this with the runtime selectivity row described above
+    /// rather than deleting it.</para>
+    ///
+    /// <para>⚠ The named STATIC-call half of this row was split out — it is a separate concern and
+    /// hit an unrelated publish problem. <c>Convert.ToInt32</c> in the property program above is
+    /// already a real .NET static crossing.</para>
+    /// </summary>
+    /// <summary>
+    /// A NAMED static .NET call. The Milestone row is cited for "instance + static calls", but it
+    /// contains no .NET static call at all: its only static-shaped call is
+    /// <c>Console.WriteLine</c>, and <c>Console</c> is deliberately claimed for NATIVE handling —
+    /// <c>NetClaimPredicate</c> calls routing it through the shim "the single most dangerous
+    /// mistake in P2a". Other fixtures make static calls incidentally, inside larger §8.5/§8.6
+    /// diffs. <c>Regex.Escape</c> is the named row: a static on a curated type, String in and
+    /// String out, so both String directions cross in one call.
+    /// </summary>
+    [Test]
+    public void AStaticDotNetCall_CrossesWithStringInAndStringOut()
+    {
+        var built = BuildOnce("ConfStatic", new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["Program.bas"] = """
+                Using System.Text.RegularExpressions
+
+                Module Program
+                 Sub Main()
+                  Console.WriteLine(Regex.Escape("a.b"))
+                 End Sub
+                End Module
+                """,
+        });
+
+        AssertBuilt(built.Result, "the static-call program");
+
+        Assert.That(NetShimPipelineFixture.Run(built.Result.ExecutablePath!),
+            Is.EqualTo("a\\.b\n"),
+            "Regex.Escape(\"a.b\") is .NET's own answer for a real STATIC crossing with a String "
+            + "argument and a String result. 'a.b' unchanged means the call never reached .NET.");
+    }
+
+    /// <summary>
+    /// The <c>double</c> delegate slot — PINNED DIVERGENCE for chip <c>task_75064f2e</c>.
+    ///
+    /// <para>This is the row the delegate test above deliberately omits, and this is WHY it has to
+    /// exist separately: <c>double</c> passes §8.4's blittable-scalar gate and is then value-cast
+    /// to <c>uint64</c> on BOTH halves of the wire, so 1.5 crosses as 1, is doubled to 2, and
+    /// returns as 2 — where .NET says 3. The build succeeds with no diagnostic. A delegate row
+    /// written with <c>int</c> alone would sit green on top of it.</para>
+    ///
+    /// <para>⛔ <b>This test asserts the WRONG value on purpose.</b> That is what a pinned
+    /// divergence is: the exact current output, so that the day the wire is fixed this test goes
+    /// RED and forces the row to be flipped to parity (3) rather than the fix landing unnoticed.
+    /// Do not "fix" this test by asserting 3 while the chip is open — it would simply fail.</para>
+    /// </summary>
+    [Test]
+    public void ADoubleDelegateSlot_TruncatesOnTheWire_PinnedDivergence()
+    {
+        var built = BuildOnce("ConfDbl", new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["Program.bas"] = """
+                Using Aot.Probe
+
+                Module Program
+                 Sub Main()
+                  Console.WriteLine(Callbacks.Dbl(Function(v As Double) v * 2.0))
+                 End Sub
+                End Module
+                """,
+        }, withProbe: true);
+
+        AssertBuilt(built.Result, "the double-delegate program");
+
+        Assert.That(NetShimPipelineFixture.Run(built.Result.ExecutablePath!),
+            Is.EqualTo("2\n"),
+            "PINNED DIVERGENCE — .NET's answer is 3 (1.5 * 2.0). '2' is the CURRENT wrong output: "
+            + "the double is value-cast to uint64 on both halves of the callback wire "
+            + "(task_75064f2e). If this now prints 3, the chip is FIXED — flip this row to parity "
+            + "and remove the 'deliberately absent' notes in the int/long/void delegate row. Any "
+            + "OTHER value is a new defect.");
+    }
+
+    /// <summary>
+    /// Indexer READ on a NON-GENERIC .NET receiver — PINNED DIVERGENCE.
+    ///
+    /// <para>Section85 proves the indexer row for a CONSTRUCTED GENERIC receiver
+    /// (<c>List&lt;Int32&gt;</c>, through <c>NetTypeResolver.ConstructedIndexer</c>). A
+    /// non-generic receiver — <c>GroupCollection</c> here, reached through
+    /// <c>Regex.Match(…).Groups</c> — fails EARLIER than the lowering: the indexer result is
+    /// typed <c>System.Object</c>, so any member access on it is BL6017 at the analyzer. MEASURED:
+    /// <c>"error BL6017: .NET type 'System.Object' has no accessible member named 'Value'"</c>.
+    /// (The recon predicted a C++ <c>operator()</c> failure on a <c>NetRef</c>; that stage is never
+    /// reached.) The row is authored in §12.3's shape and pinned at its current failure, rather
+    /// than rewritten into the generic shape that already passes.</para>
+    ///
+    /// <para>Note the receivers are INFERRED locals off member results — the shape the §8.5
+    /// fifth-site fix admits — so this row could not have been written before that fix either;
+    /// it would have been refused one step earlier, for an unrelated reason.</para>
+    /// </summary>
+    [Test]
+    public void IndexerReadOnANonGenericReceiver_DoesNotYetCompile_PinnedDivergence()
+    {
+        var dir = NetShimPipelineFixture.NewTempDir("blnet-conf-indexer-");
+        Dirs.Add(dir);
+        File.WriteAllText(Path.Combine(dir, "Program.bas"), """
+            Using System.Text.RegularExpressions
+
+            Module Program
+             Sub Main()
+              Dim m = Regex.Match("abc", "b")
+              Dim g = m.Groups
+              Console.WriteLine(g(0).Value)
+             End Sub
+            End Module
+            """);
+
+        var projectPath = NetShimPipelineFixture.WriteProject(dir, "ConfIndexer");
+        var result = CppProjectBuilder.Build(ProjectFile.Load(projectPath), "Release");
+        var text = NetShimPipelineFixture.Diagnostics(result) + "\n" + result.RawToolchainOutput;
+
+        Assert.That(result.Success, Is.False,
+            "an indexer READ on a non-generic .NET receiver is currently expected NOT to build. "
+            + "If this starts succeeding, the lowering was fixed — replace this row with the "
+            + "runtime row (assert 'b'), do not delete it.\n" + text);
+
+        Assert.That(text, Does.Contain("BL6017").And.Contain("System.Object"),
+            "the failure must still be the indexer RESULT typing as System.Object (so the member "
+            + "access is BL6017). A different failure — in particular a C++ one — means the "
+            + "typing was fixed and the row has moved on to the lowering stage; re-pin or promote "
+            + "it deliberately.\n" + text);
+    }
+
+    [Test]
+    public void TwoDotNetTypedCatchClauses_DoNotYetCompile_PinnedDivergence()
+    {
+        var dir = NetShimPipelineFixture.NewTempDir("blnet-conf-multicatch-");
+        Dirs.Add(dir);
+        File.WriteAllText(Path.Combine(dir, "Program.bas"), """
+            Using System.Text.RegularExpressions
+
+            Module Program
+             Sub Main()
+              Try
+               Dim R As New Regex("[")
+               Console.WriteLine("WRONG-no-throw")
+              Catch ex As InvalidOperationException
+               Console.WriteLine("WRONG-unrelated-clause")
+              Catch ex As ArgumentException
+               Console.WriteLine("caught-intermediate")
+              Catch ex As Exception
+               Console.WriteLine("WRONG-root-clause")
+              End Try
+              Console.WriteLine("done")
+             End Sub
+            End Module
+            """);
+
+        var projectPath = NetShimPipelineFixture.WriteProject(dir, "ConfMultiCatch");
+        var result = CppProjectBuilder.Build(ProjectFile.Load(projectPath), "Release");
+        var text = NetShimPipelineFixture.Diagnostics(result) + "\n" + result.RawToolchainOutput;
+
+        Assert.That(result.Success, Is.False,
+            "Two .NET-typed Catch clauses are currently expected NOT to build. If this starts "
+            + "succeeding the duplicate-handler defect was fixed — replace this row with the "
+            + "runtime SELECTIVITY row (unrelated clause must not fire, intermediate base must, "
+            + "trailing catch-all must lose), do not delete it.\n" + text);
+
+        Assert.That(text, Does.Contain("C2312").Or.Contain("is caught by"),
+            "the failure must still be the DUPLICATE C++ HANDLER — every .NET exception type maps "
+            + "to std::runtime_error, so the per-clause handlers collide. A different failure "
+            + "means this row is pinning something else and is no longer evidence about "
+            + "multi-clause catch.\n" + text);
     }
 }
