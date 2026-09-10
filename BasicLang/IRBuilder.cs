@@ -3320,8 +3320,102 @@ namespace BasicLang.Compiler.IR
             return result;
         }
 
+        /// <summary>
+        /// Lowers <c>AndAlso</c>/<c>OrElse</c> to real CONTROL FLOW, so the right operand runs
+        /// only when the left did not already decide the answer.
+        ///
+        /// <para>⛔ <b>Why it cannot be a binary operation.</b> The generic path evaluates BOTH
+        /// operands into temps and then combines them, destroying short-circuiting before any
+        /// backend sees it: <c>t1 = L(); t2 = R(); t3 = t1 &amp;&amp; t2;</c> — the <c>&amp;&amp;</c>
+        /// is decorative, both already ran. MEASURED on C++ and JavaScript (chip task_c8db4a58).
+        /// The C# backend LOOKED correct only because it renders operand trees inline, so C#'s
+        /// own <c>&amp;&amp;</c> short-circuited an already-broken IR.</para>
+        ///
+        /// <para>⛔⛔ <b>THE BLOCK NAMES ARE LOAD-BEARING — this is not cosmetic.</b> The C#
+        /// backend reconstructs structure by MATCHING NAMES, not graph shape:
+        /// <c>IsIfThenElse</c> requires the true target to contain <c>.then</c> and the false
+        /// target <c>.else</c>, then looks up <c>{prefix}.end</c>; <c>IsIfThen</c> requires
+        /// <c>.then</c>/<c>.end</c> with matching prefixes. Anything else falls to a lossy
+        /// fallback that emits both arms and NEVER emits the merge — and
+        /// <c>HandleUnconditionalBranch</c> separately skips any branch whose target ends in
+        /// <c>.end</c>, on the assumption the If construct emitted it. An earlier attempt named
+        /// these blocks <c>.rhs</c>/<c>.skip</c> and the whole continuation vanished: the
+        /// program printed its first operand and stopped.</para>
+        ///
+        /// <para>So both forms are emitted as the EXACT shape <see cref="Visit(IfStatementNode)"/>
+        /// produces — <c>AndAlso</c> as a bare If (<c>then</c> = evaluate right), <c>OrElse</c>
+        /// as an If/Else with an EMPTY then arm (<c>else</c> = evaluate right). Two constructs
+        /// both backends already handle thousands of times over, rather than a novel CFG each
+        /// would have to learn.</para>
+        ///
+        /// <para>⛔ <c>And</c>/<c>Or</c> must NOT come through here — they are the
+        /// non-short-circuit operators and both operands must run. Lowering all four would be
+        /// the mirror miscompile, silently dropping a side effect.</para>
+        /// </summary>
+        private void BuildShortCircuit(BinaryExpressionNode node, BinaryOpKind kind)
+        {
+            var resultType = _semanticAnalyzer.GetNodeType(node)
+                             ?? new TypeInfo("Boolean", TypeKind.Primitive);
+
+            // Same counter as a real If, so a prefix can never collide with one.
+            var id = _ifCounter++;
+            var thenBlock = _currentFunction.CreateBlock($"if{id}.then");
+            var elseBlock = kind == BinaryOpKind.OrElse
+                ? _currentFunction.CreateBlock($"if{id}.else")
+                : null;
+            var mergeBlock = _currentFunction.CreateBlock($"if{id}.end");
+
+            // The carrier. ⛔ REGISTERED with the function exactly as a Dim is —
+            // GetOrCreateVariable only tracks versions, while LocalVariables is what the
+            // backends read to DECLARE a local. Without it the C++ backend emitted
+            // `__sc0 = …` for a name it had never declared.
+            var result = CreateVariable($"__sc{id}", resultType, _nextVersion++);
+            PushVariableVersion(result.Name, result);
+            _currentFunction.LocalVariables.Add(result);
+
+            node.Left.Accept(this);
+            EmitInstruction(new IRAssignment(result, _expressionResult));
+            EmitInstruction(new IRConditionalBranch(result, thenBlock, elseBlock ?? mergeBlock));
+
+            // AndAlso keeps going while the left is TRUE, so the right operand IS the then arm.
+            // OrElse keeps going while it is FALSE, so the then arm is empty and the right
+            // operand is the else arm — the left value already stands as the result.
+            _currentBlock = thenBlock;
+            if (kind == BinaryOpKind.AndAlso)
+            {
+                node.Right.Accept(this);
+                EmitInstruction(new IRAssignment(result, _expressionResult));
+            }
+            if (!_currentBlock.IsTerminated())
+                EmitInstruction(new IRBranch(mergeBlock));
+
+            if (elseBlock != null)
+            {
+                _currentBlock = elseBlock;
+                node.Right.Accept(this);
+                EmitInstruction(new IRAssignment(result, _expressionResult));
+                if (!_currentBlock.IsTerminated())
+                    EmitInstruction(new IRBranch(mergeBlock));
+            }
+
+            _currentBlock = mergeBlock;
+            _expressionResult = result;
+        }
+
         public void Visit(BinaryExpressionNode node)
         {
+            // ⛔ SHORT-CIRCUIT FIRST, before the right operand is touched. AndAlso/OrElse are
+            // CONTROL FLOW, not operators with two ready values — see BuildShortCircuit.
+            if (!IsComparisonOperator(node.Operator))
+            {
+                var scKind = MapBinaryOperator(node.Operator);
+                if (scKind == BinaryOpKind.AndAlso || scKind == BinaryOpKind.OrElse)
+                {
+                    BuildShortCircuit(node, scKind);
+                    return;
+                }
+            }
+
             node.Left.Accept(this);
             var left = _expressionResult;
 

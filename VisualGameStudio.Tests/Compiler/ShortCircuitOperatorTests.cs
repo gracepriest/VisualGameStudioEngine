@@ -96,13 +96,11 @@ public class ShortCircuitOperatorTests
         => Assert.That(RunCSharp(Program("L(False) AndAlso R(True)")), Is.EqualTo("L\nend"));
 
     [Test]
-    [Ignore("OPEN BUG task_c8db4a58 — prints 'L R end'. Remove this attribute to reproduce in one command.")]
     public void AndAlso_LeftFalse_DoesNotEvaluateRight_Cpp()
         => Assert.That(RunCpp(Program("L(False) AndAlso R(True)")), Is.EqualTo("L\nend"),
             "an R in the output means both operands were pre-evaluated into temps");
 
     [Test]
-    [Ignore("OPEN BUG task_c8db4a58 — prints 'L R end'. Remove this attribute to reproduce in one command.")]
     public void AndAlso_LeftFalse_DoesNotEvaluateRight_JavaScript()
         => Assert.That(RunJs(Program("L(False) AndAlso R(True)")), Is.EqualTo("L\nend"),
             "an R in the output means both operands were pre-evaluated into temps");
@@ -115,12 +113,10 @@ public class ShortCircuitOperatorTests
         => Assert.That(RunCSharp(Program("L(True) OrElse R(True)")), Is.EqualTo("L\ntaken\nend"));
 
     [Test]
-    [Ignore("OPEN BUG task_c8db4a58 — prints 'L R taken end'. Remove this attribute to reproduce in one command.")]
     public void OrElse_LeftTrue_DoesNotEvaluateRight_Cpp()
         => Assert.That(RunCpp(Program("L(True) OrElse R(True)")), Is.EqualTo("L\ntaken\nend"));
 
     [Test]
-    [Ignore("OPEN BUG task_c8db4a58 — prints 'L R taken end'. Remove this attribute to reproduce in one command.")]
     public void OrElse_LeftTrue_DoesNotEvaluateRight_JavaScript()
         => Assert.That(RunJs(Program("L(True) OrElse R(True)")), Is.EqualTo("L\ntaken\nend"));
 
@@ -173,4 +169,30 @@ public class ShortCircuitOperatorTests
     [TestCase("L(False) OrElse R(False)", "L\nR\nend")]
     public void ShortCircuit_WhenBothOperandsRun_ValueIsUnchanged_JavaScript(string cond, string expected)
         => Assert.That(RunJs(Program(cond)), Is.EqualTo(expected));
+
+    // ---------------------------------------------------------------- the SHIPPING IR
+    //
+    // ⛔ Every shipping route runs OptimizationPipeline.AddStandardPasses() unconditionally,
+    // and RunJs runs none of it. The C++ leg above already goes through CompileToCppOptimized;
+    // these close the same gap for JavaScript. Short-circuiting is now CONTROL FLOW, which is
+    // exactly what dead-code elimination and copy propagation reshape — an optimizer that
+    // folded the guard away would silently restore the original bug.
+
+    [TestCase("L(False) AndAlso R(True)", "L\nend")]
+    [TestCase("L(True) OrElse R(True)", "L\ntaken\nend")]
+    [TestCase("L(True) AndAlso R(True)", "L\nR\ntaken\nend")]
+    [TestCase("L(False) OrElse R(False)", "L\nR\nend")]
+    public void Optimized_ShortCircuit_StillHolds_JavaScript(string cond, string expected)
+        => Assert.That(
+            JavaScriptOptimizedExecutionTests.RunOptimized(Program(cond))
+                .Replace("\r\n", "\n").Trim(),
+            Is.EqualTo(expected));
+
+    /// <summary>And the non-short-circuit operators keep running both operands after the passes.</summary>
+    [Test]
+    public void Optimized_And_STILL_EvaluatesRight_JavaScript()
+        => Assert.That(
+            JavaScriptOptimizedExecutionTests.RunOptimized(Program("L(False) And R(True)"))
+                .Replace("\r\n", "\n").Trim(),
+            Is.EqualTo("L\nR\nend"));
 }
