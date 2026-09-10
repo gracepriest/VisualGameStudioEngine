@@ -450,4 +450,65 @@ public class NetGeneratedShimConformanceTests
             + "answers — 7 is Values()(0) and 24 is Sum(7+8+9). This is the half the emit-level "
             + "test could not reach: it ran with a fake toolchain and phase 5 off.");
     }
+
+    // =====================================================================================
+    // §8.4 — delegates, the row §12.3 calls mandatory.
+    // =====================================================================================
+
+    /// <summary>
+    /// §12.3's result-bearing delegate row, plus the <c>long</c> and <c>void</c> shapes.
+    ///
+    /// <para>⛔ <b>This row is NOT a duplicate of Task 11's, and the difference is the whole
+    /// point.</b> <c>NetDelegateTests.ARunningProgram_DispatchesAResultBearingDelegateInline</c>
+    /// runs a native binary against a C++ STUB LAMBDA returning canned values — no .NET delegate
+    /// is ever constructed, and the real startup TU is skipped. Here a BasicLang lambda becomes an
+    /// actual <c>Aot.Probe.IntFn</c> inside the shim, is invoked by .NET, and its result crosses
+    /// back.</para>
+    ///
+    /// <para><b>The <c>-9</c> before the <c>1</c> is the load-bearing part.</b> It proves the
+    /// callback runs INLINE, during the call, rather than being queued and dispatched afterwards —
+    /// a deferred implementation would print <c>1</c> first and still "work".</para>
+    ///
+    /// <para>⚠ <b>double/float are deliberately absent.</b> They pass §8.4's blittable-scalar gate
+    /// and then TRUNCATE on the wire — .NET's 3 and 2.75 arrive as 2 and 2, with a clean build
+    /// (chip <c>task_75064f2e</c>). Writing this row with only <c>int</c> is exactly the
+    /// shape-substitution trap: the green tick would sit on top of a live numeric miscompile. The
+    /// <c>long</c> and NEGATIVE values here are the cheap insurance — they would catch a width or
+    /// sign error even though they cannot catch the floating-point one.</para>
+    /// </summary>
+    [Test]
+    public void ADelegateCrossesAsARealDotNetDelegate_AndDispatchesInline()
+    {
+        var built = BuildOnce(
+            "ConfDelegate",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Program.bas"] = """
+                    Using Aot.Probe
+
+                    Module Program
+                     Sub Main()
+                      ' EVERY lambda parameter is annotated because BasicLang does NOT infer them
+                      ' from the target delegate's signature — measured: `Function(a, b) a - b` at
+                      ' an IntFn slot is BL3001 "Cannot infer type for lambda parameter 'a'".
+                      ' Required spelling, not a workaround.
+                      Console.WriteLine(Callbacks.Fold(10, Function(a As Integer, b As Integer) a - b))
+                      Console.WriteLine(Callbacks.Big(Function(v As Long) v - 1))
+                      Console.WriteLine(Callbacks.Run(Sub(v As Integer) Console.WriteLine(v)))
+                     End Sub
+                    End Module
+                    """,
+            },
+            withProbe: true);
+
+        AssertBuilt(built.Result, "the §8.4 delegate program");
+
+        Assert.That(NetShimPipelineFixture.Run(built.Result.ExecutablePath!),
+            Is.EqualTo("7\n-4000000001\n-9\n1\n"),
+            "7 is Fold(10, a-b) = f(10,3) = 10-3, so the BasicLang lambda really became an IntFn "
+            + ".NET invoked and the result came back. -4000000001 is the long slot carrying a "
+            + "value no 32-bit path survives, and it is NEGATIVE so a sign error shows. The -9 "
+            + "MUST precede the 1: that ordering is what proves the void callback dispatched "
+            + "INLINE rather than being deferred until after the call returned.");
+    }
 }
