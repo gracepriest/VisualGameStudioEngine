@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using BasicLang.Compiler.CodeGen.Net;
 using BasicLang.Compiler.ProjectSystem;
 using NUnit.Framework;
@@ -50,7 +51,19 @@ public class NetGeneratedShimConformanceTests
     /// <c>NetShimPipelineTests.BuildOnce</c> rather than sharing it, because that one is private
     /// and its <c>[OneTimeTearDown]</c> owns its own directories.
     /// </summary>
-    private static SharedBuild BuildOnce(string projectName, IReadOnlyDictionary<string, string> files)
+    /// <param name="withProbe">
+    /// Emit <c>NetShimPipelineFixture</c>'s probe assembly (<c>Aot.Probe</c>) into the project
+    /// directory and reference it. ⛔ Use THIS, never a hand-rolled emitter: it compiles against
+    /// the net8.0 REFERENCE pack, and the other emitter in this suite
+    /// (<c>NetDelegateTests.ProbeDir.EmitAssembly</c>) compiles against IMPLEMENTATION assemblies,
+    /// which bakes in a <c>System.Private.CoreLib</c> reference and makes every use of the probe's
+    /// types CS0012 inside the generated shim.
+    /// </param>
+    /// <param name="extraItemGroupXml">Appended after the reference item group — e.g. a
+    /// <c>&lt;NetProxy&gt;</c> declaration.</param>
+    private static SharedBuild BuildOnce(
+        string projectName, IReadOnlyDictionary<string, string> files,
+        bool withProbe = false, string extraItemGroupXml = "")
     {
         var key = projectName;
         return Builds.GetOrAdd(key, _ => new Lazy<SharedBuild>(() =>
@@ -60,7 +73,14 @@ public class NetGeneratedShimConformanceTests
             foreach (var file in files)
                 File.WriteAllText(Path.Combine(dir, file.Key), file.Value);
 
-            var projectPath = NetShimPipelineFixture.WriteProject(dir, projectName);
+            var itemGroupXml = extraItemGroupXml;
+            if (withProbe)
+            {
+                var probe = NetShimPipelineFixture.EmitProbeAssembly(dir);
+                itemGroupXml = NetShimPipelineFixture.ReferenceItemGroup(probe) + extraItemGroupXml;
+            }
+
+            var projectPath = NetShimPipelineFixture.WriteProject(dir, projectName, itemGroupXml);
             var stopwatch = Stopwatch.StartNew();
             var result = CppProjectBuilder.Build(ProjectFile.Load(projectPath), "Release");
             stopwatch.Stop();
@@ -358,5 +378,76 @@ public class NetGeneratedShimConformanceTests
                 "the program must not have reached its first .NET call and printed a result.\n"
                 + dump);
         });
+    }
+
+    // =====================================================================================
+    // §7.2 / §11.4 — an omitted member is a WARNING, and the project still ships.
+    // =====================================================================================
+
+    /// <summary>
+    /// §12.3's "<c>&lt;NetProxy&gt;</c> omitted-member BL6026-and-still-builds" row, at RUN level.
+    ///
+    /// <para>The emit-level half was already proven — <c>NetSurfaceCollectorTests</c> asserts the
+    /// omission, the single BL6026, its warning severity and its message. But it does so with a
+    /// FAKE toolchain and phase 5 switched off, so nothing showed that a real project carrying
+    /// that warning publishes a shim, links, and RUNS. "Still builds" was the untested half of the
+    /// claim.</para>
+    ///
+    /// <para><c>&lt;NetProxy Include="Aot.Probe.AotProbe"/&gt;</c> declares a static class whose
+    /// only member is <c>[RequiresDynamicCode]</c>, so §7.2 omits it and announces BL6026 — a
+    /// DECLARED surface that ends up empty. The program meanwhile calls <c>Bag</c> through
+    /// ordinary call-site reachability, so the build has real work to do. Both halves matter: a
+    /// project that only had the omitted type would prove "builds" trivially, with no shim to
+    /// publish and nothing to run.</para>
+    ///
+    /// <para>⚠ BL6026 is NOT BL6020. BL6020 is the AOT-hostile-member diagnostic on the ILC side;
+    /// BL6026 is §7.2's omission, and §11.4 marks only BL6026 as always-a-warning. Asserting the
+    /// wrong code here would pass for the wrong reason, since this same probe member is what the
+    /// BL6020 fixture uses too.</para>
+    /// </summary>
+    [Test]
+    public void AnOmittedMemberWarnsWithBl6026_AndTheProjectStillPublishesAndRuns()
+    {
+        var built = BuildOnce(
+            "ConfOmitted",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Program.bas"] = """
+                    Using Aot.Probe
+
+                    Module Program
+                     Sub Main()
+                      Dim Vals = Bag.Values()
+                      Console.WriteLine(Vals(0))
+                      Console.WriteLine(Bag.Sum(Vals))
+                     End Sub
+                    End Module
+                    """,
+            },
+            withProbe: true,
+            extraItemGroupXml:
+                "\n  <ItemGroup>\n    <NetProxy Include=\"Aot.Probe.AotProbe\" />\n  </ItemGroup>");
+
+        AssertBuilt(built.Result, "the §7.2 omitted-member program");
+
+        var bl6026 = built.Result.Diagnostics.Where(d => d.Code == "BL6026").ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(bl6026, Is.Not.Empty,
+                "the declared type's [RequiresDynamicCode] member must be omitted WITH a BL6026. "
+                + "No BL6026 means either the omission stopped happening or it went silent — the "
+                + "silent form is worse, because the member simply vanishes from the surface. "
+                + "Diagnostics: " + NetShimPipelineFixture.Diagnostics(built.Result));
+            Assert.That(bl6026.TrueForAll(d => d.IsWarning), Is.True,
+                "§11.4 marks BL6026 as ALWAYS a warning — an omitted declared member must not "
+                + "fail a native build. If this became an error the whole row is moot: the build "
+                + "would already have failed above.");
+        });
+
+        Assert.That(NetShimPipelineFixture.Run(built.Result.ExecutablePath!),
+            Is.EqualTo("7\n24\n"),
+            "the project carrying a BL6026 must still publish its shim, link, and produce .NET's "
+            + "answers — 7 is Values()(0) and 24 is Sum(7+8+9). This is the half the emit-level "
+            + "test could not reach: it ran with a fake toolchain and phase 5 off.");
     }
 }
