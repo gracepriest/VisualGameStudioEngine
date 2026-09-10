@@ -511,4 +511,58 @@ public class NetGeneratedShimConformanceTests
             + "MUST precede the 1: that ordering is what proves the void callback dispatched "
             + "INLINE rather than being deferred until after the call returned.");
     }
+
+    // =====================================================================================
+    // §8.3 — out / ref SCALAR slots, written by real .NET and read back natively.
+    // =====================================================================================
+
+    /// <summary>
+    /// §12.3's <c>ref</c>/<c>out</c> row at run level.
+    ///
+    /// <para>These were stub-proven only (<c>NetProxyStubRunTests</c>): the stub asserts the wire
+    /// SHAPE — that a by-ref scalar travels as a pointer — but never that a real .NET method wrote
+    /// through that pointer and the native caller read the new value back. Those are different
+    /// claims, and only the second is what a user experiences.</para>
+    ///
+    /// <para><c>TryDouble</c> returns a Boolean AS WELL AS writing its <c>out</c> slot, so one call
+    /// proves both directions at once: a shim that dropped the write entirely would still return
+    /// <c>True</c> and, without the second line, look correct.</para>
+    ///
+    /// <para>⚠ Scalars are NATIVE here — no handle is involved — which is why this needs no
+    /// capability work and is not blocked by anything. The gap was purely that nothing ran it end
+    /// to end.</para>
+    /// </summary>
+    [Test]
+    public void OutAndRefScalarSlots_AreWrittenByDotNet_AndReadBackNatively()
+    {
+        var built = BuildOnce(
+            "ConfSlots",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Program.bas"] = """
+                    Using Aot.Probe
+
+                    Module Program
+                     Sub Main()
+                      Dim R As Integer = 0
+                      Console.WriteLine(Slots.TryDouble(21, R))
+                      Console.WriteLine(R)
+                      Dim B As Integer = 10
+                      Slots.Bump(B)
+                      Console.WriteLine(B)
+                     End Sub
+                    End Module
+                    """,
+            },
+            withProbe: true);
+
+        AssertBuilt(built.Result, "the §8.3 out/ref scalar program");
+
+        Assert.That(NetShimPipelineFixture.Run(built.Result.ExecutablePath!),
+            Is.EqualTo("True\n42\n15\n"),
+            "True is TryDouble's ordinary Boolean result; 42 is its OUT slot, and a 0 there means "
+            + "the shim called .NET but threw the write away — the exact failure a shape-only "
+            + "stub test cannot see. 15 is the REF slot: 10 sent in, +5 applied by .NET, read "
+            + "back natively. A 10 means the ref travelled by value.");
+    }
 }

@@ -149,6 +149,25 @@ internal static class NetShimPipelineFixture
                 public static long Big(LongFn f) => f(-4000000000L);
                 public static int Run(VoidFn f) { f(-9); return 1; }
             }
+
+            // ---- P2a-2 Task 12 — §8.3's out/ref SCALAR slots ----
+            // Only stub-proven until now (NetProxyStubRunTests): the stub asserts the wire shape,
+            // never that a real .NET method wrote through the pointer and the native caller read
+            // the new value back. Scalar locals are native, so no handle is involved and this
+            // needs no capability work — the gap was purely that nothing ran it end to end.
+            //
+            // TryDouble returns a Boolean AS WELL AS writing its out slot, so one call proves both
+            // directions at once: a shim that dropped the write would still return True.
+            public static class Slots
+            {
+                public static bool TryDouble(int v, out int result)
+                {
+                    result = v * 2;
+                    return true;
+                }
+
+                public static void Bump(ref int v) => v += 5;
+            }
         }
         """;
 
