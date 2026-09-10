@@ -84,6 +84,20 @@ public class MemberCasingTests
             Does.Not.Contain(".fullname"));
 
     /// <summary>
+    /// ⛔ A FUNCTION call in the wrong case, whose value is USED. MEASURED: the analyzer's
+    /// member table was case-sensitive, so <c>b.twice(3)</c> against <c>Function Twice</c>
+    /// missed, was typed Object, and died with "Cannot assign value of type 'Object' to variable
+    /// of type 'Integer'" on every backend — while <c>c.bump()</c> as a statement (no type
+    /// needed) passed, which is why the execution test below never caught it.
+    /// </summary>
+    [Test]
+    public void FunctionCall_WithDifferentCasing_IsTypedFromTheDeclaration()
+        => Assert.That(JsTestSupport.Compile(
+                "Class Box\nPublic Function Twice(x As Integer) As Integer\nReturn x * 2\nEnd Function\nEnd Class\n" +
+                "Sub Main()\nDim b As New Box()\nDim n As Integer = b.twice(3)\nConsole.WriteLine(n)\nEnd Sub"),
+            Does.Contain(".Twice(3)").And.Not.Contain(".twice("));
+
+    /// <summary>
     /// An UNKNOWN receiver type must be left completely alone — a `::` foreign name, a .NET
     /// type, or anything this module did not declare. Canonicalising what we cannot resolve
     /// would rewrite names that were already correct.
@@ -117,4 +131,18 @@ public class MemberCasingExecutionTests
                 "Sub Main()\nDim c As New Counter()\nc.bump()\nc.bump()\n" +
                 "Console.WriteLine(c.count)\nEnd Sub"),
             Is.EqualTo("2"));
+
+    private const string TwiceProgram =
+        "Class Box\nPublic Function Twice(x As Integer) As Integer\nReturn x * 2\nEnd Function\nEnd Class\n" +
+        "Sub Main()\nDim b As New Box()\nDim n As Integer = b.twice(3)\nConsole.WriteLine(n)\nEnd Sub";
+
+    /// <summary>A mis-cased FUNCTION call whose value is used — the shape the statement-only test above could not see.</summary>
+    [Test]
+    public void MisCasedFunctionCall_ValueIsUsed_JavaScript()
+        => Assert.That(JavaScriptExecutionTests.RunJs(TwiceProgram), Is.EqualTo("6"));
+
+    /// <summary>The fix is in the analyzer, so every backend gets it — the C# leg is the proof.</summary>
+    [Test]
+    public void MisCasedFunctionCall_ValueIsUsed_CSharp()
+        => Assert.That(CliTestHarness.CompileRunCSharp(TwiceProgram).Trim(), Is.EqualTo("6"));
 }

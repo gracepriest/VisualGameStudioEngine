@@ -169,7 +169,7 @@ namespace BasicLang.Compiler.IR
             while (!string.IsNullOrEmpty(typeName) && guard++ < 64)
             {
                 if (!_module.Classes.TryGetValue(typeName, out var irClass) || irClass == null)
-                    return written;
+                    return DeclaredMemberNameFromSymbols(objectType, written);
 
                 foreach (var field in irClass.Fields)
                     if (string.Equals(field?.Name, written, StringComparison.OrdinalIgnoreCase))
@@ -186,6 +186,30 @@ namespace BasicLang.Compiler.IR
                 typeName = irClass.BaseClass;
             }
 
+            return written;
+        }
+
+        /// <summary>
+        /// The declared spelling from the ANALYZER's member table, for a type this unit did not
+        /// declare — a class from another file of the project, or from a shipped <c>.bli</c>.
+        ///
+        /// <para>⛔ <c>_module.Classes</c> is THIS UNIT's classes, so the walk above cannot see a
+        /// type declared elsewhere. MEASURED: <c>el.TextContent</c> against <c>Element</c> from
+        /// <c>dom-core.bli</c> was emitted verbatim and printed <c>undefined</c>, while the same
+        /// program with <c>Element</c> declared in the same file was canonicalised. The symbol
+        /// table is shared across units and its entries carry the declared name.</para>
+        /// </summary>
+        private static string DeclaredMemberNameFromSymbols(TypeInfo objectType, string written)
+        {
+            var current = objectType;
+            var guard = 0;
+            while (current != null && guard++ < 64)
+            {
+                if (current.Members != null && current.Members.TryGetValue(written, out var symbol) &&
+                    !string.IsNullOrEmpty(symbol?.Name))
+                    return symbol.Name;
+                current = current.BaseType;
+            }
             return written;
         }
 
