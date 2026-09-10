@@ -41,6 +41,23 @@ public class ExtensionHost : IDisposable
     public event EventHandler? HostCrashed;
 
     /// <summary>
+    /// Raised when an extension calls <c>workspace.saveAll()</c>. The IDE owns which documents are
+    /// dirty, so the host cannot answer this alone — a subscriber saves and completes
+    /// <see cref="SaveAllRequestedEventArgs.Completion"/>.
+    ///
+    /// <para>With NO subscriber the request answers <c>false</c> rather than <c>true</c>: nothing
+    /// was saved, and telling an extension otherwise is the same lie <c>workspace/applyEdit</c>
+    /// currently tells.</para>
+    /// </summary>
+    public event EventHandler<SaveAllRequestedEventArgs>? SaveAllRequested;
+
+    /// <summary>
+    /// The folder globs resolve against, recorded from <see cref="SetWorkspaceFolderAsync"/>. Null
+    /// when no folder is open, which makes findFiles answer empty rather than throw.
+    /// </summary>
+    private string? _workspaceRoot;
+
+    /// <summary>
     /// Raised when the host state changes (started/stopped).
     /// </summary>
     public event EventHandler<bool>? StateChanged;
@@ -213,6 +230,11 @@ public class ExtensionHost : IDisposable
             _rpc.AddLocalRpcMethod("workspace/fs/delete", new Action<string, JsonElement>(OnFsDelete));
             _rpc.AddLocalRpcMethod("workspace/fs/rename", new Action<string, string, JsonElement>(OnFsRename));
             _rpc.AddLocalRpcMethod("workspace/fs/copy", new Action<string, string, JsonElement>(OnFsCopy));
+
+            _rpc.AddLocalRpcMethod("workspace/findFiles", new Func<string, string?, int?, List<string>>(OnFindFiles));
+            _rpc.AddLocalRpcMethod("workspace/openTextDocument",
+                new Func<string?, string?, string?, bool, ExtensionTextDocument>(OnOpenTextDocument));
+            _rpc.AddLocalRpcMethod("workspace/saveAll", new Func<bool, Task<bool>>(OnSaveAllAsync));
             _rpc.AddLocalRpcMethod("extensionActivated", new Action<string>(OnExtensionActivated));
             _rpc.AddLocalRpcMethod("log", new Action<string, string>(OnLog));
             _rpc.AddLocalRpcMethod("ready", new Action(OnReady));
@@ -612,6 +634,56 @@ public class ExtensionHost : IDisposable
         return value.ValueKind == JsonValueKind.True;
     }
 
+    private List<string> OnFindFiles(string include, string? exclude = null, int? maxResults = null) =>
+        ExtensionWorkspace.FindFiles(_workspaceRoot, include, exclude, maxResults);
+
+    /// <summary>
+    /// ⛔ ONE HANDLER, TWO WIRE SHAPES. workspace.js:216-227 sends either <c>{ uri }</c> or
+    /// <c>{ content, language, isVirtual }</c> depending on what the extension asked for. Since
+    /// StreamJsonRpc rejects keys it has no parameter for, a handler matching only one shape would
+    /// fail the other call outright — so this takes the UNION, every part optional.
+    /// </summary>
+    private ExtensionTextDocument OnOpenTextDocument(
+        string? uri = null,
+        string? content = null,
+        string? language = null,
+        bool isVirtual = false) =>
+        ExtensionWorkspace.OpenTextDocument(uri, content, language, isVirtual);
+
+    /// <summary>
+    /// Which documents are dirty is the IDE's knowledge, not the host's, so this asks and waits.
+    ///
+    /// <para>⛔ The wait is BOUNDED. A subscriber that throws before completing the source would
+    /// otherwise leave the extension's promise pending forever — a hang with no error, which is
+    /// harder to diagnose than a false. On timeout the answer is false: not "saved".</para>
+    /// </summary>
+    private async Task<bool> OnSaveAllAsync(bool includeUntitled = false)
+    {
+        var handler = SaveAllRequested;
+        if (handler == null)
+        {
+            _outputService.WriteLine(
+                "[ExtensionHost] workspace/saveAll: nothing is listening, reporting not-saved.",
+                OutputCategory.General);
+            return false;
+        }
+
+        var args = new SaveAllRequestedEventArgs { IncludeUntitled = includeUntitled };
+        handler(this, args);
+
+        var finished = await Task.WhenAny(args.Completion.Task, Task.Delay(TimeSpan.FromSeconds(30)));
+
+        if (finished != args.Completion.Task)
+        {
+            _outputService.WriteError(
+                "[ExtensionHost] workspace/saveAll timed out after 30s; reporting not-saved.",
+                OutputCategory.General);
+            return false;
+        }
+
+        return args.Completion.Task.Result;
+    }
+
     #endregion
 
     private static string ToDocumentUriCore(string pathOrUri)
@@ -742,6 +814,12 @@ public class ExtensionHost : IDisposable
     /// </summary>
     public async Task SetWorkspaceFolderAsync(string path, CancellationToken cancellationToken = default)
     {
+        // ⛔ Recorded BEFORE the IsRunning guard. The IDE opens a folder before the host finishes
+        // starting, so assigning this after the early return would leave workspace/findFiles with no
+        // root — answering "no matches" for every glob, which is indistinguishable from a workspace
+        // that genuinely contains nothing.
+        _workspaceRoot = path;
+
         if (!IsRunning || _rpc == null) return;
 
         try
@@ -1226,6 +1304,10 @@ public class TreeViewEventArgs : EventArgs
     public string? Title { get; set; }
     public string? Element { get; set; }
 }
+
+// SaveAllRequestedEventArgs lives in VisualGameStudio.Core.Abstractions.Services alongside the other
+// extension event args, because IExtensionService forwards this event and Core cannot see this
+// assembly.
 
 /// <summary>
 /// Event args for webview creation.

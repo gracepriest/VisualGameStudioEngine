@@ -33,9 +33,6 @@ public class ExtensionHostRequestCoverageTests
     private static readonly HashSet<string> KnownUnimplemented = new(StringComparer.Ordinal)
     {
         "configuration/update",
-        "workspace/openTextDocument",
-        "workspace/findFiles",
-        "workspace/saveAll",
         "executeCommand",
         "getCommands",
         "secrets/get",
@@ -180,5 +177,38 @@ public class ExtensionHostRequestCoverageTests
             Assert.That(handled, Does.Contain(method),
                 $"{method} must be registered — workspace.fs is the first thing most extensions use");
         }
+    }
+
+    /// <summary>
+    /// ⛔ REGISTERED IS NOT IMPLEMENTED, and conflating the two is worse than leaving a gap.
+    ///
+    /// <para><c>workspace/applyEdit</c> is registered and returns <c>true</c> from a body whose only
+    /// statement is a log line and a TODO. An UNREGISTERED request at least rejects, so the
+    /// extension learns it failed; this one reports success and discards the edit — an extension
+    /// that formats a document or applies a refactor is told it worked while nothing changed.</para>
+    ///
+    /// <para>This test does not demand a fix. It pins the fact so the other tests here cannot be
+    /// read as "every registered method works", and so removing the TODO forces a decision rather
+    /// than passing silently.</para>
+    /// </summary>
+    [Test]
+    public void ApplyEditIsRegisteredButStillAStub()
+    {
+        var host = RepoFile("VisualGameStudio.ProjectSystem", "Services", "ExtensionHost.cs");
+        if (host == null)
+        {
+            Assert.Ignore("ExtensionHost.cs not found from the test base directory — skipping.");
+            return;
+        }
+
+        var src = File.ReadAllText(host!);
+        var start = src.IndexOf("OnApplyEditAsync(JsonElement", StringComparison.Ordinal);
+        Assert.That(start, Is.GreaterThanOrEqualTo(0), "OnApplyEditAsync must still exist");
+
+        var body = src.Substring(start, Math.Min(400, src.Length - start));
+
+        Assert.That(body, Does.Contain("TODO"),
+            "if the TODO is gone, applyEdit was implemented — delete this test and pin the real "
+            + "behaviour instead. If it is still a stub, it must stay visibly marked as one.");
     }
 }

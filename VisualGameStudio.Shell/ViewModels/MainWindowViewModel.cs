@@ -683,6 +683,10 @@ public partial class MainWindowViewModel : ViewModelBase
         // them. ESLint's findings had no route to the Problems panel at all.
         _extensionService.ExtensionDiagnosticsReceived += OnExtensionDiagnosticsReceived;
 
+        // workspace.saveAll() from an extension. The host cannot answer this — only the shell knows
+        // which documents are dirty.
+        _extensionService.SaveAllRequested += OnExtensionSaveAllRequested;
+
         // Load accessibility and zoom settings
         if (_settingsService != null)
         {
@@ -1542,6 +1546,35 @@ public partial class MainWindowViewModel : ViewModelBase
     /// Problems feed sites and requires equality, so that a future third source cannot be
     /// half-wired the way the Problems panel originally was.</para>
     /// </remarks>
+    /// <summary>
+    /// Answers an extension's <c>workspace.saveAll()</c>.
+    /// </summary>
+    /// <remarks>
+    /// ⛔ The completion is set on EVERY path, the failure one included. An extension is awaiting
+    /// this promise, so an exception that escaped without completing would leave it pending until
+    /// the host's 30-second backstop fired — a stall with no error attached to it.
+    ///
+    /// <para>Saving touches document view models, so it is marshalled to the UI thread: the RPC
+    /// handler runs on a StreamJsonRpc worker, and Avalonia state must not be mutated there.</para>
+    /// </remarks>
+    private void OnExtensionSaveAllRequested(object? sender, SaveAllRequestedEventArgs e)
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(async () =>
+        {
+            try
+            {
+                await SaveAllAsync();
+                e.Completion.TrySetResult(true);
+            }
+            catch (Exception ex)
+            {
+                _outputService?.WriteError(
+                    $"[Extensions] workspace.saveAll failed: {ex.Message}", OutputCategory.General);
+                e.Completion.TrySetResult(false);
+            }
+        });
+    }
+
     private void OnExtensionDiagnosticsReceived(object? sender, ExtensionDiagnosticsEventArgs e)
     {
         try

@@ -174,6 +174,13 @@ public interface IExtensionService : IDisposable
     event EventHandler<ExtensionDiagnosticsEventArgs>? ExtensionDiagnosticsReceived;
 
     /// <summary>
+    /// Raised when an extension calls <c>workspace.saveAll()</c>. A subscriber must complete
+    /// <see cref="SaveAllRequestedEventArgs.Completion"/>; with none, the extension is told nothing
+    /// was saved.
+    /// </summary>
+    event EventHandler<SaveAllRequestedEventArgs>? SaveAllRequested;
+
+    /// <summary>
     /// Triggers activation for extensions matching a specific event.
     /// </summary>
     /// <param name="activationEvent">The activation event (e.g., "onLanguage:python", "onCommand:myExt.run").</param>
@@ -1363,6 +1370,30 @@ public class ExtensionDiagnosticsEventArgs : EventArgs
     public string Uri { get; set; } = "";
     public JsonElement Diagnostics { get; set; }
     public string CollectionName { get; set; } = "";
+}
+
+/// <summary>
+/// Carries a <c>workspace.saveAll()</c> request from an extension to whoever owns the open
+/// documents. The extension host cannot answer alone — which documents are dirty is the IDE's
+/// knowledge.
+/// </summary>
+/// <remarks>
+/// ⛔ A subscriber MUST complete <see cref="Completion"/> on EVERY path, its own failure included
+/// (<c>TrySetResult(false)</c>), because an extension is awaiting this. The host bounds the wait at
+/// 30 seconds so a forgotten completion degrades to "not saved" rather than hanging the extension
+/// forever, but that backstop is not the contract.
+///
+/// <para>With no subscriber at all the answer is <c>false</c>, never <c>true</c> — reporting a save
+/// that did not happen is the same lie <c>workspace/applyEdit</c> currently tells.</para>
+/// </remarks>
+public class SaveAllRequestedEventArgs : EventArgs
+{
+    /// <summary>Whether untitled documents should be saved too, as the extension asked.</summary>
+    public bool IncludeUntitled { get; init; }
+
+    /// <summary>Completed by the subscriber with whether the save actually happened.</summary>
+    public TaskCompletionSource<bool> Completion { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 }
 
 /// <summary>
