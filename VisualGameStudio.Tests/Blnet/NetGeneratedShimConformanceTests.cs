@@ -496,6 +496,120 @@ public class NetGeneratedShimConformanceTests
         });
     }
 
+    /// <summary>
+    /// §9.3's third and last handshake mode: a shim that loads and exports every core symbol but
+    /// answers the WRONG ABI version.
+    ///
+    /// <para>No asset on the machine has this shape — the P0 hand shim answers the right version
+    /// — so the row BUILDS one: a seven-export C stub whose <c>blnet_abi_version</c> returns
+    /// <c>AbiVersion + 1</c>, compiled at test time with the same compiler
+    /// <c>CppCompile.FindRunCompiler</c> discovers, using a DLL variant of its template
+    /// (<c>/LD</c> for cl, <c>-shared</c> for g++/clang++). The other six bodies are trivial and
+    /// never run: <c>blnet_startup</c> checks the ABI BEFORE calling <c>initialize</c>.</para>
+    ///
+    /// <para>⛔ <b>Drift guard, not a hand-typed list.</b> The stub must export exactly
+    /// <c>BlnetContract.CoreExportNames</c>. If the contract ever grows an eighth core export
+    /// (rule C7 bumps the ABI), this row would otherwise stop testing "bad ABI" and silently start
+    /// testing "missing export" — same exit code, different message — so the names are asserted
+    /// equivalent up front and the failure names the drift.</para>
+    ///
+    /// <para><c>BLNET_CALL</c> is <c>__cdecl</c>, which is undecorated for <c>extern "C"</c> on
+    /// x64, so the exported names match the contract's spelling exactly.</para>
+    /// </summary>
+    [Test]
+    public void AShimWithTheWrongAbiVersion_FailsTheHandshake_NamingBothVersions()
+    {
+        if (!System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
+                System.Runtime.InteropServices.OSPlatform.Windows))
+            Assert.Ignore("the stub uses __declspec(dllexport); this row is Windows-only like its siblings.");
+
+        var compiler = VisualGameStudio.Tests.Native.CppCompile.FindRunCompiler();
+        if (compiler == null)
+            Assert.Ignore("no C++ compiler found — this row compiles a stub shim.");
+
+        var contract = BasicLang.Compiler.CodeGen.CPlusPlus.BlnetContract.CoreExportNames;
+        var stubNames = new[]
+        {
+            "blnet_abi_version", "blnet_initialize", "blnet_addref", "blnet_release",
+            "blnet_alloc", "blnet_free", "blnet_last_error",
+        };
+        Assert.That(contract, Is.EquivalentTo(stubNames),
+            "DRIFT: the core export set changed. This stub must export exactly the contract's core "
+            + "names, or a missing one makes blnet_bind_core fail FIRST and this row silently "
+            + "becomes a missing-export row. Update the stub AND this list together.");
+
+        var wrongAbi = BasicLang.Compiler.CodeGen.CPlusPlus.BlnetContract.AbiVersion + 1;
+        var stubSource =
+            "#include <cstdint>\n"
+            + "extern \"C\" {\n"
+            + $"__declspec(dllexport) int32_t __cdecl blnet_abi_version(void) {{ return {wrongAbi}; }}\n"
+            + "__declspec(dllexport) int32_t __cdecl blnet_initialize(int32_t, const void*) { return 0; }\n"
+            + "__declspec(dllexport) int32_t __cdecl blnet_addref(uint64_t) { return 0; }\n"
+            + "__declspec(dllexport) int32_t __cdecl blnet_release(uint64_t) { return 0; }\n"
+            + "__declspec(dllexport) void* __cdecl blnet_alloc(int64_t) { return nullptr; }\n"
+            + "__declspec(dllexport) void __cdecl blnet_free(void*) { }\n"
+            + "__declspec(dllexport) int32_t __cdecl blnet_last_error(char**, char**) { return 0; }\n"
+            + "}\n";
+
+        var built = BuildOnce("ConfProperty", PropertyProgram);
+        AssertBuilt(built.Result, "the §12.3 named-property program");
+        var (exe, shimPath) = SandboxCopy(built, "ConfProperty", "badabi");
+
+        // Compile the stub in its own directory (cl drops .obj files in the cwd).
+        var stubDir = Path.Combine(Path.GetDirectoryName(shimPath)!, "stub");
+        Directory.CreateDirectory(stubDir);
+        var stubCpp = Path.Combine(stubDir, "badabi.cpp");
+        var stubDll = Path.Combine(stubDir, "badabi.dll");
+        File.WriteAllText(stubCpp, stubSource);
+
+        var (compilerExe, exeTemplate) = compiler.Value;
+        var dllTemplate = exeTemplate.Contains("cl /nologo", StringComparison.Ordinal)
+            ? exeTemplate.Replace("/EHsc", "/EHsc /LD", StringComparison.Ordinal)
+            : exeTemplate.Replace("-std=c++20", "-std=c++20 -shared", StringComparison.Ordinal);
+        Assert.That(dllTemplate, Is.Not.EqualTo(exeTemplate),
+            "could not derive a DLL build from the discovered compiler template: " + exeTemplate);
+
+        var psi = new System.Diagnostics.ProcessStartInfo(compilerExe, string.Format(dllTemplate, stubCpp, stubDll))
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = stubDir,
+        };
+        using (var cc = System.Diagnostics.Process.Start(psi)!)
+        {
+            var ccOut = cc.StandardOutput.ReadToEndAsync();
+            var ccErr = cc.StandardError.ReadToEndAsync();
+            Assert.That(cc.WaitForExit(120_000), Is.True, "the stub compile did not finish.");
+            Assert.That(cc.ExitCode, Is.EqualTo(0),
+                "the stub shim failed to compile, so nothing below means anything:\n"
+                + ccOut.GetAwaiter().GetResult() + "\n" + ccErr.GetAwaiter().GetResult());
+        }
+        Assert.That(File.Exists(stubDll), Is.True, "the stub compile reported success but produced no DLL: " + stubDll);
+
+        File.Copy(stubDll, shimPath, overwrite: true);
+
+        var (exitCode, stdout, stderr) = RunAllowingFailure(exe);
+        var dump = $"exit={exitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}";
+        var expectedLine = "blnet: shim ABI " + wrongAbi + ", expected "
+                           + BasicLang.Compiler.CodeGen.CPlusPlus.BlnetContract.AbiVersion;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exitCode, Is.EqualTo(NetProxyEmitter.StartupFailureExitCode),
+                "§9.3: an ABI mismatch must exit " + NetProxyEmitter.StartupFailureExitCode
+                + ".\n" + dump);
+            Assert.That(stderr, Does.Contain(expectedLine),
+                "§9.3: the failure must name BOTH versions on STDERR — the shim's and the one "
+                + "the program was built against — so a user can tell which side is stale. "
+                + "Expected the line: " + expectedLine + "\n" + dump);
+            Assert.That(stdout, Is.Empty,
+                "nothing may reach stdout: the ABI check runs before initialize, before Main.\n"
+                + dump);
+        });
+    }
+
     [Test]
     public void AMissingShim_FailsTheStartupHandshake_WithTheSpecifiedExitCode()
     {
