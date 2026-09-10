@@ -183,6 +183,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // `class MyError extends Exception` hits the temporal dead zone otherwise.
             EmitExceptionPrelude(module);
 
+            // Module-level Dims, also before classes — a static field initialiser may read one.
+            EmitGlobals(module);
+
             // Class and interface member bodies also live in module.Functions, under their
             // UNQUALIFIED name — `Class A.Handle` and `Class B.Handle` are both "Handle".
             // Emitting them here would produce two top-level `function Handle()` declarations
@@ -283,6 +286,62 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             }
 
             Line();
+        }
+
+        /// <summary>
+        /// Module-level <c>Dim</c>s as top-level <c>let</c>s.
+        ///
+        /// <para>MEASURED before this: <c>module.GlobalVariables</c> was never emitted, and a
+        /// function's <c>n = n + 1</c> came out as <c>const n = ((n + 1) | 0)</c> — IRBuilder
+        /// renames the result to the variable it assigns, and <see cref="Bind"/> knew only
+        /// locals and members — so Node died with "Cannot access 'n' before initialization"
+        /// from a build that reported success. <see cref="DeclareGlobals"/> is the other half:
+        /// inside every body the globals count as declared, so that rename is an assignment.</para>
+        ///
+        /// <para>Only a CONSTANT initializer is lowered. IRBuilder evaluates a module-level
+        /// initializer with no current function, so anything else has already lost its
+        /// instructions (EmitInstruction drops them when there is no block) — a call or a
+        /// <c>New</c> here would be a silently defaulted global. Refuse instead.</para>
+        /// </summary>
+        private void EmitGlobals(IRModule module)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var any = false;
+
+            foreach (var g in module.GlobalVariables?.Values ?? Enumerable.Empty<IRVariable>())
+            {
+                if (g?.Name == null) continue;
+
+                // JavaScript has ONE top-level scope; two modules' same-named globals would be
+                // a duplicate `let` — a SyntaxError — or, mangled apart, a silent split.
+                if (!seen.Add(g.Name))
+                    throw NotYet($"two module-level variables named '{g.Name}' in one program");
+
+                string init;
+                switch (g.InitialValue)
+                {
+                    case null:
+                        init = ArrayInitializer(g.Type) ?? TypeMapper.GetDefaultValue(g.Type);
+                        break;
+                    case IRConstant constant:
+                        init = Expr(constant);
+                        break;
+                    default:
+                        throw NotYet($"a module-level initializer for '{g.Name}' that is not a constant");
+                }
+
+                Line($"let {SanitizeName(g.Name)} = {init};");
+                any = true;
+            }
+
+            if (any) Line();
+        }
+
+        /// <summary>Globals are in scope in every body — an assignment to one must not become a fresh <c>const</c>.</summary>
+        private void DeclareGlobals()
+        {
+            foreach (var g in _module?.GlobalVariables?.Values ?? Enumerable.Empty<IRVariable>())
+                if (g?.Name != null) _declaredNames.Add(g.Name);
         }
 
         /// <summary>
@@ -446,6 +505,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             foreach (var line in prologue ?? new List<string>()) Line(line);
 
             _declaredNames = new HashSet<string>(StringComparer.Ordinal);
+            DeclareGlobals();
             foreach (var p in impl.Parameters ?? new List<IRVariable>())
                 _declaredNames.Add(p.Name);
 
@@ -1358,6 +1418,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // matches BasicLang scoping — a `Dim` inside an If branch is visible after it,
             // whereas a JS `let` at the assignment site would not be.
             _declaredNames = new HashSet<string>(StringComparer.Ordinal);
+            DeclareGlobals();
             foreach (var p in function.Parameters ?? new List<IRVariable>())
                 _declaredNames.Add(p.Name);
 
@@ -2222,14 +2283,27 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             _boundNames.Clear();
             _sequenceValued.Clear();
 
-            _declaredNames = new HashSet<string>(StringComparer.Ordinal);
+            // ⛔ The ENCLOSING scope's names stay declared inside the lambda. An arrow function
+            // captures by lexical scope, so an assignment to a captured local must be an
+            // assignment — MEASURED with a fresh set: `Sub(x) total = total + x` emitted
+            // `const total = ((total + x) | 0)` inside the arrow (IRBuilder names the result
+            // after the variable), a TDZ ReferenceError, and the accumulator never changed.
+            // The lambda's OWN parameters and locals still shadow: they are tracked separately
+            // so a `Dim y` inside the lambda gets its own `let` even when a `y` exists outside.
+            _declaredNames = new HashSet<string>(savedDeclared ?? Enumerable.Empty<string>(), StringComparer.Ordinal);
+            DeclareGlobals();
+            var own = new HashSet<string>(StringComparer.Ordinal);
             foreach (var p in fn.Parameters ?? new List<IRVariable>())
+            {
                 _declaredNames.Add(p.Name);
+                own.Add(p.Name);
+            }
 
             _indentLevel = savedIndent + 1;
             foreach (var local in fn.LocalVariables ?? new List<IRVariable>())
             {
-                if (!_declaredNames.Add(local.Name)) continue;
+                if (!own.Add(local.Name)) continue;
+                _declaredNames.Add(local.Name);
                 var init = ArrayInitializer(local.Type);
                 Line(init == null
                     ? $"let {SanitizeName(local.Name)};"
@@ -2454,6 +2528,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     case "indexof" when args.Count == 1: result = $"{receiver}.indexOf({args[0]})"; return true;
                     case "removeat" when args.Count == 1: result = $"{receiver}.splice({args[0]}, 1)"; return true;
                     case "insert" when args.Count == 2: result = $"{receiver}.splice({args[0]}, 0, {args[1]})"; return true;
+                    // List.ForEach(Sub(x) …) is the everyday shape a Sub lambda appears in.
+                    // MEASURED before this arm: emitted verbatim, "items.ForEach is not a function".
+                    case "foreach" when args.Count == 1: result = $"{receiver}.forEach({args[0]})"; return true;
                     // Array has no Clear; length = 0 empties it IN PLACE, which preserves the
                     // reference every alias holds. Assigning a fresh [] would not.
                     case "clear" when args.Count == 0: result = $"({receiver}.length = 0)"; return true;

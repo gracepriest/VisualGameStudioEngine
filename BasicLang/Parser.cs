@@ -4540,13 +4540,19 @@ namespace BasicLang.Compiler
                 lambda.ReturnType = ParseTypeReference();
             }
 
-            // Check if this is a single-line or multi-line lambda
+            // Single-line vs multi-line is decided by whether a NEWLINE follows the parameter
+            // list — which is what the language says — not by peeking for a statement keyword.
+            //
+            // ⛔ The keyword peek (Dim/If/For/…) it replaces mis-parsed two everyday shapes,
+            // both MEASURED: a multi-line Sub lambda whose first statement is a call or an
+            // assignment fell through to the single-line path and left its End Sub dangling;
+            // and a single-line `Sub(x) total = total + x` was parsed with ParseExpression, in
+            // which `=` is EQUALITY — the lambda computed a boolean, discarded it, and the
+            // accumulator never changed, from a build that succeeded on every backend.
+            var multiLine = Check(TokenType.Newline);
             SkipNewlines();
 
-            // Multi-line lambda: check for statements after newline
-            if (Check(TokenType.Dim) || Check(TokenType.If) || Check(TokenType.For) ||
-                Check(TokenType.While) || Check(TokenType.Do) || Check(TokenType.Try) ||
-                Check(TokenType.Return) || Check(TokenType.Throw))
+            if (multiLine)
             {
                 // Multi-line lambda with statements
                 lambda.StatementBody = new BlockNode(token.Line, token.Column);
@@ -4573,10 +4579,21 @@ namespace BasicLang.Compiler
 
                 Consume(endToken, $"Expected '{(isFunction ? "End Function" : "End Sub")}' to close lambda");
             }
+            else if (isFunction)
+            {
+                // Single-line Function lambda: an expression, and its value is the result.
+                lambda.Body = ParseExpression();
+            }
             else
             {
-                // Single-line expression lambda
-                lambda.Body = ParseExpression();
+                // Single-line Sub lambda: ONE statement (an assignment or a call). It has no
+                // value, so there is nothing an expression could mean here.
+                lambda.StatementBody = new BlockNode(token.Line, token.Column);
+                var stmt = ParseStatement();
+                if (stmt != null)
+                {
+                    lambda.StatementBody.Statements.Add(stmt);
+                }
             }
 
             return lambda;

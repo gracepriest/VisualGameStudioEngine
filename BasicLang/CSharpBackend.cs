@@ -925,7 +925,53 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         /// <summary>
         /// Generate a C# class from IRClass
         /// </summary>
+        /// <summary>
+        /// Fields and properties of the class being generated, and of its bases — the names an
+        /// unqualified identifier inside one of its methods can resolve to.
+        ///
+        /// <para>⛔ MEASURED without this: <c>Total = Total + x</c> inside a method emitted an
+        /// EMPTY body. IRBuilder lowers that assignment as an IRBinaryOp RENAMED to
+        /// <c>Total</c> (no IRAssignment), and <see cref="IsNamedDestination"/> knew only
+        /// parameters, locals and globals — so a field-named result looked like an unused SSA
+        /// temp and was skipped, from a build that reported success. C++ and JavaScript both
+        /// emitted the statement.</para>
+        /// </summary>
+        private HashSet<string> _currentClassMemberNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        private HashSet<string> CollectMemberNames(IRClass irClass)
+        {
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            var current = irClass;
+            while (current != null && seen.Add(current.Name))
+            {
+                foreach (var f in current.Fields ?? new List<IRField>())
+                    if (f?.Name != null) names.Add(f.Name);
+                foreach (var p in current.Properties ?? new List<IRProperty>())
+                    if (p?.Name != null) names.Add(p.Name);
+
+                if (string.IsNullOrEmpty(current.BaseClass) || _currentModule?.Classes == null) break;
+                _currentModule.Classes.TryGetValue(current.BaseClass, out current);
+            }
+
+            return names;
+        }
+
         private void GenerateClass(IRClass irClass)
+        {
+            _currentClassMemberNames = CollectMemberNames(irClass);
+            try
+            {
+                GenerateClassBody(irClass);
+            }
+            finally
+            {
+                _currentClassMemberNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            }
+        }
+
+        private void GenerateClassBody(IRClass irClass)
         {
             // Class declaration with generic parameters
             var className = SanitizeName(irClass.Name);
@@ -1578,10 +1624,21 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                         var instr = instructions[i];
 
                         // Skip pure value computations (temps) - they get inlined
-                        // into the expressions that consume them
-                        if (instr is IRValue && !(instr is IRCall) && !(instr is IRStore) &&
+                        // into the expressions that consume them.
+                        //
+                        // ⛔ Unless the result is NAMED AFTER A VARIABLE — IRBuilder lowers
+                        // `total = total + x` as an IRBinaryOp renamed to `total`, with no
+                        // IRAssignment. Skipping that "temp" emitted an EMPTY lambda body, and
+                        // a Sub lambda accumulating into a captured local (or a field) silently
+                        // did nothing. Measured: the same program summed to 6 on C++ and JS
+                        // and printed 0 here.
+                        if (instr is IRValue namedValue && !(instr is IRCall) && !(instr is IRStore) &&
                             !(instr is IRAlloca) && !(instr is IRAssignment))
                         {
+                            if (IsNamedDestination(namedValue))
+                            {
+                                sb.Append($"{new string(' ', _indentLevel * 4)}{GetValueName(namedValue)} = {EmitExpression(namedValue)};\n");
+                            }
                             continue;
                         }
 
@@ -1661,7 +1718,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     if (instr is not IRValue v) continue;
                     if (string.IsNullOrEmpty(v.Name)) continue;
 
-                    if (_declaredIdentifiers.Contains(v.Name))
+                    // A result named after a variable OR a class member is an assignment, not
+                    // a temp — registering it here would inline `Total + x` into every later
+                    // read of `Total`.
+                    if (_declaredIdentifiers.Contains(v.Name) || _currentClassMemberNames.Contains(v.Name))
                         continue;
 
                     // first definition wins (good enough for simple SSA-style temp regs)
@@ -2626,7 +2686,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         {
             if (value == null) return false;
             if (string.IsNullOrEmpty(value.Name)) return false;
-            return _declaredIdentifiers.Contains(value.Name);
+            // A class member is a destination too — see _currentClassMemberNames. A local or
+            // parameter of the same name shadows it in C# exactly as it does in BasicLang, and
+            // the emitted text is the same either way.
+            return _declaredIdentifiers.Contains(value.Name) || _currentClassMemberNames.Contains(value.Name);
         }
 
         private string GetValueName(IRValue value)
@@ -2704,9 +2767,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                             }
                         }
 
-                        // If it's a real variable, use its name; if it's a temp "register",
-                        // try to inline its defining value.
-                        if (_declaredIdentifiers.Contains(v.Name) || v.IsParameter || v.IsGlobal)
+                        // If it's a real variable (or a member of the class being generated),
+                        // use its name; if it's a temp "register", try to inline its defining value.
+                        if (_declaredIdentifiers.Contains(v.Name) || v.IsParameter || v.IsGlobal ||
+                            _currentClassMemberNames.Contains(v.Name))
                         {
                             var varName = GetValueName(v);
 

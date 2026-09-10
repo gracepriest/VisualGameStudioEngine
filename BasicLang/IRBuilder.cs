@@ -769,6 +769,7 @@ namespace BasicLang.Compiler.IR
                 else if (member is FunctionNode funcNode)
                 {
                     // Process function and add as method
+                    var declaredAt = _module.Functions.Count;
                     member.Accept(this);
 
                     var method = new IRMethod
@@ -781,7 +782,7 @@ namespace BasicLang.Compiler.IR
                         IsOverride = funcNode.IsOverride,
                         IsAbstract = funcNode.IsAbstract,
                         IsSealed = funcNode.IsSealed,
-                        Implementation = _module.Functions.LastOrDefault()
+                        Implementation = MemberFunctionAt(declaredAt)
                     };
                     // Copy generic parameters
                     foreach (var genericParam in funcNode.GenericParameters)
@@ -793,6 +794,7 @@ namespace BasicLang.Compiler.IR
                 else if (member is SubroutineNode subNode)
                 {
                     // Process subroutine and add as method
+                    var declaredAt = _module.Functions.Count;
                     member.Accept(this);
 
                     var method = new IRMethod
@@ -805,7 +807,7 @@ namespace BasicLang.Compiler.IR
                         IsOverride = subNode.IsOverride,
                         IsAbstract = subNode.IsAbstract,
                         IsSealed = subNode.IsSealed,
-                        Implementation = _module.Functions.LastOrDefault()
+                        Implementation = MemberFunctionAt(declaredAt)
                     };
                     // Copy generic parameters
                     foreach (var genericParam in subNode.GenericParameters)
@@ -818,12 +820,13 @@ namespace BasicLang.Compiler.IR
                 {
                     // Process constructor - this also processes base constructor args
                     _pendingBaseConstructorArgs = null;
+                    var declaredAt = _module.Functions.Count;
                     member.Accept(this);
 
                     var ctor = new IRConstructor
                     {
                         Access = MapAccessModifier(ctorNode.Access),
-                        Implementation = _module.Functions.LastOrDefault()
+                        Implementation = MemberFunctionAt(declaredAt)
                     };
 
                     // Use the base constructor args collected during constructor processing
@@ -869,6 +872,21 @@ namespace BasicLang.Compiler.IR
 
             _currentClassName = null;
         }
+
+        /// <summary>
+        /// The IRFunction a class member's visit DECLARED: the one <c>CreateFunction</c>
+        /// appended at the index <c>Functions</c> had just before the visit.
+        ///
+        /// <para>⛔ Never <c>Functions.LastOrDefault()</c>. <c>Visit(FunctionNode)</c> registers
+        /// the member's own function FIRST and then visits the body, so every lambda in the
+        /// body is appended AFTER it — and "last" is the last lambda. MEASURED on the C# backend
+        /// for a method containing <c>items.ForEach(Sub(x As Integer) Total = Total + x)</c>:
+        /// the class got <c>public void AddAll(int x)</c> — the lambda's signature and body —
+        /// while the real body was emitted as a stray static function, from a build that
+        /// reported success. The JavaScript backend refused the shape, which is how it was found.</para>
+        /// </summary>
+        private IRFunction MemberFunctionAt(int declaredAt) =>
+            declaredAt < _module.Functions.Count ? _module.Functions[declaredAt] : null;
 
         private AccessModifier MapAccessModifier(BasicLang.Compiler.AST.AccessModifier access)
         {
@@ -1397,6 +1415,12 @@ namespace BasicLang.Compiler.IR
             // Create the lambda function
             var lambdaFunc = new IRFunction(lambdaName, returnType);
             lambdaFunc.IsLambda = true;
+
+            // A lambda belongs to the module it is written in. With ModuleName null the C#
+            // backend grouped it under its DEFAULT class name ("Program") — a phantom module
+            // that, for a file named Main.bas (whose own module class is renamed Program),
+            // produced two `static class Program` declarations and CS0101.
+            lambdaFunc.ModuleName = _currentModuleName ?? _module?.Name;
 
             // Detect captured variables (variables from outer scopes)
             var capturedVars = new List<(string name, TypeInfo type)>();
