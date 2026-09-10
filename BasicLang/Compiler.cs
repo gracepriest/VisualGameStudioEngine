@@ -212,6 +212,20 @@ namespace BasicLang.Compiler
                     return result;
                 }
 
+                // A declaration file is not a program.
+                if (IsDeclarationFile(filePath))
+                {
+                    result.AllErrors.Add(new SemanticError(
+                        $"'{Path.GetFileName(filePath)}' is a declaration file (.bli), not a program — " +
+                        "it declares types the target runtime provides. Compile the .bas that uses it.", 0, 0));
+                    return FinalizeResult(result, startTime);
+                }
+
+                // A JavaScript build gets the shipped DOM declarations as a second unit, which is
+                // the project route's job — one program from several files.
+                if (IsJavaScriptTarget && File.Exists(DomDeclarationsPath))
+                    return CompileProjectFiles(new[] { filePath });
+
                 // Add current file's directory to search paths
                 var fileDir = Path.GetDirectoryName(filePath);
                 if (!string.IsNullOrEmpty(fileDir))
@@ -324,8 +338,7 @@ namespace BasicLang.Compiler
 
             try
             {
-                var files = sourceFiles
-                    .Select(Path.GetFullPath)
+                var files = WithJavaScriptDeclarations(sourceFiles)
                     .Where(File.Exists)
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList();
@@ -464,8 +477,42 @@ namespace BasicLang.Compiler
         private static bool IsEntryLikeFile(string filePath)
         {
             var ext = Path.GetExtension(filePath)?.ToLowerInvariant();
-            // .mod/.cls/.class are library units; everything else can hold Main.
-            return ext != ".mod" && ext != ".cls" && ext != ".class";
+            // .mod/.cls/.class are library units and .bli is declarations; everything else can hold Main.
+            return ext != ".mod" && ext != ".cls" && ext != ".class" && ext != ".bli";
+        }
+
+        /// <summary>A <c>.bli</c> — declarations of runtime-provided types; compiled with the program, never a program itself.</summary>
+        public static bool IsDeclarationFile(string filePath) =>
+            string.Equals(Path.GetExtension(filePath), ".bli", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// The DOM declarations shipped beside the compiler, auto-included in every JavaScript
+        /// build (plan 2c). <c>lib/js/dom-core.bli</c> declares <c>Document</c>, <c>Element</c>,
+        /// <c>Window</c>, … as <c>Extern Class</c>es — they emit nothing, the browser provides
+        /// them — and a program reaches the runtime objects through the hatch:
+        /// <c>Dim d As Document = ::document</c>.
+        /// </summary>
+        public static string DomDeclarationsPath =>
+            Path.Combine(AppContext.BaseDirectory, "lib", "js", "dom-core.bli");
+
+        private bool IsJavaScriptTarget =>
+            _options?.TargetBackend?.ToLowerInvariant() is "javascript" or "js";
+
+        /// <summary>
+        /// The source set plus the shipped DOM declarations when the target is JavaScript and
+        /// the file exists beside the compiler. ⛔ Gated on the BACKEND: on C# or C++ an
+        /// <c>Element</c> would collide with a user type and the declarations mean nothing.
+        /// Both routes — the CLI/IDE project build and the single file — pass through here.
+        /// </summary>
+        private List<string> WithJavaScriptDeclarations(IEnumerable<string> sourceFiles)
+        {
+            var files = sourceFiles.Select(Path.GetFullPath).ToList();
+            if (!IsJavaScriptTarget) return files;
+
+            var dom = DomDeclarationsPath;
+            if (File.Exists(dom) && !files.Any(f => string.Equals(f, dom, StringComparison.OrdinalIgnoreCase)))
+                files.Add(dom);
+            return files;
         }
 
         /// <summary>

@@ -79,7 +79,7 @@ namespace BasicLang.Compiler.ProjectSystem
         /// (CppProjectBuilder's mixed-source partition, and the LSP file filter).
         /// </summary>
         public static readonly string[] BasicLangSourceExtensions =
-            { ".bas", ".bl", ".basic", ".mod", ".cls", ".class" };
+            { ".bas", ".bl", ".basic", ".mod", ".cls", ".class", ".bli" };   // .bli = declarations (plan 2c)
 
         // Windows desktop UI frameworks (require the net*-windows TFM)
         public bool UseWindowsForms { get; set; } = false;

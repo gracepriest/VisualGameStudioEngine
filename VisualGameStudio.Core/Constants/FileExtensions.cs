@@ -9,10 +9,13 @@ public static class FileExtensions
     public const string BasicLangClass1 = ".cls";
     public const string BasicLangClass2 = ".class";
 
+    /// <summary>A declaration file — Extern Class declarations of runtime-provided types (the DOM). Compiled, never an entry point.</summary>
+    public const string BasicLangDeclaration = ".bli";
+
     public const string Project = ".blproj";
     public const string Solution = ".blsln";
 
-    public static readonly string[] SourceExtensions = { BasicLangSource1, BasicLangSource2, BasicLangSource3, BasicLangModule, BasicLangClass1, BasicLangClass2 };
+    public static readonly string[] SourceExtensions = { BasicLangSource1, BasicLangSource2, BasicLangSource3, BasicLangModule, BasicLangClass1, BasicLangClass2, BasicLangDeclaration };
 
     /// <summary>
     /// File extensions that represent BasicLang module files (.mod).

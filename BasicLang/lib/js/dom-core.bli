@@ -1,0 +1,119 @@
+' dom-core.bli — DOM declarations for the JavaScript backend (plan 2c).
+'
+' Auto-included in every JavaScript build (BasicCompiler.DomDeclarationsPath). Every type
+' here is an Extern Class: it EMITS NOTHING — the browser already provides it — and its
+' members carry the EXACT JavaScript names (decision 2), so a BasicLang call is the real
+' call. Case does not matter at the use site: el.TextContent reaches textContent.
+'
+' Obtain the runtime objects through the hatch, then everything is typed:
+'
+'     Dim d As Document = ::document
+'     Dim w As Window = ::window
+'     Dim el As Element = d.getElementById("out")
+'     el.textContent = "hello"
+'     el.addEventListener("click", Sub(e As DomEvent) Console.WriteLine(e.target.id))
+'
+' `console` is deliberately absent: Console.WriteLine already lowers to console.log, and a
+' declared `console` would collide with that surface (BL7011). Anything not declared here is
+' still reachable untyped through `::` or verbatim through javascript{ }.
+
+Public Extern Class Document
+    Public Property title As String
+    Public Property body As Element
+    Public Property documentElement As Element
+    Public Function getElementById(id As String) As Element
+    Public Function querySelector(selectors As String) As Element
+    Public Function createElement(tagName As String) As Element
+    Public Function createTextNode(data As String) As Element
+    Public Sub addEventListener(eventType As String, listener As Action(Of DomEvent))
+    Public Sub removeEventListener(eventType As String, listener As Action(Of DomEvent))
+End Class
+
+Public Extern Class Element
+    Public Property id As String
+    Public Property tagName As String
+    Public Property className As String
+    Public Property textContent As String
+    Public Property innerHTML As String
+    Public Property innerText As String
+    Public Property value As String
+    Public Property checked As Boolean
+    Public Property disabled As Boolean
+    Public Property hidden As Boolean
+    Public Property parentElement As Element
+    Public Property firstElementChild As Element
+    Public Property nextElementSibling As Element
+    Public Property style As CSSStyleDeclaration
+    Public Property classList As DOMTokenList
+    Public Function querySelector(selectors As String) As Element
+    Public Function getAttribute(name As String) As String
+    Public Sub setAttribute(name As String, attributeValue As String)
+    Public Sub removeAttribute(name As String)
+    Public Function appendChild(child As Element) As Element
+    Public Function removeChild(child As Element) As Element
+    Public Sub remove()
+    Public Sub focus()
+    Public Sub click()
+    Public Sub addEventListener(eventType As String, listener As Action(Of DomEvent))
+    Public Sub removeEventListener(eventType As String, listener As Action(Of DomEvent))
+End Class
+
+Public Extern Class CSSStyleDeclaration
+    Public Property color As String
+    Public Property backgroundColor As String
+    Public Property display As String
+    Public Property visibility As String
+    Public Property width As String
+    Public Property height As String
+    Public Property fontSize As String
+    Public Property fontWeight As String
+    Public Property margin As String
+    Public Property padding As String
+    Public Property border As String
+    Public Property opacity As String
+End Class
+
+Public Extern Class DOMTokenList
+    Public Property length As Integer
+    Public Sub add(token As String)
+    Public Sub remove(token As String)
+    Public Function toggle(token As String) As Boolean
+    Public Function contains(token As String) As Boolean
+End Class
+
+' Named DomEvent rather than Event: `Event` is a BasicLang keyword. The type name is never
+' emitted (an Extern Class emits nothing), only its members are, so the JS name matters for
+' members alone.
+Public Extern Class DomEvent
+    Public Property target As Element
+    Public Property currentTarget As Element
+    Public Property key As String
+    Public Property clientX As Integer
+    Public Property clientY As Integer
+    Public Sub preventDefault()
+    Public Sub stopPropagation()
+End Class
+
+Public Extern Class Window
+    Public Property document As Document
+    Public Property innerWidth As Integer
+    Public Property innerHeight As Integer
+    Public Property location As Location
+    Public Sub alert(message As String)
+    Public Function confirm(message As String) As Boolean
+    Public Function prompt(message As String) As String
+    Public Function setTimeout(handler As Action, milliseconds As Integer) As Integer
+    Public Function setInterval(handler As Action, milliseconds As Integer) As Integer
+    Public Sub clearTimeout(handle As Integer)
+    Public Sub clearInterval(handle As Integer)
+    Public Function requestAnimationFrame(callback As Action) As Integer
+    Public Sub addEventListener(eventType As String, listener As Action(Of DomEvent))
+End Class
+
+Public Extern Class Location
+    Public Property href As String
+    Public Property pathname As String
+    Public Property search As String
+    Public Property hash As String
+    Public Sub reload()
+End Class

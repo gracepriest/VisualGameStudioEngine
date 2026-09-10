@@ -50,7 +50,7 @@ public static class LanguageFileTypes
     /// <summary>Extensions routed to the BasicLang language server.</summary>
     private static readonly string[] BasicLangExtensions =
     {
-        ".bas", ".bl", ".mod", ".cls", ".class"
+        ".bas", ".bl", ".mod", ".cls", ".class", ".bli"
     };
 
     /// <summary>
@@ -158,7 +158,7 @@ public static class LanguageFileTypes
             ".c" => "c",
             ".h" or ".hpp" or ".hh" or ".hxx" or ".inl" => CppId,
             ".lua" => "lua",
-            ".bas" or ".bl" or ".mod" or ".cls" or ".class" => BasicLangId,
+            ".bas" or ".bl" or ".mod" or ".cls" or ".class" or ".bli" => BasicLangId,
             ".blproj" => BasicLangId,
             ".sql" => "sql",
             ".sh" or ".bash" => "shellscript",
