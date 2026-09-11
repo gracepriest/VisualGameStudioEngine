@@ -484,8 +484,25 @@ The gate *is* the type system.
 - [ ] **Resolve the three-way template disagreement** (owner question 3): the VSIX ships `Program.bas`
       + `MainForm.bas` with an SDK-style `.blproj`; the IDE ships one `Main.bas` with no
       `InitializeComponent` and a differently-named handler; the CLI `TemplateEngine` has **no WinForms
-      template at all**. ⛔ The VSIX `MainForm.bas` has **zero build coverage** and may never have
-      compiled — prove it builds before making it canonical, or retire it.
+      template at all**. ✅ The VSIX shape is **measured to build** (2026-09-11: exit 0, a 151,552-byte
+      `.exe`), so it is the safe candidate for canonical — it still has **zero build coverage**, so
+      whichever wins must be added to the sweep in the same change.
+
+**The target emission, measured — match it exactly.** The proven build produced:
+
+```csharp
+public class MainForm : Form {
+    private Label lblMessage;                          // Private is fine: same class, same file
+    private void InitializeComponent() {
+        this.Text = "WinFormsProbe";                   // Me. -> this.
+        lblMessage.Location = new Point(20, 20);       // ONE statement — the geometry fan-in
+        btnClick.Click += btnClick_Click;              // AddHandler/AddressOf -> +=
+        this.Controls.Add(btnClick);
+    } }
+```
+
+with `[STAThread]` added automatically, namespace `GeneratedCode`, and `#line` directives mapping every
+statement back to the `.bas` — so breakpoints in the generated region land on the user's file.
 - [ ] **Gate:** full suite + `BasicLang.exe build` + the IDE build path.
 
 ---

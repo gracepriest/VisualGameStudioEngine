@@ -630,7 +630,10 @@ build and wrong behaviour.
 | ⛔ The fast subset is **not** a gate for codegen work — execution tests are `[Category("Integration")]`. | P | `HANDOFF.md:116-119`. |
 | ⛔ **A new template gets zero build coverage for free.** `ProjectTemplates.All` is hard-coded; `TemplateBuildSweepTests`' cases are hand-written `[TestCase]` strings. Of 24 references, six enumerate the list but **none of those builds anything**. | M | `IProjectTemplateService.cs:542-556`; `TemplateBuildSweepTests.cs:61-68`. The one enumerating guard to model on is `ProjectTemplateBackendMappingTests.cs:92`. |
 | The model to copy: a source-of-truth table plus a completeness guard that **fails** on a missing row. | P | `ProjectTemplateBackendMappingTests.cs:25-33`, `:56-58` — *"add a row, never widen the default"*. |
-| ⛔ **The VSIX `MainForm.bas` has zero build coverage and may never have compiled.** Both named tests drive `ProjectTemplateService`, which emits a **different** WinForms source. | M | Greps for `MainForm\.bas`, `InitializeComponent`, `btnClick` return no test-project hit. |
+| ✅ **The classic designer shape COMPILES and produces a working `.exe`.** Measured 2026-09-11: the VSIX `MainForm.bas` shape (`Inherits Form`, `InitializeComponent`, `AddHandler … AddressOf`, `New Point`/`New Size`, `MessageBox.Show`) built through `BasicLang.exe build` → exit 0, a 151,552-byte `WinFormsProbe.exe` and a `.dll`. `csc` accepted the generated C#. | M | `VisualGameStudio.Tests\bin\Release\net8.0\BasicLang.exe build WinFormsProbe.blproj`, output in `bin\Debug\net8.0-windows\`. |
+| ⛔ …but it has **zero build coverage**, so nothing stops it regressing. Both named tests drive `ProjectTemplateService`, which emits a **different** WinForms source. | M | Greps for `MainForm\.bas`, `InitializeComponent`, `btnClick` return no test-project hit. |
+| **The generated C# is idiomatic and debuggable** — this is the emission the writer must produce. `Me.` → `this.`, `AddHandler x.Click, AddressOf h` → `x.Click += h;`, `New Point(20, 20)` → `new Point(20, 20)` as **one** statement, `[STAThread]` added automatically, and `#line` directives mapping every statement back to the `.bas`. Namespace is `GeneratedCode`. | M | Generated `WinFormsProbe.cs`, verified line by line. |
+| ℹ️ **`Private` fields are sufficient under D1.** The measured build declares `private Label lblMessage;` and the subclass-visibility problem never arises, because the region and the handlers are in the **same class in the same file**. `Protected` would only be required under the rejected generated-base-class design. | M | Generated `WinFormsProbe.cs:11-12`. |
 | ⛔ **Three disagreeing WinForms templates.** VSIX (`Program.bas` + `MainForm.bas`, SDK-style `.blproj`); IDE (one `Main.bas`, no `InitializeComponent`, handler `OnButtonClick`); CLI `TemplateEngine` — **none at all**. | M | `ProjectTemplateService.cs:609-629`; zero `winforms` matches in `TemplateEngine.cs`. |
 | ⛔ **No optimizer-running C# helper exists.** C++ and JavaScript both have one. Every `CompileToCSharp` in the suite is a per-fixture non-optimizing copy. | M | `CppBclEndToEndTests.cs:47`; `JsTestSupport.cs:119`. **The single most likely way this feature ships a silent miscompile.** |
 | ⛔ `Assert.Inconclusive`/`Assert.Ignore` = pass-by-absence, and `FindCompiler` reads a **different** binary from the one the suite deploys. Use `CliTestHarness.CliPath()`, which hard-fails. | R | `TemplateBuildSweepTests.cs:25-37`, `:71-73`, `:110`, `:113`; `CliTestHarness.cs:18-24`. |
@@ -703,8 +706,12 @@ Task-level sequencing, files and gates: `docs/superpowers/plans/2026-09-11-visua
    **D1 does not depend on it.**
 2. **`.frm`** — `docs/MULTI_FILE_SYSTEM_PLAN.md:21` reserves `.frm` for "Form + code-behind". This
    spec uses `.blwebform`/`.blform`. Confirm the old row is marked obsolete.
-3. **The VSIX WinForms template may never have compiled**, has zero build coverage, and disagrees with
-   the IDE template (which has no `InitializeComponent` at all) and with the CLI (which has no WinForms
-   template). Before `.blform` writing ships, one of them has to become canonical. Which?
+3. **Which WinForms template becomes canonical?** ✅ The "may never have compiled" concern is
+   **retired — measured 2026-09-11, the VSIX `MainForm.bas` shape builds to a working `.exe`.** What
+   remains is that three templates disagree: the VSIX ships `Program.bas` + `MainForm.bas` with an
+   SDK-style `.blproj`; the IDE ships one `Main.bas` with no `InitializeComponent` and a
+   differently-named handler; the CLI `TemplateEngine` has **no WinForms template at all**. The VSIX
+   shape is the one the designer generates and the one now proven to build, so making it canonical
+   (and adding it to the IDE and CLI rosters) is the low-risk answer — but it is your call.
 4. **Slice 0 re-baseline** — re-measure the full suite (2h, certainty) or trust the recorded green and
    gate only what the work touches (proportional)?
