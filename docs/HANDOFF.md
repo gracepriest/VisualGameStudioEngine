@@ -11,6 +11,25 @@ relying on it.**
 
 ---
 
+## ✅ RESOLVED — the `87a6c5e` gate was run (2026-09-11, Linux cloud session)
+
+**The warning below is DISCHARGED, with one caveat.** A full suite ran on `f54416b`
+(= `87a6c5e` + the handoff docs commit): **5454 passed / 173 failed / 203 skipped of 5830**,
+both streams captured. The total reconciles as 5799 + `46fd2c5`'s 27 + 4 from the other Task 14
+commits, so nothing crashed and nothing was lost. **All four fixtures `46fd2c5` touched are
+green, and all 173 failures are environmental to Linux** — nothing indicates the untested
+combination is a problem. `46fd2c5`'s 27 tests have since been PROVEN by 12 mutation kills and
+reviewed; see the Task 14 section below.
+
+⚠ **The caveat: a Linux run is not the Windows gate.** 82 of the 173 are `BasicLang.exe not
+deployed` (no `.exe` suffix off Windows), ~60 are hardcoded `C:\` / PATHEXT / MSVC-vcvars
+assertions, 22 are Blnet integration rows needing the ILC/AOT shim publish, 6 are native-engine
+`DllNotFound`. Those 22 are exactly §12.5's integration set, **including
+`EveryProxyTableSlotResolvesInThePublishedShim`** — the runtime backstop this task's best find
+rests on. **Re-run the full suite on Windows before trusting the combination end to end.**
+
+<details><summary>Original warning, kept for the record</summary>
+
 ## ⛔ READ FIRST — `87a6c5e` went to master WITHOUT a full-suite gate (2026-09-11)
 
 `origin/master` == `origin/feat/p2a2-t11-delegates` == **`87a6c5e`**, SHA-verified. That commit
@@ -32,6 +51,8 @@ push without it.** So master currently carries two things nothing has verified t
 
 **FIRST JOB: run the full suite on `87a6c5e`** and compare against the numbers below plus this
 branch's additions. If it is red, suspect the untested combination before either side alone.
+
+</details>
 
 ---
 
@@ -167,26 +188,43 @@ fails only when the Native tier runs alongside it). The fast subset shows the tw
   (its static type is 'Func')`. The identical call with a lambda builds and runs. It is finished
   as a **pinned divergence** asserting that exact refusal, with a *replace, do not delete* note.
 
-**Left to do, in order:**
+**DONE 2026-09-11 (Linux cloud session) — items 1-3 below are closed:**
 
-1. **The full suite on `87a6c5e`** (see the warning at the top of this file).
-2. **§12.4's V2 and V3 are UNPROVEN** — the WIP commit's 27 tests need their mutation kills, and
-   **each must be DISCRIMINATING**: if a mutation also reds a pre-existing test it has proved
-   nothing about the new one, so record the split ("1 red of 20"). The six: empty the `Rejected`
-   registry set · make `MapTypeName`'s default arm skip the `NetRef` handle · remove one entry
-   from `NetAmbientNamespaces.All` · delete the C# backend's seeding loop · flip one
-   `CppCapabilityChecker.CheckType` early return · make `NetClaimPredicate` claim
-   `File.ReadAllText`. Then review that commit properly.
-3. **Task 15, the closeout.** Its inputs are already gathered: a detached worktree at
-   `.worktrees/p2a1base` sits at `2752a96` for the empty-surface inertness diff (materialise the
-   console and game templates, flip `<TargetBackend>` to Cpp, build at both commits, diff
-   `obj/gen` + build log + stdout, subtract the two known splices `NetException` and `NetRef`).
-   Spec status updates: header `Draft` → `Implemented`; §14.15 → Resolved; §15.11 → Decided;
-   §15.6 → Recorded-unchanged. **Stale prose to sweep:** `NetInertnessTests`'s header still says
-   `NetResolverFactory` is set "at exactly ONE site repo-wide" — false since Task 4
-   (`EnableNetResolution` is also called at `BasicLang/Program.cs` :511 and :1076 and
-   `BuildService.cs` :645; only the LSP leaves it null), plus dated "pre-flip" prose in
-   `NetIrCarriageTests` and `NetFlipTests`.
+1. ✅ **Full suite run** — see the resolved notice at the top of this file.
+2. ✅ **§12.4's V2 and V3 are PROVEN.** Twelve mutations, each applied, full suite run, reverted;
+   kills computed as a set difference against the 173-failure baseline. All 12 distinct new test
+   methods went red at least once on their own assertion. **Six are discriminating** (M2
+   `MapTypeName`→`SanitizeName`, M3 drop an ambient namespace, M7 `MapTypeName`→`!= Unknown`,
+   M10 drop the generic-`IEnumerable` arm, M11 `IEnumerable` ignores arity, M12 `CheckType` drops
+   the `::` return). For the other six the assertion still fired for the right reason — so it is
+   not vacuous — but the regression is already caught elsewhere, so its value is
+   vacuity-protection, not new detection. M5 alone reds 22 pre-existing lowering tests.
+   ⚠ The brief's six were not enough: **M2 cannot kill `NoOtherRegistryName_…`**, because a
+   `MapTypeName` that never answers `NetRef` makes a "must not be `NetRef`" assertion trivially
+   true. M7 is its mirror and exists for that reason.
+   Honest gap: 16 of the 17 `BareNameResolvesThroughItsAmbientNamespace` rows are proven by
+   mechanism, not individually.
+3. ✅ **Reviewed**, one finding fixed: `CheckerRejectedNamesAreNeverClaimed` had two arity-0
+   `[TestCase]`s, so its `? :` had an unreachable generic branch and its doc comment claimed
+   coverage of "both halves" it did not have. The arity-0 constraint is now an enforced
+   assertion. **Spec status and the stale-prose sweep are done** — see Task 15 Steps 2 and 3 in
+   the plan, which now carry the measured results.
+
+**Still open — needs a WINDOWS machine, none of it doable in a Linux container:**
+
+- **The full suite on Windows.** The Linux run leaves 22 Blnet integration rows unexercised,
+  including `EveryProxyTableSlotResolvesInThePublishedShim`. Also the 20-program parity battery
+  and `TemplateBuildSweepTests`.
+- **The game template's inertness stdout.** Its codegen and build log are measured and clean
+  (zero user-program TU changes); it cannot LINK here because `VisualGameStudioEngine.lib`
+  needs the VS 2022 engine build, so BL6009 fires on both sides identically.
+- **Task 15 Steps 4 and 5** — the `IDE/` binary refresh (per `aada862`, including the deps.json
+  closure check) and the memory/closeout commit.
+
+⚠ **Two corrections the inertness measurement produced, both now in the plan:** there are
+**THREE** runtime splices, not two — `485bbe1` adds a `BasicLang::String` alias — and `2752a96`
+is no longer a clean baseline, because 291 commits separate it from master and at least one
+(`d682f5a`, a non-P2a-2 concat memory-safety fix) changes user-program TUs.
 
 **The failure mode this task kept finding — check for it in any test you write or review.**
 Assertions that pass for structural reasons rather than because the property holds: a guard

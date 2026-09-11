@@ -36,6 +36,25 @@ enumerated splices (Task 1's `NetException`, Task 5's `NetRef`) and nothing else
   those splices and nothing else. `NetInertnessTests` enforces the diagnostics half; Task 5 (the
   flip) is where its severity assertions are deliberately churned — nowhere else.
 
+  > ⚠ **CORRECTED 2026-09-11, by measurement at Task 15 Step 2. There are THREE runtime
+  > splices, not two.** The third is `using String = std::string;` (plus its explanatory
+  > comment) in `BasicLangRuntime.g.h`, added by **`485bbe1` — `feat(p2a2): typed catch —
+  > NetException chain ladder + ex.Message lowering`**, a P2a-2 commit. It is a real, sanctioned
+  > P2a-2 addition that this enumeration simply never listed; it gives runtime and lowered code
+  > the BL-facing `BasicLang::String` name for what `MapType` already spells `std::string`.
+  > Treat the exempt set as {`NetException`, `NetRef`, `String` alias} from here on.
+  >
+  > **Separately: `2752a96` is no longer a clean baseline for this rule.** 291 commits separate
+  > it from master, and they are not all P2a-2 — so a raw diff against it also picks up
+  > unrelated C++ backend work. Measured instance: the console template's user-program TUs DO
+  > change, entirely because `"x" + y` now lowers to `std::string("x") + std::string(y)`, from
+  > **`d682f5a` — `fix(cpp): one stringifier`**, which is NOT a P2a-2 commit and which fixed a
+  > memory-safety bug (the old lowering did pointer arithmetic on a `const char*`). The
+  > zero-user-TU-change claim still HOLDS for P2a-2 itself; the game template, which has no
+  > string concatenation, shows zero user-program TU changes and runtime-header changes only.
+  > A future run of this rule must either diff P2a-2's commits alone or subtract known
+  > non-P2a-2 changes explicitly.
+
 ## Environment laws (violations have caused real damage — repeat to every implementer)
 
 - Windows PowerShell 5.1: no `&&`/`||`. Timeout 600000 on builds/tests. Never build the `.sln`.
@@ -1861,19 +1880,53 @@ duplicate; grep `BlnetContractTests`/`NetShimGeneratorTests` first).
 
 ### Task 15: full verification + closeout
 
-- [ ] **Step 1:** full gates: fast subset; Blnet filter (16 frozen scenarios + all new suites);
-  C++ fixtures + the 20-program parity battery; `TemplateBuildSweepTests` (Integration); one
-  full-suite run (`~39 min`, redirected to scratchpad).
-- [ ] **Step 2:** empty-surface inertness: a console AND a game template project emit generated
-  code + build logs whose diff vs `2752a96` consists of EXACTLY the two enumerated runtime
-  splices (`NetException`, `NetRef`) and nothing else — zero user-program TU changes, zero
-  diagnostic changes, identical runtime stdout (the P2a-1 methodology, scripted diff with the
-  known-splice subtraction).
-- [ ] **Step 3:** spec status updates: §14.15 → Resolved (D-P1); §15.11 → Decided (D-P2);
-  §15.6 → Recorded-unchanged (D-P4); spec header status → Implemented (P2a complete);
-  `AbiVersion` still 1 (assert, §13). Stale-prose sweep: `NetInertnessTests` fixture header
-  still claims "NetResolverFactory set at exactly ONE site repo-wide" (stale since Task 4's
-  C# warning row); grep the Blnet fixtures for other Task-4/5-staled prose.
+- [~] **Step 1:** full gates — **PARTIAL, run on Linux 2026-09-11.** One full-suite run on
+  `f54416b`: **5454 passed / 173 failed / 203 skipped of 5830**, both streams captured, total
+  reconciling as 5799 baseline + 46fd2c5's 27 + 4 from the other Task 14 commits (so no crashed
+  host). Blnet filter: 657/24/29, every one of the 24 present in that same baseline. All four
+  fixtures `46fd2c5` touched are green.
+
+  ⚠ **This is NOT the Windows gate and does not discharge Step 1.** All 173 failures are
+  environmental to a Linux container — 82 `BasicLang.exe not deployed` (no `.exe` suffix), ~60
+  hardcoded `C:\` / PATHEXT / MSVC-vcvars assertions, 22 Blnet integration rows needing the
+  ILC/AOT shim publish, 6 native-engine `DllNotFound`. The 22 unexercised rows are precisely
+  §12.5's integration set, **including `EveryProxyTableSlotResolvesInThePublishedShim`** — the
+  runtime backstop this task's own notes call its best find. The parity battery and
+  `TemplateBuildSweepTests` likewise need Windows. Re-run there before calling Step 1 done.
+- [x] **Step 2:** empty-surface inertness — **MEASURED 2026-09-11.** Both templates were
+  materialised ONCE and compiled by both compilers at an IDENTICAL filesystem path (building the
+  two copies at different paths makes every `#line` directive differ and swamps the real diff).
+
+  | | `obj/gen` | build log | stdout |
+  |---|---|---|---|
+  | **game** | runtime header ONLY — **zero user-program TU changes** ✅ | BL6009 on BOTH sides, identically | not measurable (needs the Windows-only engine import lib) |
+  | **console** | runtime header + `Helpers.g.cpp` + `Main.g.cpp` | 0 errors both sides | **identical** once timestamps are normalised ✅ |
+
+  **Two corrections came out of this, both recorded under the standing inertness rule above:**
+  the runtime splice set is THREE, not two (`485bbe1` adds a `BasicLang::String` alias); and
+  every console user-program TU change is attributable to `d682f5a`, a non-P2a-2 memory-safety
+  fix to concatenation lowering, NOT to P2a-2. P2a-2's own zero-user-TU-change claim holds.
+
+  ⚠ Run on Linux. The game half is codegen + build log only; its stdout, and a native-engine
+  link, still need a Windows run.
+- [x] **Step 3:** spec status updates — **DONE 2026-09-11.** §14.15 → Resolved (D-P1), recording
+  that the resolution is NARROWER than either candidate the spec listed (a two-name
+  `System.Object` allowlist; `GetType()` and `Equals(Object)` stay excluded), and dropping §14.15
+  from the "limitations 10, 11 and 15 are divergences" note. §15.11 → Decided (D-P2). §15.6 →
+  Recorded-unchanged (D-P4). Header `Draft` → `Implemented`. Each decision was verified as
+  actually implemented in code before being marked — D-P1 as
+  `NetTypeResolver.ObjectAllowlistMemberNames`, D-P2 as the `TargetFrameworkAttribute` net9.0+
+  BL6021 rule — rather than trusted from this plan. `AbiVersion` re-asserted as 1
+  (`BlnetContract.cs:12`).
+
+  Stale-prose sweep, three items, all corrected: `NetInertnessTests`'s "exactly ONE site
+  repo-wide" (FALSE since Task 4 — there are four sites, and the `Program.cs` project-build call
+  site names §6.3's C#-backend warning row in its own comment; what survives is that the LSP
+  still leaves the factory null, so no finding reaches a squiggle); `NetIrCarriageTests`'s
+  "`Regex` is still Rejected/unclaimed pre-flip" (Task 5 moved it to ManagedOwned);
+  `NetFlipTests`'s scope note naming Tasks 7a/7b/9 as pending (all shipped — reworded as scope
+  rather than schedule so it cannot re-stale). No line numbers are cited in the replacements:
+  this plan's own had drifted within one task (`:511`/`:1076` are now `:519`/`:1102`).
 - [ ] **Step 4:** IDE binary refresh if the session's rules call for it (the prebuilt `IDE/`
   binaries ship the compiler — same procedure as commit `aada862`, including the deps.json
   closure check via `dotnet exec --depsfile`).
