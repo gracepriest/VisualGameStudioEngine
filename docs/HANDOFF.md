@@ -11,27 +11,26 @@ relying on it.**
 
 ---
 
-## ⛔ READ FIRST — `87a6c5e` went to master WITHOUT a full-suite gate (2026-09-11)
+## ✅ READ FIRST — master is FULL-SUITE GREEN at `f54416b` (2026-09-11)
 
-`origin/master` == `origin/feat/p2a2-t11-delegates` == **`87a6c5e`**, SHA-verified. That commit
-merged eight P2a-2 Task 14 commits into master. **The required full-suite run was started and
-then stopped ~48 minutes in, at build-green with no test summary, by an explicit decision to
-push without it.** So master currently carries two things nothing has verified together:
+`origin/master` == **`f54416b`**, which merged eight P2a-2 Task 14 commits (tip `87a6c5e`) into
+master. **Full suite measured on Windows: 5826 tests, 4 failures — exactly the standing baseline
+below, nothing new.**
 
-1. **The combination.** Task 14's commits are test-only (plus one small seam, below); the
-   incoming master commits changed `BasicLang/JavaScriptEmitter.cs`, `BasicLang/Program.cs` and
-   `BasicLang/ProjectSystem/TemplateEngine.cs`. The two sides touch **no file in common**, and
-   each was gated on its own branch — but never together, and never by a full suite.
-2. **`46fd2c5`, a WIP commit.** 27 new tests that PASS but have **no mutation kills and no
-   review**: none has been shown to fail for the right reason, or to fail at all. It also
-   carries the one product change — `BasicLang/CSharpBackend.cs`, where the test seam
-   `AmbientNamespacesForTest` (a `static` alias that compared a constant with itself and could
-   not fail even if the seeding loop were deleted) becomes an instance view
-   `CandidateUsingsForTest => _usings`. Emission was measured unmoved (parity battery 22/0/0),
-   which is evidence, not proof.
+Worth recording *because* it was in doubt: that merge combined two sides that had only ever been
+gated apart. Task 14's commits are test-only (plus one small seam); the incoming master commits
+changed `BasicLang/JavaScriptEmitter.cs`, `BasicLang/Program.cs` and
+`BasicLang/ProjectSystem/TemplateEngine.cs`. They touch **no file in common**, and the full run
+confirms the combination is clean.
 
-**FIRST JOB: run the full suite on `87a6c5e`** and compare against the numbers below plus this
-branch's additions. If it is red, suspect the untested combination before either side alone.
+⚠ **One thing is still unproven, and it is not about the build.** `46fd2c5` is a WIP commit whose
+**27 tests pass but have no mutation kills and no review** — none has been shown to fail for the
+right reason, or to fail at all. Green is not the same as proven, and these are exactly the kind
+of assertion this task repeatedly found passing for structural reasons. It also carries the one
+product change: `BasicLang/CSharpBackend.cs`, where the test seam `AmbientNamespacesForTest` (a
+`static` alias that compared a constant with itself and could not fail even if the seeding loop
+were deleted) becomes an instance view `CandidateUsingsForTest => _usings`. Emission was measured
+unmoved (parity battery 22/0/0). **Proving those 27 tests is job #1 below.**
 
 ---
 
@@ -99,10 +98,15 @@ dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release
 dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --filter "TestCategory!=Integration"
 ```
 
-| Run | Count at `6139386` | Time |
+| Run | Count | Time |
 |---|---|---|
-| Full suite | 5792 passed / 5 failed / 2 skipped | ~2h |
-| Fast subset | 4897 passed / 2 failed / 1 skipped | ~2 min |
+| Full suite at **`f54416b`** (current master, Windows) | **5826 total, 4 failures — all baseline** | ~2h |
+| Full suite at `6139386` | 5792 passed / 5 failed / 2 skipped of 5799 | ~2h |
+| Fast subset at `6139386` | 4897 passed / 2 failed / 1 skipped | ~2 min |
+
+The 5799 → 5826 move is P2a-2 Task 14's additions. The 5th failure in the `6139386` run was a
+**contention timeout**, not a defect — `NothingInAHandleSlot_…_PinnedDivergence` "failed" after
+8m49s in a loaded full run and passed alone in 34s.
 
 **Four pre-existing failures are baseline and are not yours:** two `SearchSnippets_*`,
 `Cli_Build_CppProject_ProjectReference_Warns…`, and `NonEx_variants…` (which passes alone and
@@ -169,8 +173,7 @@ fails only when the Native tier runs alongside it). The fast subset shows the tw
 
 **Left to do, in order:**
 
-1. **The full suite on `87a6c5e`** (see the warning at the top of this file).
-2. **§12.4's V2 and V3 are UNPROVEN** — the WIP commit's 27 tests need their mutation kills, and
+1. **§12.4's V2 and V3 are UNPROVEN** — the WIP commit's 27 tests need their mutation kills, and
    **each must be DISCRIMINATING**: if a mutation also reds a pre-existing test it has proved
    nothing about the new one, so record the split ("1 red of 20"). The six: empty the `Rejected`
    registry set · make `MapTypeName`'s default arm skip the `NetRef` handle · remove one entry
