@@ -1,6 +1,6 @@
 # P2a — .NET class access from Native (BL+C++) projects, AOT shim transport
 
-**Status:** Draft
+**Status:** Implemented (P2a complete — P2a-1 and P2a-2 both shipped; closed out 2026-09-11)
 **Date:** 2026-07-29
 **Builds on:** `2026-07-26-dotnet-native-boundary-contract-design.md` (P0, Implemented),
 `2026-07-27-p1-native-bcl-types-design.md` (P1, Implemented)
@@ -1368,13 +1368,27 @@ proved the type — so it is not worth the version.
     nor §8.3's objection applies. The member is excluded purely by §7.2's inheritance rule, which
     makes this a genuine **§6.3 equal-behavior divergence** rather than a marshaling limit.
 
-    Two candidate fixes for P2a-2, neither chosen here: admit nullary `Object` members whose
-    signatures are marshalable, or keep the exclusion and special-case `ToString`/`GetHashCode` as
-    native calls. **Deciding this needs a §12.1 parity program** (see the row added there).
+    ✅ **RESOLVED in P2a-2 (decision D-P1, implemented by Task 4 Step 2a; recorded here at
+    Task 15).** Of the two candidates once listed — admit nullary `Object` members whose
+    signatures are marshalable, or special-case `ToString`/`GetHashCode` as native calls —
+    **neither was taken as stated.** The resolution is narrower than the first and less invasive
+    than the second: `NetTypeResolver`'s candidate set admits `System.Object.ToString()` and
+    `System.Object.GetHashCode()` **by explicit two-name allowlist**, even when the type does not
+    override them. It is deliberately NOT the general "any marshalable nullary `Object` member"
+    rule: `GetType()` stays excluded (it is the reflection root) and `Equals(Object)` stays
+    excluded (§8.3 — `Object` is permanently `Rejected`). The allowlist is
+    `NetTypeResolver.ObjectAllowlistMemberNames`. An OVERRIDE stays authoritative: a type that
+    overrides `ToString` already yielded it under its most-derived declaration, so the
+    `System.Object` entry collides on signature identity and is dropped.
 
-> Limitations 10, 11 and 15 are *divergences from the C# backend*, not merely missing features. They
+    The §12.1 parity row that forced this decision is consequently a PASSING row, not a pinned
+    expected failure — the divergence below no longer stands.
+
+> Limitations 10 and 11 are *divergences from the C# backend*, not merely missing features. They
 > are the reason §12.1 requires a parity program for each — a divergence that is pinned is a
-> documented behavior; one that is not is a bug waiting to be found by a user.
+> documented behavior; one that is not is a bug waiting to be found by a user. (15 was a third
+> such divergence until D-P1 resolved it in P2a-2; its parity row now passes rather than being
+> pinned as an expected failure.)
 >
 > ⚠ A trap worth stating, because plan Task 5 fell into it: a test probing the §7.2 `Object`
 > boundary must use a type that does **not** override the member. `StringBuilder.ToString()` and
@@ -1392,12 +1406,12 @@ proved the type — so it is not worth the version.
 | 15.3 | Whether tightening `IsNetType` breaks an existing test — recon could not determine whether any test pins the analyzer's permissiveness. |
 | 15.4 | `blnet_initialize` is `const BlnetNativeVtable*` in the header but `void*` in the shim (`Exports.cs:36`). Deliberate for AOT blittability, or drift? Untested either way. |
 | 15.5 | **DECIDED — option (b).** BasicLang generics emit real C++ templates and are never monomorphized in the front end, so .NET instantiations cannot be enumerated at phase 3, and `MakeGenericType` throws for anything not pre-generated. v1 therefore **rejects a .NET call inside a BasicLang generic body with BL6024** rather than building an instantiation-enumeration pass, which would be its own subsystem. §12.3's generics row covers .NET generics called from non-generic BasicLang code, which works normally. Recorded as §14.13. |
-| 15.6 | `[ThreadStatic]` last-error is never cleared on `BLNET_OK`, so a caller reading it after success gets a stale unrelated error. Pre-existing; decide whether P2a tightens it. |
+| 15.6 | **RECORDED — UNCHANGED (D-P4).** `[ThreadStatic]` last-error is never cleared on `BLNET_OK`, so a caller reading it after success gets a stale unrelated error. Pre-existing. P2a deliberately does NOT tighten it: `NetCheck` reads the channel only on a non-OK status, so the staleness is unobservable through generated proxies — the only consumers P2a ships. Recorded rather than fixed, so a future direct consumer of the channel knows the contract. |
 | 15.7 | Whether a capability rejection also breaks IntelliSense emission (codegen still runs at `CppProjectBuilder.cs:293-296` with `forIntelliSense: true`) — inferred by recon, not verified. |
 | 15.8 | Latent bug spotted in passing: `WorkspaceManager.cs:186` builds the package path without lowercasing the version while `PackageManager.GetPackagePath` lowercases both — LSP package-type loading may silently miss. Out of scope; chip it. |
 | 15.9 | Whether `<ProjectReference>` (§5, §14.9) should be promoted into P2a after all, or stay a separate cross-project-compilation feature. It is the single largest deferred item and the workaround (`<Reference>` + `<HintPath>`) is workable but manual. |
 | 15.10 | **DECIDED — severity by diagnostic class.** `RequiresDynamicCode` (IL3050 and friends) → BL6020 **error**: the call throws at runtime, so building would ship a known crash. Trim-analysis warnings (IL2026 and friends) → BL6020 **warning**: Microsoft documents that many are conservative and not actionable by end developers. Assembly-level aggregates (IL2104/IL3053) → BL6020 **warning**: they do not prove the program's own paths break. This is `AotDiagnosticMapper`'s acceptance criterion. |
-| 15.11 | Shim TFM vs user assemblies: a `net8.0` shim cannot reference a `net9.0+` user assembly, which collides with D1's "any assembly". Decide whether the shim TFM floats to the highest referenced TFM or stays pinned with a BL6021-class diagnostic. |
+| 15.11 | **DECIDED — the shim TFM stays pinned `net8.0` (D-P2).** A `net8.0` shim cannot reference a `net9.0+` user assembly, which collides with D1's "any assembly". Rather than float the TFM to the highest referenced one, `NetReferenceResolver` reads each resolved reference's assembly-level `TargetFrameworkAttribute` and reports a **BL6021** when it names `.NETCoreApp,Version=v9.0` or higher — so the collision is a readable build diagnostic instead of csc answering NU1201/CS0012 late and unreadably. Floating the TFM is P2b-adjacent work and is not done here. |
 | 15.12 | **DECIDED — pump at outermost return.** A generated proxy calls `blnet_pump()` after `NetCheck` when the call depth has returned to 0, i.e. only at the outermost boundary call. This drains anything a foreign thread queued during the call without adding a pump to every nested proxy, and requires **no change to P0's frozen `BlnetCallScope`** — the check lives in generated code. Callbacks raised on the calling thread still run inline via the scope (§9.2) and never reach the queue. |
 | 15.13 | Whether a **library output** with a non-empty .NET surface should eventually be supported rather than rejected with BL6025 (§9.5, §14.12). Requires solving static-initializer survival when the TU is pulled from a static archive and nothing references its symbols. |
 

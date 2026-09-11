@@ -308,14 +308,27 @@ public class NetClaimPredicateTests
     /// <summary>
     /// Direction (2): a name the checker REPORTS must not be claimed — it has no native
     /// lowering, so the shim is the only route it could ever take, and claiming it would strand
-    /// it. Includes the two halves of the arity-sensitive <c>IEnumerable</c> rule, which is the
-    /// only name in the predicate that reads <c>genericArgumentCount</c> at all.
+    /// it.
+    ///
+    /// <para><b>This covers the NON-GENERIC half of the arity-sensitive <c>IEnumerable</c> rule
+    /// only</b> — <c>genericArgumentCount</c> is 0 on every row, and structurally must be: the
+    /// checker ACCEPTS <c>IEnumerable(Of T)</c> (it lowers to <c>BasicLang::Generator&lt;T&gt;</c>),
+    /// so a generic row could never satisfy the checker-REJECTS guard below. The generic half
+    /// lives in <see cref="GenericIEnumerableIsClaimedAndCheckerSilent"/>. An earlier revision of
+    /// this comment claimed both halves were here; they were not, and the arity parameter fed a
+    /// ternary whose generic branch was unreachable. The assertion below now holds that
+    /// constraint mechanically instead of leaving it to prose.</para>
     /// </summary>
     [TestCase("ZzqNotATypeAnyoneDeclared", 0)]
     [TestCase("IEnumerable", 0)]
     public void CheckerRejectedNamesAreNeverClaimed(string name, int genericArgumentCount)
     {
-        var type = genericArgumentCount == 0 ? ClassType(name) : ClassType(name, "Integer");
+        Assert.That(genericArgumentCount, Is.Zero,
+            "every row here must be arity 0 — see the remarks. A name the checker accepts at "
+            + "arity > 0 belongs in GenericIEnumerableIsClaimedAndCheckerSilent, not here: the "
+            + "checker-REJECTS guard below would be unsatisfiable for it.");
+
+        var type = ClassType(name);
         var diagnostics = CheckerDiagnosticsFor(type);
 
         Assert.That(diagnostics.Any(d => d.Contains("no C++ mapping")), Is.True,

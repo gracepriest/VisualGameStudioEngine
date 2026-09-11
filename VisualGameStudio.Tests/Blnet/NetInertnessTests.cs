@@ -26,14 +26,22 @@ namespace VisualGameStudio.Tests.Blnet;
 /// gate must sit on the entry point it claims to guard.</para>
 ///
 /// <para><b>Scope of the wiring, stated precisely so nobody infers more than is true.</b>
-/// <c>CompilerOptions.NetResolverFactory</c> is set at exactly ONE site repo-wide —
-/// <c>CppProjectBuilder</c>, the native build path. Every C#-backend path (<c>Program.cs</c>,
-/// <c>BuildService</c>, <c>MultiTargetCompiler</c>) leaves it null, and so does the LSP. So in
-/// P2a-1 a BL6016/BL6017/BL6023 can appear ONLY on a native build: no C# project can produce one,
-/// and none of them reaches an editor squiggle. Spec §6.3's C#-backend warning row is deliberately
-/// unimplemented here — wiring it would add spurious-warning risk to a path P2a-1 gains nothing
-/// from — and moves to P2a-2. If a later task wires either, widen this fixture to cover it, or the
-/// gate silently stops guarding the path that actually regressed.</para>
+/// <c>CompilerOptions.NetResolverFactory</c> is set at FOUR sites: <c>CppProjectBuilder</c>
+/// assigns it directly (the native build path), and <c>CompilerOptions.EnableNetResolution</c>
+/// — which assigns it — is called twice from <c>Program.cs</c> (the project build and the
+/// single-file compile) and once from <c>BuildService</c> (the IDE build).
+/// <c>MultiTargetCompiler</c> leaves it null, and so does the LSP.</para>
+///
+/// <para><b>⚠ Corrected at P2a-2 Task 15.</b> This paragraph used to claim the factory was set
+/// at "exactly ONE site repo-wide" and that every C#-backend path left it null, so a
+/// BL6016/BL6017/BL6023 could appear ONLY on a native build. <b>Task 4 wired spec §6.3's
+/// C#-backend warning row and made both claims false</b> — the <c>Program.cs</c> project-build
+/// call site now names that row in its own comment. What still holds, and is what this fixture
+/// leans on: those findings are ERRORS on a native build and WARNINGS on the C# backend, and
+/// none of them reaches an editor squiggle, because the LSP genuinely does still leave the
+/// factory null. If a later task wires the LSP, widen this fixture to cover it, or the gate
+/// silently stops guarding the path that actually regressed. (No line numbers are cited on
+/// purpose: the previous note's had drifted within a single task.)</para>
 ///
 /// <para><b>Keep this fixture through Tasks 9-16.</b> It is the standing guard on the plan's
 /// central claim, and every later task widens what the resolver sees.</para>
