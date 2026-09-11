@@ -6,6 +6,32 @@ namespace VisualGameStudio.Tests.Blnet;
 [TestFixture]
 public class BlnetContractTests
 {
+    /// <summary>
+    /// <b>Spec §13's ABI-stability pin — the one assertion that is not relative to
+    /// <see cref="BlnetContract.AbiVersion"/> itself.</b>
+    ///
+    /// <para>Every other test in the suite compares something TO <c>AbiVersion</c>: the generated
+    /// header's <c>#define</c>, the hand shim's <c>ShimAbi</c>, the generated shim's
+    /// <c>ShimAbi.cs</c>, the bad-ABI conformance stub's <c>AbiVersion + 1</c>. All of them track
+    /// the constant, so all of them stay green when it moves — which is correct for THEM (they are
+    /// drift oracles) and leaves §13's actual claim, that the number is 1 for the whole of P2a,
+    /// with no oracle at all.</para>
+    ///
+    /// <para>Contract rule C7 makes a bump a real, deliberate event: it invalidates every shim
+    /// already deployed beside a user's executable (§9.3's handshake then fails, naming both
+    /// versions), and it is what adding an eighth core export or changing a status value or a slot
+    /// encoding COSTS. This test is the place that cost gets paid consciously.</para>
+    /// </summary>
+    [Test]
+    public void AbiVersion_IsStillOne_ForAllOfP2a() =>
+        Assert.That(BlnetContract.AbiVersion, Is.EqualTo(1),
+            "BlnetContract.AbiVersion moved. Spec §13 holds it at 1 for the whole of P2a, and "
+            + "rule C7 says a bump is an ABI break: P0 conformance scenario 14 (the version "
+            + "handshake), the three §12.4 drift tests that splice this number into the generated "
+            + "shim, and every shim DLL already deployed beside a user's executable all assume the "
+            + "old value. If the bump is deliberate, update this literal in the SAME commit and "
+            + "say which ABI change forced it. If it is not, revert BlnetContract.");
+
     [Test]
     public void StatusCodes_AreDenseFromZero_AndUniquelyNamed()
     {

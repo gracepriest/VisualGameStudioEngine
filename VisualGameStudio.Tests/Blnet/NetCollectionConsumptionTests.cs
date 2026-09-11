@@ -602,5 +602,23 @@ public class NetCollectionConsumptionTests
         Assert.That(exports, Is.SupersetOf(expected),
             "the collector must see a For Each's FOUR members; they ride a bundle rather than "
             + "INetCarrying, which holds one.");
+
+        // §12.4 over a REAL COLLECTED surface (P2a-2 Task 14). Every other slots-≡-exports oracle
+        // in the suite runs on a hand-built NetSurface literal, so shapes only the analyzer and
+        // the collector produce never reached one. These four are exactly that: SYNTHESIZED
+        // accessors whose declaring types are CONSTRUCTED GENERIC interfaces —
+        // IEnumerable<System.String> and IEnumerator<System.String>, measured — plus two
+        // non-generic framework interfaces. The declaring type is an axis NetNameMangler hashes
+        // over, so "the two tables agree on hand-typed members" is not evidence that they agree
+        // on these.
+        var slots = NetProxyEmitter.EmitBindings(surface).SlotNames;
+        Assert.That(slots, Has.Count.GreaterThan(1),
+            "guard: a surface of one member (or none) makes the equality below true for the wrong "
+            + "reason. Slots: " + string.Join(", ", slots));
+        Assert.That(slots, Is.EquivalentTo(exports),
+            "spec §12.4 over the surface the COLLECTOR built, not a hand-written literal: the "
+            + "proxy table's slots and the shim's surface-derived exports must be the same set. A "
+            + "mismatch here is a null slot at runtime — the program passes §9.3's handshake and "
+            + "dies at its first .NET call with nothing on stderr (chip task_68a7198a).");
     }
 }

@@ -884,6 +884,25 @@ public class NetShimPhaseTests
             Assert.That(provenance.Select(p => p.Value.Description), Is.All.EqualTo("Aot.Probe.Widget"),
                 "the origin must name the DECLARATION the user wrote, not the member's declaring "
                 + "type — those differ for every inherited member.");
+
+            // §12.4 over a REAL COLLECTED surface (P2a-2 Task 14). The four set-equality oracles
+            // that existed for this invariant all ran on hand-built NetSurface literals, so the
+            // shape only a §7.2 expansion produces never reached one: measured, this surface is
+            // five members and TWO of them are INHERITED, carrying System.Object as their
+            // DeclaringTypeFullName rather than Aot.Probe.Widget. The declaring type is an axis
+            // NetNameMangler hashes over, which is why the inherited case has to be checked
+            // rather than assumed.
+            var slots = NetProxyEmitter.EmitBindings(surface).SlotNames;
+            var exports = NetShimGenerator.SurfaceDerivedExportNames(surface);
+            Assert.That(slots, Has.Count.GreaterThan(1),
+                "guard: a one-member expansion makes the equality below true for the wrong reason. "
+                + "Slots: " + string.Join(", ", slots));
+            Assert.That(slots, Is.EquivalentTo(exports),
+                "spec §12.4 over the surface the COLLECTOR built from <NetProxy Include=\"Aot."
+                + "Probe.Widget\"/>: the proxy table's slots and the shim's surface-derived "
+                + "exports must be the same set. A mismatch is a null slot — the program passes "
+                + "§9.3's handshake and dies at its first .NET call, silently (chip "
+                + "task_68a7198a).");
         });
     }
 

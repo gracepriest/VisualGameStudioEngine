@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -459,6 +460,188 @@ public class NetGeneratedShimConformanceTests
                 "the process must not report success, and it does NOT currently reach the "
                 + "contracted exit 3 — measured 0xC0000409 (fail-fast), asserted loosely because "
                 + "the exact code is the least stable part of the signature.\n" + dump);
+        });
+    }
+
+    // =====================================================================================
+    // §12.4 — the mechanical drift invariants, at EXECUTION level (P2a-2 Task 14).
+    // =====================================================================================
+
+    /// <summary>
+    /// One proxy-table slot per struct field in <c>blnet_bindings.g.hpp</c>. Test-owned and
+    /// shaped exactly like <c>NetShimGeneratorTests.SlotLine</c> — the two fixtures parse the
+    /// same emitter's output and neither owns it.
+    /// </summary>
+    private static readonly Regex SlotLine = new(
+        @"^\s*int32_t \(BLNET_CALL \*(?<name>\w+)\)\([^)]*\);\s*$",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+
+    /// <summary>The generated <c>ShimAbi.cs</c> constant, captured as a NUMBER.</summary>
+    private static readonly Regex ShimAbiConstant = new(
+        @"public const int AbiVersion = (?<value>\d+);", RegexOptions.Compiled);
+
+    /// <summary>
+    /// <b>§12.4's slots-≡-exports invariant, for the first time against a PUBLISHED BINARY.</b>
+    ///
+    /// <para>Every other oracle for this invariant compares two strings the same process just
+    /// produced. None of them can see the thing that actually goes wrong: a shim DLL on disk whose
+    /// export table does not contain a slot the executable beside it will call. Task 12 pinned
+    /// exactly that defect — <c>blnet_bind_all</c> assigns each member slot from
+    /// <c>blnet_get_symbol</c> with NO check, so a shim carrying the core seven and no members
+    /// PASSES §9.3's handshake, runs <c>Main</c>, and fail-fasts at the first .NET call with
+    /// nothing on stderr (chip <c>task_68a7198a</c>,
+    /// <see cref="AShimMissingAMemberExport_SurvivesTheHandshake_AndDiesSilentlyAtFirstCall_PinnedDivergence"/>).
+    /// While that hole is open, this test is the only guard that the shipping pipeline does not
+    /// produce such a shim by accident.</para>
+    ///
+    /// <para>Costs no publish: it reuses the memoized <c>ConfProperty</c> build, reads the slot
+    /// names out of the <c>obj/gen</c> header the same build wrote, and asks the OS loader whether
+    /// the deployed DLL exports each one.</para>
+    ///
+    /// <para>⛔ <b>ONE direction only, deliberately.</b> This proves slots ⊆ exports. The converse
+    /// — that the shim exports nothing beyond the slots plus the core seven — needs a PE
+    /// export-directory walk, since <c>NativeLibrary</c> can only answer "is this name present?"
+    /// and cannot enumerate. That half is NOT done here rather than substituted with something
+    /// weaker; its emit-level counterpart is
+    /// <c>NetShimGeneratorTests.ExportsAreExactlyTheSlotsPlusTheCoreSeven</c>, which reads every
+    /// <c>EntryPoint</c> string out of the generated text.</para>
+    /// </summary>
+    [Test]
+    public void EveryProxyTableSlotResolvesInThePublishedShim()
+    {
+        var built = BuildOnce("ConfProperty", PropertyProgram);
+        AssertBuilt(built.Result, "the §12.3 named-property program");
+
+        var bindingsPath = Path.Combine(built.Dir, "obj", "gen", NetProxyEmitter.BindingsFileName);
+        Assert.That(File.Exists(bindingsPath), Is.True,
+            "a program with a real .NET surface must have a §9.1 proxy-table header. Its absence "
+            + "means this row is looking in the wrong place, not that there are no slots: "
+            + bindingsPath);
+
+        var slots = SlotLine.Matches(File.ReadAllText(bindingsPath))
+            .Select(m => m.Groups["name"].Value).ToList();
+
+        // Non-vacuity, both halves: the parse found slots AT ALL, and it found a slot for a member
+        // this program is known to call. An empty (or mis-parsed) list would make the loop below
+        // pass while asking the loader nothing.
+        Assert.That(slots, Is.Not.Empty,
+            "no proxy-table slots parsed out of " + NetProxyEmitter.BindingsFileName + ". Either "
+            + "the surface collapsed to nothing — which the property program cannot do, it calls "
+            + "FileInfo, Stream and Convert members — or the slot spelling changed and this "
+            + "fixture's regex no longer matches it.");
+        Assert.That(slots.Any(s => s.Contains("System_IO_FileInfo_Create", StringComparison.Ordinal)),
+            Is.True,
+            "the slot set does not contain FileInfo.Create, which this program calls on its second "
+            + "line. Slots: " + string.Join(", ", slots));
+
+        var shimPath = Path.Combine(
+            Path.GetDirectoryName(built.Result.ExecutablePath)!,
+            NetShimPipelineFixture.ShimDllName("ConfProperty"));
+        Assert.That(File.Exists(shimPath), Is.True,
+            "the shim DLL must be deployed beside the executable (phase 7). Asserted, never "
+            + "Ignored: a missing shim here is the failure this row exists to detect, and skipping "
+            + "on it would read as a pass. Looked for " + shimPath);
+
+        var module = System.Runtime.InteropServices.NativeLibrary.Load(shimPath);
+        try
+        {
+            var missing = slots.Concat(BasicLang.Compiler.CodeGen.CPlusPlus.BlnetContract.CoreExportNames)
+                .Where(name => !System.Runtime.InteropServices.NativeLibrary.TryGetExport(
+                    module, name, out _))
+                .ToList();
+
+            Assert.That(missing, Is.Empty,
+                "the PUBLISHED shim does not export " + missing.Count + " of the "
+                + (slots.Count + BasicLang.Compiler.CodeGen.CPlusPlus.BlnetContract.CoreExportNames.Count)
+                + " names the native side will bind: " + string.Join(", ", missing)
+                + ".\nA missing CORE name fails blnet_bind_core loudly (exit 3, a §9.3 line on "
+                + "stderr). A missing MEMBER name does not: blnet_bind_all stores the null and the "
+                + "program dies at its first call to it with no message at all. §12.4's "
+                + "slots-≡-exports is what keeps that from happening, and this is the only place "
+                + "it is checked against a real DLL rather than against a string the same process "
+                + "just emitted.");
+        }
+        finally { System.Runtime.InteropServices.NativeLibrary.Free(module); }
+    }
+
+    /// <summary>
+    /// <b>The §12.4 scaffolding chain's last hop — the files a REAL build left under
+    /// <c>obj/gen/shim</c>.</b>
+    ///
+    /// <para>The fast twin
+    /// (<c>NetShimGeneratorTests.WriteToPutsTheSplicedScaffoldingOnDiskUnchanged</c>) proves
+    /// <c>NetShimGenerator.WriteTo</c> writes the right bytes into a temp directory. This one
+    /// proves the shipping pipeline calls it — that the three files ILC actually compiled are the
+    /// hand shim's <c>HandleTable</c>, <c>BlnetContract</c>'s status enum, and
+    /// <c>BlnetContract.AbiVersion</c>. Everything between the two was previously unasserted: the
+    /// phase-5 call site, the reference-path and value-type arguments it passes, the prune, and
+    /// the cache branch.</para>
+    ///
+    /// <para>⛔ <b>The cache guard comes first and is load-bearing.</b> §10.2's hit path returns
+    /// BEFORE <c>WriteTo</c> — deliberately, since regenerating inputs for a publish that will not
+    /// run is pure IO — so on a hit these files are a PREVIOUS build's output and asserting on
+    /// them proves nothing about this one. The build directory is a fresh temp dir per fixture
+    /// run, so a hit should be impossible; the positive "Publishing" check is the one that says
+    /// so, and the negative names the failure if it ever becomes possible.</para>
+    ///
+    /// <para>Costs no publish: the memoized <c>ConfProperty</c> build again.</para>
+    /// </summary>
+    [Test]
+    public void TheGeneratedShimsScaffoldingOnDiskMatchesItsSources()
+    {
+        var built = BuildOnce("ConfProperty", PropertyProgram);
+        AssertBuilt(built.Result, "the §12.3 named-property program");
+
+        var messages = string.Join("\n", built.Result.Messages);
+        Assert.That(
+            built.Result.Messages.Any(m => m.Contains(
+                NetShimPipelineFixture.PublishingMessage, StringComparison.Ordinal)),
+            Is.True,
+            "phase 5 did not report a publish for this build, so the files under obj/gen/shim were "
+            + "not necessarily written by it. Messages:\n" + messages);
+        Assert.That(
+            built.Result.Messages.Any(m => m.Contains(
+                NetShimPipelineFixture.UpToDateMessage("ConfProperty"), StringComparison.Ordinal)),
+            Is.False,
+            "this build took a §10.2 CACHE HIT. The hit path returns before NetShimGenerator."
+            + "WriteTo, so obj/gen/shim holds a PREVIOUS build's files and every assertion below "
+            + "would be about them. Messages:\n" + messages);
+
+        var shimDir = Path.Combine(built.Dir, "obj", "gen", "shim");
+        Assert.That(Directory.Exists(shimDir), Is.True,
+            "phase 5 published but left no obj/gen/shim: " + shimDir);
+
+        static string N(string s) => s.Replace("\r\n", "\n");
+        var handShim = N(File.ReadAllText(BlnetShimSourcesTests.PathToTestShimHandleTable()));
+        var handleTable = N(File.ReadAllText(
+            Path.Combine(shimDir, NetShimGenerator.HandleTableFileName)));
+        var status = N(File.ReadAllText(Path.Combine(shimDir, NetShimGenerator.StatusFileName)));
+        var abiText = File.ReadAllText(Path.Combine(shimDir, NetShimGenerator.ShimAbiFileName));
+        var abi = ShimAbiConstant.Match(abiText);
+        var contract = BasicLang.Compiler.CodeGen.CPlusPlus.BlnetContract.AbiVersion;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(handleTable, Is.EqualTo(handShim),
+                "the " + NetShimGenerator.HandleTableFileName + " this build compiled into its "
+                + "shim is not the hand-written shim's HandleTable.cs. The frozen P0 conformance "
+                + "suite validates the hand copy; while the two handle models differ, that suite "
+                + "says nothing at all about the shim the user actually runs.");
+            Assert.That(status, Is.EqualTo(N(
+                    BasicLang.Compiler.CodeGen.CPlusPlus.BlnetContract.GenerateStatusEnumCs())),
+                "the " + NetShimGenerator.StatusFileName + " this build compiled is not "
+                + "BlnetContract.GenerateStatusEnumCs()'s output. The managed enum and the native "
+                + "#defines come from one table on purpose — a shim whose BLNET_E_* values are off "
+                + "by one reports stale-handle failures as version mismatches.");
+            Assert.That(abi.Success, Is.True,
+                "the " + NetShimGenerator.ShimAbiFileName + " this build compiled carries no "
+                + "'public const int AbiVersion = <n>;'. Got:\n" + abiText);
+            Assert.That(
+                abi.Success ? int.Parse(abi.Groups["value"].Value, CultureInfo.InvariantCulture) : -1,
+                Is.EqualTo(contract),
+                "the ABI constant this build compiled into its shim is not BlnetContract."
+                + "AbiVersion (" + contract + "). That number is what blnet_abi_version answers at "
+                + "startup, and §9.3 refuses to start a program whose shim disagrees.");
         });
     }
 

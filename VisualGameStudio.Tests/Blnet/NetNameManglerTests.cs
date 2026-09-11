@@ -81,6 +81,18 @@ public class NetNameManglerTests
     // Determinism
     // ------------------------------------------------------------------
 
+    /// <summary>
+    /// <c>Regex.Match(String)</c> — spec §4.2's own worked example, and the shape both the
+    /// in-process determinism test and the cross-build golden pin below are asserted on. A FACTORY,
+    /// never a cached instance: two calls must yield two reference-distinct descriptors (including
+    /// two distinct parameter lists), which is what makes
+    /// <see cref="MangleIsDeterministicAcrossCalls"/> a statement about VALUES.
+    /// </summary>
+    private static NetMemberDescriptor RegexMatchOfString() => new NetMemberDescriptor(
+        "Match", "System.Text.RegularExpressions.Regex", NetMemberCategory.Method,
+        isStatic: true, arity: 0, typeFullName: "System.Text.RegularExpressions.Match",
+        parameters: new[] { new NetParameterDescriptor(NetRefKind.None, "System.String") });
+
     [Test]
     public void MangleIsDeterministicAcrossCalls()
     {
@@ -88,18 +100,54 @@ public class NetNameManglerTests
         // instances) with identical field VALUES. NetMemberDescriptor is deliberately not a
         // record (reference equality on Parameters), so this also proves Mangle does not
         // accidentally key off object identity.
-        NetMemberDescriptor Build() => new NetMemberDescriptor(
-            "Match", "System.Text.RegularExpressions.Regex", NetMemberCategory.Method,
-            isStatic: true, arity: 0, typeFullName: "System.Text.RegularExpressions.Match",
-            parameters: new[] { new NetParameterDescriptor(NetRefKind.None, "System.String") });
-
-        var first = NetNameMangler.Mangle(Build());
-        var second = NetNameMangler.Mangle(Build());
+        var first = NetNameMangler.Mangle(RegexMatchOfString());
+        var second = NetNameMangler.Mangle(RegexMatchOfString());
 
         Assert.That(second, Is.EqualTo(first),
             "NetNameMangler.Mangle must be a pure function of VALUES. Two structurally-identical " +
             "but reference-distinct descriptors produced two different names. Task 15's cache " +
             "key hashes this output — instability here means a stale shim can ship silently.");
+    }
+
+    /// <summary>
+    /// <b>§7.3's CROSS-BUILD half — the one determinism claim nothing in this suite could make.</b>
+    ///
+    /// <para>Every other determinism test above is scoped to a single process: same call twice,
+    /// same instance repeatedly, same batch in the opposite order. §7.3 needs more than that,
+    /// because this output is not an internal detail — it is a component of every
+    /// <c>NetShimCache</c> key written to a user's <c>obj/blnet</c>, and it is the literal
+    /// <c>EntryPoint</c> string baked into every shim DLL already deployed beside a user's
+    /// executable. Both survive across builds; an in-process oracle cannot see either.</para>
+    ///
+    /// <para><b>The literal was MEASURED, not computed.</b> It is the value this build produced
+    /// for <see cref="RegexMatchOfString"/>, transcribed. Deriving it here — by calling into the
+    /// mangler, by re-implementing <c>CanonicalIdentity</c>, by hashing anything — would make this
+    /// test a tautology that no change to the mangler could ever fail, which is precisely the
+    /// trap the rest of this fixture is written to avoid.</para>
+    ///
+    /// <para><b>This test going red is not, by itself, a bug.</b> It means the identity the mangler
+    /// hashes over changed. That is a legitimate thing to do — and it is an ABI-visible event: every
+    /// NetShimCache entry on disk is silently invalidated (the key no longer matches anything, so
+    /// the next build republishes, which is safe but not free), and every deployed shim's export
+    /// names change, so an executable built before the change and a shim published after it no
+    /// longer agree — §9.3's handshake passes and the first .NET call goes through a null slot
+    /// (the pinned defect in <c>NetGeneratedShimConformanceTests</c>, chip task_68a7198a). Update
+    /// this literal DELIBERATELY, in the same change that alters the mangler, and say so in the
+    /// commit message. Do not update it to make a red suite green.</para>
+    /// </summary>
+    [Test]
+    public void MangleOfAKnownMemberIsStableAcrossBuilds()
+    {
+        Assert.That(NetNameMangler.Mangle(RegexMatchOfString()),
+            Is.EqualTo("bl_net_System_Text_RegularExpressions_Regex_Match__System_String_52a3c1a456a9c4b1"),
+            "The mangled name of Regex.Match(String) changed. NetNameMangler.Mangle is not merely "
+            + "deterministic within one process (the three tests above) — §7.3 requires it to be "
+            + "the SAME across builds, because it is a component of every NetShimCache key on disk "
+            + "and the EntryPoint string of every shim already deployed beside a user's "
+            + "executable. Changing CanonicalIdentity, the hash, the prefix, the separators, the "
+            + "arity marker or the parameter spelling invalidates both. If the change was "
+            + "deliberate, update this literal in the SAME commit and say why; if it was not, this "
+            + "is the regression.");
     }
 
     [Test]

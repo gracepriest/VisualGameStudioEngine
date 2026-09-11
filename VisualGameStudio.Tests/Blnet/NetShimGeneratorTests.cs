@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 using BasicLang.Compiler.CodeGen.CPlusPlus;
 using BasicLang.Compiler.CodeGen.Net;
@@ -193,6 +194,109 @@ public class NetShimGeneratorTests
             + "NetArrayCopy.RequiredForms(surface), so they are INCLUDED on both sides and §12.4 "
             + "holds for them by construction. If this assertion fails over an array helper, the "
             + "bug is real drift between the two emitters, not a missing exemption.");
+    }
+
+    /// <summary>
+    /// <b>The tripwire's stated purpose — "the two de-duplicate on different keys" — made
+    /// reachable.</b>
+    ///
+    /// <para><see cref="ProxyTableSlotsMatchTheSurfaceDerivedExports"/> runs on a surface with no
+    /// duplicates, so the de-dup half of its claim is never exercised: both sides would agree
+    /// whether or not either collapsed anything. §7.1's collector walks CALL SITES, so a real
+    /// surface carries one entry per call site and duplicates are the normal case — the doubled
+    /// surface here is that shape, built by concatenating a fixture surface with itself.</para>
+    ///
+    /// <para><b>The count assertion is what makes this more than "equal and empty".</b> Two sides
+    /// that both dropped everything would satisfy the set equality; asserting each collapsed to
+    /// exactly <see cref="NetProxyEmitterTests.ShapeCount"/> proves they both de-duplicated, and
+    /// both de-duplicated to the same thing. A divergent key on either side — keying on the
+    /// descriptor instance, on the member name, on anything but the mangled name — shows up here
+    /// as a count of twice the slots on one side and the right number on the other.</para>
+    ///
+    /// <para>§8.6's array helpers do NOT double: <c>NetArrayCopy.RequiredForms</c> collects
+    /// element forms into a HashSet, so they are already per-form rather than per-member and are
+    /// included in the count unchanged.</para>
+    /// </summary>
+    [Test]
+    public void DuplicateMembersCollapseOnBOTHSidesOfSection124()
+    {
+        var members = NetProxyEmitterTests.WireShapeSurface().Members
+            .Concat(NetProxyEmitterTests.WireShapeSurface().Members)
+            .ToList();
+        var doubled = new NetSurface(members, NetProxyEmitterTests.WireShapeSurface().DeclaredTypeNames);
+
+        var slots = NetProxyEmitter.EmitBindings(doubled).SlotNames;
+        var exports = NetShimGenerator.SurfaceDerivedExportNames(doubled);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(members, Has.Count.GreaterThan(NetProxyEmitterTests.ShapeCount),
+                "fixture guard: the doubled surface must really hold duplicates, or this test is "
+                + "just ProxyTableSlotsMatchTheSurfaceDerivedExports again.");
+            Assert.That(slots, Has.Count.EqualTo(NetProxyEmitterTests.ShapeCount),
+                "NetProxyEmitter.Plan did not collapse the duplicated members onto one slot each. "
+                + "Its de-dup key is the mangled name; anything else (the descriptor instance, the "
+                + "member name) re-admits a member per call site and the proxy table grows a "
+                + "duplicate field, which is a C++ redefinition.");
+            Assert.That(exports, Has.Count.EqualTo(NetProxyEmitterTests.ShapeCount),
+                "NetShimGenerator.Plan did not collapse the duplicated members onto one export "
+                + "each. Two [UnmanagedCallersOnly] methods with the same EntryPoint do not "
+                + "compile, so the shim would fail its AOT publish ~27 s downstream, against a "
+                + "file under obj/gen/shim the user never wrote.");
+            Assert.That(slots, Is.EquivalentTo(exports),
+                "Spec §12.4 over a surface that HAS duplicates — the case that distinguishes 'the "
+                + "two collapse on the same key' from 'neither collapses'. Both sides must "
+                + "de-duplicate on NetNameMangler.Mangle's output and nothing else.");
+        });
+    }
+
+    /// <summary>
+    /// <b>§12.4's SCOPE, asserted as a set identity rather than left implicit.</b>
+    ///
+    /// <para><see cref="ProxyTableSlotsMatchTheSurfaceDerivedExports"/> compares slots against the
+    /// SURFACE-DERIVED exports only, and says so — but nothing then said what the remaining
+    /// exports are. Two drifts live in that gap: an export that is neither a slot nor a core name
+    /// (a helper accidentally given <c>[UnmanagedCallersOnly]</c>, a stale wrapper), and a slot
+    /// that collides with a core name (which would make <c>blnet_bind_all</c> overwrite a binding
+    /// <c>blnet_bind_core</c> already resolved). Both are invisible to a scoped equality.</para>
+    ///
+    /// <para><b>This reads the string ILC actually exports.</b> The oracle parses every
+    /// <c>EntryPoint = "…"</c> out of the emitted text.
+    /// <see cref="ExportSignaturesMatchTheProxyTableSlotSignatures"/>'s <c>ExportLine</c> regex
+    /// deliberately captures the C# METHOD name instead, which is the same string for a wrapper
+    /// but NOT for the core seven — their methods are <c>AbiVersion</c>, <c>Initialize</c>,
+    /// <c>AddRef</c>, … while the exported names are <c>blnet_abi_version</c>,
+    /// <c>blnet_initialize</c>, <c>blnet_addref</c>, … So an oracle reading method names is
+    /// demonstrably not reading what the native side binds, and cannot be reused here.</para>
+    /// </summary>
+    [Test]
+    public void ExportsAreExactlyTheSlotsPlusTheCoreSeven()
+    {
+        var surface = NetProxyEmitterTests.WireShapeSurface();
+        var slots = NetProxyEmitter.EmitBindings(surface).SlotNames;
+        var entryPoints = EntryPointLine.Matches(N(NetShimGenerator.EmitExports(surface)))
+            .Select(m => m.Groups["name"].Value)
+            .ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(entryPoints, Has.Count.GreaterThan(BlnetContract.CoreExportNames.Count),
+                "guard: the emitted text must contain surface wrappers as well as the core seven, "
+                + "or the identity below holds for the wrong reason.");
+            Assert.That(entryPoints,
+                Is.EquivalentTo(slots.Concat(BlnetContract.CoreExportNames).ToList()),
+                "Spec §12.4's scope, as a set identity: the shim's EntryPoint strings are EXACTLY "
+                + "the proxy table's slots plus P0's core exports — no more, no less. An extra "
+                + "name here is an export nothing binds (dead weight at best, a second entry point "
+                + "into the handle table at worst); a missing one is a null slot the program dies "
+                + "on at first call, after passing §9.3's handshake (chip task_68a7198a).");
+            Assert.That(slots.Where(BlnetContract.CoreExportNames.Contains).ToList(), Is.Empty,
+                "a surface-derived SLOT collided with one of P0's core export names. The two name "
+                + "spaces must stay disjoint: blnet_bind_core resolves the core seven and "
+                + "blnet_bind_all fills the member slots, so a shared name means one binding "
+                + "silently overwrites the other. Mangled names all start 'bl_net_', so this can "
+                + "only happen if the prefix or the core names changed.");
+        });
     }
 
     /// <summary>
@@ -497,6 +601,81 @@ public class NetShimGeneratorTests
     }
 
     /// <summary>
+    /// <b>The §12.4 scaffolding chain, followed all the way to a FILE.</b>
+    ///
+    /// <para>The chain has two hops and, before this test, they met in the middle without ever
+    /// reaching disk. Hop 1 —
+    /// <c>BlnetShimSourcesTests.HandleTableMatchesTheHandWrittenShimTheFrozenSuiteValidates</c> —
+    /// is a real text equality against the on-disk hand shim the frozen P0 suite compiles. Hop 2 —
+    /// <see cref="ScaffoldingComesFromBlnetShimSourcesVerbatim"/> — is asserted on the IN-MEMORY
+    /// dictionary <see cref="NetShimGenerator.Emit"/> returns. Nothing read the files back after
+    /// <see cref="NetShimGenerator.WriteTo"/>, so everything between "Emit produced the right
+    /// string" and "the publish compiled the right file" — the write itself, the prune, the file
+    /// names, an encoding hop — was unasserted.</para>
+    ///
+    /// <para><b>Each of the three sides is compared against the thing it is REQUIRED to equal,
+    /// not against the constant it is interpolated from.</b> <c>HandleTable.cs</c> goes against
+    /// the hand shim's own file (the copy the frozen P0 suite validates — comparing it to
+    /// <c>BlnetShimSources.HandleTable</c> would only restate hop 2); <c>BlnetStatus.cs</c>
+    /// against <c>BlnetContract.GenerateStatusEnumCs()</c>; <c>ShimAbi.cs</c> by parsing its
+    /// constant out and comparing the NUMBER to <c>BlnetContract.AbiVersion</c>. The last is
+    /// deliberately not a <c>Does.Contain("= 1;")</c>, which an <c>AbiVersion</c> of 21 would also
+    /// satisfy.</para>
+    ///
+    /// <para>Fast, not Integration: <c>WriteTo</c> into a temp directory costs milliseconds. Its
+    /// Integration twin — the same three assertions against the <c>obj/gen/shim</c> a real build
+    /// wrote — is
+    /// <c>NetGeneratedShimConformanceTests.TheGeneratedShimsScaffoldingOnDiskMatchesItsSources</c>.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void WriteToPutsTheSplicedScaffoldingOnDiskUnchanged()
+    {
+        var dir = TempDir();
+        try
+        {
+            var written = NetShimGenerator.WriteTo(dir, OneMemberSurface(), SafeProject);
+            Assert.That(written, Is.Not.Empty, "guard: nothing was written, so nothing is checked.");
+
+            var handShim = N(File.ReadAllText(BlnetShimSourcesTests.PathToTestShimHandleTable()));
+            var onDisk = N(File.ReadAllText(Path.Combine(dir, NetShimGenerator.HandleTableFileName)));
+            var status = N(File.ReadAllText(Path.Combine(dir, NetShimGenerator.StatusFileName)));
+            var abiText = File.ReadAllText(Path.Combine(dir, NetShimGenerator.ShimAbiFileName));
+            var abi = ShimAbiConstant.Match(abiText);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(onDisk, Is.EqualTo(handShim),
+                    "the " + NetShimGenerator.HandleTableFileName + " WriteTo put on disk is not "
+                    + "the hand-written shim's HandleTable.cs. The frozen P0 conformance suite "
+                    + "(§12.2) validates the hand copy, and it says something about GENERATED "
+                    + "shims only while the two handle models are the same one — so this is the "
+                    + "end of that chain, not a restatement of it. Update BOTH, or neither.");
+                Assert.That(status, Is.EqualTo(N(BlnetContract.GenerateStatusEnumCs())),
+                    "the " + NetShimGenerator.StatusFileName + " on disk is not "
+                    + "BlnetContract.GenerateStatusEnumCs()'s output. The status enum has exactly "
+                    + "one source of truth; a generated shim whose BlnetStatus disagrees with the "
+                    + "native header's #defines returns status codes the caller decodes as "
+                    + "something else entirely.");
+                Assert.That(abi.Success, Is.True,
+                    "the " + NetShimGenerator.ShimAbiFileName + " on disk carries no "
+                    + "'public const int AbiVersion = <n>;'. Exports.g.cs's blnet_abi_version "
+                    + "returns ShimAbi.AbiVersion, so without that constant the shim does not "
+                    + "compile at all. Got:\n" + abiText);
+                Assert.That(
+                    abi.Success ? int.Parse(abi.Groups["value"].Value, CultureInfo.InvariantCulture) : -1,
+                    Is.EqualTo(BlnetContract.AbiVersion),
+                    "the ABI constant on disk is not BlnetContract.AbiVersion. This number is what "
+                    + "blnet_abi_version answers at startup, and §9.3 fails the handshake when it "
+                    + "differs from the value the program was built against — so a shim written "
+                    + "with a stale constant is a program that refuses to start, naming both "
+                    + "numbers and blaming neither.");
+            });
+        }
+        finally { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
+    }
+
+    /// <summary>
     /// Task 11's namespace decision, restated as an assertion because breaking it is a compile
     /// error nothing else in this fixture would catch: <c>Exports.g.cs</c> lives in the same
     /// namespace as <c>HandleTable</c>, and <c>BlnetStatus</c> deliberately does not.
@@ -522,6 +701,27 @@ public class NetShimGeneratorTests
     private static readonly Regex ExportLine = new(
         @"^\s*public static int (?<name>bl_net_\w+)\((?<sig>[^)]*)\)\s*$",
         RegexOptions.Multiline | RegexOptions.Compiled);
+
+    /// <summary>
+    /// Every <c>[UnmanagedCallersOnly(EntryPoint = "…")]</c> string in the emitted text — the
+    /// name ILC actually exports and the native side actually binds. NOT interchangeable with
+    /// <see cref="ExportLine"/>: that one reads the C# METHOD name, which differs from the entry
+    /// point for all seven core exports (<c>AbiVersion</c> vs <c>blnet_abi_version</c>, …). No
+    /// <c>bl_net_</c> anchor here on purpose — the core names do not carry it, and an anchored
+    /// regex would silently drop exactly the half this oracle exists to see.
+    /// </summary>
+    private static readonly Regex EntryPointLine = new(
+        @"EntryPoint = ""(?<name>\w+)""",
+        RegexOptions.Compiled);
+
+    /// <summary>
+    /// The <c>ShimAbi.cs</c> constant, captured as a NUMBER so the comparison below is an
+    /// equality on the parsed value rather than a substring test that <c>= 10;</c> would satisfy
+    /// for an expected <c>1</c>.
+    /// </summary>
+    private static readonly Regex ShimAbiConstant = new(
+        @"public const int AbiVersion = (?<value>\d+);",
+        RegexOptions.Compiled);
 
     private static Dictionary<string, (string Type, string Name)[]> ParseSlotSignatures(string header) =>
         SlotLine.Matches(header).ToDictionary(

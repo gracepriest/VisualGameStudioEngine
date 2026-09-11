@@ -21,8 +21,15 @@ public class BlnetShimSourcesTests
     /// this folder and the <c>Raylib*ParityTests</c> fixtures). Throws rather than returning
     /// a sentinel: a drift test that cannot find the file it compares against must fail
     /// loudly, never silently pass.
+    ///
+    /// <para><c>internal</c> rather than private since P2a-2 Task 14: the two tests that follow
+    /// the same chain to the GENERATED files on disk
+    /// (<c>NetShimGeneratorTests.WriteToPutsTheSplicedScaffoldingOnDiskUnchanged</c> and its
+    /// Integration twin) need the same anchor. Shared rather than copied — a second copy of the
+    /// <c>.sln</c> walk-up is a second thing to get wrong, and the failure mode of getting it
+    /// wrong is a test that cannot find its oracle.</para>
     /// </summary>
-    private static string PathToTestShimHandleTable()
+    internal static string PathToTestShimHandleTable()
     {
         var testDir = TestContext.CurrentContext.TestDirectory;
         for (var dir = new DirectoryInfo(testDir); dir != null; dir = dir.Parent)

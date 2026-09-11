@@ -161,7 +161,7 @@ public class NetProxyEmitterTests
     /// inlined so a fixture change updates ONE number and every count guard follows — a guard
     /// that silently tracked the fixture would assert nothing.
     /// </summary>
-    /// <para>Composition matters here, because the number is not the member count: <b>15 member
+    /// <para>Composition matters here, because the number is not the member count: <b>16 member
     /// slots + 2 §8.6 array-copy helper slots</b> (<c>bl_net_array_new_…</c> and
     /// <c>bl_net_array_read_…</c>, one pair per distinct element form). The helpers are ORDINARY
     /// slots on purpose — as a side channel they would have been exempt from §12.4's
