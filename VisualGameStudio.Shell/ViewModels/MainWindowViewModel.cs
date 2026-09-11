@@ -8031,10 +8031,14 @@ public partial class MainWindowViewModel : ViewModelBase
             "About Visual Game Studio",
             "Visual Game Studio IDE v1.0\n\n" +
             "A complete game development platform with:\n" +
-            "- BasicLang compiler (C#, LLVM, MSIL, C++ backends)\n" +
+            // Keep in step with SolutionTypes.All / the New Project wizard's backend list.
+            "- BasicLang compiler (C#, C++, JavaScript, LLVM, MSIL backends)\n" +
             "- Full-featured IDE with IntelliSense, debugging, and source control\n" +
             "- 2D game engine built on Raylib\n\n" +
-            "1725 tests passing | VS Code parity ~95%\n\n" +
+            // No test count here: the one that used to sit on this line said "1725 tests
+            // passing" long after the suite passed 5,000, and any number hardcoded in a
+            // dialog is wrong by the next commit.
+            "VS Code parity ~95%\n\n" +
             "Copyright (c) 2026 Visual Game Studio",
             DialogButtons.Ok, DialogIcon.Information);
     }

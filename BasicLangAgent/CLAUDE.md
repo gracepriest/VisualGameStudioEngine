@@ -43,5 +43,7 @@ The agent operates on the parent directory (VisualGameStudioEngine), which conta
 
 - Source files use `.bas` extension (NOT `.bl`)
 - LSP server: `BasicLang.exe --lsp`
-- All 4 backends must be updated together (C#, LLVM, MSIL, C++)
+- The SHIPPING backends must be updated together: C#, C++ and JavaScript. (MSIL and
+  LLVM exist but are out of scope by a standing project decision — do not test, fix,
+  or report bugs on them.)
 - Tests must pass after changes: `dotnet test`
