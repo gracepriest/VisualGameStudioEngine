@@ -11,48 +11,47 @@ relying on it.**
 
 ---
 
-## ✅ RESOLVED — the `87a6c5e` gate was run (2026-09-11, Linux cloud session)
+## ✅ READ FIRST — master is FULL-SUITE GREEN at `f54416b`, and Task 14 is PROVEN (2026-09-11)
 
-**The warning below is DISCHARGED, with one caveat.** A full suite ran on `f54416b`
-(= `87a6c5e` + the handoff docs commit): **5454 passed / 173 failed / 203 skipped of 5830**,
-both streams captured. The total reconciles as 5799 + `46fd2c5`'s 27 + 4 from the other Task 14
-commits, so nothing crashed and nothing was lost. **All four fixtures `46fd2c5` touched are
-green, and all 173 failures are environmental to Linux** — nothing indicates the untested
-combination is a problem. `46fd2c5`'s 27 tests have since been PROVEN by 12 mutation kills and
-reviewed; see the Task 14 section below.
+`origin/master` == **`f54416b`**, which merged eight P2a-2 Task 14 commits (tip `87a6c5e`) into
+master. **Full suite measured on Windows: 5826 tests, 4 failures — exactly the standing baseline
+below, nothing new.**
 
-⚠ **The caveat: a Linux run is not the Windows gate.** 82 of the 173 are `BasicLang.exe not
-deployed` (no `.exe` suffix off Windows), ~60 are hardcoded `C:\` / PATHEXT / MSVC-vcvars
-assertions, 22 are Blnet integration rows needing the ILC/AOT shim publish, 6 are native-engine
-`DllNotFound`. Those 22 are exactly §12.5's integration set, **including
-`EveryProxyTableSlotResolvesInThePublishedShim`** — the runtime backstop this task's best find
-rests on. **Re-run the full suite on Windows before trusting the combination end to end.**
+Worth recording *because* it was in doubt: that merge combined two sides that had only ever been
+gated apart. Task 14's commits are test-only (plus one small seam); the incoming master commits
+changed `BasicLang/JavaScriptEmitter.cs`, `BasicLang/Program.cs` and
+`BasicLang/ProjectSystem/TemplateEngine.cs`. They touch **no file in common**, and the full run
+confirms the combination is clean.
 
-<details><summary>Original warning, kept for the record</summary>
+✅ **`46fd2c5`'s 27 tests are no longer unproven** — that was job #1 here and it is done, on
+branch `claude/jolly-pasteur-l4mpzs`. **Twelve mutations**, each applied to the product, full
+suite run, reverted; kills computed as a set difference against a measured baseline. All 12
+distinct new test methods went red at least once, on their own assertion, with their own
+diagnostic. **Six are discriminating**; for the other six the assertion still fired for the right
+reason (so it is not vacuous) but the regression is already caught elsewhere, making its value
+vacuity-protection rather than new detection — recorded rather than glossed. The review found one
+real defect, since fixed: `CheckerRejectedNamesAreNeverClaimed` had two arity-0 `[TestCase]`s, so
+its ternary had an unreachable branch and its doc comment claimed coverage it did not have.
 
-## ⛔ READ FIRST — `87a6c5e` went to master WITHOUT a full-suite gate (2026-09-11)
+⚠ **The brief's six mutations were not sufficient.** `NoOtherRegistryName_…` cannot be killed by
+the `MapTypeName`→`SanitizeName` mutation: a route that never answers `NetRef` makes a "must not
+be `NetRef`" assertion trivially true. Six more were needed, and the test's own failure message
+named the right one.
 
-`origin/master` == `origin/feat/p2a2-t11-delegates` == **`87a6c5e`**, SHA-verified. That commit
-merged eight P2a-2 Task 14 commits into master. **The required full-suite run was started and
-then stopped ~48 minutes in, at build-green with no test summary, by an explicit decision to
-push without it.** So master currently carries two things nothing has verified together:
+### The Linux picture, for cloud sessions
 
-1. **The combination.** Task 14's commits are test-only (plus one small seam, below); the
-   incoming master commits changed `BasicLang/JavaScriptEmitter.cs`, `BasicLang/Program.cs` and
-   `BasicLang/ProjectSystem/TemplateEngine.cs`. The two sides touch **no file in common**, and
-   each was gated on its own branch — but never together, and never by a full suite.
-2. **`46fd2c5`, a WIP commit.** 27 new tests that PASS but have **no mutation kills and no
-   review**: none has been shown to fail for the right reason, or to fail at all. It also
-   carries the one product change — `BasicLang/CSharpBackend.cs`, where the test seam
-   `AmbientNamespacesForTest` (a `static` alias that compared a constant with itself and could
-   not fail even if the seeding loop were deleted) becomes an instance view
-   `CandidateUsingsForTest => _usings`. Emission was measured unmoved (parity battery 22/0/0),
-   which is evidence, not proof.
+The same suite on a Linux container reports **5454 passed / 173 failed / 203 skipped of 5830** —
+all 173 environmental, none a real defect. 82 are `BasicLang.exe not deployed` (no `.exe` suffix
+off Windows), ~60 are hardcoded `C:\` / PATHEXT / MSVC-vcvars assertions, 22 are Blnet
+integration rows needing the ILC/AOT shim publish (`Cross-OS native compilation is not
+supported` — win-x64 only), 6 are native-engine `DllNotFound`.
 
-**FIRST JOB: run the full suite on `87a6c5e`** and compare against the numbers below plus this
-branch's additions. If it is red, suspect the untested combination before either side alone.
+⚠ **Two things follow.** Those 22 rows are exactly §12.5's integration set, **including
+`EveryProxyTableSlotResolvesInThePublishedShim`** — so a Linux run cannot speak for them, and
+anything touching the shim needs a Windows pass. And the TOTALS differ, 5826 vs 5830: four tests
+exist on one platform and not the other (a differing total, not a skip). Nobody has chased which
+four; if a count ever fails to reconcile, start there.
 
-</details>
 
 ---
 
@@ -120,10 +119,15 @@ dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release
 dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --filter "TestCategory!=Integration"
 ```
 
-| Run | Count at `6139386` | Time |
+| Run | Count | Time |
 |---|---|---|
-| Full suite | 5792 passed / 5 failed / 2 skipped | ~2h |
-| Fast subset | 4897 passed / 2 failed / 1 skipped | ~2 min |
+| Full suite at **`f54416b`** (current master, Windows) | **5826 total, 4 failures — all baseline** | ~2h |
+| Full suite at `6139386` | 5792 passed / 5 failed / 2 skipped of 5799 | ~2h |
+| Fast subset at `6139386` | 4897 passed / 2 failed / 1 skipped | ~2 min |
+
+The 5799 → 5826 move is P2a-2 Task 14's additions. The 5th failure in the `6139386` run was a
+**contention timeout**, not a defect — `NothingInAHandleSlot_…_PinnedDivergence` "failed" after
+8m49s in a loaded full run and passed alone in 34s.
 
 **Four pre-existing failures are baseline and are not yours:** two `SearchSnippets_*`,
 `Cli_Build_CppProject_ProjectReference_Warns…`, and `NonEx_variants…` (which passes alone and
@@ -197,7 +201,7 @@ fails only when the Native tier runs alongside it). The fast subset shows the tw
 
 **DONE 2026-09-11 (Linux cloud session) — items 1-3 below are closed:**
 
-1. ✅ **Full suite run** — see the resolved notice at the top of this file.
+1. ✅ **Full suite run** — Windows, 5826 tests / 4 baseline failures. See the top of this file.
 2. ✅ **§12.4's V2 and V3 are PROVEN.** Twelve mutations, each applied, full suite run, reverted;
    kills computed as a set difference against the 173-failure baseline. All 12 distinct new test
    methods went red at least once on their own assertion. **Six are discriminating** (M2
@@ -217,11 +221,37 @@ fails only when the Native tier runs alongside it). The fast subset shows the tw
    assertion. **Spec status and the stale-prose sweep are done** — see Task 15 Steps 2 and 3 in
    the plan, which now carry the measured results.
 
+**Also closed since, on the same branch:**
+
+4. ✅ **Chip `task_75064f2e` — the delegate wire.** A `Double` crossing a delegate slot was
+   silently truncated (1.5 arrived as 1; the program built clean, exit 0, and printed 2 where
+   .NET says 3). `Single` had the identical defect and no test. ⚠ The recon diagnosis was HALF
+   the bug: `NetShimGenerator` packed with `unchecked((ulong)a)` too, so ALL FOUR conversion
+   sites were value casts and the truncation began on the MANAGED side — making a native-only
+   fix strictly worse (`bit_cast<double>(1ULL)` is 4.9e-324). Fixed as ONE SEAM PER SIDE
+   (`wire_to`/`wire_from`, `WirePack`/`WireUnpack`) rather than four casts, which is why it
+   existed: four sites answering one question four ways.
+5. ✅ **Chip: the admissibility⇄wire-form tie** (Task 8 Step 2b, as specified). Before it,
+   `NetSurfaceCollector.FirstUnmarshalable` had NO test assertions at all. Both contrapositives
+   now exist, with part 2's probe GENERATED from `NetMarshalTable.WireRows` so a new §8.3 row
+   forces a probe member. Mutation-proven (rejecting `Double` is discriminating; admitting
+   everything is not — three declared-surface rows already cover part of it).
+6. ✅ **Chip: `AddressOf` as a .NET delegate argument.** See the finding above — a missing
+   target-typing arm, not a marshaling limit. The pinned row is PROMOTED to the runtime row.
+7. ✅ **The plan's checkboxes.** 59 unchecked boxes on shipped tasks read as a work list. The
+   TASK HEADINGS now carry verified status and a note says the boxes are unmaintained. They were
+   deliberately NOT mass-ticked: that asserts verification nobody did, and Task 2's Step 5 is not
+   done but CANCELLED.
+
 **Still open — needs a WINDOWS machine, none of it doable in a Linux container:**
 
-- **The full suite on Windows.** The Linux run leaves 22 Blnet integration rows unexercised,
-  including `EveryProxyTableSlotResolvesInThePublishedShim`. Also the 20-program parity battery
-  and `TemplateBuildSweepTests`.
+- **Two run-level proofs on the branch.** `AddressOfAsADotNetDelegateArgument_LowersAndRuns`
+  must print **7**, and the flipped `ADoubleDelegateSlot_TruncatesOnTheWire_PinnedDivergence`
+  must print **3**. Both are Integration and die on Linux at ILC's cross-OS limit — note that is
+  the SHIM PUBLISH failing, i.e. the analyzer and the managed shim compile fine, which is itself
+  evidence the `AddressOf` fix works through the real pipeline. On the double row: a **2** means
+  a half-revert to value casts; a **denormal** means the halves were split apart, which is worse
+  than the original defect.
 - **The game template's inertness stdout.** Its codegen and build log are measured and clean
   (zero user-program TU changes); it cannot LINK here because `VisualGameStudioEngine.lib`
   needs the VS 2022 engine build, so BL6009 fires on both sides identically.

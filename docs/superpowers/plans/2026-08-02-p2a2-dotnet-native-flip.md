@@ -1903,19 +1903,25 @@ duplicate; grep `BlnetContractTests`/`NetShimGeneratorTests` first).
 
 ### Task 15: full verification + closeout  ⚠ IN PROGRESS — Steps 2/3 done, Step 1 partial, Steps 4-5 open
 
-- [~] **Step 1:** full gates — **PARTIAL, run on Linux 2026-09-11.** One full-suite run on
-  `f54416b`: **5454 passed / 173 failed / 203 skipped of 5830**, both streams captured, total
-  reconciling as 5799 baseline + 46fd2c5's 27 + 4 from the other Task 14 commits (so no crashed
-  host). Blnet filter: 657/24/29, every one of the 24 present in that same baseline. All four
-  fixtures `46fd2c5` touched are green.
+- [x] **Step 1:** full gates — **DISCHARGED on Windows 2026-09-11 (`d6b57b6`): 5826 tests, 4
+  failures, and the 4 are exactly the standing baseline.** The combination `87a6c5e` merged
+  without a gate — Task 14's test-only commits against the incoming JavaScript/IDE commits — is
+  confirmed clean.
 
-  ⚠ **This is NOT the Windows gate and does not discharge Step 1.** All 173 failures are
-  environmental to a Linux container — 82 `BasicLang.exe not deployed` (no `.exe` suffix), ~60
-  hardcoded `C:\` / PATHEXT / MSVC-vcvars assertions, 22 Blnet integration rows needing the
-  ILC/AOT shim publish, 6 native-engine `DllNotFound`. The 22 unexercised rows are precisely
-  §12.5's integration set, **including `EveryProxyTableSlotResolvesInThePublishedShim`** — the
-  runtime backstop this task's own notes call its best find. The parity battery and
-  `TemplateBuildSweepTests` likewise need Windows. Re-run there before calling Step 1 done.
+  The same suite on Linux reports **5454 passed / 173 failed / 203 skipped of 5830**, all 173
+  environmental (82 `BasicLang.exe not deployed`, ~60 hardcoded `C:\`/PATHEXT/vcvars, 22 Blnet
+  integration rows needing the win-x64 ILC publish, 6 native-engine `DllNotFound`). Useful as a
+  cloud-session baseline, and NOT a substitute: those 22 are §12.5's integration set, including
+  `EveryProxyTableSlotResolvesInThePublishedShim`.
+
+  ⚠ **The totals differ — 5826 vs 5830 at the same commit.** Four tests exist on one platform and
+  not the other; a differing TOTAL is not a skip, so it is conditional compilation or a
+  platform-varying `TestCaseSource`. Nobody has chased which four. If a count ever fails to
+  reconcile, start there.
+
+  Still owed on Windows: the 20-program parity battery and `TemplateBuildSweepTests`, plus the
+  two run-level rows this branch added (`AddressOfAsADotNetDelegateArgument_LowersAndRuns` must
+  print 7; the flipped `ADoubleDelegateSlot…` row must print 3).
 - [x] **Step 2:** empty-surface inertness — **MEASURED 2026-09-11.** Both templates were
   materialised ONCE and compiled by both compilers at an IDENTICAL filesystem path (building the
   two copies at different paths makes every `#line` directive differ and swamps the real diff).
