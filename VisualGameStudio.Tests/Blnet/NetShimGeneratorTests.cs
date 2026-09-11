@@ -220,10 +220,15 @@ public class NetShimGeneratorTests
     [Test]
     public void DuplicateMembersCollapseOnBOTHSidesOfSection124()
     {
-        var members = NetProxyEmitterTests.WireShapeSurface().Members
+        // A SECOND construction, not `wire.Members` twice: the two halves must be
+        // reference-DISTINCT descriptors, because a de-dup that keyed on the descriptor instance
+        // would collapse the same-instance form and pass while the real duplicate case — one
+        // member reached from two call sites — still minted two slots.
+        var wire = NetProxyEmitterTests.WireShapeSurface();
+        var members = wire.Members
             .Concat(NetProxyEmitterTests.WireShapeSurface().Members)
             .ToList();
-        var doubled = new NetSurface(members, NetProxyEmitterTests.WireShapeSurface().DeclaredTypeNames);
+        var doubled = new NetSurface(members, wire.DeclaredTypeNames);
 
         var slots = NetProxyEmitter.EmitBindings(doubled).SlotNames;
         var exports = NetShimGenerator.SurfaceDerivedExportNames(doubled);
@@ -268,6 +273,14 @@ public class NetShimGeneratorTests
     /// <c>AddRef</c>, … while the exported names are <c>blnet_abi_version</c>,
     /// <c>blnet_initialize</c>, <c>blnet_addref</c>, … So an oracle reading method names is
     /// demonstrably not reading what the native side binds, and cannot be reused here.</para>
+    ///
+    /// <para><b>Which half carries the claim.</b> The load-bearing direction is "no EXTRA entry
+    /// point": that is the one a stray <c>[UnmanagedCallersOnly]</c> or a stale wrapper trips, and
+    /// the one mutation-proven here. The other two are cheap tripwires kept deliberately, not
+    /// independent evidence — the surface half restates the emission both sides already derive
+    /// from <c>Plan</c>, and the disjointness half restates <c>EmitCoreExports</c>' own loop over
+    /// <c>BlnetContract.CoreExportNames</c>. They cost nothing and they would catch a refactor
+    /// that moved either emission; they are not what makes this test worth having.</para>
     /// </summary>
     [Test]
     public void ExportsAreExactlyTheSlotsPlusTheCoreSeven()
@@ -613,14 +626,18 @@ public class NetShimGeneratorTests
     /// string" and "the publish compiled the right file" — the write itself, the prune, the file
     /// names, an encoding hop — was unasserted.</para>
     ///
-    /// <para><b>Each of the three sides is compared against the thing it is REQUIRED to equal,
-    /// not against the constant it is interpolated from.</b> <c>HandleTable.cs</c> goes against
-    /// the hand shim's own file (the copy the frozen P0 suite validates — comparing it to
-    /// <c>BlnetShimSources.HandleTable</c> would only restate hop 2); <c>BlnetStatus.cs</c>
-    /// against <c>BlnetContract.GenerateStatusEnumCs()</c>; <c>ShimAbi.cs</c> by parsing its
-    /// constant out and comparing the NUMBER to <c>BlnetContract.AbiVersion</c>. The last is
-    /// deliberately not a <c>Does.Contain("= 1;")</c>, which an <c>AbiVersion</c> of 21 would also
-    /// satisfy.</para>
+    /// <para><b>The three legs do not all prove the same amount, and it is worth being exact about
+    /// which is which.</b> Only <c>HandleTable.cs</c> is compared against an INDEPENDENT oracle:
+    /// the hand shim's own file, the copy the frozen P0 suite validates — comparing it to
+    /// <c>BlnetShimSources.HandleTable</c> would merely restate hop 2. The other two are
+    /// value-tautologies by construction, because the product derives each file from the very
+    /// constant they are checked against (<c>BlnetStatusCs</c> delegates to
+    /// <c>GenerateStatusEnumCs()</c>; <c>ShimAbiCs</c> interpolates <c>AbiVersion</c>). What they
+    /// genuinely pin is the WRITE HOP — that <c>WriteTo</c> put that text on disk, under that file
+    /// name, unmangled — which is the hop nothing covered before and the one a pruning or encoding
+    /// change breaks. The ABI leg parses the constant to a NUMBER rather than asserting
+    /// <c>Does.Contain</c>, so it also catches a file that carries the right digits in the wrong
+    /// shape.</para>
     ///
     /// <para>Fast, not Integration: <c>WriteTo</c> into a temp directory costs milliseconds. Its
     /// Integration twin — the same three assertions against the <c>obj/gen/shim</c> a real build
@@ -640,6 +657,7 @@ public class NetShimGeneratorTests
             var handShim = N(File.ReadAllText(BlnetShimSourcesTests.PathToTestShimHandleTable()));
             var onDisk = N(File.ReadAllText(Path.Combine(dir, NetShimGenerator.HandleTableFileName)));
             var status = N(File.ReadAllText(Path.Combine(dir, NetShimGenerator.StatusFileName)));
+            var marshal = N(File.ReadAllText(Path.Combine(dir, NetShimGenerator.MarshalFileName)));
             var abiText = File.ReadAllText(Path.Combine(dir, NetShimGenerator.ShimAbiFileName));
             var abi = ShimAbiConstant.Match(abiText);
 
@@ -657,6 +675,11 @@ public class NetShimGeneratorTests
                     + "one source of truth; a generated shim whose BlnetStatus disagrees with the "
                     + "native header's #defines returns status codes the caller decodes as "
                     + "something else entirely.");
+                Assert.That(marshal, Is.EqualTo(N(BlnetShimSources.MarshalCs)),
+                    "the " + NetShimGenerator.MarshalFileName + " on disk is not "
+                    + "BlnetShimSources.MarshalCs. It is the FOURTH spliced scaffolding file — "
+                    + "§6.4's conversion pairs — and it reaches disk by the same write hop as the "
+                    + "other three, so leaving it out would make this test's name a half-truth.");
                 Assert.That(abi.Success, Is.True,
                     "the " + NetShimGenerator.ShimAbiFileName + " on disk carries no "
                     + "'public const int AbiVersion = <n>;'. Exports.g.cs's blnet_abi_version "

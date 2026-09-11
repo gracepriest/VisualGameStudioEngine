@@ -4,7 +4,9 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
+using BasicLang.Compiler.CodeGen.CPlusPlus;
 using BasicLang.Compiler.CodeGen.Net;
 using BasicLang.Compiler.ProjectSystem;
 using NUnit.Framework;
@@ -460,7 +462,15 @@ public class NetGeneratedShimConformanceTests
         @"^\s*int32_t \(BLNET_CALL \*(?<name>\w+)\)\([^)]*\);\s*$",
         RegexOptions.Multiline | RegexOptions.Compiled);
 
-    /// <summary>The generated <c>ShimAbi.cs</c> constant, captured as a NUMBER.</summary>
+    /// <summary>
+    /// The generated <c>ShimAbi.cs</c> constant, captured as a NUMBER. Test-owned and deliberately
+    /// duplicated from <c>NetShimGeneratorTests.ShimAbiConstant</c>, on the same footing as
+    /// <see cref="SlotLine"/> above: both fixtures parse the same generator's output and neither
+    /// owns it. (Contrast <c>BlnetShimSourcesTests.PathToTestShimHandleTable</c>, which was
+    /// PROMOTED and shared — that one resolves a repo path, where two copies could disagree about
+    /// where the asset lives. Two copies of a pattern cannot disagree about anything; they simply
+    /// both stop matching, loudly, if the emitted shape changes.)
+    /// </summary>
     private static readonly Regex ShimAbiConstant = new(
         @"public const int AbiVersion = (?<value>\d+);", RegexOptions.Compiled);
 
@@ -526,17 +536,17 @@ public class NetGeneratedShimConformanceTests
             + "Ignored: a missing shim here is the failure this row exists to detect, and skipping "
             + "on it would read as a pass. Looked for " + shimPath);
 
-        var module = System.Runtime.InteropServices.NativeLibrary.Load(shimPath);
+        var module = NativeLibrary.Load(shimPath);
         try
         {
-            var missing = slots.Concat(BasicLang.Compiler.CodeGen.CPlusPlus.BlnetContract.CoreExportNames)
-                .Where(name => !System.Runtime.InteropServices.NativeLibrary.TryGetExport(
+            var missing = slots.Concat(BlnetContract.CoreExportNames)
+                .Where(name => !NativeLibrary.TryGetExport(
                     module, name, out _))
                 .ToList();
 
             Assert.That(missing, Is.Empty,
                 "the PUBLISHED shim does not export " + missing.Count + " of the "
-                + (slots.Count + BasicLang.Compiler.CodeGen.CPlusPlus.BlnetContract.CoreExportNames.Count)
+                + (slots.Count + BlnetContract.CoreExportNames.Count)
                 + " names the native side will bind: " + string.Join(", ", missing)
                 + ".\nA missing CORE name fails blnet_bind_core loudly (exit 3, a §9.3 line on "
                 + "stderr). A missing MEMBER name does not: blnet_bind_all stores the null and the "
@@ -545,7 +555,7 @@ public class NetGeneratedShimConformanceTests
                 + "it is checked against a real DLL rather than against a string the same process "
                 + "just emitted.");
         }
-        finally { System.Runtime.InteropServices.NativeLibrary.Free(module); }
+        finally { NativeLibrary.Free(module); }
     }
 
     /// <summary>
@@ -602,7 +612,7 @@ public class NetGeneratedShimConformanceTests
         var status = N(File.ReadAllText(Path.Combine(shimDir, NetShimGenerator.StatusFileName)));
         var abiText = File.ReadAllText(Path.Combine(shimDir, NetShimGenerator.ShimAbiFileName));
         var abi = ShimAbiConstant.Match(abiText);
-        var contract = BasicLang.Compiler.CodeGen.CPlusPlus.BlnetContract.AbiVersion;
+        var contract = BlnetContract.AbiVersion;
 
         Assert.Multiple(() =>
         {
@@ -612,7 +622,7 @@ public class NetGeneratedShimConformanceTests
                 + "suite validates the hand copy; while the two handle models differ, that suite "
                 + "says nothing at all about the shim the user actually runs.");
             Assert.That(status, Is.EqualTo(N(
-                    BasicLang.Compiler.CodeGen.CPlusPlus.BlnetContract.GenerateStatusEnumCs())),
+                    BlnetContract.GenerateStatusEnumCs())),
                 "the " + NetShimGenerator.StatusFileName + " this build compiled is not "
                 + "BlnetContract.GenerateStatusEnumCs()'s output. The managed enum and the native "
                 + "#defines come from one table on purpose — a shim whose BLNET_E_* values are off "
@@ -660,7 +670,7 @@ public class NetGeneratedShimConformanceTests
         if (compiler == null)
             Assert.Ignore("no C++ compiler found — this row compiles a stub shim.");
 
-        var contract = BasicLang.Compiler.CodeGen.CPlusPlus.BlnetContract.CoreExportNames;
+        var contract = BlnetContract.CoreExportNames;
         var stubNames = new[]
         {
             "blnet_abi_version", "blnet_initialize", "blnet_addref", "blnet_release",
@@ -671,7 +681,7 @@ public class NetGeneratedShimConformanceTests
             + "names, or a missing one makes blnet_bind_core fail FIRST and this row silently "
             + "becomes a missing-export row. Update the stub AND this list together.");
 
-        var wrongAbi = BasicLang.Compiler.CodeGen.CPlusPlus.BlnetContract.AbiVersion + 1;
+        var wrongAbi = BlnetContract.AbiVersion + 1;
         var stubSource =
             "#include <cstdint>\n"
             + "extern \"C\" {\n"
@@ -726,7 +736,7 @@ public class NetGeneratedShimConformanceTests
         var (exitCode, stdout, stderr) = NetShimPipelineFixture.RunAllowingFailure(exe);
         var dump = $"exit={exitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}";
         var expectedLine = "blnet: shim ABI " + wrongAbi + ", expected "
-                           + BasicLang.Compiler.CodeGen.CPlusPlus.BlnetContract.AbiVersion;
+                           + BlnetContract.AbiVersion;
 
         Assert.Multiple(() =>
         {

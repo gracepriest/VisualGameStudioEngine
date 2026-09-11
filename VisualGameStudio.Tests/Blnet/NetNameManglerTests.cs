@@ -87,10 +87,15 @@ public class NetNameManglerTests
     /// never a cached instance: two calls must yield two reference-distinct descriptors (including
     /// two distinct parameter lists), which is what makes
     /// <see cref="MangleIsDeterministicAcrossCalls"/> a statement about VALUES.
+    ///
+    /// <para><c>isStatic: false</c> because <c>Regex.Match(String)</c> IS an instance method, and
+    /// the golden pin below is only meaningful on a descriptor a real build could produce: the
+    /// flag is part of <c>CanonicalIdentity</c>, so a static spelling of this member hashes to a
+    /// name no shim will ever export and the pin would guard a shape nothing emits.</para>
     /// </summary>
     private static NetMemberDescriptor RegexMatchOfString() => new NetMemberDescriptor(
         "Match", "System.Text.RegularExpressions.Regex", NetMemberCategory.Method,
-        isStatic: true, arity: 0, typeFullName: "System.Text.RegularExpressions.Match",
+        isStatic: false, arity: 0, typeFullName: "System.Text.RegularExpressions.Match",
         parameters: new[] { new NetParameterDescriptor(NetRefKind.None, "System.String") });
 
     [Test]
@@ -139,7 +144,7 @@ public class NetNameManglerTests
     public void MangleOfAKnownMemberIsStableAcrossBuilds()
     {
         Assert.That(NetNameMangler.Mangle(RegexMatchOfString()),
-            Is.EqualTo("bl_net_System_Text_RegularExpressions_Regex_Match__System_String_52a3c1a456a9c4b1"),
+            Is.EqualTo("bl_net_System_Text_RegularExpressions_Regex_Match__System_String_edb0b06681776cfd"),
             "The mangled name of Regex.Match(String) changed. NetNameMangler.Mangle is not merely "
             + "deterministic within one process (the three tests above) — §7.3 requires it to be "
             + "the SAME across builds, because it is a component of every NetShimCache key on disk "

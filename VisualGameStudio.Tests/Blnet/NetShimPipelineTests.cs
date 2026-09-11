@@ -926,6 +926,15 @@ public class NetShimPhaseTests
             Assert.That(slots, Has.Count.GreaterThan(1),
                 "guard: a one-member expansion makes the equality below true for the wrong reason. "
                 + "Slots: " + string.Join(", ", slots));
+            // …and guard the SHAPE, not just the count. Non-empty is not enough: if the §7.2
+            // expansion ever stopped carrying inherited members, this row would keep passing over
+            // an ordinary Widget-only surface — which is precisely what the hand-built oracles
+            // already cover, so the coverage this row exists for would be gone with nothing red.
+            Assert.That(surface.Members.Select(m => m.DeclaringTypeFullName),
+                Has.Some.EqualTo("System.Object"),
+                "guard: the <NetProxy> expansion no longer carries INHERITED members, which is the "
+                + "only shape distinguishing this surface from the hand-built ones. Declaring "
+                + "types: " + string.Join(", ", surface.Members.Select(m => m.DeclaringTypeFullName)));
             Assert.That(slots, Is.EquivalentTo(exports),
                 "spec §12.4 over the surface the COLLECTOR built from <NetProxy Include=\"Aot."
                 + "Probe.Widget\"/>: the proxy table's slots and the shim's surface-derived "
