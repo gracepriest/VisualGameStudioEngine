@@ -314,7 +314,18 @@ class ProviderRegistry {
      * @returns {Promise<any>}
      */
     async dispatchRequest(type, document, params, token) {
-        const uri = document && document.uri;
+        // Stringify the uri here. `document.uri` is a Uri OBJECT, but scoreSelector ultimately
+        // reaches utils/document-selector, which documents its uri parameter as a string and treats
+        // it as one (`uri.indexOf('://')`, `uri.startsWith('file:///')`). Passing the object throws
+        // `TypeError: uri.indexOf is not a function` for any filter carrying `scheme` or `pattern` —
+        // i.e. { scheme: 'file', language: 'javascript' }, the most common VS Code selector shape.
+        // The throw escapes into main.js, becomes a -32603 error response, and is swallowed by the
+        // IDE's `catch { return null; }`, so the provider just appears to have nothing to say.
+        //
+        // Bare language-string selectors never touch uri, which is exactly how this stayed hidden.
+        // vscode-api/languages.js:351 already stringifies before scoring; this matches it rather
+        // than making document-selector polymorphic, since a two-shape contract invites the next drift.
+        const uri = document && document.uri ? String(document.uri) : '';
         const languageId = document && document.languageId;
         const matches = this.getProviders(type, uri, languageId);
 

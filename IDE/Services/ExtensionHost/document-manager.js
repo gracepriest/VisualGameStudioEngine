@@ -461,9 +461,21 @@ class DocumentManager {
      * @returns {string}
      */
     _key(uri) {
-        if (typeof uri === 'string') return uri;
-        if (uri && typeof uri.toString === 'function') return uri.toString();
-        return String(uri);
+        // Both ends must produce the SAME key, and they arrive by different routes: openDocument
+        // stores under a parsed Uri object, while getDocument looks up with the raw string off the
+        // wire. The old implementation returned strings verbatim and objects via toString(), so the
+        // two only agreed by luck — and did not, which made every provider request a permanent miss.
+        //
+        // Normalising through one parse/stringify pass makes them converge regardless of which form
+        // arrived, including drive-letter casing.
+        const asString = uri && typeof uri.toString === 'function' ? uri.toString() : String(uri);
+
+        try {
+            return Uri.parse(asString).toString();
+        } catch (_) {
+            // A key we cannot canonicalise is still better than throwing inside a lookup.
+            return asString;
+        }
     }
 
     /**
