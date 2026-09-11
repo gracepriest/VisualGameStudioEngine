@@ -547,7 +547,7 @@ namespace BasicLang.Compiler.CodeGen.Net
             {
                 L(sb, "            ulong* args_ = stackalloc ulong[" + parameters.Count + "];");
                 for (var i = 0; i < parameters.Count; i++)
-                    L(sb, "            args_[" + i + "] = unchecked((ulong)" + names[i] + ");");
+                    L(sb, "            args_[" + i + "] = " + WirePack(parameters[i], names[i]) + ";");
             }
             else
             {
@@ -561,15 +561,54 @@ namespace BasicLang.Compiler.CodeGen.Net
             L(sb, "                throw new global::System.InvalidOperationException(");
             L(sb, "                    \"blnet: callback invocation failed with status \" + st_);");
             if (returnType != "System.Void")
-                L(sb, "            return unchecked((" + Qualified(returnType) + ")r_);");
+                L(sb, "            return " + WireUnpack(returnType, "r_") + ";");
             L(sb, "        };");
             L(sb, "    }");
         }
 
         /// <summary>
-        /// v1's admissibility gate. A scalar row of §8.3 fits a <c>ulong</c> slot by an
-        /// <c>unchecked</c> cast in both directions; nothing else does, and guessing produces a
-        /// runtime misread rather than a build failure.
+        /// §8.4's wire pack — THE managed half of the seam whose native half is
+        /// <c>wire_to</c>/<c>wire_from</c> in <c>blnet_runtime.hpp</c>. Both must answer the
+        /// same question the same way or the word is corrupted in flight.
+        ///
+        /// <para>A slot word is a BIT PATTERN. For an integer row an <c>unchecked</c> value cast
+        /// reproduces the bits, which is why this read as correct for years; for a FLOATING row
+        /// it does not, and <c>(ulong)1.5</c> is <c>1</c> — the fraction is gone before native
+        /// code is ever reached (chip <c>task_75064f2e</c>).</para>
+        ///
+        /// <para>⛔ This and <see cref="WireUnpack"/> must move together with the native seam.
+        /// Fixing one half alone is WORSE than the defect: a bit-exact native adapter fed an
+        /// already-truncated <c>1</c> reinterprets it as 4.9e-324.</para>
+        /// </summary>
+        private static string WirePack(string typeFullName, string expr) => typeFullName switch
+        {
+            "System.Double" =>
+                "unchecked((ulong)global::System.BitConverter.DoubleToInt64Bits(" + expr + "))",
+            "System.Single" =>
+                "unchecked((ulong)(uint)global::System.BitConverter.SingleToInt32Bits(" + expr + "))",
+            _ => "unchecked((ulong)" + expr + ")",
+        };
+
+        /// <summary>§8.4's wire unpack — the return leg of <see cref="WirePack"/>.</summary>
+        private static string WireUnpack(string typeFullName, string expr) => typeFullName switch
+        {
+            "System.Double" =>
+                "global::System.BitConverter.Int64BitsToDouble(unchecked((long)" + expr + "))",
+            "System.Single" =>
+                "global::System.BitConverter.Int32BitsToSingle(unchecked((int)" + expr + "))",
+            _ => "unchecked((" + Qualified(typeFullName) + ")" + expr + ")",
+        };
+
+        /// <summary>
+        /// v1's admissibility gate. A scalar row of §8.3 fits a <c>ulong</c> slot — an integer
+        /// row by an <c>unchecked</c> value cast, a floating row by its BIT PATTERN (see
+        /// <see cref="WirePack"/>). Nothing else fits, and guessing produces a runtime misread
+        /// rather than a build failure.
+        ///
+        /// <para>⚠ This comment used to say every admitted row crossed "by an <c>unchecked</c>
+        /// cast in both directions". That was the defect written down as the design: admissibility
+        /// and wire-form were tied by nothing, so <c>Double</c> passed the gate and was then
+        /// carried lossily. <c>NetDelegateSlotWireTests</c> now holds the tie by round trip.</para>
         /// </summary>
         private static void RequireBlittableScalar(
             string typeFullName, NetDelegateForm form, string position)

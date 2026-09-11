@@ -164,16 +164,24 @@ internal static class NetStubHarness
     /// the very call a stub scenario is asserting on, turning a genuine regression into a
     /// vacuous pass. Scenarios opt in where the optimizer is part of what is under test.</para>
     /// </param>
+    /// <param name="resolver">
+    /// The resolver to analyze and collect against. Defaults to <see cref="SharedResolver"/>
+    /// (framework only). A fixture whose program calls into a PROBE assembly must pass a
+    /// resolver that can see it — the shared one reads framework paths only, so a probe type
+    /// would draw BL6016 here rather than reaching the surface.
+    /// </param>
     internal static (string Cpp, NetSurface Surface) CompileWithSurface(
-        string source, bool optimize)
+        string source, bool optimize, NetTypeResolver resolver = null)
     {
+        var active = resolver ?? SharedResolver.Value;
+
         var parser = new Parser(new Lexer(source).Tokenize());
         var ast = parser.Parse();
         Assert.That(parser.Errors, Is.Empty,
             "parse errors:\n" + string.Join("\n", parser.Errors.Select(e => e.Message)));
 
         var analyzer = new SemanticAnalyzer();
-        analyzer.ConfigureNetResolution(() => SharedResolver.Value, nativeBackend: true);
+        analyzer.ConfigureNetResolution(() => active, nativeBackend: true);
         Assert.That(analyzer.Analyze(ast), Is.True,
             "semantic errors:\n" + string.Join("\n", analyzer.Errors.Select(e => e.Message)));
         Assert.That(analyzer.NetDiagnostics, Is.Empty,
@@ -192,7 +200,7 @@ internal static class NetStubHarness
         var cpp = new CppCodeGenerator(new CppCodeGenOptions { GenerateComments = false })
             .Generate(module);
         var surface = NetSurfaceCollector.Collect(
-            new[] { module }, null, () => SharedResolver.Value,
+            new[] { module }, null, () => active,
             new List<NetReferenceDiagnostic>());
         Assert.That(surface.IsNonEmpty, Is.True, "the program under test must draw a surface");
         return (cpp, surface);

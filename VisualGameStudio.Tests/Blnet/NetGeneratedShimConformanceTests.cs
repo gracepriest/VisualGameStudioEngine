@@ -1150,12 +1150,16 @@ public class NetGeneratedShimConformanceTests
         AssertBuilt(built.Result, "the double-delegate program");
 
         Assert.That(NetShimPipelineFixture.Run(built.Result.ExecutablePath!),
-            Is.EqualTo("2\n"),
-            "PINNED DIVERGENCE — .NET's answer is 3 (1.5 * 2.0). '2' is the CURRENT wrong output: "
-            + "the double is value-cast to uint64 on both halves of the callback wire "
-            + "(task_75064f2e). If this now prints 3, the chip is FIXED — flip this row to parity "
-            + "and remove the 'deliberately absent' notes in the int/long/void delegate row. Any "
-            + "OTHER value is a new defect.");
+            Is.EqualTo("3\n"),
+            "PARITY — .NET's answer is 3 (1.5 * 2.0), and this row now asserts it. It was a "
+            + "PINNED DIVERGENCE asserting '2' until chip task_75064f2e was fixed: the double "
+            + "used to be value-cast to uint64 on BOTH halves of the callback wire, so 1.5 "
+            + "crossed as 1. Both halves now carry the BIT PATTERN — NetShimGenerator's "
+            + "WirePack/WireUnpack and blnet_runtime.hpp's wire_to/wire_from.\n\n"
+            + "A '2' here means a half-revert: one side went back to a value cast. A tiny "
+            + "denormal (~4.9e-324) means the NATIVE half is bit-exact while the MANAGED half "
+            + "still truncates — the halves have been split, which is worse than the original "
+            + "defect. Any other value is a new one.");
     }
 
     /// <summary>
