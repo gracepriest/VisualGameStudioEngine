@@ -737,14 +737,28 @@ int main()
                 ["Guid"] = Guid.NewGuid().ToString()
             };
 
+            // The SAME variables with the project name escaped for XML, used only for the
+            // files that ARE XML. A project file is XML and a project name is user text: '&'
+            // is a legal file-name character, so `basiclang new web -n "A&B"` wrote a
+            // <ProjectName>A&B</ProjectName> that is not well-formed, and the very next
+            // command failed with "'<' is an unexpected token. The expected token is ';'."
+            // Escaping every file instead would put &amp; into .bas source and onto the page.
+            // See TemplateProjectNameEscapingTests.
+            var xmlVariables = new Dictionary<string, string>(variables)
+            {
+                ["ProjectName"] = XmlText(projectName)
+            };
+
             // Create files from template
             if (template.Files != null)
             {
                 // Use inline file definitions
                 foreach (var file in template.Files)
                 {
+                    // The NAME is a path, never XML — always the raw variables.
                     var fileName = ReplaceVariables(file.Key, variables);
-                    var content = ReplaceVariables(file.Value, variables);
+                    var content = ReplaceVariables(
+                        file.Value, IsXmlFile(fileName) ? xmlVariables : variables);
                     var filePath = Path.Combine(outputPath, fileName);
 
                     var fileDir = Path.GetDirectoryName(filePath);
@@ -765,10 +779,47 @@ int main()
             Console.WriteLine("Next steps:");
             Console.WriteLine($"  cd {projectName}");
             Console.WriteLine($"  basiclang build");
-            Console.WriteLine($"  basiclang run");
+            // A web project has no executable, so "basiclang run" was an instruction that
+            // ended in an error — and it was the first thing a new user typed. Say what the
+            // build actually produces instead. (`run` now reports the site too, rather than
+            // hunting for a .dll; the two messages must keep agreeing.)
+            if (IsWebTemplate(template))
+                Console.WriteLine("  then open index.html in the site directory the build prints" +
+                                  " (or press F5 in the IDE)");
+            else
+                Console.WriteLine($"  basiclang run");
 
             return true;
         }
+
+        /// <summary>
+        /// Files whose CONTENT is XML and therefore need the escaped variables.
+        ///
+        /// <para>⚠ <c>.blsln</c> is deliberately NOT here. The IDE writes solution files as XML
+        /// through SolutionSerializer, but the CLI's own "sln" template emits the legacy
+        /// PLAIN-TEXT format ("BasicLang Solution File, Format Version 1.0" with '#' comment
+        /// lines) — escaping it would put a literal <c>&amp;amp;</c> into a text file. Extension
+        /// alone does not decide this; the template's content does.</para>
+        /// </summary>
+        private static bool IsXmlFile(string fileName)
+            => Path.GetExtension(fileName).Equals(".blproj", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>Escapes user text for XML element content.</summary>
+        private static string XmlText(string text) => (text ?? string.Empty)
+            .Replace("&", "&amp;")
+            .Replace("<", "&lt;")
+            .Replace(">", "&gt;");
+
+        /// <summary>
+        /// True for a template that builds to a web site rather than an executable. Keyed on
+        /// the project file the template itself ships, not on its name, so a custom template
+        /// from ~/.basiclang/templates gets the right steps too.
+        /// </summary>
+        private static bool IsWebTemplate(ProjectTemplate template) =>
+            template.Files != null &&
+            template.Files.Any(f => Path.GetExtension(f.Key).Equals(".blproj", StringComparison.OrdinalIgnoreCase)
+                                    && f.Value != null
+                                    && f.Value.IndexOf("<TargetBackend>JavaScript<", StringComparison.OrdinalIgnoreCase) >= 0);
 
         private void CopyTemplateDirectory(string sourceDir, string targetDir, Dictionary<string, string> variables)
         {

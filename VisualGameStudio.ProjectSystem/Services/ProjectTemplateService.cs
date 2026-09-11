@@ -278,9 +278,14 @@ public class ProjectTemplateService : IProjectTemplateService
         sb.AppendLine("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
         sb.AppendLine("<BasicLangProject Version=\"1.0\">");
         sb.AppendLine("  <PropertyGroup>");
-        sb.AppendLine($"    <ProjectName>{options.Name}</ProjectName>");
+        // A project file is XML and a project NAME is user text. '&' is a legal file-name
+        // character that IsValidProjectName admits, so an unescaped name made the .blproj
+        // malformed: creation succeeded and the very first build died with
+        // "'<' is an unexpected token. The expected token is ';'." See
+        // TemplateProjectNameEscapingTests. SOURCE files keep the raw name — a .bas is not XML.
+        sb.AppendLine($"    <ProjectName>{Xml(options.Name)}</ProjectName>");
         sb.AppendLine($"    <OutputType>{outputType switch { "exe" => "Exe", "library" => "Library", _ => "WinExe" }}</OutputType>");
-        sb.AppendLine($"    <RootNamespace>{options.Namespace ?? options.Name}</RootNamespace>");
+        sb.AppendLine($"    <RootNamespace>{Xml(options.Namespace ?? options.Name)}</RootNamespace>");
         sb.AppendLine($"    <TargetBackend>{targetBackend}</TargetBackend>");
         // Pure C++ projects (Language=Cpp): user-authored C++ built by
         // CppProjectBuilder through a discovered native toolchain — the
@@ -349,6 +354,14 @@ public class ProjectTemplateService : IProjectTemplateService
 
         return sb.ToString();
     }
+
+    /// <summary>Escapes user text for XML ELEMENT content (the .blproj carries no user text in
+    /// an attribute). Hand-rolled rather than SecurityElement/XElement so the generator stays a
+    /// StringBuilder that emits exactly the layout above.</summary>
+    private static string Xml(string text) => (text ?? string.Empty)
+        .Replace("&", "&amp;")
+        .Replace("<", "&lt;")
+        .Replace(">", "&gt;");
 
     private static List<(string PackageId, string Version)> GetPackageReferences(string templateId)
     {

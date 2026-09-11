@@ -92,7 +92,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
                 if (script.Length > 0 && !script.EndsWith("\n", StringComparison.Ordinal))
                     script += "\n";
-                script += "//# sourceMappingURL=" + mapFileName + "\n";
+                // A URL, resolved by devtools against the script's own URL — so it needs the
+                // same percent-encoding as the harness's src, or a '#' in the project name
+                // silently costs the user the BasicLang source view. See UrlPath.
+                script += "//# sourceMappingURL=" + UrlPath(mapFileName) + "\n";
             }
 
             var scriptPath = Path.Combine(outputDirectory, scriptFileName);
@@ -254,7 +257,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         private static string Harness(string scriptFileName, string title)
         {
             var name = Escape(title ?? Path.GetFileNameWithoutExtension(scriptFileName));
-            var src = Escape(scriptFileName);
+            var src = Escape(UrlPath(scriptFileName));
 
             var html = new StringBuilder();
             html.Append("<!DOCTYPE html>\n");
@@ -276,12 +279,32 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         /// <summary>
         /// An assembly name reaches both the title and the src attribute, and <c>&amp;</c> is
-        /// legal in a file name on every platform this targets.
+        /// legal in a file name on every platform this targets. This is the TEXT escaping —
+        /// a URL needs <see cref="UrlPath"/> first, and the two are not interchangeable.
         /// </summary>
         private static string Escape(string text) => (text ?? string.Empty)
             .Replace("&", "&amp;")
             .Replace("<", "&lt;")
             .Replace(">", "&gt;")
             .Replace("\"", "&quot;");
+
+        /// <summary>
+        /// Percent-encodes a file name for use as a URL. The output file is named after the
+        /// project, so any character a project name may contain reaches a URL here.
+        ///
+        /// <para>MEASURED: a project called <c>Site #1</c> built clean, wrote <c>Site #1.js</c>
+        /// and an index.html carrying the raw name — and the browser split the src at the
+        /// <c>#</c>, requested <c>/Site%20</c>, took a 404 and rendered a blank page while the
+        /// build still said success. <c>%</c> fails from the other side: the preview server
+        /// percent-DECODES the request path, so a raw <c>%</c> mangles on the way back. Both
+        /// are legal file-name characters that the New Project wizard admits.</para>
+        ///
+        /// <para>A single path SEGMENT, never a path — <c>Emit</c>'s contract already says the
+        /// script is a file name only, so <c>/</c> needs no special handling, and
+        /// <c>EscapeDataString</c> would encode it if one appeared anyway. An ordinary name
+        /// (letters, digits, <c>.</c>, <c>-</c>, <c>_</c>, <c>~</c>) passes through untouched,
+        /// so nothing that works today changes.</para>
+        /// </summary>
+        private static string UrlPath(string fileName) => Uri.EscapeDataString(fileName ?? string.Empty);
     }
 }

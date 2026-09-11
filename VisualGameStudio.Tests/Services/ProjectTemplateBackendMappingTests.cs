@@ -72,6 +72,14 @@ public class ProjectTemplateBackendMappingTests
         var blproj = File.ReadAllText(result.ProjectPath!);
         Assert.That(blproj, Does.Contain($"<TargetBackend>{backend}</TargetBackend>"),
             $"solution type '{solutionTypeId}' must write its own backend, not the CSharp default");
+
+        // ...and the IDE must READ BACK what the wizard just wrote. Asserting the text alone
+        // would still pass if the loader could not parse the token, which is the difference
+        // between a project that builds as JavaScript and one that reopens as C#.
+        var reloaded = await new VisualGameStudio.ProjectSystem.Serialization.ProjectSerializer()
+            .LoadAsync(result.ProjectPath!);
+        Assert.That(reloaded.TargetBackend.ToString(), Is.EqualTo(backend),
+            "the project the wizard wrote does not round-trip through the IDE's own loader");
     }
 
     [Test]
