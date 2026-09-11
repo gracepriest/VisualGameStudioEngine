@@ -31,9 +31,18 @@ environment for both this plan and the spec has **no .NET SDK** (`dotnet: comman
 the same constraint that produced the unbuilt patch in Task 1. Every "Gate" line is an instruction,
 not a record.
 
-**Blocking on owner sign-off before Task 1.** Spec §10 asks five questions; Q1 (is a WinForms
-designer wanted at all?) and Q2 (is Grid/Flow-first acceptable?) change what gets built, and Q4
-changes this plan's Task 3.
+**Blocking on owner sign-off before Task 1.** Spec §10 asks five questions.
+
+- **Q1 — ✅ ANSWERED 2026-09-11: yes, WinForms also.** The dual-target scope is confirmed. Slice 2+
+  item 6 is un-gated, and its catalog CI gate is now mandatory infrastructure rather than a
+  proposal — it is the only correctness check that target has (spec §10 Q1). Task 2 is on the
+  critical path for the same reason.
+- **Q2 — still open, and it forks the design.** Grid/Flow-first (spec D2) makes the designer a
+  constraint editor with a preview; absolute positioning makes it a pixel canvas. Task 5's catalog
+  and Task 8's canvas interaction model both depend on the answer.
+- **Q4 — still open**, and it changes this plan's Task 3.
+
+Q1's answer does **not** re-order the slices: the web half still ships first (spec §9).
 
 ---
 
@@ -245,7 +254,7 @@ already reaches a real renderer (`WebPreviewServer`, registered at `ServiceConfi
    from an asset root so `JavaScriptEmitter.cs:105-115`'s never-overwrite guard keeps protecting a
    hand-authored `index.html`. `<body data-form="LoginForm">` with `Main()` dispatching on
    `getAttribute` (spec D8 — **one `.js` per project; do not take on a backend change**).
-6. **WinForms lowering** — gated on spec §10 Q1. Its CI gate (generate every catalog control with
+6. **WinForms lowering** — ✅ confirmed in scope (spec §10 Q1). Its CI gate (generate every catalog control with
    every property, require the real CLI to exit 0) **is** its type system; blocker 7 means there is
    no other check.
 

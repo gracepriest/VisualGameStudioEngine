@@ -24,8 +24,11 @@ stages page models 1→4 and names model 4 *"Visual designer generating markup a
 with a standing constraint at `:53-54` and again in the risk table at `:343` that the v1 output
 shape must not foreclose it. Verified verbatim.
 
-The WinForms half has **no** mandate. There is no spec, plan, code, or convention anywhere in the
-repo for a WinForms designer. It is inferred symmetry, and §10 asks the owner about it directly.
+The WinForms half had **no** mandate in the repo — no spec, plan, code, or convention — and entered
+this design as inferred symmetry. **The owner has since confirmed it: WinForms is in scope**
+(§10 Q1, answered 2026-09-11). That confirmation is a product decision, not new evidence about the
+code: blocker 7 still holds, so WinForms ships with **no type metadata at any layer** and the
+catalog CI gate of §7 is not a nicety but the only correctness check the target has.
 
 ---
 
@@ -458,11 +461,29 @@ Full task breakdown and gates: `docs/superpowers/plans/2026-09-11-form-designer.
 
 ## 10. Questions for the owner — blocking, answer before implementation
 
-**Q1. Is a WinForms designer wanted at all?** Nothing in this repo asks for one. The web half is
-staged model 4 of a spec you approved; the WinForms half is inferred symmetry. It roughly doubles
-the catalog surface, and it is the half with **no type metadata at any layer** (blocker 7), so its
-only correctness check is a CI gate that shells out to `csc`. If the answer is "not now", the
-document format keeps its per-target facets (D3) and nothing else changes.
+**Q1. Is a WinForms designer wanted at all?** — ✅ **ANSWERED 2026-09-11: yes, WinForms also.**
+
+The question was asked because nothing in this repo asked for one: the web half is staged model 4
+of a spec the owner approved, the WinForms half was inferred symmetry. It is now a product
+decision, and three consequences follow that the rest of this spec is written to carry:
+
+1. **The catalog CI gate (§7) is mandatory infrastructure, not a nicety.** WinForms has no type
+   metadata at any layer (blocker 7): `Form`, `Button`, `Point` and `Size` are typed by a
+   PascalCase heuristic, member access on the result degrades to `Object` with **no diagnostic**,
+   and `CommonNetTypes` contains zero WinForms names. A hand-written catalog is unfalsifiable data
+   whose only check is whether `csc` happened to accept it. Generating every catalog control with
+   every property set and requiring the real CLI to exit 0 **is** the type system for this target.
+2. **Task 2 (`ProjectSerializer`) moves onto the critical path.** It was already "must fix before
+   anything touches WinForms"; with WinForms confirmed it is simply a prerequisite. A designer adds
+   files → the IDE saves → `<UseWindowsForms>` is destroyed → the next CLI build fails CS0246 on
+   `Form`.
+3. **The naming rule in blocker 7's corollary is now load-bearing product code**, not a note:
+   generated bases are `<Name>Base`, never `<Name>_Base`, because the heuristic excludes any
+   identifier containing `_` and `Me.Text` then becomes a hard semantic error.
+
+Still open under this answer, and **not** implied by it: whether WinForms ships *first* or second.
+§9 sequences the web half first — owner mandate, machine-readable ground truth to pin a catalog
+against, and F5 already reaching a real renderer — and this answer does not disturb that.
 
 **Q2. Is Grid/Flow-first acceptable?** It means the designer is a **constraint editor with a
 preview**, not a pixel canvas — dragging a button re-parents it into a cell rather than setting its
