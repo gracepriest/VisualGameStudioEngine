@@ -31,9 +31,9 @@ environment for both this plan and the spec has **no .NET SDK** (`dotnet: comman
 the same constraint that produced the unbuilt patch in Task 1. Every "Gate" line is an instruction,
 not a record.
 
-**Owner sign-off: 3 of 5 answered. The two that gated the design are both closed — slice 0 and
-slice 1 are fully specified and ready to start on a machine with an SDK.** Spec §10's five
-questions:
+**Owner sign-off: 4 of 5 answered. Every question that shapes the design is closed — slice 0 and
+slice 1 are fully specified and ready to start on a machine with an SDK. The one still open (Q5)
+blocks execution, not design.** Spec §10's five questions:
 
 - **Q1 — ✅ ANSWERED 2026-09-11: yes, WinForms also.** The dual-target scope is confirmed. Slice 2+
   item 6 is un-gated, and its catalog CI gate is now mandatory infrastructure rather than a
@@ -43,15 +43,15 @@ questions:
   (spec D2 + **D2a**). Task 5's catalog is un-gated. Task 8 gains a prerequisite: the
   snap-resolution rule is load-bearing UI with five sub-decisions (spec D2a) and must be designed
   before the canvas gains interaction — **new Task 8a**.
+- **Q3 — ✅ ANSWERED 2026-09-11: the designer subsumes page models 2 and 3.** No slice reorders,
+  but two staged features become **acceptance obligations on the designer** (spec §7): model 2 is
+  delivered by D9 and model 3 by the new **D10a**. D10a settles a conflict the answer creates —
+  convention wiring *and* explicit `<Bind>` wiring would double-fire and make "missing handler"
+  undecidable, so `<Bind>` wires and convention only suggests the name. New diagnostic `BL8008`
+  covers the resulting gap (handler exists, not bound).
 - **Q4 — ✅ ANSWERED 2026-09-11: fix cross-file `Implements` in slice 0.** Task 3 is un-gated.
   Gate Tasks 1 and 3 **separately** — slice 0 now carries two `SemanticAnalyzer` changes, one of
   them never compiled, and a shared gate would leave a red suite with two candidate causes.
-
-- **Q3 — still open**, and *not* blocking: page models 2 and 3 are unbuilt, and it is unstated
-  whether the designer subsumes them or they ship first. **Proceeding on the assumption that the
-  designer subsumes them** — model 3's auto-wiring convention (`Sub btnSave_Click()` →
-  `<button id="btnSave">`) reads as a piece of the designer's event story (D10), not a competitor.
-  If that is wrong, it changes sequencing only, not any decision in the spec.
 - **Q5 — still open, and it blocks execution rather than design:** nobody has run a gate yet. The
   `Inherits` patch has never been compiled, and neither the spec nor this plan was written on a
   machine with a .NET SDK. Slice 0 needs an SDK and ~39 minutes per full-suite run, twice.
@@ -116,7 +116,7 @@ save, which breaks the next `BasicLang.exe build` with CS0246 on `Form`.
 
 **Gate:** `--filter "TestCategory!=Integration"` plus the project-system fixtures.
 
-### Task 3: Cross-file `Implements` — decide, then (if yes) fix
+### Task 3: Fix cross-file `Implements`
 
 ⚠ **This task's shape changed.** The build prompt defers this because it "touches
 `Compiler.CollectExportedSymbols`, which is shared machinery". Spec §2.1 found that is **wrong**:
@@ -286,7 +286,15 @@ already reaches a real renderer (`WebPreviewServer`, registered at `ServiceConfi
 4. **The toolbox and property grid.** Both are hand-built — Avalonia 11.3 base ships no
    `PropertyGrid`, no `ColorPicker` and no font dialog. Price every type editor.
    Edits commit on focus-loss/Enter, not per keystroke (spec D13).
-5. **The markup emitter** — HTML fragment with stable ids + generated `.css`, always overwriting
+   **Double-click-to-create-handler lands here, and it is one edit, not two** (spec D10a): it writes
+   the conventionally-named `Sub btnSave_Click()` *and* the matching `<Bind>` atomically. Shipping
+   the sub without the bind is the failure mode — it looks like model 3 working and is a dead
+   button.
+5. **The markup emitter — and with it page model 2** (spec D9 + §10 Q3). `runat`-style marking is
+   **opt-in**: a page with zero designer-owned elements must still build and still support
+   code-behind, and unowned markup must be byte-identical after a save. Both are the §7 acceptance
+   tests, and a near-miss on the second is silent data loss in someone's hand-written HTML.
+   HTML fragment with stable ids + generated `.css`, always overwriting
    from an asset root so `JavaScriptEmitter.cs:105-115`'s never-overwrite guard keeps protecting a
    hand-authored `index.html`. `<body data-form="LoginForm">` with `Main()` dispatching on
    `getAttribute` (spec D8 — **one `.js` per project; do not take on a backend change**).

@@ -405,12 +405,50 @@ designer change — do not take it on.** Each form gets its own page and names i
 `<body data-form="LoginForm">`, with `Main()` dispatching on
 `doc.body.getAttribute("data-form")`. Revisit only if bundle size becomes a *measured* problem.
 
-### D9 — Steal `runat="server"` from Web Forms
+### D9 — Steal `runat="server"` from Web Forms — **this is how page model 2 is delivered**
 
 Literal markup passes through untouched; only marked elements become designer-owned objects. It is
 the cleanest shipped answer to "what happens when the user hand-writes HTML in my generated page",
 and it gives the canvas a principled way to show non-owned content as read-only rather than
 clobbering it.
+
+⚠ **Promoted by the §10 Q3 answer.** With the designer subsuming page model 2 ("code-behind on
+hand-written HTML, explicit wiring"), D9 stops being a courtesy to hand-editors and *becomes* that
+model's delivery mechanism. Two obligations follow, and neither is optional:
+
+- **Marking must be opt-in, not required.** A page with **zero** designer-owned elements must still
+  build and still support code-behind. Otherwise model 2 is only reachable by first adopting the
+  designer, which is precisely the "nothing is discarded" promise at
+  `javascript-backend-design.md:51` being broken.
+- **Unowned markup is preserved byte-for-byte**, and that is a test, not an intention — it falls
+  out of D1's structure-preserving writer and D11's round-trip obligation.
+
+### D10a — One wiring mechanism: convention names the handler, `<Bind>` wires it
+
+✅ **Forced by the §10 Q3 answer, 2026-09-11.** Page model 3 is auto-wiring —
+`Sub btnSave_Click()` binding to `<button id="btnSave">` by name alone. Subsuming it into the
+designer raises a conflict D10 does not resolve on its own: if a handler can be wired *both* by an
+explicit `<Bind Event=>` and by name convention, then a control with both gets **wired twice and
+fires twice**, and "missing handler" stops being decidable — an unmatched `btnSave_Click` could be
+a typo or just an ordinary sub.
+
+**The resolution: the `<Bind>` element is the only thing that wires.** The naming convention
+survives as the *suggested name* — double-clicking a button in the designer creates
+`Sub btnSave_Click()` and writes the matching `<Bind>` in the same edit. The user gets model 3's
+ergonomics; the document keeps one source of truth.
+
+*Rejected — honour both mechanisms.* Double-fire, and it destroys D10's "a missing handler is an
+error" rule, which is the thing standing between a renamed handler and a green build with a dead
+button.
+
+*Rejected — convention only, no `<Bind>` element.* Renaming a control silently unwires its handler,
+with no diagnostic possible because nothing ever declared the relationship. This is the classic
+auto-wiring failure and the reason the explicit form exists.
+
+*Consequence for the reader:* a hand-written `btnSave_Click` with no `<Bind>` is **not** wired, and
+the designer must say so visibly rather than leaving the user to discover it at runtime — surface
+it as an informational diagnostic on the control ("handler exists but is not bound"), with a
+one-click fix that writes the `<Bind>`.
 
 ### D10 — Events: a portable `FormEvent` plus a per-target thunk
 
@@ -466,6 +504,7 @@ A `BL8xxx` block, all carrying `file(line,col)` from `LoadOptions.SetLineInfo`:
 | `BL8005` | handler named by `<Bind Event=>` does not exist (**error**, D10) |
 | `BL8006` | `{res:Key}` used while resources are out of scope (named refusal, §9) |
 | `BL8007` | duplicate control id within a form |
+| `BL8008` | a handler matching the naming convention exists but is not bound (informational, D10a) — offer the one-click `<Bind>` fix |
 
 ---
 
@@ -474,6 +513,17 @@ A `BL8xxx` block, all carrying `file(line,col)` from `LoadOptions.SetLineInfo`:
 - **The document algebra** (D11): no-op patch writes nothing; byte-identical round-trip;
   `Read∘Apply == Apply∘Read`. Property-based over generated documents, not three hand-written cases.
 - **Recognizer fixtures**, both dialects, against the two templates that already ship.
+- **Page-model acceptance tests** (§10 Q3 — the designer subsumes models 2 and 3, so these are the
+  only place those capabilities get proven):
+  - *Model 2:* a page whose markup is entirely hand-written, with **zero** designer-owned elements,
+    builds and supports code-behind; and a mixed page's unowned markup is **byte-identical** after a
+    designer save. A near-miss here is silent data loss in someone's hand-written HTML.
+  - *Model 3:* double-clicking a control produces a conventionally-named handler that is **actually
+    wired** — assert the `<Bind>` was written, not merely that the sub exists. Asserting the sub
+    alone would pass under the rejected convention-only design and is therefore not discriminating.
+  - *D10a's exclusion:* a conventionally-named handler with **no** `<Bind>` is **not** wired, and
+    raises `BL8008`. This is the assertion that stops convention wiring creeping back in as a
+    "helpful" second mechanism and double-firing every handler.
 - **A catalog CI gate is the stand-in for the type system WinForms does not have** (blocker 7).
   Generate every catalog control with every property set, and require the **real CLI** to exit 0.
   A hand-written WinForms catalog is otherwise unfalsifiable data whose only check is whether `csc`
@@ -558,11 +608,23 @@ Consequence: **the snap-resolution rule is now load-bearing UI that must be desi
 8** — five sub-decisions are enumerated in D2a, of which (2) "dropping outside every existing cell"
 is the one that will otherwise ship as "it moved my button somewhere else".
 
-**Q3. Page models 2 and 3 are unbuilt — does the designer subsume them or must they ship first?**
-Your staging at `javascript-backend-design.md:43-54` runs 1→2→3→4, and model 3 is auto-wiring
-(`Sub btnSave_Click()` → `<button id="btnSave">`). This proposal jumps from 1 to 4. Model 3's
-convention is a plausible piece of the designer's event story (D10) rather than a competing one,
-but that is my inference, not your plan.
+**Q3. Page models 2 and 3 — subsumed or shipped first?** — ✅ **ANSWERED 2026-09-11: the designer
+subsumes both.** The staging at `javascript-backend-design.md:43-54` runs 1→2→3→4; the project goes
+1→4, with 2 and 3 arriving inside 4.
+
+This changes nothing about the slice order, but it converts two staged features into **acceptance
+obligations on the designer** — the owner's own constraint at `:51` is that "nothing built here is
+discarded", and skipping 2 and 3 means their capability has to exist through the designer or not at
+all:
+
+- **Model 2 is delivered by D9** (`runat`-style marking), which is why that decision now carries a
+  hard opt-in rule: a page with zero designer-owned elements must still build and still support
+  code-behind.
+- **Model 3 is delivered by D10a**, which had to resolve a conflict the answer creates: convention
+  wiring plus explicit `<Bind>` wiring would double-fire and make "missing handler" undecidable.
+  `<Bind>` wires; convention only suggests the name.
+
+Both are testable, and §7 now carries them as named acceptance tests rather than prose.
 
 **Q4. Cross-file `Implements` — fix it now?** — ✅ **ANSWERED 2026-09-11: fix it in slice 0.**
 
