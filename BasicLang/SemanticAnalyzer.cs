@@ -3002,6 +3002,39 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     continue;
                 }
 
+                // §8.4: an `AddressOf f` argument is TARGET-TYPED exactly like a lambda, and for
+                // exactly the same reason. DelegateTypeOf gives it a STRUCTURAL Func/Action —
+                // built deliberately so the two unify at every consumer — while real .NET
+                // delegate parameters are NAMED types (Comparison(Of T), MatchEvaluator,
+                // ThreadStart), and nominal matching admits none of the APIs anyone calls.
+                //
+                // Spec §8.4:694 promises AddressOf alongside lambdas. Without this arm it fell
+                // through to the static-type mapping below and drew BL6017 "its static type is
+                // 'Func'", while the IDENTICAL call written as a lambda built and ran — measured
+                // and pinned as AddressOfAsADotNetDelegateArgument_IsRefused_PinnedDivergence.
+                // The refusal was never a marshaling limit: by the time control reaches here the
+                // operand's parameter list is already known, which is the only thing the probe
+                // needs.
+                //
+                // DelegateTypeOf returns null for a non-function operand, so `AddressOf someVar`
+                // keeps its pointer type and still falls through — this arm claims only the
+                // shape §8.4 actually carries.
+                if (argument is UnaryExpressionNode { Operator: "AddressOf" } addressOfArgument
+                    && GetNodeSymbol(addressOfArgument.Operand) is { } addressOfTarget
+                    && DelegateTypeOf(addressOfTarget) != null)
+                {
+                    // The SAME native-only guard the lambda arm carries, load-bearing for the
+                    // same §6.3 reason: presenting a spelling on the C# path routes the argument
+                    // into overload resolution, and a member with no delegate overload then
+                    // surfaces a BL6017 warning on a program csc compiles clean today.
+                    if (!_netNativeBackend)
+                        return null;
+
+                    arguments.Add(NetTypeResolver.LambdaArgumentSpelling(
+                        addressOfTarget.Parameters?.Count ?? 0));
+                    continue;
+                }
+
                 if (!TryMapNetArgumentType(GetNodeType(argument), out var spelling, out var userDefined))
                 {
                     if (userDefined)

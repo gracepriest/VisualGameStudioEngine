@@ -182,11 +182,18 @@ fails only when the Native tier runs alongside it). The fast subset shows the tw
   handshake and dies at its first .NET call. Only the new
   `EveryProxyTableSlotResolvesInThePublishedShim` (which `NativeLibrary.TryGetExport`s every slot
   against the deployed DLL) catches it. That is the runtime backstop chip `task_68a7198a` lacked.
-- **`AddressOf` as a .NET delegate argument does not work**, though spec §8.4:694 promises it
-  alongside lambdas. Measured through the shipping pipeline: `BL6017 … Argument 2 of
-  'Aot.Probe.Callbacks.Fold' has no .NET type the analyzer can present for overload resolution
-  (its static type is 'Func')`. The identical call with a lambda builds and runs. It is finished
-  as a **pinned divergence** asserting that exact refusal, with a *replace, do not delete* note.
+- ✅ **`AddressOf` as a .NET delegate argument — FIXED 2026-09-11.** It used to draw
+  `BL6017 … has no .NET type the analyzer can present for overload resolution (its static type
+  is 'Func')` while the identical call with a lambda built and ran, contradicting spec §8.4:694.
+  The refusal was never a marshaling limit: the analyzer's argument-presentation loop
+  target-typed a `LambdaExpressionNode` and had **no arm for `AddressOf`**, so it fell through to
+  the static-type mapping, which cannot map a structural `Func` — real .NET delegate parameters
+  are NAMED types. `DelegateTypeOf` had been building the right type all along. The fix mirrors
+  the lambda arm (native-only guard included); the pinned row is promoted to the runtime row
+  `AddressOfAsADotNetDelegateArgument_LowersAndRuns`, asserting `Fold(10, AddressOf Minus)` = 7.
+  ⚠ That row is Integration, so its RUN half still needs a Windows pass; the Linux proof is
+  `NetDelegateSlotWireTests.AnAddressOfArgumentCrossesLikeALambda`, which reds with exactly that
+  BL6017 when the arm is removed.
 
 **DONE 2026-09-11 (Linux cloud session) — items 1-3 below are closed:**
 

@@ -39,12 +39,13 @@ namespace VisualGameStudio.Tests.Blnet;
 /// adapter). It cannot see the managed half, because the stub runtime REPLACES the shim — a stub
 /// writes its own packing, so a test built only on it would grade the fixture's convention rather
 /// than <c>NetShimGenerator</c>'s. That is exactly how a native-only fix would look green while
-/// being wrong; see <see cref="TheManagedHalfIsNotCoveredHere"/>, which states the other half and
-/// fails if anyone assumes otherwise.</para>
+/// being wrong; see <see cref="TheManagedHalfCarriesFloatingBitsNotValues"/>, which pins the other
+/// half.</para>
 ///
-/// <para>Chip <c>task_75064f2e</c>. <c>Double</c> and <c>Single</c> are expected RED until the
-/// wire is fixed on BOTH halves together — see the fixture's closing remarks for why a partial
-/// fix is worse than none.</para>
+/// <para>Chip <c>task_75064f2e</c>, FIXED in the commit that added this fixture. <c>Double</c>
+/// and <c>Single</c> were red here first, with both wrong words predicted before the fix, and a
+/// partial fix is worse than none — see <see cref="TheManagedHalfCarriesFloatingBitsNotValues"/>.
+/// </para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -55,8 +56,8 @@ public class NetDelegateSlotWireTests
     /// A probe assembly, because no FRAMEWORK type offers a non-generic method taking a
     /// <c>Func</c> of a blittable scalar — the shapes that exist (<c>Enumerable.Select</c>,
     /// <c>Array.ConvertAll</c>) are generic methods, which §8.4 v1 does not carry.
-    /// Each member hands the callback a value and returns what it answers, so the BasicLang
-    /// side can be an identity lambda and the stub sees the full round trip.
+    /// Each member hands the callback a value and returns what it answers, so the stub sees the
+    /// full round trip: the word it sent, through the BasicLang callback, and back.
     /// </summary>
     private const string ProbeSource = """
         namespace Wire.Probe
@@ -92,7 +93,7 @@ public class NetDelegateSlotWireTests
 
     /// <summary>
     /// <para><c>Word</c> is what the managed dispatcher must put on the wire for a value of this
-    /// row, and therefore what an identity callback must hand back.</para>
+    /// row; <c>Expected</c> is the word for TWICE that value, because the callback doubles.</para>
     ///
     /// <para>The two floating rows carry an IEEE bit pattern — 1.5 is
     /// <c>0x3FF8000000000000</c> as a double and <c>0x3FC00000</c> as a float. Those words are
@@ -119,16 +120,15 @@ public class NetDelegateSlotWireTests
     }
 
     /// <summary>
-    /// §8.4's wire must round-trip the WORD. The stub puts <paramref name="word"/> on the wire,
-    /// the BasicLang lambda is the identity, and the stub prints what came back — so anything
-    /// other than the same word is the adapter's conversion corrupting a value it was only
+    /// §8.4's wire must carry the VALUE. The stub puts <paramref name="word"/> on the wire, the
+    /// BasicLang lambda doubles what it receives, and the stub prints the word that came back —
+    /// so anything but <paramref name="expected"/> is the wire corrupting a number it was only
     /// supposed to carry.
     ///
-    /// <para>For the floating rows this fails TODAY, and the arithmetic says why:
-    /// <c>static_cast&lt;double&gt;(0x3FF8000000000000)</c> is 4.6e18 — a value far past the 53
-    /// bits a double's mantissa holds, so the return leg's
-    /// <c>static_cast&lt;uint64_t&gt;</c> cannot give the word back. The bits are gone before
-    /// the lambda ever runs.</para>
+    /// <para>Before the fix the floating rows failed, and the arithmetic said why:
+    /// <c>static_cast&lt;double&gt;(0x3FF8000000000000)</c> is 4.6e18 — far past the 53 bits a
+    /// double's mantissa holds — so doubling it and casting back could not give 3.0's word.
+    /// Measured: Double answered 9218868437227405312, Single 2139095040.</para>
     /// </summary>
     [TestCaseSource(nameof(WireRows))]
     public void ADelegateWireCarriesTheValue(
@@ -178,6 +178,64 @@ public class NetDelegateSlotWireTests
             + "today. Making C++ bit-exact alone leaves the shim sending an ALREADY-truncated "
             + "1, which bit_casts to 4.9e-324 — worse than the current answer. All four "
             + "conversion sites move together or none do.\n\nFull output:\n" + output);
+    }
+
+    /// <summary>
+    /// §8.4's OTHER authoring form: <c>AddressOf f</c> where a lambda would go. Spec §8.4:694
+    /// promises the two are interchangeable, and this drives the identical round trip through
+    /// the same probe member and the same stub — so a difference here is a difference in how
+    /// the argument was TYPED, not in the wire.
+    ///
+    /// <para><b>This was a pinned divergence until it was fixed alongside the wire.</b> The
+    /// analyzer refused it with <c>BL6017 … its static type is 'Func'</c> while the identical
+    /// call written as a lambda built and ran. The cause was never a marshaling limit: the
+    /// argument-presentation loop had a target-typing arm for <c>LambdaExpressionNode</c> and
+    /// none for <c>AddressOf</c>, so the latter fell through to the static-type mapping — which
+    /// cannot map a structural <c>Func</c>, because real .NET delegate parameters are NAMED
+    /// types. <c>DelegateTypeOf</c> had been building the right type all along.</para>
+    ///
+    /// <para>The integer row is used deliberately: it is a CONTROL for the wire (a value cast
+    /// and a bit cast agree for it), so if this fails the fault is in the typing, not in
+    /// anything this fixture's other rows cover.</para>
+    /// </summary>
+    [Test]
+    public void AnAddressOfArgumentCrossesLikeALambda()
+    {
+        var (cpp, surface) = NetStubHarness.CompileWithSurface("""
+            Using Wire.Probe
+
+            Module M
+             Function Twice(v As Integer) As Integer
+              Return v + v
+             End Function
+
+             Sub Main()
+              Slots.I32(AddressOf Twice)
+              Console.WriteLine("DONE")
+             End Sub
+            End Module
+            """, optimize: false, resolver: _resolver);
+
+        var slot = NetNameMangler.Mangle(surface.Members.Single(m => m.Name == "I32"));
+
+        var stub = NetStubHarness.StubTranslationUnit(new[]
+        {
+            new NetStubHarness.StubSlot(slot,
+                "[](uint64_t cb, int32_t* result) -> int32_t {"
+                + " uint64_t w = 21ULL; uint64_t back = 0;"
+                + " int32_t st = BasicLang::blnet::blnet_invoke_callback(cb, &w, 1, &back);"
+                + " std::printf(\"WIRE st=%d back=%llu\\n\", (int)st, (unsigned long long)back);"
+                + " *result = 0; return 0; }"),
+        });
+
+        var output = NetStubHarness.RunWithStub(cpp, surface, stub).Replace("\r\n", "\n");
+
+        Assert.That(output, Does.Contain("WIRE st=0 back=42\n"),
+            "`AddressOf Twice` did not reach the .NET delegate slot. If the analyzer refused it "
+            + "with BL6017 naming a static type of 'Func', the target-typing arm for AddressOf "
+            + "in SemanticAnalyzer's argument-presentation loop has been lost — a lambda is "
+            + "target-typed there and AddressOf must be too (spec §8.4:694 promises both).\n\n"
+            + "Full output:\n" + output);
     }
 
     /// <summary>

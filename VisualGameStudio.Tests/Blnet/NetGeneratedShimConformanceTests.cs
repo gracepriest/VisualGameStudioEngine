@@ -1421,28 +1421,31 @@ public class NetGeneratedShimConformanceTests
     /// becomes a native callback handle".</para>
     ///
     /// <para>⛔ <b>MEASURED (P2a-2 Task 14): refused at the ANALYZER, before any publish.</b></para>
+    /// The refusal this row used to pin, kept because it is what a regression looks like:
     /// <code>
     /// error BL6017: Argument 2 of 'Aot.Probe.Callbacks.Fold' has no .NET type the analyzer can
     /// present for overload resolution (its static type is 'Func'). The native backend lowers
     /// only exactly-resolved .NET calls — assign the value to a variable of a §8.3/§6.4 type
     /// first. (line 9)
     /// </code>
-    /// <para>So only the LAMBDA half of §8.4 is live: the analyzer's .NET argument-spelling pass
-    /// presents a lambda argument to overload resolution, but an <c>AddressOf</c> argument
-    /// arrives typed as a structural <c>Func</c> delegate (the typing commit d301ffb gave it —
-    /// note the message says <c>'Func'</c>, not the "Pointer To Pointer" a stale comment in
-    /// <c>NetDelegateTests</c> records from before that change) and has no §8.3/§6.4 wire type,
-    /// so the call never resolves exactly and the native backend refuses it. The diagnostic's own
-    /// remedy ("assign the value to a variable … first") does not apply either: a delegate-typed
-    /// local is not a §8.3/§6.4 type.</para>
+    /// <para><b>✅ FIXED — this row is now the RUNTIME row, promoted exactly as its pinned form
+    /// instructed.</b> The refusal above was never a marshaling limit. Only the LAMBDA half of
+    /// §8.4 was live because the analyzer's argument-spelling pass had a target-typing arm for
+    /// <c>LambdaExpressionNode</c> and NO arm for <c>AddressOf</c>; the latter therefore fell
+    /// through to the static-type mapping, which cannot map a structural <c>Func</c> — real .NET
+    /// delegate parameters are NAMED types (<c>Comparison(Of T)</c>, <c>MatchEvaluator</c>), so
+    /// nominal matching admits none of them. <c>DelegateTypeOf</c> had been building the correct
+    /// type all along, and the operand's parameter list — the only thing the probe needs — was
+    /// already known at that point. The fix mirrors the lambda arm, native-only guard included.
+    /// </para>
     ///
-    /// <para>The lambda that already passes (<c>ConfDelegate</c>) was NOT substituted here —
-    /// that is the shape substitution this fixture's header forbids. This row pins the current
-    /// refusal, code AND message, so the day <c>AddressOf</c> arguments lower is deliberate:
-    /// replace it with the runtime row (assert <c>7</c>), do not delete it. Costs no publish.</para>
+    /// <para>The lambda row (<c>ConfDelegate</c>) is still NOT substituted here — that is the
+    /// shape substitution this fixture's header forbids. The two rows now assert the same
+    /// runtime answer through the two authoring forms §8.4:694 promises are interchangeable,
+    /// which is the point of keeping both.</para>
     /// </summary>
     [Test]
-    public void AddressOfAsADotNetDelegateArgument_IsRefused_PinnedDivergence()
+    public void AddressOfAsADotNetDelegateArgument_LowersAndRuns()
     {
         var dir = NetShimPipelineFixture.NewTempDir("blnet-conf-addressof-");
         Dirs.Add(dir);
@@ -1466,21 +1469,23 @@ public class NetGeneratedShimConformanceTests
         var result = CppProjectBuilder.Build(ProjectFile.Load(projectPath), "Release");
         var text = NetShimPipelineFixture.Diagnostics(result) + "\n" + result.RawToolchainOutput;
 
-        Assert.That(result.Success, Is.False,
-            "AddressOf as a .NET delegate ARGUMENT is currently expected NOT to build. If this "
-            + "starts succeeding, the analyzer learned to present an AddressOf to overload "
-            + "resolution — good — and this row should become the RUNTIME row §12.5 asks for "
-            + "(Run == \"7\\n\": Fold(10, Minus) = 10 - 3), not be deleted.\n" + text);
+        // PROMOTED from a pinned divergence, exactly as the old row instructed: "if this starts
+        // succeeding … this row should become the RUNTIME row §12.5 asks for (Run == "7\n":
+        // Fold(10, Minus) = 10 - 3), not be deleted."
+        Assert.That(result.Success, Is.True,
+            "AddressOf as a .NET delegate ARGUMENT must now BUILD. It used to be refused with "
+            + "BL6017 'its static type is Func' while the identical call written as a lambda "
+            + "built and ran — spec §8.4:694 promises both forms. The cause was never a "
+            + "marshaling limit: SemanticAnalyzer's argument-presentation loop target-typed a "
+            + "LambdaExpressionNode and had no arm for AddressOf, so it fell through to the "
+            + "static-type mapping, which cannot map a structural Func. If this is red again "
+            + "with that same BL6017, that arm has been lost.\n" + text);
 
-        Assert.That(text, Does.Contain("BL6017").And.Contain("its static type is 'Func'"),
-            "the refusal must still be BL6017 with the AddressOf typed as 'Func' — the analyzer "
-            + "presenting no .NET type for argument 2. A DIFFERENT failure here — a different "
-            + "code, a different static type, or a C++ or ILC error — means the analyzer now "
-            + "admits the argument and the row has moved on to a later stage: re-pin or promote "
-            + "it deliberately.\n" + text);
-
-        Assert.That(text, Does.Contain("Callbacks.Fold"),
-            "…and it must be THIS call that is refused, not something earlier in the program.\n" + text);
+        Assert.That(NetShimPipelineFixture.Run(result.ExecutablePath!), Is.EqualTo("7\n"),
+            "§12.5's delegate round trip in its AddressOf form: Fold(10, AddressOf Minus) is "
+            + "10 - 3 = 7, computed by .NET calling BACK into native code through the callback "
+            + "wire. A build that succeeds but answers something else means the argument is now "
+            + "presented but mis-lowered — a worse state than the refusal this replaced.");
     }
 
     // =====================================================================================
