@@ -248,9 +248,69 @@ pages broke on text resize, on a different font, and on localisation.
 and it produces a web page that is broken in the three ways above. It also makes the designer's
 output worse than hand-written HTML, which is the one thing it cannot afford to be.
 
-*Cost, stated honestly:* the designer becomes a **constraint editor with a preview**, not a pixel
-canvas. Dragging a button does not set `left`, it re-parents into a cell. This is a real UX
-change and §10 Q2 puts it to the owner.
+*Cost, and how it is paid:* a naive Grid/Flow designer is a **constraint editor with a preview**,
+not a pixel canvas — dragging a button does not set `left`, it re-parents into a cell. That is the
+thing a VB-familiar user notices in the first thirty seconds, and §10 Q2 put it to the owner.
+**The owner chose to keep Grid/Flow persistence and buy back the gesture** — see D2a.
+
+### D2a — Persist Grid/Flow, but the editing gesture is free pixel-drag with snap resolution
+
+✅ **Owner decision, §10 Q2, 2026-09-11.** The two halves of the layout question get different
+answers, and they are separable: **what is stored** is Grid/Flow (D2), **what the hand does** is a
+free drag with snaplines, exactly as in the VS 2022 WinForms designer.
+
+On drop, the designer **resolves** the pixel position into the nearest cell or flow-insertion point,
+writes the constraint, and *shows what it wrote* — a status-bar readout and a transient highlight on
+the target cell. The user drags where they like; the document records intent.
+
+```
+You drag here ────┐
+                  ▼
+ ┌─120px─┬───1fr────┐
+ │ User  │[txtUser ]│   ◄ resolves to cell (col 1, row 0)
+ └───────┴──────────┘
+ status bar: "col 1, row 0 — stretch"
+```
+
+*Why this and not the alternatives.* VS 2022 itself has no single answer — it picks per target.
+Its **WinForms** designer is absolute: every control carries `Location`/`Size`, and what makes it
+feel precise is **snaplines** (VS 2005 onward), which snap to *alignment with neighbouring
+controls*, not to a layout grid. Its **WPF/XAML** designer is Grid-first: a new Window has a `<Grid>`
+root and drops write `Grid.Row`/`Grid.Column`. This decision takes the WPF answer for persistence
+and the WinForms answer for feel.
+
+*Rejected — per-target defaults, mirroring VS 2022 exactly* (new WinForms form opens as an absolute
+`<Canvas>`, new web form opens Grid/Flow). Maximum familiarity per target, and it is what the
+modelled IDE does. But WinForms is the familiar entry point, so most forms would start Canvas-rooted
+and stay that way; enabling the web target later then reproduces the VB6-DHTML failure by default.
+A design whose default output is bad has chosen wrong, however faithful the imitation.
+
+*Rejected — absolute everywhere with Grid/Flow opt-in.* Same failure, reached sooner.
+
+*Rejected — Grid/Flow with cell-click placement and no drag.* Cheapest, and the honest version of
+the constraint editor. Rejected because the gesture is the product here: a form designer that does
+not let you drag a button where you want it will not be used, whatever its output quality.
+
+**This decision creates work that must be designed, not improvised.** The snap-resolution rule is
+now load-bearing UI and needs its own treatment before Task 8:
+
+1. **Resolution rule.** Which cell wins when a drop straddles a boundary — centroid, or the
+   pointer's own position? (Pointer: it is what the user is looking at.)
+2. **Creating structure by dragging.** Dropping outside every existing cell must either extend the
+   grid (add a row/column) or refuse with a visible reason. Silently clamping into the nearest
+   existing cell is the behaviour users will call "it moved my button somewhere else".
+3. **Within-cell placement.** Once resolved, does the control stretch, or sit at an alignment
+   (start/center/end)? Drop position within the cell should pick the alignment; stretch is the
+   default only for a single occupant.
+4. **Reversibility.** Undo restores the prior constraint, not the prior pixels — the two differ,
+   and the undo entry must name the constraint (D13's commit-on-focus-loss rule applies here too).
+5. **`<Canvas>` keeps the raw gesture.** Inside a `<Canvas>` region, drag sets `X`/`Y` with no
+   resolution and snaplines behave exactly as WinForms users expect. That is what the escape hatch
+   is for, and it is where the fidelity argument is honoured in full.
+
+⚠ **The resolution rule is UI behaviour, not persistence.** It must never be able to produce a
+document the writer would not have produced from the property grid — same document algebra,
+same `Read∘Apply == Apply∘Read` obligation (D11).
 
 ### D3 — Control model is core + per-target facets, never an intersection catalog
 
@@ -485,10 +545,18 @@ Still open under this answer, and **not** implied by it: whether WinForms ships 
 §9 sequences the web half first — owner mandate, machine-readable ground truth to pin a catalog
 against, and F5 already reaching a real renderer — and this answer does not disturb that.
 
-**Q2. Is Grid/Flow-first acceptable?** It means the designer is a **constraint editor with a
-preview**, not a pixel canvas — dragging a button re-parents it into a cell rather than setting its
-coordinates. It is the decision that keeps the web output from being a WinForms form drawn in HTML
-(D2), and it is the one users will notice first.
+**Q2. Is Grid/Flow-first acceptable?** — ✅ **ANSWERED 2026-09-11: yes, with the gesture bought
+back. Grid/Flow is persisted; editing is free pixel-drag with snap resolution.** See **D2a**.
+
+The owner asked first what VS 2022's form designer does. The answer is that it has no single
+answer — it picks per target. Its **WinForms** designer is absolute positioning with **snaplines**
+(alignment guides against neighbouring controls, not a layout grid); its **WPF/XAML** designer is
+Grid-first, writing `Grid.Row`/`Grid.Column`. This decision takes WPF's persistence and WinForms'
+feel, rather than mirroring either wholesale.
+
+Consequence: **the snap-resolution rule is now load-bearing UI that must be designed before Task
+8** — five sub-decisions are enumerated in D2a, of which (2) "dropping outside every existing cell"
+is the one that will otherwise ship as "it moved my button somewhere else".
 
 **Q3. Page models 2 and 3 are unbuilt — does the designer subsume them or must they ship first?**
 Your staging at `javascript-backend-design.md:43-54` runs 1→2→3→4, and model 3 is auto-wiring

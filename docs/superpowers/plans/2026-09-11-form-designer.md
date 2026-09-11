@@ -31,18 +31,30 @@ environment for both this plan and the spec has **no .NET SDK** (`dotnet: comman
 the same constraint that produced the unbuilt patch in Task 1. Every "Gate" line is an instruction,
 not a record.
 
-**Blocking on owner sign-off before Task 1.** Spec §10 asks five questions.
+**Owner sign-off: 3 of 5 answered. The two that gated the design are both closed — slice 0 and
+slice 1 are fully specified and ready to start on a machine with an SDK.** Spec §10's five
+questions:
 
 - **Q1 — ✅ ANSWERED 2026-09-11: yes, WinForms also.** The dual-target scope is confirmed. Slice 2+
   item 6 is un-gated, and its catalog CI gate is now mandatory infrastructure rather than a
   proposal — it is the only correctness check that target has (spec §10 Q1). Task 2 is on the
   critical path for the same reason.
-- **Q2 — still open, and it forks the design.** Grid/Flow-first (spec D2) makes the designer a
-  constraint editor with a preview; absolute positioning makes it a pixel canvas. Task 5's catalog
-  and Task 8's canvas interaction model both depend on the answer.
+- **Q2 — ✅ ANSWERED 2026-09-11: Grid/Flow persisted, free pixel-drag with snap resolution**
+  (spec D2 + **D2a**). Task 5's catalog is un-gated. Task 8 gains a prerequisite: the
+  snap-resolution rule is load-bearing UI with five sub-decisions (spec D2a) and must be designed
+  before the canvas gains interaction — **new Task 8a**.
 - **Q4 — ✅ ANSWERED 2026-09-11: fix cross-file `Implements` in slice 0.** Task 3 is un-gated.
   Gate Tasks 1 and 3 **separately** — slice 0 now carries two `SemanticAnalyzer` changes, one of
   them never compiled, and a shared gate would leave a red suite with two candidate causes.
+
+- **Q3 — still open**, and *not* blocking: page models 2 and 3 are unbuilt, and it is unstated
+  whether the designer subsumes them or they ship first. **Proceeding on the assumption that the
+  designer subsumes them** — model 3's auto-wiring convention (`Sub btnSave_Click()` →
+  `<button id="btnSave">`) reads as a piece of the designer's event story (D10), not a competitor.
+  If that is wrong, it changes sequencing only, not any decision in the spec.
+- **Q5 — still open, and it blocks execution rather than design:** nobody has run a gate yet. The
+  `Inherits` patch has never been compiled, and neither the spec nor this plan was written on a
+  machine with a .NET SDK. Slice 0 needs an SDK and ~39 minutes per full-suite run, twice.
 
 Q1's answer does **not** re-order the slices: the web half still ships first (spec §9).
 
@@ -167,6 +179,11 @@ extension, touch `JavaScriptEmitter`, or write one byte into a user's file.
       slice 1 even though no UI calls it. Nearly free now, very expensive later.
 - [ ] **Step 4:** Three-tier read policy (spec D11) with **per-property** Degraded state carrying a
       reason string, not a per-form flag.
+- [ ] **Step 5:** The catalog's container kinds are `Grid`, `Flow` and `Canvas` (spec D2 + D2a).
+      `Grid` carries `Cols`/`Rows` track lists and children carry `Col`/`Row`; `Canvas` children
+      carry `X`/`Y` and are the **only** ones that may carry `Anchor`. Model this now even though
+      slice 1 never writes it — the recognizer in Task 6 must be able to produce a `Canvas` model,
+      because that is what both shipped templates actually are.
 
 **Gate:** unit tests; `--filter "TestCategory!=Integration"`.
 
@@ -224,6 +241,11 @@ exists.
 - [ ] **Step 4:** ⚠ **`dotnet clean` before building** — AXAML changes plus a stale build cache
       cause crashes.
 
+⛔ **No drag in slice 1.** Selection and hit-testing only. Dragging a control *is* a write, and
+slice 1's whole contract is zero writes; the drag gesture arrives in slice 2 behind Task 8a. The
+temptation is real, because a canvas that highlights on click feels one small step from a canvas
+that moves things. It is not — the step is the entire snap-resolution design.
+
 **The demo:** open the shipped `winforms-app` template and the shipped `web-site` template — files
 that already exist and already build — and see the form.
 
@@ -238,6 +260,16 @@ Ordered so **the first writing, shipping, owner-facing designer is the web one**
 mandate, `dom-core.bli` is machine-readable ground truth a catalog can be pinned against, and F5
 already reaches a real renderer (`WebPreviewServer`, registered at `ServiceConfiguration.cs:96`).
 
+0. **Task 8a — design the snap-resolution rule, before any drag gesture exists.** Spec D2a
+   enumerates five sub-decisions: which cell wins on a straddling drop (recommend: the pointer's
+   own position, because that is what the user is looking at); what dropping *outside* every
+   existing cell does (extend the grid, or refuse visibly — silently clamping into the nearest cell
+   is what users report as "it moved my button somewhere else"); within-cell alignment vs stretch;
+   undo restoring the prior **constraint** rather than the prior pixels; and `<Canvas>` keeping the
+   raw un-resolved gesture. ⚠ **The rule is UI behaviour, not persistence** — it must never produce
+   a document the property grid could not have produced, so it inherits D11's
+   `Read∘Apply == Apply∘Read` obligation. Write this down before Task 8 gains interaction; it is
+   the decision that makes the owner's Q2 answer real rather than aspirational.
 1. **`.blform` persistence + the structure-preserving writer.** Gate on the algebra, not on cases:
    a no-op patch writes **nothing**; round-trip is byte-identical; `Read∘Apply == Apply∘Read`.
    Reserve `<Components>`, `<Resources>`, `<Bind>` and `TabIndex` on day one (spec D1).
