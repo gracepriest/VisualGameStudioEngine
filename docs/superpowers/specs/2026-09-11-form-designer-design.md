@@ -496,11 +496,16 @@ Your staging at `javascript-backend-design.md:43-54` runs 1→2→3→4, and mod
 convention is a plausible piece of the designer's event story (D10) rather than a competing one,
 but that is my inference, not your plan.
 
-**Q4. Cross-file `Implements` — fix it now?** §2.1 found it is materially cheaper and lower-risk
-than the build prompt assumed: two narrow changes symmetric with the `Inherits` patch, and
-`Compiler.CollectExportedSymbols` is **not** touched. That makes it a candidate for slice 0 rather
-than a deferral. It does mean one more `SemanticAnalyzer` change in a slice that already carries
-an unbuilt one.
+**Q4. Cross-file `Implements` — fix it now?** — ✅ **ANSWERED 2026-09-11: fix it in slice 0.**
+
+§2.1 found it materially cheaper and lower-risk than the build prompt assumed: two narrow changes
+symmetric with the `Inherits` patch, and `Compiler.CollectExportedSymbols` is **not** touched.
+Plan Task 3 is un-gated.
+
+The accepted cost: slice 0 now carries **two** `SemanticAnalyzer` changes, one of which has never
+been compiled. Gate them **separately** — land and full-suite the `Inherits` patch (Task 1) before
+the `Implements` change (Task 3) goes in, so a red suite has one candidate cause rather than two.
+Two full-suite runs, ~39 minutes each.
 
 **Q5. Who runs the first gate?** The blocker-2 patch on `claude/modest-gauss-0ki0b7` has never been
 compiled or executed, and this session could not change that — there is no .NET SDK here either.

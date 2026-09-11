@@ -40,7 +40,9 @@ not a record.
 - **Q2 — still open, and it forks the design.** Grid/Flow-first (spec D2) makes the designer a
   constraint editor with a preview; absolute positioning makes it a pixel canvas. Task 5's catalog
   and Task 8's canvas interaction model both depend on the answer.
-- **Q4 — still open**, and it changes this plan's Task 3.
+- **Q4 — ✅ ANSWERED 2026-09-11: fix cross-file `Implements` in slice 0.** Task 3 is un-gated.
+  Gate Tasks 1 and 3 **separately** — slice 0 now carries two `SemanticAnalyzer` changes, one of
+  them never compiled, and a shared gate would leave a red suite with two candidate causes.
 
 Q1's answer does **not** re-order the slices: the web half still ships first (spec §9).
 
@@ -111,7 +113,9 @@ constructor (`SymbolTable.cs:76`), while `Visit(InterfaceNode)` never sets `Acce
 interface already satisfies the first arm of the export filter and **exports normally** from a
 `.bas`/`.mod` unit.
 
-**Gated on owner answer to spec §10 Q4.** If yes:
+✅ **Confirmed in scope (spec §10 Q4).** ⛔ **Do not start until Task 1 has landed and passed its
+own full-suite gate** — two unproven `SemanticAnalyzer` changes under one gate leave a red suite
+with two candidate causes.
 
 **Files:**
 - Modify: `BasicLang/SemanticAnalyzer.cs:349-368` (shell `InterfaceNode` in pass 1)
