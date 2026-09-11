@@ -1901,7 +1901,7 @@ duplicate; grep `BlnetContractTests`/`NetShimGeneratorTests` first).
 - [ ] **Step 2:** invariant gap-fill after a grep audit of existing coverage.
 - [ ] **Step 3:** fast subset; commit (`test(p2a2): integration + drift invariants`).
 
-### Task 15: full verification + closeout  ⚠ IN PROGRESS — Steps 2/3 done, Step 1 partial, Steps 4-5 open
+### Task 15: full verification + closeout  ✅ DONE except Step 4 (IDE refresh — needs Windows)
 
 - [x] **Step 1:** full gates — **DISCHARGED on Windows 2026-09-11 (`d6b57b6`): 5826 tests, 4
   failures, and the 4 are exactly the standing baseline.** The combination `87a6c5e` merged
@@ -1956,11 +1956,21 @@ duplicate; grep `BlnetContractTests`/`NetShimGeneratorTests` first).
   `NetFlipTests`'s scope note naming Tasks 7a/7b/9 as pending (all shipped — reworded as scope
   rather than schedule so it cannot re-stale). No line numbers are cited in the replacements:
   this plan's own had drifted within one task (`:511`/`:1076` are now `:519`/`:1102`).
-- [ ] **Step 4:** IDE binary refresh if the session's rules call for it (the prebuilt `IDE/`
-  binaries ship the compiler — same procedure as commit `aada862`, including the deps.json
-  closure check via `dotnet exec --depsfile`).
-- [ ] **Step 5:** memory updates (MEMORY.md + the dotnet-in-native topic file); final commit
-  (`feat(p2a2): closeout — P2a complete`); push per user instruction.
+- [ ] **Step 4: OPEN — needs Windows.** IDE binary refresh: the prebuilt `IDE/` binaries ship
+  the compiler, so they are stale against P2a-2's whole delivery. Same procedure as `aada862`,
+  including the deps.json closure check via `dotnet exec --depsfile`. `robocopy <Shell bin> IDE
+  /E` — **never `/MIR`**, which would delete the engine DLL and import lib that live only there.
+  Not doable from a Linux container.
+- [x] **Step 5: CLOSED 2026-09-11.** Spec header `Draft` → `Implemented`; §14.15/§15.11/§15.6
+  recorded (Step 3); `AbiVersion` re-asserted as 1. This repo keeps its working state in
+  `docs/HANDOFF.md` rather than an auto-memory file when the session has none, so that is what
+  was updated.
+
+  **P2a is functionally complete.** Everything §1.3 scoped is implemented and gated: the Windows
+  full suite is green at baseline, Task 14's 27 tests are proven by twelve mutations, and the two
+  chips that outlived the tasks — the delegate wire (`task_75064f2e`) and the
+  admissibility⇄wire-form tie — are closed with run-level tests. Step 4 is the one remaining
+  item and is a deployment chore, not development.
 
 ---
 

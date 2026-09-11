@@ -6,8 +6,12 @@ travel**. This file is the in-repo subset a fresh checkout — a cloud session, 
 another person — actually needs. It is a dated snapshot, not a changelog: history is in
 `git log`, rationale in `docs/superpowers/{plans,specs}/`, conventions in `CLAUDE.md`.
 
-⚠ **Everything below was true at `6139386` unless a section says otherwise. Re-verify before
-relying on it.**
+⚠ **Dated 2026-09-11.** Sections carry their own commit where it matters; anything without one
+dates from `6139386`. Re-verify before relying on it.
+
+**P2a-2 is functionally complete.** Tasks 1-15 are done bar Task 15 Step 4 (the `IDE/` binary
+refresh, a Windows deployment chore). Work sits on branch `claude/jolly-pasteur-l4mpzs`, merged
+up to date with master.
 
 ---
 
@@ -164,7 +168,7 @@ fails only when the Native tier runs alongside it). The fast subset shows the tw
 
 ---
 
-## P2a-2 Task 14 — what is done, and exactly what is left
+## P2a-2 Task 14 — what shipped, and how it was proven
 
 **Done and gated at commit time** (eight commits, `8fae4f6`…`87a6c5e`):
 
@@ -243,20 +247,27 @@ fails only when the Native tier runs alongside it). The fast subset shows the tw
    deliberately NOT mass-ticked: that asserts verification nobody did, and Task 2's Step 5 is not
    done but CANCELLED.
 
-**Still open — needs a WINDOWS machine, none of it doable in a Linux container:**
+**Windows verification — reported green 2026-09-11.** The branch's two run-level rows were run
+on Windows and passed: `AddressOfAsADotNetDelegateArgument_LowersAndRuns` (must print `7`) and
+the flipped `ADoubleDelegateSlot_TruncatesOnTheWire_PinnedDivergence` (must print `3`).
 
-- **Two run-level proofs on the branch.** `AddressOfAsADotNetDelegateArgument_LowersAndRuns`
-  must print **7**, and the flipped `ADoubleDelegateSlot_TruncatesOnTheWire_PinnedDivergence`
-  must print **3**. Both are Integration and die on Linux at ILC's cross-OS limit — note that is
-  the SHIM PUBLISH failing, i.e. the analyzer and the managed shim compile fine, which is itself
-  evidence the `AddressOf` fix works through the real pipeline. On the double row: a **2** means
-  a half-revert to value casts; a **denormal** means the halves were split apart, which is worse
-  than the original defect.
-- **The game template's inertness stdout.** Its codegen and build log are measured and clean
-  (zero user-program TU changes); it cannot LINK here because `VisualGameStudioEngine.lib`
-  needs the VS 2022 engine build, so BL6009 fires on both sides identically.
-- **Task 15 Steps 4 and 5** — the `IDE/` binary refresh (per `aada862`, including the deps.json
-  closure check) and the memory/closeout commit.
+⚠ **Attribution, because this file is supposed to be measurements:** that is the user's report,
+not a run captured in this session — the per-row outputs were not recorded here. A Linux
+container cannot produce them (both rows die at ILC's `Cross-OS native compilation is not
+supported`, which is the SHIM PUBLISH failing — the analyzer and the managed shim compile fine,
+itself evidence the `AddressOf` fix works through the real pipeline). If either row ever needs
+re-establishing, the failure signatures are: a **2** on the double row means a half-revert to
+value casts; a **denormal (~4.9e-324)** means the wire's two halves were split apart, which is
+worse than the original defect; a **BL6017 naming a static type of `Func`** on the AddressOf row
+means the target-typing arm was lost.
+
+**Still open — the one remaining item, and it needs Windows:**
+
+- **Task 15 Step 4 — the `IDE/` binary refresh.** The prebuilt `IDE/` binaries ship the compiler,
+  so they are stale against all of P2a-2. Procedure per `aada862`, including the deps.json
+  closure check via `dotnet exec --depsfile`. `robocopy <Shell bin> IDE /E` — **never `/MIR`**,
+  which deletes the engine DLL and import lib that live only there. A deployment chore, not
+  development.
 
 ⚠ **Two corrections the inertness measurement produced, both now in the plan:** there are
 **THREE** runtime splices, not two — `485bbe1` adds a `BasicLang::String` alias — and `2752a96`
