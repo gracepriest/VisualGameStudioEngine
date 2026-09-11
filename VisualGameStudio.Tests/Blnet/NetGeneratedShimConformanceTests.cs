@@ -1181,4 +1181,171 @@ public class NetGeneratedShimConformanceTests
             + "travelled by value; -1 means TryDouble answered false; a missing line means one "
             + "side never reached the shared table.");
     }
+
+    // =====================================================================================
+    // §12.5 — the delegate round-trip, AddressOf form. §8.4's opening sentence names BOTH
+    // "a BasicLang lambda or AddressOf"; the lambda half is ConfDelegate above.
+    // =====================================================================================
+
+    /// <summary>
+    /// §12.5's delegate round-trip in its <c>AddressOf</c> form — authored as a PINNED
+    /// DIVERGENCE, because measuring it found the shape does not build.
+    ///
+    /// <para><b>The row that was attempted.</b> A named module function passed where .NET expects
+    /// a delegate, against the SAME probe member as the lambda row
+    /// (<c>Callbacks.Fold(seed, f) = f(seed, 3)</c>, expected <c>7</c>), so the two rows would
+    /// differ only in how the callback is spelled. §8.4's opening sentence promises both: "A
+    /// BasicLang lambda or <c>AddressOf</c> passed where .NET expects <c>Action</c>/<c>Func</c>/…
+    /// becomes a native callback handle".</para>
+    ///
+    /// <para>⛔ <b>MEASURED (P2a-2 Task 14): refused at the ANALYZER, before any publish.</b></para>
+    /// <code>
+    /// error BL6017: Argument 2 of 'Aot.Probe.Callbacks.Fold' has no .NET type the analyzer can
+    /// present for overload resolution (its static type is 'Func'). The native backend lowers
+    /// only exactly-resolved .NET calls — assign the value to a variable of a §8.3/§6.4 type
+    /// first. (line 9)
+    /// </code>
+    /// <para>So only the LAMBDA half of §8.4 is live: the analyzer's .NET argument-spelling pass
+    /// presents a lambda argument to overload resolution, but an <c>AddressOf</c> argument
+    /// arrives typed as a structural <c>Func</c> delegate (the typing commit d301ffb gave it —
+    /// note the message says <c>'Func'</c>, not the "Pointer To Pointer" a stale comment in
+    /// <c>NetDelegateTests</c> records from before that change) and has no §8.3/§6.4 wire type,
+    /// so the call never resolves exactly and the native backend refuses it. The diagnostic's own
+    /// remedy ("assign the value to a variable … first") does not apply either: a delegate-typed
+    /// local is not a §8.3/§6.4 type.</para>
+    ///
+    /// <para>The lambda that already passes (<c>ConfDelegate</c>) was NOT substituted here —
+    /// that is the shape substitution this fixture's header forbids. This row pins the current
+    /// refusal, code AND message, so the day <c>AddressOf</c> arguments lower is deliberate:
+    /// replace it with the runtime row (assert <c>7</c>), do not delete it. Costs no publish.</para>
+    /// </summary>
+    [Test]
+    public void AddressOfAsADotNetDelegateArgument_IsRefused_PinnedDivergence()
+    {
+        var dir = NetShimPipelineFixture.NewTempDir("blnet-conf-addressof-");
+        Dirs.Add(dir);
+        File.WriteAllText(Path.Combine(dir, "Program.bas"), """
+            Using Aot.Probe
+
+            Module Program
+             Function Minus(a As Integer, b As Integer) As Integer
+              Return a - b
+             End Function
+
+             Sub Main()
+              Console.WriteLine(Callbacks.Fold(10, AddressOf Minus))
+             End Sub
+            End Module
+            """);
+
+        var probe = NetShimPipelineFixture.EmitProbeAssembly(dir);
+        var projectPath = NetShimPipelineFixture.WriteProject(
+            dir, "ConfAddressOf", NetShimPipelineFixture.ReferenceItemGroup(probe));
+        var result = CppProjectBuilder.Build(ProjectFile.Load(projectPath), "Release");
+        var text = NetShimPipelineFixture.Diagnostics(result) + "\n" + result.RawToolchainOutput;
+
+        Assert.That(result.Success, Is.False,
+            "AddressOf as a .NET delegate ARGUMENT is currently expected NOT to build. If this "
+            + "starts succeeding, the analyzer learned to present an AddressOf to overload "
+            + "resolution — good — and this row should become the RUNTIME row §12.5 asks for "
+            + "(Run == \"7\\n\": Fold(10, Minus) = 10 - 3), not be deleted.\n" + text);
+
+        Assert.That(text, Does.Contain("BL6017").And.Contain("its static type is 'Func'"),
+            "the refusal must still be BL6017 with the AddressOf typed as 'Func' — the analyzer "
+            + "presenting no .NET type for argument 2. A DIFFERENT failure here — a different "
+            + "code, a different static type, or a C++ or ILC error — means the analyzer now "
+            + "admits the argument and the row has moved on to a later stage: re-pin or promote "
+            + "it deliberately.\n" + text);
+
+        Assert.That(text, Does.Contain("Callbacks.Fold"),
+            "…and it must be THIS call that is refused, not something earlier in the program.\n" + text);
+    }
+
+    // =====================================================================================
+    // §12.5 — the Console.WriteLine-only program: §6.5's claim-predicate regression guard,
+    // at BUILD level (the emit-level half is NetShimPhaseTests.EmptySurface_SkipsPhaseFiveEntirely).
+    // =====================================================================================
+
+    /// <summary>
+    /// §12.5's fourth integration row: a program whose ONLY .NET-shaped call is
+    /// <c>Console.WriteLine</c> must draw an EMPTY surface, put no blnet artifact in
+    /// <c>obj/gen</c>, skip phase 5 entirely — and still build and run.
+    ///
+    /// <para><b>Why a second row when the emit-level one exists.</b>
+    /// <c>NetShimPhaseTests.EmptySurface_SkipsPhaseFiveEntirely</c> proves this same program with
+    /// a FAKE toolchain and stops at <c>EmitCore</c>, where it can read the typed
+    /// <c>PhaseFive</c> outcome — which <see cref="CppProjectBuilder.Build"/> discards. This row
+    /// is the other half: the shipping entry point, a real toolchain, phases 6-7, where phase 5 is
+    /// observable ONLY through its side effects — the progress lines, <c>obj/gen/shim</c>,
+    /// <c>obj/blnet</c>, and a shim DLL beside the exe. Each is asserted absent, after a POSITIVE
+    /// check that <c>obj/gen</c> was written at all, so the absences are not those of a build
+    /// that never ran.</para>
+    ///
+    /// <para><c>ConfInert</c> (the Try/Catch row) also asserts no shim, but its program NAMES
+    /// .NET exception types and never calls a .NET-shaped member, so it guards §6.5 rows (a)/(b)
+    /// — naming is not using. This program CALLS a member that only row (c) claims, per call.
+    /// Different predicate, different row: <c>NetClaimPredicate</c>'s remarks call reading
+    /// "claimed" as rows (a)+(b) only — which drops <c>Console</c> — "the single most dangerous
+    /// mistake in P2a".</para>
+    /// </summary>
+    [Test]
+    public void AConsoleOnlyProgram_DrawsNoSurface_LeavesNoPhaseFiveTrace_AndStillRuns()
+    {
+        var built = BuildOnce("ConfConsoleOnly", new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["Program.bas"] = """
+                Module Program
+                 Sub Main()
+                  Console.WriteLine(21 + 21)
+                 End Sub
+                End Module
+                """,
+        });
+
+        AssertBuilt(built.Result, "the Console-only program");
+
+        var objGen = Path.Combine(built.Dir, "obj", "gen");
+        var outputDir = Path.GetDirectoryName(built.Result.ExecutablePath)!;
+        var shimName = NetShimPipelineFixture.ShimDllName("ConfConsoleOnly");
+
+        Assert.Multiple(() =>
+        {
+            // The positive check FIRST: a missing obj/gen would make every absence below true
+            // for the wrong reason.
+            Assert.That(
+                File.Exists(Path.Combine(objGen,
+                    BasicLang.Compiler.CodeGen.CPlusPlus.CppCodeGenerator.RuntimeHeaderFileName)),
+                Is.True,
+                "obj/gen must hold the split emitter's runtime header — the build wrote its "
+                + "generated sources — or the absence checks below are vacuous. Files: "
+                + NetShimPipelineFixture.ListFiles(objGen));
+            foreach (var artifact in NetProxyEmitterTests.ExpectedArtifacts)
+            {
+                Assert.That(File.Exists(Path.Combine(objGen, artifact)), Is.False,
+                    "obj/gen holds " + artifact + " for a Console-only program. Console.WriteLine "
+                    + "is claimed for NATIVE handling by §6.5 row (c); a proxy artifact here means "
+                    + "the claim predicate let the call reach the surface collector. Files: "
+                    + NetShimPipelineFixture.ListFiles(objGen));
+            }
+            Assert.That(Directory.Exists(Path.Combine(objGen, "shim")), Is.False,
+                "obj/gen/shim exists: phase 5's GENERATE step ran for an empty surface.");
+            Assert.That(Directory.Exists(NetShimCache.CacheRoot(built.Dir)), Is.False,
+                "obj/blnet exists: phase 5 published, or at least probed the cache, for an "
+                + "empty surface.");
+            Assert.That(File.Exists(Path.Combine(outputDir, shimName)), Is.False,
+                "a shim DLL (" + shimName + ") was deployed next to a program with no .NET "
+                + "surface — an AOT publish the user never asked for and no output would reveal.");
+            foreach (var marker in NetShimPipelineFixture.PhaseFiveMessageMarkers("ConfConsoleOnly"))
+            {
+                Assert.That(built.Result.Messages.Any(m => m.Contains(marker, StringComparison.Ordinal)),
+                    Is.False,
+                    "the build reported a phase-5/7 line ('" + marker + "') for an empty surface. "
+                    + "Messages:\n" + string.Join("\n", built.Result.Messages));
+            }
+        });
+
+        Assert.That(NetShimPipelineFixture.Run(built.Result.ExecutablePath!), Is.EqualTo("42\n"),
+            "inertness is only worth proving on a program that still RUNS: 42 is "
+            + "Console.WriteLine(21 + 21) lowered natively, with no shim anywhere near it.");
+    }
 }

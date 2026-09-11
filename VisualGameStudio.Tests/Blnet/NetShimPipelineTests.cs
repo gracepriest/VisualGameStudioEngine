@@ -434,6 +434,51 @@ internal static class NetShimPipelineFixture
     internal static string Diagnostics(CppProjectBuildResult result) =>
         string.Join("\n", result.Diagnostics.Select(
             d => (d.IsWarning ? "warning " : "error ") + d.Code + ": " + d.Message));
+
+    /// <summary>The deployed shim's file name for a project — the spelling every row derives.</summary>
+    internal static string ShimDllName(string projectName) =>
+        NetProxyEmitter.ShimModuleFileName(NetShimGenerator.ShimAssemblyName(projectName));
+
+    /// <summary>
+    /// The progress line <c>CppProjectBuilder.GenerateAndPublishShim</c> writes on a cache MISS,
+    /// immediately before spawning <c>dotnet publish</c>.
+    /// </summary>
+    internal const string PublishingMessage = "Publishing .NET shim";
+
+    /// <summary>
+    /// The FULL progress line phase 5 writes on a §10.2 cache HIT, naming the DLL it reused. Rows
+    /// assert this whole string rather than the bare "up to date" substring so a hit that names
+    /// the wrong DLL — a stale manifest from another configuration, say — cannot pass.
+    /// </summary>
+    internal static string UpToDateMessage(string projectName) =>
+        ".NET shim: up to date (" + ShimDllName(projectName) + ")";
+
+    /// <summary>
+    /// The phase-7 line for the SHIM deploy specifically. The DLL name is part of it on purpose:
+    /// <c>DeployDll</c> writes "Deployed &lt;name&gt;" for the engine and MinGW runtime DLLs too,
+    /// which are unrelated to phase 5 and legitimately present on a MinGW toolchain.
+    /// </summary>
+    internal static string DeployedMessage(string projectName) => "Deployed " + ShimDllName(projectName);
+
+    /// <summary>
+    /// Every line phases 5 and 7 can write to <see cref="CppProjectBuildResult.Messages"/> for
+    /// <paramref name="projectName"/> — the miss, the hit, the deploy. An EMPTY-surface build
+    /// must produce none of them; spelled here once so the two inertness rows
+    /// (<c>NetShimPhaseTests.EmptySurface_SkipsPhaseFiveEntirely</c> at emit level, the
+    /// Console-only conformance row at build level) cannot drift apart.
+    /// </summary>
+    internal static string[] PhaseFiveMessageMarkers(string projectName) => new[]
+    {
+        PublishingMessage,
+        UpToDateMessage(projectName),
+        DeployedMessage(projectName),
+    };
+
+    /// <summary>A one-line listing of a directory's files for a failure message; tolerant of absence.</summary>
+    internal static string ListFiles(string directory) =>
+        Directory.Exists(directory)
+            ? string.Join(", ", Directory.GetFiles(directory).Select(Path.GetFileName))
+            : "<" + directory + " does not exist>";
 }
 
 /// <summary>
@@ -491,6 +536,17 @@ public class NetShimPhaseTests
     /// The inertness half, and the one that covers every project that existed before P2a-2: an
     /// empty surface means phase 5 does nothing whatsoever — no generated shim sources, no cache
     /// directory, no <see cref="CppEmitOutcome.ShimDllPath"/>, and above all no publish.
+    ///
+    /// <para><b>This is also §12.5's Console-only row at EMIT level</b> (P2a-2 Task 14): the
+    /// program's only .NET-shaped call is <c>Console.WriteLine</c>, which §6.5 row (c) claims for
+    /// native handling PER CALL — the regression guard for the claim predicate. Until Task 14 the
+    /// row asserted only the typed outcome and <see cref="ShimArtifactsExist"/>, which looks at
+    /// the two DIRECTORIES phase 5 creates and never enumerates <c>obj/gen</c>'s files. So the six
+    /// §9.1 artifacts phases 3-4 write for a NON-empty surface — <c>blnet_startup.g.cpp</c> among
+    /// them, which then goes into the compile set — were unobserved: a predicate that let
+    /// <c>Console.WriteLine</c> through would have produced them all and this test could not see
+    /// it. The typed-enum assertion stays: it is the anchor that stops a fixture from faking the
+    /// skip with <c>publishShim: false</c>.</para>
     /// </summary>
     [Test]
     public void EmptySurface_SkipsPhaseFiveEntirely()
@@ -505,6 +561,8 @@ public class NetShimPhaseTests
                 End Module
                 """,
         });
+
+        var objGen = Path.Combine(_dir, "obj", "gen");
 
         Assert.Multiple(() =>
         {
@@ -525,6 +583,39 @@ public class NetShimPhaseTests
                 + "no-op there — this is what keeps every pre-P2a-2 project's build byte-identical, "
                 + "and a stray obj/gen/shim/*.csproj is something an IDE or a `dotnet build` sweep "
                 + "will pick up.");
+
+            // ---- §12.5's Console-only row: obj/gen's FILES, the compile set, the messages ----
+            // The presence check comes first and is what makes the absences mean anything:
+            // obj/gen is written BEFORE the toolchain gate, so even with the fake toolchain the
+            // split emitter's files are on disk. A missing or empty obj/gen would make every
+            // "absent" below true for the wrong reason.
+            Assert.That(
+                File.Exists(Path.Combine(objGen,
+                    BasicLang.Compiler.CodeGen.CPlusPlus.CppCodeGenerator.RuntimeHeaderFileName)),
+                Is.True,
+                "obj/gen must hold the split emitter's runtime header for this program — the "
+                + "emission ran — or the absence checks below are vacuous. Files: "
+                + NetShimPipelineFixture.ListFiles(objGen));
+            foreach (var artifact in NetProxyEmitterTests.ExpectedArtifacts)
+            {
+                Assert.That(File.Exists(Path.Combine(objGen, artifact)), Is.False,
+                    "obj/gen holds " + artifact + " for a program whose only .NET-shaped call is "
+                    + "Console.WriteLine. §6.5 row (c) claims that call for NATIVE handling; a "
+                    + "proxy artifact here means the claim predicate let it reach the surface "
+                    + "collector — the regression NetClaimPredicate's remarks call the single "
+                    + "most dangerous mistake in P2a. Files: " + NetShimPipelineFixture.ListFiles(objGen));
+            }
+            Assert.That(outcome.Request!.SourceFiles.Select(Path.GetFileName),
+                Does.Not.Contain(NetProxyEmitter.StartupFileName),
+                "the startup TU was handed to the compiler for an EMPTY surface. Compile set: "
+                + string.Join(", ", outcome.Request.SourceFiles.Select(Path.GetFileName)));
+            foreach (var marker in NetShimPipelineFixture.PhaseFiveMessageMarkers("PhaseProbe"))
+            {
+                Assert.That(result.Messages.Any(m => m.Contains(marker, StringComparison.Ordinal)),
+                    Is.False,
+                    "a phase-5/7 progress line ('" + marker + "') was reported for an empty "
+                    + "surface. Messages:\n" + string.Join("\n", result.Messages));
+            }
         });
     }
 
@@ -1467,6 +1558,32 @@ public class NetShimPipelineTests
     /// channel must switch from "Publishing" to "up to date" (deterministic), and the warm build
     /// must actually be faster (which is what the cache is FOR — a hit that still paid the publish
     /// would satisfy the first two).</para>
+    ///
+    /// <para><b>Hardened for §12.5's fifth row (P2a-2 Task 14), three ways.</b>
+    /// <list type="number">
+    /// <item><description><i>"skip entirely" includes the GENERATE step.</i> The shim csproj under
+    /// <c>obj/gen/shim</c> is written by <c>NetShimGenerator.WriteTo</c> unconditionally
+    /// (<c>File.WriteAllText</c>, no content compare), so its last-write time is a clean oracle:
+    /// unchanged across the warm build means the hit returned BEFORE the generate step, as
+    /// <c>GenerateAndPublishShim</c> intends; moved means a hit that regenerated and only skipped
+    /// the publish. <c>CleanGeneratedDir</c> is non-recursive, so nothing else touches that
+    /// directory between the two builds.</description></item>
+    /// <item><description><i>The hit line names the RIGHT DLL.</i> The bare "up to date" substring
+    /// is now the full <see cref="NetShimPipelineFixture.UpToDateMessage"/>, so a hit that reused
+    /// some other project's or configuration's shim could not pass.</description></item>
+    /// <item><description><i>The typed outcome.</i> <see cref="CppProjectBuilder.Build"/> discards
+    /// <see cref="CppEmitOutcome.PhaseFive"/>, so at build level a hit is only ever inferred from
+    /// messages and mtimes. A third emission through <see cref="CppProjectBuilder.EmitCore"/> on
+    /// the same directory — the REAL toolchain, because §10.2's key carries its identity and a
+    /// fake one would be a guaranteed miss — reads the enum directly:
+    /// <see cref="NetShimPhaseOutcome.CacheHit"/>, with a <see cref="CppEmitOutcome.ShimDllPath"/>
+    /// that exists. Before this, neither <c>CacheHit</c> nor <c>Published</c> was asserted
+    /// anywhere.</description></item>
+    /// </list></para>
+    ///
+    /// <para>⚠ The timing assertion is the only non-deterministic one here; another process
+    /// compiling on the machine can invert it. If it fails ALONE, re-run this fixture by itself
+    /// before believing it.</para>
     /// </summary>
     [Test]
     public void SecondIdenticalBuild_HitsTheCacheAndSkipsPhaseFive()
@@ -1495,21 +1612,39 @@ public class NetShimPipelineTests
             + "what happens when any environment field is blank (no dotnet on PATH, an unreadable "
             + "reference). Manifest path: " + manifest);
 
+        // The generate step's footprint, stamped after the cold build. Guarded present: an
+        // absent csproj would make the "unchanged" comparison below a comparison of two
+        // "file not found" sentinels, which is equality for the wrong reason.
+        var shimCsproj = Path.Combine(_dir, "obj", "gen", "shim",
+            NetShimGenerator.ProjectFileName(NetShimGenerator.ShimAssemblyName("WarmProbe")));
+        Assert.That(File.Exists(shimCsproj), Is.True,
+            "guard: the cold build must have generated the shim project under obj/gen/shim, or "
+            + "the generate-step assertion below proves nothing. Looked for: " + shimCsproj);
+        var csprojStampAfterCold = File.GetLastWriteTimeUtc(shimCsproj);
+
         var (warm, warmElapsed) = Build("WarmProbe");
         AssertBuilt(warm, "the warm build");
 
         Assert.Multiple(() =>
         {
-            Assert.That(cold.Messages.Any(m => m.Contains("Publishing .NET shim")), Is.True,
+            Assert.That(cold.Messages.Any(m => m.Contains(NetShimPipelineFixture.PublishingMessage)), Is.True,
                 "the COLD build did not publish, so this test is not measuring a cache miss "
                 + "followed by a hit at all.");
-            Assert.That(warm.Messages.Any(m => m.Contains("Publishing .NET shim")), Is.False,
+            Assert.That(warm.Messages.Any(m => m.Contains(NetShimPipelineFixture.PublishingMessage)), Is.False,
                 "the warm build published again. TryGetHit rejected the manifest the cold build "
                 + "just wrote — the usual cause is a key component that is not stable across "
                 + "processes (§10.2 exists because string.GetHashCode is randomized per process).");
-            Assert.That(warm.Messages.Any(m => m.Contains("up to date")), Is.True,
-                "the warm build neither published nor reported a hit, which means phase 5 was "
-                + "skipped for some other reason — check that the surface is still non-empty.");
+            Assert.That(warm.Messages, Does.Contain(NetShimPipelineFixture.UpToDateMessage("WarmProbe")),
+                "the warm build neither published nor reported a hit NAMING THIS PROJECT'S DLL. "
+                + "No 'up to date' line at all means phase 5 was skipped for some other reason — "
+                + "check that the surface is still non-empty; an 'up to date' line naming a "
+                + "different DLL means the manifest that hit was not this build's. Messages:\n"
+                + string.Join("\n", warm.Messages));
+            Assert.That(File.GetLastWriteTimeUtc(shimCsproj), Is.EqualTo(csprojStampAfterCold),
+                "the warm build REWROTE the generated shim project. §10.2 says a hit skips "
+                + "ENTIRELY — GenerateAndPublishShim returns before NetShimGenerator.WriteTo — "
+                + "so obj/gen/shim must be untouched. A moved stamp is a hit that regenerated the "
+                + "sources and only skipped the publish: file IO for nothing on every warm build.");
             Assert.That(warmElapsed, Is.LessThan(coldElapsed),
                 $"the warm build ({warmElapsed.TotalSeconds:F1}s) was not faster than the cold one "
                 + $"({coldElapsed.TotalSeconds:F1}s). A hit that still pays the publish is not a hit.");
@@ -1519,6 +1654,31 @@ public class NetShimPipelineTests
             "the cache-hit build must produce a WORKING program — the reused DLL still has to be "
             + "deployed next to the exe, which is the step a 'skip entirely' fast path is most "
             + "likely to skip too.");
+
+        // The typed outcome, which Build discards: a third emission on the same directory, with
+        // the REAL toolchain so the key matches, must report CacheHit and hand back the DLL.
+        var emitResult = new CppProjectBuildResult();
+        var outcome = CppProjectBuilder.EmitCore(
+            ProjectFile.Load(Path.Combine(_dir, "WarmProbe.blproj")), "Release", emitResult,
+            resolveToolchain: CppToolchain.Find, forIntelliSense: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(outcome.Completed, Is.True,
+                "the third emission did not complete: " + NetShimPipelineFixture.Diagnostics(emitResult));
+            Assert.That(outcome.PhaseFive, Is.EqualTo(NetShimPhaseOutcome.CacheHit),
+                "phase 5 on an unchanged project must report the TYPED hit. Published means the "
+                + "cache was missed (and the messages above were satisfied some other way); "
+                + "SkippedEmptySurface means the surface collapsed; NotReached/Failed mean the "
+                + "phase never ran or died. This is the only place CacheHit is asserted.");
+            Assert.That(outcome.ShimDllPath, Is.Not.Null.And.Not.Empty,
+                "a hit must hand phase 7 the cached DLL's path — with nothing here the deploy "
+                + "step is inert and the program dies in blnet_load_module.");
+            Assert.That(File.Exists(outcome.ShimDllPath), Is.True,
+                "the hit's DLL path does not exist on disk: " + outcome.ShimDllPath
+                + ". TryGetHit re-hashes the file before answering, so a hit on a missing file "
+                + "means the hash check regressed.");
+        });
     }
 
     // =====================================================================================
