@@ -22,7 +22,7 @@ NUnit, XML (`System.Xml.Linq` with `LoadOptions.SetLineInfo`).
 **Design spec:** `docs/superpowers/specs/2026-09-11-form-designer-design.md` — read it first,
 especially §2 (six corrections to the build prompt, two of which change tasks in this plan).
 
-**Shape:** 21 tasks across four slices. Slice 0 makes the ground true; slice 1 demos a read-only
+**Shape:** 21 tasks across four slices, plus measured facts, file structure and risks. Slice 0 makes the ground true; slice 1 demos a read-only
 canvas with zero writes; slice 2 ships the web designer; slice 3 adds WinForms. Slices 0 and 1 are
 independent of each other and can run in either order — everything from slice 2 on needs both.
 
@@ -61,6 +61,109 @@ The one question still open (Q5) blocks execution, not design. Spec §10's five 
   machine with a .NET SDK. Slice 0 needs an SDK and ~39 minutes per full-suite run, twice.
 
 Q1's answer does **not** re-order the slices: the web half still ships first (spec §9).
+
+⚠ **The `superpowers` plugin is not installed in the environment this plan was written in** — the
+`superpowers:` workflows the header names, and that every other plan in this directory relies on,
+were unavailable. The plan conforms to the house format by hand. On a machine that has the plugin,
+drive it with `superpowers:subagent-driven-development` or `superpowers:executing-plans` as normal.
+
+---
+
+## Measured facts
+
+Every row was re-verified against `origin/master` at `d6b57b6` while writing the spec, on Linux in
+a cloud session. **Re-run them rather than trusting them** — line numbers drift, and six rows here
+contradict the build prompt (spec §2). A row marked ⚠ is one the prompt got wrong.
+
+| # | Fact | How it was measured | Result |
+|---|---|---|---|
+| 1 | No partial classes anywhere | `grep -c Partial BasicLang/Parser.cs BasicLang/ASTNodes.cs BasicLang/SemanticAnalyzer.cs` | `0 / 0 / 0` |
+| 2 | `Handles` lexed, never parsed | `grep -n "TokenType.Handles" BasicLang/Parser.cs` | no output; token at `BasicLangLexer.cs:192,540` |
+| 3 | `Inherits` resolves via `_typeManager` only | read `SemanticAnalyzer.cs:4569` | opaque arm `:4573-4578`, hard error `:4582` |
+| 4 ⚠ | `Symbol.Access` defaults to `Public` **twice** | read `SymbolTable.cs:76`; `AccessModifier` enum | `Access = AccessModifier.Public;` in ctor, **and** `Public` is the enum's zero value (`ASTNodes.cs:366-373`) |
+| 5 ⚠ | Interfaces **do** pass the export filter | read `Compiler.cs:815-832` | first arm is `symbol.Access == Public`; only the `IsClassFile` short-circuit drops them |
+| 6 | Cross-unit symbols reach `GlobalScope`, never `_typeManager` | read `SemanticAnalyzer.cs:287-328` | `ImportImplicitProjectSymbols` calls `GlobalScope.Define` only |
+| 7 | Pending-sibling pass shells `ClassNode` only | read `SemanticAnalyzer.cs:349-368` | no `InterfaceNode` arm |
+| 8 | A sibling base's `Private` members are invisible | read `SemanticAnalyzer.cs:448-478` | every arm guarded `when member.Access != AccessModifier.Private` |
+| 9 | WinForms is un-armed for .NET resolution | read `Compiler.cs:145-146` | early `return` on `UseWindowsForms \|\| UseWpf` |
+| 10 | WinForms types come from a heuristic | read `SemanticAnalyzer.cs:2397` | `char.IsUpper(name[0]) && !name.Contains('_')`, under "Be VERY permissive" |
+| 11 | `CommonNetTypes` has zero WinForms names | `sed -n '203,232p' … \| grep -cE '"(Form\|Button\|Point\|Size\|Label\|TextBox)"'` | `0` |
+| 12 ⚠ | `ProjectSerializer.Save` **destroys** unknown properties | read `ProjectSerializer.cs:245-273` | `new XDocument(...)` rebuild; emits 7 property elements |
+| 13 ⚠ | `dom-core.bli` is 119 lines, with no positioning | `wc -l`; `grep -c "position\|zIndex"` | `119`; `0` |
+| 14 | `GetSourceFiles` explicit branch is unfiltered | read `ProjectFile.cs` | bare `Directory.GetFiles(dir, filePattern)` |
+| 15 ⚠ | **BL6014 is a C-family allowlist** — it cannot catch `.blform` | read `Compiler.cs:351-381` | filters on `CFamilySourceExtensions` only; loop at `:383` does `File.ReadAllText` on everything else |
+| 16 | The seam reaches every build route | `grep -rn "CompileProjectFiles"` | `Compiler.cs:334`, called from `Program.cs:532`, `Compiler.cs:227`, `BuildService.cs:651`, `CppProjectBuilder` |
+| 17 | The harness is never overwritten | read `JavaScriptEmitter.cs:105-115` | `⛔ NEVER overwrite the harness` |
+| 18 ⚠ | The Shell's `WebView` is a **source viewer** | read `WebViewDocumentView.axaml` | its own banner: "full rendering requires a browser component (e.g., CefNet or WebView2)" |
+| 19 | Dropping `"msil"` from `winforms-app` is safe | read `IProjectTemplateService.cs:350,368,432,461` | `console-app`, `game-app`, `class-library`, `unit-test` all carry it |
+| 20 | One extension→`ItemType` decision point | read `ProjectService.cs:246` | `FileExtensions.IsSourceFile(path) ? Compile : Content` |
+| 21 | `obj/` is already gitignored | `grep -n "\[Oo\]bj/" .gitignore` | `.gitignore:37` — the generated-base location needs no new rule |
+| 22 | The prior lexer-pollution incident | read `LspMixedProjectTests.cs:13-40` | a `.cpp` from `GetSourceFiles()` **unfiltered** was "lexed/parsed AS BASICLANG", and "the pollution is invisible in diagnostics" |
+
+### Commands used throughout
+
+```powershell
+# fast loop while iterating (~2 min) — skips the compile/run/spawn tests
+dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --filter "TestCategory!=Integration"
+
+# THE GATE (~39 min). Capture BOTH streams: a crashed host still prints a per-assembly "Passed!"
+dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release 1> suite.out 2> suite.err
+
+# the compiler alone, and the IDE
+dotnet build BasicLang/BasicLang.csproj -c Release
+dotnet build VisualGameStudio.Shell/VisualGameStudio.Shell.csproj -c Release   # dotnet clean first after AXAML
+
+# the CLI — stdout is the only valid oracle, because every shipping route runs the IR optimizer
+IDE/BasicLang.exe MyFile.bas --target=csharp
+IDE/BasicLang.exe build MyProject.blproj
+IDE/BasicLang.exe design --check LoginForm.blform     # Task 7
+IDE/BasicLang.exe design --import MainForm.bas        # Task 16
+
+# refresh the hand-committed xcopy drop — NEVER /MIR
+robocopy VisualGameStudio.Shell/bin/Release/net8.0 IDE /E
+IDE/BasicLang.exe new --list                          # verify the deployed binary, not timestamps
+```
+
+## File structure
+
+New files this plan creates, in one place. Everything else is a modification to an existing file
+named in its task.
+
+```
+VisualGameStudio.Core/Forms/
+    FormDocument.cs  FormControl.cs  FormControlCatalog.cs    Task 5
+    BlformReader.cs  BlformWriter.cs  Schema/                 Task 9
+BasicLang/Forms/
+    FormLowerer.cs                                            Task 11
+    FormIR.cs  WebFormLowerer.cs                              Task 12
+    WinFormsLowerer.cs                                        Task 18
+VisualGameStudio.Editor/Controls/
+    FormCanvasControl.cs                                      Task 8, writes in Task 15
+VisualGameStudio.Shell/Views/Panels/
+    PropertyGridView.axaml(.cs)  ToolboxView.axaml(.cs)       Task 14
+VisualGameStudio.Tests/
+    Forms/BlformAlgebraTests.cs                               Task 9
+    Compiler/FormLoweringSeamTests.cs                         Task 11
+    Forms/WebLoweringTests.cs                                 Task 12
+    Forms/FormEventWiringTests.cs                             Task 13
+    Forms/WinFormsLoweringTests.cs                            Task 18
+    ProjectSerializerRoundTripTests.cs                        Task 2
+
+obj/gen/forms/            generated .bas — gitignored (.gitignore:37), never a <Compile> item
+```
+
+## Risks
+
+| Risk | Why it is real here | Mitigation |
+|---|---|---|
+| **The `Inherits` patch does not compile, or its tests do not discriminate.** | It was authored with no SDK and has never been built or run, in either direction. | Task 1 Step 2 runs the tests against *reverted* code first. Any test green on unpatched source gets rewritten, not accepted. |
+| **A `.blform` reaches the BasicLang lexer.** | BL6014 is an allowlist (fact 15) and the parser recovers silently — this exact shape has already hit the repo twice (fact 22). | Tasks 10+11 in one push; the guard test asserts via the **symbol table**, not `result.Success`. |
+| **The WinForms catalog is wrong and nothing notices.** | No type metadata at any layer (facts 9–11); member access degrades to `Object` with no diagnostic. | Task 19 generates every control with every property and requires the real CLI **and** `dotnet build` to exit 0. It is the type system. |
+| **A backend dispatch map silently defaults to C#.** | Four maps have already done this. | Task 7 and Task 16 both grep every map keyed on backend or solution type; new defaults throw; extend `ProjectTemplateBackendMappingTests`. |
+| **The snap rule gets improvised at the keyboard.** | Task 15 is where a designer feels good or bad, and the temptation is to tune it live. | Task 8a is a written, signed-off rule with no code, and Task 15 cannot start before it. |
+| **Convention wiring creeps back in as a "helpful" second mechanism.** | It looks like a small kindness and double-fires every handler (spec D10a). | Task 13 Step 4 asserts a conventionally-named handler with no `<Bind>` is **not** wired and raises `BL8008`. |
+| **A green suite that is not green.** | A crashed host prints a per-assembly "Passed!" and sends the abort to stderr. | Capture both streams; check the total against the recorded baseline (5826 / 4 known failures). |
+| **The IDE and the CLI diverge.** | They are separate entry points into the same seam. | Every task that touches the build path asserts both, in that task, not later. |
 
 ---
 
