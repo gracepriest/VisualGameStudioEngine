@@ -718,15 +718,19 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (!isVoid)
                 prologue.Add(guard + "_flags.result_bearing = true;");
 
+            // §8.4: wire_to/wire_from, NOT a cast. A slot word is a bit pattern — a value cast
+            // is right for an integer row and silently lossy for a floating one (chip
+            // task_75064f2e: the bits of 1.5 read as an integer count are 4.6e18). The seam in
+            // blnet_runtime.hpp decides per type; see its comment before adding a cast here.
             var unpacked = string.Join(", ",
-                slotTypes.Select((t, i) => "static_cast<" + t + ">(blnet_a["
+                slotTypes.Select((t, i) => "BasicLang::blnet::wire_to<" + t + ">(blnet_a["
                     + i.ToString(CultureInfo.InvariantCulture) + "])"));
             var invoke = guard + "_fn(" + unpacked + ")";
 
             var body = isVoid
                 ? invoke + "; return 0;"
                 : "auto blnet_r = " + invoke + "; if (blnet_result) *blnet_result = "
-                  + "static_cast<uint64_t>(blnet_r); return 0;";
+                  + "BasicLang::blnet::wire_from(blnet_r); return 0;";
 
             prologue.Add(
                 "BasicLang::blnet::CallbackRef " + guard + "(["

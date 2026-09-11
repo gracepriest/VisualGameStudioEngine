@@ -6,12 +6,16 @@ travel**. This file is the in-repo subset a fresh checkout — a cloud session, 
 another person — actually needs. It is a dated snapshot, not a changelog: history is in
 `git log`, rationale in `docs/superpowers/{plans,specs}/`, conventions in `CLAUDE.md`.
 
-⚠ **Everything below was true at `6139386` unless a section says otherwise. Re-verify before
-relying on it.**
+⚠ **Dated 2026-09-11.** Sections carry their own commit where it matters; anything without one
+dates from `6139386`. Re-verify before relying on it.
+
+**P2a-2 is functionally complete.** Tasks 1-15 are done bar Task 15 Step 4 (the `IDE/` binary
+refresh, a Windows deployment chore). Work sits on branch `claude/jolly-pasteur-l4mpzs`, merged
+up to date with master.
 
 ---
 
-## ✅ READ FIRST — master is FULL-SUITE GREEN at `f54416b` (2026-09-11)
+## ✅ READ FIRST — master is FULL-SUITE GREEN at `f54416b`, and Task 14 is PROVEN (2026-09-11)
 
 `origin/master` == **`f54416b`**, which merged eight P2a-2 Task 14 commits (tip `87a6c5e`) into
 master. **Full suite measured on Windows: 5826 tests, 4 failures — exactly the standing baseline
@@ -23,14 +27,35 @@ changed `BasicLang/JavaScriptEmitter.cs`, `BasicLang/Program.cs` and
 `BasicLang/ProjectSystem/TemplateEngine.cs`. They touch **no file in common**, and the full run
 confirms the combination is clean.
 
-⚠ **One thing is still unproven, and it is not about the build.** `46fd2c5` is a WIP commit whose
-**27 tests pass but have no mutation kills and no review** — none has been shown to fail for the
-right reason, or to fail at all. Green is not the same as proven, and these are exactly the kind
-of assertion this task repeatedly found passing for structural reasons. It also carries the one
-product change: `BasicLang/CSharpBackend.cs`, where the test seam `AmbientNamespacesForTest` (a
-`static` alias that compared a constant with itself and could not fail even if the seeding loop
-were deleted) becomes an instance view `CandidateUsingsForTest => _usings`. Emission was measured
-unmoved (parity battery 22/0/0). **Proving those 27 tests is job #1 below.**
+✅ **`46fd2c5`'s 27 tests are no longer unproven** — that was job #1 here and it is done, on
+branch `claude/jolly-pasteur-l4mpzs`. **Twelve mutations**, each applied to the product, full
+suite run, reverted; kills computed as a set difference against a measured baseline. All 12
+distinct new test methods went red at least once, on their own assertion, with their own
+diagnostic. **Six are discriminating**; for the other six the assertion still fired for the right
+reason (so it is not vacuous) but the regression is already caught elsewhere, making its value
+vacuity-protection rather than new detection — recorded rather than glossed. The review found one
+real defect, since fixed: `CheckerRejectedNamesAreNeverClaimed` had two arity-0 `[TestCase]`s, so
+its ternary had an unreachable branch and its doc comment claimed coverage it did not have.
+
+⚠ **The brief's six mutations were not sufficient.** `NoOtherRegistryName_…` cannot be killed by
+the `MapTypeName`→`SanitizeName` mutation: a route that never answers `NetRef` makes a "must not
+be `NetRef`" assertion trivially true. Six more were needed, and the test's own failure message
+named the right one.
+
+### The Linux picture, for cloud sessions
+
+The same suite on a Linux container reports **5454 passed / 173 failed / 203 skipped of 5830** —
+all 173 environmental, none a real defect. 82 are `BasicLang.exe not deployed` (no `.exe` suffix
+off Windows), ~60 are hardcoded `C:\` / PATHEXT / MSVC-vcvars assertions, 22 are Blnet
+integration rows needing the ILC/AOT shim publish (`Cross-OS native compilation is not
+supported` — win-x64 only), 6 are native-engine `DllNotFound`.
+
+⚠ **Two things follow.** Those 22 rows are exactly §12.5's integration set, **including
+`EveryProxyTableSlotResolvesInThePublishedShim`** — so a Linux run cannot speak for them, and
+anything touching the shim needs a Windows pass. And the TOTALS differ, 5826 vs 5830: four tests
+exist on one platform and not the other (a differing total, not a skip). Nobody has chased which
+four; if a count ever fails to reconcile, start there.
+
 
 ---
 
@@ -143,7 +168,7 @@ fails only when the Native tier runs alongside it). The fast subset shows the tw
 
 ---
 
-## P2a-2 Task 14 — what is done, and exactly what is left
+## P2a-2 Task 14 — what shipped, and how it was proven
 
 **Done and gated at commit time** (eight commits, `8fae4f6`…`87a6c5e`):
 
@@ -165,31 +190,89 @@ fails only when the Native tier runs alongside it). The fast subset shows the tw
   handshake and dies at its first .NET call. Only the new
   `EveryProxyTableSlotResolvesInThePublishedShim` (which `NativeLibrary.TryGetExport`s every slot
   against the deployed DLL) catches it. That is the runtime backstop chip `task_68a7198a` lacked.
-- **`AddressOf` as a .NET delegate argument does not work**, though spec §8.4:694 promises it
-  alongside lambdas. Measured through the shipping pipeline: `BL6017 … Argument 2 of
-  'Aot.Probe.Callbacks.Fold' has no .NET type the analyzer can present for overload resolution
-  (its static type is 'Func')`. The identical call with a lambda builds and runs. It is finished
-  as a **pinned divergence** asserting that exact refusal, with a *replace, do not delete* note.
+- ✅ **`AddressOf` as a .NET delegate argument — FIXED 2026-09-11.** It used to draw
+  `BL6017 … has no .NET type the analyzer can present for overload resolution (its static type
+  is 'Func')` while the identical call with a lambda built and ran, contradicting spec §8.4:694.
+  The refusal was never a marshaling limit: the analyzer's argument-presentation loop
+  target-typed a `LambdaExpressionNode` and had **no arm for `AddressOf`**, so it fell through to
+  the static-type mapping, which cannot map a structural `Func` — real .NET delegate parameters
+  are NAMED types. `DelegateTypeOf` had been building the right type all along. The fix mirrors
+  the lambda arm (native-only guard included); the pinned row is promoted to the runtime row
+  `AddressOfAsADotNetDelegateArgument_LowersAndRuns`, asserting `Fold(10, AddressOf Minus)` = 7.
+  ⚠ That row is Integration, so its RUN half still needs a Windows pass; the Linux proof is
+  `NetDelegateSlotWireTests.AnAddressOfArgumentCrossesLikeALambda`, which reds with exactly that
+  BL6017 when the arm is removed.
 
-**Left to do, in order:**
+**DONE 2026-09-11 (Linux cloud session) — items 1-3 below are closed:**
 
-1. **§12.4's V2 and V3 are UNPROVEN** — the WIP commit's 27 tests need their mutation kills, and
-   **each must be DISCRIMINATING**: if a mutation also reds a pre-existing test it has proved
-   nothing about the new one, so record the split ("1 red of 20"). The six: empty the `Rejected`
-   registry set · make `MapTypeName`'s default arm skip the `NetRef` handle · remove one entry
-   from `NetAmbientNamespaces.All` · delete the C# backend's seeding loop · flip one
-   `CppCapabilityChecker.CheckType` early return · make `NetClaimPredicate` claim
-   `File.ReadAllText`. Then review that commit properly.
-3. **Task 15, the closeout.** Its inputs are already gathered: a detached worktree at
-   `.worktrees/p2a1base` sits at `2752a96` for the empty-surface inertness diff (materialise the
-   console and game templates, flip `<TargetBackend>` to Cpp, build at both commits, diff
-   `obj/gen` + build log + stdout, subtract the two known splices `NetException` and `NetRef`).
-   Spec status updates: header `Draft` → `Implemented`; §14.15 → Resolved; §15.11 → Decided;
-   §15.6 → Recorded-unchanged. **Stale prose to sweep:** `NetInertnessTests`'s header still says
-   `NetResolverFactory` is set "at exactly ONE site repo-wide" — false since Task 4
-   (`EnableNetResolution` is also called at `BasicLang/Program.cs` :511 and :1076 and
-   `BuildService.cs` :645; only the LSP leaves it null), plus dated "pre-flip" prose in
-   `NetIrCarriageTests` and `NetFlipTests`.
+1. ✅ **Full suite run** — Windows, 5826 tests / 4 baseline failures. See the top of this file.
+2. ✅ **§12.4's V2 and V3 are PROVEN.** Twelve mutations, each applied, full suite run, reverted;
+   kills computed as a set difference against the 173-failure baseline. All 12 distinct new test
+   methods went red at least once on their own assertion. **Six are discriminating** (M2
+   `MapTypeName`→`SanitizeName`, M3 drop an ambient namespace, M7 `MapTypeName`→`!= Unknown`,
+   M10 drop the generic-`IEnumerable` arm, M11 `IEnumerable` ignores arity, M12 `CheckType` drops
+   the `::` return). For the other six the assertion still fired for the right reason — so it is
+   not vacuous — but the regression is already caught elsewhere, so its value is
+   vacuity-protection, not new detection. M5 alone reds 22 pre-existing lowering tests.
+   ⚠ The brief's six were not enough: **M2 cannot kill `NoOtherRegistryName_…`**, because a
+   `MapTypeName` that never answers `NetRef` makes a "must not be `NetRef`" assertion trivially
+   true. M7 is its mirror and exists for that reason.
+   Honest gap: 16 of the 17 `BareNameResolvesThroughItsAmbientNamespace` rows are proven by
+   mechanism, not individually.
+3. ✅ **Reviewed**, one finding fixed: `CheckerRejectedNamesAreNeverClaimed` had two arity-0
+   `[TestCase]`s, so its `? :` had an unreachable generic branch and its doc comment claimed
+   coverage of "both halves" it did not have. The arity-0 constraint is now an enforced
+   assertion. **Spec status and the stale-prose sweep are done** — see Task 15 Steps 2 and 3 in
+   the plan, which now carry the measured results.
+
+**Also closed since, on the same branch:**
+
+4. ✅ **Chip `task_75064f2e` — the delegate wire.** A `Double` crossing a delegate slot was
+   silently truncated (1.5 arrived as 1; the program built clean, exit 0, and printed 2 where
+   .NET says 3). `Single` had the identical defect and no test. ⚠ The recon diagnosis was HALF
+   the bug: `NetShimGenerator` packed with `unchecked((ulong)a)` too, so ALL FOUR conversion
+   sites were value casts and the truncation began on the MANAGED side — making a native-only
+   fix strictly worse (`bit_cast<double>(1ULL)` is 4.9e-324). Fixed as ONE SEAM PER SIDE
+   (`wire_to`/`wire_from`, `WirePack`/`WireUnpack`) rather than four casts, which is why it
+   existed: four sites answering one question four ways.
+5. ✅ **Chip: the admissibility⇄wire-form tie** (Task 8 Step 2b, as specified). Before it,
+   `NetSurfaceCollector.FirstUnmarshalable` had NO test assertions at all. Both contrapositives
+   now exist, with part 2's probe GENERATED from `NetMarshalTable.WireRows` so a new §8.3 row
+   forces a probe member. Mutation-proven (rejecting `Double` is discriminating; admitting
+   everything is not — three declared-surface rows already cover part of it).
+6. ✅ **Chip: `AddressOf` as a .NET delegate argument.** See the finding above — a missing
+   target-typing arm, not a marshaling limit. The pinned row is PROMOTED to the runtime row.
+7. ✅ **The plan's checkboxes.** 59 unchecked boxes on shipped tasks read as a work list. The
+   TASK HEADINGS now carry verified status and a note says the boxes are unmaintained. They were
+   deliberately NOT mass-ticked: that asserts verification nobody did, and Task 2's Step 5 is not
+   done but CANCELLED.
+
+**Windows verification — reported green 2026-09-11.** The branch's two run-level rows were run
+on Windows and passed: `AddressOfAsADotNetDelegateArgument_LowersAndRuns` (must print `7`) and
+the flipped `ADoubleDelegateSlot_TruncatesOnTheWire_PinnedDivergence` (must print `3`).
+
+⚠ **Attribution, because this file is supposed to be measurements:** that is the user's report,
+not a run captured in this session — the per-row outputs were not recorded here. A Linux
+container cannot produce them (both rows die at ILC's `Cross-OS native compilation is not
+supported`, which is the SHIM PUBLISH failing — the analyzer and the managed shim compile fine,
+itself evidence the `AddressOf` fix works through the real pipeline). If either row ever needs
+re-establishing, the failure signatures are: a **2** on the double row means a half-revert to
+value casts; a **denormal (~4.9e-324)** means the wire's two halves were split apart, which is
+worse than the original defect; a **BL6017 naming a static type of `Func`** on the AddressOf row
+means the target-typing arm was lost.
+
+**Still open — the one remaining item, and it needs Windows:**
+
+- **Task 15 Step 4 — the `IDE/` binary refresh.** The prebuilt `IDE/` binaries ship the compiler,
+  so they are stale against all of P2a-2. Procedure per `aada862`, including the deps.json
+  closure check via `dotnet exec --depsfile`. `robocopy <Shell bin> IDE /E` — **never `/MIR`**,
+  which deletes the engine DLL and import lib that live only there. A deployment chore, not
+  development.
+
+⚠ **Two corrections the inertness measurement produced, both now in the plan:** there are
+**THREE** runtime splices, not two — `485bbe1` adds a `BasicLang::String` alias — and `2752a96`
+is no longer a clean baseline, because 291 commits separate it from master and at least one
+(`d682f5a`, a non-P2a-2 concat memory-safety fix) changes user-program TUs.
 
 **The failure mode this task kept finding — check for it in any test you write or review.**
 Assertions that pass for structural reasons rather than because the property holds: a guard

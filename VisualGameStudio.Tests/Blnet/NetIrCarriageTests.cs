@@ -696,9 +696,14 @@ public class NetIrCarriageTests
     /// The plan's Task-2 acceptance shape: `Dim r As New Regex("a")` + `r.IsMatch("x")`. The
     /// analyzer's warning-only probe resolves `Regex` through the ambient namespaces
     /// (System.Text.RegularExpressions), name-matches `IsMatch`, and RECORDS the descriptor in
-    /// its annotation table; IRBuilder's instance arm reads it back by node identity. Note
-    /// `Regex` is still Rejected/unclaimed pre-flip — recording is severity-independent, so the
-    /// annotation is written TODAY, before Task 5 moves the name to ManagedOwned.
+    /// its annotation table; IRBuilder's instance arm reads it back by node identity.
+    ///
+    /// Recording is SEVERITY-INDEPENDENT, which is what this test pins. The annotation was
+    /// written back when `Regex` was still Rejected and unclaimed, and it is still written now
+    /// that Task 5's flip has moved the name to ManagedOwned (spec §11.4) — the category does
+    /// not decide whether the descriptor reaches the table. (Updated at Task 15: this note used
+    /// to say `Regex` "is still Rejected/unclaimed pre-flip", which stopped being true when the
+    /// flip landed.)
     /// </summary>
     [Test]
     public void IrBuilderAttachesTheAnalyzersResolvedMemberToAnInstanceCall()
