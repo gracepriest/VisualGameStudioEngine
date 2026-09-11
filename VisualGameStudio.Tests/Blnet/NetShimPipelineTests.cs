@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using BasicLang.Compiler;             // Lexer / Parser
 using BasicLang.Compiler.CodeGen.Net;
 using BasicLang.Compiler.ProjectSystem;
@@ -309,7 +310,21 @@ internal static class NetShimPipelineFixture
         // the WaitForExit timeout cannot save it because the block is in the read.
         var outTask = process.StandardOutput.ReadToEndAsync();
         var errTask = process.StandardError.ReadToEndAsync();
-        Assert.That(process.WaitForExit(60_000), Is.True, "the built program did not exit.");
+
+        // A timeout KILLS the tree. Asserting without killing leaves a native process running for
+        // the rest of the suite, holding its memoized directory open so teardown's delete gives up.
+        if (!process.WaitForExit(60_000))
+        {
+            try { process.Kill(entireProcessTree: true); } catch { /* already gone */ }
+            Assert.Fail("the built program did not exit within 60s: " + exePath);
+        }
+
+        // WaitForExit(int) returning true means the PROCESS ended, not that its pipes closed — a
+        // surviving grandchild holds the write handle and the reads below would block forever.
+        Assert.That(Task.WhenAll(outTask, errTask).Wait(5_000), Is.True,
+            "the built program exited but left its output pipes open, which means a grandchild "
+            + "process inherited them and is still alive: " + exePath);
+
         var stdout = outTask.GetAwaiter().GetResult();
         var stderr = errTask.GetAwaiter().GetResult();
         Assert.That(process.ExitCode, Is.EqualTo(0),
@@ -354,6 +369,12 @@ internal static class NetShimPipelineFixture
             Assert.Fail("the built program did not exit within 60s — a failure-mode row must fail "
                         + "fast, not hang.");
         }
+
+        // The process ending does not mean its pipes closed: a surviving grandchild holds the
+        // write handle and the reads below would block with no timeout to save them.
+        Assert.That(Task.WhenAll(outTask, errTask).Wait(5_000), Is.True,
+            "the built program exited but left its output pipes open, which means a grandchild "
+            + "process inherited them and is still alive: " + exePath);
 
         return (process.ExitCode,
                 outTask.GetAwaiter().GetResult().Replace("\r\n", "\n"),
@@ -466,18 +487,26 @@ internal static class NetShimPipelineFixture
     internal static string DeployedMessage(string projectName) => "Deployed " + ShimDllName(projectName);
 
     /// <summary>
-    /// Every line phases 5 and 7 can write to <see cref="CppProjectBuildResult.Messages"/> for
-    /// <paramref name="projectName"/> — the miss, the hit, the deploy. An EMPTY-surface build
-    /// must produce none of them; spelled here once so the two inertness rows
-    /// (<c>NetShimPhaseTests.EmptySurface_SkipsPhaseFiveEntirely</c> at emit level, the
-    /// Console-only conformance row at build level) cannot drift apart.
+    /// The two lines PHASE 5 can write to <see cref="CppProjectBuildResult.Messages"/> for
+    /// <paramref name="projectName"/> — the miss and the hit. Both are reachable from
+    /// <c>EmitCore</c>, so an emit-level inertness row asserting their absence is falsifiable.
     /// </summary>
     internal static string[] PhaseFiveMessageMarkers(string projectName) => new[]
     {
         PublishingMessage,
         UpToDateMessage(projectName),
-        DeployedMessage(projectName),
     };
+
+    /// <summary>
+    /// Phase 5's two lines PLUS phase 7's shim deploy. ⛔ Only a BUILD-level row may assert the
+    /// absence of all three: phase 7 lives in <c>CppProjectBuilder.Build</c>, past the point
+    /// <c>EmitCore</c> returns, so at emit level the deploy line can never appear and asserting it
+    /// absent is an assertion no mutation can make fail. Kept separate rather than shared for
+    /// exactly that reason; the two inertness rows still derive from ONE spelling of each line.
+    /// </summary>
+    internal static string[] PhaseFiveAndSevenMessageMarkers(string projectName) =>
+        PhaseFiveMessageMarkers(projectName)
+            .Concat(new[] { DeployedMessage(projectName) }).ToArray();
 
     /// <summary>A one-line listing of a directory's files for a failure message; tolerant of absence.</summary>
     internal static string ListFiles(string directory) =>

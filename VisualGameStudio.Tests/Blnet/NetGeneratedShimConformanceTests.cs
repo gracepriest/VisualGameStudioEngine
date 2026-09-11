@@ -303,22 +303,6 @@ public class NetGeneratedShimConformanceTests
     // =====================================================================================
 
     /// <summary>
-    /// §9.3: a missing shim must fail the startup handshake with the SPECIFIED exit code.
-    ///
-    /// <para><c>NetProxyEmitter.StartupFailureExitCode</c> is 3, and its own doc comment says the
-    /// handshake tests and the emitter "cannot disagree about it" — yet nothing in the suite
-    /// asserted it. A constant no test reads is a constant the emitter can change freely.</para>
-    ///
-    /// <para>The generated startup TU loads the shim by BARE NAME, so the OS resolves it from the
-    /// executable's own directory. Deleting it there is exactly the real-world failure: a build
-    /// that succeeded but whose phase-7 deployment did not happen.</para>
-    ///
-    /// <para>⚠ The program runs in a COPY of the output directory, never the shared build's own.
-    /// <see cref="BuildOnce"/> memoizes that directory and the property row above still needs it
-    /// intact; deleting the shim in place would make the two tests order-dependent — green alone,
-    /// red together, or vice versa. Costs no publish: the build is reused.</para>
-    /// </summary>
-    /// <summary>
     /// Copy a memoized build's output directory into a fresh sandbox (registered for teardown)
     /// and return the paths a §9.3 failure-mode row needs. The copy is the whole point: the
     /// memoized directory is shared with the happy-path rows, so mutating it in place would make
@@ -759,6 +743,22 @@ public class NetGeneratedShimConformanceTests
         });
     }
 
+    /// <summary>
+    /// §9.3: a missing shim must fail the startup handshake with the SPECIFIED exit code.
+    ///
+    /// <para><c>NetProxyEmitter.StartupFailureExitCode</c> is 3, and its own doc comment says the
+    /// handshake tests and the emitter "cannot disagree about it" — yet nothing in the suite
+    /// asserted it. A constant no test reads is a constant the emitter can change freely.</para>
+    ///
+    /// <para>The generated startup TU loads the shim by BARE NAME, so the OS resolves it from the
+    /// executable's own directory. Deleting it there is exactly the real-world failure: a build
+    /// that succeeded but whose phase-7 deployment did not happen.</para>
+    ///
+    /// <para>⚠ The program runs in a COPY of the output directory, never the shared build's own.
+    /// <see cref="BuildOnce"/> memoizes that directory and the property row above still needs it
+    /// intact; deleting the shim in place would make the two tests order-dependent — green alone,
+    /// red together, or vice versa. Costs no publish: the build is reused.</para>
+    /// </summary>
     [Test]
     public void AMissingShim_FailsTheStartupHandshake_WithTheSpecifiedExitCode()
     {
@@ -1283,11 +1283,15 @@ public class NetGeneratedShimConformanceTests
         var bump = NetShimPipelineFixture.SlotName(surface, "Aot.Probe.Slots", "Bump");
         var tryDouble = NetShimPipelineFixture.SlotName(surface, "Aot.Probe.Slots", "TryDouble");
 
-        // The proxies header comes FIRST, before the BasicLang module header. Order is the point:
-        // Logic.g.h itself includes blnet_proxies.g.hpp transitively when the module uses the .NET
-        // surface, so putting it first would let this row pass with the .cpp's own include doing
-        // nothing — and the row exists to prove a hand-written consumer can reach the proxies on
-        // its own. Spelled from the emitter's constant so a rename breaks the guard, not the build.
+        // The proxies header comes FIRST, and the claim that buys is narrower than it looks — say
+        // it exactly, because an earlier draft of this row overstated it. Logic.g.h includes
+        // blnet_proxies.g.hpp transitively whenever the module uses the .NET surface, so this .cpp
+        // would COMPILE with its own include deleted: nothing here can prove the include is
+        // REQUIRED. What first position does prove is that the proxies header is SELF-CONTAINED —
+        // it compiles as a translation unit's opening line, with no BasicLang runtime preamble in
+        // scope ahead of it. Reachability without any BasicLang header at all is the zero-.bas
+        // row's job (NetShimPipelineTests.ZeroBasProjectWithANetProxy_…), not this one's.
+        // Spelled from the emitter's constant so a rename breaks the guard, not the build.
         var proxiesInclude = "#include \"" + NetProxyEmitter.ProxiesFileName + "\"";
         var nativeCpp = $$"""
             {{proxiesInclude}}
@@ -1333,18 +1337,23 @@ public class NetGeneratedShimConformanceTests
 
         var objGen = Path.Combine(built.Dir, "obj", "gen");
 
-        // Guard the file the BUILDER consumed, not the local the test authored: asserting on
-        // `nativeCpp` could only fail if this method edited itself.
+        // StartsWith, on the file the BUILDER consumed. What this pins is that the proxies header
+        // compiles as the TU's opening line — self-contained, nothing of ours in scope before it.
+        // It deliberately does NOT claim the include is required: Logic.g.h supplies it
+        // transitively, so this .cpp would compile without it. Reading the file back rather than
+        // the local keeps the guard honest about which bytes the compiler saw.
         Assert.That(File.ReadAllText(Path.Combine(built.Dir, "native.cpp")),
-            Does.Contain(proxiesInclude),
-            "the .cpp the build compiled must include the proxies header ITSELF — plan Task 14 "
-            + "defines this row by that include.");
+            Does.StartWith(proxiesInclude),
+            "the .cpp the build compiled must OPEN with the proxies header, which is what proves "
+            + "that header stands alone as a translation unit's first include.");
 
         // Superset, not equality: a .bas is present, so obj/gen also holds the split emitter's
-        // files. Asserted before the bindings are read so a missing artifact reports THIS message
+        // files. Derived from the emitter over THIS row's surface rather than a hand-typed list,
+        // and asserted before the bindings are read so a missing artifact reports THIS message
         // instead of a raw FileNotFoundException.
         Assert.That(Directory.GetFiles(objGen).Select(Path.GetFileName),
-            Is.SupersetOf(NetProxyEmitterTests.ExpectedArtifacts),
+            Is.SupersetOf(NetProxyEmitter.Emit(
+                surface, NetShimPipelineFixture.ShimDllName("ConfMixed")).Keys),
             "obj/gen is missing a §9.1 artifact for a project with a non-empty .NET surface. "
             + "Files: " + NetShimPipelineFixture.ListFiles(objGen));
 
@@ -1354,9 +1363,12 @@ public class NetGeneratedShimConformanceTests
             // A slot is one struct field, spelled `(BLNET_CALL *<slot>)(` in the bindings. Counted
             // HASH-AGNOSTICALLY: matching only the derived spelling would read "1" even if the
             // §7.1 call-site path had minted a SECOND TryDouble slot under a different hash, which
-            // is the drift this assertion exists to catch.
+            // is the drift this assertion exists to catch. The stem comes off the derived name, so
+            // a change to the mangling scheme fails the pin below rather than reporting here.
+            var tryDoubleStem = tryDouble.Substring(0, tryDouble.LastIndexOf('_'));
             Assert.That(
-                Regex.Matches(bindings, @"BLNET_CALL \*bl_net_Aot_Probe_Slots_TryDouble\w*\)").Count,
+                Regex.Matches(bindings,
+                    @"BLNET_CALL \*" + Regex.Escape(tryDoubleStem) + @"\w*\)").Count,
                 Is.EqualTo(1),
                 "TryDouble is reached BOTH ways — the BasicLang call site (§7.1) and the "
                 + "<NetProxy> declaration (§7.2) — and the proxy table must carry it exactly "
@@ -1531,7 +1543,10 @@ public class NetGeneratedShimConformanceTests
             Assert.That(File.Exists(Path.Combine(outputDir, shimName)), Is.False,
                 "a shim DLL (" + shimName + ") was deployed next to a program with no .NET "
                 + "surface — an AOT publish the user never asked for and no output would reveal.");
-            foreach (var marker in NetShimPipelineFixture.PhaseFiveMessageMarkers("ConfConsoleOnly"))
+            // Build level, so phase 7's deploy line is reachable here and belongs in the list —
+            // the emit-level twin deliberately uses the shorter one.
+            foreach (var marker in
+                     NetShimPipelineFixture.PhaseFiveAndSevenMessageMarkers("ConfConsoleOnly"))
             {
                 Assert.That(built.Result.Messages.Any(m => m.Contains(marker, StringComparison.Ordinal)),
                     Is.False,
