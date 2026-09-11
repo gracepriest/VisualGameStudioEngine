@@ -304,9 +304,14 @@ internal static class NetShimPipelineFixture
             WorkingDirectory = Path.GetDirectoryName(exePath)!,
         };
         using var process = Process.Start(psi)!;
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
+        // Both streams drained CONCURRENTLY, for the reason RunAllowingFailure spells out: reading
+        // stdout to the end first deadlocks against a child that fills the stderr pipe buffer, and
+        // the WaitForExit timeout cannot save it because the block is in the read.
+        var outTask = process.StandardOutput.ReadToEndAsync();
+        var errTask = process.StandardError.ReadToEndAsync();
         Assert.That(process.WaitForExit(60_000), Is.True, "the built program did not exit.");
+        var stdout = outTask.GetAwaiter().GetResult();
+        var stderr = errTask.GetAwaiter().GetResult();
         Assert.That(process.ExitCode, Is.EqualTo(0),
             "the built program exited " + process.ExitCode
             + ". Exit code 3 is NetProxyEmitter.StartupFailureExitCode — the §9.3 handshake failed, "
@@ -1428,16 +1433,23 @@ public class NetShimPipelineTests
     private static SharedBuild BuildOnce(
         string projectName, IReadOnlyDictionary<string, string> files, string itemGroupXml = "")
     {
-        // PRINTABLE separators, deliberately. This key originally used literal NUL bytes (and a
-        // literal U+0001 between a file's name and its content), which made ripgrep classify
-        // the whole file as binary and silently drop every match past this point — an agent
-        // grepping for the Integration fixture below concluded it did not exist, and no text
-        // tool could match the invisible U+0001. "\n--\n" cannot occur inside a project name or
-        // a file name, and a source that contains it still cannot collide with another
-        // (name, content) pair because the file NAME sits between the separators.
-        var key = projectName + "\n--\n" + itemGroupXml + "\n--\n"
-                  + string.Join("\n--\n", files.OrderBy(f => f.Key, StringComparer.Ordinal)
-                      .Select(f => f.Key + "\n=\n" + f.Value));
+        // LENGTH-PREFIXED, and printable. Two separate points:
+        //
+        // Printable: this key originally used literal NUL bytes (and a literal U+0001 between a
+        // file's name and its content), which made ripgrep classify the whole file as binary and
+        // silently drop every match past this point — an agent grepping for the Integration
+        // fixture below concluded it did not exist, and no text tool could match the invisible
+        // U+0001.
+        //
+        // Length-prefixed: a separator alone is not injective. Plain concatenation lets
+        // {a: "1<sep>b<sep>2"} and {a: "1", b: "2"} produce the same key, which would hand the
+        // second caller the FIRST caller's build. No test source contains the sequence today, so
+        // this is belt and braces — but a memo that silently returns the wrong build is precisely
+        // the failure this key was rewritten to prevent, so it should not rest on that.
+        static string P(string s) => s.Length + ":" + s;
+        var key = P(projectName) + P(itemGroupXml)
+                  + string.Join("", files.OrderBy(f => f.Key, StringComparer.Ordinal)
+                      .Select(f => P(f.Key) + P(f.Value)));
 
         return SharedBuilds.GetOrAdd(key, _ => new Lazy<SharedBuild>(() =>
         {
@@ -1966,10 +1978,11 @@ public class NetShimPipelineTests
     ///
     /// <para><b>Three claims, each with its own oracle.</b>
     /// <list type="number">
-    /// <item><description><i>obj/gen is populated</i> — the top-level file set is EXACTLY
-    /// <see cref="NetProxyEmitterTests.ExpectedArtifacts"/>. Zero <c>.bas</c> means no split
-    /// files, so equivalence is exact rather than a subset; <c>shim/</c> is phase 5's
-    /// subdirectory, not a file, and the cache lives under <c>obj/</c>, not here.</description></item>
+    /// <item><description><i>obj/gen is populated</i> — the top-level file set is EXACTLY what
+    /// <see cref="NetProxyEmitter.Emit"/> produces for this row's own surface, derived rather than
+    /// listed. Zero <c>.bas</c> means no split files, so equivalence is exact rather than a subset;
+    /// <c>shim/</c> is phase 5's subdirectory, not a file, and the cache lives under <c>obj/</c>,
+    /// not here.</description></item>
     /// <item><description><i>compiled and linked, and the shim initializes</i> — <c>main</c>
     /// constructs a <c>Widget</c> through the CTOR proxy and calls <c>Twice()</c> through the
     /// INSTANCE proxy, printing .NET's answer. A startup TU that was emitted but never handed to
@@ -2020,11 +2033,15 @@ public class NetShimPipelineTests
         var objGen = Path.Combine(_dir, "obj", "gen");
         Assert.Multiple(() =>
         {
+            // Derived from the emitter over THIS row's surface, not from a hand-typed list:
+            // whatever NetProxyEmitter.Emit produces is exactly what obj/gen must hold.
             Assert.That(Directory.GetFiles(objGen).Select(Path.GetFileName),
-                Is.EquivalentTo(NetProxyEmitterTests.ExpectedArtifacts),
-                "obj/gen for a zero-.bas project must hold EXACTLY NetProxyEmitter's six "
-                + "artifacts: none missing, and no split-emitter files (there is no .bas to "
-                + "split). shim/ is phase 5's subdirectory, not a file.");
+                Is.EquivalentTo(NetProxyEmitter.Emit(surface,
+                    NetShimPipelineFixture.ShimDllName("ZeroBasProbe")).Keys),
+                "obj/gen for a zero-.bas project must hold EXACTLY the artifacts NetProxyEmitter "
+                + "emits for this surface: none missing, and no split-emitter files (there is no "
+                + ".bas to split). shim/ is phase 5's subdirectory, not a file. Files: "
+                + NetShimPipelineFixture.ListFiles(objGen));
             Assert.That(File.Exists(Path.Combine(outputDir,
                     NetProxyEmitter.ShimModuleFileName(
                         NetShimGenerator.ShimAssemblyName("ZeroBasProbe")))),
@@ -2038,7 +2055,9 @@ public class NetShimPipelineTests
             + "hand-written main() through the ctor proxy and then the instance proxy. No output "
             + "means the process died before main — the §9.3 handshake failed; a link error above "
             + "means blnet_startup.g.cpp was emitted but never compiled (the §9.5 regression); an "
-            + "exception naming a slot means the static-initializer object never ran.");
+            + "exit of -1073740791 (0xC0000409) with both streams EMPTY means the "
+            + "static-initializer object never ran and the first proxy call hit §9.2's null-slot "
+            + "guard, which fail-fasts uncaught (measured).");
 
         // The negative discriminator, on a COPY: with the shim gone the static-initializer object
         // must fail the handshake BEFORE main — exit 3, the §9.3 line on stderr, stdout empty.

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using BasicLang.Compiler.CodeGen.Net;
 using BasicLang.Compiler.ProjectSystem;
 using NUnit.Framework;
@@ -69,12 +70,13 @@ public class NetGeneratedShimConformanceTests
         // until P2a-2 Task 14 — a second row passing the same name with different sources or a
         // different item group silently got the FIRST program's build back and asserted, green,
         // against the wrong executable. The name stays in the key: it is also the shim assembly
-        // name and the output name. Printable separators, never NUL (see the pipeline twin).
-        var key = projectName
-                  + "\n--\n" + withProbe
-                  + "\n--\n" + extraItemGroupXml
-                  + "\n--\n" + string.Join("\n--\n", files.OrderBy(f => f.Key, StringComparer.Ordinal)
-                      .Select(f => f.Key + "\n=\n" + f.Value));
+        // name and the output name. Parts are LENGTH-PREFIXED so the concatenation is injective
+        // (a plain separator lets {a: "1<sep>b<sep>2"} collide with {a: "1", b: "2"}), and
+        // printable, never NUL — see the pipeline twin for what NUL bytes did to grep.
+        static string P(string s) => s.Length + ":" + s;
+        var key = P(projectName) + P(withProbe.ToString()) + P(extraItemGroupXml)
+                  + string.Join("", files.OrderBy(f => f.Key, StringComparer.Ordinal)
+                      .Select(f => P(f.Key) + P(f.Value)));
         return Builds.GetOrAdd(key, _ => new Lazy<SharedBuild>(() =>
         {
             var dir = NetShimPipelineFixture.NewTempDir("blnet-conf-");
@@ -580,22 +582,9 @@ public class NetGeneratedShimConformanceTests
         var built = BuildOnce("ConfProperty", PropertyProgram);
         AssertBuilt(built.Result, "the §12.3 named-property program");
 
-        var sourceDir = Path.GetDirectoryName(built.Result.ExecutablePath)!;
-        var sandbox = NetShimPipelineFixture.NewTempDir("blnet-conf-noshim-");
-        Dirs.Add(sandbox);
-        foreach (var file in Directory.GetFiles(sourceDir))
-            File.Copy(file, Path.Combine(sandbox, Path.GetFileName(file)));
-
-        var shimName = NetProxyEmitter.ShimModuleFileName(
-            NetShimGenerator.ShimAssemblyName("ConfProperty"));
-        var shimPath = Path.Combine(sandbox, shimName);
-
-        Assert.That(File.Exists(shimPath), Is.True,
-            "guard: the shim must be present in the copy before we remove it, or this test "
-            + "proves nothing. Looked for " + shimName + " in " + sandbox);
+        var (exe, shimPath) = SandboxCopy(built, "ConfProperty", "noshim");
         File.Delete(shimPath);
 
-        var exe = Path.Combine(sandbox, Path.GetFileName(built.Result.ExecutablePath)!);
         var (exitCode, stdout, stderr) = NetShimPipelineFixture.RunAllowingFailure(exe);
         var dump = $"exit={exitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}";
 
@@ -1111,9 +1100,15 @@ public class NetGeneratedShimConformanceTests
         var bump = NetShimPipelineFixture.SlotName(surface, "Aot.Probe.Slots", "Bump");
         var tryDouble = NetShimPipelineFixture.SlotName(surface, "Aot.Probe.Slots", "TryDouble");
 
+        // The proxies header comes FIRST, before the BasicLang module header. Order is the point:
+        // Logic.g.h itself includes blnet_proxies.g.hpp transitively when the module uses the .NET
+        // surface, so putting it first would let this row pass with the .cpp's own include doing
+        // nothing — and the row exists to prove a hand-written consumer can reach the proxies on
+        // its own. Spelled from the emitter's constant so a rename breaks the guard, not the build.
+        var proxiesInclude = "#include \"" + NetProxyEmitter.ProxiesFileName + "\"";
         var nativeCpp = $$"""
+            {{proxiesInclude}}
             #include "Logic.g.h"
-            #include "blnet_proxies.g.hpp"
             #include <cstdio>
             #include <cstdint>
             int main() {
@@ -1127,9 +1122,6 @@ public class NetGeneratedShimConformanceTests
                 return 0;
             }
             """;
-        Assert.That(nativeCpp, Does.Contain("#include \"blnet_proxies.g.hpp\""),
-            "guard: the .cpp must include the proxies header ITSELF — plan Task 14 defines this "
-            + "row by that include.");
 
         var built = BuildOnce(
             "ConfMixed",
@@ -1157,17 +1149,38 @@ public class NetGeneratedShimConformanceTests
         AssertBuilt(built.Result, "the §12.5 mixed BasicLang + C++ program");
 
         var objGen = Path.Combine(built.Dir, "obj", "gen");
+
+        // Guard the file the BUILDER consumed, not the local the test authored: asserting on
+        // `nativeCpp` could only fail if this method edited itself.
+        Assert.That(File.ReadAllText(Path.Combine(built.Dir, "native.cpp")),
+            Does.Contain(proxiesInclude),
+            "the .cpp the build compiled must include the proxies header ITSELF — plan Task 14 "
+            + "defines this row by that include.");
+
+        // Superset, not equality: a .bas is present, so obj/gen also holds the split emitter's
+        // files. Asserted before the bindings are read so a missing artifact reports THIS message
+        // instead of a raw FileNotFoundException.
+        Assert.That(Directory.GetFiles(objGen).Select(Path.GetFileName),
+            Is.SupersetOf(NetProxyEmitterTests.ExpectedArtifacts),
+            "obj/gen is missing a §9.1 artifact for a project with a non-empty .NET surface. "
+            + "Files: " + NetShimPipelineFixture.ListFiles(objGen));
+
         var bindings = File.ReadAllText(Path.Combine(objGen, NetProxyEmitter.BindingsFileName));
         Assert.Multiple(() =>
         {
-            Assert.That(File.Exists(Path.Combine(objGen, NetProxyEmitter.ProxiesFileName)), Is.True,
-                "the proxies header native.cpp includes must be in obj/gen — the directory the "
-                + "builder puts on the include path when the MERGED artifact set is non-empty.");
-            // A slot is one struct field, spelled `(BLNET_CALL *<slot>)(`, in the bindings.
-            Assert.That(bindings.Split("*" + tryDouble + ")").Length - 1, Is.EqualTo(1),
+            // A slot is one struct field, spelled `(BLNET_CALL *<slot>)(` in the bindings. Counted
+            // HASH-AGNOSTICALLY: matching only the derived spelling would read "1" even if the
+            // §7.1 call-site path had minted a SECOND TryDouble slot under a different hash, which
+            // is the drift this assertion exists to catch.
+            Assert.That(
+                Regex.Matches(bindings, @"BLNET_CALL \*bl_net_Aot_Probe_Slots_TryDouble\w*\)").Count,
+                Is.EqualTo(1),
                 "TryDouble is reached BOTH ways — the BasicLang call site (§7.1) and the "
                 + "<NetProxy> declaration (§7.2) — and the proxy table must carry it exactly "
-                + "ONCE.\n" + bindings);
+                + "ONCE, under one mangled name.\n" + bindings);
+            Assert.That(bindings, Does.Contain("*" + tryDouble + ")"),
+                "…and that one slot must be the name the resolver → collector → mangler chain "
+                + "derives, which is what the BasicLang side and the shim both bind.\n" + bindings);
             Assert.That(bindings, Does.Contain("*" + bump + ")"),
                 "Bump is in the table only because of the <NetProxy> declaration; no BasicLang "
                 + "code names it.\n" + bindings);
