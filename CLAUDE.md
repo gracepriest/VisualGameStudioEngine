@@ -16,7 +16,7 @@ BasicLang (a VB-like language + compiler), a cross-platform IDE (Avalonia), and 
 
 | Project | Lang | Role |
 |---|---|---|
-| BasicLang | C# | Compiler: preprocess → lex → parse → semantic → IR → optimize → backends (C#, LLVM, MSIL, C++); also runs as `--lsp` server and `--debug-adapter` |
+| BasicLang | C# | Compiler: preprocess → lex → parse → semantic → IR → optimize → backends (C#, C++, JavaScript, LLVM, MSIL); also runs as `--lsp` server and `--debug-adapter` |
 
 **IDE**
 
@@ -90,7 +90,7 @@ per-feature handlers, `CompletionService.cs`).
 
 VB-like syntax; classes / interfaces / modules; generics; pattern matching (`When`
 guards); LINQ; Async/Await; conditional compilation (`#If`/`#IfDef`/`#Else`/`#EndIf`);
-multi-file projects (Import/Using); .NET interop via `Using`; four backends. Source
+multi-file projects (Import/Using); .NET interop via `Using`; five backends. Source
 files: `.bas` (also `.mod`, `.cls`). In a `.cls` file, a
 first code-line `Option Public` marks the implicit class public (legacy bare `Public`
 still works but warns).

@@ -57,8 +57,81 @@ public class NewProjectWizardViewModelTests
         vm.SelectedLanguage = ProjectLanguage.BasicLang;
 
         var ids = vm.Backends.Select(b => b.SolutionType.Id).ToList();
-        Assert.That(ids, Is.EqualTo(new[] { "dotnet", "msil", "native", "llvm" }));
+        Assert.That(ids, Is.EqualTo(new[] { "dotnet", "msil", "native", "javascript", "llvm" }));
         Assert.That(vm.Backends.All(b => b.ToolchainId == null), Is.True);
+    }
+
+    // The JavaScript backend is a BasicLang backend like C# or Native C++ — the
+    // language stays BasicLang, only the output changes (a static web site).
+    // Before this option existed the wizard could not create a JavaScript
+    // project at all: every BasicLang path wrote <TargetBackend>CSharp</TargetBackend>.
+    [Test]
+    public void JavaScript_Backend_IsOffered_ForBasicLang_AndShowsOnlyWebTemplates()
+    {
+        var vm = NewVm(out _);
+        vm.SelectedLanguage = ProjectLanguage.BasicLang;
+
+        var js = vm.Backends.Single(b => b.SolutionType.Id == "javascript");
+        Assert.That(js.Name, Is.EqualTo("JavaScript (Web)"));
+        Assert.That(js.ToolchainId, Is.Null, "a BasicLang backend is never probe-gated");
+        Assert.That(js.IsEnabled, Is.True);
+
+        vm.SelectedBackend = js;
+
+        Assert.That(vm.VisibleTemplates.Select(t => t.Id), Is.EqualTo(new[] { "web-site" }),
+            "a JavaScript project must only offer templates whose code lowers to JavaScript");
+        Assert.That(vm.Categories, Is.EqualTo(new[] { "All", "Web" }));
+        Assert.That(vm.SelectedTemplate?.Id, Is.EqualTo("web-site"), "the single template auto-selects");
+        Assert.That(vm.CanGoNext, Is.True);
+    }
+
+    [Test]
+    public void JavaScript_Backend_HidesFrameworkAndCppStandardSelectors()
+    {
+        var vm = NewVm(out _);
+        vm.SelectedBackend = vm.Backends.First(b => b.SolutionType.Id == "javascript");
+
+        // No .NET target framework (there is no dotnet build) and no C++ standard
+        // (the language toggle is still BasicLang).
+        Assert.That(vm.ShowFrameworkSelector, Is.False);
+        Assert.That(vm.ShowCppStandardSelector, Is.False);
+    }
+
+    [Test]
+    public async Task CreateProject_JavaScript_UsesJavaScriptSolutionType_AndNoCppOptions()
+    {
+        var vm = NewVm(out var svc);
+        await vm.ToolchainProbeTask;
+        vm.SelectedLanguage = ProjectLanguage.BasicLang;
+        vm.SelectedBackend = vm.Backends.First(b => b.SolutionType.Id == "javascript");
+        vm.ProjectName = "MySite";
+        vm.Location = "X:/here";
+
+        ProjectCreationResult? got = null;
+        vm.ProjectCreated += (_, r) => got = r;
+
+        await vm.CreateProjectCommand.ExecuteAsync(null);
+
+        Assert.That(svc.LastOptions, Is.Not.Null);
+        Assert.That(svc.LastOptions!.SolutionType.Id, Is.EqualTo("javascript"));
+        Assert.That(svc.LastOptions.Template.Id, Is.EqualTo("web-site"));
+        Assert.That(svc.LastOptions.CppStandard, Is.Null);
+        Assert.That(svc.LastOptions.CppToolchain, Is.Null);
+        Assert.That(got, Is.Not.Null.And.Property("Success").True);
+    }
+
+    [Test]
+    public void SwitchingToCpp_AndBack_KeepsJavaScriptOffered()
+    {
+        // LoadBackends rebuilds the list on every language switch; the new option
+        // must survive the round trip, not only the first population.
+        var vm = NewVm(out _);
+        vm.SelectedLanguage = ProjectLanguage.Cpp;
+        Assert.That(vm.Backends.Any(b => b.SolutionType.Id == "javascript"), Is.False,
+            "C++ projects have no JavaScript backend");
+
+        vm.SelectedLanguage = ProjectLanguage.BasicLang;
+        Assert.That(vm.Backends.Any(b => b.SolutionType.Id == "javascript"), Is.True);
     }
 
     [Test]
