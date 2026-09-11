@@ -255,6 +255,21 @@ namespace BasicLang.Compiler.ProjectSystem
             else
             {
                 flags.Add("-std=" + request.CppStandard);
+                // The generated blnet runtime (blnet_runtime.hpp) guards its callback and
+                // invocation-queue tables with std::mutex/std::lock_guard/std::atomic, so every
+                // .NET-enabled native project needs a threading library at LINK time.
+                //
+                // ⛔ This is invisible on Linux and fatal on MinGW. Since glibc 2.34 the pthread
+                // symbols live in libc, so clang++/g++ resolve std::mutex with no flag at all and
+                // a Linux build of the very same project links clean. MinGW's POSIX threading
+                // model routes them through gthr-default.h to winpthreads, which is NOT on the
+                // link line by default — MEASURED as a wall of `undefined reference to
+                // pthread_mutex_init/destroy/lock/unlock` from EVERY translation unit, generated
+                // ones included. -pthread is the portable spelling: it is a no-op where the
+                // symbols are already in libc and pulls winpthreads where they are not.
+                //
+                // MSVC needs nothing — its standard library threading is built in.
+                flags.Add("-pthread");
                 flags.Add(request.Optimize ? "-O2" : "-O0");
                 if (request.DebugSymbols) flags.Add("-g");
                 foreach (var inc in request.IncludeDirs) flags.Add("-I" + inc);
