@@ -4567,6 +4567,28 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (node.BaseClass != null)
             {
                 var baseType = _typeManager.GetType(node.BaseClass);
+
+                // ⛔ _typeManager holds only THIS unit's declarations. A base declared in a
+                // sibling project file lives in GlobalScope — ImportImplicitProjectSymbols
+                // puts completed units' exported symbols there, RegisterPendingSiblingSignatures
+                // the not-yet-compiled ones (as a shell whose Members PopulateSiblingClassMembers
+                // fills in). Resolving there must come BEFORE the opaque-.NET arm below, or a
+                // real sibling base is misclassified as an external .NET type carrying an EMPTY
+                // Members dictionary: the build stays green and every inherited member silently
+                // degrades to Object. Without the lookup at all, a cross-file Inherits is a hard
+                // "Unknown base class" on any backend with no Using directive.
+                if (baseType == null &&
+                    !string.Equals(node.BaseClass, node.Name, StringComparison.OrdinalIgnoreCase))
+                {
+                    var siblingBase = GlobalScope.Resolve(node.BaseClass);
+                    if (siblingBase != null &&
+                        siblingBase.Kind == SymbolKind.Class &&
+                        siblingBase.Type != null)
+                    {
+                        baseType = siblingBase.Type;
+                    }
+                }
+
                 if (baseType == null)
                 {
                     if (_netNamespaces.Count > 0)
