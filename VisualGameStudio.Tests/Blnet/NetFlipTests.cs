@@ -534,13 +534,22 @@ public class NetFlipTests
                 $"ManagedOwned '{name}' must map to the NetRef handle (spec §12.4)");
         }
 
-        foreach (var category in new[]
+        foreach (var category in OtherRegistryCategories)
         {
-            BoundaryTypeCategory.NativeOwned, BoundaryTypeCategory.Bridged,
-            BoundaryTypeCategory.Rejected,
-        })
-        {
-            foreach (var name in BoundaryTypeRegistry.NamesInCategory(category))
+            var names = BoundaryTypeRegistry.NamesInCategory(category);
+
+            // NamesInCategory's switch ends in `_ => Array.Empty<string>()`, so enumerating
+            // the enum is NOT by itself coverage of a future fifth category: a new value with
+            // no arm contributes nothing and the loop below runs zero times for it. THIS
+            // assertion is what makes the enumeration meaningful — a category with no arm (or
+            // an emptied one) fails here instead of silently weakening the sweep.
+            Assert.That(names, Is.Not.Empty,
+                $"BoundaryTypeRegistry.NamesInCategory({category}) answered EMPTY. Either the "
+                + "category lost its names or it has no arm in NamesInCategory's switch (which "
+                + "falls through to Array.Empty). Give it an arm — otherwise every mechanical "
+                + "§12.4 sweep that iterates the categories skips it in silence.");
+
+            foreach (var name in names)
             {
                 Assert.That(gen.Map(new TypeInfo(name, TypeKind.Class)),
                     Is.Not.EqualTo("BasicLang::NetRef"),
@@ -548,6 +557,16 @@ public class NetFlipTests
             }
         }
     }
+
+    /// <summary>
+    /// Every registry category except ManagedOwned (the one under test) and Unknown (which is
+    /// "not a registry name" by definition and has no name list). DERIVED from the enum, not
+    /// spelled out: a hand-written array literal silently skips a category added later.
+    /// </summary>
+    private static IEnumerable<BoundaryTypeCategory> OtherRegistryCategories =>
+        Enum.GetValues<BoundaryTypeCategory>()
+            .Where(c => c != BoundaryTypeCategory.ManagedOwned
+                        && c != BoundaryTypeCategory.Unknown);
 
     /// <summary>
     /// §12.4: <c>Categorize</c> checks ManagedOwned before Rejected, so an overlap would
@@ -559,34 +578,162 @@ public class NetFlipTests
         var managedOwned = BoundaryTypeRegistry.NamesInCategory(BoundaryTypeCategory.ManagedOwned);
         var rejected = BoundaryTypeRegistry.NamesInCategory(BoundaryTypeCategory.Rejected);
 
+        Assert.That(managedOwned, Is.Not.Empty,
+            "guard: ManagedOwned is empty, so ∅ ∩ X = ∅ proves nothing");
+        // The SECOND guard, and the one that was missing: Rejected holds exactly one name
+        // today ("Object"). Emptying it makes the intersection trivially empty and leaves this
+        // test green while the invariant it claims to hold has become unfalsifiable.
+        Assert.That(rejected, Is.Not.Empty,
+            "guard: Rejected is empty, so the intersection below is ∅ for a reason that has "
+            + "nothing to do with the invariant. 'Object' is permanently Rejected (§6.4: void* "
+            + "erasure is unsound) — if it really left the set, this test needs re-deriving, "
+            + "not deleting.");
+
         Assert.That(managedOwned.Intersect(rejected, StringComparer.OrdinalIgnoreCase),
             Is.Empty,
             "ManagedOwned ∩ Rejected must be ∅ — Categorize checks ManagedOwned first, so "
             + "an overlapping name would silently resolve ManagedOwned and never reject");
     }
 
+    // ------------------------------------------------------------------------------------
+    // §12.4's OTHER codegen route: MapTypeName (the name-string one).
+    //
+    // MapType (above) is keyed on a TypeInfo and is what declarations go through. Delegate
+    // PARAMETERS — and interface-method parameters whose Type is null — go through
+    // CppCodeGenerator.MapTypeName instead, a separate `switch` with its own default arm.
+    // Until now that second route was pinned by ONE hard-coded name (Regex) and had no
+    // negative half at all, so a default arm that stopped answering NetRef would have been
+    // caught for Regex and missed for the other four ManagedOwned names.
+    // ------------------------------------------------------------------------------------
+
     /// <summary>
-    /// The name-string mapping route (delegate PARAMETERS go through MapTypeName, not
-    /// MapType) must compose too, or a `Delegate Sub F(r As Regex)` parameter emits a
-    /// bare undefined C++ name.
+    /// One delegate alias, emitted through the real pipeline, or the reason the pipeline
+    /// refused the shape. Refusals are RETURNED rather than thrown so the sweeps below can
+    /// pin them as outcomes instead of skipping the name (a skip is a pass-by-absence).
     /// </summary>
-    [Test]
-    public void DelegateParameterOfAManagedOwnedType_ComposesToNetRef()
+    private static (string Alias, string Refusal) EmitDelegateAlias(string parameterTypeName)
     {
-        var cpp = CompileToCppWithResolver("""
-            Delegate Sub Handler(r As Regex)
+        var source = $"""
+            Delegate Sub Handler(p As {parameterTypeName})
 
             Module M
              Sub Main()
               Console.WriteLine("done")
              End Sub
             End Module
-            """);
-        Assert.That(cpp, Does.Contain("BasicLang::NetRef"),
-            "a ManagedOwned delegate parameter must map to the NetRef handle through the "
-            + "MapTypeName route:\n" + cpp);
-        Assert.That(cpp, Does.Not.Contain("(Regex)"),
-            "the bare undefined C++ name must not leak into the delegate alias:\n" + cpp);
+            """;
+
+        try
+        {
+            var parser = new Parser(new Lexer(source).Tokenize());
+            var ast = parser.Parse();
+            if (parser.Errors.Count > 0)
+                return (null, "parse: " + parser.Errors[0].Message);
+
+            var analyzer = new SemanticAnalyzer();
+            analyzer.ConfigureNetResolution(() => SharedResolver.Value, nativeBackend: true);
+            if (!analyzer.Analyze(ast))
+                return (null, "semantic: " + analyzer.Errors[0].Message);
+            if (analyzer.NetDiagnostics.Count > 0)
+                return (null, "net: " + analyzer.NetDiagnostics[0].Code);
+
+            var module = new IRBuilder(analyzer).Build(ast, "TestModule");
+            var cpp = new CppCodeGenerator(new CppCodeGenOptions { GenerateComments = false })
+                .Generate(module);
+
+            var alias = cpp.Split('\n')
+                .Select(l => l.Trim())
+                .FirstOrDefault(l => l.StartsWith("using Handler =", StringComparison.Ordinal));
+            return alias == null
+                ? (null, "no `using Handler = …` line was emitted:\n" + cpp)
+                : (alias, null);
+        }
+        catch (Exception ex)
+        {
+            return (null, ex.GetType().Name + ": " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// §12.4, positive half on the MapTypeName route: EVERY ManagedOwned name — not just
+    /// Regex — composes to the NetRef handle in delegate-parameter position, asserted as the
+    /// EXACT emitted alias rather than a substring.
+    ///
+    /// <para>The exact line matters: the always-spliced NetRef runtime declares
+    /// <c>class NetRef</c> inside <c>namespace BasicLang</c> and never spells the qualified
+    /// <c>BasicLang::NetRef</c>, so a bare <c>Does.Contain</c> is discriminating here — but it
+    /// would still pass if the handle landed in the RETURN position instead of the parameter,
+    /// or alongside a leaked bare name. The whole alias pins the shape.</para>
+    /// </summary>
+    [Test]
+    public void EveryManagedOwnedName_ComposesToNetRef_ThroughTheDelegateParameterRoute()
+    {
+        var managedOwned = BoundaryTypeRegistry.NamesInCategory(BoundaryTypeCategory.ManagedOwned);
+        Assert.That(managedOwned, Is.Not.Empty,
+            "guard: ManagedOwned is empty, so this sweep proves nothing");
+
+        foreach (var name in managedOwned)
+        {
+            var (alias, refusal) = EmitDelegateAlias(name);
+            Assert.That(refusal, Is.Null,
+                $"`Delegate Sub Handler(p As {name})` must compile on the native path — a "
+                + "ManagedOwned name is legal in every DECLARATION position after the flip "
+                + $"(§11.4). Refused with: {refusal}");
+            Assert.That(alias, Is.EqualTo("using Handler = std::function<void(BasicLang::NetRef)>;"),
+                $"ManagedOwned '{name}' must reach the delegate alias as the NetRef handle "
+                + "through CppCodeGenerator.MapTypeName's default arm (the MapType route is a "
+                + "DIFFERENT switch and does not cover this one). Got: " + alias);
+        }
+    }
+
+    /// <summary>
+    /// §12.4, the negative half the MapTypeName route never had: no NativeOwned, Bridged or
+    /// Rejected name may reach a delegate parameter as the NetRef handle. Asserted on the
+    /// emitted alias, with every REFUSED name pinned by name — a refusal is an outcome to
+    /// record, not a case to skip.
+    ///
+    /// <para><b>What this does NOT claim.</b> The alias spellings themselves are not pinned
+    /// here: <c>MapTypeName</c> has no arm for <c>Char</c>, <c>UByte</c>, <c>UShort</c>,
+    /// <c>UInteger</c> or <c>ULong</c>, so those Bridged names fall to <c>SanitizeName</c> and
+    /// emit a bare, undefined C++ name. That is a real pre-existing gap in the name-string
+    /// route (<c>MapType</c> handles them), and it is NOT this test's invariant — pinning the
+    /// bare spelling as "expected" would pin the gap. The §12.4 claim, and all this asserts,
+    /// is that none of them becomes a NetRef.</para>
+    /// </summary>
+    [Test]
+    public void NoOtherRegistryName_ComposesToNetRef_ThroughTheDelegateParameterRoute()
+    {
+        var refused = new List<string>();
+
+        foreach (var category in OtherRegistryCategories)
+        {
+            foreach (var name in BoundaryTypeRegistry.NamesInCategory(category))
+            {
+                var (alias, refusal) = EmitDelegateAlias(name);
+                if (refusal != null)
+                {
+                    refused.Add(name);
+                    continue;
+                }
+
+                Assert.That(alias, Does.Not.Contain("BasicLang::NetRef"),
+                    $"{category} '{name}' reached a delegate parameter as the NetRef handle. "
+                    + "§12.4 scopes the handle representation to ManagedOwned: fix "
+                    + "CppCodeGenerator.MapTypeName's default arm (it must test "
+                    + "Categorize(...) == ManagedOwned, not `!= Unknown`). Got: " + alias);
+            }
+        }
+
+        // MEASURED, not assumed: the refusal set is EMPTY — every one of the 22 NativeOwned /
+        // Bridged / Rejected names compiles in delegate-parameter position, `Void` included
+        // (it emits `std::function<void(void)>`, which is legal C++). So the loop above really
+        // did assert on all of them. This assertion exists so that stays true: a name that
+        // STARTS being refused would silently drop out of the sweep, and the loop would keep
+        // passing while covering less.
+        Assert.That(refused, Is.Empty,
+            "a registry name the native pipeline used to accept in delegate-parameter position "
+            + "is now refused, so it is no longer covered by the NetRef assertion above. Find "
+            + "out why it broke — do NOT add it to an exempt list to make this green.");
     }
 
     // ------------------------------------------------------------------------------------

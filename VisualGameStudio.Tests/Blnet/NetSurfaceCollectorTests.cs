@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using BasicLang;
+using BasicLang.Compiler;
 using BasicLang.Compiler.CodeGen.CPlusPlus;
 using BasicLang.Compiler.CodeGen.Net;
 using BasicLang.Compiler.IR;
@@ -286,6 +287,107 @@ public class NetSurfaceCollectorTests
             + "(Exact) carriage may be collected — an unlowerable member in the surface is a "
             + "proxy slot and a shim export with no call site, and potentially the wrong "
             + "overload. FIX NetSurfaceCollector.IsCollectable, not this test.");
+    }
+
+    // ------------------------------------------------------------------------------------
+    // §12.4's claim invariant at the granularity that actually decides the shim: PRESENCE IN
+    // THE COLLECTED SURFACE.
+    //
+    // Everywhere else "shim-routed" is asserted negatively — a name is not claimed, not
+    // annotated, not carried. Those are all statements about the analyzer. The surface is what
+    // the shim is GENERATED FROM, so the positive statement — "this member reached the surface
+    // and that one did not" — is the one a proxy slot and a shim export actually follow from,
+    // and it was asserted nowhere for a program built from real BasicLang source.
+    // ------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Parses, analyzes (resolver armed, NATIVE path) and lowers real BasicLang source, the way
+    /// the build does — the shape <c>NetIrCarriageTests.BuildIrFromSource</c> uses, plus the
+    /// <c>ConfigureNetResolution</c> call that makes carriage happen at all.
+    /// </summary>
+    private static IRModule BuildIrWithResolver(string source)
+    {
+        var parser = new Parser(new Lexer(source).Tokenize());
+        var ast = parser.Parse();
+        Assert.That(parser.Errors, Is.Empty,
+            "parse errors:\n" + string.Join("\n", parser.Errors.Select(e => e.Message)));
+
+        var analyzer = new SemanticAnalyzer();
+        analyzer.ConfigureNetResolution(() => SharedResolver.Value, nativeBackend: true);
+        Assert.That(analyzer.Analyze(ast), Is.True,
+            "semantic errors:\n" + string.Join("\n", analyzer.Errors.Select(e => e.Message)));
+        Assert.That(analyzer.NetDiagnostics, Is.Empty,
+            "the probe program must be CLEAN, or a finding — not the claim predicate — is what "
+            + "kept a member out of the surface: " + string.Join(" | ",
+                analyzer.NetDiagnostics.Select(d => d.Code + ": " + d.Message)));
+
+        return new IRBuilder(analyzer).Build(ast, "TestModule");
+    }
+
+    /// <summary>
+    /// Spec §12.4, row (c) at surface granularity. One program, three static calls on two
+    /// types the analyzer resolves identically well, split by the claim predicate alone:
+    ///
+    /// <list type="bullet">
+    ///   <item><description><c>Console.WriteLine</c> — CLAIMED (table membership AND a real
+    ///     <c>EmitStdLibCall</c> arm), so it is emitted natively and must be ABSENT from the
+    ///     surface. Its presence would mean every existing program grows a proxy slot for its
+    ///     printing.</description></item>
+    ///   <item><description><c>Console.ReadKey</c> — in the same table, NO emit arm, so
+    ///     shim-routed and PRESENT.</description></item>
+    ///   <item><description><c>File.ReadAllText</c> — likewise.</description></item>
+    /// </list>
+    ///
+    /// <para>The two shim-routed members' <c>DeclaringTypeFullName</c>s are pinned as well: the
+    /// surface is keyed on the declaring type, so a member that reached it under the wrong type
+    /// would mint an export the native side cannot link against.</para>
+    /// </summary>
+    [Test]
+    public void ClaimedCallsAreAbsentFromTheSurface_AndShimRoutedOnesArePresent()
+    {
+        var module = BuildIrWithResolver("""
+            Module M
+             Sub Main()
+              Console.WriteLine("x")
+              Console.ReadKey()
+              File.ReadAllText("a.txt")
+             End Sub
+            End Module
+            """);
+
+        var surface = Collect(modules: new[] { module });
+
+        Assert.That(surface.Members.Select(m => m.Name),
+            Is.EquivalentTo(new[] { "ReadKey", "ReadAllText" }),
+            "the collected surface is the set of members the shim is GENERATED FROM. "
+            + "Console.WriteLine must not be in it (claimed — §6.5 row (c): table membership "
+            + "AND an EmitStdLibCall arm), and both unclaimed calls must be. A WriteLine here "
+            + "means every existing program now pays a proxy slot to print; a missing ReadKey "
+            + "or ReadAllText means a call the native backend cannot emit has no shim route "
+            + "either. Got: " + string.Join(" | ", surface.Members.Select(
+                m => m.DeclaringTypeFullName + "." + m.Name)));
+
+        Assert.That(
+            surface.Members.Select(m => m.DeclaringTypeFullName + "." + m.Name),
+            Is.EquivalentTo(new[] { "System.Console.ReadKey", "System.IO.File.ReadAllText" }),
+            "a surface member must carry the DECLARING type the export is mangled from "
+            + "(§7.3) — the bare BasicLang receiver spelling would collide across types.");
+
+        // PROVENANCE, asserted AFTER the payload on purpose. These three are the predicate
+        // answers that produce the split above; putting them first made a mutation to the
+        // predicate fail HERE instead of on the surface assertion, so the thing this test
+        // exists to hold — that the answer reaches the collected surface — was never
+        // exercised under mutation. They stay because a failure above should say which
+        // predicate answer moved; they do not stand in for it.
+        Assert.Multiple(() =>
+        {
+            Assert.That(NetClaimPredicate.IsClaimedCall("Console", "WriteLine"), Is.True,
+                "row (c): table membership AND a real EmitStdLibCall arm");
+            Assert.That(NetClaimPredicate.IsClaimedCall("Console", "ReadKey"), Is.False,
+                "row (c) is PER CALL — same receiver, no emit arm");
+            Assert.That(NetClaimPredicate.IsClaimedCall("File", "ReadAllText"), Is.False,
+                "in the table, no emit arm");
+        });
     }
 
     /// <summary>

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using BasicLang;
@@ -5,6 +6,8 @@ using BasicLang.Compiler.CodeGen.CPlusPlus;
 using BasicLang.Compiler.IR;
 using BasicLang.Net;
 using NUnit.Framework;
+using TypeInfo = BasicLang.Compiler.SemanticAnalysis.TypeInfo;
+using TypeKind = BasicLang.Compiler.SemanticAnalysis.TypeKind;
 
 namespace VisualGameStudio.Tests.Blnet;
 
@@ -210,12 +213,74 @@ public class NetClaimPredicateTests
             + "\"math.abs\", and the bare \"abs\" arm does not match it.)");
     }
 
+    // ====================================================================================
+    // Rows (a)/(b) against the CHECKER ITSELF — spec §12.4's "the resolver's exclusion set ≡
+    // the backend's claim set", name-granular half.
+    //
+    // ⚠ THE EQUIVALENCE IS NOT SYMMETRIC, and reading it as symmetric is the trap. Post-flip
+    // CppCapabilityChecker.CheckType ALSO early-returns on ManagedOwned (Regex/Uri/Stream/
+    // FileInfo/DirectoryInfo lower to the BasicLang::NetRef handle) — which is precisely the
+    // SHIM-ROUTED category the predicate must NOT claim. So "checker silent ⇒ predicate
+    // claims" is FALSE by design. The two honest directions, both asserted below:
+    //
+    //   (1) predicate claims  ⇒ checker silent
+    //                            (RowBAgreesWithTheCapabilityCheckersEarlyReturns)
+    //   (2) checker reports   ⇒ predicate does not claim
+    //                                            (CheckerRejectedNamesAreNeverClaimed)
+    //
+    // and the one shape that sits in the gap between them is pinned as a single invariant in
+    // ManagedOwnedIsCheckerSilentAndUnclaimed — the divergence itself, not two half-facts in
+    // two fixtures.
+    //
+    // ⚠ RowBAgreesWithTheCapabilityCheckersEarlyReturns keeps its NAME deliberately:
+    // NetClaimPredicate.cs's row-(b) comment names it as the test that holds the equivalence.
+    // The name was never the problem — the body was.
+    // ====================================================================================
+
     /// <summary>
-    /// Row (b) mirrors <see cref="CppCapabilityChecker"/>'s early returns, which live in a private
-    /// method and so cannot be called directly. This drives the checker through its public entry
-    /// point instead: a claimed type name used in a signature position must draw NO capability
-    /// diagnostic. If the checker stops treating one of these natively, the predicate is now
-    /// claiming a name the backend cannot emit, and the name below says which.
+    /// Runs the REAL <see cref="CppCapabilityChecker"/> over a module whose only interesting
+    /// feature is one function parameter of <paramref name="parameterType"/>, and returns its
+    /// diagnostics. <c>CheckType</c> is private and reports by side effect, so the public
+    /// <c>Check(IRModule)</c> entry point is the only way to observe its early returns — which
+    /// is what row (b) claims to mirror.
+    ///
+    /// <para>A PARAMETER position is used deliberately: it is one of the positions
+    /// <c>Check</c> feeds straight to <c>CheckType</c>, with no instruction-level pass in the
+    /// way, so a diagnostic here is unambiguously <c>CheckType</c>'s.</para>
+    /// </summary>
+    private static List<string> CheckerDiagnosticsFor(TypeInfo parameterType)
+    {
+        var module = new IRModule("ClaimProbeModule");
+        var probe = new IRFunction("Probe", new TypeInfo("Void", TypeKind.Void));
+        probe.Parameters.Add(new IRVariable("p", parameterType) { IsParameter = true });
+        var entry = new BasicBlock("entry");
+        entry.AddInstruction(new IRReturn());
+        probe.Blocks.Add(entry);
+        probe.EntryBlock = entry;
+        module.Functions.Add(probe);
+
+        return new CppCapabilityChecker().Check(module);
+    }
+
+    private static TypeInfo ClassType(string name, params string[] genericArguments)
+    {
+        var type = new TypeInfo(name, TypeKind.Class);
+        foreach (var argument in genericArguments)
+            type.GenericArguments.Add(new TypeInfo(argument, TypeKind.Primitive));
+        return type;
+    }
+
+    /// <summary>
+    /// Direction (1): every name rows (a)/(b) CLAIM must be one the capability checker accepts
+    /// in a signature position. A claimed name the checker rejects is a name the predicate is
+    /// keeping away from the shim while the backend cannot emit it either — the program would
+    /// simply have no lowering at all.
+    ///
+    /// <para>This is the assertion whose doc comment already said it "drives the checker through
+    /// its public entry point" while in fact asserting only <c>IsClaimedTypeName(name) Is.True</c>
+    /// over eight literals — a restatement of the predicate, with no <c>new CppCapabilityChecker</c>
+    /// anywhere in the test project. It now actually runs the checker; the name is unchanged
+    /// because <c>NetClaimPredicate</c>'s row-(b) comment cites it by that name.</para>
     /// </summary>
     [TestCase("List")]
     [TestCase("Dictionary")]
@@ -225,12 +290,153 @@ public class NetClaimPredicateTests
     [TestCase("Action")]
     [TestCase("DateTime")]
     [TestCase("String")]
+    [TestCase("InvalidOperationException")]
+    [TestCase("std::vector")]
     public void RowBAgreesWithTheCapabilityCheckersEarlyReturns(string name)
     {
         Assert.That(NetClaimPredicate.IsClaimedTypeName(name), Is.True,
-            $"'{name}' is an early return in CppCapabilityChecker.CheckType (CppCapabilityChecker.cs:"
-            + "590-625) but the predicate does not claim it. Fix NetClaimPredicate's row (b) list to "
-            + "match those early returns.");
+            $"guard: '{name}' is no longer claimed, so the checker assertion below would be "
+            + "asserting nothing about rows (a)/(b). Fix NetClaimPredicate, or move the name.");
+
+        Assert.That(CheckerDiagnosticsFor(ClassType(name)), Is.Empty,
+            $"the claim predicate claims '{name}' but CppCapabilityChecker REJECTS it in a "
+            + "parameter position. Rows (a)/(b) must mirror CheckType's early returns "
+            + "(CppCapabilityChecker.cs:774-824): a claimed name the backend cannot emit is "
+            + "kept out of the shim AND has no native lowering, so the program has neither.");
+    }
+
+    /// <summary>
+    /// Direction (2): a name the checker REPORTS must not be claimed — it has no native
+    /// lowering, so the shim is the only route it could ever take, and claiming it would strand
+    /// it. Includes the two halves of the arity-sensitive <c>IEnumerable</c> rule, which is the
+    /// only name in the predicate that reads <c>genericArgumentCount</c> at all.
+    /// </summary>
+    [TestCase("ZzqNotATypeAnyoneDeclared", 0)]
+    [TestCase("IEnumerable", 0)]
+    public void CheckerRejectedNamesAreNeverClaimed(string name, int genericArgumentCount)
+    {
+        var type = genericArgumentCount == 0 ? ClassType(name) : ClassType(name, "Integer");
+        var diagnostics = CheckerDiagnosticsFor(type);
+
+        Assert.That(diagnostics.Any(d => d.Contains("no C++ mapping")), Is.True,
+            $"guard: CppCapabilityChecker no longer rejects '{name}' with "
+            + $"{genericArgumentCount} generic argument(s), so the claim assertion below is not "
+            + "testing the direction it says it is. Re-derive the case. Got: "
+            + string.Join(" | ", diagnostics));
+
+        Assert.That(NetClaimPredicate.IsClaimedTypeName(name, genericArgumentCount), Is.False,
+            $"'{name}' has NO native lowering (the checker says so, above) yet the predicate "
+            + "claims it — so it never reaches NetTypeResolver and never reaches the shim "
+            + "either. Fix NetClaimPredicate row (b).");
+    }
+
+    /// <summary>
+    /// The other half of the <c>IEnumerable</c> rule: <c>IEnumerable(Of T)</c> lowers to
+    /// <c>BasicLang::Generator&lt;T&gt;</c>, so it is claimed AND checker-silent, while the
+    /// non-generic <c>System.Collections.IEnumerable</c> (asserted above) is neither.
+    /// </summary>
+    [Test]
+    public void GenericIEnumerableIsClaimedAndCheckerSilent()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(NetClaimPredicate.IsClaimedTypeName("IEnumerable", 1), Is.True,
+                "IEnumerable(Of T) lowers to BasicLang::Generator<T> — row (b) must claim it, "
+                + "or an iterator's element type routes through the shim.");
+            Assert.That(CheckerDiagnosticsFor(ClassType("IEnumerable", "Integer")), Is.Empty,
+                "…and CppCapabilityChecker must accept it (CheckType's "
+                + "`IEnumerable` + GenericArguments.Count > 0 arm).");
+        });
+    }
+
+    /// <summary>
+    /// <b>The known §12.4 divergence, pinned as ONE invariant.</b> A ManagedOwned name is
+    /// checker-SILENT (post-flip <c>CheckType</c> early-returns on it: the value lowers to the
+    /// always-emitted <c>BasicLang::NetRef</c> handle) and deliberately NOT claimed (§6.5 row (a)
+    /// is {NativeOwned, Bridged}, because ManagedOwned is the SHIM-ROUTED category — claiming it
+    /// would make spec §4.2's <c>Regex_Match__string</c> slot ungeneratable).
+    ///
+    /// <para>Both halves together are what makes "checker silent ⇒ predicate claims" false, and
+    /// they were previously two unrelated facts in two fixtures (a predicate-only assertion here,
+    /// a build-level "no 'no C++ mapping' blob" in <c>NetFlipTests</c>) with nothing saying they
+    /// were the same invariant. Asserting them side by side is the point: a future edit that
+    /// "restores symmetry" by claiming ManagedOwned, or by making the checker reject it, breaks
+    /// exactly one of these two lines and the message names which direction moved.</para>
+    /// </summary>
+    [Test]
+    public void ManagedOwnedIsCheckerSilentAndUnclaimed()
+    {
+        var managedOwned = BoundaryTypeRegistry.NamesInCategory(BoundaryTypeCategory.ManagedOwned);
+        Assert.That(managedOwned, Is.Not.Empty,
+            "guard: ManagedOwned is empty, so the divergence below is unobservable and this "
+            + "test proves nothing — the P2a-2 registry flip did not land.");
+
+        foreach (var name in managedOwned)
+        {
+            Assert.That(CheckerDiagnosticsFor(ClassType(name)), Is.Empty,
+                $"ManagedOwned '{name}' must be CHECKER-SILENT — CheckType's ManagedOwned arm "
+                + "(CppCapabilityChecker.cs:790) lets it through because MapType lowers it to "
+                + "BasicLang::NetRef. If this went red, the flip's checker half regressed.");
+            Assert.That(NetClaimPredicate.IsClaimedTypeName(name), Is.False,
+                $"ManagedOwned '{name}' must NOT be claimed — it is the SHIM-ROUTED category. "
+                + "This is the deliberate asymmetry: the checker is silent for it and the "
+                + "predicate still hands it to NetTypeResolver. Fix NetClaimPredicate row (a) "
+                + "back to {NativeOwned, Bridged}, never to `!= Unknown`.");
+        }
+    }
+
+    /// <summary>
+    /// §12.4 row (a), the mechanical POSITIVE sweep it never had: EVERY NativeOwned and Bridged
+    /// name is claimed — not just the two literals (<c>String</c>, <c>DateTime</c>) the
+    /// <see cref="ClaimedTypeNames"/> cases spell out.
+    ///
+    /// <para><b>Honesty note.</b> <c>IsClaimedTypeName</c> derives row (a) from
+    /// <c>BoundaryTypeRegistry.Categorize</c>, and this loop enumerates the same registry — so
+    /// the claim half below cannot fail while the predicate keeps reading the registry, and it is
+    /// a completeness guard (no name in either category is missed), not independent evidence that
+    /// row (a) is correct. The CHECKER assertion beside it is the independent half: it proves
+    /// each of those names really is an early return in <c>CheckType</c>.</para>
+    /// </summary>
+    [Test]
+    public void EveryNativeOwnedAndBridgedName_IsClaimed_AndCheckerSilent()
+    {
+        var nativelyHandled = BoundaryTypeRegistry.NamesInCategory(BoundaryTypeCategory.NativeOwned)
+            .Concat(BoundaryTypeRegistry.NamesInCategory(BoundaryTypeCategory.Bridged))
+            .ToList();
+
+        Assert.That(nativelyHandled, Is.Not.Empty,
+            "guard: both natively-handled categories are empty, so this sweep proves nothing");
+
+        foreach (var name in nativelyHandled)
+        {
+            Assert.That(NetClaimPredicate.IsClaimedTypeName(name), Is.True,
+                $"'{name}' is registry-category natively handled but the predicate does not "
+                + "claim it — it would route through the shim. Fix NetClaimPredicate row (a).");
+            Assert.That(CheckerDiagnosticsFor(ClassType(name)), Is.Empty,
+                $"'{name}' is claimed as natively handled but CppCapabilityChecker rejects it "
+                + "in a parameter position — the claim is a promise the backend does not keep.");
+        }
+    }
+
+    /// <summary>
+    /// <c>Object</c> is the one registry name that is BOTH unclaimed and checker-REJECTED: it is
+    /// permanently <see cref="BoundaryTypeCategory.Rejected"/> (void* erasure is unsound), so it
+    /// has neither a native lowering nor a shim route. The clearest instance of direction (2),
+    /// and the contrast that makes the ManagedOwned divergence legible.
+    /// </summary>
+    [Test]
+    public void RejectedObjectIsNeitherClaimedNorCheckerSilent()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(NetClaimPredicate.IsClaimedTypeName("Object"), Is.False,
+                "Rejected is diagnosed (BL6019), never claimed — §6.5 row (a) is "
+                + "{NativeOwned, Bridged}.");
+            Assert.That(
+                CheckerDiagnosticsFor(ClassType("Object")).Any(d => d.Contains("'Object' has no C++ mapping")),
+                Is.True,
+                "CppCapabilityChecker must keep rejecting Object outright.");
+        });
     }
 
     /// <summary>

@@ -64,15 +64,28 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         public string GeneratedCode => _output.ToString();
 
         /// <summary>
-        /// Test-only mirror of the candidate ambient set <see cref="Generate"/> seeds
-        /// <c>_usings</c> with. Exists so
-        /// <c>NetAmbientNamespaceTests.CSharpBackendAndResolverShareOneAmbientSet</c> can assert
-        /// this backend and <see cref="NetAmbientNamespaces"/> never drift apart without
-        /// reimplementing <see cref="Generate"/>'s setup. NOTE: despite the file name
-        /// (<c>CSharpBackend.cs</c>), the class is <c>ImprovedCSharpCodeGenerator</c> — there is no
-        /// type literally named <c>CSharpBackend</c> anywhere in the codebase.
+        /// Test-only view of the candidate <c>using</c> set THIS INSTANCE actually built —
+        /// read after <see cref="Generate"/> has run. Exists so
+        /// <c>NetAmbientNamespaceTests.GenerateSeedsEveryAmbientNamespaceIntoItsCandidateUsings</c>
+        /// can hold spec §12.4's "the ambient set used by NetTypeResolver ≡ the one used by
+        /// CSharpBackend" against what <see cref="Generate"/> DID rather than against the
+        /// constant it was supposed to read.
+        ///
+        /// <para><b>Why it is an instance view and not a static alias.</b> This member used to be
+        /// <c>static … =&gt; NetAmbientNamespaces.All</c>, which made the drift test compare the
+        /// shared constant with itself: it could not fail under ANY edit to the seeding loop in
+        /// <see cref="Generate"/>, including deleting the loop outright. Exposing <c>_usings</c>
+        /// instead puts the assertion on the generator's own state, so "the backend reads the
+        /// shared constant" becomes a measurable fact.</para>
+        ///
+        /// <para>The set is a SUPERSET of <see cref="NetAmbientNamespaces.All"/> by design:
+        /// <see cref="Generate"/> also adds the program's own <c>Using</c> directives and every
+        /// stdlib-required import. Nothing removes from it, and emission filters a separate
+        /// <c>_usedNamespaces</c> set — so reading this changes no output. NOTE: despite the file
+        /// name (<c>CSharpBackend.cs</c>), the class is <c>ImprovedCSharpCodeGenerator</c> — there
+        /// is no type literally named <c>CSharpBackend</c> anywhere in the codebase.</para>
         /// </summary>
-        internal static IReadOnlyList<string> AmbientNamespacesForTest => NetAmbientNamespaces.All;
+        internal IReadOnlyCollection<string> CandidateUsingsForTest => _usings;
 
         // Names of functions/subs defined by the user program. A user definition
         // shadows a stdlib builtin of the same name (e.g. a user "Run" must call
