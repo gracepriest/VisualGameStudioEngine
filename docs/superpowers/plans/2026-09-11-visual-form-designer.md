@@ -321,6 +321,16 @@ test `VisualGameStudio.Tests/Compiler/FormRegionWriterTests.cs` (create)
       `AddHandler el.click, …` emits `el.click.add(H)` → runtime `TypeError`. (`click` resolves on
       `Element` — `dom-core.bli:56`, members are `OrdinalIgnoreCase` per `SymbolTable.cs:111` — so this
       is the event-call rewrite firing on a resolved method, not an `IsNetType` degradation.)
+- [ ] ⛔⛔ **Emit handlers BEFORE the region that wires them** (D8's ordering rule). `AddressOf` to a
+      later-declared `Sub` erases parameter types to `Action(Of Object)` and hard-errors against
+      `Action(Of DomEvent)` — measured, in both a `Class` and a `Module`. This is the opposite of the
+      shipped WinForms template order; emitting handlers first is correct for **both** targets.
+- [ ] ⛔ On the web, never emit any of these three green-build-then-fail shapes (all measured):
+      a lambda calling an unqualified method of the enclosing class (emits a bare identifier →
+      `ReferenceError`); `Me.Method()` inside a lambda (hard error, class members not populated); a
+      qualified module call like `LoginForm.InitializeComponent()` (JS has no module container →
+      `ReferenceError`). The correct web emission is `AddressOf` with the handler declared first, which
+      produces `this.btnLogin_Click.bind(this)`.
 - [ ] ⛔ Names: **type** names must be PascalCase without `_` (`SemanticAnalyzer.cs:2050`, `:7940`);
       control **identifiers** may contain `_` freely, and both shipped templates use camelCase control
       names, so do not require PascalCase there. ℹ️ `Private` fields are correct here — the region and
@@ -347,7 +357,10 @@ output directory. This is built here, not reused.
       reusing the emitter's own `outputDirectory` makes them agree instead of adding a third path.
 - [ ] Form pages **always overwrite**. `index.html` (`JavaScriptEmitter.cs:109-114`) and `package.json`
       (`:143-148`) remain the only never-overwrite files and stay untouched.
-- [ ] `Main()` dispatches on `doc.body.getAttribute("data-form")` (`dom-core.bli:49`). One generated
+- [ ] `Main()` dispatches on the body's `data-form` attribute. ⛔ **Two steps, not chained** — measured:
+      `doc.body.getAttribute("data-form")` types as `Object` and hard-errors on assignment to `String`,
+      because chained access through a declared `Property` loses its type. Emit
+      `Dim b As Element = doc.body` then `Dim n As String = b.getAttribute("data-form")`. One generated
       top-level name, project-wide — collision-checked once by `--check` with `BL8031`.
 - [ ] **F5 opens `/<StartupForm>.html`, not `/`.** `WebPreviewServer.cs:162` maps only the bare root to
       `index.html` (404 at `:165-170`), and F5 hands the browser the root URL
@@ -509,6 +522,16 @@ statement back to the `.bas` — so breakpoints in the generated region land on 
         touch `CollectExportedSymbols`). ⚠ Affects any user with a multi-file class hierarchy.
       - **`With` IR drop** (`IRBuilder.cs:3356`, `:2866`) and **`With` over a .NET receiver**
         (`SemanticAnalyzer.cs:6939`).
+      - **Four JavaScript-backend defects measured 2026-09-11**, each a green build: a lambda calling
+        an unqualified method of the enclosing class emits a **bare identifier** (`ReferenceError` at
+        runtime); `Me.Method()` inside a lambda hard-errors because class members are not populated
+        (*"Available members: btn, .ctor0"*); a **qualified module call** emits a reference to a
+        container JS does not have (`ReferenceError`); and **chained access through a declared
+        `Property`** loses its type (`doc.body.getAttribute(…)` → `Object`). The first and third are
+        runtime failures from clean builds — the highest-severity shape this repo tracks.
+      - **`AddressOf` to a later-declared `Sub` erases parameter types** to `Action(Of Object)`
+        (`DelegateTypeOf`, `SemanticAnalyzer.cs:7503-7518`). Invisible on C#/C++ because the receiver
+        degrades to `Object`; a hard error on the web, where the DOM declarations are genuinely typed.
       - **`Overrides` never validated** (zero `Overrid` matches in `SemanticAnalyzer.cs`).
       - **`ClearIncludedFiles` has zero call sites** (`Preprocessor.cs:568`).
       - ⛔ Do **not** file the C++ `Friend`-field gap — `IRBuilder.MapAccessModifier` (`:948-957`)

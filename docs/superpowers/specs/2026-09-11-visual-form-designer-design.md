@@ -373,7 +373,18 @@ generated files that the compiler does not do. That is a **backend** change, not
 do not take it on until bundle size is a *measured* problem.
 
 Each form gets its own page and names itself: `<body data-form="LoginForm">`, with `Main()`
-dispatching on `doc.body.getAttribute("data-form")` — already declared at `dom-core.bli:49`.
+dispatching on the body's `data-form` attribute.
+
+⛔ **The dispatch must be written in two steps.** `Document.body As Element` (`dom-core.bli:22`) and
+`Element.getAttribute(…) As String` (`:49`) are both declared, but the chained form **does not
+type** — measured: `Dim s As String = doc.body.getAttribute("data-form")` fails with *"Cannot assign
+value of type 'Object' to variable of type 'String'"*. Chained access through a declared `Property`
+loses the declared type. This compiles and runs:
+
+```basic
+Dim b As Element = doc.body
+Dim formName As String = b.getAttribute("data-form")
+```
 
 **F5 opens `/<StartupForm>.html`, not `/`.** The preview server maps only the bare root to
 `index.html` (`WebPreviewServer.cs:162`, 404 at `:165-170`), and F5 currently hands the browser the
@@ -408,6 +419,27 @@ The two wiring channels are **disjoint and must not be mixed**:
   WinForms designer is C#-backend-only by construction.
 - **Web:** `el.addEventListener("click", AddressOf handler)`. The declared signature is
   `Action(Of DomEvent)` (`dom-core.bli:57`).
+
+⛔⛔ **THE ORDERING RULE — the web writer's single hardest constraint.** `AddressOf` to a `Sub`
+declared **later in the file** erases its parameter types to `Action(Of Object)`, and because the DOM
+declarations are genuinely typed, that is a **hard error**: *"Argument 2: cannot convert from
+'Action&lt;Object&gt;' to 'Action&lt;DomEvent&gt;'"*. Measured in both a `Class` and a `Module`.
+**Handlers must be emitted before the region that wires them.** Note this is the **opposite** of the
+shipped WinForms template order (`InitializeComponent` first, handlers after) — WinForms tolerates
+either only because its event member degrades to `Object`, so no conversion check ever fires. Both
+targets are safe if the designer always emits handlers first.
+
+With that rule obeyed, the web shape works end to end (measured — see *Measured facts → Web target*).
+The emitted binding is correct: `const t2 = this.btnLogin_Click.bind(this);`.
+
+⛔ Three neighbouring shapes are **green builds that fail at runtime or hard-error**, and the writer
+must avoid all three:
+
+| Shape | Outcome |
+|---|---|
+| Inside a class, a lambda calling an unqualified method — `Sub(e As DomEvent) OnClick(e)` | Compiles. Emits a **bare** `OnClick(e)` inside the arrow function while `OnClick` is a prototype method → **`ReferenceError: OnClick is not defined`** at runtime. Measured under Node. |
+| Inside a class, `Me.`-qualifying it — `Sub(e As DomEvent) Me.OnClick(e)` | **Hard error**: *"Type 'F' does not have a member 'OnClick'. Available members: btn, .ctor0"* — class members are not populated at that point. |
+| A qualified module call — `LoginForm.InitializeComponent()` | Compiles. JS emits flat free functions with **no module container** (`JavaScriptBackend.cs` has zero `ModuleName` references) → **`ReferenceError: LoginForm is not defined`**. Call it unqualified. |
 
 ⛔ **`AddHandler` against a DOM element compiles green and is nonsense.** `TryEventCall`
 (`JavaScriptBackend.cs:2182`) matches on the IR function name alone and emits `{recv}.add(handler)`
@@ -601,6 +633,11 @@ build and wrong behaviour.
 | Served root is `<project>\bin\Debug`; only the **root** request maps to `index.html`; header is `no-store, must-revalidate`. | R | `BuildConfiguration.cs:6` + `BuildService.cs:623`; `WebPreviewServer.cs:162`, 404 at `:165-170`, header at `:188`. F5 `:3847` / Ctrl+F5 `:4097` → `MainWindowViewModel.cs:4144-4182`, URL at `:4181`. |
 | `#JsImport` binds names in three of four forms → `BL7010` on top-level collision. | R | `Preprocessor.cs:81`, `:102`, `:107`, `:131`; `JsCapabilityChecker:160-214`. |
 | ⛔ `BL7007` does **not** ban `EventArgs` — it is a JavaScript-only, name-based allow-list refusal with zero effect on C#/C++. Do not model designer gating on it. | R | `JsCapabilityChecker.cs:572-589`. |
+| ✅ **The web form shape WORKS END TO END — compiled *and* run**, in both a `Class` and a `Module` flavour, provided the ordering rule in D8 is obeyed. The class form emits `const t2 = this.btnLogin_Click.bind(this);` — correctly bound — and the handler's side effect lands: `lblUser.textContent` goes from `null` to `"CLICKED"`. | M | `BasicLang.exe p_final_class.bas --target=javascript` → exit 0; run under Node v22 with a DOM stub that captures the registered listener, fires it, and asserts the mutated element. |
+| ⛔⛔ **`AddressOf` to a later-declared `Sub` erases parameter types to `Action(Of Object)`** → hard error against `Action(Of DomEvent)`. Measured in a `Class` and a `Module`; moving the handler above the wiring code fixes it. **This is the web writer's ordering rule (D8).** | M | *"Argument 2: cannot convert from 'Action&lt;Object&gt;' to 'Action&lt;DomEvent&gt;'"*. |
+| ⛔ **Inside a class, a lambda calling an unqualified method emits a bare identifier** → `ReferenceError` at runtime, green build. `Me.`-qualifying it hard-errors instead (*"does not have a member … Available members: btn, .ctor0"*). | M | Emitted `OnClick(e);` inside `(e) => { … }` while `OnClick` is a prototype method. |
+| ⛔ **A qualified module call is a runtime `ReferenceError` on JS** — `LoginForm.InitializeComponent()` compiles, but JS emits flat functions with no module container. Call unqualified. | M | `ReferenceError: LoginForm is not defined`. |
+| ⛔ **Chained access through a declared `Property` loses its type.** `doc.body.getAttribute("x")` types as `Object`; the two-step form types as `String`. Hits D7's `data-form` dispatch directly. | M | *"Cannot assign value of type 'Object' to variable of type 'String'"* on the chained form; two-step compiles. |
 
 ### Project system
 
