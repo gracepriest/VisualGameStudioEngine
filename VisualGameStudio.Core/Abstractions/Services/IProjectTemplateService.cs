@@ -176,9 +176,27 @@ public static class SolutionTypes
     };
 
     /// <summary>
-    /// All solution types.
+    /// JavaScript solution type — BasicLang compiled to JavaScript. The build writes a
+    /// static web site (index.html, the script, its source map); there is no toolchain
+    /// step and no runtime, and F5 previews the site in the browser.
     /// </summary>
-    public static IReadOnlyList<SolutionType> All => new[] { DotNet, Msil, Native, Llvm, Cpp };
+    public static readonly SolutionType JavaScript = new()
+    {
+        Id = "javascript",
+        Name = "JavaScript (Web)",
+        Description = "Compile BasicLang to JavaScript. Build writes a static web site (index.html, the script and its source map) that runs in any browser — no runtime, no toolchain. F5 previews it.",
+        Icon = "web",
+        ProjectExtension = ".blproj",
+        SolutionExtension = ".blsln",
+        SourceExtension = ".bas"
+    };
+
+    /// <summary>
+    /// All solution types. ⚠ Every id here needs an explicit TargetBackend arm in
+    /// ProjectTemplateService.GenerateProjectFileContent and at least one template whose
+    /// SupportedSolutionTypes names it — ProjectTemplateBackendMappingTests pins both.
+    /// </summary>
+    public static IReadOnlyList<SolutionType> All => new[] { DotNet, Msil, Native, JavaScript, Llvm, Cpp };
 }
 
 #endregion
@@ -495,6 +513,29 @@ public static class ProjectTemplates
 
     #endregion
 
+    #region JavaScript Templates (solution type "javascript" only)
+
+    /// <summary>
+    /// A browser page in BasicLang. JavaScript-only: the page reaches the DOM through
+    /// <c>::document</c> and the shipped <c>dom-core.bli</c> declarations, which no other
+    /// backend can lower — so it must never be offered for a .NET or native solution type.
+    /// </summary>
+    public static readonly ProjectTemplate WebSite = new()
+    {
+        Id = "web-site",
+        Name = "Web Site",
+        ShortDescription = "A browser web site compiled to JavaScript",
+        Description = "A web site written in BasicLang and compiled to JavaScript. Build writes index.html, the script and its source map under bin\\; F5 previews the site in your browser. The DOM is typed (Document, Element, DomEvent, ...) and ::name reaches any other browser global.",
+        Icon = "web",
+        Category = "Web",
+        Tags = new List<string> { "web", "site", "javascript", "js", "browser", "dom", "html" },
+        SupportedSolutionTypes = new List<string> { "javascript" },
+        Order = 12,
+        IsBuiltIn = true
+    };
+
+    #endregion
+
     /// <summary>
     /// All built-in templates.
     /// </summary>
@@ -510,7 +551,8 @@ public static class ProjectTemplates
         UnitTest,
         CppConsoleApp,
         CppLibrary,
-        CppGameApp
+        CppGameApp,
+        WebSite
     };
 }
 

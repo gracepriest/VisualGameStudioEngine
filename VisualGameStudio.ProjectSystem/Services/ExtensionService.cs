@@ -156,6 +156,7 @@ public class ExtensionService : IExtensionService
     public event EventHandler<ExtensionMessageEventArgs>? ExtensionMessageReceived;
     public event EventHandler<ExtensionContributionsLoadedEventArgs>? ContributionsLoaded;
     public event EventHandler<ExtensionDiagnosticsEventArgs>? ExtensionDiagnosticsReceived;
+    public event EventHandler<SaveAllRequestedEventArgs>? SaveAllRequested;
     public event EventHandler<ExtensionTreeViewEventArgs>? TreeViewCreated;
     public event EventHandler<ExtensionTreeViewEventArgs>? TreeViewRefreshRequested;
     public event EventHandler<WebViewCreatedEventArgs>? WebViewCreated;
@@ -272,6 +273,11 @@ public class ExtensionService : IExtensionService
         _extensionHost.CommandRegistered += OnCommandRegistered;
         _extensionHost.HostCrashed += OnHostCrashed;
         _extensionHost.DiagnosticsReceived += (s, e) => ExtensionDiagnosticsReceived?.Invoke(this, e);
+
+        // ⛔ Forwarded, NOT answered here. If nothing downstream subscribes, the args' completion is
+        // never set and the host's own 30s backstop reports "not saved" — which is the truth. This
+        // service must not complete it itself with true just to make the call return.
+        _extensionHost.SaveAllRequested += (s, e) => SaveAllRequested?.Invoke(this, e);
         _extensionHost.TreeViewCreated += (s, e) => TreeViewCreated?.Invoke(this, new ExtensionTreeViewEventArgs
         {
             ExtensionId = e.ExtensionId,

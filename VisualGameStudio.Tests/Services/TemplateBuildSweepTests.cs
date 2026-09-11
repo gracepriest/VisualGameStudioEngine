@@ -190,6 +190,105 @@ public class TemplateBuildSweepTests
             $"IDE and CLI template systems drifted on {fileName} — keep them in sync (see comments in both)");
     }
 
+    // =====================================================================
+    // JavaScript ("web-site" / CLI "web"): the ONLY templates whose SupportedSolutionTypes
+    // is "javascript". The build has no toolchain step — the emitted files ARE the
+    // deliverable — so the sweep asserts the SITE exists, not just exit 0: a JavaScript
+    // build that wrote nothing would still return 0.
+    // =====================================================================
+
+    private static void AssertSiteWasWritten(string projectDir, string projectName, string who)
+    {
+        var index = Directory.GetFiles(projectDir, "index.html", SearchOption.AllDirectories);
+        Assert.That(index, Has.Length.EqualTo(1),
+            $"{who}: expected exactly one index.html under {projectDir} (got {index.Length})");
+        var siteDir = Path.GetDirectoryName(index[0])!;
+        Assert.That(siteDir, Does.Contain(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar),
+            $"{who}: the site must land under bin\\ (got {siteDir}) — never beside the sources");
+        var script = Path.Combine(siteDir, projectName + ".js");
+        Assert.That(File.Exists(script), Is.True, $"{who}: {projectName}.js missing beside index.html");
+        Assert.That(File.ReadAllText(index[0]), Does.Contain(projectName + ".js"),
+            $"{who}: index.html must load the generated script");
+        Assert.That(File.Exists(script + ".map"), Is.True,
+            $"{who}: the source map must ship with the site (devtools shows Main.bas through it)");
+        // The template's page: a DOM call and no unlowered BasicLang left behind.
+        var js = File.ReadAllText(script);
+        Assert.That(js, Does.Contain(".createElement("), $"{who}: the DOM calls did not survive codegen");
+        Assert.That(js, Does.Not.Contain("End Sub"), $"{who}: BasicLang text leaked into the script");
+    }
+
+    [Test]
+    public async Task JavaScriptTemplate_CreatesProject_ThatCompilerBuilds_IntoASite()
+    {
+        var compiler = FindCompiler();
+        if (compiler == null)
+            Assert.Inconclusive("BasicLang.exe not built; run 'dotnet build BasicLang -c Release' first.");
+
+        var template = ProjectTemplates.All.Single(t => t.Id == "web-site");
+        var options = new CreateProjectOptions
+        {
+            Name = "SweepWebSite",
+            Location = _rootDir,
+            Template = template,
+            SolutionType = SolutionTypes.JavaScript,
+            CreateSolutionFolder = true,
+            CreateGitRepository = false
+        };
+        var result = await _service.CreateProjectAsync(options);
+        Assert.That(result.Success, Is.True, $"project creation failed: {result.Error}");
+        Assert.That(File.ReadAllText(result.ProjectPath!), Does.Contain("<TargetBackend>JavaScript</TargetBackend>"));
+
+        var (exitCode, output) = RunCompilerBuild(compiler, result.ProjectPath!);
+        Assert.That(exitCode, Is.EqualTo(0),
+            $"'web-site' project failed to build.\n--- compiler output ---\n{output}");
+        Assert.That(output, Does.Not.Contain("BL70"),
+            $"the shipped page must not trip a JavaScript capability rejection.\n{output}");
+
+        AssertSiteWasWritten(Path.GetDirectoryName(result.ProjectPath!)!, "SweepWebSite", "IDE web-site");
+    }
+
+    [Test]
+    public void CliWebTemplate_CreatesProject_ThatCompilerBuilds_IntoASite()
+    {
+        var compiler = FindCompiler();
+        if (compiler == null)
+            Assert.Inconclusive("BasicLang.exe not built; run 'dotnet build BasicLang -c Release' first.");
+
+        var projectFile = CreateCliProject("web", "SweepCliWeb");
+        Assert.That(File.ReadAllText(projectFile), Does.Contain("<TargetBackend>JavaScript</TargetBackend>"));
+
+        var (exitCode, output) = RunCompilerBuild(compiler, projectFile);
+        Assert.That(exitCode, Is.EqualTo(0),
+            $"CLI 'web' template project failed to build.\n--- compiler output ---\n{output}");
+
+        AssertSiteWasWritten(Path.GetDirectoryName(projectFile)!, "SweepCliWeb", "CLI web");
+    }
+
+    // Same contract as the C++ pairs above: the IDE's web-site and the CLI's web
+    // template are two implementations of ONE page and must not drift.
+    [TestCase("web-site", "web", "Main.bas")]
+    public async Task JavaScriptTemplates_IdeAndCliSystems_GenerateIdenticalSourceFiles(
+        string ideTemplateId, string cliShortName, string fileName)
+    {
+        var name = "Equiv" + string.Concat((ideTemplateId + fileName).Where(char.IsLetterOrDigit));
+        var template = ProjectTemplates.All.Single(t => t.Id == ideTemplateId);
+        var options = new CreateProjectOptions
+        {
+            Name = name, Location = _rootDir, Template = template,
+            SolutionType = SolutionTypes.JavaScript, CreateSolutionFolder = false, CreateGitRepository = false
+        };
+        var result = await _service.CreateProjectAsync(options);
+        Assert.That(result.Success, Is.True, result.Error);
+        var ideContent = File.ReadAllText(Path.Combine(Path.GetDirectoryName(result.ProjectPath!)!, fileName));
+
+        var cliTemplate = new BasicLang.Compiler.ProjectSystem.TemplateEngine().GetTemplate(cliShortName);
+        Assert.That(cliTemplate, Is.Not.Null);
+        var cliContent = cliTemplate!.Files[fileName].Replace("{{ProjectName}}", name);
+
+        Assert.That(ideContent.ReplaceLineEndings(), Is.EqualTo(cliContent.ReplaceLineEndings()),
+            $"IDE and CLI template systems drifted on {fileName} — keep them in sync (see comments in both)");
+    }
+
     // .blproj emission of wizard-chosen C++ options: CreateProjectOptions carries
     // CppStandard/CppToolchain into the generated project file. These tests read
     // the generated .blproj text directly — no compiler involved. (Intentional

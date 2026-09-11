@@ -145,15 +145,56 @@ public class JavaScriptEmitterTests
     /// A project name reaches the title, so it must be HTML-escaped. `&amp;` and `&lt;` in an
     /// assembly name are legal on disk and would otherwise break the document.
     /// </summary>
+    /// <summary>
+    /// The title is TEXT and is HTML-escaped; the src is a URL and is PERCENT-encoded.
+    /// The two are different escapings and this test used to conflate them — it asserted
+    /// <c>src="a&amp;amp;b.js"</c>, which is well-formed HTML naming the file <c>a&amp;b.js</c>
+    /// and happens to work, so it could not tell a correct URL from a broken one. Percent
+    /// encoding is the strictly stronger claim: it is also correct for <c>a&amp;b.js</c>, and
+    /// it is the only thing that saves the names below.
+    /// </summary>
     [Test]
-    public void Emit_EscapesTheScriptNameAndTitle()
+    public void Emit_PercentEncodesTheScriptNameAndHtmlEscapesTheTitle()
     {
         JavaScriptEmitter.Emit(_dir, "a&b.js", "console.log(1);", title: "<Tom & Jerry>");
 
         var html = Read("index.html");
-        Assert.That(html, Does.Contain("src=\"a&amp;b.js\""));
+        Assert.That(html, Does.Contain("src=\"a%26b.js\""));
         Assert.That(html, Does.Contain("&lt;Tom &amp; Jerry&gt;"));
         Assert.That(html, Does.Not.Contain("<Tom"));
+    }
+
+    /// <summary>
+    /// MEASURED, not theorised: a project named "Site #1" builds clean (exit 0), writes
+    /// "Site #1.js" beside an index.html whose src is the RAW name, and then the browser
+    /// splits that src at the '#' — it requested <c>/Site%20</c>, got a 404, and rendered a
+    /// blank page with the build still reporting success. '#' is a legal file-name character
+    /// on every platform this targets and <c>IsValidProjectName</c> admits it, so File → New
+    /// Project can produce it.
+    ///
+    /// <para>'%' is the same class of bug from the other side: the server percent-DECODES the
+    /// request path, so a raw '%' in the name either mangles or throws on the way back.</para>
+    /// </summary>
+    [TestCase("Site #1.js", "Site%20%231.js")]
+    [TestCase("50% Off.js", "50%25%20Off.js")]
+    [TestCase("a b.js", "a%20b.js")]
+    public void Emit_HarnessSrcSurvivesAUrlSignificantCharacterInTheName(string script, string expectedSrc)
+    {
+        JavaScriptEmitter.Emit(_dir, script, "console.log(1);");
+
+        var html = Read("index.html");
+        Assert.That(html, Does.Contain($"src=\"{expectedSrc}\""));
+        // The file on disk keeps its real name — only the URL is encoded.
+        Assert.That(File.Exists(Path.Combine(_dir, script)), Is.True);
+    }
+
+    /// <summary>An ordinary name must be byte-identical to before — encoding is a no-op on it.</summary>
+    [Test]
+    public void Emit_LeavesAnOrdinaryScriptNameUnencoded()
+    {
+        JavaScriptEmitter.Emit(_dir, "MyGame.js", "console.log(1);");
+
+        Assert.That(Read("index.html"), Does.Contain("src=\"MyGame.js\""));
     }
 
     // ---------------------------------------------------------------- source map (task 26)
@@ -180,5 +221,20 @@ public class JavaScriptEmitterTests
 
         Assert.That(Read("app.js.map"), Is.EqualTo("{\"version\":3}"));
         Assert.That(Read("app.js").TrimEnd(), Does.EndWith("//# sourceMappingURL=app.js.map"));
+    }
+
+    /// <summary>
+    /// sourceMappingURL is a URL too, resolved by devtools against the script's own URL — so
+    /// it needs the same percent-encoding as the src attribute, or a '#' in the name silently
+    /// costs the user their BasicLang source view while the build still succeeds.
+    /// </summary>
+    [Test]
+    public void Emit_PercentEncodesTheSourceMappingUrl()
+    {
+        JavaScriptEmitter.Emit(_dir, "Site #1.js", "console.log(1);", sourceMapJson: "{\"version\":3}");
+
+        Assert.That(File.Exists(Path.Combine(_dir, "Site #1.js.map")), Is.True, "the map keeps its real file name");
+        Assert.That(Read("Site #1.js").TrimEnd(),
+            Does.EndWith("//# sourceMappingURL=Site%20%231.js.map"));
     }
 }

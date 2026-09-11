@@ -874,6 +874,24 @@ namespace BasicLang.Compiler.Driver
             // Find the output executable
             var exeName = project.AssemblyName ?? project.ProjectName;
 
+            // A JavaScript project has NO executable — the site IS the deliverable, exactly as
+            // the build's own "Site written to:" line says. Falling through to the probe below
+            // made `run` report "Output not found" and four .dll/.exe paths that can never
+            // exist for this backend, and `basiclang new web` printed `basiclang run` as its
+            // next step, so that failure was the first thing a new web user saw. Nothing is
+            // launched here: serving the site needs an HTTP server (ES modules do not load
+            // over file://), which lives in the IDE (F5), not in the compiler.
+            if (IsJavaScriptTarget(project.Backend))
+            {
+                var indexPath = Path.Combine(outputDir, CodeGen.JavaScript.JavaScriptEmitter.HarnessName);
+                Console.WriteLine();
+                Console.WriteLine($"{exeName} is a web project — there is nothing to launch.");
+                Console.WriteLine($"  Open: {indexPath}");
+                Console.WriteLine("  Serve that directory over HTTP (or press F5 in the IDE) — a browser will");
+                Console.WriteLine("  not load ES modules from a file:// page.");
+                return 0;
+            }
+
             // Check multiple possible locations for the output.
             // NOTE: outputDir here is ALREADY projectDir/bin/<config>/<TFM> —
             // base the native entries on projectDir, or the paths double up.

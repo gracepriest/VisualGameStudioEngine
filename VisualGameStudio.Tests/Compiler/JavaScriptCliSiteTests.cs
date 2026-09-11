@@ -176,6 +176,82 @@ public class JavaScriptCliSiteTests
         Assert.That(Built("*.cs"), Is.Empty, "must not silently emit C#");
     }
 
+    // ---------------------------------------------------------------- `new web` next steps
+
+    /// <summary>
+    /// Every template printed the same three next steps, ending in `basiclang run`. For a web
+    /// project that instruction was simply wrong — see the run test below — and it is the
+    /// first thing the scaffold tells a new user to do. The steps must name what a web project
+    /// actually produces.
+    /// </summary>
+    [Test]
+    [NonParallelizable]
+    public async Task NewWeb_NextSteps_DoNotTellTheUserToRunAnExecutable()
+    {
+        var (exit, output) = await Cli("new", "web", "-n", "Scaffold", "-o", Path.Combine(_dir, "s"));
+
+        Assert.That(exit, Is.Zero, output);
+        Assert.That(output, Does.Contain("basiclang build"));
+        Assert.That(output, Does.Contain("index.html"),
+            "a web project's deliverable is the page — say so");
+    }
+
+    /// <summary>The console template's steps are unchanged: it really does have an executable.</summary>
+    [Test]
+    [NonParallelizable]
+    public async Task NewConsole_NextSteps_StillSayRun()
+    {
+        var (exit, output) = await Cli("new", "console", "-n", "Scaffold", "-o", Path.Combine(_dir, "c"));
+
+        Assert.That(exit, Is.Zero, output);
+        Assert.That(output, Does.Contain("basiclang run"));
+    }
+
+    // ---------------------------------------------------------------- `run` on a web project
+
+    /// <summary>
+    /// `basiclang new web` prints "basiclang build / basiclang run" as its next steps, so
+    /// `run` is the FIRST thing a new web user types. It used to build the site correctly and
+    /// then fail: HandleRunCommand probes only for a .dll/.exe, found neither, and exited 1
+    /// with "Output not found. Searched:" and four paths that could never exist for this
+    /// backend. A JavaScript project has no executable — the site IS the deliverable — so the
+    /// command must say where it is instead of reporting a failure that did not happen.
+    /// </summary>
+    [Test]
+    [NonParallelizable]
+    public async Task Run_JavaScriptProject_ReportsTheSiteInsteadOfFailingToFindAnExe()
+    {
+        var (exit, output) = await Cli("run", WriteProject("JavaScript"));
+
+        Assert.That(exit, Is.Zero, $"a built site is not a failure:\n{output}");
+        Assert.That(output, Does.Not.Contain("Output not found"));
+        Assert.That(output, Does.Not.Contain(".dll"), "there is no managed output to look for");
+
+        var script = Built("*.js");
+        Assert.That(script, Is.Not.Empty);
+        var siteDir = Path.GetDirectoryName(script[0])!;
+        Assert.That(output, Does.Contain(Path.Combine(siteDir, "index.html")),
+            "the user must be told the exact file to open");
+    }
+
+    /// <summary>
+    /// The C# leg of the same command must be untouched — `run` still builds and LAUNCHES a
+    /// console project. (Guards the JavaScript branch against being placed too early.)
+    /// </summary>
+    [Test]
+    [NonParallelizable]
+    [Category("Integration")]
+    public async Task Run_CSharpProject_StillLaunchesTheProgram()
+    {
+        if (!CliTestHarness.DotnetOnPath())
+            Assert.Ignore("dotnet SDK not found on PATH — the C# backend cannot build.");
+
+        var (exit, output) = await Cli("run", WriteProject("CSharp"));
+
+        Assert.That(exit, Is.Zero, output);
+        Assert.That(output, Does.Contain("1"), $"the program's own output is missing:\n{output}");
+    }
+
     // ---------------------------------------------------------------- source maps (task 26)
 
     [Test]

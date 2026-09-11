@@ -2,6 +2,9 @@
 
 const path = require('path');
 const { Disposable, EventEmitter } = require('./event');
+// The SAME Uri class the document manager keys documents by. Using a different one would produce
+// uris that stringify differently, and the two ends would stop agreeing on a document's identity.
+const { Uri } = require('../document-manager');
 
 /**
  * Creates the vscode.workspace namespace API.
@@ -214,16 +217,35 @@ function createWorkspaceApi(rpc, documentManager) {
          * @returns {Promise<object>}
          */
         async openTextDocument(uriOrOptions) {
+            let result;
+
             if (uriOrOptions && typeof uriOrOptions === 'object' && !uriOrOptions.scheme) {
                 // {content, language} — create a virtual document
-                return rpc.sendRequest('workspace/openTextDocument', {
+                result = await rpc.sendRequest('workspace/openTextDocument', {
                     content: uriOrOptions.content || '',
                     language: uriOrOptions.language || 'plaintext',
                     isVirtual: true,
                 });
+            } else {
+                const uri = _uriToString(uriOrOptions);
+                result = await rpc.sendRequest('workspace/openTextDocument', { uri });
             }
-            const uri = _uriToString(uriOrOptions);
-            return rpc.sendRequest('workspace/openTextDocument', { uri });
+
+            if (!result || !result.uri) {
+                throw new Error('openTextDocument: the IDE returned no document.');
+            }
+
+            // ⛔ The IDE answers with a PLAIN OBJECT — {uri, languageId, version, text}. Returning it
+            // as-is would hand the extension something that is not a TextDocument: getText(),
+            // lineAt() and positionAt() would all be undefined, and the failure would surface inside
+            // the extension rather than here. Registering it through the document manager both
+            // builds the real class and matches VS Code, where an opened document joins
+            // workspace.textDocuments and fires onDidOpenTextDocument.
+            const existing = documentManager.getDocument(result.uri);
+            if (existing) return existing;
+
+            return documentManager.openDocument(
+                result.uri, result.languageId, result.version, result.text);
         },
 
         onDidOpenTextDocument: documentManager.onDidOpen,
@@ -355,12 +377,17 @@ function createWorkspaceApi(rpc, documentManager) {
          * @param {object} [token] - CancellationToken
          * @returns {Promise<object[]>}
          */
-        findFiles(include, exclude, maxResults, token) {
-            return rpc.sendRequest('workspace/findFiles', {
+        async findFiles(include, exclude, maxResults, token) {
+            const found = await rpc.sendRequest('workspace/findFiles', {
                 include: typeof include === 'string' ? include : (include && include.pattern) || '',
                 exclude: typeof exclude === 'string' ? exclude : (exclude && exclude.pattern) || undefined,
                 maxResults,
             });
+
+            // ⛔ The IDE answers with file:// STRINGS. VS Code's findFiles resolves to Uri[], and
+            // extensions read .fsPath off each result — on a bare string that is undefined, so the
+            // extension would silently process nothing rather than fail loudly here.
+            return (found || []).map((u) => Uri.parse(u));
         },
 
         /**

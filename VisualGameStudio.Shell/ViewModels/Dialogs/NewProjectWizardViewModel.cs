@@ -198,10 +198,13 @@ public partial class NewProjectWizardViewModel : ObservableObject
             Backends.Clear();
             if (SelectedLanguage == ProjectLanguage.BasicLang)
             {
-                Backends.Add(new BackendOption { Name = "C# (.NET)",  SolutionType = SolutionTypes.DotNet });
-                Backends.Add(new BackendOption { Name = "MSIL",        SolutionType = SolutionTypes.Msil });
-                Backends.Add(new BackendOption { Name = "Native C++",  SolutionType = SolutionTypes.Native });
-                Backends.Add(new BackendOption { Name = "LLVM",        SolutionType = SolutionTypes.Llvm });
+                Backends.Add(new BackendOption { Name = "C# (.NET)",        SolutionType = SolutionTypes.DotNet });
+                Backends.Add(new BackendOption { Name = "MSIL",              SolutionType = SolutionTypes.Msil });
+                Backends.Add(new BackendOption { Name = "Native C++",        SolutionType = SolutionTypes.Native });
+                // BasicLang → JavaScript: a static web site, previewed with F5. Not
+                // probe-gated (no toolchain) — a BasicLang backend like the others.
+                Backends.Add(new BackendOption { Name = "JavaScript (Web)",  SolutionType = SolutionTypes.JavaScript });
+                Backends.Add(new BackendOption { Name = "LLVM",              SolutionType = SolutionTypes.Llvm });
             }
             else
             {
