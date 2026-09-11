@@ -259,8 +259,18 @@ entry in `BasicLangSourceExtensions` (`ProjectFile.cs:81-82`). **Any extension b
 item and no diagnostic.** The repo guards this quirk in the sibling method (`ProjectFile.cs:453`) and
 not in `GetSourceFiles`.
 
-`docs/MULTI_FILE_SYSTEM_PLAN.md:21` reserves `.frm` = *"Form + code-behind"*. Its sibling `.bh` row
-was implemented, so the table is not fiction. This spec supersedes that row; mark it obsolete.
+**`.frm` is NOT superseded** (owner decision, 2026-09-11). `docs/MULTI_FILE_SYSTEM_PLAN.md:21` reserves
+`.frm` = *"Form + code-behind"*, and its sibling `.bh` row was implemented, so the table is not
+fiction. The two are different concepts and both stand:
+
+| | Who authors it | What it is |
+|---|---|---|
+| `.blform` / `.blwebform` | **the designer** | The artifact drag-and-drop produces. Designer-owned, machine-written, round-tripped by the writer in D9. |
+| `.frm` | **the user** | Reserved for a hand-authored form file. Not in this spec's scope, not implemented, and **not obsoleted by it.** |
+
+If `.frm` is ever built, it and `.blform` will need a stated relationship (import? a second dialect of
+the recognizer? unrelated?). That is a decision for whoever specs `.frm` — this spec neither makes it
+nor forecloses it.
 
 ### D3 — Layout: pixel canvas on WinForms, Grid/Flow on web
 
@@ -609,7 +619,14 @@ build and wrong behaviour.
 | ⛔ Two sibling backend dispatches still silently default to C#, one documenting itself. Neither is pinned by any test. | R | `BuildService.cs:719` (`default: // csharp`); `:887-894` (`_ => "csharp"`). Only `ProjectTemplateService.cs:265-275` was hardened. |
 | ⛔ `obj/gen` is owned by the C++ builder — wiped every native build, on the C++ include path, and its sweep deletes only `*.g.cpp`/`*.g.h`. | R | `CppProjectBuilder.cs:431`, `:788-790`, `:1712-1722`, `:906-907`. Not used by this design, recorded so it is not reached for. |
 
-### Cross-file resolution *(context for Task 4, which D1 does not depend on)*
+### Cross-file resolution *(NOT in this plan — owner decision 2026-09-11; recorded so the findings are not lost)*
+
+⚠ **Disambiguation, because "we don't need `Inherits`" could be misread.** `Inherits Form` — a class
+inheriting a **.NET** base — is load-bearing for this feature and **works**: it is in the generated
+region, and the end-to-end runtime probe above depends on it. What is broken, and what is out of
+scope, is `Inherits`/`Implements` against a **user-declared type in a sibling project file**. D1 means
+the designer never does that. A user who writes a multi-file project with their own base class still
+hits it; that is a language defect to file separately, not designer work.
 
 | Fact | How | Evidence |
 |---|---|---|
@@ -649,14 +666,16 @@ build and wrong behaviour.
 ### Slice 0 — prerequisites
 
 `ProjectSerializer` must stop destroying what it does not understand, **before** anything adds a file.
-The cross-file `Inherits` + `Implements` fix lands here too, by owner request and because it is needed
-for ordinary multi-file projects — but under D1 it is **not a blocker** for anything in this feature.
+That, the wizard's discarded TFM, and the two silent-C# defaults are the whole of Slice 0 — three
+small, independently gateable changes. Cross-file `Inherits`/`Implements` is **not** here (owner
+decision 1).
 
-**On re-baselining:** master is recorded full-suite green at `f54416b` — 5826 tests, 4 baseline
-failures (`HANDOFF.md:14-18`) — and `d6b57b6` is doc-only on top. A re-baseline is a 2-hour
-re-measurement of a known number, not free evidence. What remains open is narrower: `46fd2c5`'s 27
-tests "pass but have no mutation kills and no review" (`:26-33`) — a test-quality debt, not a build
-gate. Owner question 4.
+**Gating (owner decision 4):** the recorded full-suite green at `f54416b` — 5826 tests, 4 baseline
+failures (`HANDOFF.md:14-18`) — stands; `d6b57b6` is doc-only on top. No re-baseline. Each task gates
+on the fast subset plus its own touched suites and **states which it ran and why**; the full suite is
+required only where a change reaches shared compiler machinery. ⛔ The one standing caveat is
+unchanged and is not a build gate: `46fd2c5`'s 27 tests "pass but have no mutation kills and no
+review" (`HANDOFF.md:26-33`).
 
 ### Slice 1 — a read-only canvas over files that already exist
 
@@ -698,20 +717,21 @@ Task-level sequencing, files and gates: `docs/superpowers/plans/2026-09-11-visua
 | **New Integration sweeps worsen contention**, which looks exactly like a test failure. | Budget it; re-run failures in isolation before investigating; only an assertion failure is evidence. |
 | **The IDE has no renderer**, so the canvas can never be WYSIWYG. | Designed for as a schematic; F5 is the real renderer. Label it, do not apologise for it. |
 
-## Open questions for the owner
+## Owner decisions — 2026-09-11
 
-1. **Cross-file `Inherits`/`Implements`** — scoped into Slice 0 because you asked how to fix it and
-   because `Implements` is broken too. It is a `SemanticAnalyzer` change and therefore a full-suite
-   gate (~2h). Confirm you want it inside this feature's plan rather than as its own piece of work.
-   **D1 does not depend on it.**
-2. **`.frm`** — `docs/MULTI_FILE_SYSTEM_PLAN.md:21` reserves `.frm` for "Form + code-behind". This
-   spec uses `.blwebform`/`.blform`. Confirm the old row is marked obsolete.
-3. **Which WinForms template becomes canonical?** ✅ The "may never have compiled" concern is
-   **retired — measured 2026-09-11, the VSIX `MainForm.bas` shape builds to a working `.exe`.** What
-   remains is that three templates disagree: the VSIX ships `Program.bas` + `MainForm.bas` with an
-   SDK-style `.blproj`; the IDE ships one `Main.bas` with no `InitializeComponent` and a
-   differently-named handler; the CLI `TemplateEngine` has **no WinForms template at all**. The VSIX
-   shape is the one the designer generates and the one now proven to build, so making it canonical
-   (and adding it to the IDE and CLI rosters) is the low-risk answer — but it is your call.
-4. **Slice 0 re-baseline** — re-measure the full suite (2h, certainty) or trust the recorded green and
-   gate only what the work touches (proportional)?
+All four questions are answered. Recorded here so the plan does not relitigate them.
+
+1. **Cross-file `Inherits`/`Implements` is OUT of this plan.** D1 means the designer never inherits
+   across a file boundary, so nothing here depends on it. The findings are kept in *Measured facts →
+   Cross-file resolution* and the fix is to be filed as its own work item. ⚠ This is **not** a
+   statement that `Inherits` is unnecessary — `Inherits Form` is load-bearing and works; see the
+   disambiguation on that section.
+2. **`.frm` stays.** `.blform`/`.blwebform` are designer-produced; `.frm` remains reserved for a
+   user-authored form file. Not obsoleted. See D2.
+3. **The VSIX WinForms template becomes canonical** — it is the shape the designer generates and the
+   shape proven to work end to end. The IDE roster and the CLI `TemplateEngine` (which has no WinForms
+   template at all) are brought into line with it, and it gains the build coverage it has never had.
+4. **Trust the recorded green; gate proportionally.** No full-suite re-baseline. The recorded
+   5826/4-baseline at `f54416b` stands. The full suite is required only where a change reaches shared
+   compiler machinery — in this plan that is the missing-handler check and the WinForms slice; every
+   other task gates on the fast subset plus its own touched suites, and says which it ran and why.

@@ -7,8 +7,8 @@
 C# backend) — with the web half shipping first.
 
 **Design spec:** `docs/superpowers/specs/2026-09-11-visual-form-designer-design.md`. Every `Dn`
-referenced below is defined there with its rejected alternatives, and the two document formats are
-shown in full under *The two documents, by example* — read that before any task that touches them.
+referenced below is defined there with its rejected alternatives, and both document formats are shown
+in full under *The two documents, by example* — read that before any task that touches them.
 
 **Architecture:** The document is the truth. On save the designer writes **two comment-delimited
 regions** into the user's own `.bas` (D1); everything outside them is the user's. **There is no
@@ -44,7 +44,7 @@ gated in the wrong place.
 | **`Text` and `TextDocument` are two hand-synced stores; `SaveAsync` writes the string** (`CodeEditorDocumentViewModel.cs:618`, `:701-720`) | A writer touching `TextDocument` alone **saves stale text to disk** and may not mark the tab dirty. |
 | **Any PascalCase name without `_` types as `Object` with no diagnostic** (`SemanticAnalyzer.cs:2395-2400`, `:7920`) | Wrong property names, missing handlers and undeclared DOM members all compile green. Every correctness claim needs a CLI gate, not a unit test. |
 
-## Commands
+## Commands and gating policy
 
 ```bash
 dotnet build BasicLang\BasicLang.csproj -c Release
@@ -59,18 +59,25 @@ dotnet test VisualGameStudio.Tests\VisualGameStudio.Tests.csproj -c Release --fi
 dotnet test VisualGameStudio.Tests\VisualGameStudio.Tests.csproj -c Release
 ```
 
-**Baseline:** 5826 total, 4 failures, all pre-existing — two `SearchSnippets_*`,
-`Cli_Build_CppProject_ProjectReference_Warns…`, `NonEx_variants…` (`HANDOFF.md:103`, `:111-114`; only
-the last is load-dependent). Fast subset ≈ 4897/2/1. ⛔ The fast subset is **not** a gate for codegen
-work. ⛔ A "Passed!" line does not mean the suite passed — capture both streams and check the total.
+**Baseline (owner decision 4 — trusted, not re-measured):** 5826 total, 4 failures, all pre-existing —
+two `SearchSnippets_*`, `Cli_Build_CppProject_ProjectReference_Warns…`, `NonEx_variants…`
+(`HANDOFF.md:103`, `:111-114`; only the last is load-dependent). Fast subset ≈ 4897/2/1.
+
+**Gate proportionally.** Each task runs the fast subset plus its own touched suites and **states which
+it ran and why**. The **full suite is required only** for Task 15 (tightens a `SemanticAnalyzer` error
+path) and Slice 3's Tasks 17–18 (Integration sweeps + template roster). ⛔ The fast subset is **not** a
+gate for codegen work — execution tests are `[Category("Integration")]`, so any task that changes what
+is emitted must also run its Integration fixtures and a real CLI build.
+
+⛔ A "Passed!" line does not mean the suite passed — capture both streams and check the total.
 ⛔ After AXAML changes, `dotnet clean` first.
 
 ---
 
 ## Slice 0 — prerequisites
 
-Task 1 is a live data-loss bug. Tasks 2–3 are small and unblock Slice 2. **Task 4 blocks nothing in
-this feature** (that is the point of D1) and is here by owner request.
+Three small, independently gateable changes. Cross-file `Inherits`/`Implements` is **not** here (owner
+decision 1); its findings live in the spec and are filed as a chip in Task 19.
 
 ### Task 1: `ProjectSerializer` stops destroying what it does not understand
 
@@ -88,15 +95,15 @@ no field for half its contents.
       `<TargetFramework>net8.0-windows</TargetFramework>`, `<AssemblyName>`, `<Authors>`, `<NetProxy>`
       and a `ProjectItem` carrying metadata survives Load→Save byte-equivalently. (b) A VSIX-shaped
       `<Project Sdk="Microsoft.NET.Sdk">` file (copy `BasicLang.VisualStudio/.../WpfApp/Project.blproj`)
-      survives with its `Sdk` attribute, both `<Import>`s, `<ProjectCapability>`,
-      `<ProjectTypeGuids>` and `<BasicLangCompile Include="**\*.bas"/>` intact.
+      survives with its `Sdk` attribute, both `<Import>`s, `<ProjectCapability>`, `<ProjectTypeGuids>`
+      and `<BasicLangCompile Include="**\*.bas"/>` intact.
 - [ ] **Step 2: Implement preserve-on-save**, following `BlprojReferenceWriter`'s `XDocument.Load` →
       targeted edit → BOM-less save shape rather than rebuild-from-model. Preserving unknown elements
       beats enumerating the lost ones — it also protects `<NetProxy>`, `ProjectItem.Metadata` and every
       future element.
 - [ ] **Step 3: Gate.** ⛔ Acceptance is **`BasicLang.exe build <proj>` after an IDE save**, never an
       IDE F5 — `BuildService.cs:1087-1091`'s `OutputType == WinExe` fallback masks the breakage from
-      inside the IDE. Then the fast subset.
+      inside the IDE. Then the fast subset + `Serialization` and `Services` suites.
 
 ### Task 2: The wizard's `TargetFramework` reaches the file; DPI mode is defined
 
@@ -107,10 +114,10 @@ no field for half its contents.
       or it is dropped: `BuildService.GenerateCsprojContent` (~`:1117`), `Program.cs`'s csproj literal
       (~`:706`), `ProjectFile` + its Load (follow `:151-155`), `BasicLangProject` + `ProjectSerializer`.
       ⛔ It is emitted **nowhere** today.
-- [ ] Escape compile-item paths at `ProjectTemplateService.cs:328`. ℹ️ This is **prospective
-      hardening**, not a live defect — every value reaching that line today comes from a closed switch
-      of literal filenames (`:399-416`). It becomes live in Task 14, which introduces a user-named item.
-- [ ] **Gate:** fast subset + a CLI build of a project with a non-default TFM.
+- [ ] Escape compile-item paths at `ProjectTemplateService.cs:328`. ℹ️ **Prospective hardening**, not a
+      live defect — every value reaching that line today comes from a closed switch of literal
+      filenames (`:399-416`). It becomes live in Task 13, which introduces a user-named item.
+- [ ] **Gate:** fast subset + `Services` suite + a CLI build of a project with a non-default TFM.
 
 ### Task 3: Close the two remaining silent-C# defaults
 
@@ -120,39 +127,7 @@ no field for half its contents.
 - [ ] Extend `ProjectTemplateBackendMappingTests` (`:25-33`) to cover both.
 - [ ] Drop `"msil"` from `winforms-app`'s `SupportedSolutionTypes` (`IProjectTemplateService.cs:386`)
       — that pipeline stops at a `.il` file and the arm has never been exercised.
-- [ ] **Gate:** fast subset.
-
-### Task 4: Cross-file `Inherits` **and** `Implements` *(owner-requested; blocks nothing here)*
-
-Both are broken, measured (`Unknown base class 'Animal'` / `Unknown interface 'IShape'`, exit 1), by
-the same cause: `SemanticAnalyzer.cs:4569` and `:4598` call `_typeManager.GetType` raw.
-
-**Files:** `BasicLang/SemanticAnalyzer.cs`; test `VisualGameStudio.Tests/Compiler/CrossFileInheritanceTests.cs` (create)
-
-- [ ] **Step 1: Write failing tests first and prove they fail for the stated reason.** A two-file
-      project with the base class in a sibling; one with the interface in a sibling; **and an LSP-path
-      test** modelled on `VisualGameStudio.Tests/LSP/CrossFileMemberCompletionTests.cs` — required,
-      because a `CompileProjectFiles`-only fixture cannot detect the LSP defect. ℹ️ LSP-path tests for
-      this already exist (`:120-132`, `:134-147`, `:170-197`); what is absent is a **compiler-path**
-      test — `CrossFileCompileOrderTests.cs` contains no `Inherits`/`Implements` at all.
-- [ ] **Step 2: Route `:4569` and `:4598` through `ResolveTypeName` (`:2262-2291`)**, not a hand-rolled
-      `GlobalScope.Resolve`. It already does scope-first, already accepts
-      `SymbolKind.Class|Interface|Structure|Type`, and — load-bearing — also consults `_projectSymbols`
-      (`:2306`), the only channel the LSP populates (`LSP/DocumentManager.cs:565-578`).
-      `ResolveSiblingSignatureTypeName` (`:752-768`) is the same shape and already handles interfaces.
-      ⛔ A `GlobalScope`-only fix — what `11419b7` does — lands in one of two copies and leaves
-      IntelliSense broken.
-- [ ] **Step 3: Add the missing `InterfaceNode` arm** to pass 1 of `RegisterPendingSiblingSignatures`
-      (`:347-368`, which tests `is ClassNode` only at `:359`), with a member pass mirroring
-      `PopulateSiblingClassMembers`. ⛔ A name-only `TypeInfo` would let `Implements IShape` pass the
-      analyzer and fail at `csc`. The absence is admitted in-code at `:606-608`.
-- [ ] **Step 4: Do NOT touch `CollectExportedSymbols`.** It is not the blocker: its first disjunct is
-      `symbol.Access == Public`, hard-set by `Symbol`'s ctor (`SymbolTable.cs:364`), so interfaces
-      already export from `.bas` siblings — measured.
-- [ ] **Step 5: Gate — FULL SUITE.** This is `SemanticAnalyzer`. Expect 5826 / 4 baseline.
-
-**Cross-check, do not cherry-pick:** `11419b7` on `origin/claude/modest-gauss-0ki0b7` is a prior,
-never-compiled attempt at the `Inherits` half. Read it for test names only.
+- [ ] **Gate:** fast subset + `Services` suite.
 
 ---
 
@@ -162,7 +137,7 @@ never-compiled attempt at the `Inherits` half. Read it for test names only.
 shell refactor. **Must not** widen `_openDocuments`, add a document type, add a dock region, add a
 file extension, touch `JavaScriptEmitter`, or write one byte into a user's file.
 
-### Task 5: The form model, in `BasicLang/Forms/`
+### Task 4: The form model, in `BasicLang/Forms/`
 
 **Files:** `BasicLang/Forms/{FormDocument,FormControl,FormControlCatalog,FormGeometry}.cs` (create);
 test `VisualGameStudio.Tests/Compiler/FormDocumentTests.cs` (create)
@@ -175,7 +150,7 @@ test `VisualGameStudio.Tests/Compiler/FormDocumentTests.cs` (create)
       wired — nearly free alongside the writer, very expensive to bolt on later.
 - [ ] **Gate:** fast subset.
 
-### Task 6: The recognizer — two dialects, reading the shapes that exist (D12)
+### Task 5: The recognizer — two dialects, reading the shapes that exist (D12)
 
 ⛔ **Neither shipped IDE template has an `InitializeComponent`.** `winforms-app` builds every control
 inside `Public Sub New()` (`ProjectTemplateService.cs:609-629`); `web-site`
@@ -193,16 +168,15 @@ test `VisualGameStudio.Tests/Compiler/FormRecognizerTests.cs` (create)
 - [ ] `DomDialect` reads `createElement` / `appendChild` / `addEventListener` sequences **in any Sub**.
 - [ ] ⛔ **Refuse**, do not ignore: a `Handles` clause (a hard parse error at `Parser.cs:4464`, so the
       file never builds) and a `With` block over a recognised control (`.Prop = value` inside one is
-      silently dropped at `IRBuilder.cs:3356`, so a recovered model would not match what the program
-      does). Both are D9 **Refused**.
-- [ ] **Gate — must be able to fail.** Name the exact fixture paths and assert counts and names, not
-      "it runs": from the `winforms-app` template's generated `Main.bas`, recover exactly the controls
-      `ProjectTemplateService.cs:609-629` constructs, with their names and positions; from `web-site`'s
-      `Main.bas`, recover the elements `:501-540` creates. Add the VSIX `WinFormsApp/MainForm.bas` as a
-      third fixture for the `InitializeComponent` shape — ⛔ note it carries unsubstituted
-      `$safeprojectname$` placeholders (`:2`, `:28`), so the fixture must substitute them.
+      silently dropped at `IRBuilder.cs:3356`). Both are D9 **Refused**.
+- [ ] **Gate — must be able to fail.** Name the exact fixture paths and assert counts, names and
+      positions, not "it runs": from the `winforms-app` template's generated `Main.bas`, recover
+      exactly the controls `ProjectTemplateService.cs:609-629` constructs; from `web-site`'s
+      `Main.bas`, the elements `:501-540` creates. Add the VSIX `WinFormsApp/MainForm.bas` as a third
+      fixture for the `InitializeComponent` shape — ⛔ it carries unsubstituted `$safeprojectname$`
+      placeholders (`:2`, `:28`), so the fixture must substitute them.
 
-### Task 7: `DesignDiagnostic` + the `BL8xxx` band + `basiclang design --check` (D10)
+### Task 6: `DesignDiagnostic` + the `BL8xxx` band + `basiclang design --check` (D10)
 
 **Files:** `BasicLang/Forms/DesignDiagnostic.cs` (create); `BasicLang/ErrorFormatter.cs` (modify);
 `BasicLang/Program.cs` (modify); test `VisualGameStudio.Tests/Compiler/DesignCheckCliTests.cs` (create)
@@ -215,9 +189,9 @@ test `VisualGameStudio.Tests/Compiler/FormRecognizerTests.cs` (create)
       (`FormatNormalized` `:123-130`, printed from `Program.cs:452-457`). ⛔ **Not** the
       `{label}: {Code}: {Message}` shape at `Program.cs:541`/`:1116`: it carries no file, line or
       column, because `NetReferenceDiagnostic` has none.
-- [ ] ⛔ Put the code in **both** the message string and the field —
-      `Compiler.cs:372-374` shows the pattern. On the C#/JS routes `Program.cs:554` prints only
-      `{label}: {Message}`, so a code in the field alone is invisible there.
+- [ ] ⛔ Put the code in **both** the message string and the field — `Compiler.cs:372-374` shows the
+      pattern. On the C#/JS routes `Program.cs:554` prints only `{label}: {Message}`, so a code in the
+      field alone is invisible there.
 - [ ] Register the values in `enum ErrorCode` (`ErrorFormatter.cs:14-81`) and fix the stale band
       comment at `:11-12`, which omits BL0xxx/BL6xxx/BL7xxx.
 - [ ] `case "design":` in the subcommand switch (`Program.cs:98-145`), shaped like `case "build":`
@@ -230,13 +204,13 @@ test `VisualGameStudio.Tests/Compiler/FormRecognizerTests.cs` (create)
       `design --check foo.bas -i` would launch the REPL (`:71`).
 - [ ] Update `PrintUsage` Commands (`:261-269`) and Examples (`:283-290`).
 - [ ] In this slice `--check` validates **recognizer input** (a `.bas` with a recoverable form shape);
-      it gains the document formats in Task 10.
+      it gains the document formats in Task 9.
 - [ ] **Gate:** an `[Category("Integration")]` CLI test using `CliTestHarness.CliPath()` (hard-fails on
       a missing exe) — ⛔ **not** `TemplateBuildSweepTests.FindCompiler()`, which reads a different
       binary and degrades to `Assert.Inconclusive`. Assert exit code **and** that stdout carries the
       file, line and column.
 
-### Task 8: `FormCanvasControl` and the Design∣Code toggle
+### Task 7: `FormCanvasControl` and the Design∣Code toggle
 
 **Files:** `VisualGameStudio.Shell/Controls/FormCanvasControl.cs` (create — ⛔ **not** in
 `VisualGameStudio.Editor`, which cannot see `BasicLang/Forms/`);
@@ -257,8 +231,9 @@ test `VisualGameStudio.Tests/Compiler/FormRecognizerTests.cs` (create)
       Dock re-attaches the same control instance on tab drag, float/re-dock and maximize
       (`CodeEditorControl.axaml.cs:762-767`). ⛔ Route any canvas→VM command through the
       `LiveEditor`-style visual-root guard or it double-applies (`CodeEditorDocumentView.axaml.cs:122-130`).
-- [ ] **Gate:** ⛔ `dotnet clean` first (AXAML). Fast subset. There is no `Avalonia.Headless` reference,
-      so the canvas itself is verified by running the IDE — say so; do not claim automated coverage.
+- [ ] **Gate:** ⛔ `dotnet clean` first (AXAML). Fast subset + `Editor`/`Shell` suites. There is no
+      `Avalonia.Headless` reference, so the canvas itself is verified by running the IDE — say so; do
+      not claim automated coverage.
 
 **Demo:** open the shipped `winforms-app` and `web-site` templates and see the form, produced entirely
 by a reader.
@@ -267,7 +242,7 @@ by a reader.
 
 ## Slice 2 — `.blwebform` writes *(owner: web ships first)*
 
-### Task 9: `CompileToCSharpOptimized`
+### Task 8: `CompileToCSharpOptimized`
 
 ⛔ The C# backend has **no** optimizer-running test helper; C++ and JavaScript both do. Every
 `CompileToCSharp` in the suite is a per-fixture non-optimizing copy, so a fixture written the obvious
@@ -277,7 +252,7 @@ way is green on IR that never ships.
       `BuildModule` → `OptimizationPipeline` → `AddStandardPasses` → `Run` → generate.
 - [ ] **Gate:** fast subset.
 
-### Task 10: `.blwebform` schema, structure-preserving reader/writer, and the algebra (D2, D9)
+### Task 9: `.blwebform` schema, structure-preserving reader/writer, and the algebra (D2, D9)
 
 Read the spec's *The two documents, by example* first — the schema is specified there.
 
@@ -287,19 +262,18 @@ test `VisualGameStudio.Tests/Serialization/BlWebFormRoundTripTests.cs` (create)
 - [ ] XML with `LoadOptions.SetLineInfo` so every diagnostic carries `file(line,col)`.
       Structure-preserving: unknown elements/attributes/comments kept verbatim, deterministic attribute
       order, children in z-order.
-- [ ] Implement the D9 tier rules exactly as tabled: **Canon** (known attribute, value parses),
-      **Degraded** (known attribute, value does not parse — freeze that row, round-trip the value
-      unchanged), **Refused** (document-level: damaged region, `Handles`, `With`, populated `<Bind
-      Property=>` → `BL8021`, `{res:Key}` → `BL8022`). Unknown elements round-trip untouched and are
-      **neither**.
+- [ ] Implement the D9 tier rules exactly as tabled: **Canon**, **Degraded** (per property — freeze
+      that row, round-trip the value unchanged), **Refused** (document-level: damaged region,
+      `Handles`, `With`, populated `<Bind Property=>` → `BL8021`, `{res:Key}` → `BL8022`). Unknown
+      elements round-trip untouched and are **neither**.
 - [ ] `<Literal>` passes through to markup untouched and is read-only on the canvas.
 - [ ] `TabIndex` is written on every control, defaulting to document order on creation.
 - [ ] **Test the algebra explicitly:** a no-op patch writes **nothing**; round-trip is byte-identical;
       `Read∘Apply == Apply∘Read`.
 - [ ] Extend `design --check` to accept `.blwebform`.
-- [ ] **Gate:** fast subset.
+- [ ] **Gate:** fast subset + `Serialization` suite.
 
-### Task 11: Register the extensions; skip them on **both** compile routes (D11)
+### Task 10: Register the extensions; skip them on **both** compile routes (D11)
 
 ⛔ A new source-ish extension must land at **11+ independent sites**; this knowledge is duplicated, not
 shared.
@@ -328,7 +302,7 @@ shared.
       (asserting the form is not lexed and the build succeeds), and
       `BasicLang.exe LoginForm.blwebform --target=csharp` asserting `BL8001` and exit 1.
 
-### Task 12: The region writer (D1)
+### Task 11: The region writer (D1)
 
 **Files:** `BasicLang/Forms/RegionWriter.cs` (create);
 `VisualGameStudio.Shell/ViewModels/Documents/CodeEditorDocumentViewModel.cs` (modify);
@@ -346,18 +320,18 @@ test `VisualGameStudio.Tests/Compiler/FormRegionWriterTests.cs` (create)
       (`JavaScriptBackend.cs:2182`) emits `{recv}.add(handler)` unconditionally, so
       `AddHandler el.click, …` emits `el.click.add(H)` → runtime `TypeError`. (`click` resolves on
       `Element` — `dom-core.bli:56`, members are `OrdinalIgnoreCase` per `SymbolTable.cs:111` — so this
-      is the event-call rewrite firing on a resolved method, not an `IsNetType` degradation. Same green
-      build either way.)
+      is the event-call rewrite firing on a resolved method, not an `IsNetType` degradation.)
 - [ ] ⛔ Names: **type** names must be PascalCase without `_` (`SemanticAnalyzer.cs:2050`, `:7940`);
       control **identifiers** may contain `_` freely, and both shipped templates use camelCase control
-      names, so do not require PascalCase there.
+      names, so do not require PascalCase there. ℹ️ `Private` fields are correct here — the region and
+      the handlers are the same class in the same file (measured; see the spec).
 - [ ] ⛔ When the IDE performs the write, go through **`Text`**, not only `TextDocument` — see the traps
       table. Assert the tab goes dirty and that a subsequent save writes the new content.
 - [ ] **Gate:** `CompileToCSharpOptimized` **and** a real CLI build of a project whose `.bas` carries
       written regions. stdout is the only valid oracle. Test **both entry points**:
       `BasicLang.exe build X.blproj` and the IDE `BuildService`.
 
-### Task 13: The build-time markup/CSS emitter, and F5 (D6, D7)
+### Task 12: The build-time markup/CSS emitter, and F5 (D6, D7)
 
 ⛔ **No asset root exists** — nothing in the build pipeline copies a `.css` or extra `.html` into the
 output directory. This is built here, not reused.
@@ -370,8 +344,7 @@ output directory. This is built here, not reused.
       produces a page with no markup.
 - [ ] ⛔ Write into **the directory the JavaScript emitter was handed**, not one computed afresh: the
       IDE uses `bin\Debug` (`BuildService.cs:623`) and the CLI `bin\Debug\<tfm>` (`Program.cs:488`), and
-      reusing the emitter's own `outputDirectory` makes them agree instead of adding a third path to
-      keep in sync.
+      reusing the emitter's own `outputDirectory` makes them agree instead of adding a third path.
 - [ ] Form pages **always overwrite**. `index.html` (`JavaScriptEmitter.cs:109-114`) and `package.json`
       (`:143-148`) remain the only never-overwrite files and stay untouched.
 - [ ] `Main()` dispatches on `doc.body.getAttribute("data-form")` (`dom-core.bli:49`). One generated
@@ -386,7 +359,7 @@ output directory. This is built here, not reused.
       contain **no** unlowered BasicLang (`End Sub`) or unsubstituted placeholders. Assert `index.html`
       is byte-unchanged. Then F5 and confirm in a browser.
 
-### Task 14: Creating a form
+### Task 13: Creating a form
 
 Nothing in Slices 0–1 creates a form; without this the feature can read, write and gate documents that
 nothing produces, and the `.bas` + `.blwebform` pair is never exercised by the path a user takes.
@@ -402,9 +375,9 @@ nothing produces, and the `.bas` + `.blwebform` pair is never exercised by the p
 - [ ] ⛔ Three Solution Explorer tree builders with three different filters
       (`SolutionExplorerViewModel.cs:177-249`, `:348-352` hardcoded whitelist, `:766-815`). A form added
       only to the project-items path **vanishes** when the project opens as part of a solution.
-- [ ] **Gate:** fast subset + create-then-build through both entry points.
+- [ ] **Gate:** fast subset + `Shell` suite + create-then-build through both entry points.
 
-### Task 15: Toolbox and property grid
+### Task 14: Toolbox and property grid
 
 - [ ] Build the property grid by **extracting** the Settings dialog's typed-row editor —
       `SearchableSettingItem` + `SettingControlKind` (`SettingsViewModel.cs:21-116`) and its
@@ -422,9 +395,9 @@ nothing produces, and the `.bas` + `.blwebform` pair is never exercised by the p
       type across Core/Shell/DockFactory/ViewLocator.
 - [ ] ⛔ A designer setting added to the Settings dialog must be registered in
       `CodeEditorDocumentView`'s static ctor (`:24-47`) or the settings contract test will not cover it.
-- [ ] **Gate:** ⛔ `dotnet clean` (AXAML), fast subset, then run the IDE.
+- [ ] **Gate:** ⛔ `dotnet clean` (AXAML), fast subset + `Shell`/`Dialogs` suites, then run the IDE.
 
-### Task 16: A missing handler becomes a hard error (D8)
+### Task 15: A missing handler becomes a hard error (D8)
 
 ⛔ Today nothing checks it, and the accidental guarantee is punctuation-dependent: `AddressOf OnClick`
 on a deleted handler gives **no diagnostic**; `AddressOf On_Click` gives *"Undefined identifier"*.
@@ -437,24 +410,25 @@ on a deleted handler gives **no diagnostic**; `AddressOf On_Click` gives *"Undef
       twin at `:6181-6188` is identical) real validation: the event expression must resolve to
       `SymbolKind.Event` or a `TypeKind.Delegate` member, and the handler's delegate type must match via
       the existing `GetDelegateParameterTypes` (`:5987-6000`).
-- [ ] **Gate: FULL SUITE.** This is `SemanticAnalyzer` and it tightens an error path.
+- [ ] **Gate: FULL SUITE.** This is `SemanticAnalyzer` and it tightens an error path — one of only two
+      places in this plan where the full suite is required.
 
 ---
 
 ## Slice 3 — `.blform` writes (WinForms)
 
-### Task 17: `.blform` schema, reader/writer, and algebra
+### Task 16: `.blform` schema, reader/writer, and algebra
 
-D2 makes two formats a deliberate decision; this is the `.blform` half of Task 10 and is the same size.
-Without it Task 19 has no input document to write from.
+D2 makes two formats a deliberate decision; this is the `.blform` half of Task 9 and is the same size.
+Without it Task 18 has no input document to write from.
 
 - [ ] Schema per the spec's worked example: absolute `X`/`Y`/`Width`/`Height`, `Anchor`/`Dock`, no
       `<Literal>`.
-- [ ] Same structure-preserving reader/writer, same D9 tiers, same algebra tests as Task 10.
+- [ ] Same structure-preserving reader/writer, same D9 tiers, same algebra tests as Task 9.
 - [ ] Extend `design --check` to accept `.blform`.
-- [ ] **Gate:** fast subset.
+- [ ] **Gate:** fast subset + `Serialization` suite.
 
-### Task 18: The WinForms control catalog and its CI gate
+### Task 17: The WinForms control catalog and its CI gate
 
 ⛔ WinForms has **no type metadata at any layer**, so the catalog is unfalsifiable hand-written data.
 The gate *is* the type system.
@@ -463,15 +437,20 @@ The gate *is* the type system.
       *"add a row, never widen the default"* — with a completeness guard that **fails** on a missing row.
 - [ ] `[Category("Integration")] [TestFixture] [NonParallelizable]`: generate a project containing
       **every** catalog control with **every** property set and require the real CLI to exit 0.
-      ⛔ Drive the cases from the catalog via `TestCaseSource`, **not** a hand-written `[TestCase]` list
-      — that is exactly the hole `TemplateBuildSweepTests` has.
+      ⛔ Drive the cases from the catalog via `TestCaseSource`, **not** a hand-written `[TestCase]` list.
 - [ ] Prefer `Native.CSharpRun.CompileAndRun` (in-process Roslyn, no SDK gate) for the per-control
       "csc accepts it" leg; keep one real CLI smoke on top.
+- [ ] ⛔ **Do not gate a modal dialog on UIAutomation.** It cannot query a thread blocked in a modal
+      message loop and returns a false negative — measured 2026-09-11, three runs disagreed. Use Win32
+      `EnumWindows`/`EnumChildWindows` (a MessageBox is window class `#32770`).
 - [ ] ⛔ Budget for contention: Integration fixtures are `[NonParallelizable]` because each saturates a
       core. Re-run failures in isolation before investigating.
 - [ ] **Gate:** full suite.
 
-### Task 19: WinForms region writing and template reconciliation
+### Task 18: WinForms region writing, and the VSIX template becomes canonical
+
+**Owner decision 3:** the VSIX shape is canonical. It is what the designer generates and the only
+WinForms shape proven to work end to end.
 
 - [ ] Write the regions in the shipped order: declare field → construct → set properties →
       `AddHandler … AddressOf` → `Controls.Add` (`WinFormsApp/MainForm.bas:14-15`, `:41-46`).
@@ -479,14 +458,20 @@ The gate *is* the type system.
       `btnLogin.Location = New Point(96, 80)`. `Location` returns a `Point` **struct**, so
       `btnLogin.Location.X = 96` fails at `csc` — and BasicLang will not catch it, because WinForms
       member access degrades to `Object` with no diagnostic. (The exact csc code depends on whether the
-      optimizer inlines the temp the C# backend emits at `CSharpBackend.cs:3629-3637`; do not assert a
-      specific code without measuring it.)
-- [ ] **Resolve the three-way template disagreement** (owner question 3): the VSIX ships `Program.bas`
-      + `MainForm.bas` with an SDK-style `.blproj`; the IDE ships one `Main.bas` with no
-      `InitializeComponent` and a differently-named handler; the CLI `TemplateEngine` has **no WinForms
-      template at all**. ✅ The VSIX shape is **measured to build** (2026-09-11: exit 0, a 151,552-byte
-      `.exe`), so it is the safe candidate for canonical — it still has **zero build coverage**, so
-      whichever wins must be added to the sweep in the same change.
+      optimizer inlines the temp emitted at `CSharpBackend.cs:3629-3637`; do not assert a specific code
+      without measuring it.)
+- [ ] **Promote the VSIX shape and retire the divergence.** Today: the VSIX ships `Program.bas` +
+      `MainForm.bas`; the IDE ships one `Main.bas` with no `InitializeComponent` and handler
+      `OnButtonClick` (`ProjectTemplateService.cs:585-636`); the CLI `TemplateEngine` has **no WinForms
+      template at all**. Bring the IDE template and a new CLI template into line with the VSIX shape.
+      ⛔ Task 5's recognizer fixtures are keyed to the *current* IDE template — update them in the same
+      change or they silently stop testing what ships.
+- [ ] ⛔ **Add it to the sweep.** The canonical template has had **zero build coverage** its whole life;
+      `ProjectTemplates.All` is hard-coded and `TemplateBuildSweepTests`' cases are hand-written
+      `[TestCase]` strings, so it gains nothing automatically. Add the IDE↔CLI equivalence case too
+      (`TemplateBuildSweepTests.cs:168-191`, `:269-290`) — those two rosters are separate
+      implementations and only that test stops them drifting.
+- [ ] **Gate:** full suite + `BasicLang.exe build` + the IDE build path.
 
 **The target emission, measured — match it exactly.** The proven build produced:
 
@@ -494,34 +479,41 @@ The gate *is* the type system.
 public class MainForm : Form {
     private Label lblMessage;                          // Private is fine: same class, same file
     private void InitializeComponent() {
-        this.Text = "WinFormsProbe";                   // Me. -> this.
+        this.Text = "WinFormsProbe";                   // Me. → this.
         lblMessage.Location = new Point(20, 20);       // ONE statement — the geometry fan-in
-        btnClick.Click += btnClick_Click;              // AddHandler/AddressOf -> +=
+        btnClick.Click += btnClick_Click;              // AddHandler/AddressOf → +=
         this.Controls.Add(btnClick);
     } }
 ```
 
 with `[STAThread]` added automatically, namespace `GeneratedCode`, and `#line` directives mapping every
 statement back to the `.bas` — so breakpoints in the generated region land on the user's file.
-- [ ] **Gate:** full suite + `BasicLang.exe build` + the IDE build path.
 
 ---
 
 ## Slice 4 — closeout
 
-### Task 20
+### Task 19
 
-- [ ] Full suite, both entry points, expected 5826 / 4 baseline plus this plan's additions.
+- [ ] Full suite, both entry points. Baseline 5826 / 4 plus this plan's additions.
 - [ ] Refresh the `IDE\` drop: `robocopy <Shell bin> IDE /E` — ⛔ **never `/MIR`**, and verify against
       `IDE/BasicLang.exe new --list`, never timestamps. ⛔ `IDE/lib/js/dom-core.bli` is load-bearing.
-- [ ] Update `docs/HANDOFF.md` and `CLAUDE.md`; mark `docs/MULTI_FILE_SYSTEM_PLAN.md:21`'s `.frm` row
-      obsolete (owner question 2).
-- [ ] File as separate chips, not fixed here: the **`With` IR drop** (`IRBuilder.cs:3356`, `:2866`),
-      **`With` over a .NET receiver** (`SemanticAnalyzer.cs:6939`), **`Overrides` never validated**, and
-      **`ClearIncludedFiles` has zero call sites** (`Preprocessor.cs:568`).
-      ⛔ Do **not** file the C++ `Friend`-field gap — `IRBuilder.MapAccessModifier` (`:948-957`)
-      collapses `Friend` to `Private` before any `IRField` is built, so it is unreachable and the chip
-      would not reproduce.
+- [ ] Update `docs/HANDOFF.md` and `CLAUDE.md`. ⛔ Do **not** touch
+      `docs/MULTI_FILE_SYSTEM_PLAN.md:21` — owner decision 2 keeps `.frm` reserved for a user-authored
+      form file; it is not obsoleted by `.blform`.
+- [ ] File as separate chips, not fixed here:
+      - **Cross-file `Inherits`/`Implements`** — both broken, measured (`Unknown base class` /
+        `Unknown interface`, exit 1), same cause at `SemanticAnalyzer.cs:4569`/`:4598`. Out of this plan
+        by owner decision 1. The spec's *Cross-file resolution* section carries the full diagnosis and
+        the fix shape (route through `ResolveTypeName`, add the `InterfaceNode` arm, and do **not**
+        touch `CollectExportedSymbols`). ⚠ Affects any user with a multi-file class hierarchy.
+      - **`With` IR drop** (`IRBuilder.cs:3356`, `:2866`) and **`With` over a .NET receiver**
+        (`SemanticAnalyzer.cs:6939`).
+      - **`Overrides` never validated** (zero `Overrid` matches in `SemanticAnalyzer.cs`).
+      - **`ClearIncludedFiles` has zero call sites** (`Preprocessor.cs:568`).
+      - ⛔ Do **not** file the C++ `Friend`-field gap — `IRBuilder.MapAccessModifier` (`:948-957`)
+        collapses `Friend` to `Private` before any `IRField` is built, so it is unreachable and the chip
+        would not reproduce.
 
 ---
 
@@ -530,7 +522,8 @@ statement back to the `.bas` — so breakpoints in the generated region land on 
 Menus/toolbars/status bars · modal dialogs and `DialogResult` · data binding (slot reserved, emits
 nothing) · localization/resources (slot reserved) · validation (**no slot reserved** — added later as
 an optional element, which unknown-element round-tripping makes non-breaking) · multi-form navigation
-and MDI · WYSIWYG rendering. Reasons are in the spec's *Non-goals* table.
+and MDI · WYSIWYG rendering · `.frm` (a separate, user-authored form file, reserved and untouched).
+Reasons are in the spec's *Non-goals* table.
 
 **Decided now:** the designer never edits `Program.bas`, and the startup form is a **project**
 property, not a form property.
