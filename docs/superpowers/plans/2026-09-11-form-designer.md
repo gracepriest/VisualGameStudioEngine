@@ -22,6 +22,10 @@ NUnit, XML (`System.Xml.Linq` with `LoadOptions.SetLineInfo`).
 **Design spec:** `docs/superpowers/specs/2026-09-11-form-designer-design.md` — read it first,
 especially §2 (six corrections to the build prompt, two of which change tasks in this plan).
 
+**Shape:** 21 tasks across four slices. Slice 0 makes the ground true; slice 1 demos a read-only
+canvas with zero writes; slice 2 ships the web designer; slice 3 adds WinForms. Slices 0 and 1 are
+independent of each other and can run in either order — everything from slice 2 on needs both.
+
 ---
 
 ## ⛔ STATUS: NOT STARTED. Nothing below has been built or run.
@@ -31,12 +35,12 @@ environment for both this plan and the spec has **no .NET SDK** (`dotnet: comman
 the same constraint that produced the unbuilt patch in Task 1. Every "Gate" line is an instruction,
 not a record.
 
-**Owner sign-off: 4 of 5 answered. Every question that shapes the design is closed — slice 0 and
-slice 1 are fully specified and ready to start on a machine with an SDK. The one still open (Q5)
-blocks execution, not design.** Spec §10's five questions:
+**Owner sign-off: 4 of 5 answered, and every question that shapes the design is closed.** All
+twenty-one tasks below are specified to the step — slices 0 through 3, plus a definition of done.
+The one question still open (Q5) blocks execution, not design. Spec §10's five questions:
 
-- **Q1 — ✅ ANSWERED 2026-09-11: yes, WinForms also.** The dual-target scope is confirmed. Slice 2+
-  item 6 is un-gated, and its catalog CI gate is now mandatory infrastructure rather than a
+- **Q1 — ✅ ANSWERED 2026-09-11: yes, WinForms also.** The dual-target scope is confirmed. Slice 3
+  (Tasks 18–20) is un-gated, and its catalog CI gate is now mandatory infrastructure rather than a
   proposal — it is the only correctness check that target has (spec §10 Q1). Task 2 is on the
   critical path for the same reason.
 - **Q2 — ✅ ANSWERED 2026-09-11: Grid/Flow persisted, free pixel-drag with snap resolution**
@@ -60,7 +64,7 @@ Q1's answer does **not** re-order the slices: the web half still ships first (sp
 
 ---
 
-## Slice 0 — prerequisites. Non-negotiable. (~2 days + one full suite run)
+## Slice 0 — prerequisites. Non-negotiable. (~2 days + two full suite runs)
 
 Nothing in slice 1 depends on Tasks 2–4, but everything after slice 1 does, and Task 1 gates the
 whole generated-base-class design. Do slice 0 first anyway: it is the smallest set of changes that
@@ -174,7 +178,7 @@ extension, touch `JavaScriptEmitter`, or write one byte into a user's file.
 - [ ] **Step 1:** `FormDocument` / `FormControl` / a 10-kind `FormControlCatalog`.
 - [ ] **Step 2:** Per-target `Facet` bags with `Literal` / `Expression` / `Property` / `Attribute`
       kinds plus a `<Raw>` hatch (spec D3). Even with no writer, the **reader** must round-trip a
-      foreign-target facet into the model so slice 2's writer can preserve it.
+      foreign-target facet into the model so Task 9's writer can preserve it.
 - [ ] **Step 3:** **Serialize-subtree / deserialize-subtree-with-rename**, per spec §8 — required in
       slice 1 even though no UI calls it. Nearly free now, very expensive later.
 - [ ] **Step 4:** Three-tier read policy (spec D11) with **per-property** Degraded state carrying a
@@ -242,7 +246,7 @@ exists.
       cause crashes.
 
 ⛔ **No drag in slice 1.** Selection and hit-testing only. Dragging a control *is* a write, and
-slice 1's whole contract is zero writes; the drag gesture arrives in slice 2 behind Task 8a. The
+slice 1's whole contract is zero writes; the drag gesture arrives in Task 15, behind Task 8a. The
 temptation is real, because a canvas that highlights on click feels one small step from a canvas
 that moves things. It is not — the step is the entire snap-resolution design.
 
@@ -254,53 +258,320 @@ manual run of `IDE/VisualGameStudio.exe`.
 
 ---
 
-## Slice 2+ — writing (not scheduled here; sequence fixed)
+## Slice 2 — the web designer writes (the first shipping designer)
 
 Ordered so **the first writing, shipping, owner-facing designer is the web one** — it has the owner
 mandate, `dom-core.bli` is machine-readable ground truth a catalog can be pinned against, and F5
-already reaches a real renderer (`WebPreviewServer`, registered at `ServiceConfiguration.cs:96`).
+already reaches a real renderer (`MainWindowViewModel.cs:4168`, `_webPreviewServer.Start(...)`).
 
-0. **Task 8a — design the snap-resolution rule, before any drag gesture exists.** Spec D2a
-   enumerates five sub-decisions: which cell wins on a straddling drop (recommend: the pointer's
-   own position, because that is what the user is looking at); what dropping *outside* every
-   existing cell does (extend the grid, or refuse visibly — silently clamping into the nearest cell
-   is what users report as "it moved my button somewhere else"); within-cell alignment vs stretch;
-   undo restoring the prior **constraint** rather than the prior pixels; and `<Canvas>` keeping the
-   raw un-resolved gesture. ⚠ **The rule is UI behaviour, not persistence** — it must never produce
-   a document the property grid could not have produced, so it inherits D11's
-   `Read∘Apply == Apply∘Read` obligation. Write this down before Task 8 gains interaction; it is
-   the decision that makes the owner's Q2 answer real rather than aspirational.
-1. **`.blform` persistence + the structure-preserving writer.** Gate on the algebra, not on cases:
-   a no-op patch writes **nothing**; round-trip is byte-identical; `Read∘Apply == Apply∘Read`.
-   Reserve `<Components>`, `<Resources>`, `<Bind>` and `TabIndex` on day one (spec D1).
-2. **`.blform` as a `<Compile>` item.** Add to `FileExtensions.SourceExtensions`; keep **out of**
-   `ProjectFile.BasicLangSourceExtensions` and `ModuleResolver.SupportedExtensions`.
-   ⚠ **Then immediately do (3) — between them there is a window where XML reaches the lexer.**
-3. **The `FormLowerer` seam — partition, then inject** (spec §2.2, D5). In the BL6014 guard region
-   of `CompileProjectFiles`, after the `files.Count == 0` check and **before** the registration loop
-   at `Compiler.cs:383`. BL6014 is a C-family *allowlist*, so it will not catch `.blform`; without
-   this, `File.ReadAllText` hands XML to the BasicLang lexer, the error-recovering parser does not
-   throw, and a junk module is silently registered — the exact incident recorded at
-   `LspMixedProjectTests.cs:13-40`, where the pollution is **invisible in diagnostics**.
-   **Test that a `.blform` never reaches the lexer, via the symbol table directly.**
-4. **The toolbox and property grid.** Both are hand-built — Avalonia 11.3 base ships no
-   `PropertyGrid`, no `ColorPicker` and no font dialog. Price every type editor.
-   Edits commit on focus-loss/Enter, not per keystroke (spec D13).
-   **Double-click-to-create-handler lands here, and it is one edit, not two** (spec D10a): it writes
-   the conventionally-named `Sub btnSave_Click()` *and* the matching `<Bind>` atomically. Shipping
-   the sub without the bind is the failure mode — it looks like model 3 working and is a dead
-   button.
-5. **The markup emitter — and with it page model 2** (spec D9 + §10 Q3). `runat`-style marking is
-   **opt-in**: a page with zero designer-owned elements must still build and still support
-   code-behind, and unowned markup must be byte-identical after a save. Both are the §7 acceptance
-   tests, and a near-miss on the second is silent data loss in someone's hand-written HTML.
-   HTML fragment with stable ids + generated `.css`, always overwriting
-   from an asset root so `JavaScriptEmitter.cs:105-115`'s never-overwrite guard keeps protecting a
-   hand-authored `index.html`. `<body data-form="LoginForm">` with `Main()` dispatching on
-   `getAttribute` (spec D8 — **one `.js` per project; do not take on a backend change**).
-6. **WinForms lowering** — ✅ confirmed in scope (spec §10 Q1). Its CI gate (generate every catalog control with
-   every property, require the real CLI to exit 0) **is** its type system; blocker 7 means there is
-   no other check.
+⚠ **Tasks 10 and 11 must land in the same push.** Between them there is a window in which a
+`.blform` listed as `<Compile>` is handed to the BasicLang lexer. Do not split them across commits,
+and do not leave that window open overnight.
+
+### Task 8a: Design the snap-resolution rule (no code)
+
+The owner's Q2 answer (spec D2a) is only real if this is decided before a drag gesture exists.
+Output is a short spec section appended to the design doc, not source.
+
+- [ ] **Step 1:** Which cell wins when a drop straddles a boundary. **Recommendation: the pointer's
+      own position**, not the control's centroid — the pointer is what the user is looking at.
+- [ ] **Step 2:** What a drop *outside every existing cell* does — extend the grid (add a row or
+      column) or refuse with a visible reason. ⚠ **Silently clamping into the nearest existing cell
+      is what users report as "it moved my button somewhere else".** This is the sub-decision that
+      ships badly if it is improvised.
+- [ ] **Step 3:** Within-cell placement — stretch, or an alignment (start/center/end) picked from
+      where in the cell the drop landed. Stretch is the default only for a single occupant.
+- [ ] **Step 4:** Undo restores the prior **constraint**, not the prior pixels, and the undo entry
+      names the constraint.
+- [ ] **Step 5:** `<Canvas>` children keep the raw, unresolved gesture — drag sets `X`/`Y` and
+      snaplines behave exactly as a WinForms user expects. This is where the fidelity argument is
+      honoured in full.
+- [ ] **Step 6:** State the invariant explicitly: **the rule is UI behaviour, not persistence.** It
+      must never produce a document the property grid could not have produced, so it inherits D11's
+      `Read∘Apply == Apply∘Read` obligation.
+
+**Gate:** owner or reviewer sign-off on the written rule. No build.
+
+### Task 9: `.blform` schema and the structure-preserving writer
+
+**Files:**
+- Create: `VisualGameStudio.Core/Forms/BlformReader.cs`, `BlformWriter.cs`
+- Create: `VisualGameStudio.Core/Forms/Schema/` (element and attribute names as constants)
+- Test: `VisualGameStudio.Tests/Forms/BlformAlgebraTests.cs`
+
+- [ ] **Step 1: Write the algebra tests first, property-based over generated documents** — not three
+      hand-written cases. Three laws: a no-op patch writes **nothing** (assert bytes, not a dirty
+      flag); round-trip is **byte-identical**; `Read∘Apply == Apply∘Read`.
+- [ ] **Step 2:** Reader on `XDocument.Load` with `LoadOptions.SetLineInfo` so every diagnostic
+      carries `file(line,col)`. Unknown elements, unknown attributes and comments are retained on
+      the model, not discarded.
+- [ ] **Step 3:** Writer with deterministic attribute order and children in z-order.
+- [ ] **Step 4:** Reserve the four day-one sections even though v1 writes none of them:
+      `<Components>`, `<Resources>`, `<Bind Property= Source= Path=>`, and an explicit `TabIndex`
+      on every control (spec D1). Each is an hour now and a format break later.
+- [ ] **Step 5:** `BL8001` (not well-formed), `BL8002` (unknown control kind → Refused, file never
+      written), `BL8003` (unparseable value → that **one property** Degraded), `BL8007` (duplicate
+      id).
+- [ ] **Step 6:** Wire the reader into `design --check` from Task 7 so the CLI validates `.blform`
+      as well as recovered source.
+
+**Gate:** `--filter "TestCategory!=Integration"`. ⛔ **A failing algebra law is a hard stop, not a
+known issue** — every later task assumes these three hold.
+
+### Task 10: `.blform` enters the project system
+
+**Files:**
+- Modify: `VisualGameStudio.Core/Constants/FileExtensions.cs` (add `BasicLangForm = ".blform"` and
+  put it in `SourceExtensions`)
+- Verify unchanged: `ProjectFile.BasicLangSourceExtensions`, `ModuleResolver.SupportedExtensions` —
+  `.blform` must **not** appear in either
+- Modify: `VisualGameStudio.ProjectSystem/Services/ProjectService.cs:246` — the single
+  extension→`ProjectItemType` decision point, so an added `.blform` becomes `Compile`, not `Content`
+
+- [ ] **Step 1:** Add the extension and confirm `<Compile Include="LoginForm.blform" />` round-trips
+      through `ProjectSerializer` (it already does — verified spec §4 — so this is a regression
+      test, not new code).
+- [ ] **Step 2:** ⚠ **Assert the two exclusions.** A test that fails if `.blform` ever appears in
+      `ProjectFile.BasicLangSourceExtensions` or `ModuleResolver.SupportedExtensions`. Both are
+      "obviously wrong to add" right up until someone adds them to fix a different bug.
+- [ ] **Step 3:** Solution Explorer shows `.blform` with its own icon and opens it in the designer.
+- [ ] **Step 4:** ⛔ **Go straight to Task 11 in the same push.**
+
+**Gate:** `--filter "TestCategory!=Integration"` + `SolutionExplorerViewModelTests`.
+
+### Task 11: The `FormLowerer` seam — partition, then inject
+
+Spec §2.2 and D5. **This is the task the build prompt got wrong**, so read §2.2 before starting.
+
+**Files:**
+- Modify: `BasicLang/Compiler.cs` — the BL6014 guard region (`:351-381`), after the
+  `files.Count == 0` check and **before** the registration loop at `:383`
+- Create: `BasicLang/Forms/FormLowerer.cs`
+- Test: `VisualGameStudio.Tests/Compiler/FormLoweringSeamTests.cs`
+
+- [ ] **Step 1: Write the failing guard test first** — a project with a `.blform` `<Compile>` item
+      compiles, and the `.blform` **never reaches the lexer**. ⚠ **Assert via the symbol table /
+      module registry directly.** `LspMixedProjectTests.cs:13-40` records why: the error-recovering
+      parser does not throw, it registers a junk module under the file's basename, and *"the
+      pollution is invisible in diagnostics"*. A test that only checks `result.Success` passes while
+      the symbol table is corrupt.
+- [ ] **Step 2:** Confirm BL6014 does **not** catch it today — `CFamilySourceExtensions` is an
+      allowlist. Run the test and watch XML reach the lexer. That is the bug, reproduced.
+- [ ] **Step 3:** Partition `.blform` out of `files`; hand them to the lowerer; inject the generated
+      `.bas` back in. One seam, four build routes (`Program.cs:532`, `Compiler.cs:227`,
+      `BuildService.cs:651`, `CppProjectBuilder`).
+- [ ] **Step 4:** Generated sources land in `obj/gen/forms/` — gitignored already (`.gitignore:37`,
+      `[Oo]bj/`), never a `<Compile>` item, never in Solution Explorer (spec D4).
+- [ ] **Step 5: Both entry points.** `BasicLang.exe build X.blproj` **and** the IDE `BuildService`
+      path. Assert both, in this task, not later.
+
+**Gate: FULL SUITE.** This edits `Compiler.CompileProjectFiles`, which every build route runs
+through.
+
+### Task 12: FormIR and the web lowerer
+
+**Files:**
+- Create: `BasicLang/Forms/FormIR.cs`, `BasicLang/Forms/WebFormLowerer.cs`
+- Test: `VisualGameStudio.Tests/Forms/WebLoweringTests.cs`
+
+- [ ] **Step 1:** `FormIR` as the single intermediate both targets lower from (spec D6). ⚠ **Lower
+      to BasicLang source, never to JavaScript.** Emitting `.js` directly would bypass source maps,
+      `JsCapabilityChecker`, semantic type-checking, and the ability for handler bodies to call
+      generated declarations with real types.
+- [ ] **Step 2:** Emit three artifacts per form: an HTML fragment with stable ids, a `.css`, and a
+      `.g.bas` that touches only `getElementById` and `addEventListener` (both already declared —
+      `dom-core.bli:24` and `:57`). **Zero `.bli` additions.**
+- [ ] **Step 3: Layout is CSS text, not typed member access.** `dom-core.bli` has no
+      `position`/`left`/`top`/`zIndex` (verified: `grep -c` returns 0). Geometry **fans out** on the
+      web — `X="96" Y="80"` becomes two independent declarations (spec D7).
+- [ ] **Step 4:** Generated markup **always overwrites**, shipped from an asset root, so
+      `JavaScriptEmitter.cs:105-115`'s never-overwrite guard keeps protecting only a hand-authored
+      `index.html` that never entered that root. Test both halves: generated markup is replaced on
+      rebuild; a hand-authored `index.html` is not.
+- [ ] **Step 5:** One `.js` per project (spec D8). `<body data-form="LoginForm">`, `Main()`
+      dispatching on `doc.body.getAttribute("data-form")`. ⛔ **Do not add multi-entry-point support
+      to `JavaScriptBackend` — that is a backend change, not a designer change.**
+- [ ] **Step 6:** Generated base class members are `Protected`, never `Private`
+      (`SemanticAnalyzer.cs:448-478` — a private member of a sibling base is invisible to the
+      subclass), and the type is `<Name>Base`, never `<Name>_Base` (the PascalCase heuristic at
+      `:2397` excludes identifiers containing `_`).
+
+**Gate:** the real CLI. **stdout is the only valid oracle** — every shipping route runs the IR
+optimizer and the unit-test helper does not.
+
+### Task 13: Events — `<Bind>` wires, convention names
+
+Spec D10 and **D10a**, which exists because the owner's Q3 answer made auto-wiring the designer's
+job.
+
+**Files:**
+- Modify: `BasicLang/Forms/WebFormLowerer.cs` (DOM thunk), `FormIR.cs`
+- Test: `VisualGameStudio.Tests/Forms/FormEventWiringTests.cs`
+
+- [ ] **Step 1:** `FormEvent` plus a per-target thunk — an inline lambda on DOM, a private
+      `(sender, EventArgs)` sub on WinForms. This dodges the `Action` vs `Action(Of DomEvent)` arity
+      wall and BL7007's ban on `EventArgs` together.
+- [ ] **Step 2:** Wiring is `AddHandler <ctl>.<Event>, AddressOf <handler>` — `Handles` is lexed but
+      **never parsed** (`Parser.cs` has zero `TokenType.Handles`), so it is not available.
+- [ ] **Step 3: A missing handler is an error** (`BL8005`), not a warning. The analyzer has no
+      override validation, so a renamed or deleted handler otherwise yields a green build with a
+      wired, dead button.
+- [ ] **Step 4: Exactly one wiring mechanism** (D10a). `<Bind>` wires; the naming convention only
+      *suggests* the name. ⚠ **Test that a conventionally-named handler with no `<Bind>` is NOT
+      wired** and raises `BL8008`. That assertion is what stops convention wiring creeping back in
+      as a "helpful" second mechanism and double-firing every handler.
+
+**Gate:** `--filter "TestCategory!=Integration"` + a CLI run proving a real button fires once.
+
+### Task 14: The property grid and toolbox
+
+**Files:**
+- Create: `VisualGameStudio.Shell/Views/Panels/PropertyGridView.axaml(.cs)`, `ToolboxView.axaml(.cs)`
+  and their view models
+- Modify: `VisualGameStudio.Shell/Dock/DockFactory.cs` (two new dock regions)
+
+- [ ] **Step 1:** Both are hand-built. Avalonia 11.3 base ships **no** `PropertyGrid`, **no**
+      `ColorPicker` and **no** font dialog — price every type editor as bespoke.
+- [ ] **Step 2:** Edits commit on **focus-loss/Enter**, not per keystroke (spec D13) — otherwise
+      typing "Sign in" is eight undo entries.
+- [ ] **Step 3:** Degraded rows are **per property** (spec D11): one unparseable value freezes
+      exactly one row, shows its reason, and leaves every other row editable.
+- [ ] **Step 4:** Foreign-target facets render greyed with a reason and are **never dropped on save**
+      (spec D3) — the round-trip test from Task 9 covers the persistence half; this is the UI half.
+- [ ] **Step 5: Double-click-to-create-handler is ONE atomic edit** (D10a): it writes
+      `Sub btnSave_Click()` **and** the matching `<Bind>` together. ⚠ Shipping the sub without the
+      bind looks like model 3 working and is a dead button.
+- [ ] **Step 6:** ⚠ **`dotnet clean` before building** — AXAML plus a stale cache crashes.
+
+**Gate:** full suite (this reaches `VisualGameStudio.Shell`) + a manual `IDE/VisualGameStudio.exe`
+run.
+
+### Task 15: The canvas writes — drag with snap resolution
+
+This is where slice 1's read-only canvas gains a write path, and where Task 8a's rule is
+implemented. Not before.
+
+**Files:**
+- Modify: `VisualGameStudio.Editor/Controls/FormCanvasControl.cs`
+
+- [ ] **Step 1:** Drag, drop from toolbox, delete, reorder — each resolved through Task 8a's rule.
+- [ ] **Step 2:** Snaplines while dragging, and the status-bar readout naming the constraint the drop
+      will write ("col 1, row 0 — stretch") **before** the mouse is released.
+- [ ] **Step 3:** Undo/redo restores the prior **constraint**, not the prior pixels.
+- [ ] **Step 4: The canvas keeps rendering the model recovered from the persisted artifact**, never
+      from the in-memory delta (spec D11), so a writer/reader disagreement surfaces within one tick
+      instead of as slow corruption.
+- [ ] **Step 5:** Re-run Task 9's algebra tests against documents produced by dragging, not only by
+      the property grid. The gesture must not be able to produce a document the grid could not.
+
+**Gate:** full suite + manual IDE run.
+
+### Task 16: `design --import` — the recognizer as an importer
+
+**Files:**
+- Modify: `BasicLang/Program.cs` (the `design` verb)
+
+- [ ] **Step 1:** Convert a hand-written form (Task 6's recognizer output) into a `.blform` plus a
+      trimmed code-behind. This is the migration path for existing forms, including the shipped VSIX
+      template.
+- [ ] **Step 2:** Refuses rather than guesses — anything the recognizer marks Refused stops the
+      import with a named diagnostic and writes nothing.
+- [ ] **Step 3:** ⚠ **Grep every backend/solution-type dispatch map again** before adding the
+      subcommand. A missing switch arm does not fail, it silently builds C#; four maps have already
+      defaulted that way.
+
+**Gate:** the real CLI, against both shipped templates.
+
+### Task 17: Web end-to-end — the shipping milestone
+
+- [ ] **Step 1:** New project → design a form on the canvas → F5 → the form renders in the system
+      browser and a button fires exactly once.
+- [ ] **Step 2:** **Model 2 acceptance** (spec §7, §10 Q3): a page with **zero** designer-owned
+      elements still builds and still supports code-behind; a mixed page's unowned markup is
+      **byte-identical** after a designer save. A near-miss on the second is silent data loss in
+      someone's hand-written HTML.
+- [ ] **Step 3:** **Model 3 acceptance:** double-click produces a conventionally-named handler that
+      is **actually wired** — assert the `<Bind>` was written, not merely that the sub exists.
+      Asserting the sub alone would pass under the convention-only design that D10a rejected, and so
+      proves nothing.
+
+**Gate: FULL SUITE**, and this is the point at which the web designer is claimable as shipped.
+
+---
+
+## Slice 3 — WinForms
+
+Confirmed in scope by the owner (spec §10 Q1). Everything here rests on Task 1 and Task 2 having
+landed, and on the fact that **this target has no type metadata at any layer**.
+
+### Task 18: The WinForms lowerer
+
+**Files:**
+- Create: `BasicLang/Forms/WinFormsLowerer.cs`
+- Test: `VisualGameStudio.Tests/Forms/WinFormsLoweringTests.cs`
+
+- [ ] **Step 1:** Match the shipped template's shape exactly
+      (`BasicLang.VisualStudio/.../WinFormsApp/MainForm.bas`) — it is already swept by
+      `TemplateBuildSweepTests` and `BuildServicePipelineTests.Build_WinFormsTemplate_DotNet_Builds`.
+- [ ] **Step 2: Geometry fans IN here** (spec D7). `X="96" Y="80"` is **one** statement —
+      `btnLogin.Location = New Point(96, 80)`. ⚠ It cannot be emitted as two: `Location` returns a
+      `Point` **struct**, so `btnLogin.Location.X = 96` is CS1612 — and BasicLang will not catch it,
+      because WinForms types come from the PascalCase heuristic and member access degrades to
+      `Object` with no diagnostic. It compiles clean until `csc`.
+- [ ] **Step 3:** One statement per property — there is no object-initializer or `With` syntax
+      (`Parser.cs` `New` parses a type reference and optional positional args, then returns).
+- [ ] **Step 4:** Grid/Flow containers lower to `TableLayoutPanel`/`FlowLayoutPanel`; `<Canvas>`
+      children lower to `Location`/`Size` with `Anchor`.
+
+**Gate:** the real CLI **and** `dotnet build` on the emitted project — `csc` is the only thing that
+actually type-checks this target.
+
+### Task 19: The catalog CI gate — the stand-in for the type system
+
+⛔ **This is not a nicety. It is the only correctness check WinForms has.** `EnableNetResolution`
+returns early for `UseWindowsForms` (`Compiler.cs:145-146`), the resolver closure is
+`Microsoft.NETCore.App` only, and `CommonNetTypes` contains **zero** WinForms names — so the catalog
+is otherwise unfalsifiable hand-written data.
+
+- [ ] **Step 1:** Generate a project containing **every catalog control with every property set**.
+- [ ] **Step 2:** Require the **real CLI** to exit 0, then `dotnet build` to exit 0.
+- [ ] **Step 3:** Run it on every catalog change. A control added without passing this gate is a
+      control nobody has established exists.
+- [ ] **Step 4:** ⚠ Assert no generated identifier contains `_` — the heuristic excludes such names
+      and `Me.Text` becomes a hard semantic error.
+
+**Gate:** the gate *is* the test. Wire it into the suite as `[Category("Integration")]`.
+
+### Task 20: WinForms end-to-end
+
+- [ ] **Step 1:** New WinForms project → design a form → build → run → a window appears and a button
+      fires once.
+- [ ] **Step 2:** Confirm Task 2's fix holds end-to-end: add a file through the IDE (which triggers a
+      project save), then build **from the CLI**. Before Task 2 this fails CS0246 on `Form`.
+- [ ] **Step 3:** `design --import` on the shipped VSIX template produces a `.blform` that builds to
+      the same window.
+
+**Gate: FULL SUITE.**
+
+---
+
+## Definition of done
+
+The feature is shippable when all of these hold at once:
+
+- [ ] Slice 0's four tasks landed, each full-suite gated where it touches `SemanticAnalyzer`.
+- [ ] Task 9's three algebra laws hold — no-op writes nothing, round-trip byte-identical,
+      `Read∘Apply == Apply∘Read` — against documents produced by **both** the property grid and the
+      drag gesture.
+- [ ] A `.blform` never reaches the BasicLang lexer, asserted via the symbol table.
+- [ ] Both entry points build every form: `BasicLang.exe build X.blproj` and the IDE.
+- [ ] Page model 2 and model 3 acceptance tests pass (Task 17) — they are the only place those
+      staged capabilities get proven.
+- [ ] The WinForms catalog gate passes with every control and every property.
+- [ ] `IDE/` refreshed with `robocopy <Shell bin> IDE /E` — **never `/MIR`** — and verified against
+      the deployed binary (`IDE/BasicLang.exe new --list`), not timestamps.
+- [ ] The full suite matches the recorded baseline, with stdout **and stderr** captured and the
+      total checked against the expected count.
 
 ---
 

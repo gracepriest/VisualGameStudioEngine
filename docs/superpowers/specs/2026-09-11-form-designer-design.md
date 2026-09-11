@@ -565,7 +565,19 @@ mandate, `dom-core.bli` is machine-readable ground truth a catalog can be pinned
 puts the real renderer one keystroke away. WinForms is rendered in the read-only slice anyway,
 because the template already exists and a window is the better demo.
 
-Full task breakdown and gates: `docs/superpowers/plans/2026-09-11-form-designer.md`.
+Full task breakdown and gates: `docs/superpowers/plans/2026-09-11-form-designer.md` — **21 tasks
+across four slices, specified to the step, with a definition of done.** Slice 0 makes the ground
+true (the two `SemanticAnalyzer` fixes, the `ProjectSerializer` fix, DPI); slice 1 demos a
+read-only canvas with zero writes; slice 2 ships the web designer; slice 3 adds WinForms.
+
+Three tasks carry warnings worth repeating here, because each is a place where the obvious
+implementation is wrong:
+
+- **Tasks 10 and 11 must land in the same push.** Between them a `.blform` listed as `<Compile>`
+  is handed to the BasicLang lexer (§2.2).
+- **Task 15 (drag) must not start before Task 8a** (the snap-resolution rule) is written down.
+- **Task 19 (the WinForms catalog gate) is not a nicety** — with no type metadata at any layer, it
+  is the only correctness check that target has.
 
 ---
 
