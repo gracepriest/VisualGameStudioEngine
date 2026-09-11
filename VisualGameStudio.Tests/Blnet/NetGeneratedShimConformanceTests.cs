@@ -65,7 +65,16 @@ public class NetGeneratedShimConformanceTests
         string projectName, IReadOnlyDictionary<string, string> files,
         bool withProbe = false, string extraItemGroupXml = "")
     {
-        var key = projectName;
+        // The key covers the NAME and every build INPUT. Keyed on the name alone — as it was
+        // until P2a-2 Task 14 — a second row passing the same name with different sources or a
+        // different item group silently got the FIRST program's build back and asserted, green,
+        // against the wrong executable. The name stays in the key: it is also the shim assembly
+        // name and the output name. Printable separators, never NUL (see the pipeline twin).
+        var key = projectName
+                  + "\n--\n" + withProbe
+                  + "\n--\n" + extraItemGroupXml
+                  + "\n--\n" + string.Join("\n--\n", files.OrderBy(f => f.Key, StringComparer.Ordinal)
+                      .Select(f => f.Key + "\n=\n" + f.Value));
         return Builds.GetOrAdd(key, _ => new Lazy<SharedBuild>(() =>
         {
             var dir = NetShimPipelineFixture.NewTempDir("blnet-conf-");
@@ -100,45 +109,8 @@ public class NetGeneratedShimConformanceTests
             NetShimPipelineFixture.TryDeleteDir(dir);
     }
 
-    /// <summary>
-    /// Run a built program that is EXPECTED to fail, returning its exit code and both streams
-    /// instead of asserting success.
-    ///
-    /// <para><c>NetShimPipelineFixture.Run</c> asserts <c>ExitCode == 0</c>, which is right for a
-    /// happy-path row and unusable for §8.2's handle-0 rule, where dying IS the specified
-    /// behaviour. Note <c>NetProxyEmitter.StartupFailureExitCode</c> (3) is asserted NOWHERE in
-    /// the suite, so a row that pins an exit code needs this path.</para>
-    ///
-    /// <para>⛔ Both streams are drained CONCURRENTLY. Reading stdout to end and only then
-    /// reading stderr deadlocks if the child fills the stderr pipe buffer while we are blocked on
-    /// stdout — and the WaitForExit timeout does not save you, because the block is in the read,
-    /// not the wait. A failing program is exactly the one likely to write a lot to stderr.</para>
-    /// </summary>
-    private static (int ExitCode, string StdOut, string StdErr) RunAllowingFailure(string exePath)
-    {
-        var psi = new System.Diagnostics.ProcessStartInfo(exePath)
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = Path.GetDirectoryName(exePath)!,
-        };
-        using var process = System.Diagnostics.Process.Start(psi)!;
-        var outTask = process.StandardOutput.ReadToEndAsync();
-        var errTask = process.StandardError.ReadToEndAsync();
-
-        if (!process.WaitForExit(60_000))
-        {
-            try { process.Kill(entireProcessTree: true); } catch { /* already gone */ }
-            Assert.Fail("the built program did not exit within 60s — a §8.2 row must fail fast, "
-                        + "not hang.");
-        }
-
-        return (process.ExitCode,
-                outTask.GetAwaiter().GetResult().Replace("\r\n", "\n"),
-                errTask.GetAwaiter().GetResult().Replace("\r\n", "\n"));
-    }
+    // RunAllowingFailure (exit code + BOTH streams, drained concurrently) and SandboxCopy's body
+    // live on NetShimPipelineFixture since P2a-2 Task 14, shared with the pipeline fixture.
 
     private static void AssertBuilt(CppProjectBuildResult result, string label)
     {
@@ -177,7 +149,7 @@ public class NetGeneratedShimConformanceTests
     /// <summary>
     /// The property program's sources, hoisted so the §9.3 handshake row below can reuse the SAME
     /// memoized build instead of paying a second AOT publish. <see cref="BuildOnce"/> keys on the
-    /// project name, so both callers must pass this exact dictionary.
+    /// project name AND the sources, so both callers must pass this exact dictionary.
     /// </summary>
     private static readonly IReadOnlyDictionary<string, string> PropertyProgram =
         new Dictionary<string, string>(StringComparer.Ordinal)
@@ -344,25 +316,17 @@ public class NetGeneratedShimConformanceTests
     /// red together, or vice versa. Costs no publish: the build is reused.</para>
     /// </summary>
     /// <summary>
-    /// Copy a memoized build's output directory into a fresh sandbox and return the paths a §9.3
-    /// failure-mode row needs. The copy is the whole point: the memoized directory is shared with
-    /// the happy-path rows, so mutating it in place would make tests order-dependent.
+    /// Copy a memoized build's output directory into a fresh sandbox (registered for teardown)
+    /// and return the paths a §9.3 failure-mode row needs. The copy is the whole point: the
+    /// memoized directory is shared with the happy-path rows, so mutating it in place would make
+    /// tests order-dependent. The body — the copy and the never-Ignore shim guard — is
+    /// <see cref="NetShimPipelineFixture.SandboxCopy"/>; this wrapper owns only the directory.
     /// </summary>
     private static (string Exe, string ShimPath) SandboxCopy(SharedBuild built, string projectName, string tag)
     {
-        var sourceDir = Path.GetDirectoryName(built.Result.ExecutablePath)!;
         var sandbox = NetShimPipelineFixture.NewTempDir("blnet-conf-" + tag + "-");
         Dirs.Add(sandbox);
-        foreach (var file in Directory.GetFiles(sourceDir))
-            File.Copy(file, Path.Combine(sandbox, Path.GetFileName(file)));
-
-        var shimName = NetProxyEmitter.ShimModuleFileName(NetShimGenerator.ShimAssemblyName(projectName));
-        var shimPath = Path.Combine(sandbox, shimName);
-        Assert.That(File.Exists(shimPath), Is.True,
-            "guard: the deployed shim must be present in the copy before this row replaces or "
-            + "removes it, or the row proves nothing. Looked for " + shimName + " in " + sandbox);
-
-        return (Path.Combine(sandbox, Path.GetFileName(built.Result.ExecutablePath)!), shimPath);
+        return NetShimPipelineFixture.SandboxCopy(built.Result, projectName, sandbox);
     }
 
     /// <summary>
@@ -387,7 +351,7 @@ public class NetGeneratedShimConformanceTests
         var (exe, shimPath) = SandboxCopy(built, "ConfProperty", "noexport");
         File.Copy(typeof(NetGeneratedShimConformanceTests).Assembly.Location, shimPath, overwrite: true);
 
-        var (exitCode, stdout, stderr) = RunAllowingFailure(exe);
+        var (exitCode, stdout, stderr) = NetShimPipelineFixture.RunAllowingFailure(exe);
         var dump = $"exit={exitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}";
 
         Assert.Multiple(() =>
@@ -474,7 +438,7 @@ public class NetGeneratedShimConformanceTests
         var (exe, shimPath) = SandboxCopy(built, "ConfMemberExport", "nomember");
         File.Copy(handShim, shimPath, overwrite: true);
 
-        var (exitCode, stdout, stderr) = RunAllowingFailure(exe);
+        var (exitCode, stdout, stderr) = NetShimPipelineFixture.RunAllowingFailure(exe);
         var dump = $"exit={exitCode} (0x{unchecked((uint)exitCode):X8})\nstdout:\n{stdout}\nstderr:\n{stderr}";
 
         Assert.Multiple(() =>
@@ -590,7 +554,7 @@ public class NetGeneratedShimConformanceTests
 
         File.Copy(stubDll, shimPath, overwrite: true);
 
-        var (exitCode, stdout, stderr) = RunAllowingFailure(exe);
+        var (exitCode, stdout, stderr) = NetShimPipelineFixture.RunAllowingFailure(exe);
         var dump = $"exit={exitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}";
         var expectedLine = "blnet: shim ABI " + wrongAbi + ", expected "
                            + BasicLang.Compiler.CodeGen.CPlusPlus.BlnetContract.AbiVersion;
@@ -632,7 +596,7 @@ public class NetGeneratedShimConformanceTests
         File.Delete(shimPath);
 
         var exe = Path.Combine(sandbox, Path.GetFileName(built.Result.ExecutablePath)!);
-        var (exitCode, stdout, stderr) = RunAllowingFailure(exe);
+        var (exitCode, stdout, stderr) = NetShimPipelineFixture.RunAllowingFailure(exe);
         var dump = $"exit={exitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}";
 
         Assert.Multiple(() =>
@@ -1102,5 +1066,119 @@ public class NetGeneratedShimConformanceTests
             + "to std::runtime_error, so the per-clause handlers collide. A different failure "
             + "means this row is pinning something else and is no longer evidence about "
             + "multi-clause catch.\n" + text);
+    }
+
+    // =====================================================================================
+    // §12.5 — a BasicLang program and a hand-written .cpp both calling the same .NET library
+    // (plan Task 14: the §9.5 merge proof).
+    // =====================================================================================
+
+    /// <summary>
+    /// §12.5's first integration row: ONE project, a BasicLang module AND a hand-written
+    /// <c>.cpp</c>, both reaching the SAME .NET library through the SAME generated proxies, with
+    /// the C++ side owning <c>main()</c> (so the BasicLang side has no <c>Sub Main</c> — the
+    /// entry-point rule allows exactly one owner).
+    ///
+    /// <para><b>Each side calls a member the other does not</b> — that is what makes this
+    /// evidence about the MERGE rather than about either producer alone. The BasicLang side calls
+    /// <c>Slots.TryDouble</c> through ordinary §7.1 call-site reachability; the C++ side calls
+    /// <c>Slots.Bump</c>, which NO BasicLang code names, so it is in the proxy table only because
+    /// <c>&lt;NetProxy Include="Aot.Probe.Slots"/&gt;</c> put it there. Remove the declaration and
+    /// <c>native.cpp</c> stops compiling; drop the proxy TUs from the compile set (§9.5's
+    /// "emitted but never compiled or linked") and <c>g_net</c> is unresolved at link for BOTH
+    /// sides; never run the startup object and the first proxy call, on either side, hits §9.2's
+    /// null-slot guard. <c>TryDouble</c> is reached BOTH ways and the table must carry it ONCE.</para>
+    ///
+    /// <para>Exact stdout equality, deliberately: both lines are values only .NET computes
+    /// (<c>Bump</c> is <c>v += 5</c>; <c>TryDouble</c> writes <c>v * 2</c> to its out slot), so
+    /// neither side can silently vanish or answer a native default.</para>
+    ///
+    /// <para>The C++-side proxy's spelling is DERIVED at test time through the same resolver →
+    /// collector → mangler chain the builder uses (§9.2: function name == slot name), never typed
+    /// in: a literal <c>bl_net_…_&lt;hash&gt;</c> would pin the mangler's hash and rot silently.
+    /// The <c>.cpp</c> includes <c>blnet_proxies.g.hpp</c> ITSELF, guarded below — reaching the
+    /// proxies only transitively through <c>Logic.g.h</c> would make this a BasicLang row with a
+    /// C++ <c>main</c>, not the C++-consumer proof.</para>
+    /// </summary>
+    [Test]
+    public void AMixedProject_BasicLangAndHandWrittenCpp_BothCallTheSameDotNetLibrary()
+    {
+        // Derive the C++-side proxy names BEFORE the build: native.cpp is a build input.
+        var deriveDir = NetShimPipelineFixture.NewTempDir("blnet-conf-derive-");
+        Dirs.Add(deriveDir);
+        var surface = NetShimPipelineFixture.DeclaredSurface(
+            deriveDir, NetShimPipelineFixture.EmitProbeAssembly(deriveDir), "Aot.Probe.Slots");
+        var bump = NetShimPipelineFixture.SlotName(surface, "Aot.Probe.Slots", "Bump");
+        var tryDouble = NetShimPipelineFixture.SlotName(surface, "Aot.Probe.Slots", "TryDouble");
+
+        var nativeCpp = $$"""
+            #include "Logic.g.h"
+            #include "blnet_proxies.g.hpp"
+            #include <cstdio>
+            #include <cstdint>
+            int main() {
+                /* Bump(ref int): a ByRef scalar proxy takes int32_t&; .NET adds 5. No BasicLang
+                   code names Bump — it is in the table because of the <NetProxy> declaration. */
+                int32_t b = 10;
+                BasicLang::net::{{bump}}(b);
+                std::printf("cpp=%d\n", static_cast<int>(b));
+                /* BlSide() is the BasicLang module function; it calls TryDouble, which C++ does not. */
+                std::printf("bl=%d\n", static_cast<int>(BlSide()));
+                return 0;
+            }
+            """;
+        Assert.That(nativeCpp, Does.Contain("#include \"blnet_proxies.g.hpp\""),
+            "guard: the .cpp must include the proxies header ITSELF — plan Task 14 defines this "
+            + "row by that include.");
+
+        var built = BuildOnce(
+            "ConfMixed",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Logic.bas"] = """
+                    Using Aot.Probe
+
+                    Module Logic
+                     Function BlSide() As Integer
+                      Dim R As Integer = 0
+                      If Slots.TryDouble(21, R) Then
+                       Return R
+                      End If
+                      Return -1
+                     End Function
+                    End Module
+                    """,
+                ["native.cpp"] = nativeCpp,
+            },
+            withProbe: true,
+            extraItemGroupXml:
+                "\n  <ItemGroup>\n    <NetProxy Include=\"Aot.Probe.Slots\" />\n  </ItemGroup>");
+
+        AssertBuilt(built.Result, "the §12.5 mixed BasicLang + C++ program");
+
+        var objGen = Path.Combine(built.Dir, "obj", "gen");
+        var bindings = File.ReadAllText(Path.Combine(objGen, NetProxyEmitter.BindingsFileName));
+        Assert.Multiple(() =>
+        {
+            Assert.That(File.Exists(Path.Combine(objGen, NetProxyEmitter.ProxiesFileName)), Is.True,
+                "the proxies header native.cpp includes must be in obj/gen — the directory the "
+                + "builder puts on the include path when the MERGED artifact set is non-empty.");
+            // A slot is one struct field, spelled `(BLNET_CALL *<slot>)(`, in the bindings.
+            Assert.That(bindings.Split("*" + tryDouble + ")").Length - 1, Is.EqualTo(1),
+                "TryDouble is reached BOTH ways — the BasicLang call site (§7.1) and the "
+                + "<NetProxy> declaration (§7.2) — and the proxy table must carry it exactly "
+                + "ONCE.\n" + bindings);
+            Assert.That(bindings, Does.Contain("*" + bump + ")"),
+                "Bump is in the table only because of the <NetProxy> declaration; no BasicLang "
+                + "code names it.\n" + bindings);
+        });
+
+        Assert.That(NetShimPipelineFixture.Run(built.Result.ExecutablePath!),
+            Is.EqualTo("cpp=15\nbl=42\n"),
+            "cpp=15 is .NET's Bump (10 + 5) read back through a ByRef scalar proxy called from "
+            + "hand-written C++; bl=42 is TryDouble's out slot (21 * 2) read back through the "
+            + "BasicLang module function. Both are values only .NET computes. 10 means the ref "
+            + "travelled by value; -1 means TryDouble answered false; a missing line means one "
+            + "side never reached the shared table.");
     }
 }

@@ -315,6 +315,122 @@ internal static class NetShimPipelineFixture
         return stdout.Replace("\r\n", "\n");
     }
 
+    /// <summary>
+    /// Run a built program that is EXPECTED to fail, returning its exit code and both streams
+    /// instead of asserting success.
+    ///
+    /// <para><see cref="Run"/> asserts <c>ExitCode == 0</c>, which is right for a happy-path
+    /// row and unusable for §8.2's handle-0 rule or a §9.3 handshake row, where dying IS the
+    /// specified behaviour. Hoisted here from <c>NetGeneratedShimConformanceTests</c> (P2a-2
+    /// Task 14) so both publish-backed fixtures share ONE body.</para>
+    ///
+    /// <para>⛔ Both streams are drained CONCURRENTLY. Reading stdout to end and only then
+    /// reading stderr deadlocks if the child fills the stderr pipe buffer while we are blocked on
+    /// stdout — and the WaitForExit timeout does not save you, because the block is in the read,
+    /// not the wait. A failing program is exactly the one likely to write a lot to stderr.</para>
+    /// </summary>
+    internal static (int ExitCode, string StdOut, string StdErr) RunAllowingFailure(string exePath)
+    {
+        var psi = new ProcessStartInfo(exePath)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = Path.GetDirectoryName(exePath)!,
+        };
+        using var process = Process.Start(psi)!;
+        var outTask = process.StandardOutput.ReadToEndAsync();
+        var errTask = process.StandardError.ReadToEndAsync();
+
+        if (!process.WaitForExit(60_000))
+        {
+            try { process.Kill(entireProcessTree: true); } catch { /* already gone */ }
+            Assert.Fail("the built program did not exit within 60s — a failure-mode row must fail "
+                        + "fast, not hang.");
+        }
+
+        return (process.ExitCode,
+                outTask.GetAwaiter().GetResult().Replace("\r\n", "\n"),
+                errTask.GetAwaiter().GetResult().Replace("\r\n", "\n"));
+    }
+
+    /// <summary>
+    /// Copy a build's output directory into <paramref name="sandboxDir"/> (created if missing;
+    /// the CALLER owns its lifetime) and return the paths a failure-mode row needs. The copy is
+    /// the whole point: a memoized build directory is shared with the happy-path rows, so
+    /// mutating it in place would make tests order-dependent — green alone, red together, or
+    /// vice versa.
+    ///
+    /// <para>The deployed shim is ASSERTED present before the caller replaces or removes it —
+    /// never Ignored: a row that Ignores on a missing shim is a pass-by-absence.</para>
+    /// </summary>
+    internal static (string Exe, string ShimPath) SandboxCopy(
+        CppProjectBuildResult result, string projectName, string sandboxDir)
+    {
+        var sourceDir = Path.GetDirectoryName(result.ExecutablePath)!;
+        Directory.CreateDirectory(sandboxDir);
+        foreach (var file in Directory.GetFiles(sourceDir))
+            File.Copy(file, Path.Combine(sandboxDir, Path.GetFileName(file)));
+
+        var shimName = NetProxyEmitter.ShimModuleFileName(NetShimGenerator.ShimAssemblyName(projectName));
+        var shimPath = Path.Combine(sandboxDir, shimName);
+        Assert.That(File.Exists(shimPath), Is.True,
+            "guard: the deployed shim must be present in the copy before this row replaces or "
+            + "removes it, or the row proves nothing. Looked for " + shimName + " in " + sandboxDir);
+
+        return (Path.Combine(sandboxDir, Path.GetFileName(result.ExecutablePath)!), shimPath);
+    }
+
+    /// <summary>
+    /// The §7.2 DECLARED surface of <paramref name="netProxyTypes"/> over the probe assembly at
+    /// <paramref name="probeDllPath"/>, resolved the way <c>CppProjectBuilder</c> resolves it
+    /// (reference closure → resolver → collector). A hand-written C++ row uses this to DERIVE a
+    /// proxy's spelling — §9.2: the C++ function name IS the slot name IS
+    /// <see cref="NetNameMangler.Mangle"/> of the member — rather than typing a
+    /// <c>bl_net_…_&lt;hash&gt;</c> literal that would rot the day the mangler's identity changes.
+    /// Only the declared half is walked (no IR), which is all those rows need.
+    /// </summary>
+    internal static NetSurface DeclaredSurface(
+        string projectDir, string probeDllPath, params string[] netProxyTypes)
+    {
+        var project = new ProjectFile { Backend = "cpp" };
+        project.AssemblyReferences.Add(new AssemblyReference
+        { Name = ProbeAssemblyName, HintPath = probeDllPath });
+        foreach (var type in netProxyTypes)
+            project.NetProxyTypes.Add(type);
+        var projectPath = Path.Combine(projectDir, "DeclaredSurfaceProbe.blproj");
+
+        var closure = NetReferenceResolver.Resolve(project, projectPath);
+        var diagnostics = new List<NetReferenceDiagnostic>();
+        var surface = NetSurfaceCollector.Collect(
+            Array.Empty<BasicLang.Compiler.IR.IRModule>(), project,
+            () => NetTypeResolver.Create(closure.All), diagnostics);
+
+        Assert.That(surface.Members, Is.Not.Empty,
+            "the declared type(s) expanded to nothing: " + string.Join(", ", netProxyTypes)
+            + ". Collector diagnostics: " + string.Join("; ", diagnostics));
+        return surface;
+    }
+
+    /// <summary>
+    /// The proxy-table slot name of ONE member of <paramref name="surface"/> — which is also the
+    /// name of its inline C++ proxy inside <c>BasicLang::net</c> (§9.2).
+    /// <paramref name="memberName"/> is the METADATA name: <c>".ctor"</c> for a constructor.
+    /// Exactly-one on purpose: an overloaded member would need a parameter filter, and silently
+    /// taking the first overload is how a row ends up calling a proxy it never meant to.
+    /// </summary>
+    internal static string SlotName(NetSurface surface, string declaringTypeFullName, string memberName)
+    {
+        var matches = surface.Members
+            .Where(m => m.DeclaringTypeFullName == declaringTypeFullName && m.Name == memberName)
+            .ToList();
+        Assert.That(matches, Has.Count.EqualTo(1),
+            $"expected exactly one member '{declaringTypeFullName}.{memberName}' in the surface, "
+            + $"found {matches.Count}. Surface: " + string.Join(", ", surface.Members));
+        return NetNameMangler.Mangle(matches[0]);
+    }
+
     internal static string Diagnostics(CppProjectBuildResult result) =>
         string.Join("\n", result.Diagnostics.Select(
             d => (d.IsWarning ? "warning " : "error ") + d.Code + ": " + d.Message));
@@ -1221,9 +1337,16 @@ public class NetShimPipelineTests
     private static SharedBuild BuildOnce(
         string projectName, IReadOnlyDictionary<string, string> files, string itemGroupXml = "")
     {
-        var key = projectName + " " + itemGroupXml + " "
-                  + string.Join(" ", files.OrderBy(f => f.Key, StringComparer.Ordinal)
-                      .Select(f => f.Key + "" + f.Value));
+        // PRINTABLE separators, deliberately. This key originally used literal NUL bytes (and a
+        // literal U+0001 between a file's name and its content), which made ripgrep classify
+        // the whole file as binary and silently drop every match past this point — an agent
+        // grepping for the Integration fixture below concluded it did not exist, and no text
+        // tool could match the invisible U+0001. "\n--\n" cannot occur inside a project name or
+        // a file name, and a source that contains it still cannot collide with another
+        // (name, content) pair because the file NAME sits between the separators.
+        var key = projectName + "\n--\n" + itemGroupXml + "\n--\n"
+                  + string.Join("\n--\n", files.OrderBy(f => f.Key, StringComparer.Ordinal)
+                      .Select(f => f.Key + "\n=\n" + f.Value));
 
         return SharedBuilds.GetOrAdd(key, _ => new Lazy<SharedBuild>(() =>
         {
@@ -1669,26 +1792,62 @@ public class NetShimPipelineTests
     }
 
     // =====================================================================================
-    // §12.5 — the zero-.bas smoke.
+    // §12.5 — the zero-.bas row: obj/gen populated, startup TU compiled AND linked, shim
+    // initializes.
     // =====================================================================================
 
     /// <summary>
-    /// A project with NO BasicLang source at all — a hand-written C++ <c>main()</c> plus a
-    /// <c>&lt;NetProxy&gt;</c> — publishes a shim and links the startup translation unit. §9.5's
-    /// executable-shape rule says this must work: the static-initializer object in
-    /// <c>blnet_startup.g.cpp</c> covers both executable shapes.
+    /// §12.5's second integration row. A project with NO BasicLang source at all — a
+    /// hand-written C++ <c>main()</c> plus a <c>&lt;NetProxy&gt;</c> — must populate
+    /// <c>obj/gen</c>, compile and link <c>blnet_startup.g.cpp</c>, and initialize the shim before
+    /// <c>main</c>. This is the path §9.5's four gates used to block, and the mixed row
+    /// (<c>NetGeneratedShimConformanceTests</c>, the §9.5 merge proof) cannot stand in for it:
+    /// with a <c>.bas</c> present, the split emitter's own gate carries the proxy TUs along.
     ///
-    /// <para>Spec §17 letters this test before the flip, but its operative precondition (§9.5's
-    /// gate rework) landed in P2a-1 and the "shim actually initializes" half is only satisfiable
-    /// now — hence a SMOKE here; the full §12.5 assertion is Task 14's.</para>
+    /// <para><b>Three claims, each with its own oracle.</b>
+    /// <list type="number">
+    /// <item><description><i>obj/gen is populated</i> — the top-level file set is EXACTLY
+    /// <see cref="NetProxyEmitterTests.ExpectedArtifacts"/>. Zero <c>.bas</c> means no split
+    /// files, so equivalence is exact rather than a subset; <c>shim/</c> is phase 5's
+    /// subdirectory, not a file, and the cache lives under <c>obj/</c>, not here.</description></item>
+    /// <item><description><i>compiled and linked, and the shim initializes</i> — <c>main</c>
+    /// constructs a <c>Widget</c> through the CTOR proxy and calls <c>Twice()</c> through the
+    /// INSTANCE proxy, printing .NET's answer. A startup TU that was emitted but never handed to
+    /// the compiler is an unresolved <c>g_net</c> at link; a startup object that never ran is
+    /// §9.2's null-slot guard at the first call. Either way there is no <c>42</c>.</description></item>
+    /// <item><description><i>the static-initializer object is in THIS exe and runs before
+    /// <c>main</c></i> — the negative discriminator, on a SANDBOX COPY: with the shim deleted the
+    /// program must exit <see cref="NetProxyEmitter.StartupFailureExitCode"/> with the §9.3
+    /// load-failure line on stderr and NOTHING on stdout. A program that reached <c>main</c> and
+    /// died there would print first, or abort with a different signature.</description></item>
+    /// </list></para>
+    ///
+    /// <para>Until P2a-2 Task 14 this was a SMOKE: <c>main</c> printed a constant and the row
+    /// asserted only that the startup file existed and the constant appeared — which a build that
+    /// silently dropped the proxy TUs from the compile set would still have passed, because
+    /// nothing in it called a proxy.</para>
     /// </summary>
     [Test]
     public void ZeroBasProjectWithANetProxy_PublishesAndLinksTheStartupTu()
     {
         var probe = NetShimPipelineFixture.EmitProbeAssembly(_dir);
-        Write("main.cpp", """
+
+        // The proxy spellings are DERIVED (§9.2: function name == slot name == the mangled
+        // member) from the same declaration the build will expand — never hard-coded.
+        var surface = NetShimPipelineFixture.DeclaredSurface(_dir, probe, "Aot.Probe.Widget");
+        var ctor = NetShimPipelineFixture.SlotName(surface, "Aot.Probe.Widget", ".ctor");
+        var twice = NetShimPipelineFixture.SlotName(surface, "Aot.Probe.Widget", "Twice");
+
+        Write("main.cpp", $$"""
+            #include "blnet_proxies.g.hpp"
             #include <cstdio>
-            int main() { std::printf("native ok\n"); return 0; }
+            #include <cstdint>
+            int main() {
+                /* ctor proxy returns a BasicLang::blnet::NetRef; the instance proxy takes it first. */
+                auto w = BasicLang::net::{{ctor}}(21);
+                std::printf("%d\n", static_cast<int>(BasicLang::net::{{twice}}(w)));
+                return 0;
+            }
             """);
 
         var (result, _) = Build("ZeroBasProbe",
@@ -1698,13 +1857,14 @@ public class NetShimPipelineTests
         AssertBuilt(result, "the zero-.bas <NetProxy> project");
 
         var outputDir = Path.GetDirectoryName(result.ExecutablePath)!;
+        var objGen = Path.Combine(_dir, "obj", "gen");
         Assert.Multiple(() =>
         {
-            Assert.That(
-                File.Exists(Path.Combine(_dir, "obj", "gen", NetProxyEmitter.StartupFileName)),
-                Is.True,
-                "blnet_startup.g.cpp was not emitted for a project whose only .NET is a "
-                + "<NetProxy> declaration.");
+            Assert.That(Directory.GetFiles(objGen).Select(Path.GetFileName),
+                Is.EquivalentTo(NetProxyEmitterTests.ExpectedArtifacts),
+                "obj/gen for a zero-.bas project must hold EXACTLY NetProxyEmitter's six "
+                + "artifacts: none missing, and no split-emitter files (there is no .bas to "
+                + "split). shim/ is phase 5's subdirectory, not a file.");
             Assert.That(File.Exists(Path.Combine(outputDir,
                     NetProxyEmitter.ShimModuleFileName(
                         NetShimGenerator.ShimAssemblyName("ZeroBasProbe")))),
@@ -1713,12 +1873,36 @@ public class NetShimPipelineTests
                 + "same way a BasicLang one does.");
         });
 
-        // Running it is the part that proves the startup TU was actually LINKED: the
-        // static-initializer object runs blnet_startup() before main(), and a failed §9.3
-        // handshake exits with NetProxyEmitter.StartupFailureExitCode rather than printing.
-        Assert.That(NetShimPipelineFixture.Run(result.ExecutablePath!), Is.EqualTo("native ok\n"),
-            "the program did not reach its own main(). The static-initializer object in "
-            + "blnet_startup.g.cpp runs the §9.3 handshake first — reaching main() means the shim "
-            + "loaded, the ABI matched and every proxy slot bound.");
+        Assert.That(NetShimPipelineFixture.Run(result.ExecutablePath!), Is.EqualTo("42\n"),
+            "42 is .NET's answer for Widget(21).Twice() (ProbeSource: Value * 2), reached from a "
+            + "hand-written main() through the ctor proxy and then the instance proxy. No output "
+            + "means the process died before main — the §9.3 handshake failed; a link error above "
+            + "means blnet_startup.g.cpp was emitted but never compiled (the §9.5 regression); an "
+            + "exception naming a slot means the static-initializer object never ran.");
+
+        // The negative discriminator, on a COPY: with the shim gone the static-initializer object
+        // must fail the handshake BEFORE main — exit 3, the §9.3 line on stderr, stdout empty.
+        var (exe, shimPath) = NetShimPipelineFixture.SandboxCopy(
+            result, "ZeroBasProbe", Path.Combine(_dir, "sandbox-noshim"));
+        File.Delete(shimPath);
+
+        var (exitCode, stdout, stderr) = NetShimPipelineFixture.RunAllowingFailure(exe);
+        var dump = $"exit={exitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}";
+        Assert.Multiple(() =>
+        {
+            Assert.That(exitCode, Is.EqualTo(NetProxyEmitter.StartupFailureExitCode),
+                "§9.3: a missing shim must exit " + NetProxyEmitter.StartupFailureExitCode
+                + " from the startup object, before main.\n" + dump);
+            Assert.That(stderr, Does.Contain("blnet: failed to load '"),
+                "§9.3: the failure must be the contracted load-failure line. Exit 3 alone is not "
+                + "enough — abort() exits 3 on some CRTs, so a death inside main could fake the "
+                + "code (measured: with the startup object removed, the uncaught §9.2 guard "
+                + "exception fail-fasts with 0xC0000409 and NOTHING on either stream); only the "
+                + "line proves the handshake ran.\n" + dump);
+            Assert.That(stdout, Is.Empty,
+                "nothing may reach stdout: the static-initializer object runs BEFORE main, so a "
+                + "printed value means main ran without the shim — the object is not linked into "
+                + "this exe.\n" + dump);
+        });
     }
 }
