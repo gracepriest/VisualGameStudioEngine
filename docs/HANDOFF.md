@@ -6,14 +6,36 @@ travel**. This file is the in-repo subset a fresh checkout — a cloud session, 
 another person — actually needs. It is a dated snapshot, not a changelog: history is in
 `git log`, rationale in `docs/superpowers/{plans,specs}/`, conventions in `CLAUDE.md`.
 
-⚠ **Everything below was true at `6139386`. Re-verify before relying on it.**
+⚠ **Everything below was true at `6139386` unless a section says otherwise. Re-verify before
+relying on it.**
+
+---
+
+## ⛔ READ FIRST — `87a6c5e` went to master WITHOUT a full-suite gate (2026-09-11)
+
+`origin/master` == `origin/feat/p2a2-t11-delegates` == **`87a6c5e`**, SHA-verified. That commit
+merged eight P2a-2 Task 14 commits into master. **The required full-suite run was started and
+then stopped ~48 minutes in, at build-green with no test summary, by an explicit decision to
+push without it.** So master currently carries two things nothing has verified together:
+
+1. **The combination.** Task 14's commits are test-only (plus one small seam, below); the
+   incoming master commits changed `BasicLang/JavaScriptEmitter.cs`, `BasicLang/Program.cs` and
+   `BasicLang/ProjectSystem/TemplateEngine.cs`. The two sides touch **no file in common**, and
+   each was gated on its own branch — but never together, and never by a full suite.
+2. **`46fd2c5`, a WIP commit.** 27 new tests that PASS but have **no mutation kills and no
+   review**: none has been shown to fail for the right reason, or to fail at all. It also
+   carries the one product change — `BasicLang/CSharpBackend.cs`, where the test seam
+   `AmbientNamespacesForTest` (a `static` alias that compared a constant with itself and could
+   not fail even if the seeding loop were deleted) becomes an instance view
+   `CandidateUsingsForTest => _usings`. Emission was measured unmoved (parity battery 22/0/0),
+   which is evidence, not proof.
+
+**FIRST JOB: run the full suite on `87a6c5e`** and compare against the numbers below plus this
+branch's additions. If it is red, suspect the untested combination before either side alone.
 
 ---
 
 ## Where things stand
-
-`origin/master` == `6139386`, pushed and SHA-verified. The working tree is clean apart from an
-untracked `csc.dll` at the repo root (**never `git add -A`** because of it).
 
 Most recent work — a **JavaScript project type in the IDE**. The compiler could already emit a
 web site, the build service could build one, and F5 could preview one, but the New Project
@@ -95,9 +117,11 @@ fails only when the Native tier runs alongside it). The fast subset shows the tw
 
 ## Open work
 
-- **P2a-2 (.NET classes in native projects)** — Task 14 (integration tests, §12.4 invariants)
-  in progress, Task 15 is the closeout. Plan:
-  `docs/superpowers/plans/2026-08-02-p2a2-dotnet-native-flip.md`.
+- **P2a-2 (.NET classes in native projects) — Task 14 is most of the way done; see below.**
+  Task 15 is the closeout. Plan: `docs/superpowers/plans/2026-08-02-p2a2-dotnet-native-flip.md`
+  (Task 14 at :1834, Task 15 at :1862); spec:
+  `docs/superpowers/specs/2026-07-29-p2a-dotnet-access-aot-shim-design.md` (§12.4 at :1256,
+  §12.5 at :1290).
 - **VS Code extension host** — roughly 24 unimplemented requests, enumerated and enforced by
   `ExtensionHostRequestCoverageTests.KnownUnimplemented` (a second test fails once an entry is
   implemented, so the list must shrink). A missing `sendNotification` handler is a silent
@@ -112,3 +136,64 @@ fails only when the Native tier runs alongside it). The fast subset shows the tw
   cover the view model and the template service; nothing here can drive the Avalonia window.
 - Scope decisions already made — **MSIL and LLVM are out of scope** (do not test, fix, or file
   bugs on them), and **COM interop is ruled out**.
+
+---
+
+## P2a-2 Task 14 — what is done, and exactly what is left
+
+**Done and gated at commit time** (eight commits, `8fae4f6`…`87a6c5e`):
+
+- **Spec §12.5's five integration rows, complete.** A mixed BasicLang + hand-written C++ project
+  where both sides call the same .NET library through the same generated proxies; a zero-`.bas`
+  `<NetProxy>` project proving the startup TU is compiled, linked and initialised (with a
+  shim-deleted negative asserting exit 3 and the load-failure line); the delegate round-trip;
+  Console-only inertness at both emit and build level; and cold-then-warm caching hardened three
+  ways, including the typed `CacheHit` outcome that was asserted nowhere.
+- **§12.4's V1 and V4 invariants**: a golden cross-build mangle pin; slots ≡ exports over REAL
+  collected surfaces and as the set identity `Exports = Slots ∪ CoreSeven`; the published shim's
+  exports checked at EXECUTION level; the generated shim's scaffolding compared ON DISK; and
+  `AbiVersion = 1` pinned directly (spec §13).
+
+**Two findings worth keeping:**
+
+- ⭐ **A shim missing one member export still BUILDS.** The C++ side links against the proxy
+  *table*, not the shim's exports, so nothing at build time notices; the program passes the §9.3
+  handshake and dies at its first .NET call. Only the new
+  `EveryProxyTableSlotResolvesInThePublishedShim` (which `NativeLibrary.TryGetExport`s every slot
+  against the deployed DLL) catches it. That is the runtime backstop chip `task_68a7198a` lacked.
+- **`AddressOf` as a .NET delegate argument does not work**, though spec §8.4:694 promises it
+  alongside lambdas. Measured through the shipping pipeline: `BL6017 … Argument 2 of
+  'Aot.Probe.Callbacks.Fold' has no .NET type the analyzer can present for overload resolution
+  (its static type is 'Func')`. The identical call with a lambda builds and runs. It is finished
+  as a **pinned divergence** asserting that exact refusal, with a *replace, do not delete* note.
+
+**Left to do, in order:**
+
+1. **The full suite on `87a6c5e`** (see the warning at the top of this file).
+2. **§12.4's V2 and V3 are UNPROVEN** — the WIP commit's 27 tests need their mutation kills, and
+   **each must be DISCRIMINATING**: if a mutation also reds a pre-existing test it has proved
+   nothing about the new one, so record the split ("1 red of 20"). The six: empty the `Rejected`
+   registry set · make `MapTypeName`'s default arm skip the `NetRef` handle · remove one entry
+   from `NetAmbientNamespaces.All` · delete the C# backend's seeding loop · flip one
+   `CppCapabilityChecker.CheckType` early return · make `NetClaimPredicate` claim
+   `File.ReadAllText`. Then review that commit properly.
+3. **Task 15, the closeout.** Its inputs are already gathered: a detached worktree at
+   `.worktrees/p2a1base` sits at `2752a96` for the empty-surface inertness diff (materialise the
+   console and game templates, flip `<TargetBackend>` to Cpp, build at both commits, diff
+   `obj/gen` + build log + stdout, subtract the two known splices `NetException` and `NetRef`).
+   Spec status updates: header `Draft` → `Implemented`; §14.15 → Resolved; §15.11 → Decided;
+   §15.6 → Recorded-unchanged. **Stale prose to sweep:** `NetInertnessTests`'s header still says
+   `NetResolverFactory` is set "at exactly ONE site repo-wide" — false since Task 4
+   (`EnableNetResolution` is also called at `BasicLang/Program.cs` :511 and :1076 and
+   `BuildService.cs` :645; only the LSP leaves it null), plus dated "pre-flip" prose in
+   `NetIrCarriageTests` and `NetFlipTests`.
+
+**The failure mode this task kept finding — check for it in any test you write or review.**
+Assertions that pass for structural reasons rather than because the property holds: a guard
+asserting on text the test itself wrote; a comparison the product feeds both sides of (change one
+*comment* in `BlnetShimSources.HandleTable` and the "verbatim" test stays green, because both its
+sides move together); a hand-typed list standing in for a derived one; a guard against *empty*
+that is not a guard against the *shape* that made the row worth having; a pin on a shape nothing
+emits (the golden mangle literal once described an instance method as static); and a doc comment
+describing a test that does not exist (`RowBAgreesWithTheCapabilityCheckersEarlyReturns` still
+claims to drive the capability checker — the test project never constructs one).
