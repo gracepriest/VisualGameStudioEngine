@@ -119,6 +119,9 @@ wrapper reference and deploys the native DLL for game apps.
 
 ## Where things live (don't duplicate it here)
 
+- **On a machine with no auto-memory** (a cloud session, a fresh clone) → start at
+  `docs/HANDOFF.md`: the in-repo snapshot of state, gates and traps. The auto-memory
+  below lives outside the repo and does not travel.
 - **Current work / status** → auto-memory `MEMORY.md` (loaded each session)
 - **History / rationale** → `git log` and `docs/superpowers/{plans,specs}/`
 - **Authoritative engine API** → `framework.h` + `RaylibWrapper.vb` (+ `docs/`)
