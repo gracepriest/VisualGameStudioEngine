@@ -645,6 +645,12 @@ public class NetBuildPipelineTests
     /// resolver runs AFTER the obj/gen write (Task 8's pinned ordering), so cancelling from
     /// inside it proves the build ran all the way through phase 4 and then stopped at the next
     /// boundary instead of compiling. A single guard at the door would fail the second assertion.
+    ///
+    /// <para>The cancel hangs off <c>resolveById</c>, not <c>resolveToolchain</c>: this is a
+    /// BasicLang native project, which always builds as "msvc"
+    /// (<see cref="ProjectFile.EffectiveCppToolchain"/>) and therefore resolves BY ID. The
+    /// unpinned machine probe is never called for it, so a cancel hung off that seam would
+    /// never fire and this test would assert nothing.</para>
     /// </summary>
     [Test]
     public void CancelledMidBuild_AbortsAfterTheEmitPhaseHasAlreadyRun()
@@ -657,7 +663,7 @@ public class NetBuildPipelineTests
             () =>
             {
                 CppProjectBuilder.Build(ProjectFile.Load(projectPath), "Release",
-                    resolveToolchain: () => { probed = true; cts.Cancel(); return FakeToolchain(); },
+                    resolveById: _ => { probed = true; cts.Cancel(); return FakeToolchain(); },
                     cancellationToken: cts.Token);
             },
             "Cancelling during the build did not abort it. Build must check the token at its "

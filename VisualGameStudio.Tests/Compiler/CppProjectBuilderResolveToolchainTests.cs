@@ -43,6 +43,13 @@ public class CppProjectBuilderResolveToolchainTests
         }
     }
 
+    /// <summary>
+    /// A PURE C++ project (<c>Language=Cpp</c>) — deliberately, not a BasicLang one.
+    /// The <c>resolveToolchain</c> seam these tests pin is the UNPINNED path, and a
+    /// BasicLang native project is never unpinned: it is always "msvc" by policy
+    /// (<see cref="ProjectFile.EffectiveCppToolchain"/>) and so takes the by-id path
+    /// instead. Only a pure C++ project can still reach the machine probe.
+    /// </summary>
     private ProjectFile MakeMinimalCppProject()
     {
         const string blproj = """
@@ -50,11 +57,12 @@ public class CppProjectBuilderResolveToolchainTests
               <PropertyGroup>
                 <ProjectName>App</ProjectName>
                 <OutputType>Exe</OutputType>
+                <Language>Cpp</Language>
                 <TargetBackend>Cpp</TargetBackend>
               </PropertyGroup>
             </BasicLangProject>
             """;
-        File.WriteAllText(Path.Combine(_dir, "App.bas"), "Sub Main()\n    PrintLine 7\nEnd Sub\n");
+        File.WriteAllText(Path.Combine(_dir, "main.cpp"), "int main() { return 0; }\n");
         var projPath = Path.Combine(_dir, "App.blproj");
         File.WriteAllText(projPath, blproj);
         return ProjectFile.Load(projPath);

@@ -51,6 +51,14 @@ public class CppRuntimeDeployE2ETests
         }
     }
 
+    /// <summary>
+    /// A PURE C++ project (<c>Language=Cpp</c>) pinned to gcc. It must NOT be a BasicLang
+    /// project: those always build as "msvc" (<see cref="ProjectFile.EffectiveCppToolchain"/>),
+    /// so the pin would be ignored and the <c>resolveById</c> below — which echoes back
+    /// whatever id it is handed — would hand back an MSVC-KIND toolchain whose "vcvars batch
+    /// file" is really g++.exe, invoking it as <c>cmd /c "g++.exe &amp;&amp; cl ..."</c>.
+    /// MinGW runtime deployment is a gcc-family concern, and gcc is now reachable only here.
+    /// </summary>
     private ProjectFile MakeMinimalCppProject()
     {
         const string blproj = """
@@ -58,12 +66,14 @@ public class CppRuntimeDeployE2ETests
               <PropertyGroup>
                 <ProjectName>App</ProjectName>
                 <OutputType>Exe</OutputType>
+                <Language>Cpp</Language>
                 <TargetBackend>Cpp</TargetBackend>
                 <CppToolchain>gcc</CppToolchain>
               </PropertyGroup>
             </BasicLangProject>
             """;
-        File.WriteAllText(Path.Combine(_dir, "App.bas"), "Sub Main()\n    PrintLine 7\nEnd Sub\n");
+        File.WriteAllText(Path.Combine(_dir, "main.cpp"),
+            "#include <string>\nint main() { std::string s = \"7\"; return (int)s.size() - 1; }\n");
         var projPath = Path.Combine(_dir, "App.blproj");
         File.WriteAllText(projPath, blproj);
         return ProjectFile.Load(projPath);
