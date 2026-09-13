@@ -305,7 +305,7 @@ public class FormRecognizerTests
         Assert.Multiple(() =>
         {
             Assert.That(form.IsRefused, Is.True, "a Handles clause must be REFUSED, not ignored");
-            Assert.That(form.Refusals.Single().Code, Is.EqualTo("BL8001"));
+            Assert.That(form.Refusals.Single().Code, Is.EqualTo("BL8002"));
             Assert.That(form.Refusals.Single().Line, Is.EqualTo(4));
             Assert.That(form.Refusals.Single().Message, Does.Contain("AddHandler"),
                 "a refusal must say what to do instead");
@@ -334,7 +334,7 @@ public class FormRecognizerTests
         Assert.Multiple(() =>
         {
             Assert.That(form.IsRefused, Is.True);
-            Assert.That(form.Refusals.Single().Code, Is.EqualTo("BL8002"));
+            Assert.That(form.Refusals.Single().Code, Is.EqualTo("BL8003"));
             Assert.That(form.Refusals.Single().Line, Is.EqualTo(6));
             Assert.That(form.Refusals.Single().Message, Does.Contain("silently discarded"));
         });
@@ -482,7 +482,7 @@ public class FormRecognizerTests
     public void WinForms_DoesNotTreatAnOrdinaryFieldAsAControl()
     {
         // Accepting any declared identifier meant `Private db As Connection` + `db = New Connection()`
-        // became a "control" with no catalog row, earning a BL8003 warning on an ordinary field —
+        // became a "control" with no catalog row, earning a BL8004 warning on an ordinary field —
         // and it disagreed with the declared-but-unconstructed pass, which was already catalog-only.
         var form = WinFormsDialect.Read("""
             Public Class MainForm

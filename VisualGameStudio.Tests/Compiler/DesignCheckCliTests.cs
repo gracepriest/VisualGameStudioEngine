@@ -64,9 +64,9 @@ public class DesignCheckCliTests
     [Test]
     public void Format_UsesTheClickToNavigateShape_NotTheLabelShape()
     {
-        var diagnostic = new DesignDiagnostic("BL8001", "BL8001: nope", "C:\\p\\MainForm.bas", 4, 62, false);
+        var diagnostic = new DesignDiagnostic("BL8002", "BL8002: nope", "C:\\p\\MainForm.bas", 4, 62, false);
 
-        Assert.That(diagnostic.Format(), Is.EqualTo("C:\\p\\MainForm.bas(4,62): error BL8001: BL8001: nope"),
+        Assert.That(diagnostic.Format(), Is.EqualTo("C:\\p\\MainForm.bas(4,62): error BL8002: BL8002: nope"),
             "the rendered shape must match CppDiagnostic.FormatNormalized character for character — " +
             "that is the format the IDE Output panel's click-to-navigate regex matches. The CLI's " +
             "other shape, '{label}: {Code}: {Message}', carries no file, line or column.");
@@ -77,10 +77,10 @@ public class DesignCheckCliTests
     {
         Assert.Multiple(() =>
         {
-            Assert.That(new DesignDiagnostic("BL8004", "m", "a.bas", 7, 0, true).Format(),
-                Is.EqualTo("a.bas(7): warning BL8004: m"));
-            Assert.That(new DesignDiagnostic("BL8004", "m", "a.bas", 0, 0, true).Format(),
-                Is.EqualTo("a.bas: warning BL8004: m"));
+            Assert.That(new DesignDiagnostic("BL8005", "m", "a.bas", 7, 0, true).Format(),
+                Is.EqualTo("a.bas(7): warning BL8005: m"));
+            Assert.That(new DesignDiagnostic("BL8005", "m", "a.bas", 0, 0, true).Format(),
+                Is.EqualTo("a.bas: warning BL8005: m"));
         });
     }
 
@@ -241,7 +241,7 @@ public class DesignCheckCliTests
         Assert.Multiple(() =>
         {
             Assert.That(exitCode, Is.Zero, $"stdout:\n{stdout}\nstderr:\n{stderr}");
-            Assert.That(stdout, Does.Contain("BL8006"), "the finding belongs on stdout like every other");
+            Assert.That(stdout, Does.Contain("BL8007"), "the finding belongs on stdout like every other");
             Assert.That(stderr, Does.Not.Contain("design failed"), "this is a finding, not a tool failure");
         });
     }
@@ -294,7 +294,7 @@ public class DesignCheckCliTests
                 $"a design error must fail the command, or CI cannot use it.\nstdout:\n{stdout}\nstderr:\n{stderr}");
             Assert.That(stdout, Does.Contain("Handles.bas("), "stdout must carry the FILE");
             Assert.That(stdout, Does.Contain("(4,"), "stdout must carry the LINE");
-            Assert.That(stdout, Does.Match(@"Handles\.bas\(4,\d+\): error BL8001:"),
+            Assert.That(stdout, Does.Match(@"Handles\.bas\(4,\d+\): error BL8002:"),
                 "the full click-to-navigate shape, with a column");
         });
     }
@@ -320,7 +320,7 @@ public class DesignCheckCliTests
         Assert.Multiple(() =>
         {
             Assert.That(exitCode, Is.Zero, $"stdout:\n{stdout}\nstderr:\n{stderr}");
-            Assert.That(stdout, Does.Contain("BL8005"));
+            Assert.That(stdout, Does.Contain("BL8006"));
             Assert.That(stdout, Does.Contain("1 warning(s)"));
         });
     }

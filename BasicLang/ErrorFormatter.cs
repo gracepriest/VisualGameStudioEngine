@@ -95,11 +95,11 @@ namespace BasicLang.Compiler
 
         // Design-time findings (BL8xxx). Collected, never thrown — see
         // BasicLang.Forms.DesignDiagnostic, which carries the strings that actually reach the user.
-        BL8001_HandlesClauseNotSupported,
-        BL8002_WithBlockOverControl,
-        BL8003_UnsupportedControlType,
-        BL8004_NoFormShape,
-        BL8005_OrphanedControl,
+        BL8002_HandlesClauseNotSupported,
+        BL8003_WithBlockOverControl,
+        BL8004_UnsupportedControlType,
+        BL8005_NoFormShape,
+        BL8006_OrphanedControl,
 
         // General errors
         BL9999_UnknownError

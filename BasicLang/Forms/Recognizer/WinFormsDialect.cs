@@ -84,7 +84,7 @@ public static class WinFormsDialect
                 // would produce a designer view of a program that cannot run.
                 case TokenType.Handles:
                     form.Refusals.Add(new RecognitionRefusal(
-                        "BL8001",
+                        "BL8002",
                         "A 'Handles' clause is not supported by the BasicLang parser, so this file " +
                         "cannot build. Wire the event with 'AddHandler <control>.<Event>, AddressOf " +
                         "<handler>' instead.",
@@ -184,7 +184,7 @@ public static class WinFormsDialect
                     // and `New Font(...)` all match this shape and none of them is a control.
                     // ⚠ This used to also accept any identifier the class had declared, whatever its
                     // type — so `Private db As Connection` + `db = New Connection()` became a
-                    // "control" with no catalog row and earned a BL8003 warning on an ordinary
+                    // "control" with no catalog row and earned a BL8004 warning on an ordinary
                     // field. It also disagreed with the declared-but-unconstructed pass below, which
                     // was already catalog-only. One rule now.
                     if (FormControlCatalog.Find(typeName) != null)
@@ -265,7 +265,7 @@ public static class WinFormsDialect
         if (isControl)
         {
             form.Refusals.Add(new RecognitionRefusal(
-                "BL8002",
+                "BL8003",
                 $"'With {target}' cannot be imported: a '.Property = value' inside a With block is " +
                 "silently discarded by the compiler, so the designer would show properties the " +
                 "running program never sets. Assign through the control name instead.",

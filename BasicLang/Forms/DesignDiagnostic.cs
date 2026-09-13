@@ -51,23 +51,62 @@ public sealed record DesignDiagnostic(
 /// </summary>
 public static class DesignCodes
 {
+    // ⛔ THE BAND ALLOCATION. The spec and plan assign specific numbers to specific tasks, and the
+    // recognizer's codes were originally numbered from BL8001 without checking — colliding with the
+    // number the plan reserves for the compile-route skip. Claim from the free range below, and
+    // check BOTH documents before taking a number:
+    //
+    //   BL8001          reserved — "a form document is not a program; build the project"
+    //   BL8002..BL8010  recognizer and design-check findings (here)
+    //   BL8011, BL8012  designer-owned region states
+    //   BL8021, BL8022  document-level refusals in a form document (here)
+    //   BL8031          reserved
+    //
+    // Nothing in this band lives in BasicLang.Compiler.ErrorCode as a string; the enum registration
+    // there is for discoverability only, and adding a member there does not claim a number here.
+
     /// <summary>A <c>Handles</c> clause — lexed but never parsed, so the file cannot build.</summary>
-    public const string HandlesClause = "BL8001";
+    public const string HandlesClause = "BL8002";
 
     /// <summary>A <c>With</c> block over a control — its property assignments are silently discarded.</summary>
-    public const string WithBlock = "BL8002";
+    public const string WithBlock = "BL8003";
 
     /// <summary>A control whose type has no catalog row, so the designer cannot edit it.</summary>
-    public const string UnsupportedControl = "BL8003";
+    public const string UnsupportedControl = "BL8004";
 
     /// <summary>A file the designer found no form shape in.</summary>
-    public const string NoFormShape = "BL8004";
+    public const string NoFormShape = "BL8005";
 
     /// <summary>A control that is constructed but never parented, so it never appears at run time.</summary>
-    public const string OrphanedControl = "BL8005";
+    public const string OrphanedControl = "BL8006";
 
     /// <summary>The file's text could not be turned into tokens — typically an unterminated string.</summary>
-    public const string Unreadable = "BL8006";
+    public const string Unreadable = "BL8007";
+
+    /// <summary>
+    /// A <c>&lt;Bind&gt;</c> carrying the reserved data-binding attributes (<c>Property</c>,
+    /// <c>Source</c>, <c>Path</c>). Reserved means parsed and round-tripped, never acted on — so a
+    /// document that populates them is refused rather than silently ignored, which would leave the
+    /// user believing a binding exists.
+    /// </summary>
+    public const string ReservedBindingPopulated = "BL8021";
+
+    /// <summary>
+    /// A <c>{res:Key}</c> resource reference. <c>&lt;Resources&gt;</c> is reserved and empty in v1,
+    /// so a value referring into it cannot be resolved; refusing beats writing back a reference to
+    /// nothing.
+    /// </summary>
+    public const string ReservedResourceReference = "BL8022";
+
+    /// <summary>The form document itself is not well-formed XML, or its root/version is not one we know.</summary>
+    public const string MalformedDocument = "BL8008";
+
+    /// <summary>
+    /// A property whose attribute the catalog knows but whose value does not parse — D9's
+    /// <b>Degraded</b> tier. One frozen property-grid row, the rest of the control still editable,
+    /// and the value round-trips unchanged.
+    /// </summary>
+    public const string DegradedProperty = "BL8009";
 }
 
 /// <summary>
@@ -79,6 +118,40 @@ public static class DesignCodes
 /// </summary>
 public static class DesignCheck
 {
+    /// <summary>Findings for one file, dispatched on its extension.</summary>
+    public static IReadOnlyList<DesignDiagnostic> Check(string filePath, string text) =>
+        Path.GetExtension(filePath).Equals(".blwebform", StringComparison.OrdinalIgnoreCase)
+            ? CheckWebForm(filePath, text)
+            : CheckSource(filePath, text);
+
+    /// <summary>
+    /// Findings for a <c>.blwebform</c> document: everything the reader reported, plus the
+    /// per-property Degraded rows as warnings.
+    /// </summary>
+    public static IReadOnlyList<DesignDiagnostic> CheckWebForm(string filePath, string text)
+    {
+        var form = Serialization.BlWebFormReader.Read(filePath, text);
+        var findings = form.Diagnostics.ToList();
+
+        if (form.IsRefused)
+        {
+            // Document-level refusal: the form opens read-only and the naming diagnostic is the
+            // point. Listing frozen rows underneath it buries the reason the document is refused.
+            return findings;
+        }
+
+        foreach (var degraded in form.Degraded)
+        {
+            findings.Add(new DesignDiagnostic(
+                DesignCodes.DegradedProperty,
+                $"{DesignCodes.DegradedProperty}: '{degraded.ControlId}.{degraded.Property}' is " +
+                $"frozen in the property grid — {degraded.Reason}",
+                filePath, 0, 0, IsWarning: true));
+        }
+
+        return findings;
+    }
+
     /// <summary>Findings for one source file. Never throws for bad content — that is a finding, not a crash.</summary>
     public static IReadOnlyList<DesignDiagnostic> CheckSource(string filePath, string source)
     {
@@ -169,7 +242,7 @@ public static class DesignCheck
     {
         try
         {
-            return CheckSource(filePath, File.ReadAllText(filePath));
+            return Check(filePath, File.ReadAllText(filePath));
         }
         // UnauthorizedAccessException derives from SystemException, NOT IOException — a read-only or
         // ACL-denied file, or a directory passed where a file was meant, would otherwise escape a

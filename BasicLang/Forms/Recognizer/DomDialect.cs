@@ -62,7 +62,7 @@ public static class DomDialect
                 // but never parsed, so the file cannot build at all.
                 case TokenType.Handles:
                     form.Refusals.Add(new RecognitionRefusal(
-                        "BL8001",
+                        "BL8002",
                         "A 'Handles' clause is not supported by the BasicLang parser, so this file " +
                         "cannot build. Wire the event with addEventListener instead.",
                         token.Line, token.Column));
@@ -283,7 +283,7 @@ public static class DomDialect
         if (target != null && form[target] != null)
         {
             form.Refusals.Add(new RecognitionRefusal(
-                "BL8002",
+                "BL8003",
                 $"'With {target}' cannot be imported: a '.Property = value' inside a With block is " +
                 "silently discarded by the compiler, so the designer would show properties the " +
                 "running program never sets. Assign through the element name instead.",
