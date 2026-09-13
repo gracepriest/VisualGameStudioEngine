@@ -155,8 +155,7 @@ public static class FormDocumentWriter
         // documents this writer had already produced. Same trap as materialising a configuration
         // default in ProjectSerializer.
         SetAttributeIfMeaningful(root, "Name", model.Name, nameWhenAbsent);
-        SetAttributeIfMeaningful(root, "Version", model.Version.ToString(),
-            FormDocumentReader.SupportedVersion.ToString());
+        SetIntAttributeIfChanged(root, "Version", model.Version, FormDocumentReader.SupportedVersion);
 
         // D3, at the root: a window has a size and a caption, a page has a layout and may carry
         // literal markup. Each side writes only its own vocabulary — writing both would put a
@@ -300,26 +299,26 @@ public static class FormDocumentWriter
         // a document that omitted them is inventing content. TabIndex IS written on every control the
         // designer creates — Create does that — but adopting a hand-written document must not
         // rewrite it wholesale on the first unrelated edit.
-        SetAttributeIfMeaningful(element, "TabIndex", control.TabIndex.ToString(), "0");
+        SetIntAttributeIfChanged(element, "TabIndex", control.TabIndex, 0);
 
         // Each geometry writes only its own vocabulary. The model carries exactly one shape, the
         // reader selected it from the document's target, and nothing here converts between them.
         switch (control.Geometry)
         {
             case PixelGeometry pixel:
-                SetAttributeIfMeaningful(element, "X", pixel.X.ToString(), "0");
-                SetAttributeIfMeaningful(element, "Y", pixel.Y.ToString(), "0");
-                SetAttributeIfMeaningful(element, "Width", pixel.Width.ToString(), "0");
-                SetAttributeIfMeaningful(element, "Height", pixel.Height.ToString(), "0");
+                SetIntAttributeIfChanged(element, "X", pixel.X, 0);
+                SetIntAttributeIfChanged(element, "Y", pixel.Y, 0);
+                SetIntAttributeIfChanged(element, "Width", pixel.Width, 0);
+                SetIntAttributeIfChanged(element, "Height", pixel.Height, 0);
                 SetAttributeIfChanged(element, "Anchor", pixel.Anchor);
                 SetAttributeIfChanged(element, "Dock", pixel.Dock);
                 break;
 
             case GridGeometry grid:
-                SetAttributeIfMeaningful(element, "Col", grid.Col.ToString(), "0");
-                SetAttributeIfMeaningful(element, "Row", grid.Row.ToString(), "0");
-                SetAttributeIfChanged(element, "ColSpan", grid.ColSpan == 1 ? null : grid.ColSpan.ToString());
-                SetAttributeIfChanged(element, "RowSpan", grid.RowSpan == 1 ? null : grid.RowSpan.ToString());
+                SetIntAttributeIfChanged(element, "Col", grid.Col, 0);
+                SetIntAttributeIfChanged(element, "Row", grid.Row, 0);
+                SetOptionalIntAttribute(element, "ColSpan", grid.ColSpan, 1);
+                SetOptionalIntAttribute(element, "RowSpan", grid.RowSpan, 1);
                 break;
         }
 
@@ -516,6 +515,74 @@ public static class FormDocumentWriter
         {
             SetAttributeIfChanged(element, name, value);
         }
+    }
+
+    /// <summary>
+    /// Writes an integer attribute, <b>never overwriting text the reader could not parse</b>.
+    ///
+    /// <para>⛔⛔ The reader answers an unparseable <c>Version="1.0"</c> or <c>TabIndex="two"</c>
+    /// with a DEFAULT it invented — 1 and 0. Comparing the model against that default the way
+    /// <c>SetAttributeIfMeaningful</c> does then wrote the default straight over the user's text:
+    /// a NO-OP save silently downgraded the document version and reset the tab order, with no
+    /// diagnostic and no Degraded row. The file changed on a save the user never made.</para>
+    ///
+    /// <para>So the existing text decides what the model value MEANS:</para>
+    /// <list type="bullet">
+    ///   <item>absent — write only when the model differs from what absence reads as;</item>
+    ///   <item>parseable — write only when the model differs from the parsed value. This also
+    ///         preserves spelling: <c>"007"</c> stays <c>"007"</c> while the model says 7;</item>
+    ///   <item>unparseable — the model holds the invented default, so write only when it has moved
+    ///         AWAY from that default, which is the one case that is a real edit. Renumbering the
+    ///         tab order still reaches the document; re-saving an untouched one does not.</item>
+    /// </list>
+    /// </summary>
+    private static void SetIntAttributeIfChanged(XElement element, string name, int value, int absentMeans)
+    {
+        var existing = element.Attribute(name);
+
+        if (existing == null)
+        {
+            if (value != absentMeans)
+            {
+                element.SetAttributeValue(name, value.ToString());
+            }
+
+            return;
+        }
+
+        if (int.TryParse(existing.Value, out var current))
+        {
+            if (current != value)
+            {
+                existing.Value = value.ToString();
+            }
+
+            return;
+        }
+
+        if (value != absentMeans)
+        {
+            existing.Value = value.ToString();
+        }
+    }
+
+    /// <summary>
+    /// The same rule for an attribute whose default means ABSENT — <c>ColSpan</c>, <c>RowSpan</c>.
+    ///
+    /// <para>⚠ Here the damage would be a REMOVAL rather than a rewrite: an unparseable
+    /// <c>ColSpan="x"</c> reads as 1, and "1 means omit it" would then delete the user's text on a
+    /// no-op save.</para>
+    /// </summary>
+    private static void SetOptionalIntAttribute(XElement element, string name, int value, int defaultValue)
+    {
+        var existing = element.Attribute(name);
+
+        if (existing != null && !int.TryParse(existing.Value, out _) && value == defaultValue)
+        {
+            return;
+        }
+
+        SetAttributeIfChanged(element, name, value == defaultValue ? null : value.ToString());
     }
 
     private static void SetAttributeIfChanged(XElement element, string name, string? value)

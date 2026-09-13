@@ -341,6 +341,63 @@ public class FormRegionWriterTests
     }
 
     [Test]
+    public void Write_DoesNotEmitADegradedValue_IntoTheUsersFile()
+    {
+        // ⛔⛔ A Degraded value is one the catalog knows and cannot parse. Splicing it into source
+        // produces a file the user cannot build: `lbl.TextAlign = ContentAlignment.Bogus` is
+        // CS0117, and `lbl.Enabled = maybe` does not even get past BasicLang. D9 requires the
+        // value to survive in the DOCUMENT and to show frozen in the property grid; it says
+        // nothing about emitting it, and emitting it breaks the build for a value the designer has
+        // already told the user it cannot use.
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm" };
+        var label = new FormControl { Kind = "Label", Id = "lbl", TabIndex = 0 };
+        label.Properties["Text"] = "Hello";
+        label.Properties["TextAlign"] = "Bogus";      // not an allowed value
+        label.Properties["Enabled"] = "maybe";        // not a Bool
+        form.Controls.Add(label);
+
+        var source = ScaffoldedFile().Replace("LoginForm.blwebform", "LoginForm.blform");
+        var result = RegionWriter.Write("LoginForm.bas", source, form, "LoginForm.blform");
+
+        Assert.That(result.Refused, Is.False, "a degraded value is a warning, not a refusal");
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Text, Does.Contain("""lbl.Text = "Hello" """.TrimEnd()),
+                "the rest of the control is still written");
+            Assert.That(result.Text, Does.Not.Contain("Bogus"));
+            Assert.That(result.Text, Does.Not.Contain("maybe"));
+            Assert.That(result.Diagnostics.Select(d => d.Code),
+                Has.Exactly(2).EqualTo(DesignCodes.DegradedProperty),
+                "and the user is told which values did not make it");
+        });
+    }
+
+    [Test]
+    public void Write_StillEmitsRecognizerSource_WhichNeverParsesAsACatalogValue()
+    {
+        // ⚠ The other half. The recognizer stores what it READ, so an imported form carries
+        // `ContentAlignment.MiddleLeft` and `New Font("Segoe UI", 12)` — neither of which parses
+        // as a catalog value. Treating those as degraded would silently strip every property off
+        // every imported form.
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm" };
+        var label = new FormControl { Kind = "Label", Id = "lbl", TabIndex = 0 };
+        label.Properties["Text"] = "\"Already quoted\"";
+        label.Properties["TextAlign"] = "ContentAlignment.MiddleLeft";
+        form.Controls.Add(label);
+
+        var source = ScaffoldedFile().Replace("LoginForm.blwebform", "LoginForm.blform");
+        var result = RegionWriter.Write("LoginForm.bas", source, form, "LoginForm.blform");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Text, Does.Contain("lbl.TextAlign = ContentAlignment.MiddleLeft"));
+            Assert.That(result.Text, Does.Contain("""lbl.Text = "Already quoted" """.TrimEnd()));
+            Assert.That(result.Diagnostics.Select(d => d.Code),
+                Has.None.EqualTo(DesignCodes.DegradedProperty));
+        });
+    }
+
+    [Test]
     public void Write_WinForms_AcceptsAHandlerDeclaredAfterTheRegionThatWiresIt()
     {
         // ⛔⛔ THE OPPOSITE of the web rule below, and the shape Owner decision 3 makes canonical.

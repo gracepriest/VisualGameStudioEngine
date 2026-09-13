@@ -746,6 +746,11 @@ namespace BasicLang.Compiler.Driver
                         sourceMapJson: BuildSourceMapJson(generator, scriptName, projectDir),
                         jsImports: combinedIR.JsImports,
                         importBaseDirectory: projectDir,
+                        // ⛔ Without this the markup emitter never runs: a project containing a
+                        // .blwebform built successfully and wrote no .html and no .css, because
+                        // `forms` is optional and nothing but the tests ever passed it.
+                        forms: Forms.FormDocumentLoader.LoadWebForms(
+                            sourceFiles, m => Console.Error.WriteLine($"  Warning: {m}")),
                         warn: m => Console.Error.WriteLine($"  Warning: {m}"));
                     Console.WriteLine($"  Site written to: {outputDir}");
                 }

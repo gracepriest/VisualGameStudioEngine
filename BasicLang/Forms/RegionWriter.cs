@@ -109,7 +109,7 @@ public static class RegionWriter
         var newline = source.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
 
         var controlsBody = GenerateControls(form, IndentOf(index, controls), newline);
-        var initBody = GenerateInit(form, IndentOf(index, init), newline);
+        var initBody = GenerateInit(form, IndentOf(index, init), newline, filePath, diagnostics);
 
         CheckAnchors(filePath, form, diagnostics);
         CheckTargetProperties(filePath, form, diagnostics);
@@ -359,7 +359,8 @@ public static class RegionWriter
         return body.ToString();
     }
 
-    private static string GenerateInit(FormDocument form, string indent, string newline)
+    private static string GenerateInit(
+        FormDocument form, string indent, string newline, string filePath, List<DesignDiagnostic> diagnostics)
     {
         var body = new StringBuilder();
         var inner = indent + "    ";
@@ -390,7 +391,7 @@ public static class RegionWriter
 
         foreach (var control in form.Controls)
         {
-            AppendControlInit(body, form, control, parent: "Me", inner, newline);
+            AppendControlInit(body, form, control, parent: "Me", inner, newline, filePath, diagnostics);
         }
 
         body.Append($"{indent}End Sub").Append(newline);
@@ -408,7 +409,8 @@ public static class RegionWriter
     /// reachable from ordinary use.</para>
     /// </summary>
     private static void AppendControlInit(
-        StringBuilder body, FormDocument form, FormControl control, string parent, string inner, string newline)
+        StringBuilder body, FormDocument form, FormControl control, string parent, string inner,
+        string newline, string filePath, List<DesignDiagnostic> diagnostics)
     {
         if (form.Target == FormTarget.Web)
         {
@@ -431,6 +433,29 @@ public static class RegionWriter
                 // document keeps it (the other target uses it) and the caller reports it.
                 if (property != null && !property.AppliesTo(FormTarget.WinForms))
                 {
+                    continue;
+                }
+
+                // ⛔⛔ A DEGRADED value never reaches generated source. The catalog knows the
+                // attribute but cannot parse the value, and splicing it in produces a file the
+                // user cannot build: `lbl.TextAlign = ContentAlignment.Bogus` is CS0117, and
+                // `lbl.Enabled = maybe` does not even get past BasicLang. D9 requires the value to
+                // be preserved in the DOCUMENT and shown frozen in the property grid — it says
+                // nothing about emitting it, and emitting it breaks the build for a value the
+                // designer has already told the user it cannot use.
+                //
+                // ⚠ Guarded by IsAlreadySource so the IMPORT route survives: the recognizer stores
+                // what it read, so an enum arrives as `ContentAlignment.MiddleLeft` and a string
+                // as `"Sign in"` — neither parses as a catalog value, and skipping those would
+                // silently strip every property off an imported form.
+                if (property != null && !property.Accepts(value) && !IsAlreadySource(value))
+                {
+                    diagnostics.Add(new DesignDiagnostic(
+                        DesignCodes.DegradedProperty,
+                        $"{DesignCodes.DegradedProperty}: '{control.Id}.{name}' is '{value}', which " +
+                        $"is not a valid {property.Type}, so it is not written into the generated " +
+                        "code. The value is preserved in the document.",
+                        filePath, 0, 0, IsWarning: true));
                     continue;
                 }
 
@@ -477,7 +502,7 @@ public static class RegionWriter
 
         foreach (var child in control.Children)
         {
-            AppendControlInit(body, form, child, control.Id, inner, newline);
+            AppendControlInit(body, form, child, control.Id, inner, newline, filePath, diagnostics);
         }
 
         if (form.Target == FormTarget.WinForms)
@@ -541,11 +566,28 @@ public static class RegionWriter
     /// meanwhile stores already-quoted source text, because that is what it read. Typing the
     /// formatting off the catalog is what lets both feed the same writer.</para>
     /// </summary>
+    /// <summary>
+    /// True when the value is already BasicLang SOURCE rather than a document value.
+    ///
+    /// <para>⛔ The recognizer (D12) stores what it READ — `"Sign in"` with its quotes,
+    /// `New Font("Segoe UI", 12)`, `ContentAlignment.MiddleLeft` — while the document reader stores
+    /// raw attribute text. One <c>Properties</c> dictionary, two conventions, and this is what
+    /// tells them apart. Without the qualified-name case an imported form would have every enum
+    /// property stripped as "degraded".</para>
+    /// </summary>
+    private static bool IsAlreadySource(string value) =>
+        value.StartsWith("\"", StringComparison.Ordinal) ||
+        value.StartsWith("New ", StringComparison.Ordinal) ||
+        QualifiedName.IsMatch(value);
+
+    private static readonly System.Text.RegularExpressions.Regex QualifiedName =
+        new(@"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+$",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
+
     private static string Literal(FormControl control, string name, string value)
     {
         // Already a source literal (the recognizer's convention) — leave it exactly as read.
-        if (value.StartsWith("\"", StringComparison.Ordinal) ||
-            value.StartsWith("New ", StringComparison.Ordinal))
+        if (IsAlreadySource(value))
         {
             return value;
         }

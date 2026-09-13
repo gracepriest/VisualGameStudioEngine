@@ -58,7 +58,8 @@ public static class DesignCodes
     //
     //   BL8001          reserved — "a form document is not a program; build the project"
     //   BL8002..BL8010  recognizer and design-check findings (here)
-    //   BL8011..BL8015  designer-owned region states and region-writer findings
+    //   BL8010          illegal/missing control id (here)
+    //   BL8011..BL8017  designer-owned region states, region-writer and document findings
     //   BL8021, BL8022  document-level refusals in a form document (here)
     //   BL8031          reserved
     //
@@ -136,6 +137,23 @@ public static class DesignCodes
 
     /// <summary>The form document itself is not well-formed XML, or its root/version is not one we know.</summary>
     public const string MalformedDocument = "BL8008";
+
+    /// <summary>
+    /// A control whose <c>Id</c> is missing or is not a legal BasicLang identifier.
+    ///
+    /// <para>⛔⛔ A refusal, not a warning. The <c>Id</c> becomes a FIELD NAME in the user's own
+    /// <c>.bas</c>: an empty one generates <c>Private  As Button</c> and
+    /// <c>Me.Controls.Add()</c>, and <c>my-button</c> generates <c>my-button = New Button()</c>.
+    /// Both are syntax errors written into a file the user owns, by a designer that reported the
+    /// document clean.</para>
+    /// </summary>
+    public const string IllegalControlId = "BL8010";
+
+    /// <summary>
+    /// Two controls sharing an <c>Id</c>. Also a refusal: the generated field is declared twice,
+    /// and every reference to it is ambiguous.
+    /// </summary>
+    public const string DuplicateControlId = "BL8017";
 
     /// <summary>
     /// A property whose attribute the catalog knows but whose value does not parse — D9's

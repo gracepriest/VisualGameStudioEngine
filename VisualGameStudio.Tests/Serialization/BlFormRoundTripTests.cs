@@ -294,6 +294,91 @@ public class BlFormRoundTripTests
     }
 
     // ==================================================================
+    // Control ids — they become field names in the user's own file
+    // ==================================================================
+
+    [Test]
+    public void AControlWithNoId_IsRefused()
+    {
+        // ⛔⛔ Until this existed, FormDocument.IsLegalControlId had NO caller outside its own
+        // tests, and this document passed `design --check` with zero findings while the region
+        // writer generated `Private  As Button` and `Me.Controls.Add()` into the user's .bas.
+        var form = Read("""
+            <Form Name="F" Version="1">
+              <Controls><Button Id="" X="10" Y="10" TabIndex="0"/></Controls>
+            </Form>
+            """, "F.blform");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(form.IsRefused, Is.True);
+            Assert.That(form.Diagnostics.Select(d => d.Code), Does.Contain(DesignCodes.IllegalControlId));
+        });
+    }
+
+    [Test]
+    public void AControlWithAnIdThatIsNotAnIdentifier_IsRefused()
+    {
+        // `my-button = New Button()` is a syntax error in a file the user owns.
+        var form = Read("""
+            <Form Name="F" Version="1">
+              <Controls><Button Id="my-button" X="10" Y="10" TabIndex="0"/></Controls>
+            </Form>
+            """, "F.blform");
+
+        Assert.That(form.Diagnostics.Select(d => d.Code), Does.Contain(DesignCodes.IllegalControlId));
+    }
+
+    [Test]
+    public void AnUnderscoreIsFineInAControlId()
+    {
+        // ⚠ The form's NAME may not contain one (it becomes a type name and falls out of the
+        // PascalCase heuristic), but a control id is an ordinary identifier.
+        var form = Read("""
+            <Form Name="F" Version="1">
+              <Controls><Button Id="btn_login" X="10" Y="10" TabIndex="0"/></Controls>
+            </Form>
+            """, "F.blform");
+
+        Assert.That(form.IsRefused, Is.False,
+            string.Join("; ", form.Diagnostics.Select(d => d.Format())));
+    }
+
+    [Test]
+    public void TwoControlsSharingAnId_AreRefused()
+    {
+        var form = Read("""
+            <Form Name="F" Version="1">
+              <Controls>
+                <Button Id="dup" X="0" Y="0" TabIndex="0"/>
+                <Button Id="dup" X="0" Y="30" TabIndex="1"/>
+              </Controls>
+            </Form>
+            """, "F.blform");
+
+        Assert.That(form.Diagnostics.Select(d => d.Code), Does.Contain(DesignCodes.DuplicateControlId));
+    }
+
+    [Test]
+    public void ADuplicateIsFoundAcrossContainers_NotJustAmongSiblings()
+    {
+        // ⛔ The generated fields are all members of ONE class, so a Button inside a Panel collides
+        // with a Button on the form just as surely as two siblings do.
+        var form = Read("""
+            <Form Name="F" Version="1">
+              <Controls>
+                <Button Id="dup" X="0" Y="0" TabIndex="0"/>
+                <Panel Id="pnl" X="0" Y="40" Width="100" Height="100" TabIndex="1">
+                  <Button Id="dup" X="5" Y="5" TabIndex="2"/>
+                </Panel>
+              </Controls>
+            </Form>
+            """, "F.blform");
+
+        Assert.That(form.Diagnostics.Select(d => d.Code), Does.Contain(DesignCodes.DuplicateControlId));
+    }
+
+    // ==================================================================
     // The algebra — the properties the whole design rests on
     // ==================================================================
 

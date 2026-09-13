@@ -497,6 +497,48 @@ public class FormDocumentRoundTripTests
     }
 
     [Test]
+    public void Algebra_ANoOpWriteDoesNotRewriteAnUnparseableStructuralValue()
+    {
+        // ⛔⛔ The byte-identity guarantee, at its sharpest. The reader cannot parse Version="1.0"
+        // or TabIndex="two", so the MODEL holds a default it invented — 1 and 0. The writer then
+        // saw an attribute present, wrote the model value over it, and silently turned the user's
+        // text into that default: a no-op save downgraded the version and RESET the tab order.
+        // No diagnostic, no Degraded row, and the file changed on a save the user did not make.
+        var original = """
+            <WebForm Name="F" Version="1.0">
+              <Controls><Button Id="b" TabIndex="two" Col="0"/></Controls>
+            </WebForm>
+            """;
+        var form = Read(original, "F.blwebform");
+
+        var written = FormDocumentWriter.Write(form);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(written, Is.EqualTo(original), "a no-op write must change nothing at all");
+            Assert.That(written, Does.Contain("""Version="1.0" """.TrimEnd()));
+            Assert.That(written, Does.Contain("""TabIndex="two" """.TrimEnd()));
+        });
+    }
+
+    [Test]
+    public void Algebra_AGenuineEditStillWrites_OverAnUnparseableValue()
+    {
+        // ⚠ The other half, or the fix would be "never write TabIndex again". Renumbering the tab
+        // order is a real designer action and must reach the document even when the value it
+        // replaces was unreadable.
+        var form = Read("""
+            <WebForm Name="F" Version="1">
+              <Controls><Button Id="b" TabIndex="two" Col="0"/></Controls>
+            </WebForm>
+            """, "F.blwebform");
+
+        form.Model.FindById("b")!.TabIndex = 5;
+
+        Assert.That(FormDocumentWriter.Write(form), Does.Contain("""TabIndex="5" """.TrimEnd()));
+    }
+
+    [Test]
     public void Read_DoesNotThrow_OnANonIntegerVersion()
     {
         Assert.DoesNotThrow(() => Read("""<WebForm Name="V" Version="1.0"><Controls/></WebForm>""", "V.blwebform"));

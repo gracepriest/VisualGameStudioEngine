@@ -944,6 +944,16 @@ public class BuildService : IBuildService
         BasicLang.Compiler.CodeGen.JavaScript.JavaScriptEmitter.Emit(
             outputDir, scriptFileName, generatedCode, title: project.Name, sourceMapJson: mapJson,
             jsImports: jsImports,
+            // ⛔ The IDE route needs this as much as the CLI's. `forms` is optional and only the
+            // tests ever passed it, so the markup emitter never ran in either shipping path: a
+            // project containing a .blwebform built green and produced no page at all.
+            forms: BasicLang.Forms.FormDocumentLoader.LoadWebForms(
+                // ⚠ Resolved against the project directory, exactly as the compile route resolves
+                // them — a ProjectItem's Include is relative, and reading it as a path would find
+                // nothing and emit no page, silently.
+                project.GetSourceFiles()
+                    .Select(item => Path.Combine(project.ProjectDirectory, item.Include)),
+                m => _outputService.WriteLine($"Warning: {m}", OutputCategory.Build)),
             importBaseDirectory: project.ProjectDirectory,
             // WriteLine, not WriteError: a missing #JsImport target does not fail the build, and
             // colouring it as an error would make a warning look like one.

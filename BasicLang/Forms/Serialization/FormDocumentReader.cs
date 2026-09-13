@@ -171,7 +171,34 @@ public static class FormDocumentReader
             }
         }
 
+        CheckDuplicateIds(model, filePath, diagnostics);
+
         return new FormFile(model, xml, text, filePath, diagnostics, degraded);
+    }
+
+    /// <summary>
+    /// Refuses a document where two controls share an <c>Id</c>.
+    ///
+    /// <para>⛔ Checked across the WHOLE tree, not per container: the generated fields are all
+    /// members of one class, so a Button inside a Panel and a Button on the form collide just as
+    /// surely as two siblings. The generated code would declare the field twice and every
+    /// reference to it would be ambiguous.</para>
+    /// </summary>
+    private static void CheckDuplicateIds(
+        FormDocument model, string filePath, List<DesignDiagnostic> diagnostics)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var control in model.AllControls())
+        {
+            if (control.Id.Length > 0 && !seen.Add(control.Id))
+            {
+                diagnostics.Add(Error(DesignCodes.DuplicateControlId,
+                    $"more than one control has the Id '{control.Id}'. Ids become field names in " +
+                    "the generated code, so they must be unique across the whole form.",
+                    filePath, 0, 0));
+            }
+        }
     }
 
     // ==================================================================
@@ -278,6 +305,24 @@ public static class FormDocumentReader
             TabIndex = IntAttribute(element, "TabIndex") ?? 0,
             Geometry = ReadGeometry(element, target)
         };
+
+        // ⛔⛔ The Id becomes a FIELD NAME in the user's own .bas. Until this check existed,
+        // FormDocument.IsLegalControlId had no caller outside its own tests, and a document with
+        // Id="" or Id="my-button" passed `design --check` with zero findings while the region
+        // writer generated `Private  As Button` and `my-button = New Button()` into a file the
+        // user owns. Refused, not warned: there is no partially-usable version of a control the
+        // generated code cannot name.
+        if (!FormDocument.IsLegalControlId(control.Id))
+        {
+            diagnostics.Add(Error(DesignCodes.IllegalControlId,
+                control.Id.Length == 0
+                    ? $"a <{element.Name.LocalName}> has no Id. Every control needs one — it " +
+                      "becomes the field name the generated code declares and wires."
+                    : $"'{control.Id}' is not a legal control Id. It becomes a BasicLang " +
+                      "identifier, so it must start with a letter or underscore and contain only " +
+                      "letters, digits and underscores.",
+                filePath, Line(element), Column(element)));
+        }
 
         foreach (var attribute in element.Attributes())
         {
