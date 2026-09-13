@@ -249,7 +249,10 @@ public class ProjectTemplateBackendMappingTests
     // inline in a large async method and cannot be invoked without a real compile — it is covered
     // by TemplateBuildSweepTests (Integration), and its default now throws rather than emitting C#.
 
-    private static MethodInfo GetBackendIdMethod()
+    // ⛔ Fully qualified. VisualGameStudio.Core.Abstractions.Services declares its own MethodInfo
+    // (IRefactoringService.cs:131), and this file has both that namespace and System.Reflection in
+    // scope — a bare `MethodInfo` here is CS0104, not a resolution to the reflection type.
+    private static System.Reflection.MethodInfo GetBackendIdMethod()
     {
         var method = typeof(BuildService).GetMethod(
             "GetBackendId", BindingFlags.NonPublic | BindingFlags.Static);

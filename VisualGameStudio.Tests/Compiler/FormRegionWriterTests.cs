@@ -435,21 +435,25 @@ public class FormRegionWriterTests
         // into generated SOURCE. Emitting the raw text produced `btnLogin.Text = Sign in` — a syntax
         // error. The recognizer meanwhile stores already-quoted source. Typing the formatting off
         // the catalog is what lets both feed the same writer.
+        // ⛔ A TextBox, not a Button. The formatting is typed off THE CONTROL'S OWN catalog row, so
+        // "an Int is bare" can only be demonstrated on a control that actually declares an Int:
+        // MaxLength belongs to TextBox, and asking a Button for it returns null — which lands in the
+        // untyped arm and quotes the value. That is correct behaviour being shown the wrong input.
         var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm" };
-        var button = new FormControl { Kind = "Button", Id = "btnLogin", TabIndex = 0 };
-        button.Properties["Text"] = "Sign in";        // as a DOCUMENT would carry it
-        button.Properties["Enabled"] = "false";
-        button.Properties["MaxLength"] = "12";
-        form.Controls.Add(button);
+        var box = new FormControl { Kind = "TextBox", Id = "txtUser", TabIndex = 0 };
+        box.Properties["Text"] = "Sign in";        // as a DOCUMENT would carry it
+        box.Properties["Enabled"] = "false";
+        box.Properties["MaxLength"] = "12";
+        form.Controls.Add(box);
 
         var source = ScaffoldedFile().Replace("LoginForm.blwebform", "LoginForm.blform");
         var result = RegionWriter.Write("LoginForm.bas", source, form, "LoginForm.blform");
 
         Assert.Multiple(() =>
         {
-            Assert.That(result.Text, Does.Contain("""btnLogin.Text = "Sign in" """.TrimEnd()));
-            Assert.That(result.Text, Does.Contain("btnLogin.Enabled = False"), "a Bool is bare, and BasicLang-cased");
-            Assert.That(result.Text, Does.Contain("btnLogin.MaxLength = 12"), "an Int is bare");
+            Assert.That(result.Text, Does.Contain("""txtUser.Text = "Sign in" """.TrimEnd()));
+            Assert.That(result.Text, Does.Contain("txtUser.Enabled = False"), "a Bool is bare, and BasicLang-cased");
+            Assert.That(result.Text, Does.Contain("txtUser.MaxLength = 12"), "an Int is bare");
         });
     }
 

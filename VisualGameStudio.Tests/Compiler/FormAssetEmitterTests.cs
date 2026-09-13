@@ -346,8 +346,15 @@ public class FormAssetEmitterTests
             Assert.That(source, Does.Contain("""If formName = "LoginForm" Then"""));
             Assert.That(source, Does.Contain("""ElseIf formName = "SignupForm" Then"""));
             Assert.That(source, Does.Contain("End If"));
-            Assert.That(source.Split("Sub ").Length - 1, Is.EqualTo(2),
-                "exactly one Sub declaration and its End Sub — no second top-level name");
+            // ⛔ Counted as two separate properties, not as occurrences of "Sub ". The closing
+            // keyword is "End Sub" at the end of its line, with no trailing space, so a single
+            // count of "Sub " never sees it — an assertion of 2 fails against output that is
+            // exactly right, and one of 1 would pass just as well against output carrying a second
+            // declaration and no terminator.
+            Assert.That(source.Split("Sub ").Length - 1, Is.EqualTo(1),
+                "exactly one Sub DECLARATION — no second top-level name to collide across forms");
+            Assert.That(source.Split("End Sub").Length - 1, Is.EqualTo(1),
+                "and it is terminated exactly once");
         });
     }
 
