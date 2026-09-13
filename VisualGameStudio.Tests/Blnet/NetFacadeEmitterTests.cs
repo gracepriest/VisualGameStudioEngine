@@ -10,7 +10,7 @@ namespace VisualGameStudio.Tests.Blnet;
 
 /// <summary>
 /// <c>blnet_facade.g.hpp</c> — the ergonomic C++ rendering of the proxy slots
-/// (plan <c>2026-09-13-blnet-cpp-facade.md</c>, Task 1: static methods).
+/// (plan <c>2026-09-13-blnet-cpp-facade.md</c>, Tasks 1-2: static and instance methods).
 ///
 /// <para><b>⛔ The trap this fixture is built to avoid.</b> "The facade compiles" is NOT
 /// coverage — an EMPTY facade compiles perfectly, and so does one that silently dropped half the
@@ -31,6 +31,15 @@ public class NetFacadeEmitterTests
             public sealed class Widget { }
             public sealed class Gadget { }
 
+            // Task 2: a type with INSTANCE members. It therefore gets a handle and a wrapper,
+            // and becomes nameable in other signatures under D7.
+            public sealed class Counter
+            {
+                private int _n;
+                public int Bump(int by) { _n += by; return _n; }
+                public string Label() => "n=" + _n;
+            }
+
             public static class Api
             {
                 // Renders: static, single scalar/string wire forms, scalar return.
@@ -38,11 +47,19 @@ public class NetFacadeEmitterTests
                 public static string Shout(string s) => s + "!";
                 public static void   Ping() { }
 
+                // D7 in BOTH directions. Counter has instance members, so it has a wrapper and
+                // these render as the wrapper type rather than as a bare NetRef.
+                public static Counter Make() => new Counter();
+                public static int     Read(Counter c) => c.Bump(0);
+
                 // Does NOT render in v1 — each exercises one ClassifyForFacade arm.
                 public static int    ByRefArg(ref int v) => v;
 
-                // D8: BOTH omitted. Widget and Gadget are distinct .NET types that share ONE
-                // C++ wire form (every handle is NetRef), so these are one C++ signature.
+                // D8: BOTH omitted. Widget and Gadget are distinct .NET types with NO members, so
+                // neither has a wrapper and both still collapse onto NetRef — one C++ signature.
+                // (Had they been wrapper types, D7 would have made these distinguishable and both
+                // would render; that asymmetry is the point of keying the collision check on the
+                // facade types rather than on the wire form.)
                 public static void   Ambiguous(Widget w) { }
                 public static void   Ambiguous(Gadget g) { }
             }
@@ -58,6 +75,7 @@ public class NetFacadeEmitterTests
         _probe = new ProbeAssembly("FacProbe", ProbeSource);
         var project = new ProjectFile();
         project.NetProxyTypes.Add("Fac.Probe.Api");
+        project.NetProxyTypes.Add("Fac.Probe.Counter");
 
         var resolver = NetTypeResolver.Create(
             NetTypeResolverTestRefs.FrameworkPaths.Concat(new[] { _probe.Path }));
@@ -229,6 +247,20 @@ public class NetFacadeEmitterTests
                 + " *result = stub_strdup(\"SHOUTED\"); return 0; }"),
             new NetStubHarness.StubSlot(Slot("Ping"),
                 "[]() -> int32_t { std::printf(\"PING\\n\"); return 0; }"),
+
+            // Task 2. Make hands back a handle the wrapper must adopt; Bump's result depends on
+            // BOTH the receiver and the argument, so dropping the receiver or shifting the
+            // arguments left by one changes the number; Read proves a wrapper parameter is
+            // unwrapped to that same handle.
+            new NetStubHarness.StubSlot(Slot("Make"),
+                "[](uint64_t* result) -> int32_t { *result = 42; return 0; }"),
+            new NetStubHarness.StubSlot(Slot("Bump"),
+                "[](uint64_t self, int32_t a0, int32_t* result) -> int32_t {"
+                + " std::printf(\"SELF:%llu\\n\", (unsigned long long)self);"
+                + " *result = (int32_t)self + a0; return 0; }"),
+            new NetStubHarness.StubSlot(Slot("Read"),
+                "[](uint64_t a0, int32_t* result) -> int32_t {"
+                + " *result = (int32_t)a0 * 100; return 0; }"),
         });
 
         var main = """
@@ -240,16 +272,164 @@ public class NetFacadeEmitterTests
                 std::printf("%d\n", Fac::Probe::Api::Twice(21));
                 std::printf("%s\n", Fac::Probe::Api::Shout("hi").c_str());
                 Fac::Probe::Api::Ping();
+
+                /* D7: a handle return arrives as the wrapper, not as a NetRef. */
+                Fac::Probe::Counter c = Fac::Probe::Api::Make();
+                std::printf("BUMP:%d\n", c.Bump(5));
+                std::printf("READ:%d\n", Fac::Probe::Api::Read(c));
+                std::printf("RAW:%llu\n", (unsigned long long)c.raw().get());
                 return 0;
             }
             """;
 
         var output = NetStubHarness.RunWithStub(main, _surface, stub).Replace("\r\n", "\n");
 
-        Assert.That(output, Is.EqualTo("210\nARG:hi\nSHOUTED\nPING\n"),
-            "the facade compiled but did not forward correctly. '0' or a default means the "
-            + "argument never reached the slot; a missing ARG line means the string parameter "
-            + "was dropped; a wrong order means the facade bound a name to the wrong slot.");
+        Assert.That(output,
+            Is.EqualTo("210\nARG:hi\nSHOUTED\nPING\nSELF:42\nBUMP:47\nREAD:4200\nRAW:42\n"),
+            "the facade compiled but did not forward correctly.\n"
+            + "  '0' or a default        -> the argument never reached the slot;\n"
+            + "  missing ARG line        -> the string parameter was dropped;\n"
+            + "  SELF:0                  -> the receiver was not forwarded from the handle;\n"
+            + "  BUMP:5 (not 47)         -> the receiver was dropped and the arguments shifted;\n"
+            + "  READ:0                  -> a wrapper parameter was not unwrapped to its handle;\n"
+            + "  RAW:0                   -> the wrapper did not adopt the returned handle.");
+    }
+
+    // ---- Task 2: instance members, the handle, and D7 ------------------------------------
+
+    /// <summary>
+    /// D4: a type with instance members holds its <c>NetRef</c> PRIVATELY and exposes
+    /// <c>raw()</c>; a static-only type gets neither.
+    ///
+    /// <para>The negative half is the load-bearing one. If every type got a handle,
+    /// <c>Console</c> would become a constructible value with a meaningless identity, and D7
+    /// would start offering it as a parameter type.</para>
+    /// </summary>
+    [Test]
+    public void OnlyTypesWithInstanceMembersCarryAHandle()
+    {
+        var text = Facade();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(TypeBlock(text, "Counter"),
+                Does.Match(@"\nprivate:\n\s*BasicLang::blnet::NetRef blnet_handle_;"),
+                "Counter has instance members, so it must hold its handle — and hold it PRIVATELY "
+                + "(D4), so the wrapper cannot be rebound to a different object behind its back.");
+
+            Assert.That(text, Does.Contain("const BasicLang::blnet::NetRef& raw() const;"),
+                "the handle must be reachable for the mangled slots and for proxies the facade "
+                + "does not render — by const reference, so the common use costs no refcount traffic.");
+
+            Assert.That(TypeBlock(text, "Api"), Does.Not.Contain("NetRef blnet_handle_"),
+                "Api is static-only, so it must NOT carry a handle: a Console-shaped type with a "
+                + "handle is a constructible value with no meaning, and D7 would offer it as a "
+                + "parameter type.");
+        });
+    }
+
+    /// <summary>
+    /// D3: the receiver stops being an explicit first argument — that is the whole ergonomic win.
+    /// The proxy still takes it first (<c>EmitProxyBody</c> prepends <c>const NetRef&amp; self</c>),
+    /// so the facade must supply it from its own field.
+    /// </summary>
+    [Test]
+    public void InstanceMethodsDropTheReceiverAndSupplyItFromTheHandle()
+    {
+        var text = Facade();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(text, Does.Contain("int32_t Bump(int32_t a0) const;"),
+                "an instance method renders as an ordinary member function with the receiver GONE "
+                + "from its parameter list. It must be const: D7 passes wrappers as const&, so a "
+                + "non-const member function could not be called on one.");
+
+            Assert.That(text, Does.Contain("BasicLang::net::" + Slot("Bump") + "(blnet_handle_, a0)"),
+                "the receiver must be forwarded as the proxy's FIRST argument, from the wrapper's "
+                + "own handle. Dropping it shifts every argument left by one.");
+
+            Assert.That(text, Does.Not.Contain("static int32_t Bump"),
+                "an instance method must not render as static.");
+        });
+    }
+
+    /// <summary>
+    /// D7: a handle-typed parameter or return is the WRAPPER type when that type has one, in both
+    /// directions — and the argument is unwrapped to the raw handle at the call.
+    ///
+    /// <para>Without this the signature is <c>NetRef</c> everywhere and the facade buys nothing
+    /// over the mangled slot for anything but scalars.</para>
+    /// </summary>
+    [Test]
+    public void HandleTypesInTheSurfaceRenderAsTheirWrapper()
+    {
+        var text = Facade();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(text, Does.Contain("static ::BasicLang::netfx::Fac::Probe::Counter Make();"),
+                "a handle RETURN whose type has a wrapper must render as that wrapper, not NetRef.");
+
+            Assert.That(text,
+                Does.Contain("static int32_t Read(const ::BasicLang::netfx::Fac::Probe::Counter& a0);"),
+                "a handle PARAMETER whose type has a wrapper must render as that wrapper, taken by "
+                + "const reference.");
+
+            Assert.That(text, Does.Contain("(a0.raw())"),
+                "a wrapper argument must be unwrapped to its handle at the call — the proxy takes "
+                + "a NetRef, not a facade type.");
+
+            Assert.That(text,
+                Does.Contain("::BasicLang::netfx::Fac::Probe::Counter(BasicLang::net::" + Slot("Make")),
+                "a wrapper RESULT must be constructed from the proxy's returned handle.");
+        });
+    }
+
+    /// <summary>
+    /// The ordering property the three-phase emission exists for: EVERY type is forward-declared
+    /// before ANY member body is defined.
+    ///
+    /// <para>This is not stylistic. <c>Fac.Probe.Api</c> sorts before <c>Fac.Probe.Counter</c> and
+    /// returns one, so a body emitted inside the struct — which is what Task 1 did while every
+    /// signature was a scalar — names an incomplete type and does not compile. A compile test
+    /// catches that only while the probe happens to be ordered badly; this asserts the invariant
+    /// directly.</para>
+    /// </summary>
+    [Test]
+    public void EveryTypeIsForwardDeclaredBeforeAnyBodyIsDefined()
+    {
+        var text = Facade();
+
+        var lastForward = text.LastIndexOf("struct Counter;", StringComparison.Ordinal);
+        var firstBody = text.IndexOf("\ninline ", StringComparison.Ordinal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lastForward, Is.GreaterThanOrEqualTo(0),
+                "every facade type must be forward-declared (D7 lets one name another).");
+            Assert.That(firstBody, Is.GreaterThan(lastForward),
+                "a member body is defined before the forward declarations are complete. A body "
+                + "needs its parameter and return types COMPLETE, so all bodies must follow all "
+                + "declarations.");
+
+            // Scoped to the struct's own text. An unbounded regex from "struct Api {" would
+            // happily run past the closing brace and match a body in the out-of-line section,
+            // which is precisely where bodies belong — it would fail on correct output.
+            Assert.That(TypeBlock(text, "Api"), Does.Not.Contain("return BasicLang::net::"),
+                "a member body was emitted INSIDE the struct. That compiles only while no "
+                + "signature names a sibling facade type — exactly the case D7 introduces.");
+        });
+    }
+
+    /// <summary>The text of one <c>struct X { … };</c> block, for scoped assertions.</summary>
+    private static string TypeBlock(string text, string typeName)
+    {
+        var start = text.IndexOf("struct " + typeName + " {", StringComparison.Ordinal);
+        Assert.That(start, Is.GreaterThanOrEqualTo(0), $"no 'struct {typeName} {{' in the facade");
+        var end = text.IndexOf("\n};", start, StringComparison.Ordinal);
+        Assert.That(end, Is.GreaterThan(start), $"'struct {typeName}' never closes");
+        return text.Substring(start, end - start);
     }
 
     /// <summary>The mangled slot name for the sole probe member of that name.</summary>

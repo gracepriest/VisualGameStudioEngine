@@ -1,6 +1,6 @@
 # blnet C++ facade — an ergonomic header over the generated proxy slots
 
-**Status:** Task 1 implemented; Tasks 2-5 open
+**Status:** Tasks 1-2 implemented; Tasks 3-5 open
 **Date:** 2026-09-13
 **Builds on:** `2026-07-29-p2a-dotnet-access-aot-shim-design.md` (P2a, Implemented) — §7.3
 mangling, §8.3 wire forms, §9.1 generated artifacts.
@@ -57,9 +57,22 @@ static-only type; the types that DO hold a handle keep it private (see D4).
 functions.** This is the whole ergonomic win: the receiver stops being an explicit first
 argument.
 
-**D4 — A type with any instance member holds its `NetRef` privately**, exposing `raw()`. Private
-because a public handle lets a caller copy it out and release it independently of the
-refcounting, which is a use-after-free with extra steps.
+**D4 — A type with any instance member holds its `NetRef` privately**, exposing `raw()`.
+
+> ⚠ **Correction, made while implementing Task 2.** The original rationale here read "a public
+> handle lets a caller copy it out and release it independently of the refcounting, which is a
+> use-after-free with extra steps." **That is not true of this `NetRef`.** It holds a
+> `std::shared_ptr<void>` whose deleter calls `g_netref_release`, so *copying* a `NetRef` shares
+> ownership and the release runs exactly once, when the last copy dies. Copying is safe.
+>
+> The real hazard is rebuilding one from a raw handle: `NetRef(x.raw().get())` opens a **second
+> control block** over the same managed object, and both will release it. `NetRef::Duplicate`
+> exists precisely to do that correctly (checked addref first). Note that privacy does not
+> prevent this either, since `NetRef::get()` is public — so this is not what privacy buys.
+>
+> What privacy actually buys is narrower and still worth having: the wrapper cannot be **rebound**
+> to a different object behind its own back, so a `Regex` always wraps the handle it was built
+> with. The generated header says this accurately rather than repeating the original claim.
 
 **D5 — Constructors become real C++ constructors.** `Regex r("^a+$")` rather than a factory.
 A type with a constructor slot but no default .NET constructor gets no default constructor.
@@ -72,11 +85,25 @@ looks like assignment and costs a shim round trip. `IsSettable == false` emits o
 and raw `NetRef` otherwise.** The surface is the whole world the facade can name; a handle to a
 type nobody declared has no wrapper to be.
 
+*Refined in Task 2:* "in the surface" is too loose — the precondition is **having a wrapper with a
+handle**, i.e. having at least one rendered instance member (D4). A static-only type like
+`System.Console` is in the surface and must still NOT be offered as a parameter type: a `Console`
+value would be a constructible object with no identity.
+
 **D8 — Two slots that render to the SAME C++ signature are BOTH omitted, with a BL6027 warning
 naming them.** Never silently pick one. This is reachable: §8.3 maps distinct .NET types onto one
 wire form (every handle-represented type is `NetRef`), so `F(Regex)` and `F(Uri)` are one C++
 signature. Omitting both keeps the mangled slots as the escape hatch; picking one would make
 `F(someUri)` silently call the `Regex` overload.
+
+**D10 — The header is emitted in three phases: forward declarations, type declarations, then
+out-of-line `inline` definitions.** *(Added in Task 2.)* Not a style choice. D7 lets one facade
+type appear in another's signature, and .NET name order says nothing about which must come first —
+`Fac.Probe.Api` sorts before `Fac.Probe.Counter` and returns one. A member body needs its parameter
+and return types COMPLETE, which a forward declaration is not, so bodies cannot live inside the
+struct as they did in Task 1 while every signature was still a scalar. Proven by mutation: removing
+the forward declarations fails the compile with *"no type named 'Counter' in namespace
+BasicLang::netfx::Fac::Probe"*.
 
 **D9 — The header is always emitted and never auto-included.** Cost is zero when unused (inline
 functions, no ODR presence), and unconditional emission keeps the drift test simple — there is no
@@ -112,9 +139,24 @@ functions, no ODR presence), and unconditional emission keeps the drift test sim
   which **compiles cleanly** and is caught only by the run assertion (`0` instead of `210`).
   The stub multiplies by ten rather than returning its argument, so an identity-preserving
   facade bug cannot pass by accident.
-- [ ] **Task 2 — instance members and the handle.** Private `NetRef`, `raw()`, instance member
-  functions, D7's wrapper-typed parameters and returns.
-- [ ] **Task 3 — constructors (D5) and properties (D6).**
+- [x] **Task 2 — instance members and the handle.** *Done.* Private `NetRef` + `raw()` on any
+  type with a rendered instance member, instance members as ordinary `const` member functions with
+  the receiver supplied from the handle, and D7's wrapper-typed parameters and returns in both
+  directions.
+
+  Four new tests, each proven by a discriminating mutation (dropping the receiver, making the
+  handle public, disabling D7, and removing the forward declarations); every mutation was killed
+  by its own test and none by an unrelated one. The run oracle was extended so `Bump`'s stubbed
+  result depends on BOTH the receiver and the argument — dropping the receiver and shifting the
+  arguments left therefore changes the number rather than staying plausible.
+
+  Verified beyond the probe: a real build over `System.Console`, `System.Text.RegularExpressions.Regex`
+  and `System.Object` emits a 610-line facade that compiles clean, instance calls included.
+- [ ] **Task 3 — constructors (D5) and properties (D6).** Note the interaction Task 2 created:
+  every wrapper already has an `explicit T(NetRef)` that ADOPTS an existing handle. D5's real
+  constructors must not collide with it — a .NET `.ctor(NetRef)` would, and a `.ctor()` taking no
+  arguments is a different signature and will not. Decide there whether the adopting constructor
+  keeps its plain spelling or moves behind a tag type.
 - [ ] **Task 4 — D8's collision rule + BL6027.** Red first: a surface with two handle-typed
   overloads must emit neither and warn. The omit-both BEHAVIOR already ships from Task 1
   (`CollidingFacadeSignatures`, pinned by `TwoSlotsSharingOneCppSignatureAreBothOmitted`); what
