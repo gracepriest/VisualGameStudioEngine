@@ -7,6 +7,7 @@ using CommunityToolkit.Mvvm.Input;
 using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Core.Abstractions.ViewModels;
 using VisualGameStudio.Core.Models;
+using VisualGameStudio.ProjectSystem.Serialization;
 using VisualGameStudio.ProjectSystem.Services;
 
 namespace VisualGameStudio.Shell.ViewModels.Panels;
@@ -348,7 +349,11 @@ public partial class SolutionExplorerViewModel : ViewModelBase
             var sourceExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
                 ".bas", ".bl", ".mod", ".cls", ".class", ".bli", ".json", ".xml", ".blproj",
-                ".cpp", ".h", ".hpp", ".c", ".cc", ".cxx"
+                ".cpp", ".h", ".hpp", ".c", ".cc", ".cxx",
+                // ⛔ Form documents MUST be here. This is a hardcoded whitelist, not the shared
+                // extension list, and it is one of three independent tree filters — a file missing
+                // from this one exists on disk and is simply invisible in the Solution Explorer.
+                ".blform", ".blwebform"
             };
 
             var files = Directory.GetFiles(projectDir)
@@ -385,6 +390,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         return ext switch
         {
             ".bas" or ".bl" => TreeNodeType.SourceFile,
+            ".blform" or ".blwebform" => TreeNodeType.SourceFile,   // a designer document is project source
             ".mod" => TreeNodeType.ContentFile,       // "M" icon
             ".cls" or ".class" => TreeNodeType.Resource, // "C" icon via converter
             ".png" or ".jpg" or ".bmp" or ".ico" or ".svg" => TreeNodeType.Resource,
@@ -819,7 +825,11 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         var ext = Path.GetExtension(fileName).ToLowerInvariant();
         return ext switch
         {
-            ".bas" or ".bl" or ".mod" or ".cls" or ".class" or ".cs" or ".vb" or ".cpp" or ".h" or ".fs" => TreeNodeType.SourceFile,
+            // ⛔ The second of three tree builders. A form added only to the project-items path
+            // VANISHES when the same project is opened as part of a solution, because this is the
+            // filter that path uses.
+            ".bas" or ".bl" or ".mod" or ".cls" or ".class" or ".cs" or ".vb" or ".cpp" or ".h" or ".fs"
+                or ".blform" or ".blwebform" => TreeNodeType.SourceFile,
             ".png" or ".jpg" or ".bmp" or ".ico" or ".svg" => TreeNodeType.Resource,
             _ => TreeNodeType.File
         };
@@ -1158,7 +1168,11 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         var ext = Path.GetExtension(fileName).ToLowerInvariant();
         return ext switch
         {
+            // Form documents ride as <Compile> (D11): listed so the build can find them, and
+            // skipped by both compile routes. ⚠ This is a SECOND copy of the Compile-vs-Content
+            // decision — ProjectService uses FileExtensions.IsSourceFile for the same question.
             ".bas" or ".bl" or ".mod" or ".cls" or ".class" or ".bli"
+                or ".blform" or ".blwebform"
                 or ".cpp" or ".cc" or ".cxx" or ".c" or ".h" or ".hpp" => ProjectItemType.Compile,
             ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".ico" => ProjectItemType.Resource,
             _ => ProjectItemType.Content
@@ -1212,6 +1226,87 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     private async Task AddNewBasicLangFileAsync()
     {
         await AddNewFileWithExtensionAsync("New BasicLang File", "NewFile.bas", ".bas");
+    }
+
+    /// <summary>
+    /// Creates a form: the <c>.blwebform</c> document AND the <c>.bas</c> code-behind, as a pair.
+    ///
+    /// <para>⛔ Modelled on <see cref="ConfirmNewItemAsync"/>, which adds the item <b>and</b> calls
+    /// <c>SaveProjectAsync</c> — deliberately NOT on <c>ProjectService.AddFileToProjectAsync</c>,
+    /// which mutates the model and never writes, so the new files would vanish from the project on
+    /// the next load.</para>
+    /// </summary>
+    [RelayCommand]
+    private async Task AddNewFormAsync()
+    {
+        var project = _projectService.CurrentProject;
+        if (project == null) return;
+
+        var targetDir = GetTargetDirectory();
+        if (targetDir == null) return;
+
+        var name = await _dialogService.PromptAsync("New Form", "Form name:", "LoginForm");
+        if (string.IsNullOrWhiteSpace(name)) return;
+
+        name = Path.GetFileNameWithoutExtension(name.Trim());
+
+        // ⛔ A form name becomes a CLASS name, so this is stricter than a filename check: no
+        // underscore, letters and digits only. A type name containing '_' falls out of the
+        // compiler's .NET-type heuristic and every Me.<inherited member> in the class becomes a
+        // hard error — which would look like a compiler bug, not a naming rule.
+        var illegal = BasicLang.Forms.FormScaffolder.DescribeIllegalName(name);
+        if (illegal != null)
+        {
+            await _dialogService.ShowMessageAsync("Error", illegal);
+            return;
+        }
+
+        var scaffold = BasicLang.Forms.FormScaffolder.Create(name);
+        var documentPath = Path.Combine(targetDir, scaffold.DocumentFileName);
+        var codePath = Path.Combine(targetDir, scaffold.CodeFileName);
+
+        if (File.Exists(documentPath) || File.Exists(codePath))
+        {
+            await _dialogService.ShowMessageAsync("Error", $"'{name}' already exists in this folder.");
+            return;
+        }
+
+        // ⛔⛔ BEFORE adding the first explicit <Compile> item. The compiler globs **/*.bas ONLY
+        // while a project has no explicit Compile items; the first one flips it to the explicit
+        // list. So adding a form to a project that had been relying on the glob would SILENTLY DROP
+        // EVERY OTHER SOURCE from the build — no diagnostic, just a build that compiles two files
+        // and reports success. Materialising what the glob would have found keeps the explicit list
+        // saying exactly what the glob already said.
+        var materialised = ProjectGlobSafety.MaterialiseGlobbedSources(project);
+        if (materialised.Count > 0)
+        {
+            // Told, not done silently: this materially changes the user's project file, and the
+            // next person to read it should know why it suddenly lists every source. One dialog,
+            // once per project — the list can only become explicit a single time.
+            await _dialogService.ShowMessageAsync(
+                "Project sources listed explicitly",
+                $"Adding a form makes this project's source list explicit, so {materialised.Count} " +
+                "existing source file(s) have been listed in the project file. Without that, adding " +
+                "the first file would have silently removed the others from the build.");
+        }
+
+        await File.WriteAllTextAsync(documentPath, scaffold.DocumentText);
+        await File.WriteAllTextAsync(codePath, scaffold.CodeText);
+
+        foreach (var path in new[] { documentPath, codePath })
+        {
+            project.Items.Add(new ProjectItem
+            {
+                Include = Path.GetRelativePath(project.ProjectDirectory, path),
+                ItemType = GetItemTypeForExtension(path)
+            });
+        }
+
+        await _projectService.SaveProjectAsync();
+        RefreshTree(project);
+
+        // The code-behind is what the user edits; the document is the designer's.
+        FileOpenRequested?.Invoke(this, codePath);
     }
 
     [RelayCommand]
@@ -1294,7 +1389,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
 
         var files = await _dialogService.ShowOpenFileDialogAsync(
             "Add Existing File",
-            new[] { ("BasicLang Files", new[] { "*.bas", "*.bl", "*.mod", "*.cls", "*.class" }), ("C++ Files", new[] { "*.cpp", "*.h", "*.hpp", "*.c", "*.cc", "*.cxx" }), ("All Files", new[] { "*.*" }) },
+            new[] { ("BasicLang Files", new[] { "*.bas", "*.bl", "*.mod", "*.cls", "*.class" }), ("Form Designer Documents", new[] { "*.blform", "*.blwebform" }), ("C++ Files", new[] { "*.cpp", "*.h", "*.hpp", "*.c", "*.cc", "*.cxx" }), ("All Files", new[] { "*.*" }) },
             allowMultiple: true);
 
         if (files == null || files.Length == 0) return;
