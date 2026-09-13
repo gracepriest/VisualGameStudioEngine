@@ -6176,6 +6176,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             // Analyze the handler expression
             node.HandlerExpression?.Accept(this);
+
+            ValidateHandlerWiring(node.EventExpression, node.HandlerExpression, "AddHandler",
+                node.Line, node.Column);
         }
 
         public void Visit(RemoveHandlerStatementNode node)
@@ -6185,7 +6188,116 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             // Analyze the handler expression
             node.HandlerExpression?.Accept(this);
+
+            ValidateHandlerWiring(node.EventExpression, node.HandlerExpression, "RemoveHandler",
+                node.Line, node.Column);
         }
+
+        /// <summary>
+        /// What <c>AddHandler</c>/<c>RemoveHandler</c> can actually be checked for here.
+        ///
+        /// <para>⛔⛔ Deliberately silent whenever the event side is UNRESOLVED, which on the
+        /// target this matters most for is nearly always. <c>EnableNetResolution</c> returns early
+        /// for <c>UseWindowsForms</c> (<c>Compiler.cs:145</c>) and the resolver closure cannot reach
+        /// <c>System.Windows.Forms.dll</c>, so <c>btnLogin.Click</c> types as <c>Object</c> with no
+        /// symbol and no diagnostic. Requiring <c>SymbolKind.Event</c> outright would therefore
+        /// reject every correct WinForms program — including the code this designer generates for
+        /// D8. The check fires only where there is real evidence of a mistake: a resolved symbol
+        /// that is plainly not an event, or two delegate shapes we can both see and that disagree.
+        /// </para>
+        /// </summary>
+        private void ValidateHandlerWiring(
+            ExpressionNode eventExpression, ExpressionNode handlerExpression,
+            string keyword, int line, int column)
+        {
+            if (eventExpression == null || handlerExpression == null)
+            {
+                return;
+            }
+
+            var eventSymbol = GetNodeSymbol(eventExpression);
+            var eventType = GetNodeType(eventExpression);
+
+            // A resolved symbol that is neither an event nor delegate-typed is a real mistake:
+            // `AddHandler someInteger, AddressOf Foo` wires nothing and reports nothing today.
+            if (eventSymbol != null &&
+                eventSymbol.Kind != SymbolKind.Event &&
+                eventSymbol.Kind != SymbolKind.Property &&
+                eventType != null &&
+                eventType.Kind != TypeKind.Delegate &&
+                !IsUnresolvedType(eventType))
+            {
+                Error($"'{eventSymbol.Name}' is a {eventSymbol.Kind}, not an event, so " +
+                      $"{keyword} cannot attach a handler to it.", line, column);
+                return;
+            }
+
+            // Shape comparison, only when BOTH shapes are visible. GetDelegateParameterTypes
+            // returns null for anything it cannot read, and a null on either side means "no
+            // evidence", never "mismatch".
+            var expected = GetDelegateParameterTypes(eventType);
+            var actual = GetDelegateParameterTypes(GetNodeType(handlerExpression));
+
+            if (expected == null || actual == null)
+            {
+                return;
+            }
+
+            if (expected.Count != actual.Count)
+            {
+                Error($"the handler passed to {keyword} takes {actual.Count} parameter(s) but the " +
+                      $"event supplies {expected.Count}.", line, column);
+                return;
+            }
+
+            for (var i = 0; i < expected.Count; i++)
+            {
+                if (IsDefiniteParameterMismatch(expected[i], actual[i]))
+                {
+                    Error($"the handler passed to {keyword} takes '{actual[i].Name}' as parameter " +
+                          $"{i + 1}, but the event supplies '{expected[i].Name}'.", line, column);
+                    return;
+                }
+            }
+        }
+
+        /// <summary>
+        /// True only when two parameter types CANNOT be the same type — never merely "these look
+        /// different".
+        ///
+        /// <para>⛔ Restricted to primitives on both sides, and there is no general
+        /// assignability helper in this analyzer to widen it with. Comparing class names would
+        /// report <c>EventArgs</c> against <c>MouseEventArgs</c> as a mismatch, which is the
+        /// ordinary correct shape of an event handler; primitives have no inheritance, so a
+        /// difference between two of them is a real disagreement and not a widening. Anything
+        /// outside that — an unresolved type, a class, an interface, a foreign type — is treated
+        /// as no evidence, because a false error on a hot path is worse than a missed one.</para>
+        /// </summary>
+        private bool IsDefiniteParameterMismatch(TypeInfo expected, TypeInfo actual)
+        {
+            if (expected == null || actual == null ||
+                IsUnresolvedType(expected) || IsUnresolvedType(actual))
+            {
+                return false;
+            }
+
+            if (expected.Kind != TypeKind.Primitive || actual.Kind != TypeKind.Primitive)
+            {
+                return false;
+            }
+
+            return !expected.Name.Equals(actual.Name, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// True when the type is the resolver's stand-in for "I could not work this out" rather
+        /// than a type the user wrote. Everything unresolved lands on Object here (IsNetType), so
+        /// treating Object as evidence would turn every unreadable .NET member into a false error.
+        /// </summary>
+        private bool IsUnresolvedType(TypeInfo type) =>
+            type == null ||
+            type.Name.Equals("Object", StringComparison.OrdinalIgnoreCase) ||
+            type.Kind == TypeKind.Foreign;
 
         public void Visit(TypePatternNode node)
         {
@@ -7581,9 +7693,49 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     break;
 
                 case "AddressOf":
-                    resultType = DelegateTypeOf(GetNodeSymbol(node.Operand))
-                                 ?? _typeManager.CreatePointerType(operandType);
+                {
+                    // ⛔ This arm could not fail, and the accidental guarantee it gave was
+                    // PUNCTUATION-DEPENDENT: `AddressOf OnClick` naming a handler the user had
+                    // deleted produced NO diagnostic, while `AddressOf On_Click` produced
+                    // "Undefined identifier". The difference is IsNetType, which treats any
+                    // PascalCase identifier without an underscore as a .NET type — so the
+                    // un-punctuated name typed as Object, the symbol lookup returned null, and the
+                    // ungated pointer fallback below accepted it. D8 wires every generated handler
+                    // through AddressOf, so that silence is a handler that never fires.
+                    var handlerDelegate = DelegateTypeOf(GetNodeSymbol(node.Operand));
+
+                    if (handlerDelegate != null)
+                    {
+                        resultType = handlerDelegate;
+                    }
+                    else if (node.Operand is IdentifierExpressionNode bareName &&
+                             !bareName.IsForeignQualified &&
+                             GetNodeSymbol(node.Operand) == null &&
+                             !operandType.IsPointer)
+                    {
+                        // ⛔⛔ The ONLY new error, and deliberately the narrowest one that catches
+                        // the defect: a BARE NAME that resolved to no symbol whatsoever. A member
+                        // access is left alone because the resolver genuinely cannot see through it
+                        // — EnableNetResolution returns early for UseWindowsForms (Compiler.cs:145)
+                        // and the closure cannot reach System.Windows.Forms.dll, so every
+                        // `AddressOf Me.Handler` and `AddressOf obj.Method` in a WinForms program
+                        // has a null symbol and always will. Erroring on those would make every
+                        // AddHandler this designer generates a build failure. IsNetType is NOT
+                        // narrowed — the plan is explicit that doing so fails programs across the
+                        // suite, and this arm does not need it to.
+                        Error($"'{bareName.Name}' is not a Sub or Function in scope, so " +
+                              "AddressOf cannot take its address. If this names an event handler, " +
+                              "check it has not been renamed or deleted.",
+                              node.Line, node.Column);
+                        resultType = _typeManager.ObjectType;
+                    }
+                    else
+                    {
+                        resultType = _typeManager.CreatePointerType(operandType);
+                    }
+
                     break;
+                }
 
                 case "Deref":
                     // Dereference pointer
