@@ -4142,6 +4142,36 @@ public partial class MainWindowViewModel : ViewModelBase
     /// stale root, and it is deliberately left RUNNING after this returns: the page is live
     /// until the user stops it or opens something else.</para>
     /// </summary>
+    /// <summary>
+    /// Points the browser at the startup form's generated page rather than at the site root.
+    ///
+    /// <para>⛔ Without this, generated form pages are unreachable from F5. The preview server maps
+    /// only the BARE ROOT to <c>index.html</c> and 404s anything it cannot resolve, and F5 has
+    /// always handed the browser the root URL — so a project whose whole UI is a generated
+    /// <c>LoginForm.html</c> would open on the hand-authored harness and appear to have built
+    /// nothing.</para>
+    ///
+    /// <para>This needs NO exception to the never-overwrite rule: <c>index.html</c> stays the
+    /// user's own harness, served at <c>/</c> exactly as before. Both F5 and Ctrl+F5 route through
+    /// the caller, so both are fixed by this one line.</para>
+    /// </summary>
+    private static string AppendStartupFormPage(string url, string siteDirectory)
+    {
+        // Exactly one generated page means there is no ambiguity about which to open. With several,
+        // the choice is the project's StartupForm property, which does not exist yet — opening the
+        // root is the honest fallback rather than guessing one of them.
+        var pages = Directory.GetFiles(siteDirectory, "*.html")
+            .Where(p => !string.Equals(Path.GetFileName(p), "index.html", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (pages.Count != 1)
+        {
+            return url;
+        }
+
+        return url.TrimEnd('/') + "/" + Uri.EscapeDataString(Path.GetFileName(pages[0]));
+    }
+
     private async Task StartJavaScriptPreviewAsync()
     {
         await SaveBeforeBuildAsync();
@@ -4167,6 +4197,7 @@ public partial class MainWindowViewModel : ViewModelBase
         try
         {
             url = _webPreviewServer.Start(siteDirectory);
+            url = AppendStartupFormPage(url, siteDirectory);
         }
         catch (Exception ex)
         {
