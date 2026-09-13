@@ -135,6 +135,21 @@ namespace BasicLang.Compiler.Driver
                             return 1;
                         }
 
+                    // ⛔ Shaped like `build`, NOT like the six arms above. `new`, `restore`, `add`,
+                    // `remove`, `list` and `search` all `return 0` unconditionally, discarding
+                    // whatever their handler decided. A `design --check` that always exited 0 would
+                    // be useless in CI — which is the only place anyone would run it.
+                    case "design":
+                        try
+                        {
+                            return HandleDesignCommand(subArgs);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine($"design failed: {ex.Message}");
+                            return 2;
+                        }
+
                     case "list":
                         HandleListCommand(subArgs);
                         return 0;
@@ -267,6 +282,7 @@ namespace BasicLang.Compiler.Driver
             Console.WriteLine("  remove package    Remove a NuGet package");
             Console.WriteLine("  list packages     List installed packages");
             Console.WriteLine("  search <query>    Search for NuGet packages");
+            Console.WriteLine("  design --check    Check what the form designer reads from a file");
             Console.WriteLine();
             Console.WriteLine("Options:");
             Console.WriteLine("  --repl, -i        Start interactive REPL");
@@ -286,6 +302,7 @@ namespace BasicLang.Compiler.Driver
             Console.WriteLine("  basiclang run                          Build and run project");
             Console.WriteLine("  basiclang add package Newtonsoft.Json  Add a package");
             Console.WriteLine("  basiclang restore                      Restore all packages");
+            Console.WriteLine("  basiclang design --check MainForm.bas  Check a form for design issues");
             Console.WriteLine("  basiclang --repl                       Start interactive mode");
             Console.WriteLine("  basiclang program.bas                  Compile a source file");
         }
@@ -293,6 +310,68 @@ namespace BasicLang.Compiler.Driver
         // ====================================================================
         // Command Handlers
         // ====================================================================
+
+        /// <summary>
+        /// <c>basiclang design --check &lt;files…&gt;</c> — validates what the form designer would
+        /// read from each file, without opening an IDE.
+        ///
+        /// <para>Exit codes: <b>0</b> clean, warnings included; <b>1</b> when any error-severity
+        /// finding was reported; <b>2</b> for an argument error. Warnings do not fail the build,
+        /// because an unsupported control type is information, not breakage.</para>
+        ///
+        /// <para>⛔ Every flag here must avoid the names sniffed BEFORE the verb switch ever runs:
+        /// <c>--lsp</c>, <c>--language-server</c>, <c>--debug-adapter</c>, <c>--dap</c>,
+        /// <c>--repl</c>, <c>-i</c>, <c>--interactive</c>, <c>--help</c>, <c>-h</c>,
+        /// <c>--version</c>, <c>-v</c>. Those checks are <c>args.Contains</c> over the WHOLE
+        /// command line, so <c>design --check foo.bas -i</c> starts the REPL and never reaches this
+        /// method. <c>--check</c> is safe; adding a <c>-v</c> "verbose" would not be.</para>
+        /// </summary>
+        static int HandleDesignCommand(string[] args)
+        {
+            var check = args.Contains("--check");
+            var paths = args.Where(a => !a.StartsWith("-", StringComparison.Ordinal)).ToList();
+
+            if (!check)
+            {
+                Console.Error.WriteLine("Usage: basiclang design --check <file.bas> [more files...]");
+                return 2;
+            }
+
+            if (paths.Count == 0)
+            {
+                Console.Error.WriteLine("design --check: no input files.");
+                return 2;
+            }
+
+            var findings = new List<BasicLang.Forms.DesignDiagnostic>();
+            foreach (var path in paths)
+            {
+                if (!File.Exists(path))
+                {
+                    Console.Error.WriteLine($"design --check: file not found: {path}");
+                    return 2;
+                }
+
+                findings.AddRange(BasicLang.Forms.DesignCheck.CheckFile(path));
+            }
+
+            // ⛔ ALL findings go to stdout, errors included — deliberately NOT the warnings-to-stdout
+            // / errors-to-stderr split the native build route uses. There, the split exists because
+            // the caller treats stderr as failure. Here the EXIT CODE carries that signal, and the
+            // findings are this verb's output rather than its errors: a CI step that captures only
+            // stdout must still see every line it is meant to act on. stderr is left for tool-level
+            // failures — bad arguments, an unreadable file — which are exit 2, not findings.
+            foreach (var finding in findings)
+            {
+                Console.WriteLine(finding.Format());
+            }
+
+            var errors = findings.Count(f => !f.IsWarning);
+            var warnings = findings.Count - errors;
+            Console.WriteLine($"design --check: {paths.Count} file(s), {errors} error(s), {warnings} warning(s).");
+
+            return errors > 0 ? 1 : 0;
+        }
 
         static void HandleNewCommand(string[] args)
         {
