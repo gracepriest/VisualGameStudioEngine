@@ -1,4 +1,4 @@
-# Handoff snapshot — 2026-09-11
+# Handoff snapshot — 2026-09-11, updated 2026-09-13
 
 **Why this file exists.** Working state for this repo normally lives in a per-machine
 auto-memory directory (`~/.claude/projects/…/memory/`) that is **outside the repo and does not
@@ -7,11 +7,148 @@ another person — actually needs. It is a dated snapshot, not a changelog: hist
 `git log`, rationale in `docs/superpowers/{plans,specs}/`, conventions in `CLAUDE.md`.
 
 ⚠ **Everything below was true at `6139386` unless a section says otherwise. Re-verify before
-relying on it.**
+relying on it.** The 2026-09-13 section immediately below is newer than the rest of this file
+and supersedes it wherever they disagree — in particular about whether a cloud container can
+build and test this repo.
 
 ---
 
-## ✅ READ FIRST — master is FULL-SUITE GREEN at `f54416b` (2026-09-11)
+## ⛔ READ FIRST — 2026-09-13: a cloud container CAN build and test this repo
+
+**This overturns the standing assumption that cloud sessions cannot gate.** A .NET 8 SDK installs
+from the Ubuntu archive; the package index in a fresh container is just stale:
+
+```bash
+apt-get update && apt-get install -y --no-install-recommends dotnet-sdk-8.0   # ~1 min
+```
+
+`builds.dotnet.microsoft.com` IS blocked by the agent proxy, which is what made the earlier
+"no compiler here" finding correct at the time and wrong now. Nothing else is needed: NuGet
+restore works, the compiler and the test project both build, and the full suite runs.
+
+**What that cost.** Twelve commits of form-designer work (`d8d6124`…`8c841f0`) were written,
+reviewed by subagents, and reported as gated — with a compiler nobody had run. The first real
+build found:
+
+- **`VisualGameStudio.Tests` had not compiled since `0152506`** (CS0104: `MethodInfo` is
+  ambiguous between `System.Reflection` and `VisualGameStudio.Core.Abstractions.Services`, which
+  declares its own at `IRefactoringService.cs:131`). **Every "gate" reported in commits
+  `0152506` through `8c841f0` was therefore never run.** Fixed in `e2c4c51`.
+- Two tests that had never executed asserted the wrong thing — one demonstrated "an Int is bare"
+  using a property the control's catalog row does not declare, the other counted `"Sub "`
+  occurrences and expected the count to include `End Sub`, which has no trailing space.
+- `CliTestHarness.CliPath()` hardcoded `BasicLang.exe`. The apphost is `BasicLang` with no
+  extension off Windows, so **every spawned-CLI test in this suite was red on Linux**, and the
+  failure read as "not deployed — project reference output changed?", which looks like a build
+  layout problem rather than an unsupported platform. Fixing it turned 38 pre-existing failures
+  green.
+
+**Take the lesson, not just the fix:** subagent review is a decent proof-reader and is not a
+compiler. It found 29 real defects across three passes and still missed a file that did not
+compile.
+
+### Measured on Linux, .NET 8.0.131 (this container)
+
+| Run | Result | Time |
+|---|---|---|
+| Full suite, pre-branch baseline `6a6d224` | **174 failed / 5837 total** (5460 passed, 203 skipped) | ~8 min |
+| Full suite, `feat/form-designer` tip | **174 failed / 6111 total** (5734 passed, 203 skipped) | ~7 min |
+| Fast subset, baseline `6a6d224` | 90 failed / 4939 total | ~1 min |
+| Fast subset, `feat/form-designer` tip | 90 failed / 5196 total | ~1 min |
+
+⛔ **The two full-suite failure sets are IDENTICAL, compared by test name** — 174 names, no
+regressions and no accidental fixes. That comparison, not the count, is the gate: run the
+baseline in a `git worktree` and `comm -23` the sorted failure names. A raw count hides a
+regression that lands as another test goes green.
+
+⚠ **The 174 are environmental, not the Windows baseline of 4.** They are Windows-only tests on
+Linux: 23 assert on hardcoded `C:\` paths, 10 need clang, 8 need MSVC/`vcvars`. **Do not treat
+174 as "the number" on Windows** — re-measure there. The Windows baseline in the table further
+down (5826 total / 4 failures at `f54416b`) is still the number that matters for a release.
+
+⚠ The full suite takes **~7 minutes here, not ~2 hours**. That is not a faster machine: the
+native/clang/MSVC integration tests fail fast instead of running. A green-looking short run on
+Linux has not exercised codegen end-to-end.
+
+### Form designer — where it actually is
+
+Plan: `docs/superpowers/plans/2026-09-11-visual-form-designer.md` (19 tasks).
+Spec: `docs/superpowers/specs/2026-09-11-visual-form-designer-design.md`.
+Branch: **`feat/form-designer`** (PR #4). Not merged.
+
+**Done and now genuinely gated:** Tasks **1–6, 8–13, 15, 16**.
+
+| Task | What landed |
+|---|---|
+| 1 | `ProjectSerializer` preserves the `.blproj` in place instead of rebuilding it from the model |
+| 2–3 | TFM reaches the file; DPI mode emitted; two silent C# backend defaults now throw |
+| 4 | Form model — geometry, controls, catalog, document, clipboard |
+| 5 | The recognizer (importer) — WinForms and DOM dialects, values kept as raw source text |
+| 6 | `DesignDiagnostic`, the `BL8xxx` band, `basiclang design --check` |
+| 8 | `CSharpTestSupport` with the false-green guard |
+| 9 | `.blwebform` reader/writer, D9 tiers, the algebra |
+| 10 | Form documents ride as `<Compile>` and are skipped on both compile routes |
+| 11 | Designer-owned marked regions — hashing, refusal, handler ordering |
+| 12 | Markup/CSS/JS emission, the two-step `data-form` dispatch |
+| 13 | Creating a form — the document + `.bas` pair, and the glob guard |
+| **15** | **A missing handler is a hard error (D8)** |
+| **16** | **`.blform` — the same reader and writer, not a second one** |
+
+**Not done:** Task 7 and 14 (Avalonia canvas + property grid — they build here, but there is no
+`Avalonia.Headless` package so nothing can drive them), 17–18 (WinForms catalog + region writing,
+which need Windows to verify against the real toolchain), 19 (closeout).
+
+### Contradictions found against the spec and the briefing
+
+1. **The briefing's platform table is wrong** — see the top of this section. Tasks marked
+   "build but unverifiable" and "needs the full suite" were both doable here.
+2. **`FormClipboard` used `(int?)` casts on XML attributes**, which throw `FormatException` on a
+   non-integer. The clipboard is precisely where unvetted text arrives; a paste carrying
+   `X="20px"` took the IDE down rather than declining the paste. Now `int.TryParse`, like every
+   other reader in the feature.
+3. **"Structural attribute" is not a property of the attribute NAME.** The two formats overlap in
+   spelling and not in meaning — `Width` is a `.blform` control's pixel width and is read into its
+   geometry, while on a `.blwebform` control nothing reads it. Under one flat list it was neither
+   a property nor an unknown attribute: absent from the model entirely, and dropped by anything
+   rebuilding the document from it. `IsStructural` now takes a `FormTarget`.
+4. **The spec does not say what happens when a file's NAME disagrees with its ROOT element.** A
+   `.blform` containing `<WebForm>` is now REFUSED. Neither side can be believed over the other:
+   trust the root and the writer emits one format's geometry into a file the project system
+   compiles as the other; trust the extension and every `X`/`Y` reads as an unknown attribute and
+   the canvas comes up empty. Both are invisible until the user saves.
+5. **Task 15 could not be implemented as the plan words it.** The plan says to error whenever
+   `GetNodeSymbol(operand)` is null. That would reject every correct WinForms program, this
+   designer's generated output included, because `EnableNetResolution` returns early for
+   `UseWindowsForms` (`Compiler.cs:145`) and the resolver closure cannot reach
+   `System.Windows.Forms.dll` — so every `AddressOf Me.Handler` has a null symbol and always
+   will. **Implemented narrower:** the only new error is a BARE NAME that resolved to no symbol
+   at all. A member access is left alone. `IsNetType` is NOT narrowed, per the plan's own warning.
+   The `AddHandler`/`RemoveHandler` validation is likewise silent whenever the event side is
+   unresolved, and reports only a resolved symbol that is plainly not an event, a parameter-count
+   disagreement, or two *primitive* parameter types that differ. There is no assignability helper
+   in `SemanticAnalyzer` to widen that last one with, and comparing class names would flag
+   `EventArgs` against `MouseEventArgs` — the ordinary correct shape of a handler.
+
+### What the next session should pick up
+
+1. **Re-run the full suite on Windows.** Everything above is a Linux measurement. The Windows
+   number to beat is 5826 total / 4 failures at `f54416b`; this branch adds 274 tests.
+2. **Tasks 17–18** (WinForms catalog + region writing). Task 16 exists to give 18 an input
+   document; it now has one. ⛔ The catalog is **unfalsifiable** without the real toolchain —
+   every `Form`/`Button` member types as `Object` with no diagnostic, so a misspelled property
+   name compiles green. The gate has to be a sweep that generates every control with every
+   property and requires the real CLI to exit 0, driven from `FormControlCatalog.All`.
+3. **Tasks 7 and 14** (canvas + property grid) — need a machine that can run Avalonia.
+4. **Task 19**, closeout.
+5. **PR #3 (`claude/busy-newton-gsispd`)** is still open carrying a superseded spec/plan pair.
+   It should be closed or stripped to just the SessionStart hook.
+
+---
+
+## ✅ 2026-09-11 — master is FULL-SUITE GREEN at `f54416b`
+
+*(Still true, and still the Windows number that matters. Read the 2026-09-13 section above
+first: it is newer, and it contradicts this file's assumption about cloud sessions.)*
 
 `origin/master` == **`f54416b`**, which merged eight P2a-2 Task 14 commits (tip `87a6c5e`) into
 master. **Full suite measured on Windows: 5826 tests, 4 failures — exactly the standing baseline
@@ -97,6 +234,9 @@ These are measured, not cautionary. Each one shipped a green build that did the 
 dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release
 dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --filter "TestCategory!=Integration"
 ```
+
+⚠ These are **Windows** numbers. For Linux/cloud numbers — and for the worktree-diff method that
+should be used instead of comparing raw counts — see the 2026-09-13 section at the top.
 
 | Run | Count | Time |
 |---|---|---|
