@@ -384,6 +384,166 @@ public class BlWebFormRoundTripTests
     }
 
     // ==================================================================
+    // Regressions found by review — each of these lost user content
+    // ==================================================================
+
+    [Test]
+    public void Write_CalledTwiceOnTheSameInstance_DoesNotRevertTheEdit()
+    {
+        // ⛔ ApplyToDocument mutates the tree IN PLACE. Comparing a second write against the
+        // ORIGINAL text made it see "nothing changed" and return the pre-edit document — so a second
+        // Save wrote the old content back over the saved one. The exact opposite of the no-op it is
+        // supposed to be, and every fixture dodged it by re-reading between writes.
+        var form = Read(LoginForm);
+        form.Model.FindById("btnLogin")!.Properties["Text"] = "Log in";
+
+        var first = BlWebFormWriter.Write(form);
+        var second = BlWebFormWriter.Write(form);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Does.Contain("Log in"));
+            Assert.That(second, Is.EqualTo(first), "the second write must not resurrect the old text");
+            Assert.That(second, Does.Not.Contain("Sign in"));
+        });
+    }
+
+    [Test]
+    public void Save_CalledTwice_DoesNotWriteThePreEditDocumentBack()
+    {
+        var path = Path.Combine(_dir, "Twice.blwebform");
+        File.WriteAllText(path, LoginForm);
+        var form = BlWebFormReader.Read(path, LoginForm);
+        form.Model.FindById("btnLogin")!.Properties["Text"] = "Log in";
+
+        BlWebFormWriter.Save(form);
+        var afterFirst = File.ReadAllText(path);
+        var wroteAgain = BlWebFormWriter.Save(form);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(wroteAgain, Is.False, "nothing changed, so nothing may be written");
+            Assert.That(File.ReadAllText(path), Is.EqualTo(afterFirst));
+            Assert.That(File.ReadAllText(path), Does.Contain("Log in"));
+        });
+    }
+
+    [Test]
+    public void Write_RefusesToTouchARefusedDocument()
+    {
+        // ⛔ The refusal paths return the full parsed tree but an EMPTY model — reading stops before
+        // Name, Version, controls, layout and literal are populated. Writing from that model deleted
+        // every control, downgraded the version to 1, stamped the filename over the document's name
+        // and dropped the <Literal>. Refusing a document to AVOID a lossy save and then performing
+        // exactly that save is the worst outcome available.
+        var newer = """
+            <WebForm Name="Future" Version="99">
+              <Controls><Button Id="btnKeep" TabIndex="0" Text="Keep me"/></Controls>
+              <Literal><![CDATA[<p>keep</p>]]></Literal>
+            </WebForm>
+            """;
+        var form = Read(newer, "Future.blwebform");
+
+        Assert.That(form.IsRefused, Is.True, "sanity: a newer version is refused");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(BlWebFormWriter.Write(form), Is.EqualTo(newer),
+                "not one byte of a refused document may change");
+            Assert.That(BlWebFormWriter.Save(form), Is.False, "and nothing may reach the disk");
+        });
+    }
+
+    [Test]
+    public void Write_KeepsAReservedResourceReference()
+    {
+        // The reader skipped adding {res:…} to the model, so the writer's dropped-catalog-property
+        // sweep DELETED it — the document refused specifically to preserve the reference was the one
+        // that lost it.
+        var xml = """
+            <WebForm Name="Res" Version="1">
+              <Controls><Button Id="b" TabIndex="0" Text="{res:SignIn}"/></Controls>
+            </WebForm>
+            """;
+        var form = Read(xml, "Res.blwebform");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(form.Model.FindById("b")!.Properties["Text"], Is.EqualTo("{res:SignIn}"),
+                "the value must reach the model or the writer cannot know to keep it");
+            Assert.That(BlWebFormWriter.Write(form), Does.Contain("{res:SignIn}"));
+        });
+    }
+
+    [Test]
+    public void Read_ReportsANonIntegerStructuralValue_RatherThanThrowing()
+    {
+        // ⛔ (int?) on an XAttribute THROWS on a non-integer. TabIndex="one" escaped the reader, the
+        // check's IOException-only catch, and surfaced as "design failed: the input string was not
+        // in a correct format", exit 2 — a tool failure. The asymmetry was the tell: a bad CATALOG
+        // value got a careful Degraded tier while a bad STRUCTURAL value crashed.
+        BlWebForm form = null!;
+        Assert.DoesNotThrow(() => form = Read("""
+            <WebForm Name="Bad" Version="1">
+              <Controls><Button Id="b" TabIndex="one" Col="two"/></Controls>
+            </WebForm>
+            """, "Bad.blwebform"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(form.Model.FindById("b")!.TabIndex, Is.Zero, "unparseable reads as absent");
+            Assert.That(form.IsRefused, Is.False);
+        });
+    }
+
+    [Test]
+    public void Read_DoesNotThrow_OnANonIntegerVersion()
+    {
+        Assert.DoesNotThrow(() => Read("""<WebForm Name="V" Version="1.0"><Controls/></WebForm>""", "V.blwebform"));
+    }
+
+    [Test]
+    public void Write_DoesNotAddDefaultsToAHandWrittenDocumentThatOmittedThem()
+    {
+        // ⛔ The reader fills Name from the FILENAME, Version from SupportedVersion, TabIndex/Col/Row
+        // from 0 and Layout.Kind from Grid. Writing those back unconditionally rewrote a
+        // hand-authored document that deliberately omitted them — so "a no-op patch writes nothing"
+        // was true only for documents this writer had already produced, which is exactly the set
+        // that does not need the guarantee.
+        var sparse = """
+            <WebForm>
+              <Layout Cols="1fr"/>
+              <Controls><Button Id="b"/></Controls>
+            </WebForm>
+            """;
+        var form = Read(sparse, "b.blwebform");
+
+        var after = BlWebFormWriter.Write(form);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(after, Is.EqualTo(sparse), "a no-op save on a sparse document writes nothing");
+            Assert.That(after, Does.Not.Contain("TabIndex"));
+            Assert.That(after, Does.Not.Contain("Version"));
+            Assert.That(after, Does.Not.Contain("Kind"));
+        });
+    }
+
+    [Test]
+    public void Write_StillAddsAPropertyWhoseValueIsNotTheDefault()
+    {
+        // The other half: suppressing defaults must not suppress a real value.
+        var form = Read("""
+            <WebForm>
+              <Controls><Button Id="b"/></Controls>
+            </WebForm>
+            """, "b.blwebform");
+        form.Model.FindById("b")!.TabIndex = 3;
+
+        Assert.That(BlWebFormWriter.Write(form), Does.Contain("""TabIndex="3" """.TrimEnd()));
+    }
+
+    // ==================================================================
     // Creating from scratch
     // ==================================================================
 

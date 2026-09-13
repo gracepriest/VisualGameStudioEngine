@@ -43,7 +43,13 @@ public static class BlWebFormReader
             return new BlWebForm(model, xml, text, filePath, diagnostics, degraded);
         }
 
-        var version = (int?)root.Attribute("Version") ?? SupportedVersion;
+        // ⛔ int.TryParse, never a (int?) cast. The XLinq cast THROWS FormatException on a value that
+        // is not an integer — so `Version="1.0"` or `TabIndex="one"` would escape this method
+        // entirely and surface as "design failed: The input string was not in a correct format",
+        // exit 2, a tool failure. The contract here is that a bad document is a FINDING. The
+        // asymmetry was the tell: a bad catalog value got a careful Degraded tier while a bad
+        // structural value crashed.
+        var version = IntAttribute(root, "Version") ?? SupportedVersion;
         if (version > SupportedVersion)
         {
             // Refusing a newer document is safer than reading the parts we recognise: writing it
@@ -137,9 +143,17 @@ public static class BlWebFormReader
         if (definition == null)
         {
             // An element the catalog does not know is NOT a control and NOT an error — it belongs to
-            // a newer designer and must survive the round trip. It is collected by the caller's
-            // unknown-children path only when it sits at the root; inside <Controls> we keep it as
-            // an unknown child of the document instead of inventing a control for it.
+            // a newer designer.
+            //
+            // ⚠ Precisely what happens to it, because the obvious reading is wrong: it is NOT added
+            // to the model anywhere. It survives an edit-and-save only because the writer's removal
+            // sweep skips elements the catalog does not know, so nothing ever deletes it — survival
+            // by omission, not by a round-trip mechanism. The consequences are real and bounded:
+            // BlWebFormWriter.Create (which builds a document from the model alone) would not
+            // reproduce it, and passes that walk the model — id uniqueness, tab order — cannot see
+            // it. Modelling it properly needs a per-container unknown-children list, which is more
+            // machinery than v1 earns; this comment exists so the next reader does not assume the
+            // machinery is already here.
             return null;
         }
 
@@ -147,7 +161,7 @@ public static class BlWebFormReader
         {
             Kind = definition.Kind,
             Id = (string?)element.Attribute("Id") ?? "",
-            TabIndex = (int?)element.Attribute("TabIndex") ?? 0,
+            TabIndex = IntAttribute(element, "TabIndex") ?? 0,
             Geometry = ReadGeometry(element)
         };
 
@@ -160,13 +174,21 @@ public static class BlWebFormReader
             }
 
             // ⛔ A reserved resource reference cannot be resolved in v1 — <Resources> is empty by
-            // definition — so writing it back would be writing a reference to nothing.
+            // definition — so the document is refused rather than half-understood.
+            //
+            // ⚠ The value is still recorded in Properties. Skipping it here left the attribute
+            // present in the document but absent from the model, and the writer's
+            // dropped-catalog-property sweep then DELETED it — so the document refused specifically
+            // to preserve the reference was the one that lost it. Recording it keeps the round trip
+            // honest; the refusal is what stops it being acted on.
             if (LooksLikeResourceReference(attribute.Value))
             {
                 diagnostics.Add(Error(DesignCodes.ReservedResourceReference,
                     $"'{control.Id}.{name}' uses the reserved resource syntax " +
                     $"'{attribute.Value}', which v1 cannot resolve.",
                     filePath, Line(element), Column(element)));
+
+                control.Properties[name] = attribute.Value;
                 continue;
             }
 
@@ -247,12 +269,16 @@ public static class BlWebFormReader
 
         return new GridGeometry
         {
-            Col = (int?)element.Attribute("Col") ?? 0,
-            Row = (int?)element.Attribute("Row") ?? 0,
-            ColSpan = (int?)element.Attribute("ColSpan") ?? 1,
-            RowSpan = (int?)element.Attribute("RowSpan") ?? 1
+            Col = IntAttribute(element, "Col") ?? 0,
+            Row = IntAttribute(element, "Row") ?? 0,
+            ColSpan = IntAttribute(element, "ColSpan") ?? 1,
+            RowSpan = IntAttribute(element, "RowSpan") ?? 1
         };
     }
+
+    /// <summary>An integer attribute, or null when absent OR unparseable. Never throws.</summary>
+    private static int? IntAttribute(XElement element, string name) =>
+        int.TryParse((string?)element.Attribute(name), out var value) ? value : null;
 
     /// <summary>`{res:Key}` — the reserved resource syntax.</summary>
     private static bool LooksLikeResourceReference(string value) =>

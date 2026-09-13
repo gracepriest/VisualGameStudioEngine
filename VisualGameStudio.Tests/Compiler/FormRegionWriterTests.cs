@@ -39,8 +39,13 @@ public class FormRegionWriterTests
     /// </summary>
     private static string ScaffoldedFile()
     {
+        // ⛔ Normalised to LF. C# raw string literals take their line endings from the SOURCE FILE,
+        // and .gitattributes is `* text=auto`, so this fixture is CRLF on a Windows checkout and LF
+        // on Linux. Two tests below search it for an LF-spelled needle; on CRLF the Replace would
+        // silently no-op, the region would stay Canon, and the tests would fail for a reason that
+        // has nothing to do with what they are testing.
         var emptyHash = RegionMarkers.HashContent("");
-        return $"""
+        return Lf($"""
             Public Class LoginForm
 
             {RegionMarkers.FormatOpen("controls", "LoginForm.blwebform", emptyHash, "    ")}
@@ -58,8 +63,11 @@ public class FormRegionWriterTests
 
             End Class
 
-            """;
+            """);
     }
+
+    /// <summary>Line-ending normalisation, so a fixture means the same thing on both checkouts.</summary>
+    private static string Lf(string text) => text.Replace("\r\n", "\n");
 
     // ==================================================================
     // Scanning and classification
@@ -382,6 +390,108 @@ public class FormRegionWriterTests
 
         Assert.That(result.Refused, Is.False,
             string.Join("; ", result.Diagnostics.Select(d => d.Format())));
+    }
+
+    // ==================================================================
+    // Regressions found by review
+    // ==================================================================
+
+    [Test]
+    public void Write_WinForms_ParentsAChildToItsContainer_NotToTheForm()
+    {
+        // ⛔ Walking the flat AllControls() list emitted Me.Controls.Add(x) for EVERY control,
+        // including nested ones — so a Button inside a Panel was added to the FORM and a nested
+        // layout rendered flat at run time. A silent divergence between the designer view and the
+        // running program, which is the whole class of bug D9 exists to prevent. The catalog ships
+        // Panel and GroupBox as containers, so this is reachable from ordinary use.
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm" };
+        var panel = new FormControl { Kind = "Panel", Id = "pnlBox", TabIndex = 0 };
+        panel.Children.Add(new FormControl { Kind = "Label", Id = "lblInner", TabIndex = 1 });
+        form.Controls.Add(panel);
+
+        var source = ScaffoldedFile().Replace("LoginForm.blwebform", "LoginForm.blform");
+        var result = RegionWriter.Write("LoginForm.bas", source, form, "LoginForm.blform");
+
+        Assert.That(result.Refused, Is.False, string.Join("; ", result.Diagnostics.Select(d => d.Format())));
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Text, Does.Contain("pnlBox.Controls.Add(lblInner)"),
+                "the child belongs to its container");
+            Assert.That(result.Text, Does.Not.Contain("Me.Controls.Add(lblInner)"),
+                "and must NOT also be added to the form");
+            Assert.That(result.Text, Does.Contain("Me.Controls.Add(pnlBox)"),
+                "the top-level container is still the form's");
+            Assert.That(result.Text.IndexOf("pnlBox.Controls.Add(lblInner)", StringComparison.Ordinal),
+                Is.LessThan(result.Text.IndexOf("Me.Controls.Add(pnlBox)", StringComparison.Ordinal)),
+                "a container is populated before it is added, like the shipped template");
+        });
+    }
+
+    [Test]
+    public void Write_WinForms_QuotesAStringPropertyThatIsNotAlreadySourceText()
+    {
+        // ⛔ The same Properties dictionary means two things to two consumers: the DOCUMENT reader
+        // stores the raw XML attribute text (Sign in, unquoted), while this writer splices values
+        // into generated SOURCE. Emitting the raw text produced `btnLogin.Text = Sign in` — a syntax
+        // error. The recognizer meanwhile stores already-quoted source. Typing the formatting off
+        // the catalog is what lets both feed the same writer.
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm" };
+        var button = new FormControl { Kind = "Button", Id = "btnLogin", TabIndex = 0 };
+        button.Properties["Text"] = "Sign in";        // as a DOCUMENT would carry it
+        button.Properties["Enabled"] = "false";
+        button.Properties["MaxLength"] = "12";
+        form.Controls.Add(button);
+
+        var source = ScaffoldedFile().Replace("LoginForm.blwebform", "LoginForm.blform");
+        var result = RegionWriter.Write("LoginForm.bas", source, form, "LoginForm.blform");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Text, Does.Contain("""btnLogin.Text = "Sign in" """.TrimEnd()));
+            Assert.That(result.Text, Does.Contain("btnLogin.Enabled = False"), "a Bool is bare, and BasicLang-cased");
+            Assert.That(result.Text, Does.Contain("btnLogin.MaxLength = 12"), "an Int is bare");
+        });
+    }
+
+    [Test]
+    public void Write_WinForms_LeavesAlreadyQuotedSourceTextAlone()
+    {
+        // The recognizer's convention: it read `"Sign in"` from source and stores it with quotes.
+        // Double-quoting it would emit `""Sign in""`.
+        var source = ScaffoldedFile().Replace("LoginForm.blwebform", "LoginForm.blform");
+        var result = RegionWriter.Write("LoginForm.bas", source, WinFormsLoginForm(), "LoginForm.blform");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Text, Does.Contain("""btnLogin.Text = "Sign in" """.TrimEnd()));
+            Assert.That(result.Text, Does.Not.Contain("\"\"Sign in\"\""));
+        });
+    }
+
+    [Test]
+    public void Write_RefusesAHalfAdoptedFile_NamingTheMissingRegion()
+    {
+        // ⚠ Telling a user their file "has no designer regions" when it visibly has one is worse
+        // than saying nothing, and writing only the half that exists would leave the declarations
+        // and the wiring out of step.
+        var empty = RegionMarkers.HashContent("");
+        var source = Lf($"""
+            Public Class LoginForm
+            {RegionMarkers.FormatOpen("controls", "LoginForm.blwebform", empty, "    ")}
+            {RegionMarkers.FormatClose("    ")}
+            End Class
+            """);
+
+        var result = RegionWriter.Write("LoginForm.bas", source, WebLoginForm(), "LoginForm.blwebform");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Refused, Is.True, "half-adopted is not the import case");
+            Assert.That(result.Changed, Is.False);
+            Assert.That(result.Diagnostics.Single().Code, Is.EqualTo(DesignCodes.RegionMalformed));
+            Assert.That(result.Diagnostics.Single().Message, Does.Contain("init"),
+                "the diagnostic must name the region that is missing");
+        });
     }
 
     [Test]

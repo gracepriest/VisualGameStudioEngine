@@ -70,16 +70,34 @@ public static class RegionWriter
         var controls = RegionMarkers.Find(regions, RegionMarkers.Controls);
         var init = RegionMarkers.Find(regions, RegionMarkers.Init);
 
-        if (controls == null || init == null)
+        if (controls == null && init == null)
         {
-            // No markers at all is the IMPORT case, not an error: `design --import` offers to adopt
-            // the file and until then the designer writes nothing (D1). Reported as a warning so a
-            // caller can tell "nothing to do" from "refused".
+            // NEITHER marker is the IMPORT case, not an error: `design --import` offers to adopt the
+            // file and until then the designer writes nothing (D1). A warning so a caller can tell
+            // "nothing to do" from "refused".
             diagnostics.Add(new DesignDiagnostic(
                 DesignCodes.RegionAbsent,
                 $"{DesignCodes.RegionAbsent}: this file has no designer regions, so nothing was " +
                 "written. Import it first to let the designer own part of it.",
                 filePath, 0, 0, IsWarning: true));
+            return new RegionWriteResult(Changed: false, source, diagnostics);
+        }
+
+        if (controls == null || init == null)
+        {
+            // ⚠ HALF-adopted is not the import case, and telling the user the file "has no designer
+            // regions" when it visibly has one is worse than saying nothing. A file with one region
+            // is closer to Malformed: the designer cannot write a complete form into it, and
+            // silently writing only the half that exists would leave the field declarations and the
+            // wiring out of step.
+            var present = controls != null ? RegionMarkers.Controls : RegionMarkers.Init;
+            var missing = controls != null ? RegionMarkers.Init : RegionMarkers.Controls;
+
+            diagnostics.Add(Error(DesignCodes.RegionMalformed,
+                $"this file has a designer '{present}' region but no '{missing}' region. Both are " +
+                "required — the declarations and the wiring must be regenerated together. Add the " +
+                $"missing '{missing}' markers, or remove the '{present}' ones and re-import.",
+                filePath, (controls ?? init)!.Line));
             return new RegionWriteResult(Changed: false, source, diagnostics);
         }
 
@@ -245,57 +263,112 @@ public static class RegionWriter
             body.Append($"{inner}Dim doc As Document = ::document").Append(newline);
         }
 
-        foreach (var control in form.AllControls())
+        foreach (var control in form.Controls)
         {
-            if (form.Target == FormTarget.Web)
-            {
-                body.Append($"{inner}{control.Id} = doc.getElementById(\"{control.Id}\")").Append(newline);
-            }
-            else
-            {
-                body.Append($"{inner}{control.Id} = New {DeclaredType(form, control)}()").Append(newline);
-
-                // ⛔ One statement per property. There is no object-initializer syntax, and `With`
-                // must NEVER be emitted: `.Prop = value` inside a With block is silently discarded
-                // by the IR builder, so the running program would not set what the designer shows.
-                foreach (var (name, value) in control.Properties)
-                {
-                    body.Append($"{inner}{control.Id}.{name} = {value}").Append(newline);
-                }
-            }
-
-            foreach (var bind in control.Binds)
-            {
-                if (string.IsNullOrEmpty(bind.Handler))
-                {
-                    continue;
-                }
-
-                if (form.Target == FormTarget.Web)
-                {
-                    // ⛔ NEVER `AddHandler el.click, AddressOf H` on the web: the event-call rewrite
-                    // emits `{recv}.add(handler)` unconditionally, so that becomes
-                    // `el.click.add(H)` → a runtime TypeError. addEventListener is the only correct
-                    // form, and AddressOf (not a lambda) is what produces a bound handler.
-                    body.Append($"{inner}{control.Id}.addEventListener(\"{bind.Event}\", AddressOf {bind.Handler})")
-                        .Append(newline);
-                }
-                else
-                {
-                    // ⛔ NEVER `Handles` — it is lexed but never parsed, so the file would not build.
-                    body.Append($"{inner}AddHandler {control.Id}.{bind.Event}, AddressOf {bind.Handler}")
-                        .Append(newline);
-                }
-            }
-
-            if (form.Target == FormTarget.WinForms)
-            {
-                body.Append($"{inner}Me.Controls.Add({control.Id})").Append(newline);
-            }
+            AppendControlInit(body, form, control, parent: "Me", inner, newline);
         }
 
         body.Append($"{indent}End Sub").Append(newline);
         return body.ToString();
+    }
+
+    /// <summary>
+    /// Emits one control and then its children, parenting each child to <b>its own container</b>.
+    ///
+    /// <para>⚠ This used to walk the flat <c>AllControls()</c> list and emit
+    /// <c>Me.Controls.Add(x)</c> for every control including nested ones — so a Button inside a
+    /// Panel was added to the FORM, and a nested layout rendered flat at run time. That is a silent
+    /// divergence between the designer view and the running program, which is the whole class of
+    /// bug D9 exists to prevent. The catalog ships Panel and GroupBox as containers, so this is
+    /// reachable from ordinary use.</para>
+    /// </summary>
+    private static void AppendControlInit(
+        StringBuilder body, FormDocument form, FormControl control, string parent, string inner, string newline)
+    {
+        if (form.Target == FormTarget.Web)
+        {
+            body.Append($"{inner}{control.Id} = doc.getElementById(\"{control.Id}\")").Append(newline);
+        }
+        else
+        {
+            body.Append($"{inner}{control.Id} = New {DeclaredType(form, control)}()").Append(newline);
+
+            // ⛔ One statement per property. There is no object-initializer syntax, and `With` must
+            // NEVER be emitted: `.Prop = value` inside a With block is silently discarded by the IR
+            // builder, so the running program would not set what the designer shows.
+            foreach (var (name, value) in control.Properties)
+            {
+                body.Append($"{inner}{control.Id}.{name} = {Literal(control, name, value)}").Append(newline);
+            }
+        }
+
+        foreach (var bind in control.Binds)
+        {
+            if (string.IsNullOrEmpty(bind.Handler))
+            {
+                continue;
+            }
+
+            if (form.Target == FormTarget.Web)
+            {
+                // ⛔ NEVER `AddHandler el.click, AddressOf H` on the web: the event-call rewrite
+                // emits `{recv}.add(handler)` unconditionally, so that becomes `el.click.add(H)` →
+                // a runtime TypeError. addEventListener is the only correct form, and AddressOf
+                // (not a lambda) is what produces a bound handler.
+                body.Append($"{inner}{control.Id}.addEventListener(\"{bind.Event}\", AddressOf {bind.Handler})")
+                    .Append(newline);
+            }
+            else
+            {
+                // ⛔ NEVER `Handles` — it is lexed but never parsed, so the file would not build.
+                body.Append($"{inner}AddHandler {control.Id}.{bind.Event}, AddressOf {bind.Handler}")
+                    .Append(newline);
+            }
+        }
+
+        foreach (var child in control.Children)
+        {
+            AppendControlInit(body, form, child, control.Id, inner, newline);
+        }
+
+        if (form.Target == FormTarget.WinForms)
+        {
+            // Parented to its container — `Me` only for a top-level control. Emitted AFTER the
+            // children so a container is populated before it is added, which is the order the
+            // shipped template uses.
+            body.Append($"{inner}{parent}.Controls.Add({control.Id})").Append(newline);
+        }
+    }
+
+    /// <summary>
+    /// Formats a property value as BasicLang SOURCE, driven off the catalog's declared type.
+    ///
+    /// <para>⛔ The same <c>Properties</c> dictionary means two different things to two consumers:
+    /// the document reader stores the RAW attribute text (<c>Sign in</c>, unquoted, because XML
+    /// attributes are not quoted values), while this writer splices the value into generated source.
+    /// Emitting the raw text produced <c>btnLogin.Text = Sign in</c> — a syntax error. The recognizer
+    /// meanwhile stores already-quoted source text, because that is what it read. Typing the
+    /// formatting off the catalog is what lets both feed the same writer.</para>
+    /// </summary>
+    private static string Literal(FormControl control, string name, string value)
+    {
+        // Already a source literal (the recognizer's convention) — leave it exactly as read.
+        if (value.StartsWith("\"", StringComparison.Ordinal) ||
+            value.StartsWith("New ", StringComparison.Ordinal))
+        {
+            return value;
+        }
+
+        var property = control.Definition?.Property(name);
+        return property?.Type switch
+        {
+            FormPropertyType.Int => value,
+            FormPropertyType.Bool => bool.TryParse(value, out var flag) ? (flag ? "True" : "False") : value,
+            // A colour and an enum both name a member the target resolves; a string is a string.
+            FormPropertyType.Enum => value,
+            FormPropertyType.Color => value,
+            _ => "\"" + value.Replace("\"", "\"\"") + "\""
+        };
     }
 
     /// <summary>

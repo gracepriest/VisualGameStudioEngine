@@ -172,8 +172,12 @@ namespace BasicLang.Compiler.Driver
             // (.bas/.bl/.basic/.mod/.cls/.class) — routing through it keeps the CLI
             // in sync so class files (.cls/.class) are no longer silently ignored.
             // .blproj is a project file, not a source file, so it is checked separately.
+            // ⛔ A form document is deliberately NOT in ModuleResolver's list (it must never be
+            // lexed or importable), so it must be admitted here explicitly or the CLI never routes
+            // it at all — it falls through to "unrecognized argument" and exits 2, which reads as a
+            // typo rather than as "that is not a program". Same reason .blproj is checked separately.
             var fileArg = args.FirstOrDefault(a => !a.StartsWith("-") &&
-                (ModuleResolver.IsSourceFile(a) || a.EndsWith(".blproj")));
+                (ModuleResolver.IsSourceFile(a) || a.EndsWith(".blproj") || BasicCompiler.IsFormDocument(a)));
 
             if (fileArg != null)
             {
@@ -182,6 +186,18 @@ namespace BasicLang.Compiler.Driver
                     if (fileArg.EndsWith(".blproj"))
                     {
                         return await HandleBuildCommand(new[] { fileArg });
+                    }
+
+                    // A form document rides in a project as a <Compile> item but is XML, not a
+                    // program. Refused HERE as well as in CompileFile: this is the message a user
+                    // actually sees, and CompileFile's copy guards the other callers
+                    // (Debugger/DebugSession, the IDE's build service).
+                    if (BasicCompiler.IsFormDocument(fileArg))
+                    {
+                        Console.Error.WriteLine(
+                            $"BL8001: '{Path.GetFileName(fileArg)}' is a form document, not a program — " +
+                            "it describes a form the designer owns. Build the project instead.");
+                        return 1;
                     }
 
                     // A .bli is resolvable (so a project may include it) but is declarations,

@@ -25,6 +25,7 @@ public sealed class BlWebForm
         Model = model;
         Xml = xml;
         OriginalText = originalText;
+        CurrentText = originalText;
         FilePath = filePath;
         Diagnostics = diagnostics;
         Degraded = degraded;
@@ -49,7 +50,19 @@ public sealed class BlWebForm
 
     internal XDocument Xml { get; }
 
+    /// <summary>The text as loaded. Never changes — it is the baseline byte-identity is measured against.</summary>
     internal string OriginalText { get; }
+
+    /// <summary>
+    /// The text this document last serialized to, which starts equal to <see cref="OriginalText"/>.
+    ///
+    /// <para>⛔ Needed because the writer mutates <see cref="Xml"/> IN PLACE. Without it, a second
+    /// <c>Write</c> on the same instance sees a tree that already holds the first edit, finds
+    /// "nothing changed", and returns <see cref="OriginalText"/> — the text from BEFORE that edit.
+    /// A second <c>Save</c> would then write the pre-edit document back over the saved one, which is
+    /// the exact opposite of the no-op it is supposed to be.</para>
+    /// </summary>
+    internal string CurrentText { get; set; }
 
     /// <summary>The frozen reason for one property, or null when that property is not Degraded.</summary>
     public string? DegradedReason(string controlId, string property) =>

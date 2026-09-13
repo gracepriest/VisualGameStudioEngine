@@ -22,13 +22,6 @@ namespace BasicLang.Forms.Serialization;
 public static class BlWebFormWriter
 {
     /// <summary>
-    /// Attribute order for a control element. Deterministic so that two designers, or the same
-    /// designer twice, produce the same bytes — a format that reorders attributes on save turns
-    /// every commit into an unreadable diff.
-    /// </summary>
-    private static readonly string[] StructuralOrder = { "Id", "Col", "Row", "ColSpan", "RowSpan", "TabIndex" };
-
-    /// <summary>
     /// The document text for the current model state.
     ///
     /// <para>⛔ When the model changed nothing, the ORIGINAL TEXT is returned verbatim rather than a
@@ -46,16 +39,36 @@ public static class BlWebFormWriter
     /// </summary>
     public static string Write(BlWebForm form)
     {
+        // ⛔ A REFUSED document is never written. The refusal paths in the reader return the full
+        // parsed tree but an EMPTY model — a newer-version document, or one with an unexpected root,
+        // stops being read before Name, Version, controls, layout and literal are populated. Writing
+        // from that model would delete every control, downgrade the version to 1, stamp the filename
+        // over the document's name and drop the <Literal>. Refusing a document specifically to avoid
+        // a lossy save, and then performing exactly that save, is the worst outcome available.
+        if (form.IsRefused)
+        {
+            return form.CurrentText;
+        }
+
         // Serialize before and after applying: identical output means the model asked for nothing.
+        // The comparison is against the tree's CURRENT serialization, not the original text, because
+        // the tree is mutated in place and may already carry an earlier edit.
         var before = XmlTextIO.Serialize(form.Xml, form.OriginalText);
-        ApplyToDocument(form.Xml, form.Model);
+        ApplyToDocument(form.Xml, form.Model, Path.GetFileNameWithoutExtension(form.FilePath));
         var after = XmlTextIO.Serialize(form.Xml, form.OriginalText);
 
-        return string.Equals(before, after, StringComparison.Ordinal) ? form.OriginalText : after;
+        if (string.Equals(before, after, StringComparison.Ordinal))
+        {
+            return form.CurrentText;
+        }
+
+        form.CurrentText = after;
+        return after;
     }
 
     /// <summary>Writes to disk only when the bytes would differ. Returns true when it wrote.</summary>
-    public static bool Save(BlWebForm form) => XmlTextIO.SaveIfChanged(form.FilePath, Write(form));
+    public static bool Save(BlWebForm form) =>
+        !form.IsRefused && XmlTextIO.SaveIfChanged(form.FilePath, Write(form));
 
     /// <summary>
     /// Builds a document from scratch, for a form the designer is creating. Separate from
@@ -99,7 +112,12 @@ public static class BlWebFormWriter
     // Applying the model to an existing document
     // ==================================================================
 
-    private static void ApplyToDocument(XDocument xml, FormDocument model)
+    /// <param name="nameWhenAbsent">
+    /// What the READER would have used for <c>Name</c> had the document omitted it — the file's own
+    /// base name. Passed in because the writer cannot otherwise tell "the document said this" from
+    /// "the reader filled this in".
+    /// </param>
+    private static void ApplyToDocument(XDocument xml, FormDocument model, string nameWhenAbsent)
     {
         var root = xml.Root;
         if (root == null)
@@ -107,8 +125,15 @@ public static class BlWebFormWriter
             return;
         }
 
-        SetAttributeIfChanged(root, "Name", model.Name);
-        SetAttributeIfChanged(root, "Version", model.Version.ToString());
+        // ⚠ "Meaningful", not "Changed", for anything with a default. The reader fills Name from the
+        // FILENAME and Version from SupportedVersion when the document omits them — so writing them
+        // unconditionally would add `Name="…" Version="1"` to a hand-authored document that
+        // deliberately left them out, and "a no-op patch writes nothing" would be true only for
+        // documents this writer had already produced. Same trap as materialising a configuration
+        // default in ProjectSerializer.
+        SetAttributeIfMeaningful(root, "Name", model.Name, nameWhenAbsent);
+        SetAttributeIfMeaningful(root, "Version", model.Version.ToString(),
+            BlWebFormReader.SupportedVersion.ToString());
 
         ApplyLayout(root, model);
         ApplyControls(root, model);
@@ -135,7 +160,7 @@ public static class BlWebFormWriter
             return;
         }
 
-        SetAttributeIfChanged(element, "Kind", model.Layout.Kind.ToString());
+        SetAttributeIfMeaningful(element, "Kind", model.Layout.Kind.ToString(), FormLayoutKind.Grid.ToString());
         SetAttributeIfChanged(element, "Cols", model.Layout.Cols);
         SetAttributeIfChanged(element, "Rows", model.Layout.Rows);
         SetAttributeIfChanged(element, "Gap", model.Layout.Gap);
@@ -177,8 +202,13 @@ public static class BlWebFormWriter
 
         foreach (var control in controls)
         {
+            // ⚠ The catalog guard mirrors the removal loop above. Without it, a future element that
+            // happens to carry a matching Id would have TabIndex/Col/Row and catalog properties
+            // stamped onto it, and its catalog-named attributes stripped — the writer would edit an
+            // element it does not understand.
             var element = container.Elements()
-                .FirstOrDefault(e => string.Equals((string?)e.Attribute("Id"), control.Id, StringComparison.Ordinal));
+                .FirstOrDefault(e => FormControlCatalog.Find(e.Name.LocalName) != null &&
+                                     string.Equals((string?)e.Attribute("Id"), control.Id, StringComparison.Ordinal));
 
             if (element == null)
             {
@@ -195,12 +225,17 @@ public static class BlWebFormWriter
         // TabIndex is written on EVERY control in v1, defaulting to document order on creation —
         // explicit rather than implied, so reordering the XML cannot silently reorder tab focus.
         SetAttributeIfChanged(element, "Id", control.Id);
-        SetAttributeIfChanged(element, "TabIndex", control.TabIndex.ToString());
+
+        // Defaults again: the reader reads an absent TabIndex/Col/Row as 0, so writing "0" back into
+        // a document that omitted them is inventing content. TabIndex IS written on every control the
+        // designer creates — Create does that — but adopting a hand-written document must not
+        // rewrite it wholesale on the first unrelated edit.
+        SetAttributeIfMeaningful(element, "TabIndex", control.TabIndex.ToString(), "0");
 
         if (control.Geometry is GridGeometry grid)
         {
-            SetAttributeIfChanged(element, "Col", grid.Col.ToString());
-            SetAttributeIfChanged(element, "Row", grid.Row.ToString());
+            SetAttributeIfMeaningful(element, "Col", grid.Col.ToString(), "0");
+            SetAttributeIfMeaningful(element, "Row", grid.Row.ToString(), "0");
             SetAttributeIfChanged(element, "ColSpan", grid.ColSpan == 1 ? null : grid.ColSpan.ToString());
             SetAttributeIfChanged(element, "RowSpan", grid.RowSpan == 1 ? null : grid.RowSpan.ToString());
         }
@@ -377,6 +412,18 @@ public static class BlWebFormWriter
     /// still replaces the attribute node, which is invisible in the tree but is exactly the kind of
     /// churn that makes "a no-op patch writes nothing" false.</para>
     /// </summary>
+    /// <summary>
+    /// Sets an attribute only when the element already carries it, or when the value differs from
+    /// what an ABSENT attribute would be read as. Leaves a deliberately-omitted attribute omitted.
+    /// </summary>
+    private static void SetAttributeIfMeaningful(XElement element, string name, string value, string absentMeans)
+    {
+        if (element.Attribute(name) != null || !string.Equals(value, absentMeans, StringComparison.Ordinal))
+        {
+            SetAttributeIfChanged(element, name, value);
+        }
+    }
+
     private static void SetAttributeIfChanged(XElement element, string name, string? value)
     {
         var existing = element.Attribute(name);
