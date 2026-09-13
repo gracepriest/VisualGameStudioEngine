@@ -83,7 +83,7 @@ the next one before planning around it.**
 | Run | Result | Time |
 |---|---|---|
 | Full suite, pre-branch baseline `6a6d224` | **174 failed / 5837 total** (5460 passed, 203 skipped) | ~8 min |
-| Full suite, `feat/form-designer` tip | **174 failed / 6168 total** (5791 passed, 203 skipped) | ~8 min |
+| Full suite, `feat/form-designer` tip | **174 failed / 6191 total** (5814 passed, 203 skipped) | ~8 min |
 | Fast subset, baseline `6a6d224` | 90 failed / 4939 total | ~1 min |
 | Fast subset, `feat/form-designer` tip | 90 failed / 5196 total | ~1 min |
 
@@ -107,7 +107,8 @@ Plan: `docs/superpowers/plans/2026-09-11-visual-form-designer.md` (19 tasks).
 Spec: `docs/superpowers/specs/2026-09-11-visual-form-designer-design.md`.
 Branch: **`feat/form-designer`** (PR #4). Not merged.
 
-**Done and now genuinely gated:** Tasks **1–13, 15–18** — everything except **14** and **19**.
+**Done and now genuinely gated:** Tasks **1–18**. Task **19** (closeout) is partial — two of its
+four items cannot be done off Windows.
 
 | Task | What landed |
 |---|---|
@@ -127,14 +128,38 @@ Branch: **`feat/form-designer`** (PR #4). Not merged.
 | **17** | **The WinForms catalog gate — every control, every property, through the real chain to `csc`** |
 | **18** | **The VSIX shape promoted across IDE and CLI, geometry fan-in, build + equivalence gates** |
 | **7** | **`FormCanvasControl`, the one shared transform, and the Design\|Code mode** |
+| **14** | **Toolbox and property grid — D9's tiers reaching the UI, on one extracted row editor** |
+| **19** | **Closeout — partial. See below.** |
 
 **Not done:** Task 7 and 14 (Avalonia canvas + property grid — they build here, but there is no
 `Avalonia.Headless` package so nothing can drive them), 19 (closeout).
 
-**Not done:** **Task 14** (toolbox + property grid) and **Task 19** (closeout). Task 14 is a large
-refactor of the Settings dialog's typed-row editor — which is already duplicated inside that dialog
-— plus new UI, and its own gate ends "then run the IDE". It is the one remaining task where the
-work is mostly what a person has to look at.
+### Task 19 — what is left, and why
+
+| Item | State |
+|---|---|
+| Full suite, both entry points | ✅ Run every commit; see the table above |
+| Update `docs/HANDOFF.md` and `CLAUDE.md` | ✅ This file, plus a durable *Form designer* section in `CLAUDE.md` |
+| File the follow-up chips | ⚠ **Written up, not filed** — `docs/form-designer-followups.md` has all ten, filable verbatim. Opening issues is outward-facing and nobody asked. |
+| Refresh the `IDE/` drop | ❌ **Must not happen here.** `IDE/BasicLang.exe` is a **PE32+ Windows binary**; refreshing it from a Linux build would swap the Windows executables for ELF apphosts and break the drop for everyone. Do it on Windows with `robocopy` — never `/MIR`. |
+
+⛔ `docs/MULTI_FILE_SYSTEM_PLAN.md:21` is **untouched**, per owner decision 2 — `.frm` stays reserved
+for a user-authored form file and is not obsoleted by `.blform`.
+
+### ⛔ Still unverified: everything you can only see
+
+Three pieces of UI shipped without anyone looking at them. Their LOGIC is tested; their APPEARANCE
+is not, and no test claims otherwise:
+
+- the **canvas** (`FormCanvasControl`) — its transform has 15 tests because a drift there lands
+  clicks on the wrong control with no visual symptom, but what it draws is unchecked;
+- the **property grid and toolbox** — the rows, tiers and commit semantics have 18 tests;
+- the **Settings dialog**, whose duplicated row editor was extracted into `TypedValueEditor` and
+  which now renders through it. 165 settings tests still pass, and the AXAML compiles with its
+  bindings resolved, but nobody has opened the dialog.
+
+**Open the IDE before merging.** A build proves Avalonia compiled the markup and the compiled
+bindings resolved. It does not prove anything is visible, laid out, or the right size.
 
 ### ⛔⛔ D8's handler-ordering rule is real but WEB-ONLY
 
@@ -241,14 +266,12 @@ Not this writer's call, so it refuses and says why.
 ### What the next session should pick up
 
 1. **Re-run the full suite on Windows.** Everything above is a Linux measurement. The Windows
-   number to beat is 5826 total / 4 failures at `f54416b`; this branch adds 331 tests.
-2. **Task 14** (toolbox + property grid) — the last implementation task. Extract the Settings
-   dialog's typed-row editor rather than writing a third copy of it; `Avalonia.Headless` is
-   available if you want automated coverage, but the visual half still wants the IDE running.
+   number to beat is 5826 total / 4 failures at `f54416b`; this branch adds 354 tests.
+2. **Open the IDE and look at the designer and the Settings dialog** — see *Still unverified* above.
 3. **Decide the multi-edge `Anchor` question above.** Until then anchoring is single-edge or `Dock`.
-4. **Look at the canvas in a running IDE.** Task 7's transform is tested; its APPEARANCE is not,
-   and nothing in the suite claims it is.
-5. **Task 19**, closeout.
+4. **File the ten chips** in `docs/form-designer-followups.md`. Two are runtime failures from clean
+   builds, which is the highest-severity shape this repo tracks.
+5. **Refresh the `IDE/` drop on Windows**, and finish Task 19.
 6. **PR #3 (`claude/busy-newton-gsispd`)** is still open carrying a superseded spec/plan pair.
 
 ---

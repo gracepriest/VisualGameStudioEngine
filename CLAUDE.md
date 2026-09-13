@@ -58,6 +58,18 @@ IDE/BasicLang.exe --debug-adapter                                              #
 The native C++ engine builds via VS 2022 MSBuild on `VisualGameStudioEngine.vcxproj`
 (x64/Release), auto-discovered through vswhere.
 
+**On Linux / in a cloud container** the SDK installs from the distro archive — the package index in
+a fresh container is stale, so update first:
+
+```bash
+apt-get update && apt-get install -y --no-install-recommends dotnet-sdk-8.0
+```
+
+The full suite runs in ~8 minutes there, but **~170 tests fail for environmental reasons** (hardcoded
+`C:\` paths, clang, MSVC). The raw number therefore means nothing on its own: build the merge-base
+in a `git worktree`, run both, and compare the sorted FAILURE NAMES with `comm -23`. A count alone
+hides a regression that lands as another test goes green. Windows remains the release gate.
+
 ## Working conventions — READ THIS, these prevent real mistakes
 
 - **PowerShell is the primary shell.** Use the dedicated tools (Read/Edit/Write/
@@ -67,6 +79,9 @@ The native C++ engine builds via VS 2022 MSBuild on `VisualGameStudioEngine.vcxp
   corrupts the BOM-less UTF-8 files here (has caused mojibake more than once). Use
   Edit/Write. For a multi-line git commit message, write a file and use `git commit -F`.
 - **After AXAML changes, `dotnet clean` before building** — stale build cache causes crashes.
+- **`IDE/` is a WINDOWS xcopy drop.** `IDE/BasicLang.exe` is a PE32+ binary — **never refresh it
+  from a Linux build**, which would swap the Windows executables for ELF apphosts. Refresh with
+  `robocopy <Shell bin> IDE /E` on Windows — **never `/MIR`**.
 - **Validate codegen through the CLI *and* the IR optimizer**, not only the non-optimizing
   unit-test helper — the green suite has hidden bugs the optimizer/CLI exposed. Run the CLI,
   or use the optimizer-running test helper (`CompileToCppOptimized` in `CppCollectionTests.cs`).
@@ -85,6 +100,33 @@ Backends: `CSharpBackend.cs`, `LLVMBackend.cs`, `MSILBackend.cs`, `CppCodeGenera
 (+ `CppCapabilityChecker.cs`). Resolution/types: `ModuleResolver.cs`,
 `ModuleTypeWalker.cs`, `TypeMapper.cs`. LSP: `BasicLang/LSP/` (server +
 per-feature handlers, `CompletionService.cs`).
+
+## Form designer (`BasicLang/Forms/`, `VisualGameStudio.Shell/Controls/`)
+
+Two document formats, one reader and one writer. `.blform` (WinForms, absolute pixels) and
+`.blwebform` (web, Grid/Flow) share the element grammar and diverge in layout vocabulary and
+catalog; `FormDocumentReader`/`FormDocumentWriter` pick the vocabulary from the ROOT element, and a
+file whose name disagrees with its root is refused. `FormControlCatalog` is the single source of
+truth for which controls exist and what can be set on them — toolbox, property grid, emitters and
+the CI gate all read it. **Add a row; never hand-write a `[TestCase]` list beside it.**
+
+The designer writes into two marked regions inside the user's own `.bas` (`RegionWriter`), refusing
+rather than overwriting anything hand-edited. Design view is a MODE on the existing code editor, not
+a second document type.
+
+- ⛔ **A WinForms catalog row is unfalsifiable without `csc`.** `EnableNetResolution` returns early
+  for `UseWindowsForms` and the resolver cannot reach `System.Windows.Forms.dll`, so every
+  `Form`/`Button`/`Point` member types as `Object` with no diagnostic — **a misspelled property name
+  compiles green**. `WinFormsCatalogSweepTests` generates every control with every property and
+  requires csc to accept it; that gate has already caught six wrong catalog rows.
+- ⛔ **Never emit `With` from a generator** — the IR builder silently drops every `.Prop = value`
+  inside it (see `docs/form-designer-followups.md`).
+- ⛔ **Geometry fans in**: `Location = New Point(x, y)` as ONE statement. `Location.X = 96` is
+  CS1612, and BasicLang reports nothing because the member degrades to `Object`.
+- ⚠ The handler-ordering rule (a handler must precede the region that wires it) is **web-only** —
+  measured. On WinForms the same shape compiles, which is why the shipped VSIX template does it.
+- The canvas is a **schematic**, not a preview: the IDE has no browser and no WinForms surface. F5
+  to the real target is the renderer.
 
 ## BasicLang language
 
