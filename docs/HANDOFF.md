@@ -67,12 +67,23 @@ app still needs Windows; nothing the catalog gate checks needs the program to st
 and Roslyn sees two assemblies with the same simple name; the error it then produces points at the
 innocent one.
 
+### ⛔ Avalonia.Headless is restorable too — the third assumption to fall
+
+`Avalonia.Headless` and `Avalonia.Headless.NUnit` 11.3.13 both restore. Task 7's plan entry says
+"there is no `Avalonia.Headless` reference, so the canvas is verified by running the IDE — say so";
+that constraint no longer holds, and whoever takes **Task 14** should know before pricing it.
+
+Nothing on this branch uses it yet: Task 7's risky part is pure geometry and needs no UI thread.
+But three inherited platform assumptions have now been measured and all three were wrong — no
+compiler in a cloud container, no WinForms type-checking off Windows, no Avalonia headless. **Check
+the next one before planning around it.**
+
 ### Measured on Linux, .NET 8.0.131 (this container)
 
 | Run | Result | Time |
 |---|---|---|
 | Full suite, pre-branch baseline `6a6d224` | **174 failed / 5837 total** (5460 passed, 203 skipped) | ~8 min |
-| Full suite, `feat/form-designer` tip | **174 failed / 6132 total** (5755 passed, 203 skipped) | ~8 min |
+| Full suite, `feat/form-designer` tip | **174 failed / 6168 total** (5791 passed, 203 skipped) | ~8 min |
 | Fast subset, baseline `6a6d224` | 90 failed / 4939 total | ~1 min |
 | Fast subset, `feat/form-designer` tip | 90 failed / 5196 total | ~1 min |
 
@@ -96,7 +107,7 @@ Plan: `docs/superpowers/plans/2026-09-11-visual-form-designer.md` (19 tasks).
 Spec: `docs/superpowers/specs/2026-09-11-visual-form-designer-design.md`.
 Branch: **`feat/form-designer`** (PR #4). Not merged.
 
-**Done and now genuinely gated:** Tasks **1–6, 8–13, 15, 16, 17**, and half of **18**.
+**Done and now genuinely gated:** Tasks **1–13, 15–18** — everything except **14** and **19**.
 
 | Task | What landed |
 |---|---|
@@ -114,20 +125,42 @@ Branch: **`feat/form-designer`** (PR #4). Not merged.
 | **15** | **A missing handler is a hard error (D8)** |
 | **16** | **`.blform` — the same reader and writer, not a second one** |
 | **17** | **The WinForms catalog gate — every control, every property, through the real chain to `csc`** |
-| **18** | **PARTIAL — geometry fan-in and the canonical init shape. See below.** |
+| **18** | **The VSIX shape promoted across IDE and CLI, geometry fan-in, build + equivalence gates** |
+| **7** | **`FormCanvasControl`, the one shared transform, and the Design\|Code mode** |
 
 **Not done:** Task 7 and 14 (Avalonia canvas + property grid — they build here, but there is no
 `Avalonia.Headless` package so nothing can drive them), 19 (closeout).
 
-**Task 18 is PARTIAL and the remainder is the bigger half.** Done: geometry fans in
-(`Location = New Point(96, 80)` as ONE statement — `Location.X = 96` is **CS1612**, measured
-2026-09-13, which the plan asks for rather than assumes), the form's own caption and `ClientSize`,
-and the shipped emission order. **Not done:** *"promote the VSIX shape and retire the divergence"* —
-the VSIX still ships `Program.bas` + `MainForm.bas`, the IDE template still ships one `Main.bas`
-with no `InitializeComponent`, and the CLI `TemplateEngine` still has no WinForms template at all.
-That bullet also requires updating Task 5's recognizer fixtures in the SAME change (they are keyed
-to the CURRENT IDE template and will silently stop testing what ships) and adding the template to
-`TemplateBuildSweepTests`, whose cases are hand-written `[TestCase]` strings.
+**Not done:** **Task 14** (toolbox + property grid) and **Task 19** (closeout). Task 14 is a large
+refactor of the Settings dialog's typed-row editor — which is already duplicated inside that dialog
+— plus new UI, and its own gate ends "then run the IDE". It is the one remaining task where the
+work is mostly what a person has to look at.
+
+### ⛔⛔ D8's handler-ordering rule is real but WEB-ONLY
+
+Measured 2026-09-13, three ways, because applying it to both targets made the designer refuse the
+very shape Owner decision 3 calls canonical:
+
+| Shape, handler declared AFTER the wiring | Result |
+|---|---|
+| Web: `addEventListener("click", AddressOf H)` | **FAILS** — "cannot convert from `Action(Of Object)` to `Action(Of DomEvent)`". The DOM signature declares the parameter type, so the erased handler has something concrete to fail against. |
+| WinForms: `AddHandler btn.Click, AddressOf H` | **Compiles**, through BasicLang *and* csc, and binds with full parameter types (`object sender, EventArgs e`). The event is an unresolvable .NET member typed as `Object` — there is no declared delegate to mismatch. |
+| Module-level `Sub` into a declared `Action(Of Integer)` | **Compiles.** |
+
+The shipped VSIX template declares `btnClick_Click` **below** the `InitializeComponent` that wires
+it. `RegionWriter` was refusing that on both targets (BL8013), so the designer rejected the template
+it is modelled on and blocked the D12 import route for every existing WinForms file. The check is
+now web-only, and the scaffolder emits the init region in the canonical position on WinForms and
+last on the web.
+
+### ⛔ `basiclang a.bas b.bas` silently compiled only the first file
+
+`FirstOrDefault` over the file arguments. It printed *"Compilation successful!"*, *"Files compiled:
+1"* and exit 0, while the emitted C# referenced a class that was never compiled and failed at csc
+with *"The type or namespace name 'MainForm' could not be found"*. Found on the shipped VSIX
+template, which is exactly two files. Extra source files are now **refused** with a message pointing
+at the project route — single-file is the documented contract and multi-file is what a `.blproj` is
+for.
 
 ### ⛔⛔ Task 17's gate found six defects the whole toolchain was blind to
 
@@ -208,12 +241,13 @@ Not this writer's call, so it refuses and says why.
 ### What the next session should pick up
 
 1. **Re-run the full suite on Windows.** Everything above is a Linux measurement. The Windows
-   number to beat is 5826 total / 4 failures at `f54416b`; this branch adds 295 tests.
-2. **Task 18's second half** — promote the VSIX shape and retire the three-way template
-   divergence, update Task 5's recognizer fixtures in the SAME change, and add the template to
-   `TemplateBuildSweepTests`. Task 17's gate is in place to catch what that breaks.
+   number to beat is 5826 total / 4 failures at `f54416b`; this branch adds 331 tests.
+2. **Task 14** (toolbox + property grid) — the last implementation task. Extract the Settings
+   dialog's typed-row editor rather than writing a third copy of it; `Avalonia.Headless` is
+   available if you want automated coverage, but the visual half still wants the IDE running.
 3. **Decide the multi-edge `Anchor` question above.** Until then anchoring is single-edge or `Dock`.
-4. **Tasks 7 and 14** (canvas + property grid) — need a machine that can run Avalonia.
+4. **Look at the canvas in a running IDE.** Task 7's transform is tested; its APPEARANCE is not,
+   and nothing in the suite claims it is.
 5. **Task 19**, closeout.
 6. **PR #3 (`claude/busy-newton-gsispd`)** is still open carrying a superseded spec/plan pair.
 
