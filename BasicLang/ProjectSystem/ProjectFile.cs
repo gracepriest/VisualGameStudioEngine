@@ -99,6 +99,16 @@ namespace BasicLang.Compiler.ProjectSystem
         /// need to tell BasicLang sources apart from C++ translation units
         /// (CppProjectBuilder's mixed-source partition, and the LSP file filter).
         /// </summary>
+        /// <remarks>
+        /// ⛔ NEVER add <c>.blform</c> or <c>.blwebform</c> here. This list drives the default
+        /// source glob in <see cref="GetSourceFiles"/>, which feeds files straight to
+        /// <c>File.ReadAllText</c> and then the BasicLang lexer. A form document is XML. It rides
+        /// as an explicit <c>&lt;Compile&gt;</c> item and is partitioned out in
+        /// <c>CompileProjectFiles</c> — it must never be swept in by the glob, where no
+        /// <c>&lt;Compile&gt;</c> item and no diagnostic would mark its arrival.
+        /// The IDE-side list (<c>VisualGameStudio.Core.Constants.FileExtensions.SourceExtensions</c>)
+        /// DOES include them, and that difference is deliberate.
+        /// </remarks>
         public static readonly string[] BasicLangSourceExtensions =
             { ".bas", ".bl", ".basic", ".mod", ".cls", ".class", ".bli" };   // .bli = declarations (plan 2c)
 

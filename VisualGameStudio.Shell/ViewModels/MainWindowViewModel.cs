@@ -2286,6 +2286,7 @@ public partial class MainWindowViewModel : ViewModelBase
             Filters = new List<FileDialogFilter>
             {
                 new("BasicLang Files", "bas", "bl", "basic"),
+                new("Form Designer Documents", "blform", "blwebform"),
                 new("C++ Files", "cpp", "h", "hpp", "c", "cc", "cxx"),
                 new("All Files", "*")
             }
