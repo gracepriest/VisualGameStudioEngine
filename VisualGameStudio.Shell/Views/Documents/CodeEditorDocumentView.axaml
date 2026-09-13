@@ -178,6 +178,7 @@
 
         <designer:FormCanvasControl Grid.Column="1"
                                     Document="{Binding DesignDocument}"
+                                    ModelRevision="{Binding DesignModelRevision}"
                                     SelectedControl="{Binding PropertyGrid.SelectedControl, Mode=TwoWay}"/>
 
         <!-- Property grid: the catalog's properties for the selection, with D9's tiers. -->

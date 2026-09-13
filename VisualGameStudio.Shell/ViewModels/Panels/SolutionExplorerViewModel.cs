@@ -1261,7 +1261,17 @@ public partial class SolutionExplorerViewModel : ViewModelBase
             return;
         }
 
-        var scaffold = BasicLang.Forms.FormScaffolder.Create(name);
+        // ⛔⛔ The TARGET comes from the project, not from the scaffolder's default. Taking the
+        // default gave a WinForms project a <WebForm> document and a code-behind with no
+        // `Inherits Form` — a form that cannot compile, in a project whose whole point is WinForms.
+        // UseWindowsForms is what the template writes and what the build reads; the JavaScript
+        // backend is the web case, and everything else has no designer target of its own, so Web
+        // (the format that needs no desktop runtime) is the safe fallback.
+        var target = project.UseWindowsForms == true
+            ? BasicLang.Forms.FormTarget.WinForms
+            : BasicLang.Forms.FormTarget.Web;
+
+        var scaffold = BasicLang.Forms.FormScaffolder.Create(name, target);
         var documentPath = Path.Combine(targetDir, scaffold.DocumentFileName);
         var codePath = Path.Combine(targetDir, scaffold.CodeFileName);
 

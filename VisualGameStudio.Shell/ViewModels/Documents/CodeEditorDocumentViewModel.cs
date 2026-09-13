@@ -152,6 +152,18 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     /// <summary>The toolbox beside the canvas, driven from the catalog for this document's target.</summary>
     public ViewModels.Designer.FormToolboxViewModel Toolbox { get; } = new();
 
+    /// <summary>
+    /// Bumped whenever the designer changed the model in place, so the canvas repaints.
+    ///
+    /// <para>⛔ The property grid edits <c>FormControl.Properties</c> directly — the canvas, the
+    /// grid and the writer deliberately share ONE object graph, so the document reference never
+    /// changes and Avalonia's <c>AffectsRender</c> has nothing to notice. Without this counter the
+    /// user renames a button, the file updates, and the box on the canvas keeps the old caption.
+    /// </para>
+    /// </summary>
+    [ObservableProperty]
+    private int _designModelRevision;
+
     private bool _designerPanelsWired;
     private bool _applyingDesignerEdit;
 
@@ -202,6 +214,9 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         }
 
         var written = BasicLang.Forms.Serialization.FormDocumentWriter.Write(file);
+
+        // The model changed behind an unchanged reference — tell the canvas to repaint.
+        DesignModelRevision++;
 
         _applyingDesignerEdit = true;
         try

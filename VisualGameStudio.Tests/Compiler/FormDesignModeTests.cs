@@ -182,6 +182,42 @@ public class FormDesignModeTests
     }
 
     [Test]
+    public void APropertyGridEdit_TellsTheCanvasToRepaint()
+    {
+        // ⛔⛔ The grid edits FormControl.Properties IN PLACE — canvas, grid and writer share ONE
+        // object graph on purpose, so the document REFERENCE never changes and Avalonia's
+        // AffectsRender has nothing to notice. Without a revision counter the user renames a
+        // button, the file updates, and the box on the canvas keeps the old caption.
+        var vm = NewViewModel();
+        vm.FilePath = "/tmp/LoginForm.blwebform";
+        vm.Text = WebForm;
+        vm.ToggleDesignModeCommand.Execute(null);
+        vm.PropertyGrid.SelectedControl = vm.DesignDocument!.FindById("btnLogin");
+
+        var before = vm.DesignModelRevision;
+        vm.PropertyGrid.Rows.Single(r => r.Name == "Text").StringValue = "Log in";
+
+        Assert.That(vm.DesignModelRevision, Is.GreaterThan(before),
+            "the canvas repaints off this counter; nothing else changes that it can see");
+    }
+
+    [Test]
+    public void ANoOpEdit_DoesNotRepaintTheCanvas()
+    {
+        var vm = NewViewModel();
+        vm.FilePath = "/tmp/LoginForm.blwebform";
+        vm.Text = WebForm;
+        vm.ToggleDesignModeCommand.Execute(null);
+        vm.PropertyGrid.SelectedControl = vm.DesignDocument!.FindById("btnLogin");
+
+        var before = vm.DesignModelRevision;
+        var row = vm.PropertyGrid.Rows.Single(r => r.Name == "Text");
+        row.StringValue = row.RawValue;
+
+        Assert.That(vm.DesignModelRevision, Is.EqualTo(before));
+    }
+
+    [Test]
     public void AnEditInCodeView_StillResetsThePanels()
     {
         // The guard above must not swallow a real Code-view edit — that text did NOT come from

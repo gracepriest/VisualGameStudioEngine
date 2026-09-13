@@ -489,9 +489,19 @@ public class ProjectSerializer
         // A namespaced project (an old-style MSBuild xmlns) is not something LoadAsync parses, so
         // the baseline would be empty and every comparison would look like a change. Leaving the
         // file untouched is strictly better than rewriting it from a model that never read it.
+        //
+        // ⛔⛔ THROW, do not return. Returning here completed the save successfully and wrote
+        // nothing — the IDE reported "saved", the user believed their change was persisted, and it
+        // was gone at the next reload. A save that cannot happen has to say so; this is the same
+        // rule as the unparseable-file path below, which already refuses rather than falling back
+        // to a rebuild.
         if (root.Name.Namespace != XNamespace.None)
         {
-            return;
+            throw new InvalidOperationException(
+                $"'{project.FilePath}' uses an XML namespace ({root.Name.Namespace}), which this " +
+                "project format does not. Saving would have to rebuild the file from a model that " +
+                "never read it, discarding everything the loader does not model — so nothing was " +
+                "written. Remove the xmlns from the project element to edit it here.");
         }
 
         var changed = false;

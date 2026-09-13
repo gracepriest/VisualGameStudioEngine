@@ -334,6 +334,58 @@ public class FormAssetEmitterTests
     }
 
     [Test]
+    public void ASelectsItems_BecomeOptionChildren()
+    {
+        // ⛔⛔ The WinForms side emits Items.Add(...) per entry. Without the matching <option>s a
+        // ComboBox rendered as an EMPTY dropdown on the web and a populated one on the desktop,
+        // from the SAME document — a designer/runtime divergence across targets.
+        var form = new FormDocument { Target = FormTarget.Web, Name = "F" };
+        var combo = new FormControl { Kind = "ComboBox", Id = "cmb", TabIndex = 0 };
+        combo.Properties["Items"] = "Alpha, Beta, Gamma";
+        combo.Properties["Text"] = "Pick one";
+        form.Controls.Add(combo);
+
+        var html = FormAssetEmitter.Html(form, "App.js");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(html, Does.Contain("<option>Alpha</option>"));
+            Assert.That(html, Does.Contain("<option>Beta</option>"));
+            Assert.That(html, Does.Contain("<option>Gamma</option>"));
+            // ⛔ A <select> takes <option> children and nothing else. Text was being written as a
+            // bare text node inside it, which browsers drop or render as stray text.
+            Assert.That(html, Does.Not.Contain(">Pick one<"));
+            Assert.That(html, Does.Contain("""title="Pick one" """.TrimEnd()),
+                "a select's Text labels it rather than filling it");
+        });
+    }
+
+    [Test]
+    public void ASelectWithNoItems_EmitsNoOptions()
+    {
+        var form = new FormDocument { Target = FormTarget.Web, Name = "F" };
+        form.Controls.Add(new FormControl { Kind = "ListBox", Id = "lst", TabIndex = 0 });
+
+        Assert.That(FormAssetEmitter.Html(form, "App.js"), Does.Not.Contain("<option"));
+    }
+
+    [Test]
+    public void DispatchSource_ConstructsTheForm_WithoutCallingInitializeComponentAgain()
+    {
+        // ⛔⛔ The scaffolded `Public Sub New()` already calls InitializeComponent. Calling it
+        // again here ran the entire init body TWICE — so every addEventListener registered its
+        // handler twice and a single click fired it twice. Nothing about the page looked wrong.
+        var source = FormAssetEmitter.DispatchSource(new[] { "LoginForm" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(source, Does.Contain("Dim f As New LoginForm()"));
+            Assert.That(source, Does.Not.Contain("InitializeComponent"),
+                "the constructor does it; a second call double-registers every handler");
+        });
+    }
+
+    [Test]
     public void DispatchSource_BranchesOnEveryForm_UnderOneTopLevelName()
     {
         // One generated top-level name per project, fixed spelling, so --check can collision-check

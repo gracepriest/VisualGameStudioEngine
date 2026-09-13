@@ -197,7 +197,7 @@ public static class FormClipboard
         var result = new List<FormControl>();
         foreach (var element in root.Elements())
         {
-            var control = FromElement(element);
+            var control = FromElement(element, target);
             if (control != null)
             {
                 Rename(control, Taken, minted);
@@ -300,7 +300,16 @@ public static class FormClipboard
         return element;
     }
 
-    private static FormControl? FromElement(XElement element)
+    /// <param name="target">
+    /// ⛔ The pasted subtree's format. Without it this used the target-AGNOSTIC
+    /// <c>IsStructural</c>, which treats both vocabularies as structural — so copying a web
+    /// control silently dropped its <c>Width</c>, and copying a WinForms control dropped its
+    /// <c>Col</c>, because each is structural in the OTHER format and so was skipped without ever
+    /// reaching <c>Properties</c> or <c>UnknownAttributes</c>. That is precisely the trap the
+    /// target-aware overload was added to document, reached through the one call site that still
+    /// used the old one.
+    /// </param>
+    private static FormControl? FromElement(XElement element, FormTarget target)
     {
         var definition = FormControlCatalog.Find(element.Name.LocalName);
         if (definition == null)
@@ -320,7 +329,7 @@ public static class FormClipboard
         foreach (var attribute in element.Attributes())
         {
             var name = attribute.Name.LocalName;
-            if (FormControlCatalog.IsStructural(name))
+            if (FormControlCatalog.IsStructural(name, target))
             {
                 continue;
             }
@@ -350,7 +359,7 @@ public static class FormClipboard
             }
             else if (FormControlCatalog.Find(child.Name.LocalName) != null)
             {
-                var nested = FromElement(child);
+                var nested = FromElement(child, target);
                 if (nested != null)
                 {
                     control.Children.Add(nested);

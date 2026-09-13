@@ -132,11 +132,22 @@ public static class FormAssetEmitter
 
         var text = control.Properties.TryGetValue("Text", out var t) ? t : null;
 
+        // ⛔ A <select> takes <option> children and NOTHING else. Its Text was being written as a
+        // bare text node inside the element, which browsers drop or render as stray text above the
+        // list. A ComboBox's Text is its label, not its content, so it becomes a title attribute.
+        var isSelect = string.Equals(tag, "select", StringComparison.Ordinal);
+
         // An <input> has no children, so its Text is a value; everything else carries it as content.
         var textIsValue = string.Equals(tag, "input", StringComparison.Ordinal);
         if (textIsValue && text != null)
         {
             sb.Append($" value=\"{Attr(text)}\"");
+        }
+
+        // A select's Text labels the control; it cannot be its content.
+        if (isSelect && text != null)
+        {
+            sb.Append($" title=\"{Attr(text)}\"");
         }
 
         if (Flag(control, "Enabled") == false) sb.Append(" disabled");
@@ -172,7 +183,21 @@ public static class FormAssetEmitter
 
         sb.Append('>');
 
-        if (text != null)
+        // ⛔⛔ Items reach the page as <option>s or they do not reach it at all. The WinForms side
+        // emits Items.Add(...) per entry, so without this a ComboBox rendered as an EMPTY dropdown
+        // on the web and a populated one on the desktop — from the same document. That is the
+        // designer/runtime divergence D9 exists to prevent, across targets instead of within one.
+        if (isSelect && control.Properties.TryGetValue("Items", out var items))
+        {
+            sb.Append('\n');
+            foreach (var item in FormPropertyDef.SplitItems(items))
+            {
+                sb.Append($"{indent}  <option>{Text(item)}</option>\n");
+            }
+
+            sb.Append(indent);
+        }
+        else if (text != null && !isSelect)
         {
             sb.Append(Text(text));
         }
@@ -320,8 +345,12 @@ public static class FormAssetEmitter
         foreach (var name in formNames)
         {
             sb.Append($"    {(first ? "If" : "ElseIf")} formName = \"{name}\" Then\n");
+            // ⛔ Constructing the form is ENOUGH — the scaffolded `Public Sub New()` already calls
+            // InitializeComponent (FormScaffolder.CodeBehind). Calling it again here ran the whole
+            // init body TWICE, so every addEventListener registered its handler twice and one
+            // click fired it twice. It is also generated Private, so the second call was reaching
+            // for a member this module has no business touching.
             sb.Append($"        Dim f As New {name}()\n");
-            sb.Append("        f.InitializeComponent()\n");
             first = false;
         }
 

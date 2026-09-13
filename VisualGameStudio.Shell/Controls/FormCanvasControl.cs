@@ -32,11 +32,26 @@ public class FormCanvasControl : Control
         AvaloniaProperty.Register<FormCanvasControl, FormControl?>(
             nameof(SelectedControl), defaultBindingMode: Avalonia.Data.BindingMode.TwoWay);
 
+    /// <summary>
+    /// Bumped by the host whenever the MODEL changed without the document reference changing.
+    ///
+    /// <para>⛔⛔ Without this the canvas never redraws after a property-grid edit. The grid
+    /// mutates <c>FormControl.Properties</c> IN PLACE — deliberately, so the canvas, the grid and
+    /// the writer all share one object graph — so <see cref="DocumentProperty"/> still holds the
+    /// same reference, <c>AffectsRender</c> sees no change, and nothing invalidates. The user
+    /// types a new caption, the document and the file both update, and the box on the canvas keeps
+    /// the old text. Handing the canvas a fresh copy instead would fix the paint and break the
+    /// selection, which is the trade the shared graph exists to avoid.</para>
+    /// </summary>
+    public static readonly StyledProperty<int> ModelRevisionProperty =
+        AvaloniaProperty.Register<FormCanvasControl, int>(nameof(ModelRevision));
+
     static FormCanvasControl()
     {
         // Re-draw when what is drawn changes. Without this the canvas keeps showing the previous
         // document after a switch, which reads as "the designer opened the wrong file".
-        AffectsRender<FormCanvasControl>(DocumentProperty, SelectedControlProperty);
+        AffectsRender<FormCanvasControl>(
+            DocumentProperty, SelectedControlProperty, ModelRevisionProperty);
     }
 
     public FormDocument? Document
@@ -49,6 +64,12 @@ public class FormCanvasControl : Control
     {
         get => GetValue(SelectedControlProperty);
         set => SetValue(SelectedControlProperty, value);
+    }
+
+    public int ModelRevision
+    {
+        get => GetValue(ModelRevisionProperty);
+        set => SetValue(ModelRevisionProperty, value);
     }
 
     /// <summary>
