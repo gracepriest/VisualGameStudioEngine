@@ -134,6 +134,66 @@ public class WinFormsTemplateBuildTests
     }
 
     [Test]
+    public void TheCliTemplate_TypeChecks()
+    {
+        var files = GenerateCliWinFormsProject();
+
+        WinFormsCompile.AssertCompiles(
+            new[]
+            {
+                CompileToCSharp("MainForm.bas", files["MainForm.bas"]),
+                CompileToCSharp("Main.bas", files["Main.bas"])
+            },
+            "the CLI's `basiclang new winforms` template must compile.");
+    }
+
+    [Test]
+    public async Task TheIdeAndCliTemplates_ShipByteIdenticalSources()
+    {
+        // ⛔⛔ The equivalence the plan asks for, and the strictest form it can take: these are two
+        // separate template systems with a documented history of drifting ("change one, change
+        // both" appears in both files and did not prevent it). The .blproj files differ by design
+        // — the CLI emits defaults only, as its cpp templates already note — but the SOURCE must
+        // be identical, because the source is the shape the designer reads and writes.
+        var ide = await GenerateIdeWinFormsProjectAsync();
+        var cli = GenerateCliWinFormsProject();
+
+        foreach (var name in new[] { "Main.bas", "MainForm.bas" })
+        {
+            Assert.That(Normalise(cli[name]), Is.EqualTo(Normalise(ide[name])),
+                $"{name} has drifted between the IDE wizard and `basiclang new winforms`");
+        }
+    }
+
+    /// <summary>
+    /// Line endings only. The two systems write through different paths, and a CRLF/LF difference
+    /// is not drift — asserting on it would make this fail on one platform and pass on the other,
+    /// which is the failure mode that teaches people to ignore a test.
+    /// </summary>
+    private static string Normalise(string text) => text.Replace("\r\n", "\n").TrimEnd();
+
+    private Dictionary<string, string> GenerateCliWinFormsProject()
+    {
+        var dir = Path.Combine(_dir, "cli-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+
+        var (exit, stdout, stderr) = CliTestHarness.RunProcess(
+            CliTestHarness.CliPath(),
+            new[] { "new", "winforms", "--name", "IdeApp" }, dir, timeoutMs: 60_000);
+
+        Assert.That(exit, Is.Zero,
+            $"`basiclang new winforms` failed.\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+
+        var projectDir = Directory.GetDirectories(dir).SingleOrDefault() ?? dir;
+        var files = Directory.GetFiles(projectDir, "*.bas")
+            .ToDictionary(Path.GetFileName, File.ReadAllText)!;
+
+        Assert.That(files.Keys, Is.EquivalentTo(new[] { "Main.bas", "MainForm.bas" }),
+            "the CLI template must ship the canonical entry-point + form pair");
+        return files;
+    }
+
+    [Test]
     public async Task TheIdeTemplate_ListsEverySourceFileItWrites()
     {
         // ⛔⛔ GetSourceFiles() globs **/*.bas ONLY while a project has no explicit <Compile>
