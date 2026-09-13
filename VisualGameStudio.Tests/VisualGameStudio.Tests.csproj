@@ -30,6 +30,28 @@
     <!-- Roslyn: compile-and-run the C# the backend generates, proving the SAME BasicLang
          source that runs on the C++ backend also runs on the C# backend (Task 3 portability). -->
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.9.2" />
+    <!-- ⛔ The WinForms REFERENCE assemblies, and the reason the designer's control catalog is
+         falsifiable at all. WinForms has no type metadata at any layer this compiler can see:
+         EnableNetResolution returns early for UseWindowsForms, the resolver closure cannot reach
+         System.Windows.Forms.dll, and every Form/Button/Point member therefore types as Object
+         with NO diagnostic — a misspelled property name compiles green. csc is the only thing
+         that says otherwise, and these are what let it run.
+
+         Referenced as a plain NuGet package rather than found through the installed SDK on
+         purpose: reference-only compilation is cross-platform (the assemblies are metadata, not
+         code), so this works on Linux where the WindowsDesktop SDK targets do not exist at all.
+         Restore therefore guarantees it is present on every platform, which is what lets
+         WinFormsCompile FAIL when the pack is missing instead of quietly skipping — a catalog
+         gate that can no-op is worth less than no gate, because it reports success. -->
+    <PackageReference Include="Microsoft.WindowsDesktop.App.Ref" Version="8.0.31"
+                      GeneratePathProperty="true" ExcludeAssets="all" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Surfaced to the test assembly so WinFormsCompile can find the pack without guessing at
+         a NuGet cache layout. -->
+    <AssemblyMetadata Include="WindowsDesktopRefPath"
+                      Value="$(PkgMicrosoft_WindowsDesktop_App_Ref)/ref/net8.0" />
   </ItemGroup>
 
   <ItemGroup>

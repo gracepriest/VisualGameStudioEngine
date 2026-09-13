@@ -19,12 +19,128 @@ public enum FormPropertyType
 /// <param name="Type">Declared type; a value that does not parse to it drops out of the Canon tier.</param>
 /// <param name="Default">Written only when the value differs from this. Null = always write when set.</param>
 /// <param name="AllowedValues">For <see cref="FormPropertyType.Enum"/>; empty otherwise.</param>
+/// <param name="WinFormsEnumType">
+/// The <c>System.Windows.Forms</c> enum an <see cref="FormPropertyType.Enum"/> value belongs to,
+/// e.g. <c>ContentAlignment</c>.
+///
+/// <para>⛔ Required for every Enum property, and MEASURED, not assumed. The generated source is
+/// C# by way of BasicLang, and an unqualified <c>Center</c> is not a value in either — BasicLang
+/// compiles <c>lbl.TextAlign = Center</c> happily (WinForms member access degrades to
+/// <c>Object</c> with no diagnostic) and csc then rejects the emitted C# with CS0103. Nothing
+/// short of csc catches it.</para>
+/// </param>
+/// <param name="WinFormsMemberNames">
+/// Where the designer's vocabulary and the WinForms member name DIFFER, keyed by the designer's
+/// value. <c>ContentAlignment</c> has no <c>Left</c> — it has <c>MiddleLeft</c> — so the catalog's
+/// own Left/Center/Right cannot be emitted verbatim. Omit when the names already agree.
+/// </param>
+/// <param name="Targets">
+/// The targets this property actually EXISTS on; null means both.
+///
+/// <para>⛔ Not a preference — a fact about the platform, and every entry here was found by csc
+/// rather than by reading docs. WinForms <c>RadioButton</c> has no <c>GroupName</c> (it groups by
+/// container) and WinForms <c>ListBox</c> has no <c>MultiSelect</c> (it has <c>SelectionMode</c>).
+/// Both compiled green through BasicLang and were rejected by csc with CS1061.</para>
+/// </param>
+/// <param name="WinFormsFactory">
+/// A function to wrap the value in, when the WinForms property type is not the string the designer
+/// edits. <c>PasswordChar</c> is a <c>char</c> and <c>Image</c> is a <c>System.Drawing.Image</c>;
+/// assigning a string to either is CS0029.
+///
+/// <para>⚠ <c>Convert.ToChar</c>, not <c>CChar</c> — measured. BasicLang passes <c>CChar</c>
+/// through to the C# backend verbatim and C# has no such function, so it fails at csc with
+/// CS0103.</para>
+/// </param>
+/// <param name="IsItemCollection">
+/// True when the value is a comma-separated list that must be ADDED to a read-only collection
+/// rather than assigned. <c>ComboBox.Items</c> and <c>ListBox.Items</c> are get-only, so assigning
+/// one is CS0200.
+/// </param>
 public sealed record FormPropertyDef(
     string Name,
     FormPropertyType Type,
     string? Default = null,
-    IReadOnlyList<string>? AllowedValues = null)
+    IReadOnlyList<string>? AllowedValues = null,
+    string? WinFormsEnumType = null,
+    IReadOnlyDictionary<string, string>? WinFormsMemberNames = null,
+    IReadOnlyList<FormTarget>? Targets = null,
+    string? WinFormsFactory = null,
+    bool IsItemCollection = false)
 {
+    /// <summary>True when this property exists on <paramref name="target"/>.</summary>
+    public bool AppliesTo(FormTarget target) => Targets == null || Targets.Contains(target);
+
+    /// <summary>
+    /// The value as WinForms SOURCE — what the region writer splices after the <c>=</c>.
+    ///
+    /// <para>Returns null when this property has nothing special to say, leaving the caller's
+    /// default formatting in charge.</para>
+    /// </summary>
+    public string? WinFormsLiteral(string value)
+    {
+        if (Type == FormPropertyType.Enum && WinFormsEnumType != null)
+        {
+            var member = WinFormsMemberNames != null &&
+                         WinFormsMemberNames.TryGetValue(value, out var mapped)
+                ? mapped
+                : value;
+            return $"{WinFormsEnumType}.{member}";
+        }
+
+        if (WinFormsFactory != null)
+        {
+            return $"{WinFormsFactory}(\"{value.Replace("\"", "\"\"")}\")";
+        }
+
+        return Type == FormPropertyType.Color ? ColorLiteral(value) : null;
+    }
+
+    /// <summary>The individual items of an <see cref="IsItemCollection"/> value.</summary>
+    public static IEnumerable<string> SplitItems(string value) =>
+        value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    /// <summary>
+    /// A colour as WinForms source.
+    ///
+    /// <para>⛔ <c>#RRGGBB</c> is a value the catalog ACCEPTS (so it is Canon in the document and
+    /// round-trips untouched) and which cannot be emitted verbatim: <c>#</c> starts a preprocessor
+    /// directive, so <c>lbl.ForeColor = #FF0000</c> does not even LEX. It has to become a
+    /// <c>Color.FromArgb</c> call. A named colour passes through as <c>Color.Name</c>.</para>
+    /// </summary>
+    private static string ColorLiteral(string value)
+    {
+        if (value.Length == 0 || value[0] != '#')
+        {
+            return "Color." + value;
+        }
+
+        var digits = value.Substring(1);
+
+        // #rgb -> #rrggbb, so one path handles both.
+        if (digits.Length == 3)
+        {
+            digits = string.Concat(digits.Select(c => new string(c, 2)));
+        }
+
+        if (digits.Length == 6)
+        {
+            digits = "FF" + digits;
+        }
+
+        if (digits.Length != 8 || !digits.All(Uri.IsHexDigit))
+        {
+            // Not a shape this understands. Degraded values reach here (the tier freezes the
+            // property-grid row, it does not stop the writer), and inventing a colour for one
+            // would put a value on screen the document never carried.
+            return "Color." + value;
+        }
+
+        static int Hex(string text, int start) =>
+            Convert.ToInt32(text.Substring(start, 2), 16);
+
+        return $"Color.FromArgb({Hex(digits, 0)}, {Hex(digits, 2)}, {Hex(digits, 4)}, {Hex(digits, 6)})";
+    }
+
     /// <summary>True when <paramref name="value"/> parses to this property's declared type.</summary>
     public bool Accepts(string? value)
     {
@@ -122,8 +238,18 @@ public static class FormControlCatalog
     private static readonly FormPropertyDef BackColor = new("BackColor", FormPropertyType.Color);
     private static readonly FormPropertyDef Checked = new("Checked", FormPropertyType.Bool, "false");
 
+    // ⛔ ContentAlignment has no Left/Center/Right — it is a 3x3 grid of Top/Middle/Bottom by
+    // Left/Center/Right. The designer keeps the simple horizontal vocabulary and maps to the
+    // middle row, which is what a single-line Label or Button actually wants.
     private static readonly FormPropertyDef TextAlign = new(
-        "TextAlign", FormPropertyType.Enum, "Left", new[] { "Left", "Center", "Right" });
+        "TextAlign", FormPropertyType.Enum, "Left", new[] { "Left", "Center", "Right" },
+        WinFormsEnumType: "ContentAlignment",
+        WinFormsMemberNames: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Left"] = "MiddleLeft",
+            ["Center"] = "MiddleCenter",
+            ["Right"] = "MiddleRight"
+        });
 
     private static IReadOnlyList<FormPropertyDef> Common(params FormPropertyDef[] own) =>
         own.Concat(new[] { Enabled, Visible, ForeColor, BackColor }).ToList();
@@ -146,31 +272,43 @@ public static class FormControlCatalog
             new FormPropertyDef("Multiline", FormPropertyType.Bool, "false"),
             new FormPropertyDef("ReadOnly", FormPropertyType.Bool, "false"),
             new FormPropertyDef("MaxLength", FormPropertyType.Int),
-            new FormPropertyDef("PasswordChar", FormPropertyType.String))),
+            // WinForms PasswordChar is a char, not a string — assigning one is CS0029.
+            new FormPropertyDef("PasswordChar", FormPropertyType.String,
+                WinFormsFactory: "Convert.ToChar"))),
         new("Button",      "Button",      "button",   null,       false, Common(Text, TextAlign)),
         new("CheckBox",    "CheckBox",    "input",    "checkbox", false, Common(Text, Checked)),
         new("RadioButton", "RadioButton", "input",    "radio",    false, Common(
             Text,
             Checked,
-            // The DOM groups radios by name=; WinForms groups them by container. Modeled
-            // explicitly so the two targets can be made to agree rather than diverging silently.
-            new FormPropertyDef("GroupName", FormPropertyType.String))),
+            // ⛔ WEB ONLY. The DOM groups radios by name=; WinForms groups them by CONTAINER and
+            // has no GroupName property at all — csc says CS1061, BasicLang says nothing.
+            new FormPropertyDef("GroupName", FormPropertyType.String,
+                Targets: new[] { FormTarget.Web }))),
         new("ComboBox",    "ComboBox",    "select",   null,       false, Common(
             Text,
-            new FormPropertyDef("Items", FormPropertyType.String),
+            // Items is a get-only collection on WinForms — assigning it is CS0200.
+            new FormPropertyDef("Items", FormPropertyType.String, IsItemCollection: true),
             new FormPropertyDef("SelectedIndex", FormPropertyType.Int, "-1"))),
         new("ListBox",     "ListBox",     "select",   null,       false, Common(
-            new FormPropertyDef("Items", FormPropertyType.String),
+            new FormPropertyDef("Items", FormPropertyType.String, IsItemCollection: true),
             new FormPropertyDef("SelectedIndex", FormPropertyType.Int, "-1"),
-            new FormPropertyDef("MultiSelect", FormPropertyType.Bool, "false"))),
+            // ⛔ WEB ONLY. WinForms ListBox has no MultiSelect — it has SelectionMode, an enum.
+            // Mapping a Bool onto it is a design decision v1 has not made, so the property stays
+            // web-only rather than being silently approximated.
+            new FormPropertyDef("MultiSelect", FormPropertyType.Bool, "false",
+                Targets: new[] { FormTarget.Web }))),
         new("Panel",       "Panel",       "div",      null,       true,  Common(
             new FormPropertyDef("BorderStyle", FormPropertyType.Enum, "None",
-                new[] { "None", "FixedSingle", "Fixed3D" }))),
+                new[] { "None", "FixedSingle", "Fixed3D" },
+                WinFormsEnumType: "BorderStyle"))),
         new("GroupBox",    "GroupBox",    "fieldset", null,       true,  Common(Text)),
         new("PictureBox",  "PictureBox",  "img",      null,       false, Common(
-            new FormPropertyDef("Image", FormPropertyType.String),
+            // WinForms Image is a System.Drawing.Image, not a path string (CS0029).
+            new FormPropertyDef("Image", FormPropertyType.String,
+                WinFormsFactory: "Image.FromFile"),
             new FormPropertyDef("SizeMode", FormPropertyType.Enum, "Normal",
-                new[] { "Normal", "StretchImage", "AutoSize", "CenterImage", "Zoom" }))),
+                new[] { "Normal", "StretchImage", "AutoSize", "CenterImage", "Zoom" },
+                WinFormsEnumType: "PictureBoxSizeMode"))),
     };
 
     public static FormControlDef? Find(string kind) =>

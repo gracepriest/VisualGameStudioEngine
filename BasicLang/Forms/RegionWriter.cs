@@ -111,6 +111,8 @@ public static class RegionWriter
         var controlsBody = GenerateControls(form, IndentOf(index, controls), newline);
         var initBody = GenerateInit(form, IndentOf(index, init), newline);
 
+        CheckAnchors(filePath, form, diagnostics);
+        CheckTargetProperties(filePath, form, diagnostics);
         CheckHandlerOrdering(filePath, index, form, init, diagnostics);
         if (diagnostics.Any(d => !d.IsWarning))
         {
@@ -144,6 +146,84 @@ public static class RegionWriter
     /// than the ordering, but a reader copying its layout gets a file that does not build on the web
     /// target. This check turns that into a diagnostic instead of a confusing compile error.</para>
     /// </summary>
+    /// <summary>
+    /// Refuses a control anchored to more than one edge.
+    ///
+    /// <para>⛔⛔ Not a style rule — BasicLang has NO WAY to write a combined flags value, measured
+    /// three ways (see <see cref="DesignCodes.AnchorNotExpressible"/>). The alternatives to
+    /// refusing are both worse: emitting the first flag alone puts geometry on screen that the
+    /// running program will not reproduce, which is exactly the designer/runtime divergence D9
+    /// exists to prevent; emitting all of them produces a file that does not compile, and the
+    /// error surfaces in the user's own <c>.bas</c> at a line the designer wrote. Refusing says
+    /// so once, at design time, and leaves the file untouched.</para>
+    ///
+    /// <para>⚠ Reachable today only from a hand-authored <c>.blform</c> — the canvas that would
+    /// offer multiple anchors is Task 14 and does not exist yet. Whether the right long-term fix
+    /// is to teach the parser a bitwise <c>Or</c> is an open decision, not this writer's to make.
+    /// </para>
+    /// </summary>
+    private static void CheckAnchors(
+        string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
+    {
+        if (form.Target != FormTarget.WinForms)
+        {
+            return;
+        }
+
+        foreach (var control in form.AllControls())
+        {
+            if (control.Geometry is not PixelGeometry { Anchor: { } anchor } ||
+                string.IsNullOrWhiteSpace(anchor))
+            {
+                continue;
+            }
+
+            var edges = anchor.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (edges.Length > 1)
+            {
+                diagnostics.Add(Error(DesignCodes.AnchorNotExpressible,
+                    $"'{control.Id}' is anchored to {edges.Length} edges ('{anchor}'), which " +
+                    "BasicLang cannot express: it has no usable bitwise Or, and AnchorStyles is a " +
+                    ".NET type the compiler cannot resolve, so neither Or, CType nor | works. Use " +
+                    "a single anchor edge, or Dock, until the language can combine flags.",
+                    filePath, 0));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Warns about properties the document carries that the target does not have, which
+    /// <see cref="AppendControlInit"/> skips. A warning, never a refusal: the value is valid in
+    /// the other format and round-trips untouched, so the document is not wrong — only unusable
+    /// here. Reporting it is what stops the skip from being silent.
+    /// </summary>
+    private static void CheckTargetProperties(
+        string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
+    {
+        foreach (var control in form.AllControls())
+        {
+            var definition = control.Definition;
+            if (definition == null)
+            {
+                continue;
+            }
+
+            foreach (var name in control.Properties.Keys)
+            {
+                var property = definition.Property(name);
+                if (property != null && !property.AppliesTo(form.Target))
+                {
+                    diagnostics.Add(new DesignDiagnostic(
+                        DesignCodes.PropertyNotOnTarget,
+                        $"{DesignCodes.PropertyNotOnTarget}: '{control.Id}.{name}' does not exist " +
+                        $"on {form.Target}, so it is not written into the generated code. The " +
+                        "value is preserved in the document.",
+                        filePath, 0, 0, IsWarning: true));
+                }
+            }
+        }
+    }
+
     private static void CheckHandlerOrdering(
         string filePath, SourceIndex index, FormDocument form,
         FormRegion init, List<DesignDiagnostic> diagnostics)
@@ -262,6 +342,21 @@ public static class RegionWriter
             // user could rename or remove.
             body.Append($"{inner}Dim doc As Document = ::document").Append(newline);
         }
+        else
+        {
+            // The form's own caption and client size, before any control — the order the shipped
+            // VSIX template uses, and the shape Owner decision 3 makes canonical. ClientSize fans
+            // in exactly as a control's Size does, and for the same CS1612 reason.
+            if (form.Text != null)
+            {
+                body.Append($"{inner}Me.Text = \"{form.Text.Replace("\"", "\"\"")}\"").Append(newline);
+            }
+
+            if (form.Width is > 0 && form.Height is > 0)
+            {
+                body.Append($"{inner}Me.ClientSize = New Size({form.Width}, {form.Height})").Append(newline);
+            }
+        }
 
         foreach (var control in form.Controls)
         {
@@ -293,11 +388,35 @@ public static class RegionWriter
         {
             body.Append($"{inner}{control.Id} = New {DeclaredType(form, control)}()").Append(newline);
 
+            AppendPixelGeometry(body, control, inner, newline);
+
             // ⛔ One statement per property. There is no object-initializer syntax, and `With` must
             // NEVER be emitted: `.Prop = value` inside a With block is silently discarded by the IR
             // builder, so the running program would not set what the designer shows.
             foreach (var (name, value) in control.Properties)
             {
+                var property = control.Definition?.Property(name);
+
+                // A property that does not exist on this target is skipped, not emitted. The
+                // document keeps it (the other target uses it) and the caller reports it.
+                if (property != null && !property.AppliesTo(FormTarget.WinForms))
+                {
+                    continue;
+                }
+
+                // ⛔ A get-only collection is ADDED to, never assigned — `cmb.Items = "a,b"` is
+                // CS0200, and BasicLang reports nothing because Items types as Object.
+                if (property is { IsItemCollection: true })
+                {
+                    foreach (var item in FormPropertyDef.SplitItems(value))
+                    {
+                        body.Append($"{inner}{control.Id}.{name}.Add(\"{item.Replace("\"", "\"\"")}\")")
+                            .Append(newline);
+                    }
+
+                    continue;
+                }
+
                 body.Append($"{inner}{control.Id}.{name} = {Literal(control, name, value)}").Append(newline);
             }
         }
@@ -341,6 +460,48 @@ public static class RegionWriter
     }
 
     /// <summary>
+    /// A control's position and size, in the WinForms idiom.
+    ///
+    /// <para>⛔⛔ <b>Geometry FANS IN.</b> <c>X="96" Y="80"</c> becomes ONE statement,
+    /// <c>Location = New Point(96, 80)</c> — never <c>Location.X = 96</c>. <c>Location</c> returns
+    /// a <c>Point</c> STRUCT, so assigning through it modifies a temporary and csc rejects it with
+    /// <b>CS1612</b> ("cannot modify the return value ... because it is not a variable"). Measured
+    /// 2026-09-13; the plan says not to assert the code without measuring it, so that is the
+    /// measurement. BasicLang itself catches none of this — WinForms member access degrades to
+    /// <c>Object</c> with no diagnostic — so the per-statement shape here is load-bearing.</para>
+    /// </summary>
+    private static void AppendPixelGeometry(
+        StringBuilder body, FormControl control, string inner, string newline)
+    {
+        if (control.Geometry is not PixelGeometry pixel)
+        {
+            return;
+        }
+
+        if (pixel.X != 0 || pixel.Y != 0)
+        {
+            body.Append($"{inner}{control.Id}.Location = New Point({pixel.X}, {pixel.Y})").Append(newline);
+        }
+
+        if (pixel.Width != 0 || pixel.Height != 0)
+        {
+            body.Append($"{inner}{control.Id}.Size = New Size({pixel.Width}, {pixel.Height})").Append(newline);
+        }
+
+        if (!string.IsNullOrWhiteSpace(pixel.Dock))
+        {
+            body.Append($"{inner}{control.Id}.Dock = DockStyle.{pixel.Dock.Trim()}").Append(newline);
+        }
+
+        // A single anchor only. The multi-flag case is REFUSED before we get here (see
+        // CheckAnchors) because BasicLang cannot express it at all.
+        if (!string.IsNullOrWhiteSpace(pixel.Anchor))
+        {
+            body.Append($"{inner}{control.Id}.Anchor = AnchorStyles.{pixel.Anchor.Trim()}").Append(newline);
+        }
+    }
+
+    /// <summary>
     /// Formats a property value as BasicLang SOURCE, driven off the catalog's declared type.
     ///
     /// <para>⛔ The same <c>Properties</c> dictionary means two different things to two consumers:
@@ -360,11 +521,22 @@ public static class RegionWriter
         }
 
         var property = control.Definition?.Property(name);
+
+        // ⛔ An enum or a colour is NOT the bare text. MEASURED, both ways:
+        //   lbl.TextAlign = Center    lexes, compiles, and csc then rejects it (CS0103).
+        //   lbl.ForeColor = #FF0000   does not even LEX -- '#' starts a preprocessor directive.
+        // The catalog carries the WinForms enum type and the member mapping precisely so this
+        // can be qualified rather than guessed at.
+        var typed = property?.WinFormsLiteral(value);
+        if (typed != null)
+        {
+            return typed;
+        }
+
         return property?.Type switch
         {
             FormPropertyType.Int => value,
             FormPropertyType.Bool => bool.TryParse(value, out var flag) ? (flag ? "True" : "False") : value,
-            // A colour and an enum both name a member the target resolves; a string is a string.
             FormPropertyType.Enum => value,
             FormPropertyType.Color => value,
             _ => "\"" + value.Replace("\"", "\"\"") + "\""

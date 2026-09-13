@@ -58,7 +58,7 @@ public static class DesignCodes
     //
     //   BL8001          reserved — "a form document is not a program; build the project"
     //   BL8002..BL8010  recognizer and design-check findings (here)
-    //   BL8011, BL8012  designer-owned region states
+    //   BL8011..BL8015  designer-owned region states and region-writer findings
     //   BL8021, BL8022  document-level refusals in a form document (here)
     //   BL8031          reserved
     //
@@ -101,6 +101,23 @@ public static class DesignCodes
 
     /// <summary>The file has no designer regions — the import case, not an error.</summary>
     public const string RegionAbsent = "BL8014";
+
+    /// <summary>
+    /// A control anchored to more than one edge. MEASURED 2026-09-13: BasicLang cannot express a
+    /// combined flags value at all — <c>AnchorStyles.Left Or AnchorStyles.Top</c> is rejected
+    /// ("Logical operator 'Or' requires Boolean operands"), <c>CType(7, AnchorStyles)</c> is
+    /// rejected ("no such conversion exists") because the enum is an unresolvable .NET type, and
+    /// <c>|</c> lexes but the parser never consumes it ("Unexpected token in expression").
+    /// </summary>
+    public const string AnchorNotExpressible = "BL8015";
+
+    /// <summary>
+    /// A property the document carries that does not exist on the target being generated — a
+    /// <c>GroupName</c> in a <c>.blform</c>, say. A WARNING: the value round-trips untouched and
+    /// the other target still uses it, but it is skipped here rather than emitted into code that
+    /// would not compile. Saying so beats dropping it silently.
+    /// </summary>
+    public const string PropertyNotOnTarget = "BL8016";
 
     /// <summary>
     /// A <c>&lt;Bind&gt;</c> carrying the reserved data-binding attributes (<c>Property</c>,
