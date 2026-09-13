@@ -25,9 +25,17 @@ public static class DomDialect
     public static RecognizedForm Read(string source)
     {
         var index = new SourceIndex(source);
-        var cursor = new TokenCursor(new Lexer(source).Tokenize());
         var form = new RecognizedForm();
         string? currentMember = null;
+
+        var cursor = TokenCursor.TryLex(source, out var lexError);
+        if (cursor == null)
+        {
+            // See WinFormsDialect: the lexer throws on a half-typed string literal, which is the
+            // commonest state a file is in while the designer is asked to render it.
+            form.UnreadableReason = lexError;
+            return form;
+        }
 
         while (!cursor.AtEnd)
         {
@@ -221,10 +229,18 @@ public static class DomDialect
         cursor.SkipToNextLine();
     }
 
+    /// <summary>
+    /// Marks the ARGUMENT of <c>appendChild</c> as parented — never the receiver.
+    ///
+    /// <para>⚠ This used to mark every control named anywhere on the line. For
+    /// <c>doc.body.appendChild(heading)</c> that was harmless, but for
+    /// <c>panel.appendChild(heading)</c> it also marked <c>panel</c> — so a container created and
+    /// never attached to the document silently lost its orphan warning, which is the one case where
+    /// the warning matters most.</para>
+    /// </summary>
     private static void MarkParented(TokenCursor cursor, RecognizedForm form)
     {
-        // The argument is the last identifier before the closing paren; scan the line for any
-        // identifier that names a control we already know.
+        // Find `appendChild` `(` and take the identifiers inside the parens.
         for (var i = 0; ; i++)
         {
             var token = cursor.Peek(i);
@@ -233,10 +249,29 @@ public static class DomDialect
                 break;
             }
 
-            if (token.Type == TokenType.Identifier && form[token.Lexeme] is { } control)
+            if (token.Type != TokenType.Identifier ||
+                !string.Equals(token.Lexeme, "appendChild", StringComparison.OrdinalIgnoreCase) ||
+                cursor.Peek(i + 1)?.Type != TokenType.LeftParen)
             {
-                control.IsParented = true;
+                continue;
             }
+
+            for (var j = i + 2; ; j++)
+            {
+                var argument = cursor.Peek(j);
+                if (argument == null || argument.Type == TokenType.Newline ||
+                    argument.Type == TokenType.RightParen)
+                {
+                    break;
+                }
+
+                if (argument.Type == TokenType.Identifier && form[argument.Lexeme] is { } control)
+                {
+                    control.IsParented = true;
+                }
+            }
+
+            break;
         }
 
         cursor.SkipToNextLine();
@@ -262,15 +297,6 @@ public static class DomDialect
     private static string TextOf(Token literal) =>
         literal.Value?.ToString() ?? literal.Lexeme.Trim('"');
 
-    private static string RawRightHandSide(TokenCursor cursor, SourceIndex index, int ahead)
-    {
-        var first = cursor.Peek(ahead);
-        if (first == null || first.Type == TokenType.Newline)
-        {
-            return "";
-        }
-
-        var start = index.OffsetOf(first.Line, first.Column);
-        return index.Slice(start, index.EndOfLine(first.Line)).Trim();
-    }
+    private static string RawRightHandSide(TokenCursor cursor, SourceIndex index, int ahead) =>
+        RawSlice.RightHandSide(cursor, index, ahead);
 }

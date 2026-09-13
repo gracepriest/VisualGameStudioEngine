@@ -45,7 +45,7 @@ public class FormDocumentTests
         foreach (var target in new[] { FormTarget.WinForms, FormTarget.Web })
         {
             var kinds = FormControlCatalog.For(target).Select(c => c.Kind).ToList();
-            Assert.That(kinds, Does.Contain("Label").And.Contains("TextBox").And.Contains("Button"),
+            Assert.That(kinds, Does.Contain("Label").And.Contain("TextBox").And.Contain("Button"),
                 $"{target} cannot express the spec's worked example");
         }
     }

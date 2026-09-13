@@ -74,8 +74,17 @@ public sealed class FormControl
     /// <summary>Child controls. Only meaningful when the catalog marks the kind a container.</summary>
     public List<FormControl> Children { get; } = new();
 
-    /// <summary>Attributes the reader did not recognise, preserved verbatim (D9).</summary>
-    public Dictionary<string, string> UnknownAttributes { get; } = new(StringComparer.Ordinal);
+    /// <summary>
+    /// Attributes the reader did not recognise, preserved verbatim (D9).
+    ///
+    /// <para>⚠ Case-INSENSITIVE, matching <see cref="Properties"/>. XML attribute names are
+    /// case-sensitive, so a document could carry both <c>Text</c> and <c>text</c>; with an ordinal
+    /// comparer here, the first would land in <see cref="Properties"/> and the second here, both
+    /// would serialize, and on read-back the catalog's case-insensitive lookup would route them into
+    /// the same slot — silently dropping one. Sharing the comparer means the collision cannot be
+    /// created in the first place.</para>
+    /// </summary>
+    public Dictionary<string, string> UnknownAttributes { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Child elements the reader did not recognise, preserved verbatim (D9).</summary>
     public List<XElement> UnknownChildren { get; } = new();

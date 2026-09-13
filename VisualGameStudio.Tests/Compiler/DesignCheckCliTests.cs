@@ -201,6 +201,67 @@ public class DesignCheckCliTests
             """));
     }
 
+    [Test]
+    public void Check_ReportsAnUnlexableFile_AsAWarning_RatherThanThrowing()
+    {
+        // ⛔ The contract said "never throws for bad content", and it did: Lexer.Tokenize() throws
+        // on an unterminated string, which is the commonest mid-edit state there is. The test above
+        // passed only because `If someCondition Then` lexes cleanly.
+        IReadOnlyList<DesignDiagnostic> findings = null!;
+
+        Assert.DoesNotThrow(() => findings = DesignCheck.CheckSource("Broken.bas", """
+            Public Class MainForm
+                Inherits Form
+                Private btnClick As Button
+                Public Sub New()
+                    btnClick.Text = "Click
+            """));
+
+        var finding = findings.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(finding.Code, Is.EqualTo(DesignCodes.Unreadable));
+            Assert.That(finding.IsWarning, Is.True,
+                "a file the lexer refuses fails the compiler anyway with its own diagnostic — " +
+                "design --check has no business double-reporting it as a second build failure");
+        });
+    }
+
+    [Test]
+    [Category("Integration")]
+    public async Task Cli_DesignCheck_ExitsZero_AndDoesNotCrash_OnAnUnlexableFile()
+    {
+        // Before the fix this escaped as an unhandled LexerException, was caught by the verb's
+        // generic handler, and reported as exit 2 on STDERR — the code reserved for "invoked
+        // wrongly" and the stream the verb deliberately does not use for findings.
+        var path = Write("Unlexable.bas", "Public Class MainForm\n    Inherits Form\n    Private x As Button\n    Public Sub New()\n        x.Text = \"oops\n");
+
+        var (exitCode, stdout, stderr) = await CliTestHarness.RunCli(_dir, "design", "--check", path);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exitCode, Is.Zero, $"stdout:\n{stdout}\nstderr:\n{stderr}");
+            Assert.That(stdout, Does.Contain("BL8006"), "the finding belongs on stdout like every other");
+            Assert.That(stderr, Does.Not.Contain("design failed"), "this is a finding, not a tool failure");
+        });
+    }
+
+    [Test]
+    [Category("Integration")]
+    public async Task Cli_DesignCheck_RejectsAnUnknownOption()
+    {
+        // Silently dropping it meant `design --chek file.bas` ran as though the typo were not there.
+        var path = Write("MainForm.bas", CleanForm);
+
+        var (exitCode, _, stderr) = await CliTestHarness.RunCli(_dir, "design", "--check", "--chek", path);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exitCode, Is.EqualTo(2));
+            Assert.That(stderr, Does.Contain("--chek"), "the rejection must name the option it did not know");
+        });
+    }
+
     // ==================================================================
     // The CLI verb — the only thing that proves the exit code is usable in CI
     // ==================================================================

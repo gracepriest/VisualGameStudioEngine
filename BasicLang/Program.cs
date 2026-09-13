@@ -331,6 +331,18 @@ namespace BasicLang.Compiler.Driver
             var check = args.Contains("--check");
             var paths = args.Where(a => !a.StartsWith("-", StringComparison.Ordinal)).ToList();
 
+            // ⚠ Reject an unrecognised flag rather than dropping it. Silently ignoring one means
+            // `design --chek file.bas` runs as if the typo were not there — and since the verb's
+            // whole job is to report, a run that quietly did something else is worse than no run.
+            var unknown = args.FirstOrDefault(a =>
+                a.StartsWith("-", StringComparison.Ordinal) && a != "--check");
+            if (unknown != null)
+            {
+                Console.Error.WriteLine($"design: unknown option '{unknown}'.");
+                Console.Error.WriteLine("Usage: basiclang design --check <file.bas> [more files...]");
+                return 2;
+            }
+
             if (!check)
             {
                 Console.Error.WriteLine("Usage: basiclang design --check <file.bas> [more files...]");

@@ -73,15 +73,49 @@ internal sealed class TokenCursor
         }
     }
 
-    /// <summary>The last token before the next newline, for measuring a statement's extent.</summary>
-    public Token? LastTokenOnLine()
+    /// <summary>
+    /// The first comment token at or after <paramref name="from"/> on the current line, or null.
+    /// Used to stop a raw source slice before a trailing comment.
+    /// </summary>
+    public Token? FirstCommentOnLine(int from)
     {
-        Token? last = null;
-        for (var i = Position; i < _tokens.Count && _tokens[i].Type != TokenType.Newline; i++)
+        for (var i = from; ; i++)
         {
-            last = _tokens[i];
-        }
+            var token = Peek(i);
+            if (token == null || token.Type == TokenType.Newline)
+            {
+                return null;
+            }
 
-        return last;
+            if (token.Type == TokenType.Comment)
+            {
+                return token;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Lexes <paramref name="source"/>, returning null when the lexer refused it.
+    ///
+    /// <para>⛔ <c>Lexer.Tokenize()</c> THROWS — six reachable sites: an unterminated string, an
+    /// unterminated interpolated string, a number too large for Long, a malformed
+    /// <c>&amp;H</c>/<c>&amp;O</c>/<c>&amp;B</c> prefix, <c>&amp;H</c> with no digits, and an
+    /// unterminated <c>cpp{ }</c> block. The first of those is the single most common state a file
+    /// is in WHILE BEING EDITED (<c>btnClick.Text = "</c>), which is exactly when the designer is
+    /// asked to render it. Letting that escape would turn a half-typed line into a crash on the one
+    /// path whose whole premise is tolerating incomplete source.</para>
+    /// </summary>
+    public static TokenCursor? TryLex(string source, out string? error)
+    {
+        try
+        {
+            error = null;
+            return new TokenCursor(new Lexer(source).Tokenize());
+        }
+        catch (LexerException ex)
+        {
+            error = ex.Message;
+            return null;
+        }
     }
 }

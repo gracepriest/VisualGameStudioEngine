@@ -30,8 +30,17 @@ public static class WinFormsDialect
     public static RecognizedForm Read(string source)
     {
         var index = new SourceIndex(source);
-        var cursor = new TokenCursor(new Lexer(source).Tokenize());
         var form = new RecognizedForm();
+
+        var cursor = TokenCursor.TryLex(source, out var lexError);
+        if (cursor == null)
+        {
+            // The lexer refused the text. Return an empty form that SAYS so rather than throwing:
+            // a half-typed string literal is the commonest mid-edit state, and the designer is asked
+            // to render exactly then.
+            form.UnreadableReason = lexError;
+            return form;
+        }
 
         // Field declarations seen at class level: id -> declared type.
         var declaredTypes = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -88,17 +97,44 @@ public static class WinFormsDialect
                     continue;
             }
 
-            // --- class-level field declaration: [Private|Public|Protected|Dim] id As Type ---
-            if (currentMember == null && IsDeclarationKeyword(token.Type) &&
+            // --- declaration: [Private|Public|Protected|Dim] id As Type ---
+            if (IsDeclarationKeyword(token.Type) &&
                 cursor.CheckAhead(1, TokenType.Identifier) &&
-                cursor.CheckAhead(2, TokenType.As) &&
-                cursor.CheckAhead(3, TokenType.Identifier))
+                cursor.CheckAhead(2, TokenType.As))
             {
                 var id = cursor.Peek(1)!.Lexeme;
-                declaredTypes[id] = cursor.Peek(3)!.Lexeme;
-                declaredLines[id] = token.Line;
-                cursor.SkipToNextLine();
-                continue;
+
+                // `As New Label()` — the combined declare-and-construct form. It is idiomatic and
+                // this repo's own web template uses it (`Dim counter As New ClickCounter()`), yet it
+                // carries no Assignment token, so the `<id> = New <Type>(` shape below never sees
+                // it. A form written this way used to open completely empty.
+                if (cursor.CheckAhead(3, TokenType.New) && cursor.CheckAhead(4, TokenType.Identifier))
+                {
+                    var newType = cursor.Peek(4)!.Lexeme;
+                    declaredTypes[id] = newType;
+                    declaredLines[id] = token.Line;
+
+                    if (FormControlCatalog.Find(newType) != null)
+                    {
+                        var declared = form[id] ?? Add(form, id);
+                        declared.TypeName = newType;
+                        declared.CatalogKind = FormControlCatalog.Find(newType)!.Kind;
+                        declared.ConstructionLine = token.Line;
+                        declared.DeclarationLine = token.Line;
+                        form.BuiltIn ??= currentMember;
+                    }
+
+                    cursor.SkipToNextLine();
+                    continue;
+                }
+
+                if (cursor.CheckAhead(3, TokenType.Identifier))
+                {
+                    declaredTypes[id] = cursor.Peek(3)!.Lexeme;
+                    declaredLines[id] = token.Line;
+                    cursor.SkipToNextLine();
+                    continue;
+                }
             }
 
             // --- everything below is a statement inside some member ---
@@ -117,8 +153,12 @@ public static class WinFormsDialect
 
             if (token.Type == TokenType.Identifier || token.Type == TokenType.Me)
             {
-                // Me.Controls.Add(<id>)
-                if (token.Type == TokenType.Me && cursor.CheckName(2, "Controls") && cursor.CheckName(4, "Add"))
+                // <receiver>.Controls.Add(<id>) — receiver is `Me` OR a container control.
+                // ⚠ Matching only `Me` was a real defect: the catalog ships Panel and GroupBox as
+                // containers, and `pnlBox.Controls.Add(lblInner)` did not match, so every child of
+                // every container collected a spurious "created but never added to the form"
+                // warning. That would have been design --check's most common false positive.
+                if (cursor.CheckName(2, "Controls") && cursor.CheckName(4, "Add"))
                 {
                     MarkParented(cursor, form);
                     continue;
@@ -140,10 +180,14 @@ public static class WinFormsDialect
                     var id = token.Lexeme;
                     var typeName = cursor.Peek(3)!.Lexeme;
 
-                    // Only a catalog type — or an identifier the class declared as a field — is a
-                    // control. `Me.Size = New Size(...)`, `New Point(...)` and `New Font(...)` all
-                    // match this shape and none of them is a control.
-                    if (FormControlCatalog.Find(typeName) != null || declaredTypes.ContainsKey(id))
+                    // Only a CATALOG type is a control. `Me.Size = New Size(...)`, `New Point(...)`
+                    // and `New Font(...)` all match this shape and none of them is a control.
+                    // ⚠ This used to also accept any identifier the class had declared, whatever its
+                    // type — so `Private db As Connection` + `db = New Connection()` became a
+                    // "control" with no catalog row and earned a BL8003 warning on an ordinary
+                    // field. It also disagreed with the declared-but-unconstructed pass below, which
+                    // was already catalog-only. One rule now.
+                    if (FormControlCatalog.Find(typeName) != null)
                     {
                         var control = form[id] ?? Add(form, id);
                         control.TypeName = typeName;
@@ -279,15 +323,6 @@ public static class WinFormsDialect
     /// D9's tiering decides later what is editable. Parsing here would mean discarding whatever did
     /// not fit.</para>
     /// </summary>
-    private static string RawRightHandSide(TokenCursor cursor, SourceIndex index, int ahead)
-    {
-        var first = cursor.Peek(ahead);
-        if (first == null || first.Type == TokenType.Newline)
-        {
-            return "";
-        }
-
-        var start = index.OffsetOf(first.Line, first.Column);
-        return index.Slice(start, index.EndOfLine(first.Line)).Trim();
-    }
+    private static string RawRightHandSide(TokenCursor cursor, SourceIndex index, int ahead) =>
+        RawSlice.RightHandSide(cursor, index, ahead);
 }

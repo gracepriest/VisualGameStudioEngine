@@ -386,6 +386,166 @@ public class FormRecognizerTests
     }
 
     [Test]
+    public void Recognizer_ToleratesAHalfTypedStringLiteral_RatherThanThrowing()
+    {
+        // ⛔ Lexer.Tokenize() THROWS on an unterminated string — and a half-typed string literal is
+        // the single commonest state a file is in WHILE BEING EDITED, which is exactly when the
+        // designer is asked to render it. The earlier tolerance test picked `If someCondition Then`,
+        // which the lexer happily tokenizes, so it passed while this property did not hold.
+        RecognizedForm form = null!;
+        Assert.DoesNotThrow(() => form = WinFormsDialect.Read("""
+            Public Class MainForm
+                Inherits Form
+                Private btnClick As Button
+                Public Sub New()
+                    btnClick = New Button()
+                    btnClick.Text = "Click
+            """));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(form.UnreadableReason, Is.Not.Null,
+                "the form must SAY it could not be read, not come back silently empty");
+            Assert.That(form.Controls, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void Dom_ToleratesAHalfTypedStringLiteral_RatherThanThrowing()
+    {
+        RecognizedForm form = null!;
+        Assert.DoesNotThrow(() => form = DomDialect.Read("""
+            Sub Main()
+                Dim doc As Document = ::document
+                Dim heading As Element = doc.createElement("h1
+            """));
+
+        Assert.That(form.UnreadableReason, Is.Not.Null);
+    }
+
+    [Test]
+    public void WinForms_ReadsTheCombinedDeclareAndConstructForm()
+    {
+        // `Dim x As New Label()` carries no Assignment token, so the `<id> = New <Type>(` shape
+        // never saw it and a form written this way opened completely EMPTY. The form is idiomatic
+        // and this repo's own web template uses it (`Dim counter As New ClickCounter()`).
+        var form = WinFormsDialect.Read("""
+            Public Class MainForm
+                Inherits Form
+                Private lblMessage As New Label()
+                Public Sub New()
+                    lblMessage.Text = "Hello"
+                    Me.Controls.Add(lblMessage)
+                End Sub
+            End Class
+            """);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(form.Controls.Select(c => c.Id), Is.EqualTo(new[] { "lblMessage" }));
+            Assert.That(form["lblMessage"]!.CatalogKind, Is.EqualTo("Label"));
+            Assert.That(form["lblMessage"]!.ConstructionLine, Is.EqualTo(3));
+            Assert.That(form["lblMessage"]!.Properties["Text"], Is.EqualTo("\"Hello\""));
+            Assert.That(form["lblMessage"]!.IsParented, Is.True);
+        });
+    }
+
+    [Test]
+    public void WinForms_CountsAChildAddedToAContainer_AsParented()
+    {
+        // The catalog ships Panel and GroupBox as containers, so `pnlBox.Controls.Add(lblInner)` is
+        // ordinary code. Matching only `Me.Controls.Add` gave every child of every container a
+        // spurious "created but never added to the form" warning — design --check's most likely
+        // false positive.
+        var form = WinFormsDialect.Read("""
+            Public Class MainForm
+                Inherits Form
+                Private pnlBox As Panel
+                Private lblInner As Label
+                Public Sub New()
+                    pnlBox = New Panel()
+                    lblInner = New Label()
+                    pnlBox.Controls.Add(lblInner)
+                    Me.Controls.Add(pnlBox)
+                End Sub
+            End Class
+            """);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(form["lblInner"]!.IsParented, Is.True, "added to a container, not to Me");
+            Assert.That(form["pnlBox"]!.IsParented, Is.True);
+        });
+    }
+
+    [Test]
+    public void WinForms_DoesNotTreatAnOrdinaryFieldAsAControl()
+    {
+        // Accepting any declared identifier meant `Private db As Connection` + `db = New Connection()`
+        // became a "control" with no catalog row, earning a BL8003 warning on an ordinary field —
+        // and it disagreed with the declared-but-unconstructed pass, which was already catalog-only.
+        var form = WinFormsDialect.Read("""
+            Public Class MainForm
+                Inherits Form
+                Private db As Connection
+                Private btnClick As Button
+                Public Sub New()
+                    db = New Connection()
+                    btnClick = New Button()
+                    Me.Controls.Add(btnClick)
+                End Sub
+            End Class
+            """);
+
+        Assert.That(form.Controls.Select(c => c.Id), Is.EqualTo(new[] { "btnClick" }),
+            "only catalog types are controls, on BOTH the constructed and the declared-only path");
+    }
+
+    [Test]
+    public void RawValue_StopsAtATrailingComment()
+    {
+        // Slicing to the end of the line swallowed the comment into the property value, and the
+        // writer would then emit it back as part of the string. No shipped template puts a comment
+        // on an assignment line, so no fixture caught it.
+        var form = WinFormsDialect.Read("""
+            Public Class MainForm
+                Inherits Form
+                Private lblMessage As Label
+                Public Sub New()
+                    lblMessage = New Label()
+                    lblMessage.Text = "Hi"   ' the greeting
+                End Sub
+            End Class
+            """);
+
+        Assert.That(form["lblMessage"]!.Properties["Text"], Is.EqualTo("\"Hi\""),
+            "a trailing comment is not part of the value");
+    }
+
+    [Test]
+    public void Dom_AppendChild_MarksTheArgument_NotTheReceiver()
+    {
+        // Marking every control named on the line meant `panel.appendChild(heading)` also marked
+        // `panel` — so a container created and never attached to the document lost its orphan
+        // warning, which is the case where that warning matters most.
+        var form = DomDialect.Read("""
+            Sub Main()
+                Dim doc As Document = ::document
+                Dim panel As Element = doc.createElement("div")
+                Dim heading As Element = doc.createElement("h1")
+                panel.appendChild(heading)
+            End Sub
+            """);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(form["heading"]!.IsParented, Is.True, "it was the argument");
+            Assert.That(form["panel"]!.IsParented, Is.False,
+                "the receiver of appendChild is not thereby parented itself");
+        });
+    }
+
+    [Test]
     public void WinForms_KeepsAFieldThatWasDeclaredButNeverConstructed()
     {
         var form = WinFormsDialect.Read("""

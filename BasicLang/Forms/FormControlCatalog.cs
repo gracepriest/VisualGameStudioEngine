@@ -132,6 +132,11 @@ public static class FormControlCatalog
     /// The ten kinds of v1. Ten is a deliberate floor, not a ceiling: it is the smallest set that
     /// covers a login form, a settings pane and a list-detail pane — the three shapes the designer
     /// has to handle before it is worth using at all.
+    ///
+    /// <para>⛔ This field MUST stay below the shared <c>FormPropertyDef</c> fields it reads through
+    /// <c>Common(…)</c>. Static field initializers run in textual order, so moving it above them
+    /// leaves every shared property null inside the concat — with no compile error and no exception
+    /// at init, just a NullReferenceException later from <c>Property()</c> or <c>Accepts()</c>.</para>
     /// </summary>
     public static readonly IReadOnlyList<FormControlDef> All = new List<FormControlDef>
     {

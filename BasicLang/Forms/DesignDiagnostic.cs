@@ -65,6 +65,9 @@ public static class DesignCodes
 
     /// <summary>A control that is constructed but never parented, so it never appears at run time.</summary>
     public const string OrphanedControl = "BL8005";
+
+    /// <summary>The file's text could not be turned into tokens — typically an unterminated string.</summary>
+    public const string Unreadable = "BL8006";
 }
 
 /// <summary>
@@ -97,6 +100,19 @@ public static class DesignCheck
         }
 
         var form = isWinForms ? WinFormsDialect.Read(source) : DomDialect.Read(source);
+
+        if (form.UnreadableReason != null)
+        {
+            // A WARNING, not an error. A file the lexer refuses will fail the compiler anyway with
+            // its own diagnostic, and `design --check` has no business double-reporting it as a
+            // second build failure. What matters here is only that the designer could not read it.
+            findings.Add(new DesignDiagnostic(
+                DesignCodes.Unreadable,
+                $"{DesignCodes.Unreadable}: the designer could not read this file — " +
+                $"{form.UnreadableReason}",
+                filePath, 0, 0, IsWarning: true));
+            return findings;
+        }
 
         // Refusals first, and they are errors: each names a construct that makes the designer view
         // and the running program disagree (D9 Refused).
@@ -155,7 +171,10 @@ public static class DesignCheck
         {
             return CheckSource(filePath, File.ReadAllText(filePath));
         }
-        catch (IOException ex)
+        // UnauthorizedAccessException derives from SystemException, NOT IOException — a read-only or
+        // ACL-denied file, or a directory passed where a file was meant, would otherwise escape a
+        // method whose contract is "a bad file is a finding, not a crash".
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return new[]
             {

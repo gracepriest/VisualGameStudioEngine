@@ -83,6 +83,14 @@ public sealed class RecognizedForm
 
     public List<RecognitionRefusal> Refusals { get; } = new();
 
+    /// <summary>
+    /// Why the file could not be read at all, or null when it could. Set when the LEXER refused the
+    /// source — an unterminated string literal being the common case while the user is mid-edit.
+    /// Distinct from a refusal: a refusal means "this shape is understood and must not be imported",
+    /// this means "the text could not be turned into tokens".
+    /// </summary>
+    public string? UnreadableReason { get; set; }
+
     /// <summary>True when nothing may be imported from this file.</summary>
     public bool IsRefused => Refusals.Count > 0;
 
