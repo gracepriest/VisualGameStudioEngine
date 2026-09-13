@@ -17,6 +17,30 @@ public class BasicLangProject
     public CppProjectSettings? CppSettings { get; set; }
     public string Version { get; set; } = "1.0";
 
+    /// <summary>
+    /// The .NET target framework moniker (<c>net8.0</c>, <c>net8.0-windows</c>, …).
+    /// <c>null</c> means the project file carries no <c>&lt;TargetFramework&gt;</c> element.
+    ///
+    /// <para>⚠ Nullability is load-bearing for every property in this block. The serializer writes
+    /// an element only when the model value differs from what the file already said, so a null here
+    /// means "the file did not mention this" and leaves the file untouched. A non-nullable default
+    /// would make every IDE save inject the default into projects that deliberately omit it.</para>
+    /// </summary>
+    public string? TargetFramework { get; set; }
+
+    /// <summary>
+    /// <c>&lt;UseWindowsForms&gt;</c>. Required for the WinForms half of the form designer, and the
+    /// single property whose loss was most visible: an IDE save used to strip it from a WinForms
+    /// project, after which the build no longer referenced the Windows Forms assemblies.
+    /// </summary>
+    public bool? UseWindowsForms { get; set; }
+
+    /// <summary>&lt;UseWpf&gt;. Symmetric with <see cref="UseWindowsForms"/>; the VSIX ships a WPF template.</summary>
+    public bool? UseWpf { get; set; }
+
+    /// <summary>&lt;AssemblyName&gt;. Null when the file omits it (the build then falls back to the project name).</summary>
+    public string? AssemblyName { get; set; }
+
     public List<ProjectItem> Items { get; set; } = new();
     public List<ProjectReference> References { get; set; } = new();
     public List<PackageReference> PackageReferences { get; set; } = new();
