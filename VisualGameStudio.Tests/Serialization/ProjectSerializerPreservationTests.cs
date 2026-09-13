@@ -383,6 +383,279 @@ public class ProjectSerializerPreservationTests
         });
     }
 
+    // ------------------------------------------------------------------
+    // The IDE loads with a configured default backend; the save must not read that as an edit
+    // ------------------------------------------------------------------
+
+    private const string ProjectWithoutBackend = """
+        <BasicLangProject Version="1.0">
+          <PropertyGroup>
+            <ProjectName>NoBackend</ProjectName>
+            <Authors>Grace</Authors>
+          </PropertyGroup>
+        </BasicLangProject>
+        """;
+
+    [Test]
+    public async Task Save_DoesNotInjectTargetBackend_WhenTheFileOmitsItAndTheIdeDefaultDiffers()
+    {
+        // ProjectService loads with its basiclang.compiler.backend setting as
+        // defaultBackendWhenOmitted, so a file with no <TargetBackend> comes back carrying that
+        // value. Comparing against a freshly default-seeded re-parse would read that as a user edit
+        // and write <TargetBackend>Cpp</TargetBackend> into a project nobody touched — on the VSIX
+        // shape, which uses <BasicLangBackend>, that means every single IDE save.
+        var path = Write("NoBackend.blproj", ProjectWithoutBackend);
+        var before = File.ReadAllText(path);
+
+        var serializer = new ProjectSerializer();
+        var project = await serializer.LoadAsync(path, TargetBackend.Cpp);
+        await serializer.SaveAsync(project);
+
+        Assert.That(File.ReadAllText(path), Is.EqualTo(before),
+            "the IDE's configured default backend is not a user edit and must not be written into " +
+            "a file that deliberately omits the element");
+    }
+
+    [Test]
+    public async Task Save_PersistsAChangedBackend_EvenWhenTheFileOmittedTheElement()
+    {
+        // The other half of the same rule: suppressing the seeded default must not also suppress a
+        // real change the user made on top of it.
+        var path = Write("NoBackend.blproj", ProjectWithoutBackend);
+
+        var serializer = new ProjectSerializer();
+        var project = await serializer.LoadAsync(path, TargetBackend.Cpp);
+        project.TargetBackend = TargetBackend.JavaScript;
+        await serializer.SaveAsync(project);
+
+        Assert.That(File.ReadAllText(path), Does.Contain("<TargetBackend>JavaScript</TargetBackend>"));
+        var reloaded = await serializer.LoadAsync(path, TargetBackend.Cpp);
+        Assert.That(reloaded.TargetBackend, Is.EqualTo(TargetBackend.JavaScript));
+    }
+
+    // ------------------------------------------------------------------
+    // The written file's prologue and line endings
+    // ------------------------------------------------------------------
+
+    [Test]
+    public async Task Save_DoesNotPrependAnXmlDeclaration_ToAFileThatHadNone()
+    {
+        // XDocument.Save(TextWriter, SaveOptions) calls WriteStartDocument() unconditionally and
+        // leaves OmitXmlDeclaration false, so it prepends <?xml …?> even to a document that never
+        // had one — and with formatting disabled, with no newline after it. On the VSIX shape that
+        // produces `<?xml…?><Project Sdk="Microsoft.NET.Sdk">` on one line.
+        var path = Write("NoDecl.blproj", VsixShapedProject);
+
+        var serializer = new ProjectSerializer();
+        var project = await serializer.LoadAsync(path);
+        project.RootNamespace = "Renamed";          // force a real write
+        await serializer.SaveAsync(project);
+
+        var after = File.ReadAllText(path);
+        Assert.Multiple(() =>
+        {
+            Assert.That(after, Does.Not.Contain("<?xml"),
+                "a file with no XML declaration must not gain one on save");
+            Assert.That(after, Does.StartWith("""<Project Sdk="Microsoft.NET.Sdk">"""));
+        });
+    }
+
+    [Test]
+    public async Task Save_KeepsAnExistingXmlDeclaration_OnItsOwnLine()
+    {
+        var path = Write("Decl.blproj",
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n" +
+            "<BasicLangProject Version=\"1.0\">\n" +
+            "  <PropertyGroup>\n" +
+            "    <ProjectName>Decl</ProjectName>\n" +
+            "  </PropertyGroup>\n" +
+            "</BasicLangProject>");
+
+        var serializer = new ProjectSerializer();
+        var project = await serializer.LoadAsync(path);
+        project.RootNamespace = "Renamed";
+        await serializer.SaveAsync(project);
+
+        var after = File.ReadAllText(path);
+        Assert.Multiple(() =>
+        {
+            Assert.That(after, Does.StartWith("<?xml"));
+            Assert.That(after, Does.Contain("?>\n<BasicLangProject"),
+                "the declaration must stay on its own line, not be jammed against the root");
+        });
+    }
+
+    [Test]
+    public async Task Save_DoesNotRewriteEveryLineEnding()
+    {
+        // The XML parser is required to normalise CRLF to LF, and XmlWriter re-expands LF using
+        // NewLineChars, which defaults to CRLF. Left alone, editing one property flips every line
+        // ending in the file and turns a one-element change into a whole-file diff.
+        var lf = "<BasicLangProject Version=\"1.0\">\n  <PropertyGroup>\n    <ProjectName>Lf</ProjectName>\n  </PropertyGroup>\n</BasicLangProject>";
+        var path = Write("Lf.blproj", lf);
+
+        var serializer = new ProjectSerializer();
+        var project = await serializer.LoadAsync(path);
+        project.RootNamespace = "Renamed";
+        await serializer.SaveAsync(project);
+
+        var after = File.ReadAllText(path);
+        Assert.That(after, Does.Not.Contain("\r\n"),
+            "an LF project file must stay LF — rewriting every line ending makes a one-property " +
+            "edit look like a whole-file rewrite in source control");
+    }
+
+    [Test]
+    public async Task Save_KeepsCrLfLineEndings_WhenThatIsWhatTheFileUses()
+    {
+        var crlf = "<BasicLangProject Version=\"1.0\">\r\n  <PropertyGroup>\r\n    <ProjectName>Crlf</ProjectName>\r\n  </PropertyGroup>\r\n</BasicLangProject>";
+        var path = Write("Crlf.blproj", crlf);
+
+        var serializer = new ProjectSerializer();
+        var project = await serializer.LoadAsync(path);
+        project.RootNamespace = "Renamed";
+        await serializer.SaveAsync(project);
+
+        var after = File.ReadAllText(path);
+        Assert.Multiple(() =>
+        {
+            Assert.That(after, Does.Contain("\r\n"));
+            Assert.That(after.Replace("\r\n", ""), Does.Not.Contain("\n"),
+                "no line may be left with a bare LF in a CRLF file");
+        });
+    }
+
+    // ------------------------------------------------------------------
+    // Duplicates, defaults, and files we cannot understand
+    // ------------------------------------------------------------------
+
+    [Test]
+    public async Task Save_WritesToTheOccurrenceTheLoaderActuallyReads()
+    {
+        // LoadAsync's PropertyGroup loop assigns unconditionally in document order, so a later
+        // duplicate wins. Writing to the FIRST occurrence would leave the file still resolving to
+        // the old value: the model and the file would disagree after a save, and every subsequent
+        // save would see a difference and rewrite the file again without ever converging.
+        var path = Write("Dupe.blproj", """
+            <BasicLangProject Version="1.0">
+              <PropertyGroup>
+                <ProjectName>Dupe</ProjectName>
+                <RootNamespace>First</RootNamespace>
+              </PropertyGroup>
+              <PropertyGroup>
+                <RootNamespace>Second</RootNamespace>
+              </PropertyGroup>
+            </BasicLangProject>
+            """);
+
+        var serializer = new ProjectSerializer();
+        var project = await serializer.LoadAsync(path);
+        Assert.That(project.RootNamespace, Is.EqualTo("Second"), "sanity: the loader takes the last");
+
+        project.RootNamespace = "Third";
+        await serializer.SaveAsync(project);
+
+        var reloaded = await serializer.LoadAsync(path);
+        Assert.That(reloaded.RootNamespace, Is.EqualTo("Third"),
+            "the value the loader reads back must be the value that was written");
+
+        // ...and a second save must be a no-op, proving the write converged.
+        var afterFirstSave = File.ReadAllText(path);
+        await serializer.SaveAsync(await serializer.LoadAsync(path));
+        Assert.That(File.ReadAllText(path), Is.EqualTo(afterFirstSave),
+            "a save that does not converge rewrites the file on every Build/F5 forever");
+    }
+
+    [Test]
+    public async Task Save_DoesNotMaterializeADefault_IntoAConfigurationGroupThatOmittedIt()
+    {
+        // LoadAsync reads a missing <DebugSymbols> as false. Writing all four children whenever any
+        // one differs would materialise <DebugSymbols>false</DebugSymbols> into a Debug group that
+        // was relying on the toolchain default — silently turning debug symbols off because the
+        // user edited DefineConstants.
+        var path = Write("Cfg.blproj", """
+            <BasicLangProject Version="1.0">
+              <PropertyGroup><ProjectName>Cfg</ProjectName></PropertyGroup>
+              <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+                <DefineConstants>DEBUG;TRACE</DefineConstants>
+              </PropertyGroup>
+            </BasicLangProject>
+            """);
+
+        var serializer = new ProjectSerializer();
+        var project = await serializer.LoadAsync(path);
+        project.Configurations["Debug"].DefineConstants = "DEBUG;TRACE;EXTRA";
+        await serializer.SaveAsync(project);
+
+        var after = File.ReadAllText(path);
+        Assert.Multiple(() =>
+        {
+            Assert.That(after, Does.Contain("DEBUG;TRACE;EXTRA"), "the edit must land");
+            Assert.That(after, Does.Not.Contain("<DebugSymbols>"),
+                "an element the group deliberately omitted must not be materialised by an unrelated edit");
+            Assert.That(after, Does.Not.Contain("<Optimize>"));
+        });
+    }
+
+    [Test]
+    public async Task Save_LeavesConfigurationsAlone_WhenAConditionIsOneWeCannotParse()
+    {
+        // VS writes '$(Configuration)|$(Platform)' == 'Debug|AnyCPU', which ExtractConfigurationName
+        // does not match — so LoadAsync never read that group. Adding our own
+        // '$(Configuration)' == 'Debug' group beside it would give the project two Debug groups
+        // that disagree.
+        var path = Write("VsCfg.blproj", """
+            <BasicLangProject Version="1.0">
+              <PropertyGroup><ProjectName>VsCfg</ProjectName></PropertyGroup>
+              <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|AnyCPU'">
+                <Optimize>false</Optimize>
+              </PropertyGroup>
+            </BasicLangProject>
+            """);
+
+        var serializer = new ProjectSerializer();
+        var project = await serializer.LoadAsync(path);
+        project.RootNamespace = "Renamed";      // force a write for an unrelated reason
+        await serializer.SaveAsync(project);
+
+        var after = File.ReadAllText(path);
+        Assert.Multiple(() =>
+        {
+            Assert.That(after, Does.Contain("Renamed"), "the unrelated edit must still land");
+            Assert.That(after, Does.Not.Contain("'$(Configuration)' == 'Debug'"),
+                "a second, disagreeing Debug group must not be appended beside the VS-style one");
+            Assert.That(System.Text.RegularExpressions.Regex.Matches(after, "Debug").Count, Is.EqualTo(1),
+                "exactly one Debug configuration group must remain");
+        });
+    }
+
+    [Test]
+    public void Save_RefusesToOverwriteAFileItCannotParse()
+    {
+        // The original defect, reachable only from a damaged file — i.e. exactly when the user can
+        // least afford it. Refusing is recoverable; replacing the file with a skeleton is not.
+        var path = Write("Broken.blproj", "<BasicLangProject><PropertyGroup><Name>oops & broken");
+        var before = File.ReadAllText(path);
+
+        var project = new BasicLangProject { FilePath = path, Name = "Broken" };
+
+        Assert.ThrowsAsync<System.Xml.XmlException>(() => new ProjectSerializer().SaveAsync(project));
+        Assert.That(File.ReadAllText(path), Is.EqualTo(before),
+            "a malformed project file must be left exactly as it is, never rebuilt from the model");
+    }
+
+    [Test]
+    public void Save_RefusesToOverwriteAFileWithAnUnexpectedRoot()
+    {
+        var path = Write("Alien.blproj", "<SomethingElse><Data>keep me</Data></SomethingElse>");
+        var before = File.ReadAllText(path);
+
+        var project = new BasicLangProject { FilePath = path, Name = "Alien" };
+
+        Assert.ThrowsAsync<InvalidOperationException>(() => new ProjectSerializer().SaveAsync(project));
+        Assert.That(File.ReadAllText(path), Is.EqualTo(before));
+    }
+
     [Test]
     public async Task Save_WritesBomlessUtf8()
     {

@@ -52,6 +52,20 @@ public class BasicLangProject
     /// </summary>
     public string? ApplicationHighDpiMode { get; set; }
 
+    /// <summary>
+    /// <see cref="TargetBackend"/> as this project was last loaded. Null for a model that was never
+    /// loaded from a file.
+    ///
+    /// <para>⚠ Needed because <c>TargetBackend</c> is the one property whose loaded value does not
+    /// come only from the file: <c>LoadAsync</c> seeds it from the IDE's
+    /// <c>basiclang.compiler.backend</c> setting when the file carries no <c>&lt;TargetBackend&gt;</c>
+    /// element. Without this, a preserving save re-parsing the file would see "file says nothing,
+    /// model says Cpp", read that as a user edit, and inject <c>&lt;TargetBackend&gt;Cpp&lt;/TargetBackend&gt;</c>
+    /// into a project the user never touched. Comparing against the value at load tells an actual
+    /// edit apart from the seeded default.</para>
+    /// </summary>
+    public TargetBackend? BackendAtLoad { get; set; }
+
     public List<ProjectItem> Items { get; set; } = new();
     public List<ProjectReference> References { get; set; } = new();
     public List<PackageReference> PackageReferences { get; set; } = new();

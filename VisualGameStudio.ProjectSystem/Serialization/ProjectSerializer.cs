@@ -250,6 +250,10 @@ public class ProjectSerializer
             }
         }
 
+        // Remember the backend as loaded, so a preserving save can tell a real edit apart from the
+        // value seeded by defaultBackendWhenOmitted for a file that carries no <TargetBackend>.
+        project.BackendAtLoad = project.TargetBackend;
+
         // Ensure default configurations exist
         if (!project.Configurations.ContainsKey("Debug"))
         {
@@ -280,7 +284,7 @@ public class ProjectSerializer
     /// Writes the project back to <see cref="BasicLangProject.FilePath"/>.
     ///
     /// <para>When the file already exists this edits it IN PLACE, touching only the elements whose
-    /// model value disagrees with what the file says (<see cref="TrySavePreservingAsync"/>).
+    /// model value disagrees with what the file says (<see cref="SavePreservingAsync"/>).
     /// Everything else — unmodeled properties, item metadata, <c>&lt;Import&gt;</c>s, the
     /// <c>Sdk</c> attribute, comments, formatting — survives untouched.</para>
     ///
@@ -294,9 +298,14 @@ public class ProjectSerializer
     /// </summary>
     public async Task SaveAsync(BasicLangProject project, CancellationToken cancellationToken = default)
     {
-        if (File.Exists(project.FilePath) &&
-            await TrySavePreservingAsync(project, cancellationToken))
+        if (File.Exists(project.FilePath))
         {
+            // ⛔ No fallback to SaveNewAsync here. Falling back would mean that a file we could not
+            // parse — a half-written .blproj, a stray '&', an unexpected root element — gets
+            // REPLACED by a seven-property skeleton built from the model. That is precisely the
+            // destruction this method was changed to stop, reappearing exactly when the user can
+            // least afford it. Refusing to save is recoverable; overwriting is not.
+            await SavePreservingAsync(project, cancellationToken);
             return;
         }
 
@@ -463,37 +472,26 @@ public class ProjectSerializer
     /// and its element is left exactly as the user wrote it — which is what makes an unmodified save
     /// byte-identical, comments and indentation included.</para>
     ///
-    /// <para>Returns false when the document cannot be understood well enough to edit safely, so the
-    /// caller can fall back to building a fresh file.</para>
+    /// <para>Throws rather than falling back when the file cannot be understood — a malformed
+    /// document, or a root element this serializer does not know. There is deliberately no recovery
+    /// path that rebuilds the file from the model, because that is the data loss this class exists
+    /// to prevent.</para>
     /// </summary>
-    private async Task<bool> TrySavePreservingAsync(BasicLangProject project, CancellationToken cancellationToken)
+    private async Task SavePreservingAsync(BasicLangProject project, CancellationToken cancellationToken)
     {
-        XDocument doc;
-        BasicLangProject baseline;
-        try
-        {
-            var text = await File.ReadAllTextAsync(project.FilePath, cancellationToken);
-            doc = XDocument.Parse(text, LoadOptions.PreserveWhitespace);
-            if (doc.Root == null)
-            {
-                return false;
-            }
+        var text = await File.ReadAllTextAsync(project.FilePath, cancellationToken);
+        var doc = XDocument.Parse(text, LoadOptions.PreserveWhitespace);
+        var baseline = await LoadAsync(project.FilePath, project.BackendAtLoad, cancellationToken);
 
-            baseline = await LoadAsync(project.FilePath, null, cancellationToken);
-        }
-        catch (Exception ex) when (ex is XmlException or InvalidOperationException or IOException)
-        {
-            return false;
-        }
-
-        var root = doc.Root!;
+        var root = doc.Root
+            ?? throw new InvalidOperationException($"'{project.FilePath}' has no root element.");
 
         // A namespaced project (an old-style MSBuild xmlns) is not something LoadAsync parses, so
         // the baseline would be empty and every comparison would look like a change. Leaving the
         // file untouched is strictly better than rewriting it from a model that never read it.
         if (root.Name.Namespace != XNamespace.None)
         {
-            return true;
+            return;
         }
 
         var changed = false;
@@ -501,7 +499,14 @@ public class ProjectSerializer
         changed |= UpsertProperty(root, "ProjectName", project.Name, baseline.Name);
         changed |= UpsertProperty(root, "OutputType", project.OutputType.ToString(), baseline.OutputType.ToString());
         changed |= UpsertProperty(root, "RootNamespace", project.RootNamespace, baseline.RootNamespace);
-        changed |= UpsertProperty(root, "TargetBackend", project.TargetBackend.ToString(), baseline.TargetBackend.ToString());
+
+        // TargetBackend compares against the FILE's element when it has one, and otherwise against
+        // the value at load — never against a freshly-defaulted parse. LoadAsync seeds this property
+        // from the IDE's configured backend when the element is absent, so comparing against a
+        // null-seeded re-parse would read "file says nothing, model says Cpp" as a user edit and
+        // inject <TargetBackend> into every project that omits it, on every save.
+        changed |= UpsertProperty(root, "TargetBackend", project.TargetBackend.ToString(),
+            RawProperty(root, "TargetBackend") ?? project.BackendAtLoad?.ToString());
         changed |= UpsertProperty(root, "TargetFramework", project.TargetFramework, baseline.TargetFramework);
         changed |= UpsertProperty(root, "AssemblyName", project.AssemblyName, baseline.AssemblyName);
         changed |= UpsertProperty(root, "UseWindowsForms", BoolText(project.UseWindowsForms), BoolText(baseline.UseWindowsForms));
@@ -528,7 +533,7 @@ public class ProjectSerializer
             // The file already says exactly what the model says. Not rewriting it is what keeps a
             // no-op save byte-identical, and it also avoids a pointless mtime bump that would make
             // every Build/F5 look like an edit to file watchers and source control.
-            return true;
+            return;
         }
 
         var directory = Path.GetDirectoryName(project.FilePath);
@@ -537,16 +542,118 @@ public class ProjectSerializer
             Directory.CreateDirectory(directory);
         }
 
+        await WriteDocumentAsync(doc, project.FilePath, text, cancellationToken);
+    }
+
+    /// <summary>
+    /// Serializes <paramref name="doc"/> over <paramref name="filePath"/>, reproducing the original
+    /// file's prologue and line endings.
+    ///
+    /// <para>⛔ Not <c>XDocument.Save(TextWriter, SaveOptions)</c>. That calls
+    /// <c>WriteStartDocument()</c> unconditionally and leaves <c>OmitXmlDeclaration</c> false, so it
+    /// PREPENDS <c>&lt;?xml version="1.0" encoding="utf-8"?&gt;</c> even to a document that had none —
+    /// and with formatting disabled, with no newline after it. A VS 2022 project would come back as
+    /// <c>&lt;?xml…?&gt;&lt;Project Sdk="Microsoft.NET.Sdk"&gt;</c> on one line, which reads as exactly the
+    /// corruption this class was changed to stop.</para>
+    ///
+    /// <para>⛔ Line endings need the same care. The XML parser is required to normalise CRLF to LF,
+    /// so by the time a document is in memory every whitespace node holds bare LF; an
+    /// <c>XmlWriter</c> then re-expands them using <c>NewLineChars</c>, which defaults to CRLF.
+    /// Left alone, editing one property rewrites every line ending in the file and turns a
+    /// one-element change into a whole-file diff. The original text decides instead.</para>
+    /// </summary>
+    private static async Task WriteDocumentAsync(
+        XDocument doc, string filePath, string originalText, CancellationToken cancellationToken)
+    {
+        var usesCrLf = originalText.Contains("\r\n", StringComparison.Ordinal);
+
+        var settings = new XmlWriterSettings
+        {
+            // Pairs with LoadOptions.PreserveWhitespace — together they reproduce the original
+            // layout instead of re-indenting the whole document around one edited element.
+            Indent = false,
+            // Always omitted here; the original prologue is restored verbatim below instead. That
+            // is more faithful than letting the writer regenerate one: it keeps the author's exact
+            // attribute spelling AND whatever separated it from the root element, neither of which
+            // survives a round-trip through XDocument.Declaration.
+            OmitXmlDeclaration = true,
+            NewLineHandling = usesCrLf ? NewLineHandling.Replace : NewLineHandling.None,
+            NewLineChars = usesCrLf ? "\r\n" : "\n"
+        };
+
+        var body = new StringWriter();
+        using (var writer = XmlWriter.Create(body, settings))
+        {
+            doc.WriteTo(writer);
+        }
+
+        var content = Recombine(originalText, body.ToString());
+
+        // Write to a sibling temp file and move it into place: opening the real file for writing
+        // truncates it before serialization begins, so a failure part-way through would leave a
+        // truncated .blproj.
         // BOM-less UTF-8: XDocument.Save(path) would inject a BOM and corrupt the file, the same
         // reason BlprojReferenceWriter writes through an explicit UTF8Encoding(false).
-        // DisableFormatting pairs with PreserveWhitespace above — together they reproduce the
-        // original layout instead of re-indenting the whole document around one edited element.
-        await using var stream = new FileStream(project.FilePath, FileMode.Create, FileAccess.Write, FileShare.None);
-        await using var writer = new StreamWriter(stream, new UTF8Encoding(false));
-        doc.Save(writer, SaveOptions.DisableFormatting);
-        await writer.FlushAsync(cancellationToken);
-        return true;
+        var tempPath = filePath + ".tmp" + Environment.ProcessId;
+        try
+        {
+            await File.WriteAllTextAsync(tempPath, content, new UTF8Encoding(false), cancellationToken);
+            File.Move(tempPath, filePath, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                try { File.Delete(tempPath); } catch { /* best-effort cleanup */ }
+            }
+        }
     }
+
+    /// <summary>
+    /// Puts the original XML declaration back in front of the serialized body, separated exactly as
+    /// it was in the original file.
+    ///
+    /// <para>Leading newlines are stripped from the body and re-supplied from the original rather
+    /// than trusting either source alone: whether <c>XDocument</c> keeps the whitespace between the
+    /// declaration and the root element as a document-level text node is an implementation detail,
+    /// and getting it wrong in either direction produces a spurious blank line or a declaration
+    /// jammed against the root. Taking the separator from the original file is true regardless.</para>
+    /// </summary>
+    private static string Recombine(string originalText, string body)
+    {
+        if (!originalText.StartsWith("<?xml", StringComparison.Ordinal))
+        {
+            return body;
+        }
+
+        var end = originalText.IndexOf("?>", StringComparison.Ordinal);
+        if (end < 0)
+        {
+            return body;
+        }
+
+        end += 2;
+        var separatorStart = end;
+        while (end < originalText.Length && (originalText[end] == '\r' || originalText[end] == '\n'))
+        {
+            end++;
+        }
+
+        var declaration = originalText.Substring(0, separatorStart);
+        var separator = originalText.Substring(separatorStart, end - separatorStart);
+        return declaration + separator + body.TrimStart('\r', '\n');
+    }
+
+    /// <summary>
+    /// The raw text of a property element as the FILE spells it, or null when absent.
+    /// Reads the LAST occurrence, matching <see cref="LoadAsync"/>'s last-wins behaviour.
+    /// </summary>
+    private static string? RawProperty(XElement root, string name) =>
+        root.Elements("PropertyGroup")
+            .Where(g => string.IsNullOrEmpty(g.Attribute("Condition")?.Value))
+            .SelectMany(g => g.Elements())
+            .LastOrDefault(e => string.Equals(e.Name.LocalName, name, StringComparison.OrdinalIgnoreCase))
+            ?.Value;
 
     /// <summary>Reads one property element by name, case-insensitively (MSBuild property names are).</summary>
     private static string? PropertyValue(XElement propertyGroup, string name) =>
@@ -577,24 +684,44 @@ public class ProjectSerializer
         // and the spellings genuinely differ in the wild — the IDE's own template emits <UseWPF>
         // while <UseWpf> is just as valid. A case-sensitive match would append a second element
         // instead of updating the one already there.
-        var existing = globalGroups
+        var matches = globalGroups
             .SelectMany(g => g.Elements())
-            .FirstOrDefault(e => string.Equals(e.Name.LocalName, name, StringComparison.OrdinalIgnoreCase));
+            .Where(e => string.Equals(e.Name.LocalName, name, StringComparison.OrdinalIgnoreCase))
+            .ToList();
 
         if (desired == null)
         {
-            if (existing == null)
+            if (matches.Count == 0)
             {
                 return false;
             }
 
-            RemoveWithLeadingWhitespace(existing);
+            // Remove EVERY occurrence. Removing only one would leave the property still in force,
+            // so the next save would compare unequal again and rewrite the file forever.
+            foreach (var match in matches)
+            {
+                RemoveWithLeadingWhitespace(match);
+            }
+
             return true;
         }
 
-        if (existing != null)
+        if (matches.Count > 0)
         {
-            existing.Value = desired;
+            // ⚠ Write to the LAST occurrence, because that is the one LoadAsync reads: its
+            // PropertyGroup loop assigns unconditionally in document order, so a later duplicate
+            // wins. Writing to the first would leave the file still resolving to the old value —
+            // the model and the file would disagree after a save, and every subsequent save would
+            // see a difference and rewrite the file again without ever converging.
+            matches[^1].Value = desired;
+
+            // Duplicates now disagree with each other; drop the shadowed ones so the file says
+            // one thing.
+            for (var i = 0; i < matches.Count - 1; i++)
+            {
+                RemoveWithLeadingWhitespace(matches[i]);
+            }
+
             return true;
         }
 
@@ -602,7 +729,7 @@ public class ProjectSerializer
         if (target == null)
         {
             target = new XElement("PropertyGroup");
-            root.Add(target);
+            AddPreservingIndent(root, target);
         }
 
         AddPreservingIndent(target, new XElement(name, desired));
@@ -612,6 +739,24 @@ public class ProjectSerializer
     /// <summary>Configuration-specific PropertyGroups, matched on the configuration name.</summary>
     private static bool ReconcileConfigurations(XElement root, BasicLangProject project, BasicLangProject baseline)
     {
+        // ⛔ If the file carries a configuration condition this serializer cannot parse — the
+        // VS-standard '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' is the common one — then
+        // LoadAsync never read that group, and adding our own '$(Configuration)' == 'Debug' group
+        // beside it would give the project two Debug groups that disagree. Leave configurations
+        // entirely alone rather than half-understand them.
+        var hasUnparseableCondition = root.Elements("PropertyGroup").Any(g =>
+        {
+            var condition = g.Attribute("Condition")?.Value;
+            return !string.IsNullOrEmpty(condition) &&
+                   condition.Contains("$(Configuration)", StringComparison.OrdinalIgnoreCase) &&
+                   string.IsNullOrEmpty(ExtractConfigurationName(condition));
+        });
+
+        if (hasUnparseableCondition)
+        {
+            return false;
+        }
+
         var changed = false;
 
         foreach (var (name, config) in project.Configurations)
@@ -625,7 +770,9 @@ public class ProjectSerializer
                 continue;
             }
 
-            var group = root.Elements("PropertyGroup").FirstOrDefault(g =>
+            // LAST, not first — LoadAsync's `Configurations[name] = config` lets a later duplicate
+            // win, so the last group is the one the file actually resolves to.
+            var group = root.Elements("PropertyGroup").LastOrDefault(g =>
                 string.Equals(ExtractConfigurationName(g.Attribute("Condition")?.Value ?? ""), name,
                     StringComparison.OrdinalIgnoreCase));
 
@@ -636,14 +783,34 @@ public class ProjectSerializer
                 AddPreservingIndent(root, group);
             }
 
-            SetChild(group, "OutputPath", config.OutputPath);
-            SetChild(group, "DebugSymbols", config.DebugSymbols ? "true" : "false");
-            SetChild(group, "Optimize", config.Optimize ? "true" : "false");
+            // ⚠ Each child is written only when the group already carries it or when the value
+            // differs from what an ABSENT element parses as. LoadAsync reads a missing
+            // <DebugSymbols> as false, so writing all four unconditionally would materialise
+            // <DebugSymbols>false</DebugSymbols> into a Debug group that had been relying on the
+            // toolchain default — silently turning debug symbols off because the user edited
+            // DefineConstants. Same "absent is not false" rule the nullable properties on
+            // BasicLangProject follow.
+            SetChildIfMeaningful(group, "OutputPath", config.OutputPath, $"bin\\{name}");
+            SetChildIfMeaningful(group, "DebugSymbols", config.DebugSymbols ? "true" : "false", "false");
+            SetChildIfMeaningful(group, "Optimize", config.Optimize ? "true" : "false", "false");
             SetChild(group, "DefineConstants", config.DefineConstants);
             changed = true;
         }
 
         return changed;
+    }
+
+    /// <summary>
+    /// Sets a configuration child when the group already has it, or when <paramref name="value"/>
+    /// differs from <paramref name="absentMeans"/> — the value <see cref="LoadAsync"/> would infer
+    /// if the element were missing. Leaves a deliberately-absent element absent.
+    /// </summary>
+    private static void SetChildIfMeaningful(XElement group, string name, string value, string absentMeans)
+    {
+        if (group.Element(name) != null || !string.Equals(value, absentMeans, StringComparison.OrdinalIgnoreCase))
+        {
+            SetChild(group, name, value);
+        }
     }
 
     private static void SetChild(XElement parent, string name, string? value)
@@ -847,12 +1014,19 @@ public class ProjectSerializer
         }
     }
 
-    /// <summary>Removes an element together with the whitespace in front of it, so no blank line is left behind.</summary>
+    /// <summary>
+    /// Removes an element together with the indentation in front of it, so no blank line is left
+    /// behind. Only whitespace-only text is removed — a text node with content would be part of
+    /// mixed content and is never ours to delete.
+    /// </summary>
     private static void RemoveWithLeadingWhitespace(XElement element)
     {
         var leading = element.PreviousNode as XText;
         element.Remove();
-        leading?.Remove();
+        if (leading != null && string.IsNullOrWhiteSpace(leading.Value))
+        {
+            leading.Remove();
+        }
     }
 
     private static string? ExtractConfigurationName(string condition)
