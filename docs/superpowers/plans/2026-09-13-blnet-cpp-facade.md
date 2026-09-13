@@ -1,0 +1,161 @@
+# blnet C++ facade — an ergonomic header over the generated proxy slots
+
+**Status:** Task 1 implemented; Tasks 2-5 open
+**Date:** 2026-09-13
+**Builds on:** `2026-07-29-p2a-dotnet-access-aot-shim-design.md` (P2a, Implemented) — §7.3
+mangling, §8.3 wire forms, §9.1 generated artifacts.
+
+## 1. The problem
+
+C++ reaches .NET today by naming a mangled slot verbatim:
+
+```cpp
+BasicLang::net::bl_net_System_Text_RegularExpressions_Regex_Escape__System_String_095f897ff422192f("1+1");
+```
+
+That name is correct and has to be — §7.3 folds the declaring type, member, static-ness,
+generic arity and per-parameter ref-kind into one flat C identifier because the export lives in
+a flat symbol namespace with no overloading, and 37 public framework types contain member pairs
+that collide without it. None of that is negotiable.
+
+But it is a **terrible authoring surface**, and worse, a *fragile* one: the trailing hash changes
+whenever the signature does, so hand-written C++ naming slots breaks silently on an unrelated
+edit. The measured advice today is "read the name out of `obj/gen/blnet_proxies.g.hpp` after each
+build", which is not something a person should have to do.
+
+## 2. The shape
+
+A second generated header, `blnet_facade.g.hpp`, rendering the same slots as ordinary C++:
+
+```cpp
+#include "blnet_facade.g.hpp"
+using namespace BasicLang::netfx;
+
+System::Console::WriteLine("hello");
+auto r = System::Text::RegularExpressions::Regex("^\\d+$");
+bool ok = r.IsMatch("123");
+```
+
+**It is a second rendering of the same `SlotPlan` list `NetProxyEmitter` already computes.** That
+is the load-bearing design choice: the facade cannot disagree with the proxy table about a
+signature, because both are projections of one plan. Only COVERAGE can drift, and §6 pins that.
+
+## 3. Decisions
+
+**D1 — Root namespace `BasicLang::netfx`, never a bare `namespace System`.**
+Emitting `namespace System` at global scope would collide with any user type or namespace of
+that name, in a header the user did not write and cannot edit. The root keeps it inert;
+`using namespace BasicLang::netfx;` is one line and opt-in. A generated header must never make a
+program that compiled stop compiling.
+
+**D2 — One `struct` per .NET type, namespaces mirroring the .NET namespace.**
+`System.Text.RegularExpressions.Regex` → `namespace System::Text::RegularExpressions { struct
+Regex … }`. `struct` because members default public and there is no invariant to protect on a
+static-only type; the types that DO hold a handle keep it private (see D4).
+
+**D3 — Static members become `static` member functions; instance members become ordinary member
+functions.** This is the whole ergonomic win: the receiver stops being an explicit first
+argument.
+
+**D4 — A type with any instance member holds its `NetRef` privately**, exposing `raw()`. Private
+because a public handle lets a caller copy it out and release it independently of the
+refcounting, which is a use-after-free with extra steps.
+
+**D5 — Constructors become real C++ constructors.** `Regex r("^a+$")` rather than a factory.
+A type with a constructor slot but no default .NET constructor gets no default constructor.
+
+**D6 — Properties become `get_X()` / `set_X()`, not operators or magic.**
+Boring and explicit. An `operator=` overload that performs a cross-boundary call is a trap: it
+looks like assignment and costs a shim round trip. `IsSettable == false` emits only the getter.
+
+**D7 — A handle-typed parameter or return is the WRAPPER type when that type is in the surface,
+and raw `NetRef` otherwise.** The surface is the whole world the facade can name; a handle to a
+type nobody declared has no wrapper to be.
+
+**D8 — Two slots that render to the SAME C++ signature are BOTH omitted, with a BL6027 warning
+naming them.** Never silently pick one. This is reachable: §8.3 maps distinct .NET types onto one
+wire form (every handle-represented type is `NetRef`), so `F(Regex)` and `F(Uri)` are one C++
+signature. Omitting both keeps the mangled slots as the escape hatch; picking one would make
+`F(someUri)` silently call the `Regex` overload.
+
+**D9 — The header is always emitted and never auto-included.** Cost is zero when unused (inline
+functions, no ODR presence), and unconditional emission keeps the drift test simple — there is no
+"was it on?" axis.
+
+## 4. What v1 does NOT do
+
+- No operator overloading, no implicit conversions, no `ToString`.
+- No generic types beyond what the surface already admits (§8.3 rejects open type parameters).
+- No delegate/callback ergonomics — §8.4's `CallbackRef` stays as it is.
+- No IntelliSense/doc-comment generation.
+- **No detection of a TYPE whose name equals a NAMESPACE segment.** D8 covers two slots sharing
+  one C++ *signature*; it does not cover a .NET type named `A.B` coexisting with a namespace
+  `A.B`, which would emit both `struct B` and `namespace B` into the same enclosing scope — a
+  redeclaration error in the generated header. Not reachable on today's surface (`System.Console`
+  is a type and there is no `System.Console` namespace), and deliberately left alone rather than
+  guessed at: the fix belongs with Task 4's collision machinery, which is where the reporting
+  path (BL6027) already lives. The same applies to two distinct types that sanitize to one
+  identifier — e.g. a nested `A.B+C` flattening to `A.B_C` alongside a real type of that name.
+
+## 5. Tasks
+
+- [x] **Task 1 — `NetFacadeEmitter`, static methods only.** *Done.* Rendered as
+  `NetProxyEmitter.Facade.cs` (a `partial` of the existing emitter, not a new class — see the
+  note below on why). Five tests in `NetFacadeEmitterTests`: the set-identity coverage
+  invariant, the three rendered shapes, D8's both-omitted rule, D1's namespace containment, and
+  a compile-AND-RUN oracle.
+
+  The compile oracle went further than planned: rather than only compiling, it RUNS against
+  `NetStubHarness`'s stub table, because compiling proves less than it appears to. Proven by two
+  discriminating mutations — dropping the `return` keyword (caught only by the compile/run test,
+  the four text tests stayed green), and forwarding a constant instead of the caller's argument,
+  which **compiles cleanly** and is caught only by the run assertion (`0` instead of `210`).
+  The stub multiplies by ten rather than returning its argument, so an identity-preserving
+  facade bug cannot pass by accident.
+- [ ] **Task 2 — instance members and the handle.** Private `NetRef`, `raw()`, instance member
+  functions, D7's wrapper-typed parameters and returns.
+- [ ] **Task 3 — constructors (D5) and properties (D6).**
+- [ ] **Task 4 — D8's collision rule + BL6027.** Red first: a surface with two handle-typed
+  overloads must emit neither and warn. The omit-both BEHAVIOR already ships from Task 1
+  (`CollidingFacadeSignatures`, pinned by `TwoSlotsSharingOneCppSignatureAreBothOmitted`); what
+  is left is the BL6027 diagnostic — today the collision is reported only as an `OMITTED`
+  comment inside the generated header, which nobody reads unless they already went looking.
+  Extend the same pass to the two NAME collisions listed in §4 (type-vs-namespace segment, and
+  two types sanitizing to one identifier), which are the cases that produce a header that does
+  not compile rather than one that silently omits.
+- [ ] **Task 5 — the coverage drift test (§6) and wiring into `NetProxyEmitter.Emit`.**
+
+### Task 1 — two findings worth carrying into Tasks 2-5
+
+**The facade is a `partial` of `NetProxyEmitter`, not a separate `NetFacadeEmitter`.** The plan's
+own load-bearing claim is that the facade is a second rendering of the SAME `SlotPlan` list. A
+separate class would have needed `Plan(surface)` made public, which is precisely the seam through
+which the two could start disagreeing. Sharing the private plan keeps §2's guarantee structural
+instead of conventional.
+
+**Adding an artifact has THREE consumers, not one.** `blnet_facade.g.hpp` made six drift tests go
+red, and one of them was a genuine bug rather than a stale expectation:
+`CppProjectBuilder.CleanGeneratedDir` filters on the suffixes `.g.cpp` and `.g.h` plus a list of
+exact names — and **`.g.hpp` does not end in `.g.h`**, so a stale facade would have survived a
+project that stopped using .NET and stayed on the include path, the exact hazard that exact-name
+list exists to prevent. The three consumers to update together:
+
+1. `NetProxyEmitterTests.ExpectedArtifacts` — the §9.1 set.
+2. `CppProjectBuilder.NetArtifactFileNames` — the clean filter (the one that was a real bug).
+3. `NetBuildPipelineTests`' two merged-set expectations.
+
+`TranslationUnitFileNames` needed NO change, and that is the right answer: the facade is a header
+and must never be compiled as a TU.
+
+## 6. The invariant that keeps it honest
+
+**Every `SlotPlan` is either rendered in the facade or on a skip list that states why.**
+
+Asserted as a set difference over the slot names, not a count — a count passes while one slot
+swaps for another. The skip list is data, so a newly-unrenderable slot fails the test rather
+than quietly vanishing from the facade, which is the §7.2 lesson: an omission nobody is told
+about leaves the surface quietly meaning less than it says.
+
+⚠ **The trap to avoid, from P2a-2's own history.** Do not assert "the facade compiles" and call
+it covered — an empty facade compiles perfectly. Coverage must be the set identity, and the
+compile test is the SECOND oracle, for shape.

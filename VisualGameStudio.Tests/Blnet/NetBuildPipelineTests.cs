@@ -116,7 +116,7 @@ public class NetBuildPipelineTests
     /// standalone <c>Sub Main</c>, so <c>emitMain</c> is true.</item>
     /// <item><c>BasicLangRuntime.g.h</c>.</item>
     /// </list>
-    /// Six names are conspicuously ABSENT — <see cref="NetProxyEmitter"/>'s — and that absence
+    /// Seven names are conspicuously ABSENT — <see cref="NetProxyEmitter"/>'s — and that absence
     /// is the whole point.
     /// </summary>
     private static readonly string[] ExpectedGeneratedFileNames =
@@ -346,7 +346,7 @@ public class NetBuildPipelineTests
 
         Assert.Multiple(() =>
         {
-            // The artifact set is NetProxyEmitter's six and ONLY those: with no .bas files there
+            // The artifact set is NetProxyEmitter's seven and ONLY those: with no .bas files there
             // is no split at all, so anything else here came from somewhere it should not have.
             Assert.That(GeneratedFileNames(), Is.EqualTo(new[]
                 {
@@ -356,6 +356,7 @@ public class NetBuildPipelineTests
                     NetProxyEmitter.ContractHeaderFileName,
                     NetProxyEmitter.RuntimeHeaderFileName,
                     NetProxyEmitter.MarshalHeaderFileName,   // §6.4 conversion pairs (P2a-2 Task 6)
+                    NetProxyEmitter.FacadeFileName,          // ergonomic rendering (facade plan D9)
                 }.OrderBy(n => n, StringComparer.Ordinal)),
                 "A pure-C++ project with a .NET surface did not get exactly NetProxyEmitter's "
                 + "artifact set in obj/gen. If it got NOTHING, the obj/gen write is still gated on "
@@ -502,6 +503,7 @@ public class NetBuildPipelineTests
                 NetProxyEmitter.BindingsFileName,
                 NetProxyEmitter.ProxiesFileName,
                 NetProxyEmitter.StartupFileName,
+                NetProxyEmitter.FacadeFileName,
             })
             .OrderBy(n => n, StringComparer.Ordinal);
 
@@ -704,11 +706,15 @@ public class NetBuildPipelineTests
     /// <summary>
     /// <b>A drift invariant, not a restatement.</b> The oracle is
     /// <see cref="NetProxyEmitter.Emit"/>'s ACTUAL key set for a non-empty surface; the subject
-    /// is <c>CppProjectBuilder.CleanGeneratedDir</c>'s filter. Four of the five artifacts escape
-    /// the historical <c>.g.cpp</c>/<c>.g.h</c> suffix test (<c>blnet.h</c>,
-    /// <c>blnet_runtime.hpp</c> and the two <c>.g.hpp</c> headers), so a project that STOPS using
-    /// .NET would otherwise leave a removed member's proxy header on the include path where user
-    /// C++ can still <c>#include</c> it. Goes red the moment a sixth artifact is added.
+    /// is <c>CppProjectBuilder.CleanGeneratedDir</c>'s filter. All but ONE artifact
+    /// (<c>blnet_startup.g.cpp</c>) escape the historical <c>.g.cpp</c>/<c>.g.h</c> suffix test —
+    /// note that a <c>.g.hpp</c> header does NOT end in <c>.g.h</c> — so a project that STOPS
+    /// using .NET would otherwise leave a removed member's proxy header on the include path where
+    /// user C++ can still <c>#include</c> it.
+    ///
+    /// <para>Deliberately states no COUNT: the oracle is <c>Emit</c>'s live key set, so this goes
+    /// red the moment ANY new artifact is added without a matching name in the filter — which is
+    /// exactly how <c>blnet_facade.g.hpp</c> was caught.</para>
     /// </summary>
     [Test]
     public void CleanGeneratedDirRemovesEveryNetArtifact()
@@ -740,7 +746,7 @@ public class NetBuildPipelineTests
     /// <summary>
     /// The other side of the same filter: it must not eat a hand-written file that happens to
     /// share the directory. Pins that the widened filter added exact NAMES, never a new SUFFIX
-    /// class — a <c>.h</c> or <c>.hpp</c> that is not one of the five survives.
+    /// class — a <c>.h</c> or <c>.hpp</c> that is not one of the listed names survives.
     /// </summary>
     [Test]
     public void CleanGeneratedDirLeavesFilesItDoesNotOwn()

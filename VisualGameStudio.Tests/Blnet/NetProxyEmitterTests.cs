@@ -298,15 +298,23 @@ public class NetProxyEmitterTests
     /// <c>shim/</c> DIRECTORY belongs to phase 5 (<c>NetShimGenerator</c>, plan Task 14)
     /// and is deliberately not produced here — §10.1 requires phases 1-4 to give full C++
     /// IntelliSense without ever publishing a shim.
+    ///
+    /// <para><c>blnet_facade.g.hpp</c> (plan <c>2026-09-13-blnet-cpp-facade.md</c>) joins the set
+    /// unconditionally, per that plan's D9: emitting it always — rather than behind a flag —
+    /// keeps this drift test one-dimensional, and an unused facade costs nothing because every
+    /// function in it is inline. It is a HEADER, so it must never reach
+    /// <c>TranslationUnitFileNames</c>; it must, however, be in
+    /// <c>CppProjectBuilder.NetArtifactFileNames</c>, because <c>.g.hpp</c> does not end in
+    /// <c>.g.h</c> and the suffix filter alone would leave a stale copy on the include path.</para>
     /// </summary>
     internal static readonly string[] ExpectedArtifacts =
     {
         "blnet.h", "blnet_runtime.hpp", "blnet_marshal.hpp", "blnet_bindings.g.hpp",
-        "blnet_proxies.g.hpp", "blnet_startup.g.cpp",
+        "blnet_proxies.g.hpp", "blnet_startup.g.cpp", "blnet_facade.g.hpp",
     };
 
     [Test]
-    public void NonEmptySurfaceEmitsExactlyTheSixNativeArtifacts()
+    public void NonEmptySurfaceEmitsExactlyTheSevenNativeArtifacts()
     {
         var files = NetProxyEmitter.Emit(WireShapeSurface(), Module);
 

@@ -102,6 +102,16 @@ These are measured, not cautionary. Each one shipped a green build that did the 
   load-bearing**: the deployed compiler auto-includes it for every JavaScript build, and
   without it the typed DOM does not resolve. Verify a refresh against the deployed files
   (`IDE/BasicLang.exe new --list`), never timestamps.
+- ⛔ **Adding a file to the blnet artifact set has THREE consumers, and the suffix filter is
+  the one that bites.** `CppProjectBuilder.CleanGeneratedDir` matches the suffixes `.g.cpp` and
+  `.g.h` plus a list of EXACT names — and **`.g.hpp` does not end in `.g.h`**. A new `.g.hpp`
+  artifact that is not added to `NetArtifactFileNames` survives cleaning and stays on the
+  include path after a project stops using .NET, where user C++ can still `#include` a removed
+  member's header. Measured when `blnet_facade.g.hpp` was added: six drift tests went red, five
+  were stale expectations and one was this real bug. Update together:
+  `NetProxyEmitterTests.ExpectedArtifacts`, `CppProjectBuilder.NetArtifactFileNames`, and
+  `NetBuildPipelineTests`' two merged-set lists. A *header* must NOT go into
+  `TranslationUnitFileNames` — that list is translation units only.
 - ⛔ **A "Passed!" summary line does not mean the suite passed.** A crashed test host still
   prints a per-assembly summary; the abort goes to **stderr**. Capture both streams and check
   the total against the expected count, not just `Failed: 0`.
@@ -151,6 +161,14 @@ fails only when the Native tier runs alongside it). The fast subset shows the tw
   (Task 14 at :1834, Task 15 at :1862); spec:
   `docs/superpowers/specs/2026-07-29-p2a-dotnet-access-aot-shim-design.md` (§12.4 at :1256,
   §12.5 at :1290).
+- **blnet C++ facade (`blnet_facade.g.hpp`)** — an ergonomic C++ rendering of the proxy slots,
+  so hand-written C++ can say `System::Console::WriteLine("hi")` instead of naming a mangled
+  slot whose trailing hash moves whenever the signature does. Plan:
+  `docs/superpowers/plans/2026-09-13-blnet-cpp-facade.md`. **Task 1 (static methods) is done and
+  proven**; Tasks 2-5 are open: instance members + the private `NetRef` handle, constructors and
+  properties, the BL6027 collision diagnostic, and the coverage drift wiring. The header is
+  emitted unconditionally and included by nobody — `using namespace BasicLang::netfx;` is the
+  one opt-in line.
 - **VS Code extension host** — roughly 24 unimplemented requests, enumerated and enforced by
   `ExtensionHostRequestCoverageTests.KnownUnimplemented` (a second test fails once an entry is
   implemented, so the list must shrink). A missing `sendNotification` handler is a silent
