@@ -5,6 +5,7 @@
              xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Documents"
              xmlns:editor="using:VisualGameStudio.Editor.Controls"
              xmlns:controls="using:VisualGameStudio.Shell.Views.Controls"
+             xmlns:designer="using:VisualGameStudio.Shell.Controls"
              xmlns:avalonEdit="https://github.com/avaloniaui/avaloniaedit"
              mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="400"
              x:Class="VisualGameStudio.Shell.Views.Documents.CodeEditorDocumentView"
@@ -147,12 +148,39 @@
                                 CaretPositionChanged="OnCaretPositionChanged"/>
     </Grid>
 
+    <!-- Design view. Overlays the editor rather than replacing it: MainEditor and both split
+         containers already carry their own IsVisible bindings, and threading a third condition
+         through all three is how a rarely-used mode makes the COMMON path go blank. An opaque
+         overlay leaves every one of those bindings exactly as it was. -->
+    <Border Background="{DynamicResource IdeBg}"
+            IsVisible="{Binding IsDesignMode}">
+      <designer:FormCanvasControl Document="{Binding DesignDocument}"/>
+    </Border>
+
     <!-- Split View Toggle Button -->
     <StackPanel Orientation="Horizontal"
                 HorizontalAlignment="Right"
                 VerticalAlignment="Top"
                 Margin="0,2,20,0"
                 Spacing="2">
+      <!-- Design|Code. Only for a form document — every other file has nothing to draw. -->
+      <Button Command="{Binding ToggleDesignModeCommand}"
+              ToolTip.Tip="Toggle Design / Code view"
+              Height="20"
+              Padding="6,2"
+              Background="Transparent"
+              Opacity="0.6"
+              IsVisible="{Binding IsFormDocument}">
+        <!-- Two labels rather than a value converter: the label is the only thing that varies,
+             and a converter would be a new public type, a namespace import and a registration to
+             carry one string each way. -->
+        <Panel>
+          <TextBlock FontSize="10" Foreground="{DynamicResource IdeFg}"
+                     Text="Design" IsVisible="{Binding !IsDesignMode}"/>
+          <TextBlock FontSize="10" Foreground="{DynamicResource IdeFg}"
+                     Text="Code" IsVisible="{Binding IsDesignMode}"/>
+        </Panel>
+      </Button>
       <Button Command="{Binding SplitHorizontalCommand}"
               ToolTip.Tip="Split Horizontal"
               Width="20" Height="20"

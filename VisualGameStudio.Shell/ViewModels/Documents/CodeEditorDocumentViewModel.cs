@@ -46,6 +46,17 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     [ObservableProperty]
     private bool _isSplitView;
 
+    /// <summary>
+    /// True when the Design view is showing instead of the text editor.
+    ///
+    /// <para>⛔ A MODE ON THE EXISTING DOCUMENT, not a new document type — the same idiom as
+    /// <see cref="IsSplitView"/>, which this is cloned from. A second document type would mean two
+    /// tabs for one file, two undo stacks, and two things that both think they own the text; D1
+    /// puts the designer's output INSIDE the user's own file precisely so there is one of each.</para>
+    /// </summary>
+    [ObservableProperty]
+    private bool _isDesignMode;
+
     [ObservableProperty]
     private SplitOrientation _splitOrientation = SplitOrientation.Horizontal;
 
@@ -61,6 +72,47 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     public bool TrimTrailingWhitespaceOnSave { get; set; }
 
     public new string Id => FilePath ?? Guid.NewGuid().ToString();
+
+    /// <summary>
+    /// True when this file is a form document, so the Design toggle is worth offering.
+    ///
+    /// <para>⛔ Asks <c>FileExtensions</c> rather than testing the extension here. That list is
+    /// already the single source of truth for which extensions are form documents, and a second
+    /// copy would be a second thing to update — with the failure mode that a new extension shows
+    /// no Design tab and nobody can say why.</para>
+    /// </summary>
+    public bool IsFormDocument =>
+        FilePath != null && VisualGameStudio.Core.Constants.FileExtensions.IsFormDocument(FilePath);
+
+    /// <summary>
+    /// The parsed document behind the Design view, or null when this file is not one, cannot be
+    /// parsed, or is refused.
+    ///
+    /// <para>⚠ Read from <see cref="Text"/> on demand rather than cached. The text is the truth and
+    /// the user can edit it in Code view at any moment; a cached model would show a canvas that no
+    /// longer matches the file, which is the designer/runtime divergence D9 exists to prevent — one
+    /// step earlier.</para>
+    ///
+    /// <para>⚠ A REFUSED document yields null, so the canvas shows nothing rather than showing the
+    /// empty model a refusal produces. A refusal's model is deliberately unpopulated; drawing it
+    /// would tell the user their form has no controls.</para>
+    /// </summary>
+    public BasicLang.Forms.FormDocument? DesignDocument
+    {
+        get
+        {
+            if (!IsFormDocument || string.IsNullOrEmpty(Text))
+            {
+                return null;
+            }
+
+            var form = BasicLang.Forms.Serialization.FormDocumentReader.Read(FilePath!, Text);
+            return form.IsRefused ? null : form.Model;
+        }
+    }
+
+    [RelayCommand]
+    private void ToggleDesignMode() => IsDesignMode = !IsDesignMode;
     public new string Title => GetTitle();
     public new bool CanClose => true;
 
@@ -179,6 +231,13 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
 
     partial void OnTextChanged(string value)
     {
+        // The Design view reads DesignDocument from Text on demand, so it only redraws when told
+        // the property changed. Without this, an edit in Code view leaves a stale canvas.
+        if (IsFormDocument)
+        {
+            OnPropertyChanged(nameof(DesignDocument));
+        }
+
         var wasDirty = IsDirty;
         IsDirty = value != _originalText;
 
