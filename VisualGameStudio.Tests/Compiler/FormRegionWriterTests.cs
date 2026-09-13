@@ -373,12 +373,11 @@ public class FormRegionWriterTests
     }
 
     [Test]
-    public void Write_StillEmitsRecognizerSource_WhichNeverParsesAsACatalogValue()
+    public void Write_StillEmitsAValueAlreadyInItsSourceForm_WhichNeverParsesAsACatalogValue()
     {
-        // ⚠ The other half. The recognizer stores what it READ, so an imported form carries
-        // `ContentAlignment.MiddleLeft` and `New Font("Segoe UI", 12)` — neither of which parses
-        // as a catalog value. Treating those as degraded would silently strip every property off
-        // every imported form.
+        // ⚠ The other half. A value already in its WinForms source form is not degraded: it is
+        // exactly what emitting the designer's own `Left` produces. Treating it as degraded would
+        // strip the property for no reason the user could name.
         var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm" };
         var label = new FormControl { Kind = "Label", Id = "lbl", TabIndex = 0 };
         label.Properties["Text"] = "\"Already quoted\"";
@@ -394,6 +393,54 @@ public class FormRegionWriterTests
             Assert.That(result.Text, Does.Contain("""lbl.Text = "Already quoted" """.TrimEnd()));
             Assert.That(result.Diagnostics.Select(d => d.Code),
                 Has.None.EqualTo(DesignCodes.DegradedProperty));
+        });
+    }
+
+    [Test]
+    public void Write_QuotesAStringThatMerelyLooksLikeAQualifiedName()
+    {
+        // ⛔⛔ REGRESSION GUARD. "is this value already source?" was once answered by the SHAPE
+        // of the string — a `Type.Member` regex — and a perfectly ordinary string value that
+        // happens to contain a dot matches it. `lbl.Text = config.json` is then emitted unquoted:
+        // BasicLang lexes it as member access on an undeclared `config`, and the user's form no
+        // longer builds because a Label's caption had a file extension in it. Only the catalog row
+        // can tell a String from an Enum, so only the catalog row may answer.
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm" };
+        var label = new FormControl { Kind = "Label", Id = "lbl", TabIndex = 0 };
+        label.Properties["Text"] = "config.json";
+        form.Controls.Add(label);
+
+        var source = ScaffoldedFile().Replace("LoginForm.blwebform", "LoginForm.blform");
+        var result = RegionWriter.Write("LoginForm.bas", source, form, "LoginForm.blform");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Text, Does.Contain("""lbl.Text = "config.json" """.TrimEnd()));
+            Assert.That(result.Text, Does.Not.Contain("lbl.Text = config.json"));
+        });
+    }
+
+    [Test]
+    public void Write_TreatsAnUnknownEnumMemberAsDegraded_EvenFullyQualified()
+    {
+        // ⛔⛔ REGRESSION GUARD, the same shape test seen from the other side. `Bogus` alone is
+        // caught as Degraded; written `ContentAlignment.Bogus` it matched the qualified-name shape,
+        // was waved through as "already source", and reached the user's file as CS0117 — the exact
+        // failure the Degraded check exists to stop, with zero diagnostics. The catalog knows which
+        // members it can write, so an unlisted one is Degraded however it is spelled.
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm" };
+        var label = new FormControl { Kind = "Label", Id = "lbl", TabIndex = 0 };
+        label.Properties["TextAlign"] = "ContentAlignment.Bogus";
+        form.Controls.Add(label);
+
+        var source = ScaffoldedFile().Replace("LoginForm.blwebform", "LoginForm.blform");
+        var result = RegionWriter.Write("LoginForm.bas", source, form, "LoginForm.blform");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Text, Does.Not.Contain("Bogus"));
+            Assert.That(result.Diagnostics.Select(d => d.Code),
+                Has.Exactly(1).EqualTo(DesignCodes.DegradedProperty));
         });
     }
 

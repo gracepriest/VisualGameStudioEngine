@@ -189,10 +189,23 @@ public static class FormAssetEmitter
         // designer/runtime divergence D9 exists to prevent, across targets instead of within one.
         if (isSelect && control.Properties.TryGetValue("Items", out var items))
         {
+            // ⛔ SelectedIndex is the SAME divergence one property over. WinForms emits
+            // `cmb.SelectedIndex = 2`; the page has no such property, and without marking the
+            // option the desktop opened on the user's chosen entry while the web opened on the
+            // first one. It is an INDEX into this list, so it can only be resolved here, where the
+            // list is being written.
+            var selected = control.Properties.TryGetValue("SelectedIndex", out var raw) &&
+                           int.TryParse(raw, out var parsed)
+                ? parsed
+                : -1;
+
             sb.Append('\n');
+            var position = 0;
             foreach (var item in FormPropertyDef.SplitItems(items))
             {
-                sb.Append($"{indent}  <option>{Text(item)}</option>\n");
+                var mark = position == selected ? " selected" : "";
+                sb.Append($"{indent}  <option{mark}>{Text(item)}</option>\n");
+                position++;
             }
 
             sb.Append(indent);

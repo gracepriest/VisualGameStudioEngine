@@ -572,14 +572,32 @@ public static class FormDocumentWriter
     /// <para>⚠ Here the damage would be a REMOVAL rather than a rewrite: an unparseable
     /// <c>ColSpan="x"</c> reads as 1, and "1 means omit it" would then delete the user's text on a
     /// no-op save.</para>
+    ///
+    /// <para>⚠ …and the parseable case still has to preserve SPELLING, exactly as its sibling does.
+    /// Handling only the unparseable case left <c>ColSpan="02"</c> rewritten to <c>"2"</c> by a save
+    /// that changed nothing — a smaller wound than resetting the tab order, and the same broken
+    /// promise: D9 says a no-op patch writes nothing. An explicit <c>ColSpan="1"</c> is kept for the
+    /// same reason; "the default means omit it" governs a value the DESIGNER produced, not text the
+    /// user typed.</para>
     /// </summary>
     private static void SetOptionalIntAttribute(XElement element, string name, int value, int defaultValue)
     {
         var existing = element.Attribute(name);
 
-        if (existing != null && !int.TryParse(existing.Value, out _) && value == defaultValue)
+        if (existing != null)
         {
-            return;
+            if (int.TryParse(existing.Value, out var current))
+            {
+                if (current == value)
+                {
+                    return;
+                }
+            }
+            else if (value == defaultValue)
+            {
+                // The model holds what absence reads as, so the value never moved.
+                return;
+            }
         }
 
         SetAttributeIfChanged(element, name, value == defaultValue ? null : value.ToString());

@@ -444,11 +444,12 @@ public static class RegionWriter
                 // nothing about emitting it, and emitting it breaks the build for a value the
                 // designer has already told the user it cannot use.
                 //
-                // ⚠ Guarded by IsAlreadySource so the IMPORT route survives: the recognizer stores
-                // what it read, so an enum arrives as `ContentAlignment.MiddleLeft` and a string
-                // as `"Sign in"` — neither parses as a catalog value, and skipping those would
-                // silently strip every property off an imported form.
-                if (property != null && !property.Accepts(value) && !IsAlreadySource(value))
+                // ⚠ A value that is ALREADY this property's source form is not degraded — it is
+                // what the catalog would itself have written. `ContentAlignment.MiddleLeft` does
+                // not parse as the designer's `Left`, but it is exactly what emitting `Left`
+                // produces, so skipping it would strip the property for no reason. The catalog
+                // answers that per row; a shape test cannot (FormPropertyDef.IsSourceForm).
+                if (property != null && !property.Accepts(value) && !property.IsSourceForm(value))
                 {
                     diagnostics.Add(new DesignDiagnostic(
                         DesignCodes.DegradedProperty,
@@ -557,6 +558,22 @@ public static class RegionWriter
     }
 
     /// <summary>
+    /// True when the value is already BasicLang SOURCE rather than a document value.
+    ///
+    /// <para>⛔ Two conventions share one <c>Properties</c> dictionary: the document reader stores
+    /// the RAW attribute text (<c>Sign in</c>, unquoted), while a value that came from source keeps
+    /// what was read (<c>"Sign in"</c> with its quotes, <c>ContentAlignment.MiddleLeft</c>). The
+    /// CATALOG decides which is which — see <see cref="FormPropertyDef.IsSourceForm"/> for why the
+    /// shape of the string is not a safe answer. Only a property the catalog does not know falls
+    /// back to a shape, and then only to the two that are unambiguous in any language emitted
+    /// here.</para>
+    /// </summary>
+    private static bool IsAlreadySource(FormPropertyDef? property, string value) =>
+        property?.IsSourceForm(value) ??
+        (value.StartsWith("\"", StringComparison.Ordinal) ||
+         value.StartsWith("New ", StringComparison.Ordinal));
+
+    /// <summary>
     /// Formats a property value as BasicLang SOURCE, driven off the catalog's declared type.
     ///
     /// <para>⛔ The same <c>Properties</c> dictionary means two different things to two consumers:
@@ -566,33 +583,16 @@ public static class RegionWriter
     /// meanwhile stores already-quoted source text, because that is what it read. Typing the
     /// formatting off the catalog is what lets both feed the same writer.</para>
     /// </summary>
-    /// <summary>
-    /// True when the value is already BasicLang SOURCE rather than a document value.
-    ///
-    /// <para>⛔ The recognizer (D12) stores what it READ — `"Sign in"` with its quotes,
-    /// `New Font("Segoe UI", 12)`, `ContentAlignment.MiddleLeft` — while the document reader stores
-    /// raw attribute text. One <c>Properties</c> dictionary, two conventions, and this is what
-    /// tells them apart. Without the qualified-name case an imported form would have every enum
-    /// property stripped as "degraded".</para>
-    /// </summary>
-    private static bool IsAlreadySource(string value) =>
-        value.StartsWith("\"", StringComparison.Ordinal) ||
-        value.StartsWith("New ", StringComparison.Ordinal) ||
-        QualifiedName.IsMatch(value);
-
-    private static readonly System.Text.RegularExpressions.Regex QualifiedName =
-        new(@"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+$",
-            System.Text.RegularExpressions.RegexOptions.Compiled);
-
     private static string Literal(FormControl control, string name, string value)
     {
-        // Already a source literal (the recognizer's convention) — leave it exactly as read.
-        if (IsAlreadySource(value))
+        var property = control.Definition?.Property(name);
+
+        // Already a source literal — leave it exactly as read. Re-formatting it would produce
+        // `ContentAlignment.ContentAlignment.MiddleLeft` for an enum and `""Sign in""` for a string.
+        if (IsAlreadySource(property, value))
         {
             return value;
         }
-
-        var property = control.Definition?.Property(name);
 
         // ⛔ An enum or a colour is NOT the bare text. MEASURED, both ways:
         //   lbl.TextAlign = Center    lexes, compiles, and csc then rejects it (CS0103).

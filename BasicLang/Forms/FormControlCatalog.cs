@@ -141,6 +141,45 @@ public sealed record FormPropertyDef(
         return $"Color.FromArgb({Hex(digits, 0)}, {Hex(digits, 2)}, {Hex(digits, 4)}, {Hex(digits, 6)})";
     }
 
+    /// <summary>
+    /// True when <paramref name="value"/> is already this property's WinForms SOURCE form rather
+    /// than a document value — the two conventions that share one <c>Properties</c> dictionary.
+    ///
+    /// <para>⛔⛔ <b>Ask the catalog, never the shape of the string.</b> A shape test
+    /// ("does it look like <c>Type.Member</c>?") was tried and was wrong in both directions: it
+    /// made <c>Text="config.json"</c> emit as the bare identifier <c>config.json</c>, and it waved
+    /// <c>TextAlign="ContentAlignment.Bogus"</c> straight through the Degraded check into CS0117 —
+    /// the exact failure that check exists to stop. Only the row knows its own enum type and its
+    /// own members, so only the row can tell a value it could have WRITTEN from one it must
+    /// QUOTE.</para>
+    ///
+    /// <para>An Enum value qualifies only when it is, exactly, what <see cref="WinFormsLiteral"/>
+    /// would produce for one of this row's <see cref="AllowedValues"/>. A member the catalog does
+    /// not list is Degraded even though the real enum may have it: the catalog is the single source
+    /// of truth, so the fix for a missing member is a catalog row, not a value spliced in
+    /// unchecked.</para>
+    /// </summary>
+    public bool IsSourceForm(string value) => Type switch
+    {
+        FormPropertyType.Enum =>
+            WinFormsEnumType != null && AllowedValues != null &&
+            AllowedValues.Any(v => string.Equals(WinFormsLiteral(v), value, StringComparison.Ordinal)),
+
+        // `Color.Red` / `Color.FromArgb(...)`. The 140-odd KnownColor names are not enumerated here
+        // (see IsColor), so the member cannot be checked the way an enum member is.
+        FormPropertyType.Color =>
+            value.StartsWith("Color.", StringComparison.Ordinal) ||
+            value.StartsWith("New ", StringComparison.Ordinal),
+
+        // A string arrives from the document unquoted, so quotes mean it is already source.
+        FormPropertyType.String =>
+            value.StartsWith("\"", StringComparison.Ordinal) ||
+            value.StartsWith("New ", StringComparison.Ordinal),
+
+        // An Int or a Bool has no source form that differs from its document text.
+        _ => false
+    };
+
     /// <summary>True when <paramref name="value"/> parses to this property's declared type.</summary>
     public bool Accepts(string? value)
     {

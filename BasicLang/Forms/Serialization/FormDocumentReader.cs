@@ -38,6 +38,8 @@ public static class FormDocumentReader
             Name = Path.GetFileNameWithoutExtension(filePath)
         };
 
+        var positions = new Dictionary<FormControl, XElement>();
+
         XDocument xml;
         try
         {
@@ -138,7 +140,7 @@ public static class FormDocumentReader
                 case "Controls":
                     foreach (var child in element.Elements())
                     {
-                        var control = ReadControl(child, target.Value, filePath, diagnostics, degraded);
+                        var control = ReadControl(child, target.Value, filePath, diagnostics, degraded, positions);
                         if (control != null)
                         {
                             model.Controls.Add(control);
@@ -171,7 +173,7 @@ public static class FormDocumentReader
             }
         }
 
-        CheckDuplicateIds(model, filePath, diagnostics);
+        CheckDuplicateIds(model, filePath, diagnostics, positions);
 
         return new FormFile(model, xml, text, filePath, diagnostics, degraded);
     }
@@ -185,7 +187,8 @@ public static class FormDocumentReader
     /// reference to it would be ambiguous.</para>
     /// </summary>
     private static void CheckDuplicateIds(
-        FormDocument model, string filePath, List<DesignDiagnostic> diagnostics)
+        FormDocument model, string filePath, List<DesignDiagnostic> diagnostics,
+        Dictionary<FormControl, XElement> positions)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
@@ -193,10 +196,17 @@ public static class FormDocumentReader
         {
             if (control.Id.Length > 0 && !seen.Add(control.Id))
             {
+                // ⚠ Reported AT THE SECOND OCCURRENCE, not at (0,0). This walks the MODEL, which
+                // carries no positions, so the element each control was read from is kept aside as
+                // it is read — without it the one diagnostic that names two places in the file was
+                // the only one that could not point at either, and the sibling Id check right
+                // beside it does carry a position.
+                var at = positions.GetValueOrDefault(control);
+
                 diagnostics.Add(Error(DesignCodes.DuplicateControlId,
                     $"more than one control has the Id '{control.Id}'. Ids become field names in " +
                     "the generated code, so they must be unique across the whole form.",
-                    filePath, 0, 0));
+                    filePath, Line(at), Column(at)));
             }
         }
     }
@@ -278,7 +288,8 @@ public static class FormDocumentReader
 
     private static FormControl? ReadControl(
         XElement element, FormTarget target, string filePath,
-        List<DesignDiagnostic> diagnostics, List<DegradedProperty> degraded)
+        List<DesignDiagnostic> diagnostics, List<DegradedProperty> degraded,
+        Dictionary<FormControl, XElement> positions)
     {
         var definition = FormControlCatalog.Find(element.Name.LocalName);
         if (definition == null)
@@ -305,6 +316,12 @@ public static class FormDocumentReader
             TabIndex = IntAttribute(element, "TabIndex") ?? 0,
             Geometry = ReadGeometry(element, target)
         };
+
+        // Where this control came from, for the checks that run over the finished MODEL and would
+        // otherwise have no position to report. FormControl is a class, so the default comparer is
+        // reference equality — two controls with the same Id are still two keys, which is the whole
+        // case this serves.
+        positions[control] = element;
 
         // ⛔⛔ The Id becomes a FIELD NAME in the user's own .bas. Until this check existed,
         // FormDocument.IsLegalControlId had no caller outside its own tests, and a document with
@@ -411,7 +428,7 @@ public static class FormDocumentReader
 
             if (FormControlCatalog.Find(child.Name.LocalName) != null)
             {
-                var nested = ReadControl(child, target, filePath, diagnostics, degraded);
+                var nested = ReadControl(child, target, filePath, diagnostics, degraded, positions);
                 if (nested != null)
                 {
                     control.Children.Add(nested);

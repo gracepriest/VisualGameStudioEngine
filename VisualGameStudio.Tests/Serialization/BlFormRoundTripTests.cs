@@ -360,6 +360,54 @@ public class BlFormRoundTripTests
     }
 
     [Test]
+    public void ADuplicateIdIsReported_AtTheLineOfTheSecondOccurrence()
+    {
+        // ⚠ The one diagnostic that names two places in the file was the only one that could not
+        // point at either: it walks the finished MODEL, which carries no positions, so it reported
+        // (0,0) while the illegal-Id check right beside it carried line and column. Double-clicking
+        // it in the error list went to the top of the file.
+        var form = Read("""
+            <Form Name="F" Version="1">
+              <Controls>
+                <Button Id="dup" X="0" Y="0" TabIndex="0"/>
+                <Button Id="dup" X="0" Y="30" TabIndex="1"/>
+              </Controls>
+            </Form>
+            """, "F.blform");
+
+        var duplicate = form.Diagnostics.Single(d => d.Code == DesignCodes.DuplicateControlId);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(duplicate.Line, Is.EqualTo(4), "the SECOND Button, not the first and not 0");
+            Assert.That(duplicate.Column, Is.GreaterThan(0));
+        });
+    }
+
+    [Test]
+    public void ASpelledOutOptionalInt_SurvivesANoOpSave()
+    {
+        // ⛔ `ColSpan="02"` means 2, and a save that changed nothing rewrote it to "2". Smaller
+        // than resetting a tab order, and the same broken promise: D9 requires a no-op patch to
+        // write nothing at all. An explicit ColSpan="1" is kept for the same reason — "the default
+        // means omit it" governs what the DESIGNER produced, not text the user typed.
+        const string text = """
+            <WebForm Name="F" Version="1">
+              <Layout Kind="Grid" Cols="1fr" Rows="auto"/>
+              <Controls>
+                <Button Id="btn" Col="0" Row="0" ColSpan="02" TabIndex="0"/>
+                <Label Id="lbl" Col="0" Row="0" RowSpan="1" TabIndex="1"/>
+              </Controls>
+            </WebForm>
+            """;
+
+        var form = Read(text, "F.blwebform");
+
+        Assert.That(FormDocumentWriter.Write(form), Is.EqualTo(text),
+            "a no-op save must be byte-identical");
+    }
+
+    [Test]
     public void ADuplicateIsFoundAcrossContainers_NotJustAmongSiblings()
     {
         // ⛔ The generated fields are all members of ONE class, so a Button inside a Panel collides

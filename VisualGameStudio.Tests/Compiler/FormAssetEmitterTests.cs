@@ -361,6 +361,42 @@ public class FormAssetEmitterTests
     }
 
     [Test]
+    public void ASelectsSelectedIndex_MarksThatOption()
+    {
+        // ⛔ The same cross-target divergence one property over. WinForms emits
+        // `cmb.SelectedIndex = 1`; the page has no such property, so without marking the option the
+        // desktop opened on Beta and the web opened on Alpha — from the same document.
+        var form = new FormDocument { Target = FormTarget.Web, Name = "F" };
+        var combo = new FormControl { Kind = "ComboBox", Id = "cmb", TabIndex = 0 };
+        combo.Properties["Items"] = "Alpha, Beta, Gamma";
+        combo.Properties["SelectedIndex"] = "1";
+        form.Controls.Add(combo);
+
+        var html = FormAssetEmitter.Html(form, "App.js");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(html, Does.Contain("<option>Alpha</option>"));
+            Assert.That(html, Does.Contain("<option selected>Beta</option>"));
+            Assert.That(html, Does.Contain("<option>Gamma</option>"));
+        });
+    }
+
+    [Test]
+    public void ASelectsSelectedIndexOutOfRange_MarksNothing()
+    {
+        // -1 is the catalog default (nothing chosen) and anything past the end is a document the
+        // user can produce by shortening Items. Neither may mark an arbitrary option.
+        var form = new FormDocument { Target = FormTarget.Web, Name = "F" };
+        var combo = new FormControl { Kind = "ComboBox", Id = "cmb", TabIndex = 0 };
+        combo.Properties["Items"] = "Alpha, Beta";
+        combo.Properties["SelectedIndex"] = "7";
+        form.Controls.Add(combo);
+
+        Assert.That(FormAssetEmitter.Html(form, "App.js"), Does.Not.Contain("selected"));
+    }
+
+    [Test]
     public void ASelectWithNoItems_EmitsNoOptions()
     {
         var form = new FormDocument { Target = FormTarget.Web, Name = "F" };
