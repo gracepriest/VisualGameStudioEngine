@@ -706,6 +706,63 @@ public class NetBuildPipelineTests
     }
 
     // =====================================================================================
+    // 4b. BL6027 — a facade collision must reach the BUILD, not just the generated header.
+    // =====================================================================================
+
+    /// <summary>
+    /// A facade name collision surfaces as a BL6027 WARNING on the build result.
+    ///
+    /// <para><b>Why this exists alongside the emitter's own test.</b> <c>NetFacadeEmitterTests</c>
+    /// proves <c>FacadeDiagnostics</c> computes the right findings; nothing there proves the
+    /// builder ever ASKS. A diagnostic that is wired but never fires is exactly the failure mode
+    /// BL6027 was added to prevent — the collision was already reported inside
+    /// <c>blnet_facade.g.hpp</c>, and a comment in a generated file nobody opens is not a notice.
+    /// </para>
+    ///
+    /// <para>The surface is two members that differ only in their .NET parameter TYPE. §8.3 maps
+    /// both handle-represented types onto <c>NetRef</c>, so they are one C++ signature — the D8
+    /// shape, built directly rather than via an assembly because the seam under test is the
+    /// builder, not the collector.</para>
+    /// </summary>
+    [Test]
+    public void AFacadeCollision_WarnsWithBl6027_AndTheBuildStillSucceeds()
+    {
+        var collidingSurface = new NetSurface(new[]
+        {
+            NetProxyEmitterTests.HandleArgMember("Overloaded", "MyLib.Alpha"),
+            NetProxyEmitterTests.HandleArgMember("Overloaded", "MyLib.Beta"),
+        }, Array.Empty<string>());
+
+        var (result, _) = Emit(PureCppProject(), surfaceOverride: collidingSurface);
+
+        var bl6027 = result.Diagnostics.Where(d => d.Code == "BL6027").ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(bl6027, Is.Not.Empty,
+                "the build never reported the facade collision. CppProjectBuilder.EmitCore must "
+                + "call NetProxyEmitter.FacadeDiagnostics and merge the result — otherwise the "
+                + "omission is announced only inside obj/gen/blnet_facade.g.hpp, which nobody "
+                + "opens to find out why a name they expected is missing. Codes seen: "
+                + string.Join(" | ", result.Diagnostics.Select(d => d.Code)));
+
+            Assert.That(bl6027.Select(d => d.IsWarning), Has.All.True,
+                "BL6027 must be a WARNING. Every colliding member is still callable under its "
+                + "mangled name, so the build is correct — merely less ergonomic. Making it an "
+                + "error would let a convenience header stop a working project from building.");
+
+            // Scoped to BL6027 rather than "the build has no errors". The build can carry
+            // UNRELATED errors that say nothing about this rule — on a machine without MSVC,
+            // BL6015 fires for every BasicLang native project — and asserting a clean build here
+            // would make this test report the environment instead of the rule.
+            Assert.That(result.Diagnostics.Where(d => !d.IsWarning).Select(d => d.Code),
+                Does.Not.Contain("BL6027"),
+                "a facade collision must never be an ERROR: every colliding member is still "
+                + "callable under its mangled name.");
+        });
+    }
+
+    // =====================================================================================
     // 5. CleanGeneratedDir must cover every artifact NetProxyEmitter can write.
     // =====================================================================================
 

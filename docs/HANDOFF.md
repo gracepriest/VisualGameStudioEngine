@@ -164,9 +164,10 @@ fails only when the Native tier runs alongside it). The fast subset shows the tw
 - **blnet C++ facade (`blnet_facade.g.hpp`)** — an ergonomic C++ rendering of the proxy slots,
   so hand-written C++ can say `System::Console::WriteLine("hi")` instead of naming a mangled
   slot whose trailing hash moves whenever the signature does. Plan:
-  `docs/superpowers/plans/2026-09-13-blnet-cpp-facade.md`. **Tasks 1-3 are done and proven** —
+  `docs/superpowers/plans/2026-09-13-blnet-cpp-facade.md`. **Tasks 1-4 are done and proven** —
   methods (static and instance), constructors, and properties, so `Regex r("^a+$"); r.IsMatch(s)`
-  works from C++. Tasks 4-5 are open: the BL6027 collision diagnostic and the coverage drift
+  works from C++; name and signature collisions are omitted rather than guessed at, and reported
+  as **BL6027 (always a warning — never fails a build)**. Task 5 is open: the coverage drift
   wiring. The header is emitted unconditionally and included by nobody —
   `using namespace BasicLang::netfx;` is the one opt-in line.
   ⚠ **A property's `set_X()` is usually absent**, and that is the SURFACE, not the facade: a

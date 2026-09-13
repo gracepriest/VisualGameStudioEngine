@@ -307,6 +307,15 @@ public class NetProxyEmitterTests
     /// <c>CppProjectBuilder.NetArtifactFileNames</c>, because <c>.g.hpp</c> does not end in
     /// <c>.g.h</c> and the suffix filter alone would leave a stale copy on the include path.</para>
     /// </summary>
+    /// <summary>
+    /// A static, void method taking ONE handle-typed argument. Two of these with the same name and
+    /// different .NET parameter types are the D8 collision shape: §8.3 maps every
+    /// handle-represented type onto <c>NetRef</c>, so they share one C++ signature.
+    /// </summary>
+    internal static NetMemberDescriptor HandleArgMember(string name, string parameterTypeFullName) =>
+        new(name, "MyLib.Api", NetMemberCategory.Method, isStatic: true, arity: 0, "System.Void",
+            new[] { new NetParameterDescriptor(NetRefKind.None, parameterTypeFullName) });
+
     internal static readonly string[] ExpectedArtifacts =
     {
         "blnet.h", "blnet_runtime.hpp", "blnet_marshal.hpp", "blnet_bindings.g.hpp",

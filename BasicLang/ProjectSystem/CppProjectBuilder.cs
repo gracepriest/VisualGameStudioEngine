@@ -763,6 +763,19 @@ namespace BasicLang.Compiler.ProjectSystem
             }
             var netTus = NetProxyEmitter.TranslationUnitFileNames(surface);
 
+            // BL6027 (facade decision D8): a C++ name two or more .NET things would share. The
+            // facade omits every side rather than picking one, and says so HERE because the
+            // alternative — a comment inside obj/gen/blnet_facade.g.hpp — is not a diagnostic:
+            // nobody opens a generated header to discover why a name they expected is missing.
+            //
+            // ALWAYS a warning, never an error. The proxy table is complete and each colliding
+            // member stays callable under its mangled name, so the build is correct and merely
+            // less ergonomic; failing it would let a convenience header stop a working project
+            // from building. MergeNetDiagnostics' return is therefore deliberately ignored — it
+            // counts ERRORS, and there are none to count here.
+            MergeNetDiagnostics(NetProxyEmitter.FacadeDiagnostics(surface), ref netReferences,
+                outcome, result, project.FilePath, forIntelliSense);
+
             // ---- 5c. File IO (BL6006) — a separate try so an IO fault is never -----------
             // mislabeled as a codegen error. ArgumentException belongs to BL6006 HERE
             // (an invalid path out of Path.Combine/WriteAllText), which is exactly why

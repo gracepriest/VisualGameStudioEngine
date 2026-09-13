@@ -167,14 +167,26 @@ public class NetFacadeEmitterTests
     {
         var text = Facade();
 
-        Assert.That(text, Does.Not.Contain("Ambiguous("),
-            "a colliding overload was rendered. With both Widget and Gadget arriving as NetRef "
-            + "these are ONE C++ signature, so any rendering silently binds one .NET member to "
-            + "calls meant for the other. Omit both and name them in the OMITTED comment.");
+        // The exact property: 'Ambiguous' appears ONLY in the OMITTED report, never in code.
+        // A blanket Does.Not.Contain over the whole file fails on CORRECT output, because both
+        // the report's heading (the shared C++ signature) and its list (the .NET members) name it
+        // — which is the entire point of reporting rather than silently dropping.
+        var omittedAt = text.IndexOf("/* OMITTED", StringComparison.Ordinal);
 
-        Assert.That(text, Does.Contain("OMITTED"),
-            "the collision must be REPORTED in the header, not silently dropped — the reader "
-            + "needs to know to reach for the mangled slot.");
+        Assert.Multiple(() =>
+        {
+            Assert.That(omittedAt, Is.GreaterThanOrEqualTo(0),
+                "the collision must be REPORTED in the header, not silently dropped — the reader "
+                + "needs to know to reach for the mangled slot.");
+
+            Assert.That(text.Substring(0, Math.Max(omittedAt, 0)), Does.Not.Contain("Ambiguous"),
+                "a colliding overload was rendered as CODE. With both Widget and Gadget arriving "
+                + "as NetRef these are ONE C++ signature, so any rendering silently binds one .NET "
+                + "member to calls meant for the other.");
+
+            Assert.That(text.Substring(Math.Max(omittedAt, 0)), Does.Contain("Ambiguous"),
+                "the report must NAME what collided; 'something was omitted' is not actionable.");
+        });
     }
 
     /// <summary>
@@ -642,6 +654,172 @@ public class NetFacadeEmitterTests
                         && m.Parameters.Count == paramCount)
             .Select(NetNameMangler.Mangle)
             .Single();
+
+    // ---- Task 4: BL6027 and the name collisions -------------------------------------------
+
+    /// <summary>
+    /// A collision must reach the BUILD as BL6027, not only a comment in a generated header.
+    ///
+    /// <para>A comment inside <c>obj/gen</c> is not a diagnostic: nobody opens a generated header
+    /// to discover why a name they expected is missing. The whole point of omitting every side is
+    /// that the caller has to learn to reach for the mangled slot instead.</para>
+    ///
+    /// <para>ALWAYS a warning, never an error. The proxy table is complete and each colliding
+    /// member stays callable under its mangled name, so the build is correct and merely less
+    /// ergonomic — failing it would let a convenience header stop a working project from building.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void ACollisionIsReportedAsABl6027Warning()
+    {
+        var diagnostics = NetProxyEmitter.FacadeDiagnostics(_surface);
+
+        Assert.That(diagnostics, Is.Not.Empty,
+            "the probe's Ambiguous(Widget)/Ambiguous(Gadget) pair collides, so a diagnostic is due.");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(diagnostics.Select(d => d.Code), Has.All.EqualTo("BL6027"));
+            Assert.That(diagnostics.Select(d => d.IsWarning), Has.All.True,
+                "BL6027 must never be an error: every colliding member is still callable under "
+                + "its mangled name, so the build is correct — just less ergonomic.");
+
+            var message = string.Join("\n", diagnostics.Select(d => d.Message));
+            Assert.That(message, Does.Contain("Ambiguous"),
+                "the diagnostic must NAME what collided.");
+            Assert.That(message, Does.Contain(NetProxyEmitter.ProxiesFileName),
+                "…and point at the escape hatch: the mangled slot in the proxies header.");
+        });
+    }
+
+    /// <summary>
+    /// An empty or absent surface produces no diagnostics at all — the inertness claim, applied to
+    /// the diagnostic channel rather than to the file set.
+    /// </summary>
+    [Test]
+    public void AnEmptySurfaceProducesNoFacadeDiagnostics()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(NetProxyEmitter.FacadeDiagnostics(null), Is.Empty);
+            Assert.That(
+                NetProxyEmitter.FacadeDiagnostics(
+                    new NetSurface(Array.Empty<NetMemberDescriptor>(), Array.Empty<string>())),
+                Is.Empty);
+        });
+    }
+
+    /// <summary>
+    /// Two .NET types that sanitize to ONE C++ identifier: both omitted, and reported.
+    ///
+    /// <para>Sanitization is many-to-one — a nested <c>A.B+C</c> flattens to <c>A::B_C</c> and
+    /// meets a real <c>A.B_C</c>. Unlike a signature collision, whose damage is a wrong binding,
+    /// emitting both here is a REDEFINITION: the header does not compile at all. That is why this
+    /// case drops the types rather than merely warning about them.</para>
+    /// </summary>
+    [Test]
+    public void TwoTypesSanitizingToOneIdentifierAreBothOmitted()
+    {
+        var text = FacadeOf(
+            Member("Fac.Probe.Outer+Inner", "FromNested"),
+            Member("Fac.Probe.Outer_Inner", "FromFlat"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(CodeOf(text), Does.Not.Contain("struct Outer_Inner"),
+                "emitting both would be a redefinition — the header would not compile.");
+            Assert.That(CodeOf(text), Does.Not.Contain("FromNested"));
+            Assert.That(CodeOf(text), Does.Not.Contain("FromFlat"));
+            Assert.That(text, Does.Contain("OMITTED"), "the drop must be reported.");
+        });
+    }
+
+    /// <summary>
+    /// A type whose name is also a NAMESPACE segment: the namespace wins, the type is omitted.
+    ///
+    /// <para>A type <c>A.B</c> alongside a type <c>A.B.C</c> would need <c>struct B</c> and
+    /// <c>namespace B</c> in one scope, which does not compile. The namespace has to win, because
+    /// other types live inside it.</para>
+    ///
+    /// <para><b>Why this surface is built by hand.</b> C# cannot express the clash in one assembly
+    /// (CS0101), so no probe assembly can produce it — but the surface spans assemblies, where
+    /// nothing forbids it. Constructing the descriptors directly is the only way to reach the
+    /// case at all, and the emitter's contract is over descriptors regardless.</para>
+    /// </summary>
+    [Test]
+    public void ATypeWhoseNameIsAlsoANamespaceIsOmittedAndTheNamespaceWins()
+    {
+        var text = FacadeOf(
+            Member("Fac.Probe.Box", "OnTheType"),
+            Member("Fac.Probe.Box.Inner", "OnTheNested"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(text, Does.Contain("namespace Box {"),
+                "the NAMESPACE must survive — the other type lives inside it.");
+            Assert.That(CodeOf(text), Does.Not.Contain("struct Box {"),
+                "the TYPE must go: a name cannot be both a struct and a namespace in one scope.");
+            Assert.That(CodeOf(text), Does.Not.Contain("OnTheType"),
+                "the omitted type's members go with it.");
+            Assert.That(CodeOf(text), Does.Contain("OnTheNested"),
+                "the type INSIDE the namespace is unaffected — only the clashing name is dropped.");
+        });
+    }
+
+    /// <summary>
+    /// The coverage invariant must stay honest about collisions: a slot dropped for colliding is
+    /// on the SKIP list, not silently counted as rendered.
+    ///
+    /// <para>This is the gap Task 4 closed. <c>FacadeRendered</c> used to report every
+    /// shape-renderable slot, including ones <c>EmitFacade</c> then dropped for colliding — so the
+    /// set identity was satisfied by a "rendered" set that overstated what the header contained.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void ASlotDroppedForCollidingIsOnTheSkipListNotTheRenderedList()
+    {
+        var rendered = NetProxyEmitter.FacadeRendered(_surface);
+        var skipped = NetProxyEmitter.FacadeSkips(_surface);
+
+        var ambiguous = _surface.Members
+            .Where(m => m.Name == "Ambiguous")
+            .Select(NetNameMangler.Mangle)
+            .ToList();
+
+        Assert.That(ambiguous, Has.Count.EqualTo(2), "guard: the probe must still have the pair.");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rendered, Has.No.AnyOf(ambiguous),
+                "a slot the header omits must not be reported as rendered — that makes the "
+                + "coverage set identity pass on a set that overstates the header.");
+            Assert.That(skipped.Where(s => ambiguous.Contains(s.SlotName)).Select(s => s.Reason),
+                Has.Exactly(2).Contains("SAME C++ signature"),
+                "…it must be on the skip list, with the collision as its stated reason.");
+        });
+    }
+
+    // ---- helpers for hand-built surfaces --------------------------------------------------
+
+    /// <summary>A static, no-argument, void method on the named declaring type.</summary>
+    private static NetMemberDescriptor Member(string declaringType, string name) =>
+        new(name, declaringType, NetMemberCategory.Method, isStatic: true, arity: 0,
+            "System.Void", Array.Empty<NetParameterDescriptor>());
+
+    private static string FacadeOf(params NetMemberDescriptor[] members) =>
+        NetProxyEmitter.Emit(
+            new NetSurface(members, Array.Empty<string>()),
+            "FacProbe.Blnet.dll")[NetProxyEmitter.FacadeFileName];
+
+    /// <summary>
+    /// The facade with its OMITTED report cut off — the CODE alone. Assertions about what is not
+    /// emitted must exclude the report, which names every omission on purpose.
+    /// </summary>
+    private static string CodeOf(string facade)
+    {
+        var at = facade.IndexOf("/* OMITTED", StringComparison.Ordinal);
+        return at < 0 ? facade : facade.Substring(0, at);
+    }
 
     /// <summary>The mangled slot name for the sole probe member of that name.</summary>
     private static string Slot(string memberName) =>

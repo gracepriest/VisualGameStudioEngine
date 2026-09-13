@@ -98,20 +98,104 @@ namespace BasicLang.Compiler.CodeGen.Net
         }
 
         /// <summary>
-        /// The slots v1 does not render, with the reason for each. Exposed so the coverage test
-        /// can assert <c>rendered ∪ skipped == every slot</c> as a SET — a count would pass while
-        /// one slot silently swapped for another.
+        /// A name the facade REFUSES to resolve by guessing (D8), and what collided on it.
+        ///
+        /// <para>Reported as BL6027 rather than only as a comment in the generated header: a
+        /// comment inside a file nobody opens is not a diagnostic, and the whole point of omitting
+        /// both sides is that the caller has to know to reach for the mangled slot instead.</para>
         /// </summary>
-        internal static IReadOnlyList<FacadeSkip> FacadeSkips(NetSurface surface) =>
-            Plan(surface).Select(ClassifyForFacade).Where(s => s != null).ToList();
+        internal sealed class FacadeCollision
+        {
+            internal FacadeCollision(string cppName, IReadOnlyList<string> netNames, string detail)
+            {
+                CppName = cppName;
+                NetNames = netNames;
+                Detail = detail;
+            }
 
-        /// <summary>The slot names v1 DOES render.</summary>
-        internal static IReadOnlyList<string> FacadeRendered(NetSurface surface) =>
-            Plan(surface).Where(p => ClassifyForFacade(p) == null).Select(p => p.SlotName).ToList();
+            /// <summary>The C++ name two or more things would have shared.</summary>
+            internal string CppName { get; }
+
+            /// <summary>The .NET members or types that map onto it, in a stable order.</summary>
+            internal IReadOnlyList<string> NetNames { get; }
+
+            /// <summary>Why it cannot be resolved here.</summary>
+            internal string Detail { get; }
+
+            internal string Message =>
+                "the C++ facade omits '" + CppName + "': " + Detail + " Colliding .NET names: "
+                + string.Join(", ", NetNames)
+                + ". Call these through their mangled slot names in " + ProxiesFileName
+                + " — the proxy table is unaffected. (Facade decision D8.)";
+        }
 
         /// <summary>
-        /// One slot's verdict: null when it renders, a <see cref="FacadeSkip"/> when it does not.
-        /// ONE function so the emitter and the coverage test cannot disagree about what v1 covers.
+        /// Everything one pass over the plan list decides: what renders, what does not and why,
+        /// which types carry a handle, and which names collided.
+        ///
+        /// <para><b>Why it is one pass rather than several queries.</b> These answers depend on
+        /// each other in one direction only — a name collision removes a type, which changes which
+        /// types carry a handle, which changes which SIGNATURES collide — and computing them
+        /// separately let the answers disagree. Before this existed, <c>FacadeRendered</c> reported
+        /// slots that <c>EmitFacade</c> then dropped for colliding, so the coverage set identity
+        /// was satisfied by a "rendered" set that overstated what the header contained.</para>
+        /// </summary>
+        private sealed class FacadeLayout
+        {
+            internal FacadeLayout(
+                IReadOnlyList<SlotPlan> rendered,
+                IReadOnlyList<FacadeSkip> skipped,
+                ISet<string> handleTypes,
+                IReadOnlyList<FacadeCollision> collisions,
+                IReadOnlyList<string> typeNames)
+            {
+                Rendered = rendered;
+                Skipped = skipped;
+                HandleTypes = handleTypes;
+                Collisions = collisions;
+                TypeNames = typeNames;
+            }
+
+            internal IReadOnlyList<SlotPlan> Rendered { get; }
+            internal IReadOnlyList<FacadeSkip> Skipped { get; }
+            internal ISet<string> HandleTypes { get; }
+            internal IReadOnlyList<FacadeCollision> Collisions { get; }
+            internal IReadOnlyList<string> TypeNames { get; }
+        }
+
+        /// <summary>
+        /// The slots the facade does not render, with the reason for each. Exposed so the coverage
+        /// test can assert <c>rendered ∪ skipped == every slot</c> as a SET — a count would pass
+        /// while one slot silently swapped for another.
+        /// </summary>
+        internal static IReadOnlyList<FacadeSkip> FacadeSkips(NetSurface surface) =>
+            LayOutFacade(Plan(surface)).Skipped;
+
+        /// <summary>The slot names the facade DOES render.</summary>
+        internal static IReadOnlyList<string> FacadeRendered(NetSurface surface) =>
+            LayOutFacade(Plan(surface)).Rendered.Select(p => p.SlotName).ToList();
+
+        /// <summary>
+        /// BL6027, one per collided C++ name — ALWAYS a warning.
+        ///
+        /// <para>Never an error: the proxy table is complete and every colliding member stays
+        /// callable under its mangled name, so the build is correct, merely less ergonomic. Failing
+        /// it would turn a convenience header into a reason a working project stops building.</para>
+        /// </summary>
+        internal static IReadOnlyList<NetReferenceDiagnostic> FacadeDiagnostics(NetSurface surface)
+        {
+            if (surface == null || !surface.IsNonEmpty)
+                return Array.Empty<NetReferenceDiagnostic>();
+
+            return LayOutFacade(Plan(surface)).Collisions
+                .Select(c => new NetReferenceDiagnostic("BL6027", c.Message, IsWarning: true))
+                .ToList();
+        }
+
+        /// <summary>
+        /// One slot's SHAPE verdict: null when the shape is renderable, a <see cref="FacadeSkip"/>
+        /// when it is not. Says nothing about names — collisions are decided later, over the whole
+        /// set, because they are a property of a pair rather than of a slot.
         /// </summary>
         private static FacadeSkip ClassifyForFacade(SlotPlan plan)
         {
@@ -133,23 +217,74 @@ namespace BasicLang.Compiler.CodeGen.Net
             return null;
         }
 
-        // ------------------------------------------------------------------------------------
+        /// <summary>
+        /// THE pass. Order matters and runs one way only: shape, then NAME collisions between
+        /// types, then handles, then SIGNATURE collisions between members.
+        ///
+        /// <para>Handles are computed after the type omissions on purpose. D7 spells a parameter as
+        /// a wrapper only for a type in this set, so computing it first would let a signature name
+        /// a type the header no longer defines — a dangling reference in generated code.</para>
+        /// </summary>
+        private static FacadeLayout LayOutFacade(IReadOnlyList<SlotPlan> plans)
+        {
+            var skipped = new List<FacadeSkip>();
+            var admitted = new List<SlotPlan>();
+            foreach (var plan in plans)
+            {
+                var verdict = ClassifyForFacade(plan);
+                if (verdict != null) skipped.Add(verdict); else admitted.Add(plan);
+            }
+
+            var collisions = new List<FacadeCollision>();
+            var droppedTypes = CollidingFacadeTypeNames(admitted, collisions);
+
+            var survivors = new List<SlotPlan>();
+            foreach (var plan in admitted)
+            {
+                if (droppedTypes.Contains(plan.Member.DeclaringTypeFullName))
+                    skipped.Add(new FacadeSkip(plan.SlotName,
+                        "its declaring type's C++ name collides with another name in the same "
+                        + "scope, so the type is omitted whole (BL6027)."));
+                else
+                    survivors.Add(plan);
+            }
+
+            var handleTypes = FacadeHandleTypes(survivors);
+            var collidingSlots = CollidingFacadeSignatures(survivors, handleTypes, collisions);
+
+            var rendered = new List<SlotPlan>();
+            foreach (var plan in survivors)
+            {
+                if (collidingSlots.Contains(plan.SlotName))
+                    skipped.Add(new FacadeSkip(plan.SlotName,
+                        "another slot renders to the SAME C++ signature, so both are omitted "
+                        + "rather than one silently winning (BL6027)."));
+                else
+                    rendered.Add(plan);
+            }
+
+            // A handle type whose every member was pruned still needs its wrapper: a D7 signature
+            // elsewhere may name it.
+            var typeNames = rendered
+                .Select(p => p.Member.DeclaringTypeFullName)
+                .Concat(handleTypes)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(n => n, StringComparer.Ordinal)
+                .ToList();
+
+            return new FacadeLayout(rendered, skipped, handleTypes, collisions, typeNames);
+        }
 
         /// <summary>
         /// Declaring types that get a HANDLE and a wrapper: those with at least one rendered
-        /// INSTANCE member (D4).
+        /// INSTANCE member, or a constructor (D4, D5).
         ///
-        /// <para>A CONSTRUCTOR counts too (D5): a type you can construct is a type that holds a
-        /// handle, even when every other member of it is static.</para>
+        /// <para>A CONSTRUCTOR counts: a type you can construct is a type that holds a handle, even
+        /// when every other member of it is static.</para>
         ///
         /// <para>A static-only type deliberately gets neither. <c>System.Console</c> has no
         /// instances, so a <c>Console</c> object would be a meaningless value, and D7 must not
         /// offer it as a parameter type.</para>
-        ///
-        /// <para>Computed BEFORE collision pruning, on purpose. Pruning can remove a type's last
-        /// instance member, which would remove it from this set, which could change which
-        /// signatures collide — a fixpoint nobody needs. Reading it once leaves at worst a wrapper
-        /// with a handle and no methods, which compiles and stays referenceable by D7.</para>
         /// </summary>
         private static ISet<string> FacadeHandleTypes(IReadOnlyList<SlotPlan> rendered) =>
             rendered
@@ -159,9 +294,139 @@ namespace BasicLang.Compiler.CodeGen.Net
                 .ToHashSet(StringComparer.Ordinal);
 
         /// <summary>
-        /// D7: a handle-typed parameter is the WRAPPER type when that type has a wrapper, and raw
-        /// <c>NetRef</c> otherwise. The surface is the whole world the facade can name; a handle to
-        /// a type nobody declared has no wrapper to be.
+        /// .NET types whose C++ NAME cannot coexist with another name in the same scope. Both
+        /// cases here produce a header that DOES NOT COMPILE if emitted, which is why they are
+        /// dropped rather than merely reported — unlike a signature collision, whose damage is
+        /// only a wrong binding.
+        ///
+        /// <list type="number">
+        /// <item><description><b>Two types, one C++ identifier.</b> Sanitization is many-to-one:
+        /// a nested <c>A.B+C</c> flattens to <c>A::B_C</c> and collides with a real
+        /// <c>A.B_C</c>; a generic arity marker does the same. Emitting both is a
+        /// redefinition.</description></item>
+        /// <item><description><b>A type whose name is also a NAMESPACE segment.</b> A type
+        /// <c>A.B</c> alongside a type <c>A.B.C</c> needs <c>struct B</c> and
+        /// <c>namespace B</c> in the same scope. The namespace wins — other types live inside
+        /// it — and the type is dropped. C# forbids this within one assembly, but the surface
+        /// spans assemblies, where nothing does.</description></item>
+        /// </list>
+        /// </summary>
+        private static ISet<string> CollidingFacadeTypeNames(
+            IReadOnlyList<SlotPlan> admitted, List<FacadeCollision> collisions)
+        {
+            var types = admitted
+                .Select(p => p.Member.DeclaringTypeFullName)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(n => n, StringComparer.Ordinal)
+                .ToList();
+
+            var dropped = new HashSet<string>(StringComparer.Ordinal);
+
+            // (1) many .NET names -> one C++ path.
+            foreach (var group in types
+                         .GroupBy(FacadeTypePath, StringComparer.Ordinal)
+                         .Where(g => g.Count() > 1)
+                         .OrderBy(g => g.Key, StringComparer.Ordinal))
+            {
+                foreach (var netName in group) dropped.Add(netName);
+                collisions.Add(new FacadeCollision(
+                    "::" + FacadeRootNamespace + "::" + group.Key,
+                    group.OrderBy(n => n, StringComparer.Ordinal).ToList(),
+                    "two .NET types sanitize to one C++ identifier, and emitting both would be a "
+                    + "redefinition."));
+            }
+
+            // (2) a type path that is also a namespace path.
+            var namespacePaths = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var type in types)
+            {
+                var segments = FacadeNamespaceSegments(type, out _);
+                for (var i = 1; i <= segments.Count; i++)
+                    namespacePaths.Add(string.Join("::", segments.Take(i)));
+            }
+
+            foreach (var type in types)
+            {
+                var path = FacadeTypePath(type);
+                if (!namespacePaths.Contains(path) || dropped.Contains(type)) continue;
+
+                dropped.Add(type);
+                collisions.Add(new FacadeCollision(
+                    "::" + FacadeRootNamespace + "::" + path,
+                    new[] { type },
+                    "a .NET type of this name shares it with a NAMESPACE that other surface types "
+                    + "live inside, so the name cannot be both a struct and a namespace; the "
+                    + "namespace wins and the type is omitted."));
+            }
+
+            return dropped;
+        }
+
+        /// <summary>The sanitized <c>Ns::Ns::Type</c> path a .NET type renders at, without the root.</summary>
+        private static string FacadeTypePath(string declaringTypeFullName)
+        {
+            var segments = FacadeNamespaceSegments(declaringTypeFullName, out var typeName);
+            return string.Join("::", segments.Concat(new[] { typeName }));
+        }
+
+        /// <summary>
+        /// Slot names whose facade signature is shared with another slot (decision D8).
+        ///
+        /// <para>BOTH are omitted rather than one being chosen. §8.3 collapses every
+        /// handle-represented type onto <c>NetRef</c>, so <c>F(Regex)</c> and <c>F(Uri)</c> can be
+        /// one C++ signature — picking either would make <c>F(someUri)</c> silently call the
+        /// <c>Regex</c> overload, which is a wrong answer rather than a missing one.</para>
+        ///
+        /// <para><b>Keyed on the FACADE types, not the wire types</b>, because D7 changes the
+        /// answer: once both <c>Regex</c> and <c>Uri</c> have wrappers those overloads are
+        /// genuinely distinct C++ signatures and must BOTH render. Keying on the wire form would
+        /// omit two perfectly callable members. Handle types outside the surface still collapse
+        /// onto <c>NetRef</c> and still collide.</para>
+        ///
+        /// <para><b>Keyed on the RENDERED name, not the member's .NET name.</b> D6 makes a property
+        /// <c>X</c> render as <c>get_X</c>, so it can collide with a METHOD literally named
+        /// <c>get_X</c> — two different .NET names, one C++ name. Keying on <c>Member.Name</c>
+        /// would let that pair through as two overloads of the same signature, which does not
+        /// compile.</para>
+        ///
+        /// <para>The key omits static-ness, which is the shape C++ wants — it forbids overloading a
+        /// static and a non-static member function with the same parameter types, so such a pair
+        /// would be caught here as the collision it is. No claim that this is reachable: C# will
+        /// not let one type declare both, and an INHERITED member reports its base as
+        /// <c>DeclaringTypeFullName</c>, so it lands in a different struct rather than colliding.
+        /// The key is shaped this way because it costs nothing, not because a case is known.</para>
+        /// </summary>
+        private static ISet<string> CollidingFacadeSignatures(
+            IReadOnlyList<SlotPlan> rendered, ISet<string> handleTypes,
+            List<FacadeCollision> collisions)
+        {
+            var colliding = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var group in rendered
+                         .GroupBy(p => FacadeSignatureKey(p, handleTypes), StringComparer.Ordinal)
+                         .Where(g => g.Count() > 1)
+                         .OrderBy(g => g.Key, StringComparer.Ordinal))
+            {
+                foreach (var plan in group) colliding.Add(plan.SlotName);
+                collisions.Add(new FacadeCollision(
+                    group.Key,
+                    group.Select(p => p.Member.ToString()).OrderBy(n => n, StringComparer.Ordinal).ToList(),
+                    "two or more members render to this one C++ signature — §8.3 maps distinct .NET "
+                    + "types onto one wire form, so rendering either would silently bind calls "
+                    + "meant for the other."));
+            }
+
+            return colliding;
+        }
+
+        private static string FacadeSignatureKey(SlotPlan plan, ISet<string> handleTypes) =>
+            plan.Member.DeclaringTypeFullName + "::" + FacadeMemberName(plan) + "("
+            + string.Join(",", plan.Parameters.Select(p => FacadeParamType(p, handleTypes))) + ")";
+
+        /// <summary>
+        /// D7: a handle-typed parameter or return is the WRAPPER type when that type has one, and
+        /// raw <c>NetRef</c> otherwise. The surface is the whole world the facade can name; a
+        /// handle to a type nobody declared has no wrapper to be.
         /// </summary>
         private static bool RendersAsWrapper(
             WireForm wire, string netTypeFullName, ISet<string> handleTypes) =>
@@ -217,18 +482,15 @@ namespace BasicLang.Compiler.CodeGen.Net
         /// nearer one. Generated code can afford the width; binding the wrong type cannot be
         /// afforded at all.</para>
         /// </summary>
-        private static string FacadeQualifiedName(string declaringTypeFullName)
-        {
-            var segments = FacadeNamespaceSegments(declaringTypeFullName, out var typeName);
-            return "::" + FacadeRootNamespace
-                   + string.Concat(segments.Select(s => "::" + s))
-                   + "::" + typeName;
-        }
+        private static string FacadeQualifiedName(string declaringTypeFullName) =>
+            "::" + FacadeRootNamespace + "::" + FacadeTypePath(declaringTypeFullName);
 
         // ------------------------------------------------------------------------------------
 
         private static string EmitFacade(NetSurface surface, IReadOnlyList<SlotPlan> plans)
         {
+            var layout = LayOutFacade(plans);
+
             var sb = new StringBuilder();
             Banner(sb, FacadeFileName,
                 "An ergonomic rendering of the proxy slots (see the emitter's remarks).",
@@ -245,29 +507,16 @@ namespace BasicLang.Compiler.CodeGen.Net
             L(sb, "#include <utility>   /* std::move, for the handle constructor */");
             L(sb, "");
 
-            var rendered = plans.Where(p => ClassifyForFacade(p) == null).ToList();
-            var handleTypes = FacadeHandleTypes(rendered);
-            var collisions = CollidingFacadeSignatures(rendered, handleTypes);
-            rendered = rendered.Where(p => !collisions.Contains(p.SlotName)).ToList();
-
-            var byType = rendered
+            var byType = layout.Rendered
                 .GroupBy(p => p.Member.DeclaringTypeFullName, StringComparer.Ordinal)
                 .ToDictionary(
                     g => g.Key,
                     g => (IReadOnlyList<SlotPlan>)g.ToList(),
                     StringComparer.Ordinal);
 
-            // A handle type with every method pruned still needs its wrapper: D7 signatures
-            // elsewhere may name it.
-            var typeNames = byType.Keys
-                .Concat(handleTypes)
-                .Distinct(StringComparer.Ordinal)
-                .OrderBy(n => n, StringComparer.Ordinal)
-                .ToList();
-
             L(sb, "namespace BasicLang { namespace netfx {");
 
-            if (handleTypes.Count > 0)
+            if (layout.HandleTypes.Count > 0)
             {
                 L(sb, "");
                 L(sb, "/* Tag for the handle-ADOPTING constructor: T(adopt_handle, h) wraps an existing");
@@ -279,24 +528,30 @@ namespace BasicLang.Compiler.CodeGen.Net
                 L(sb, "inline constexpr " + FacadeAdoptTagType + " " + FacadeAdoptTag + "{};");
             }
 
-            EmitFacadeForwardDeclarations(sb, typeNames);
+            EmitFacadeForwardDeclarations(sb, layout.TypeNames);
 
-            foreach (var name in typeNames)
-                EmitFacadeTypeDeclaration(sb, name, MembersOf(byType, name), handleTypes);
+            foreach (var name in layout.TypeNames)
+                EmitFacadeTypeDeclaration(sb, name, MembersOf(byType, name), layout.HandleTypes);
 
-            foreach (var name in typeNames)
-                EmitFacadeTypeDefinitions(sb, name, MembersOf(byType, name), handleTypes);
+            foreach (var name in layout.TypeNames)
+                EmitFacadeTypeDefinitions(sb, name, MembersOf(byType, name), layout.HandleTypes);
 
-            if (collisions.Count > 0)
+            if (layout.Collisions.Count > 0)
             {
                 L(sb, "");
-                L(sb, "/* OMITTED — two or more slots render to the SAME C++ signature, so a facade");
-                L(sb, "   name would silently pick one. §8.3 maps distinct .NET types onto one wire");
-                L(sb, "   form (every handle-represented type is NetRef), so this is reachable, not");
-                L(sb, "   theoretical. Call these through their mangled slot names in " + ProxiesFileName + ":");
-                foreach (var slot in collisions.OrderBy(s => s, StringComparer.Ordinal))
-                    L(sb, "     - " + Comment(slot));
-                L(sb, "*/");
+                L(sb, "/* OMITTED — each name below is claimed by two or more .NET things, and the facade");
+                L(sb, "   refuses to pick one: a wrong binding is worse than a missing one. Every member");
+                L(sb, "   remains callable under its mangled name in " + ProxiesFileName + ".");
+                L(sb, "   Reported on the build as BL6027, so this comment is a reference, not the");
+                L(sb, "   only notice you get. */");
+                foreach (var collision in layout.Collisions)
+                {
+                    L(sb, "/*   " + Comment(collision.CppName));
+                    L(sb, "       " + Comment(collision.Detail));
+                    foreach (var netName in collision.NetNames)
+                        L(sb, "     - " + Comment(netName));
+                    L(sb, "*/");
+                }
             }
 
             L(sb, "");
@@ -307,45 +562,6 @@ namespace BasicLang.Compiler.CodeGen.Net
         private static IReadOnlyList<SlotPlan> MembersOf(
             IReadOnlyDictionary<string, IReadOnlyList<SlotPlan>> byType, string name) =>
             byType.TryGetValue(name, out var members) ? members : Array.Empty<SlotPlan>();
-
-        /// <summary>
-        /// Slot names whose facade signature is shared with another slot (decision D8).
-        ///
-        /// <para>BOTH are omitted rather than one being chosen. §8.3 collapses every
-        /// handle-represented type onto <c>NetRef</c>, so <c>F(Regex)</c> and <c>F(Uri)</c> are
-        /// one C++ signature — picking either would make <c>F(someUri)</c> silently call the
-        /// <c>Regex</c> overload, which is a wrong answer rather than a missing one.</para>
-        ///
-        /// <para><b>Keyed on the FACADE types, not the wire types</b>, because D7 changes the
-        /// answer: once both <c>Regex</c> and <c>Uri</c> have wrappers those overloads are
-        /// genuinely distinct C++ signatures and must BOTH render. Keying on the wire form would
-        /// omit two perfectly callable members. Handle types outside the surface still collapse
-        /// onto <c>NetRef</c> and still collide.</para>
-        ///
-        /// <para><b>Keyed on the RENDERED name, not the member's .NET name.</b> D6 makes a property
-        /// <c>X</c> render as <c>get_X</c>, so it can collide with a METHOD literally named
-        /// <c>get_X</c> — two different .NET names, one C++ name. Keying on
-        /// <c>Member.Name</c> would let that pair through as two overloads of the same signature,
-        /// which does not compile.</para>
-        ///
-        /// <para>The key omits static-ness, which is the shape C++ wants — it forbids overloading a
-        /// static and a non-static member function with the same parameter types, so such a pair
-        /// would be caught here as the collision it is. No claim that this is reachable: C# will
-        /// not let one type declare both, and an INHERITED member reports its base as
-        /// <c>DeclaringTypeFullName</c>, so it lands in a different struct rather than colliding.
-        /// The key is shaped this way because it costs nothing, not because a case is known.</para>
-        /// </summary>
-        private static ISet<string> CollidingFacadeSignatures(
-            IReadOnlyList<SlotPlan> rendered, ISet<string> handleTypes) =>
-            rendered
-                .GroupBy(p => FacadeSignatureKey(p, handleTypes), StringComparer.Ordinal)
-                .Where(g => g.Count() > 1)
-                .SelectMany(g => g.Select(p => p.SlotName))
-                .ToHashSet(StringComparer.Ordinal);
-
-        private static string FacadeSignatureKey(SlotPlan plan, ISet<string> handleTypes) =>
-            plan.Member.DeclaringTypeFullName + "::" + FacadeMemberName(plan) + "("
-            + string.Join(",", plan.Parameters.Select(p => FacadeParamType(p, handleTypes))) + ")";
 
         private static void EmitFacadeForwardDeclarations(
             StringBuilder sb, IReadOnlyList<string> typeNames)

@@ -1,6 +1,6 @@
 # blnet C++ facade — an ergonomic header over the generated proxy slots
 
-**Status:** Tasks 1-3 implemented; Tasks 4-5 open
+**Status:** Tasks 1-4 implemented; Task 5 open
 **Date:** 2026-09-13
 **Builds on:** `2026-07-29-p2a-dotnet-access-aot-shim-design.md` (P2a, Implemented) — §7.3
 mangling, §8.3 wire forms, §9.1 generated artifacts.
@@ -193,14 +193,33 @@ functions, no ODR presence), and unconditional emission keeps the drift test sim
   Verified past the probe: a real build over `System.Console`, `Regex` and `System.Object` emits a
   788-line facade that compiles with `Regex r("^\\d+$")` — the plan's own §2 example — plus
   `Console::get_BufferHeight()` and tagged adoption.
-- [ ] **Task 4 — D8's collision rule + BL6027.** Red first: a surface with two handle-typed
-  overloads must emit neither and warn. The omit-both BEHAVIOR already ships from Task 1
-  (`CollidingFacadeSignatures`, pinned by `TwoSlotsSharingOneCppSignatureAreBothOmitted`); what
-  is left is the BL6027 diagnostic — today the collision is reported only as an `OMITTED`
-  comment inside the generated header, which nobody reads unless they already went looking.
-  Extend the same pass to the two NAME collisions listed in §4 (type-vs-namespace segment, and
-  two types sanitizing to one identifier), which are the cases that produce a header that does
-  not compile rather than one that silently omits.
+- [x] **Task 4 — D8's collision rule + BL6027.** *Done.* BL6027 is a WARNING, raised from
+  `NetProxyEmitter.FacadeDiagnostics` and merged by `CppProjectBuilder.EmitCore` through the same
+  channel BL6022/6023/6026 use. Never an error: the proxy table is complete and every colliding
+  member stays callable under its mangled name, so the build is correct and merely less ergonomic
+  — failing it would let a convenience header stop a working project from building.
+
+  The two NAME collisions from §4 are now detected AND acted on, because unlike a signature
+  collision (whose damage is a wrong binding) these emit a header that does not compile:
+  two types sanitizing to one identifier are both dropped; a type whose name is also a namespace
+  segment is dropped and the namespace wins, since other types live inside it.
+
+  **A latent inconsistency this closed.** `FacadeRendered` used to report every shape-renderable
+  slot, including ones `EmitFacade` then dropped for colliding — so §6's set identity was being
+  satisfied by a "rendered" set that overstated what the header actually contained. Classification
+  is now ONE pass (`LayOutFacade`) whose order runs one way only: shape → type-name collisions →
+  handle types → signature collisions. Handles are computed after the type drops on purpose, or a
+  D7 signature could name a type the header no longer defines.
+
+  Five new tests, each proven by a discriminating mutation: disabling type-name collision
+  detection, making BL6027 an error, returning no diagnostics, counting collided slots as
+  rendered, and removing the builder wiring entirely. The last one matters most — the emitter's own
+  test proves the findings are computed, and nothing there proves the builder ever asks.
+
+  Measured: the real `System.Console` + `Regex` surface has **zero** collisions, because D7's
+  wrapper types already disambiguate most handle overloads and the rest differ in arity. So BL6027
+  is expected to be rare in practice, which is exactly why it needed a test that constructs the
+  collision rather than hoping to find one.
 - [ ] **Task 5 — the coverage drift test (§6) and wiring into `NetProxyEmitter.Emit`.**
 
 ### Task 1 — two findings worth carrying into Tasks 2-5
