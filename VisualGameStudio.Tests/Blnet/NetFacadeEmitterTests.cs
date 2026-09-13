@@ -10,7 +10,7 @@ namespace VisualGameStudio.Tests.Blnet;
 
 /// <summary>
 /// <c>blnet_facade.g.hpp</c> — the ergonomic C++ rendering of the proxy slots
-/// (plan <c>2026-09-13-blnet-cpp-facade.md</c>, Tasks 1-2: static and instance methods).
+/// (plan <c>2026-09-13-blnet-cpp-facade.md</c>, Tasks 1-3: methods, constructors and properties).
 ///
 /// <para><b>⛔ The trap this fixture is built to avoid.</b> "The facade compiles" is NOT
 /// coverage — an EMPTY facade compiles perfectly, and so does one that silently dropped half the
@@ -36,8 +36,18 @@ public class NetFacadeEmitterTests
             public sealed class Counter
             {
                 private int _n;
+
+                // Task 3 / D5: real constructors. Two of them, so the overload set is not trivial,
+                // and neither may collide with the handle-ADOPTING constructor.
+                public Counter() { }
+                public Counter(int start) { _n = start; }
+
                 public int Bump(int by) { _n += by; return _n; }
                 public string Label() => "n=" + _n;
+
+                // Task 3 / D6: a property renders as get_Value(). Its SETTER is a different
+                // question — see the emitter's remarks: a declared surface draws read slots only.
+                public int Value => _n;
             }
 
             public static class Api
@@ -261,6 +271,16 @@ public class NetFacadeEmitterTests
             new NetStubHarness.StubSlot(Slot("Read"),
                 "[](uint64_t a0, int32_t* result) -> int32_t {"
                 + " *result = (int32_t)a0 * 100; return 0; }"),
+
+            // Task 3. The constructor slot MAKES the object and hands back its handle, so a
+            // wrapper that forgot to adopt the result reads back 0. get_Value derives from the
+            // receiver, so a getter that lost it reads 0 too.
+            new NetStubHarness.StubSlot(SlotCtor(1),
+                "[](int32_t a0, uint64_t* result) -> int32_t {"
+                + " *result = (uint64_t)(a0 * 3); return 0; }"),
+            new NetStubHarness.StubSlot(Slot("Value"),
+                "[](uint64_t self, int32_t* result) -> int32_t {"
+                + " *result = (int32_t)self * 2; return 0; }"),
         });
 
         var main = """
@@ -278,6 +298,12 @@ public class NetFacadeEmitterTests
                 std::printf("BUMP:%d\n", c.Bump(5));
                 std::printf("READ:%d\n", Fac::Probe::Api::Read(c));
                 std::printf("RAW:%llu\n", (unsigned long long)c.raw().get());
+
+                /* D5: a real constructor CREATES the object — not a factory call. */
+                Fac::Probe::Counter made(7);
+                std::printf("CTOR:%llu\n", (unsigned long long)made.raw().get());
+                /* D6: a property is a plain get_X(). */
+                std::printf("VAL:%d\n", made.get_Value());
                 return 0;
             }
             """;
@@ -285,14 +311,18 @@ public class NetFacadeEmitterTests
         var output = NetStubHarness.RunWithStub(main, _surface, stub).Replace("\r\n", "\n");
 
         Assert.That(output,
-            Is.EqualTo("210\nARG:hi\nSHOUTED\nPING\nSELF:42\nBUMP:47\nREAD:4200\nRAW:42\n"),
+            Is.EqualTo("210\nARG:hi\nSHOUTED\nPING\nSELF:42\nBUMP:47\nREAD:4200\nRAW:42\n"
+                       + "CTOR:21\nVAL:42\n"),
             "the facade compiled but did not forward correctly.\n"
             + "  '0' or a default        -> the argument never reached the slot;\n"
             + "  missing ARG line        -> the string parameter was dropped;\n"
             + "  SELF:0                  -> the receiver was not forwarded from the handle;\n"
             + "  BUMP:5 (not 47)         -> the receiver was dropped and the arguments shifted;\n"
             + "  READ:0                  -> a wrapper parameter was not unwrapped to its handle;\n"
-            + "  RAW:0                   -> the wrapper did not adopt the returned handle.");
+            + "  RAW:0                   -> the wrapper did not adopt the returned handle;\n"
+            + "  CTOR:0                  -> a real constructor ran the slot and discarded its\n"
+            + "                             handle, leaving the wrapper empty;\n"
+            + "  VAL:0                   -> a property getter lost the receiver.");
     }
 
     // ---- Task 2: instance members, the handle, and D7 ------------------------------------
@@ -381,8 +411,10 @@ public class NetFacadeEmitterTests
                 + "a NetRef, not a facade type.");
 
             Assert.That(text,
-                Does.Contain("::BasicLang::netfx::Fac::Probe::Counter(BasicLang::net::" + Slot("Make")),
-                "a wrapper RESULT must be constructed from the proxy's returned handle.");
+                Does.Contain("::BasicLang::netfx::Fac::Probe::Counter(::BasicLang::netfx::adopt_handle, "
+                             + "BasicLang::net::" + Slot("Make")),
+                "a wrapper RESULT must ADOPT the proxy's returned handle — through the tagged "
+                + "constructor, since the untagged spelling now belongs to D5's real constructors.");
         });
     }
 
@@ -402,7 +434,7 @@ public class NetFacadeEmitterTests
         var text = Facade();
 
         var lastForward = text.LastIndexOf("struct Counter;", StringComparison.Ordinal);
-        var firstBody = text.IndexOf("\ninline ", StringComparison.Ordinal);
+        var firstBody = FirstMemberDefinition(text);
 
         Assert.Multiple(() =>
         {
@@ -422,6 +454,32 @@ public class NetFacadeEmitterTests
         });
     }
 
+    /// <summary>
+    /// Offset of the first OUT-OF-LINE MEMBER DEFINITION — an <c>inline</c> line that qualifies a
+    /// name with <c>Type::</c> and opens a parameter list.
+    ///
+    /// <para>Not simply the first <c>inline</c>: the file also emits
+    /// <c>inline constexpr adopt_handle_t adopt_handle{};</c> ahead of the forward declarations,
+    /// which is correct — the tag is a complete type that depends on nothing — but is not a member
+    /// body and must not be mistaken for one.</para>
+    /// </summary>
+    private static int FirstMemberDefinition(string text)
+    {
+        var scan = 0;
+        while (true)
+        {
+            var at = text.IndexOf("\ninline ", scan, StringComparison.Ordinal);
+            if (at < 0) return -1;
+            scan = at + 1;
+
+            var lineEnd = text.IndexOf('\n', at + 1);
+            var line = lineEnd < 0 ? text.Substring(at + 1) : text.Substring(at + 1, lineEnd - at - 1);
+            if (line.Contains("::", StringComparison.Ordinal)
+                && line.Contains("(", StringComparison.Ordinal))
+                return at;
+        }
+    }
+
     /// <summary>The text of one <c>struct X { … };</c> block, for scoped assertions.</summary>
     private static string TypeBlock(string text, string typeName)
     {
@@ -431,6 +489,159 @@ public class NetFacadeEmitterTests
         Assert.That(end, Is.GreaterThan(start), $"'struct {typeName}' never closes");
         return text.Substring(start, end - start);
     }
+
+    // ---- Task 3: constructors (D5) and properties (D6) -----------------------------------
+
+    /// <summary>
+    /// D5: a .NET constructor becomes a real C++ constructor that CREATES the object —
+    /// <c>Counter c(7)</c>, not a factory call.
+    /// </summary>
+    [Test]
+    public void ConstructorsRenderAsRealCppConstructors()
+    {
+        var text = Facade();
+        var counter = TypeBlock(text, "Counter");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(counter, Does.Contain("Counter();"),
+                "the parameterless .NET constructor must render.");
+            Assert.That(counter, Does.Contain("Counter(int32_t a0);"),
+                "a constructor with arguments must render with them.");
+
+            // The body initialises the handle FROM the constructor slot: PlanMember gives every
+            // .ctor a Handle return precisely because metadata's System.Void would otherwise emit
+            // a slot that constructs and discards.
+            Assert.That(text,
+                Does.Contain(": blnet_handle_(BasicLang::net::" + SlotCtor(1) + "(a0)) {}"),
+                "a constructor must initialise the wrapper's handle from its own slot's result. "
+                + "If it does not, the object is created and thrown away and the wrapper is empty.");
+        });
+    }
+
+    /// <summary>
+    /// The adopting constructor must be TAGGED, so it never joins a real constructor's overload
+    /// set.
+    ///
+    /// <para>Untagged, <c>T(NetRef)</c> is ambiguous with any .NET constructor taking a single
+    /// handle-typed argument of a type outside the surface — which renders as
+    /// <c>T(const NetRef&amp;)</c>. <c>StreamReader(Stream)</c> is exactly that shape, so this is
+    /// reachable rather than theoretical.</para>
+    /// </summary>
+    [Test]
+    public void TheAdoptingConstructorIsTaggedSoItCannotCollideWithARealOne()
+    {
+        var text = Facade();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(text, Does.Contain("struct adopt_handle_t"),
+                "the adopt tag type must be defined.");
+            Assert.That(TypeBlock(text, "Counter"),
+                Does.Contain("Counter(adopt_handle_t, BasicLang::blnet::NetRef blnet_handle);"),
+                "the adopting constructor must take the tag.");
+            Assert.That(TypeBlock(text, "Counter"),
+                Does.Not.Contain("explicit Counter(BasicLang::blnet::NetRef"),
+                "the UNTAGGED adopting constructor must be gone — it is ambiguous with any .NET "
+                + "constructor taking one handle-typed argument.");
+        });
+    }
+
+    /// <summary>
+    /// D6: a property becomes <c>get_X()</c> — boring and explicit, never an operator. An
+    /// <c>operator=</c> that performs a cross-boundary call looks like assignment and costs a
+    /// shim round trip.
+    /// </summary>
+    [Test]
+    public void PropertiesRenderAsGetAccessors()
+    {
+        var text = Facade();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(TypeBlock(text, "Counter"), Does.Contain("int32_t get_Value() const;"),
+                "an instance property must render as get_X(), const like any other instance member.");
+
+            Assert.That(text, Does.Contain("BasicLang::net::" + Slot("Value") + "(blnet_handle_)"),
+                "the getter must forward to the property's own read slot, with the receiver "
+                + "supplied from the handle.");
+
+            Assert.That(TypeBlock(text, "Counter"), Does.Not.Contain("operator="),
+                "a property must not become an operator (D6).");
+        });
+    }
+
+    /// <summary>
+    /// Every member CATEGORY now renders, so nothing may be skipped merely for being a
+    /// constructor, property or field. What remains skippable is SHAPE — a multi-slot result or
+    /// argument, or a ByRef parameter.
+    ///
+    /// <para>Asserted against the skip REASONS rather than a count, so this keeps meaning what it
+    /// says when the surface changes.</para>
+    /// </summary>
+    [Test]
+    public void NoSlotIsSkippedMerelyForItsCategory()
+    {
+        var skipped = NetProxyEmitter.FacadeSkips(_surface);
+
+        Assert.That(skipped.Select(s => s.Reason), Has.None.Contains("renders methods only"),
+            "a category-based skip survived Task 3. Constructors, properties and fields all "
+            + "render now; only shape (multi-slot results/arguments, ByRef) may exclude a slot.");
+
+        Assert.That(skipped, Is.Not.Empty,
+            "guard: the probe must still skip SOMETHING (ByRefArg), or this proves nothing.");
+    }
+
+    /// <summary>
+    /// The other half of D6: a <c>set_X</c> slot renders as <c>set_X(value)</c>.
+    ///
+    /// <para><b>Why this test builds its own surface.</b> No declared surface can reach this path.
+    /// A <c>&lt;NetProxy&gt;</c> type draws only property READ slots; a setter descriptor is
+    /// synthesized only where a BasicLang program actually WRITES the member, and a real build over
+    /// <c>System.Console</c> and <c>Regex</c> produces zero <c>set_</c> slots. Testing it through
+    /// the probe assembly is therefore impossible — so the setter is synthesized here with the same
+    /// production helper (<c>NetAccessorSynthesis.SetterFor</c>) the compiler uses.</para>
+    ///
+    /// <para>The setter arrives as an ordinary <c>Method</c> named <c>set_X</c> returning
+    /// <c>System.Void</c> with the value as its last parameter, so it needs no special case in the
+    /// emitter — which is exactly what this pins. If someone later adds one, this goes red.</para>
+    /// </summary>
+    [Test]
+    public void ASynthesizedSetterRendersAsSetX()
+    {
+        var property = _surface.Members.Single(
+            m => m.Name == "Value" && m.DeclaringTypeFullName == "Fac.Probe.Counter");
+        var setter = NetAccessorSynthesis.SetterFor(property);
+
+        var withSetter = new NetSurface(
+            _surface.Members.Concat(new[] { setter }).ToList(), Array.Empty<string>());
+        var text = NetProxyEmitter.Emit(withSetter, "FacProbe.Blnet.dll")[NetProxyEmitter.FacadeFileName];
+
+        Assert.Multiple(() =>
+        {
+            // const because it describes the WRAPPER, which is unchanged — the .NET object behind
+            // the handle is free to mutate. D7 passes wrappers as const&, so a non-const setter
+            // could not be called on one.
+            Assert.That(text, Does.Contain("void set_Value(int32_t a0) const;"),
+                "a synthesized setter must render as set_X taking the value.");
+
+            Assert.That(text, Does.Contain("BasicLang::net::" + NetNameMangler.Mangle(setter)
+                                           + "(blnet_handle_, a0)"),
+                "the setter must forward the receiver and the value, in that order.");
+
+            Assert.That(text, Does.Not.Contain("get_set_Value"),
+                "a name that already carries an accessor prefix must not be prefixed again.");
+        });
+    }
+
+    /// <summary>The mangled slot name of the probe Counter constructor with that many parameters.</summary>
+    private static string SlotCtor(int paramCount) =>
+        _surface.Members
+            .Where(m => m.Kind == NetMemberCategory.Constructor
+                        && m.DeclaringTypeFullName == "Fac.Probe.Counter"
+                        && m.Parameters.Count == paramCount)
+            .Select(NetNameMangler.Mangle)
+            .Single();
 
     /// <summary>The mangled slot name for the sole probe member of that name.</summary>
     private static string Slot(string memberName) =>

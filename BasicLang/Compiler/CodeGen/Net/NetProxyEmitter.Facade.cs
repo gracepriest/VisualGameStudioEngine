@@ -24,13 +24,21 @@ namespace BasicLang.Compiler.CodeGen.Net
     /// are projections of one plan. Only COVERAGE can drift, which is what
     /// <c>NetFacadeEmitterTests</c> pins as a set identity.</para>
     ///
-    /// <para><b>v1 scope (plan Tasks 1-2): METHODS, static and instance.</b> Constructors,
-    /// properties and fields are plan Task 3; any slot whose result or arguments fan out to
-    /// multiple scalar slots, and any ByRef parameter, remain deliberately unrendered. Every
-    /// omission is REPORTED through <see cref="FacadeSkip"/> rather than dropped, so the coverage
-    /// test fails on a newly unrenderable slot instead of quietly covering less. That is §7.2's
-    /// lesson applied to ourselves: an omission nobody is told about leaves the surface meaning
-    /// less than it says.</para>
+    /// <para><b>v1 scope (plan Tasks 1-3): every member CATEGORY — methods, constructors,
+    /// properties and fields, static and instance.</b> What remains unrendered is shape, not
+    /// category: a slot whose result or arguments fan out to multiple scalar slots, and any ByRef
+    /// parameter. Every omission is REPORTED through <see cref="FacadeSkip"/> rather than dropped,
+    /// so the coverage test fails on a newly unrenderable slot instead of quietly covering less.
+    /// That is §7.2's lesson applied to ourselves: an omission nobody is told about leaves the
+    /// surface meaning less than it says.</para>
+    ///
+    /// <para><b>⚠ A property's SETTER is usually absent, and that is upstream of this emitter.</b>
+    /// A <c>&lt;NetProxy&gt;</c> declared type draws only property READ slots; a <c>set_X</c>
+    /// descriptor is SYNTHESIZED (<see cref="NetSyntheticKind.Setter"/>) only where a BasicLang
+    /// program actually writes the member. Measured on a real build over <c>System.Console</c> and
+    /// <c>Regex</c>: zero <c>set_</c> slots. The facade can only render slots that EXIST — it
+    /// cannot invent an export — so D6's <c>set_X()</c> appears exactly when its slot does. This
+    /// is a property of the surface, not a gap in the facade.</para>
     ///
     /// <para><b>Why the file is emitted in three phases.</b> D7 lets one facade type appear in
     /// another's signature, and .NET name order says nothing about which has to come first
@@ -59,6 +67,22 @@ namespace BasicLang.Compiler.CodeGen.Net
         /// <summary>The wrapper's handle field, and the constructor parameter that fills it.</summary>
         private const string FacadeHandleField = "blnet_handle_";
         private const string FacadeHandleParam = "blnet_handle";
+
+        /// <summary>
+        /// The tag type that keeps the handle-ADOPTING constructor out of D5's way.
+        ///
+        /// <para><b>Why a tag rather than a plain <c>explicit T(NetRef)</c>.</b> Task 2 spelled the
+        /// adopting constructor that way, which was fine while nothing else took the constructor
+        /// space. D5 changes that: a .NET constructor whose single argument is a handle-typed value
+        /// of a type NOT in the surface renders as <c>T(const NetRef&amp;)</c>, and an overload set
+        /// containing both that and <c>T(NetRef)</c> is AMBIGUOUS for every call. This is not a
+        /// contrived shape — <c>StreamReader(Stream)</c> is exactly it.</para>
+        ///
+        /// <para>No .NET type maps to <c>adopt_handle_t</c>, so a real constructor can never
+        /// collide with the adopting one, and D5 owns the ordinary constructor space outright.</para>
+        /// </summary>
+        private const string FacadeAdoptTagType = "adopt_handle_t";
+        private const string FacadeAdoptTag = "adopt_handle";
 
         /// <summary>Why one slot is absent from the facade — the skip list is DATA, not silence.</summary>
         internal sealed class FacadeSkip
@@ -91,11 +115,6 @@ namespace BasicLang.Compiler.CodeGen.Net
         /// </summary>
         private static FacadeSkip ClassifyForFacade(SlotPlan plan)
         {
-            if (plan.Member.Kind != NetMemberCategory.Method)
-                return new FacadeSkip(plan.SlotName,
-                    "v1 renders methods only; this is a " + plan.Member.Kind
-                    + " (constructors, properties and fields are plan Task 3).");
-
             if (plan.Return.Kind == WireKind.MultiScalar)
                 return new FacadeSkip(plan.SlotName,
                     "the result fans out to multiple scalar slots, which the proxy returns through "
@@ -120,6 +139,9 @@ namespace BasicLang.Compiler.CodeGen.Net
         /// Declaring types that get a HANDLE and a wrapper: those with at least one rendered
         /// INSTANCE member (D4).
         ///
+        /// <para>A CONSTRUCTOR counts too (D5): a type you can construct is a type that holds a
+        /// handle, even when every other member of it is static.</para>
+        ///
         /// <para>A static-only type deliberately gets neither. <c>System.Console</c> has no
         /// instances, so a <c>Console</c> object would be a meaningless value, and D7 must not
         /// offer it as a parameter type.</para>
@@ -130,7 +152,9 @@ namespace BasicLang.Compiler.CodeGen.Net
         /// with a handle and no methods, which compiles and stays referenceable by D7.</para>
         /// </summary>
         private static ISet<string> FacadeHandleTypes(IReadOnlyList<SlotPlan> rendered) =>
-            rendered.Where(p => p.HasReceiver)
+            rendered
+                .Where(p => p.HasReceiver
+                            || p.Member.Kind == NetMemberCategory.Constructor)
                 .Select(p => p.Member.DeclaringTypeFullName)
                 .ToHashSet(StringComparer.Ordinal);
 
@@ -159,6 +183,30 @@ namespace BasicLang.Compiler.CodeGen.Net
                 : RendersAsWrapper(plan.Return, plan.Member.TypeFullName, handleTypes)
                     ? FacadeQualifiedName(plan.Member.TypeFullName)
                     : plan.Return.CppReturnType;
+
+        /// <summary>
+        /// The C++ name a slot renders under (D6).
+        ///
+        /// <para>A property or field becomes <c>get_X</c> / <c>set_X</c> — boring and explicit. An
+        /// <c>operator=</c> overload performing a cross-boundary call is a trap: it looks like
+        /// assignment and costs a shim round trip.</para>
+        ///
+        /// <para>A name that ALREADY carries an accessor prefix is left alone. A synthesized setter
+        /// is named <c>set_X</c> (<see cref="NetSyntheticKind.Setter"/>) and §8.5's array accessors
+        /// are <c>get_Item</c>/<c>set_Item</c>; prefixing those again yields <c>get_get_Item</c>.</para>
+        /// </summary>
+        private static string FacadeMemberName(SlotPlan plan)
+        {
+            if (plan.Member.Kind == NetMemberCategory.Constructor) return ".ctor";
+
+            var name = plan.Member.Name;
+            if (plan.Member.Kind == NetMemberCategory.Method) return name;
+
+            return name.StartsWith("get_", StringComparison.Ordinal)
+                   || name.StartsWith("set_", StringComparison.Ordinal)
+                ? name
+                : "get_" + name;
+        }
 
         /// <summary>
         /// A facade type's name, qualified from the global scope.
@@ -219,6 +267,18 @@ namespace BasicLang.Compiler.CodeGen.Net
 
             L(sb, "namespace BasicLang { namespace netfx {");
 
+            if (handleTypes.Count > 0)
+            {
+                L(sb, "");
+                L(sb, "/* Tag for the handle-ADOPTING constructor: T(adopt_handle, h) wraps an existing");
+                L(sb, "   handle, where T(...) constructs a NEW .NET object (D5). No .NET type maps to");
+                L(sb, "   this tag, so a real constructor can never collide with the adopting one —");
+                L(sb, "   which a plain T(NetRef) would, against any .NET constructor taking a single");
+                L(sb, "   handle-typed argument, StreamReader(Stream) being the obvious one. */");
+                L(sb, "struct " + FacadeAdoptTagType + " { explicit " + FacadeAdoptTagType + "() = default; };");
+                L(sb, "inline constexpr " + FacadeAdoptTagType + " " + FacadeAdoptTag + "{};");
+            }
+
             EmitFacadeForwardDeclarations(sb, typeNames);
 
             foreach (var name in typeNames)
@@ -262,6 +322,12 @@ namespace BasicLang.Compiler.CodeGen.Net
         /// omit two perfectly callable members. Handle types outside the surface still collapse
         /// onto <c>NetRef</c> and still collide.</para>
         ///
+        /// <para><b>Keyed on the RENDERED name, not the member's .NET name.</b> D6 makes a property
+        /// <c>X</c> render as <c>get_X</c>, so it can collide with a METHOD literally named
+        /// <c>get_X</c> — two different .NET names, one C++ name. Keying on
+        /// <c>Member.Name</c> would let that pair through as two overloads of the same signature,
+        /// which does not compile.</para>
+        ///
         /// <para>The key omits static-ness, which is the shape C++ wants — it forbids overloading a
         /// static and a non-static member function with the same parameter types, so such a pair
         /// would be caught here as the collision it is. No claim that this is reachable: C# will
@@ -278,7 +344,7 @@ namespace BasicLang.Compiler.CodeGen.Net
                 .ToHashSet(StringComparer.Ordinal);
 
         private static string FacadeSignatureKey(SlotPlan plan, ISet<string> handleTypes) =>
-            plan.Member.DeclaringTypeFullName + "::" + plan.Member.Name + "("
+            plan.Member.DeclaringTypeFullName + "::" + FacadeMemberName(plan) + "("
             + string.Join(",", plan.Parameters.Select(p => FacadeParamType(p, handleTypes))) + ")";
 
         private static void EmitFacadeForwardDeclarations(
@@ -314,11 +380,11 @@ namespace BasicLang.Compiler.CodeGen.Net
 
             if (hasHandle)
             {
-                L(sb, "    /* Wraps an EXISTING handle; this does NOT create the .NET object (D5's real");
-                L(sb, "       constructors are plan Task 3). explicit on purpose: a NetRef is not a");
-                L(sb, "       " + Comment(typeName) + ", and an implicit conversion would let any handle bind to any");
-                L(sb, "       wrapper of any type. */");
-                L(sb, "    explicit " + typeName + "(BasicLang::blnet::NetRef " + FacadeHandleParam + ");");
+                L(sb, "    /* Wraps an EXISTING handle; this does NOT create a .NET object — the");
+                L(sb, "       constructors below (D5) do that. Tagged so it cannot be reached by");
+                L(sb, "       accident, and so it never joins a real constructor's overload set. */");
+                L(sb, "    " + typeName + "(" + FacadeAdoptTagType + ", BasicLang::blnet::NetRef "
+                      + FacadeHandleParam + ");");
                 L(sb, "");
                 L(sb, "    /* The underlying handle, for the mangled slots and for proxies this facade");
                 L(sb, "       does not render. Held privately (D4) so the wrapper cannot be rebound to a");
@@ -335,7 +401,12 @@ namespace BasicLang.Compiler.CodeGen.Net
                 L(sb, "");
             }
 
-            foreach (var plan in members.OrderBy(p => p.SlotName, StringComparer.Ordinal))
+            var ordered = members.OrderBy(p => p.SlotName, StringComparer.Ordinal).ToList();
+
+            foreach (var plan in ordered.Where(IsFacadeConstructor))
+                L(sb, "    " + FacadeConstructorSignature(plan, typeName, handleTypes, qualified: false) + ";");
+
+            foreach (var plan in ordered.Where(p => !IsFacadeConstructor(p)))
                 L(sb, "    " + FacadeMemberSignature(plan, handleTypes, qualifier: null) + ";");
 
             if (hasHandle)
@@ -365,7 +436,8 @@ namespace BasicLang.Compiler.CodeGen.Net
             if (hasHandle)
             {
                 L(sb, "inline " + typeName + "::" + typeName
-                      + "(BasicLang::blnet::NetRef " + FacadeHandleParam + ")");
+                      + "(" + FacadeAdoptTagType + ", BasicLang::blnet::NetRef "
+                      + FacadeHandleParam + ")");
                 L(sb, "    : " + FacadeHandleField + "(std::move(" + FacadeHandleParam + ")) {}");
                 L(sb, "");
                 L(sb, "inline const BasicLang::blnet::NetRef& " + typeName + "::raw() const {");
@@ -374,7 +446,24 @@ namespace BasicLang.Compiler.CodeGen.Net
                 L(sb, "");
             }
 
-            foreach (var plan in members.OrderBy(p => p.SlotName, StringComparer.Ordinal))
+            foreach (var plan in members.OrderBy(p => p.SlotName, StringComparer.Ordinal)
+                         .Where(IsFacadeConstructor))
+            {
+                // D5: a real constructor CREATES the .NET object. The constructor slot's proxy
+                // returns the fresh handle (PlanMember gives every .ctor a Handle return, because
+                // metadata's System.Void would emit a slot that constructs and discards), so the
+                // handle field is initialised straight from the call.
+                var ctorArgs = string.Join(", ",
+                    plan.Parameters.Select(p => FacadeArgument(p, handleTypes)));
+
+                L(sb, "inline " + FacadeConstructorSignature(plan, typeName, handleTypes, qualified: true));
+                L(sb, "    : " + FacadeHandleField + "(BasicLang::net::" + plan.SlotName
+                      + "(" + ctorArgs + ")) {}");
+                L(sb, "");
+            }
+
+            foreach (var plan in members.OrderBy(p => p.SlotName, StringComparer.Ordinal)
+                         .Where(p => !IsFacadeConstructor(p)))
             {
                 var callArgs = new List<string>();
 
@@ -391,8 +480,13 @@ namespace BasicLang.Compiler.CodeGen.Net
                     RendersAsWrapper(plan.Return, plan.Member.TypeFullName, handleTypes);
 
                 L(sb, "inline " + FacadeMemberSignature(plan, handleTypes, typeName) + " {");
+                // A wrapper RESULT adopts the handle the proxy returned, so it goes through the
+                // tagged constructor — the untagged spelling is now a real .NET constructor.
                 L(sb, "    " + (plan.Return.Kind == WireKind.Void ? "" : "return ")
-                      + (wrapsResult ? returnType + "(" + forward + ")" : forward) + ";");
+                      + (wrapsResult
+                            ? returnType + "(::" + FacadeRootNamespace + "::" + FacadeAdoptTag
+                              + ", " + forward + ")"
+                            : forward) + ";");
                 L(sb, "}");
                 L(sb, "");
             }
@@ -421,9 +515,27 @@ namespace BasicLang.Compiler.CodeGen.Net
             return (plan.HasReceiver || qualifier != null ? "" : "static ")
                    + FacadeReturnType(plan, handleTypes) + " "
                    + (qualifier == null ? "" : qualifier + "::")
-                   + plan.Member.Name
+                   + FacadeMemberName(plan)
                    + "(" + string.Join(", ", args) + ")"
                    + (plan.HasReceiver ? " const" : "");
+        }
+
+        private static bool IsFacadeConstructor(SlotPlan plan) =>
+            plan.Member.Kind == NetMemberCategory.Constructor;
+
+        /// <summary>
+        /// One constructor's C++ signature (D5), for the declaration or the out-of-line
+        /// definition. A constructor takes no <c>static</c>, no <c>const</c> and no return type,
+        /// which is why it does not share <see cref="FacadeMemberSignature"/>.
+        /// </summary>
+        private static string FacadeConstructorSignature(
+            SlotPlan plan, string typeName, ISet<string> handleTypes, bool qualified)
+        {
+            var args = plan.Parameters
+                .Select(p => FacadeParamType(p, handleTypes) + " " + p.Name);
+
+            return (qualified ? typeName + "::" : "") + typeName
+                   + "(" + string.Join(", ", args) + ")";
         }
 
         /// <summary>

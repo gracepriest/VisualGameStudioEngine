@@ -164,11 +164,16 @@ fails only when the Native tier runs alongside it). The fast subset shows the tw
 - **blnet C++ facade (`blnet_facade.g.hpp`)** — an ergonomic C++ rendering of the proxy slots,
   so hand-written C++ can say `System::Console::WriteLine("hi")` instead of naming a mangled
   slot whose trailing hash moves whenever the signature does. Plan:
-  `docs/superpowers/plans/2026-09-13-blnet-cpp-facade.md`. **Task 1 (static methods) is done and
-  proven**; Tasks 2-5 are open: instance members + the private `NetRef` handle, constructors and
-  properties, the BL6027 collision diagnostic, and the coverage drift wiring. The header is
-  emitted unconditionally and included by nobody — `using namespace BasicLang::netfx;` is the
-  one opt-in line.
+  `docs/superpowers/plans/2026-09-13-blnet-cpp-facade.md`. **Tasks 1-3 are done and proven** —
+  methods (static and instance), constructors, and properties, so `Regex r("^a+$"); r.IsMatch(s)`
+  works from C++. Tasks 4-5 are open: the BL6027 collision diagnostic and the coverage drift
+  wiring. The header is emitted unconditionally and included by nobody —
+  `using namespace BasicLang::netfx;` is the one opt-in line.
+  ⚠ **A property's `set_X()` is usually absent**, and that is the SURFACE, not the facade: a
+  `<NetProxy>` declared type draws only property READ slots, because a setter descriptor is
+  synthesized only where a BasicLang program actually writes the member. Measured on a real build
+  over `System.Console` and `Regex`: zero `set_` slots. C++ can read such a property but not write
+  it. The facade cannot fix this — it can only render slots that exist.
 - **VS Code extension host** — roughly 24 unimplemented requests, enumerated and enforced by
   `ExtensionHostRequestCoverageTests.KnownUnimplemented` (a second test fails once an entry is
   implemented, so the list must shrink). A missing `sendNotification` handler is a silent

@@ -1,6 +1,6 @@
 # blnet C++ facade — an ergonomic header over the generated proxy slots
 
-**Status:** Tasks 1-2 implemented; Tasks 3-5 open
+**Status:** Tasks 1-3 implemented; Tasks 4-5 open
 **Date:** 2026-09-13
 **Builds on:** `2026-07-29-p2a-dotnet-access-aot-shim-design.md` (P2a, Implemented) — §7.3
 mangling, §8.3 wire forms, §9.1 generated artifacts.
@@ -77,9 +77,29 @@ argument.
 **D5 — Constructors become real C++ constructors.** `Regex r("^a+$")` rather than a factory.
 A type with a constructor slot but no default .NET constructor gets no default constructor.
 
+*Resolved in Task 3 — the interaction Task 2 flagged.* The handle-adopting constructor now takes a
+**tag**: `T(adopt_handle, h)` adopts, `T(...)` constructs. Task 2's plain `explicit T(NetRef)` could
+not survive D5, because a .NET constructor whose single argument is a handle-typed value of a type
+outside the surface renders as `T(const NetRef&)`, and an overload set containing both is ambiguous
+for *every* call. `StreamReader(Stream)` is exactly that shape, so this was reachable rather than
+theoretical. No .NET type maps to `adopt_handle_t`, so D5 owns the ordinary constructor space
+outright.
+
 **D6 — Properties become `get_X()` / `set_X()`, not operators or magic.**
 Boring and explicit. An `operator=` overload that performs a cross-boundary call is a trap: it
 looks like assignment and costs a shim round trip. `IsSettable == false` emits only the getter.
+
+> ⚠ **Measured while implementing Task 3: `set_X()` will usually be ABSENT, and not because of
+> `IsSettable`.** A `<NetProxy>` declared type draws only property READ slots. A `set_X` descriptor
+> is *synthesized* (`NetSyntheticKind.Setter`) only where a BasicLang program actually writes the
+> member, so a declared surface has none — a real build over `System.Console` and `Regex` produced
+> **zero** `set_` slots. The facade can only render slots that exist; it cannot invent an export.
+> So C++ can read `Console.ForegroundColor` through the facade but cannot write it unless some
+> BasicLang code in the same project writes it too.
+>
+> This is a property of the SURFACE, not of the facade, and fixing it means making the collector
+> emit setter slots for declared settable members — a §7.2 surface question, deliberately not
+> decided here.
 
 **D7 — A handle-typed parameter or return is the WRAPPER type when that type is in the surface,
 and raw `NetRef` otherwise.** The surface is the whole world the facade can name; a handle to a
@@ -152,11 +172,27 @@ functions, no ODR presence), and unconditional emission keeps the drift test sim
 
   Verified beyond the probe: a real build over `System.Console`, `System.Text.RegularExpressions.Regex`
   and `System.Object` emits a 610-line facade that compiles clean, instance calls included.
-- [ ] **Task 3 — constructors (D5) and properties (D6).** Note the interaction Task 2 created:
-  every wrapper already has an `explicit T(NetRef)` that ADOPTS an existing handle. D5's real
-  constructors must not collide with it — a .NET `.ctor(NetRef)` would, and a `.ctor()` taking no
-  arguments is a different signature and will not. Decide there whether the adopting constructor
-  keeps its plain spelling or moves behind a tag type.
+- [x] **Task 3 — constructors (D5) and properties (D6).** *Done.* Real C++ constructors
+  initialising the handle from the constructor slot; `get_X()` for properties and fields; the
+  adopting constructor moved behind an `adopt_handle_t` tag (see D5) so it can never join a real
+  constructor's overload set.
+
+  **Every member CATEGORY now renders** — the `ClassifyForFacade` gate on `Kind != Method` is gone,
+  and what remains skippable is shape only (multi-slot result or argument, ByRef parameter).
+
+  One correctness fix the change forced: D8's collision key moved onto the RENDERED name. D6 makes
+  a property `X` render as `get_X`, so it can now collide with a method literally named `get_X` —
+  two different .NET names, one C++ name — which keying on `Member.Name` would have let through as
+  two overloads of one signature.
+
+  Four new tests, each proven by a discriminating mutation (a constructor that runs its slot and
+  discards the handle, an untagged adopting constructor, no `get_` prefix, and restoring the
+  category skip). The run oracle covers both new paths; the discarding-constructor mutation reads
+  back `CTOR:0 / VAL:0` rather than anything plausible.
+
+  Verified past the probe: a real build over `System.Console`, `Regex` and `System.Object` emits a
+  788-line facade that compiles with `Regex r("^\\d+$")` — the plan's own §2 example — plus
+  `Console::get_BufferHeight()` and tagged adoption.
 - [ ] **Task 4 — D8's collision rule + BL6027.** Red first: a surface with two handle-typed
   overloads must emit neither and warn. The omit-both BEHAVIOR already ships from Task 1
   (`CollidingFacadeSignatures`, pinned by `TwoSlotsSharingOneCppSignatureAreBothOmitted`); what
