@@ -84,6 +84,25 @@ public static class DesignCodes
     public const string Unreadable = "BL8007";
 
     /// <summary>
+    /// A designer region was edited by hand, so regenerating it would discard that edit. The form
+    /// opens read-only; Code view stays fully editable.
+    /// </summary>
+    public const string RegionHandEdited = "BL8011";
+
+    /// <summary>A designer marker is missing its partner, nested, or duplicated. Never written to.</summary>
+    public const string RegionMalformed = "BL8012";
+
+    /// <summary>
+    /// A handler is declared AFTER the designer region that wires it. An <c>AddressOf</c> naming a
+    /// later-declared <c>Sub</c> erases its parameter types and then fails to match the event's
+    /// delegate.
+    /// </summary>
+    public const string HandlerDeclaredAfterWiring = "BL8013";
+
+    /// <summary>The file has no designer regions — the import case, not an error.</summary>
+    public const string RegionAbsent = "BL8014";
+
+    /// <summary>
     /// A <c>&lt;Bind&gt;</c> carrying the reserved data-binding attributes (<c>Property</c>,
     /// <c>Source</c>, <c>Path</c>). Reserved means parsed and round-tripped, never acted on — so a
     /// document that populates them is refused rather than silently ignored, which would leave the
