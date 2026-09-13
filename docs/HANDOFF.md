@@ -47,12 +47,32 @@ build found:
 compiler. It found 29 real defects across three passes and still missed a file that did not
 compile.
 
+### ⛔ WinForms can be TYPE-CHECKED here too — the catalog is falsifiable off Windows
+
+The WinForms **reference assemblies** restore as an ordinary NuGet package, and reference-only
+compilation is cross-platform (they are metadata, not code):
+
+```xml
+<PackageReference Include="Microsoft.WindowsDesktop.App.Ref" Version="8.0.31"
+                  GeneratePathProperty="true" ExcludeAssets="all" PrivateAssets="all" />
+```
+
+So `csc` type-checks generated WinForms C# on Linux, where the WindowsDesktop **MSBuild SDK** does
+not exist at all (`dotnet build` of a `net8.0-windows` project fails with MSB4019, and
+`EnableWindowsTargeting` does not help — it needs those same missing targets). Running a WinForms
+app still needs Windows; nothing the catalog gate checks needs the program to start.
+
+⚠ Three assemblies ship in BOTH the base and desktop ref packs — `System.Drawing`, `WindowsBase`,
+`Microsoft.VisualBasic` — and the DESKTOP copy must win, as it does under the real SDK. Pass both
+and Roslyn sees two assemblies with the same simple name; the error it then produces points at the
+innocent one.
+
 ### Measured on Linux, .NET 8.0.131 (this container)
 
 | Run | Result | Time |
 |---|---|---|
 | Full suite, pre-branch baseline `6a6d224` | **174 failed / 5837 total** (5460 passed, 203 skipped) | ~8 min |
-| Full suite, `feat/form-designer` tip | **174 failed / 6111 total** (5734 passed, 203 skipped) | ~7 min |
+| Full suite, `feat/form-designer` tip | **174 failed / 6132 total** (5755 passed, 203 skipped) | ~8 min |
 | Fast subset, baseline `6a6d224` | 90 failed / 4939 total | ~1 min |
 | Fast subset, `feat/form-designer` tip | 90 failed / 5196 total | ~1 min |
 
@@ -76,7 +96,7 @@ Plan: `docs/superpowers/plans/2026-09-11-visual-form-designer.md` (19 tasks).
 Spec: `docs/superpowers/specs/2026-09-11-visual-form-designer-design.md`.
 Branch: **`feat/form-designer`** (PR #4). Not merged.
 
-**Done and now genuinely gated:** Tasks **1–6, 8–13, 15, 16**.
+**Done and now genuinely gated:** Tasks **1–6, 8–13, 15, 16, 17**, and half of **18**.
 
 | Task | What landed |
 |---|---|
@@ -93,10 +113,66 @@ Branch: **`feat/form-designer`** (PR #4). Not merged.
 | 13 | Creating a form — the document + `.bas` pair, and the glob guard |
 | **15** | **A missing handler is a hard error (D8)** |
 | **16** | **`.blform` — the same reader and writer, not a second one** |
+| **17** | **The WinForms catalog gate — every control, every property, through the real chain to `csc`** |
+| **18** | **PARTIAL — geometry fan-in and the canonical init shape. See below.** |
 
 **Not done:** Task 7 and 14 (Avalonia canvas + property grid — they build here, but there is no
-`Avalonia.Headless` package so nothing can drive them), 17–18 (WinForms catalog + region writing,
-which need Windows to verify against the real toolchain), 19 (closeout).
+`Avalonia.Headless` package so nothing can drive them), 19 (closeout).
+
+**Task 18 is PARTIAL and the remainder is the bigger half.** Done: geometry fans in
+(`Location = New Point(96, 80)` as ONE statement — `Location.X = 96` is **CS1612**, measured
+2026-09-13, which the plan asks for rather than assumes), the form's own caption and `ClientSize`,
+and the shipped emission order. **Not done:** *"promote the VSIX shape and retire the divergence"* —
+the VSIX still ships `Program.bas` + `MainForm.bas`, the IDE template still ships one `Main.bas`
+with no `InitializeComponent`, and the CLI `TemplateEngine` still has no WinForms template at all.
+That bullet also requires updating Task 5's recognizer fixtures in the SAME change (they are keyed
+to the CURRENT IDE template and will silently stop testing what ships) and adding the template to
+`TemplateBuildSweepTests`, whose cases are hand-written `[TestCase]` strings.
+
+### ⛔⛔ Task 17's gate found six defects the whole toolchain was blind to
+
+Every one compiled **green** through BasicLang and would have shipped. This is the clearest
+evidence in the repo for why the catalog needs csc rather than review:
+
+| Catalog claim | What WinForms actually has | csc |
+|---|---|---|
+| `TextBox.PasswordChar` is a String | a `char` | CS0029 |
+| `RadioButton.GroupName` | **does not exist** (grouping is by container) | CS1061 |
+| `ComboBox.Items` assignable | get-only collection | CS0200 |
+| `ListBox.Items` assignable | get-only collection | CS0200 |
+| `ListBox.MultiSelect` | **does not exist** (it is `SelectionMode`, an enum) | CS1061 |
+| `PictureBox.Image` is a path String | a `System.Drawing.Image` | CS0029 |
+| `TextAlign = Center` | `ContentAlignment` has no `Center` — it has `MiddleCenter` | CS0103 |
+
+`GroupName` and `MultiSelect` are now **web-only** — a platform fact, not a preference. The rest
+gained a WinForms enum type, a member mapping, a value factory (`Convert.ToChar`,
+`Image.FromFile`), or a collection marker. Completeness guards now FAIL on an Enum row with no
+enum type, an allowed value that maps to no member, and a WinForms control with no type name.
+
+⚠ `Convert.ToChar`, **not** `CChar` — measured. BasicLang passes `CChar` through to the C# backend
+verbatim and C# has no such function (CS0103). The same is true of anything VB-shaped: that backend
+is a passthrough for names it does not know, so "it compiled" means nothing on its own.
+
+### ⛔ AN OPEN DECISION: multi-edge `Anchor` is not expressible in BasicLang
+
+`Anchor="Left,Top,Right"` — an ordinary WinForms thing — cannot be generated. Measured three ways
+on 2026-09-13:
+
+| Attempt | Result |
+|---|---|
+| `AnchorStyles.Left Or AnchorStyles.Top` | *"Logical operator 'Or' requires Boolean operands"* |
+| `CType(7, AnchorStyles)` | *"Cannot convert 'Integer' to 'AnchorStyles': no such conversion exists"* — the enum is an unresolvable .NET type |
+| `AnchorStyles.Left \| AnchorStyles.Top` | `\|` **lexes** (`TokenType.BitwiseOr`, `BasicLangLexer.cs:754`) but the parser never consumes it: *"Unexpected token in expression"* |
+
+The designer currently **refuses** such a document (`BL8015`) rather than emitting one flag (which
+puts geometry on screen the running program will not reproduce — the exact D9 divergence) or all of
+them (which does not compile). Reachable today only from a hand-authored `.blform`, because the
+canvas that would offer multiple anchors is Task 14.
+
+**The decision someone has to make:** teach the parser a bitwise `Or`/`|` (a language change with a
+full-suite blast radius, and the semantic analyzer would also have to stop demanding Boolean
+operands for an unresolvable enum type), or keep refusing and ship single-edge anchors plus `Dock`.
+Not this writer's call, so it refuses and says why.
 
 ### Contradictions found against the spec and the briefing
 
@@ -132,16 +208,14 @@ which need Windows to verify against the real toolchain), 19 (closeout).
 ### What the next session should pick up
 
 1. **Re-run the full suite on Windows.** Everything above is a Linux measurement. The Windows
-   number to beat is 5826 total / 4 failures at `f54416b`; this branch adds 274 tests.
-2. **Tasks 17–18** (WinForms catalog + region writing). Task 16 exists to give 18 an input
-   document; it now has one. ⛔ The catalog is **unfalsifiable** without the real toolchain —
-   every `Form`/`Button` member types as `Object` with no diagnostic, so a misspelled property
-   name compiles green. The gate has to be a sweep that generates every control with every
-   property and requires the real CLI to exit 0, driven from `FormControlCatalog.All`.
-3. **Tasks 7 and 14** (canvas + property grid) — need a machine that can run Avalonia.
-4. **Task 19**, closeout.
-5. **PR #3 (`claude/busy-newton-gsispd`)** is still open carrying a superseded spec/plan pair.
-   It should be closed or stripped to just the SessionStart hook.
+   number to beat is 5826 total / 4 failures at `f54416b`; this branch adds 295 tests.
+2. **Task 18's second half** — promote the VSIX shape and retire the three-way template
+   divergence, update Task 5's recognizer fixtures in the SAME change, and add the template to
+   `TemplateBuildSweepTests`. Task 17's gate is in place to catch what that breaks.
+3. **Decide the multi-edge `Anchor` question above.** Until then anchoring is single-edge or `Dock`.
+4. **Tasks 7 and 14** (canvas + property grid) — need a machine that can run Avalonia.
+5. **Task 19**, closeout.
+6. **PR #3 (`claude/busy-newton-gsispd`)** is still open carrying a superseded spec/plan pair.
 
 ---
 
