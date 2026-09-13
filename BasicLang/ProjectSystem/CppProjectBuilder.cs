@@ -830,11 +830,26 @@ namespace BasicLang.Compiler.ProjectSystem
             // A project may pin one specific toolchain via <CppToolchain> ("llvm" | "gcc" |
             // "msvc"); then ONLY that toolchain satisfies the build — a machine that has
             // some other compiler installed gets BL6015 naming both sides, never a silent
-            // substitute. No pin = the machine probe, exactly as before. The pin drives
+            // substitute. No pin = the machine probe (pure C++ only — see below). The pin drives
             // IntelliSense emission through the SAME resolution (so the compile database
             // matches what a build would use), but IntelliSense keeps tolerating a null
             // result the same way it tolerates BL6005's — clang++-identity fallback below.
-            var requestedId = project.CppToolchain;
+            // A BasicLang native project is ALWAYS "msvc" for a BUILD (ProjectFile
+            // .EffectiveCppToolchain, owner directive) — so it takes the by-id path below and the
+            // machine probe never runs for it. Only a pure C++ project can still be unpinned and
+            // reach resolveToolchain().
+            //
+            // IntelliSense is deliberately EXEMPT (IntelliSenseEmissionService's D2): resolving the
+            // policy here would send every emission through TryFindById("msvc") -> vswhere, a
+            // process spawn on the project-open hot path that D2 exists to avoid. So the
+            // IntelliSense path keeps today's behavior exactly — a pure C++ project still honors
+            // its pin, and a BasicLang project resolves to the caller-supplied toolchain (null =
+            // the clang++ default identity). The divergence is the bounded, self-correcting one
+            // D2 already accepts: the session's first build rewrites the database with MSVC's own
+            // identity, and that build is now guaranteed to BE MSVC.
+            var requestedId = forIntelliSense
+                ? (project.IsCppProject ? project.CppToolchain : null)
+                : project.EffectiveCppToolchain;
             var toolchain = string.IsNullOrEmpty(requestedId)
                 ? resolveToolchain()
                 : (resolveById ?? CppToolchain.TryFindById)(requestedId);
@@ -843,10 +858,20 @@ namespace BasicLang.Compiler.ProjectSystem
             {
                 if (!string.IsNullOrEmpty(requestedId))
                 {
+                    // Two different causes share this code, and the remedy differs: a pure C++
+                    // project asked for this toolchain in its project file (editable), while a
+                    // BasicLang project got MSVC from policy — telling THAT user to "change
+                    // <CppToolchain>" would send them after an element that has no effect.
+                    var detected = (probeAvailability ?? CppToolchain.ProbeAvailability)().DetectedList;
                     Fail(result, "BL6015",
-                        $"C++ toolchain '{requestedId}' requested by the project is not installed. "
-                        + $"Detected: {(probeAvailability ?? CppToolchain.ProbeAvailability)().DetectedList}. "
-                        + $"Install {requestedId} or change <CppToolchain> in the project file.",
+                        project.IsCppProject
+                            ? $"C++ toolchain '{requestedId}' requested by the project is not installed. "
+                              + $"Detected: {detected}. "
+                              + $"Install {requestedId} or change <CppToolchain> in the project file."
+                            : "BasicLang native projects always compile with MSVC, which is not installed. "
+                              + $"Detected: {detected}. "
+                              + "Install Visual Studio 2022 or Build Tools with the "
+                              + "\"Desktop development with C++\" workload.",
                         project.FilePath);
                     return outcome;
                 }

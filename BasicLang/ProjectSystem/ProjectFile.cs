@@ -65,6 +65,27 @@ namespace BasicLang.Compiler.ProjectSystem
 
         // Native-build setting (applies to any IsNativeProject, incl. mixed)
         public string? CppToolchain { get; set; }   // "llvm" | "gcc" | "msvc"; null = machine probe
+
+        /// <summary>
+        /// The toolchain id a native BUILD of THIS project must use; null = machine probe.
+        /// The single source of truth for build-toolchain policy — both build consumers read
+        /// it (CppProjectBuilder's toolchain gate and the IDE BuildService's invalid-override
+        /// pre-check) so the CLI and the IDE cannot drift.
+        ///
+        /// <para>IntelliSense emission does NOT consult this: it must not spawn a probe on the
+        /// project-open path (IntelliSenseEmissionService's D2). See the toolchain gate in
+        /// <c>CppProjectBuilder.EmitCore</c>, which applies the exemption.</para>
+        ///
+        /// <para>A BasicLang native project ALWAYS builds with MSVC (owner directive): no
+        /// machine probe, never clang++ or g++, and a hand-edited <c>&lt;CppToolchain&gt;</c>
+        /// does not override it — the wizard never writes that element for a BasicLang
+        /// project, so the only way to reach one is by editing the file by hand.</para>
+        ///
+        /// <para>Pure C++ projects (<see cref="IsCppProject"/>) are deliberately untouched:
+        /// their wizard offers an explicit llvm/gcc/msvc pick, and null there still means
+        /// "probe this machine".</para>
+        /// </summary>
+        public string? EffectiveCppToolchain => IsCppProject ? CppToolchain : "msvc";
         public List<string> IncludeDirs { get; set; } = new List<string>();
         public List<string> NativeLibs { get; set; } = new List<string>();
         public List<string> Defines { get; set; } = new List<string>();

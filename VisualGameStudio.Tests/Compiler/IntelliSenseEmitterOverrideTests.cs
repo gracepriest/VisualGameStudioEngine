@@ -44,6 +44,13 @@ public class IntelliSenseEmitterOverrideTests
         }
     }
 
+    /// <summary>
+    /// A PURE C++ project (<c>Language=Cpp</c>) — deliberately, not a BasicLang one.
+    /// Every test here is about honoring a <c>&lt;CppToolchain&gt;</c> PIN, and a BasicLang
+    /// native project no longer has one to honor: it is always "msvc" by policy
+    /// (<see cref="ProjectFile.EffectiveCppToolchain"/>), pin or no pin. Pure C++ is
+    /// where pins still decide anything, so that is where this fixture belongs.
+    /// </summary>
     private ProjectFile WriteProject(string cppToolchainPin)
     {
         var blproj = $"""
@@ -51,12 +58,13 @@ public class IntelliSenseEmitterOverrideTests
               <PropertyGroup>
                 <ProjectName>App</ProjectName>
                 <OutputType>Exe</OutputType>
+                <Language>Cpp</Language>
                 <TargetBackend>Cpp</TargetBackend>
                 <CppToolchain>{cppToolchainPin}</CppToolchain>
               </PropertyGroup>
             </BasicLangProject>
             """;
-        File.WriteAllText(Path.Combine(_dir, "App.bas"), "Sub Main()\n    PrintLine 7\nEnd Sub\n");
+        File.WriteAllText(Path.Combine(_dir, "main.cpp"), "int main() { return 0; }\n");
         var path = Path.Combine(_dir, "App.blproj");
         File.WriteAllText(path, blproj);
         return ProjectFile.Load(path);

@@ -1236,7 +1236,11 @@ public class BuildService : IBuildService
             var projectFile = BasicLang.Compiler.ProjectSystem.ProjectFile.Load(
                 Path.GetFullPath(project.FilePath));
 
-            var requestedId = projectFile.CppToolchain;
+            // Same policy value EmitCore's gate reads (ProjectFile.EffectiveCppToolchain), NOT the
+            // raw <CppToolchain> element — otherwise a BasicLang native project, which is always
+            // "msvc" by policy, would skip the friendly pre-check below and only discover a broken
+            // MSVC path later as a rawer BL6015.
+            var requestedId = projectFile.EffectiveCppToolchain;
 
             // Pre-validate a PINNED, set-but-Invalid override before EmitCore ever runs:
             // an authoritative-when-set override must hard-fail even when that same
