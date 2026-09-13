@@ -70,7 +70,7 @@ public class FormScaffolderTests
     {
         var scaffold = FormScaffolder.Create("LoginForm");
 
-        var form = BlWebFormReader.Read("LoginForm.blwebform", scaffold.DocumentText);
+        var form = FormDocumentReader.Read("LoginForm.blwebform", scaffold.DocumentText);
 
         Assert.Multiple(() =>
         {
@@ -126,7 +126,7 @@ public class FormScaffolderTests
         // The whole pair, exercised the way a user would: scaffold, then have the designer write a
         // control into it.
         var scaffold = FormScaffolder.Create("LoginForm");
-        var document = BlWebFormReader.Read("LoginForm.blwebform", scaffold.DocumentText);
+        var document = FormDocumentReader.Read("LoginForm.blwebform", scaffold.DocumentText);
 
         var button = new FormControl { Kind = "Button", Id = "btnLogin", TabIndex = 0 };
         button.Properties["Text"] = "Sign in";

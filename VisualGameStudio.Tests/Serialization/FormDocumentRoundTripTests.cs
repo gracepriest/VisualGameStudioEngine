@@ -14,7 +14,7 @@ namespace VisualGameStudio.Tests.Serialization;
 /// slowly instead of obviously.</para>
 /// </summary>
 [TestFixture]
-public class BlWebFormRoundTripTests
+public class FormDocumentRoundTripTests
 {
     private string _dir = null!;
 
@@ -49,11 +49,11 @@ public class BlWebFormRoundTripTests
         </WebForm>
         """;
 
-    private BlWebForm Read(string xml, string name = "LoginForm.blwebform")
+    private FormFile Read(string xml, string name = "LoginForm.blwebform")
     {
         var path = Path.Combine(_dir, name);
         File.WriteAllText(path, xml);
-        return BlWebFormReader.Read(path, xml);
+        return FormDocumentReader.Read(path, xml);
     }
 
     // ==================================================================
@@ -157,7 +157,7 @@ public class BlWebFormRoundTripTests
     [Test]
     public void Read_ReportsMalformedXml_WithItsPosition_RatherThanThrowing()
     {
-        BlWebForm form = null!;
+        FormFile form = null!;
         Assert.DoesNotThrow(() => form = Read("<WebForm Name=\"F\"><Controls>"));
 
         Assert.Multiple(() =>
@@ -238,7 +238,7 @@ public class BlWebFormRoundTripTests
             """;
         var form = Read(xml);
 
-        Assert.That(BlWebFormWriter.Write(form), Is.EqualTo(xml),
+        Assert.That(FormDocumentWriter.Write(form), Is.EqualTo(xml),
             "a frozen value must be written back EXACTLY as the user wrote it — a writer that " +
             "normalised it would silently 'fix' something it does not understand");
     }
@@ -252,7 +252,7 @@ public class BlWebFormRoundTripTests
     {
         var form = Read(LoginForm);
 
-        Assert.That(BlWebFormWriter.Write(form), Is.EqualTo(LoginForm),
+        Assert.That(FormDocumentWriter.Write(form), Is.EqualTo(LoginForm),
             "reading and writing with no edit must reproduce the file exactly — comments, the " +
             "unknown <FutureSection>, attribute spelling and indentation included");
     }
@@ -264,8 +264,8 @@ public class BlWebFormRoundTripTests
         File.WriteAllText(path, LoginForm);
         var before = File.GetLastWriteTimeUtc(path);
 
-        var form = BlWebFormReader.Read(path, LoginForm);
-        var wrote = BlWebFormWriter.Save(form);
+        var form = FormDocumentReader.Read(path, LoginForm);
+        var wrote = FormDocumentWriter.Save(form);
 
         Assert.Multiple(() =>
         {
@@ -282,7 +282,7 @@ public class BlWebFormRoundTripTests
         // reader and the writer disagree about what the document means and corruption is slow.
         var edited = Read(LoginForm);
         edited.Model.FindById("btnLogin")!.Properties["Text"] = "Log in";
-        var applyThenRead = BlWebFormReader.Read(edited.FilePath, BlWebFormWriter.Write(edited));
+        var applyThenRead = FormDocumentReader.Read(edited.FilePath, FormDocumentWriter.Write(edited));
 
         var readThenApply = Read(LoginForm);
         readThenApply.Model.FindById("btnLogin")!.Properties["Text"] = "Log in";
@@ -292,7 +292,7 @@ public class BlWebFormRoundTripTests
             Assert.That(applyThenRead.Model.FindById("btnLogin")!.Properties["Text"], Is.EqualTo("Log in"));
             Assert.That(applyThenRead.Model.Controls.Select(c => c.Id),
                 Is.EqualTo(readThenApply.Model.Controls.Select(c => c.Id)));
-            Assert.That(BlWebFormWriter.Write(applyThenRead), Is.EqualTo(BlWebFormWriter.Write(readThenApply)),
+            Assert.That(FormDocumentWriter.Write(applyThenRead), Is.EqualTo(FormDocumentWriter.Write(readThenApply)),
                 "writing either side must give the same document");
         });
     }
@@ -303,7 +303,7 @@ public class BlWebFormRoundTripTests
         var form = Read(LoginForm);
         form.Model.FindById("btnLogin")!.Properties["Text"] = "Log in";
 
-        var after = BlWebFormWriter.Write(form);
+        var after = FormDocumentWriter.Write(form);
 
         Assert.Multiple(() =>
         {
@@ -328,12 +328,12 @@ public class BlWebFormRoundTripTests
         // that — so a second write of an already-written document is byte-identical.
         var form = Read(LoginForm);
         form.Model.FindById("btnLogin")!.Properties["Text"] = "Log in";
-        var first = BlWebFormWriter.Write(form);
+        var first = FormDocumentWriter.Write(form);
 
-        var reloaded = BlWebFormReader.Read(form.FilePath, first);
+        var reloaded = FormDocumentReader.Read(form.FilePath, first);
         Assert.Multiple(() =>
         {
-            Assert.That(BlWebFormWriter.Write(reloaded), Is.EqualTo(first),
+            Assert.That(FormDocumentWriter.Write(reloaded), Is.EqualTo(first),
                 "a no-op write of an already-written document must return it unchanged");
             Assert.That(reloaded.Model.FindById("btnLogin")!.Properties["Text"], Is.EqualTo("Log in"));
             Assert.That(reloaded.Model.Controls.Select(c => c.Id),
@@ -348,7 +348,7 @@ public class BlWebFormRoundTripTests
         var form = Read(LoginForm);
         form.Model.Controls.RemoveAll(c => c.Id == "txtUser");
 
-        var after = BlWebFormWriter.Write(form);
+        var after = FormDocumentWriter.Write(form);
 
         Assert.Multiple(() =>
         {
@@ -370,8 +370,8 @@ public class BlWebFormRoundTripTests
         added.Properties["Text"] = "Bad password";
         form.Model.Controls.Add(added);
 
-        var after = BlWebFormWriter.Write(form);
-        var reloaded = BlWebFormReader.Read(form.FilePath, after);
+        var after = FormDocumentWriter.Write(form);
+        var reloaded = FormDocumentReader.Read(form.FilePath, after);
 
         Assert.Multiple(() =>
         {
@@ -397,8 +397,8 @@ public class BlWebFormRoundTripTests
         var form = Read(LoginForm);
         form.Model.FindById("btnLogin")!.Properties["Text"] = "Log in";
 
-        var first = BlWebFormWriter.Write(form);
-        var second = BlWebFormWriter.Write(form);
+        var first = FormDocumentWriter.Write(form);
+        var second = FormDocumentWriter.Write(form);
 
         Assert.Multiple(() =>
         {
@@ -413,12 +413,12 @@ public class BlWebFormRoundTripTests
     {
         var path = Path.Combine(_dir, "Twice.blwebform");
         File.WriteAllText(path, LoginForm);
-        var form = BlWebFormReader.Read(path, LoginForm);
+        var form = FormDocumentReader.Read(path, LoginForm);
         form.Model.FindById("btnLogin")!.Properties["Text"] = "Log in";
 
-        BlWebFormWriter.Save(form);
+        FormDocumentWriter.Save(form);
         var afterFirst = File.ReadAllText(path);
-        var wroteAgain = BlWebFormWriter.Save(form);
+        var wroteAgain = FormDocumentWriter.Save(form);
 
         Assert.Multiple(() =>
         {
@@ -448,9 +448,9 @@ public class BlWebFormRoundTripTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(BlWebFormWriter.Write(form), Is.EqualTo(newer),
+            Assert.That(FormDocumentWriter.Write(form), Is.EqualTo(newer),
                 "not one byte of a refused document may change");
-            Assert.That(BlWebFormWriter.Save(form), Is.False, "and nothing may reach the disk");
+            Assert.That(FormDocumentWriter.Save(form), Is.False, "and nothing may reach the disk");
         });
     }
 
@@ -471,7 +471,7 @@ public class BlWebFormRoundTripTests
         {
             Assert.That(form.Model.FindById("b")!.Properties["Text"], Is.EqualTo("{res:SignIn}"),
                 "the value must reach the model or the writer cannot know to keep it");
-            Assert.That(BlWebFormWriter.Write(form), Does.Contain("{res:SignIn}"));
+            Assert.That(FormDocumentWriter.Write(form), Does.Contain("{res:SignIn}"));
         });
     }
 
@@ -482,7 +482,7 @@ public class BlWebFormRoundTripTests
         // check's IOException-only catch, and surfaced as "design failed: the input string was not
         // in a correct format", exit 2 — a tool failure. The asymmetry was the tell: a bad CATALOG
         // value got a careful Degraded tier while a bad STRUCTURAL value crashed.
-        BlWebForm form = null!;
+        FormFile form = null!;
         Assert.DoesNotThrow(() => form = Read("""
             <WebForm Name="Bad" Version="1">
               <Controls><Button Id="b" TabIndex="one" Col="two"/></Controls>
@@ -518,7 +518,7 @@ public class BlWebFormRoundTripTests
             """;
         var form = Read(sparse, "b.blwebform");
 
-        var after = BlWebFormWriter.Write(form);
+        var after = FormDocumentWriter.Write(form);
 
         Assert.Multiple(() =>
         {
@@ -540,7 +540,7 @@ public class BlWebFormRoundTripTests
             """, "b.blwebform");
         form.Model.FindById("b")!.TabIndex = 3;
 
-        Assert.That(BlWebFormWriter.Write(form), Does.Contain("""TabIndex="3" """.TrimEnd()));
+        Assert.That(FormDocumentWriter.Write(form), Does.Contain("""TabIndex="3" """.TrimEnd()));
     }
 
     // ==================================================================
@@ -558,8 +558,8 @@ public class BlWebFormRoundTripTests
         model.Controls.Add(button);
         model.RenumberTabIndexes();
 
-        var text = BlWebFormWriter.Create(model);
-        var reloaded = BlWebFormReader.Read(Path.Combine(_dir, "Fresh.blwebform"), text);
+        var text = FormDocumentWriter.Create(model);
+        var reloaded = FormDocumentReader.Read(Path.Combine(_dir, "Fresh.blwebform"), text);
 
         Assert.Multiple(() =>
         {
@@ -584,8 +584,8 @@ public class BlWebFormRoundTripTests
         button.Properties["Enabled"] = "false";
         model.Controls.Add(button);
 
-        var first = BlWebFormWriter.Create(model);
-        var second = BlWebFormWriter.Create(model);
+        var first = FormDocumentWriter.Create(model);
+        var second = FormDocumentWriter.Create(model);
 
         Assert.That(second, Is.EqualTo(first));
         Assert.That(first.IndexOf("Id=", StringComparison.Ordinal),

@@ -132,24 +132,34 @@ public static class DesignCodes
 /// Validates what the designer would read from a source file — the engine behind
 /// <c>basiclang design --check</c>.
 ///
-/// <para>In this slice it checks <b>recognizer input</b>: a <c>.bas</c> with a recoverable form
-/// shape. It gains the <c>.blform</c>/<c>.blwebform</c> document formats when those exist.</para>
+/// <para>It checks two kinds of input: a form DOCUMENT (<c>.blform</c> or <c>.blwebform</c>), read
+/// through the structure-preserving reader and reported with its tiers; and <b>recognizer input</b>
+/// — a <c>.bas</c> with a recoverable form shape, for the import route of D12.</para>
 /// </summary>
 public static class DesignCheck
 {
-    /// <summary>Findings for one file, dispatched on its extension.</summary>
+    /// <summary>
+    /// Findings for one file, dispatched on its extension.
+    ///
+    /// <para>⛔ Both document extensions route here, and the set comes from
+    /// <c>FormDocumentReader.TargetOfExtension</c> rather than from a literal repeated in this file.
+    /// A second list of extensions is a second thing to update, and the failure mode of missing one
+    /// is silent: a <c>.blform</c> would be handed to the SOURCE checker, which would lex XML as
+    /// BasicLang, find no form shape, and report BL8005 — a clean-looking answer to a question
+    /// nobody asked.</para>
+    /// </summary>
     public static IReadOnlyList<DesignDiagnostic> Check(string filePath, string text) =>
-        Path.GetExtension(filePath).Equals(".blwebform", StringComparison.OrdinalIgnoreCase)
-            ? CheckWebForm(filePath, text)
+        Serialization.FormDocumentReader.TargetOfExtension(filePath) != null
+            ? CheckFormDocument(filePath, text)
             : CheckSource(filePath, text);
 
     /// <summary>
-    /// Findings for a <c>.blwebform</c> document: everything the reader reported, plus the
-    /// per-property Degraded rows as warnings.
+    /// Findings for a form document: everything the reader reported, plus the per-property Degraded
+    /// rows as warnings. Both formats — the reader picks the vocabulary from the document itself.
     /// </summary>
-    public static IReadOnlyList<DesignDiagnostic> CheckWebForm(string filePath, string text)
+    public static IReadOnlyList<DesignDiagnostic> CheckFormDocument(string filePath, string text)
     {
-        var form = Serialization.BlWebFormReader.Read(filePath, text);
+        var form = Serialization.FormDocumentReader.Read(filePath, text);
         var findings = form.Diagnostics.ToList();
 
         if (form.IsRefused)

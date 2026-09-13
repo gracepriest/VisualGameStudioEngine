@@ -206,6 +206,40 @@ public static class FormControlCatalog
         "Col", "Row", "ColSpan", "RowSpan"               // .blwebform (D3)
     };
 
+    /// <summary>The layout vocabulary of one format, and only that one (D3).</summary>
+    private static readonly IReadOnlyList<string> PixelAttributes = new[]
+    {
+        "X", "Y", "Width", "Height", "Anchor", "Dock"
+    };
+
+    private static readonly IReadOnlyList<string> GridAttributes = new[]
+    {
+        "Col", "Row", "ColSpan", "RowSpan"
+    };
+
+    /// <summary>Structural in EITHER format. Use the target-aware overload when the target is known.</summary>
     public static bool IsStructural(string attributeName) =>
         StructuralAttributes.Any(a => string.Equals(a, attributeName, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Structural in <paramref name="target"/>'s own vocabulary.
+    ///
+    /// <para>⛔ The two vocabularies overlap in spelling and not in meaning, so "structural" is not a
+    /// property of the attribute name alone. <c>Width</c> is a <c>.blform</c> control's pixel width
+    /// and is read into its geometry; on a <c>.blwebform</c> control nothing reads it, so calling it
+    /// structural there would make it neither a property nor an unknown attribute — absent from the
+    /// model entirely, and silently dropped by any path that rebuilds the document from the
+    /// model.</para>
+    /// </summary>
+    public static bool IsStructural(string attributeName, FormTarget target)
+    {
+        if (string.Equals(attributeName, "Id", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(attributeName, "TabIndex", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var vocabulary = target == FormTarget.WinForms ? PixelAttributes : GridAttributes;
+        return vocabulary.Any(a => string.Equals(a, attributeName, StringComparison.OrdinalIgnoreCase));
+    }
 }

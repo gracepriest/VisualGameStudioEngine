@@ -312,7 +312,7 @@ public static class FormClipboard
         {
             Kind = definition.Kind,
             Id = (string?)element.Attribute("Id") ?? "",
-            TabIndex = (int?)element.Attribute("TabIndex") ?? 0
+            TabIndex = IntAttribute(element, "TabIndex") ?? 0
         };
 
         control.Geometry = ReadGeometry(element);
@@ -367,14 +367,17 @@ public static class FormClipboard
 
     private static FormGeometry? ReadGeometry(XElement element)
     {
+        // ⛔ int.TryParse, never a (int?) cast. The XLinq cast THROWS FormatException on a value it
+        // cannot parse, and the clipboard is exactly where unvetted text arrives — a paste of a
+        // fragment carrying X="20px" would take the IDE down rather than declining the paste.
         if (element.Attribute("X") != null || element.Attribute("Y") != null)
         {
             return new PixelGeometry
             {
-                X = (int?)element.Attribute("X") ?? 0,
-                Y = (int?)element.Attribute("Y") ?? 0,
-                Width = (int?)element.Attribute("Width") ?? 0,
-                Height = (int?)element.Attribute("Height") ?? 0,
+                X = IntAttribute(element, "X") ?? 0,
+                Y = IntAttribute(element, "Y") ?? 0,
+                Width = IntAttribute(element, "Width") ?? 0,
+                Height = IntAttribute(element, "Height") ?? 0,
                 Anchor = (string?)element.Attribute("Anchor"),
                 Dock = (string?)element.Attribute("Dock")
             };
@@ -384,13 +387,17 @@ public static class FormClipboard
         {
             return new GridGeometry
             {
-                Col = (int?)element.Attribute("Col") ?? 0,
-                Row = (int?)element.Attribute("Row") ?? 0,
-                ColSpan = (int?)element.Attribute("ColSpan") ?? 1,
-                RowSpan = (int?)element.Attribute("RowSpan") ?? 1
+                Col = IntAttribute(element, "Col") ?? 0,
+                Row = IntAttribute(element, "Row") ?? 0,
+                ColSpan = IntAttribute(element, "ColSpan") ?? 1,
+                RowSpan = IntAttribute(element, "RowSpan") ?? 1
             };
         }
 
         return null;
     }
+
+    /// <summary>An integer attribute, or null when absent OR unparseable. Never throws.</summary>
+    private static int? IntAttribute(XElement element, string name) =>
+        int.TryParse((string?)element.Attribute(name), out var value) ? value : null;
 }

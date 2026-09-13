@@ -3,7 +3,8 @@ using System.Xml.Linq;
 namespace BasicLang.Forms.Serialization;
 
 /// <summary>
-/// Writes a <c>.blwebform</c> back out, touching only what the model actually changed.
+/// Writes a form document — <c>.blform</c> or <c>.blwebform</c> — back out, touching only what the
+/// model actually changed.
 ///
 /// <para><b>The algebra this must satisfy</b>, because D1 puts designer-written regions inside files
 /// the user owns and D9 is what makes that safe:</para>
@@ -19,7 +20,7 @@ namespace BasicLang.Forms.Serialization;
 /// comments, unknown elements, attribute spelling, indentation — is never touched because it is
 /// never visited.</para>
 /// </summary>
-public static class BlWebFormWriter
+public static class FormDocumentWriter
 {
     /// <summary>
     /// The document text for the current model state.
@@ -37,7 +38,7 @@ public static class BlWebFormWriter
     /// and it is a one-time change to a file the designer now co-owns — not a per-save churn.
     /// <c>Write_NormalisesAHandWrittenDocument_OnlyOnTheFirstRealEdit</c> pins the boundary.</para>
     /// </summary>
-    public static string Write(BlWebForm form)
+    public static string Write(FormFile form)
     {
         // ⛔ A REFUSED document is never written. The refusal paths in the reader return the full
         // parsed tree but an EMPTY model — a newer-version document, or one with an unexpected root,
@@ -67,7 +68,7 @@ public static class BlWebFormWriter
     }
 
     /// <summary>Writes to disk only when the bytes would differ. Returns true when it wrote.</summary>
-    public static bool Save(BlWebForm form) =>
+    public static bool Save(FormFile form) =>
         !form.IsRefused && XmlTextIO.SaveIfChanged(form.FilePath, Write(form));
 
     /// <summary>
@@ -77,13 +78,28 @@ public static class BlWebFormWriter
     /// </summary>
     public static string Create(FormDocument model)
     {
-        var root = new XElement("WebForm",
+        // The element name IS the format (D2): <Form> or <WebForm>. Taken from the model rather
+        // than from a parameter so a document cannot be created with a root that disagrees with the
+        // geometry its controls carry.
+        var root = new XElement(model.RootElementName,
             new XAttribute("Name", model.Name),
             new XAttribute("Version", model.Version));
 
-        if (model.Layout != null)
+        if (model.Target == FormTarget.WinForms)
+        {
+            // The window, not the page: a client size and a caption. D3's divergence, at the root.
+            root.SetAttributeValue("Width", model.Width);
+            root.SetAttributeValue("Height", model.Height);
+            root.SetAttributeValue("Text", model.Text);
+        }
+        else if (model.Layout != null)
         {
             root.Add(LayoutElement(model.Layout));
+        }
+
+        foreach (var (name, value) in model.UnknownAttributes)
+        {
+            root.SetAttributeValue(name, value);
         }
 
         var controls = new XElement("Controls");
@@ -94,9 +110,16 @@ public static class BlWebFormWriter
 
         root.Add(controls);
 
-        if (model.Literal != null)
+        // Web only. A .blform has no markup to pass through, and a <Literal> in one would be an
+        // element the WinForms emitter has nowhere to put.
+        if (model.Target == FormTarget.Web && model.Literal != null)
         {
             root.Add(new XElement("Literal", new XCData(model.Literal)));
+        }
+
+        foreach (var unknown in model.UnknownChildren)
+        {
+            root.Add(new XElement(unknown));
         }
 
         // Reserved and empty in v1, but written so the shape of a designer-created document matches
@@ -133,11 +156,55 @@ public static class BlWebFormWriter
         // default in ProjectSerializer.
         SetAttributeIfMeaningful(root, "Name", model.Name, nameWhenAbsent);
         SetAttributeIfMeaningful(root, "Version", model.Version.ToString(),
-            BlWebFormReader.SupportedVersion.ToString());
+            FormDocumentReader.SupportedVersion.ToString());
 
-        ApplyLayout(root, model);
+        // D3, at the root: a window has a size and a caption, a page has a layout and may carry
+        // literal markup. Each side writes only its own vocabulary — writing both would put a
+        // <Layout> into a .blform on the first save, and the file would then be refused by its own
+        // reader on the next open.
+        if (model.Target == FormTarget.WinForms)
+        {
+            ApplyFormAttributes(root, model);
+        }
+        else
+        {
+            ApplyLayout(root, model);
+        }
+
         ApplyControls(root, model);
-        ApplyLiteral(root, model);
+
+        if (model.Target == FormTarget.Web)
+        {
+            ApplyLiteral(root, model);
+        }
+    }
+
+    /// <summary>
+    /// The <c>.blform</c> root's <c>Width</c>/<c>Height</c>/<c>Text</c>.
+    ///
+    /// <para>⛔ A null model value means "the document did not say" — either the attribute was
+    /// absent, or it was present and unparseable, in which case the reader left it unmodelled and
+    /// the unknown-attribute round trip is the only thing preserving it. Either way, writing null
+    /// here as a removal would delete an attribute the user wrote and the designer never
+    /// understood. Clearing the caption from the designer sets <c>Text</c> to the empty string,
+    /// which IS written; it is not the same state as null.</para>
+    /// </summary>
+    private static void ApplyFormAttributes(XElement root, FormDocument model)
+    {
+        if (model.Width != null)
+        {
+            SetAttributeIfChanged(root, "Width", model.Width.Value.ToString());
+        }
+
+        if (model.Height != null)
+        {
+            SetAttributeIfChanged(root, "Height", model.Height.Value.ToString());
+        }
+
+        if (model.Text != null)
+        {
+            SetAttributeIfChanged(root, "Text", model.Text);
+        }
     }
 
     private static void ApplyLayout(XElement root, FormDocument model)
@@ -173,7 +240,10 @@ public static class BlWebFormWriter
         if (container == null)
         {
             container = new XElement("Controls");
-            InsertPreservingIndent(root, container, before: root.Element("Literal"));
+            // <Literal> is web-only and <Components> is in both, so this anchors correctly for
+            // either format and falls through to "append" when neither is present.
+            InsertPreservingIndent(root, container,
+                before: root.Element("Literal") ?? root.Element("Components"));
         }
 
         ApplyControlList(container, model.Controls);
@@ -232,12 +302,25 @@ public static class BlWebFormWriter
         // rewrite it wholesale on the first unrelated edit.
         SetAttributeIfMeaningful(element, "TabIndex", control.TabIndex.ToString(), "0");
 
-        if (control.Geometry is GridGeometry grid)
+        // Each geometry writes only its own vocabulary. The model carries exactly one shape, the
+        // reader selected it from the document's target, and nothing here converts between them.
+        switch (control.Geometry)
         {
-            SetAttributeIfMeaningful(element, "Col", grid.Col.ToString(), "0");
-            SetAttributeIfMeaningful(element, "Row", grid.Row.ToString(), "0");
-            SetAttributeIfChanged(element, "ColSpan", grid.ColSpan == 1 ? null : grid.ColSpan.ToString());
-            SetAttributeIfChanged(element, "RowSpan", grid.RowSpan == 1 ? null : grid.RowSpan.ToString());
+            case PixelGeometry pixel:
+                SetAttributeIfMeaningful(element, "X", pixel.X.ToString(), "0");
+                SetAttributeIfMeaningful(element, "Y", pixel.Y.ToString(), "0");
+                SetAttributeIfMeaningful(element, "Width", pixel.Width.ToString(), "0");
+                SetAttributeIfMeaningful(element, "Height", pixel.Height.ToString(), "0");
+                SetAttributeIfChanged(element, "Anchor", pixel.Anchor);
+                SetAttributeIfChanged(element, "Dock", pixel.Dock);
+                break;
+
+            case GridGeometry grid:
+                SetAttributeIfMeaningful(element, "Col", grid.Col.ToString(), "0");
+                SetAttributeIfMeaningful(element, "Row", grid.Row.ToString(), "0");
+                SetAttributeIfChanged(element, "ColSpan", grid.ColSpan == 1 ? null : grid.ColSpan.ToString());
+                SetAttributeIfChanged(element, "RowSpan", grid.RowSpan == 1 ? null : grid.RowSpan.ToString());
+                break;
         }
 
         foreach (var (name, value) in control.Properties)
@@ -342,12 +425,23 @@ public static class BlWebFormWriter
 
         element.SetAttributeValue("Id", control.Id);
 
-        if (control.Geometry is GridGeometry grid)
+        switch (control.Geometry)
         {
-            element.SetAttributeValue("Col", grid.Col);
-            element.SetAttributeValue("Row", grid.Row);
-            if (grid.ColSpan != 1) element.SetAttributeValue("ColSpan", grid.ColSpan);
-            if (grid.RowSpan != 1) element.SetAttributeValue("RowSpan", grid.RowSpan);
+            case PixelGeometry pixel:
+                element.SetAttributeValue("X", pixel.X);
+                element.SetAttributeValue("Y", pixel.Y);
+                element.SetAttributeValue("Width", pixel.Width);
+                element.SetAttributeValue("Height", pixel.Height);
+                element.SetAttributeValue("Anchor", pixel.Anchor);
+                element.SetAttributeValue("Dock", pixel.Dock);
+                break;
+
+            case GridGeometry grid:
+                element.SetAttributeValue("Col", grid.Col);
+                element.SetAttributeValue("Row", grid.Row);
+                if (grid.ColSpan != 1) element.SetAttributeValue("ColSpan", grid.ColSpan);
+                if (grid.RowSpan != 1) element.SetAttributeValue("RowSpan", grid.RowSpan);
+                break;
         }
 
         element.SetAttributeValue("TabIndex", control.TabIndex);

@@ -12,9 +12,9 @@ namespace BasicLang.Forms.Serialization;
 /// different format. Holding both is what makes "a no-op patch writes nothing" achievable rather
 /// than aspirational.</para>
 /// </summary>
-public sealed class BlWebForm
+public sealed class FormFile
 {
-    internal BlWebForm(
+    internal FormFile(
         FormDocument model,
         XDocument xml,
         string originalText,

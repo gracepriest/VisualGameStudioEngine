@@ -14,7 +14,8 @@ public sealed record FormScaffold(
     string CodeText);
 
 /// <summary>
-/// Creates the <c>.blwebform</c> + <c>.bas</c> pair a new form consists of.
+/// Creates the document + <c>.bas</c> pair a new form consists of — <c>.blform</c> for WinForms,
+/// <c>.blwebform</c> for the web (D2).
 ///
 /// <para>Pure text in, pure text out — no file system, no project model. That is deliberate: the
 /// IDE's add-item flow, the CLI, and the tests all need the same two strings, and the part that is
@@ -93,12 +94,22 @@ public static class FormScaffolder
                 Kind = FormLayoutKind.Grid, Cols = "auto,1fr", Rows = "auto", Gap = "8px"
             };
         }
+        else
+        {
+            // D3's other half: a window has a size and a caption where a page has a layout. 800x450
+            // is the size `dotnet new winforms` gives a new form, so a form created here and a form
+            // created by the shipped template open the same size rather than differing for no
+            // reason the user could name.
+            document.Width = 800;
+            document.Height = 450;
+            document.Text = formName;
+        }
 
         var documentFileName = formName + document.FileExtension;
 
         return new FormScaffold(
             documentFileName,
-            Serialization.BlWebFormWriter.Create(document),
+            Serialization.FormDocumentWriter.Create(document),
             formName + ".bas",
             CodeBehind(formName, documentFileName, target));
     }
