@@ -341,10 +341,55 @@ public class FormRegionWriterTests
     }
 
     [Test]
+    public void Write_WinForms_AcceptsAHandlerDeclaredAfterTheRegionThatWiresIt()
+    {
+        // ⛔⛔ THE OPPOSITE of the web rule below, and the shape Owner decision 3 makes canonical.
+        // The shipped VSIX template declares btnClick_Click BELOW the InitializeComponent that
+        // wires it. Measured 2026-09-13: that file compiles through BasicLang AND csc, and the
+        // handler binds with its full parameter types (object sender, EventArgs e) — the event is
+        // an unresolvable .NET member typed as Object, so there is no declared delegate for an
+        // erased handler to mismatch.
+        //
+        // Refusing it would make the designer reject the template it is modelled on, and would
+        // block the D12 import route for every existing WinForms file.
+        var empty = RegionMarkers.HashContent("");
+        var source = Lf($"""
+            Public Class LoginForm
+                Inherits Form
+            {RegionMarkers.FormatOpen("controls", "LoginForm.blform", empty, "    ")}
+            {RegionMarkers.FormatClose("    ")}
+
+                Public Sub New()
+                    InitializeComponent()
+                End Sub
+
+            {RegionMarkers.FormatOpen("init", "LoginForm.blform", empty, "    ")}
+            {RegionMarkers.FormatClose("    ")}
+
+                Private Sub btnLogin_Click(sender As Object, e As EventArgs)
+                End Sub
+            End Class
+            """);
+
+        var form = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm" };
+        var button = new FormControl { Kind = "Button", Id = "btnLogin", TabIndex = 0 };
+        button.Binds.Add(new FormBind { Event = "Click", Handler = "btnLogin_Click" });
+        form.Controls.Add(button);
+
+        var result = RegionWriter.Write("LoginForm.bas", source, form, "LoginForm.blform");
+
+        Assert.That(result.Refused, Is.False,
+            string.Join("; ", result.Diagnostics.Select(d => d.Format())));
+        Assert.That(result.Text, Does.Contain("AddHandler btnLogin.Click, AddressOf btnLogin_Click"));
+    }
+
+    [Test]
     public void Write_RefusesWhenAHandlerIsDeclaredAfterTheRegionThatWiresIt()
     {
-        // ⛔⛔ D8. AddressOf naming a later-declared Sub erases its parameter types to
-        // Action(Of Object) and then hard-errors against Action(Of DomEvent).
+        // ⛔⛔ D8, and it is real — ON THE WEB. Measured 2026-09-13: AddressOf naming a
+        // later-declared Sub erases its parameter types to Action(Of Object) and then hard-errors
+        // against Action(Of DomEvent), because the DOM signature declares the parameter type.
+        // The WinForms case above is the control: same shape, no declared delegate, compiles.
         // ⚠ The spec's own D1 worked example has this shape — it is illustrating the marker layout,
         // not the ordering — so a reader copying it gets a file that does not build on the web.
         var empty = RegionMarkers.HashContent("");

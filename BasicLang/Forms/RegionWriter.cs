@@ -224,10 +224,39 @@ public static class RegionWriter
         }
     }
 
+    /// <summary>
+    /// Refuses a handler declared AFTER the region that wires it — <b>on the web only</b>.
+    ///
+    /// <para>⛔⛔ MEASURED 2026-09-13, because applying it to both targets refuses the very shape
+    /// Owner decision 3 makes canonical. The erasure is real but narrow:</para>
+    ///
+    /// <list type="table">
+    ///   <item><term>Web, <c>addEventListener("click", AddressOf H)</c>, H declared after</term>
+    ///     <description><b>FAILS</b> — "cannot convert from 'Action&lt;Object&gt;' to
+    ///     'Action&lt;DomEvent&gt;'". The DOM signature declares the parameter type, so the erased
+    ///     <c>Action&lt;Object&gt;</c> has something concrete to fail against.</description></item>
+    ///   <item><term>WinForms, <c>AddHandler btn.Click, AddressOf H</c>, H declared after</term>
+    ///     <description><b>Compiles</b>, through BasicLang AND csc, and the handler binds with its
+    ///     full parameter types (<c>object sender, EventArgs e</c>). The event is an unresolvable
+    ///     .NET member typed as <c>Object</c>, so there is no declared delegate to mismatch.</description></item>
+    ///   <item><term>Module-level Sub into a declared <c>Action(Of Integer)</c>, declared after</term>
+    ///     <description><b>Compiles.</b></description></item>
+    /// </list>
+    ///
+    /// <para>The shipped VSIX template — canonical per Owner decision 3 — declares
+    /// <c>btnClick_Click</c> below the <c>InitializeComponent</c> that wires it. Refusing that on
+    /// WinForms would make the designer reject the template it is supposed to generate, and would
+    /// block the D12 import route for every existing WinForms file.</para>
+    /// </summary>
     private static void CheckHandlerOrdering(
         string filePath, SourceIndex index, FormDocument form,
         FormRegion init, List<DesignDiagnostic> diagnostics)
     {
+        if (form.Target != FormTarget.Web)
+        {
+            return;
+        }
+
         var handlers = form.AllControls()
             .SelectMany(c => c.Binds)
             .Select(b => b.Handler)
@@ -248,9 +277,10 @@ public static class RegionWriter
             {
                 diagnostics.Add(Error(DesignCodes.HandlerDeclaredAfterWiring,
                     $"'{handler}' is declared on line {declaration}, AFTER the designer's init " +
-                    "region that wires it. An AddressOf naming a Sub declared later erases its " +
-                    "parameter types and then fails to match the event's delegate. Move the handler " +
-                    "above the init region.",
+                    "region that wires it. On the web an AddressOf naming a Sub declared later " +
+                    "erases its parameter types, and addEventListener then rejects it — " +
+                    "'cannot convert from Action(Of Object) to Action(Of DomEvent)'. Move the " +
+                    "handler above the init region.",
                     filePath, declaration));
             }
         }

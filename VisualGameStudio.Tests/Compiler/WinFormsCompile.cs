@@ -78,11 +78,22 @@ internal static class WinFormsCompile
     }
 
     /// <summary>Every csc ERROR in <paramref name="source"/>, empty when it compiles.</summary>
-    public static IReadOnlyList<string> Errors(string source)
+    public static IReadOnlyList<string> Errors(string source) => Errors(new[] { source });
+
+    /// <summary>
+    /// Every csc ERROR across several source files compiled TOGETHER, as one assembly.
+    ///
+    /// <para>⛔ Separate syntax trees, never concatenated text. Each generated file opens with its
+    /// own <c>using</c> directives and its own <c>namespace</c>, so joining two of them puts the
+    /// second file's usings after the first file's namespace — CS1529, "a using clause must
+    /// precede all other elements". That is an artefact of the join and says nothing about the
+    /// code; it cost a confusing red run before this overload existed.</para>
+    /// </summary>
+    public static IReadOnlyList<string> Errors(IEnumerable<string> sources)
     {
         var compilation = CSharpCompilation.Create(
             assemblyName: "WinFormsGate_" + Guid.NewGuid().ToString("N"),
-            syntaxTrees: new[] { CSharpSyntaxTree.ParseText(source) },
+            syntaxTrees: sources.Select(s => CSharpSyntaxTree.ParseText(s)).ToArray(),
             references: References.Value,
             options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 
@@ -96,12 +107,17 @@ internal static class WinFormsCompile
     }
 
     /// <summary>Asserts the source compiles, quoting csc and the source when it does not.</summary>
-    public static void AssertCompiles(string source, string because)
+    public static void AssertCompiles(string source, string because) =>
+        AssertCompiles(new[] { source }, because);
+
+    /// <summary>Asserts several files compile together, quoting csc and every source on failure.</summary>
+    public static void AssertCompiles(IReadOnlyList<string> sources, string because)
     {
-        var errors = Errors(source);
+        var errors = Errors(sources);
         Assert.That(errors, Is.Empty,
             $"{because}\ncsc rejected the generated WinForms C#:\n  {string.Join("\n  ", errors)}\n" +
-            $"--- generated source ---\n{Numbered(source)}");
+            string.Join("\n", sources.Select((s, i) =>
+                $"--- generated source {i + 1} of {sources.Count} ---\n{Numbered(s)}")));
     }
 
     private static string Numbered(string source) =>

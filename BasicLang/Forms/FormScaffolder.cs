@@ -73,10 +73,21 @@ public static class FormScaffolder
     /// without correct hashes would make the first save report the designer's own output as a hand
     /// edit (BL8011) — the feature would refuse to work on the file it had just created.</para>
     ///
-    /// <para>⛔⛔ The init region is emitted <b>last</b>, after the handler area, because D8's
-    /// ordering rule requires a handler to be declared before the region that wires it. This is the
-    /// opposite of the layout in D1's worked example, which illustrates the marker shape rather than
-    /// the ordering.</para>
+    /// <para>⛔⛔ <b>The region order differs by target, and both orders are measured.</b></para>
+    ///
+    /// <para><b>Web:</b> the init region comes LAST, after the handler area, because D8's ordering
+    /// rule is real there — <c>addEventListener("click", AddressOf H)</c> with H declared later
+    /// fails with "cannot convert from 'Action(Of Object)' to 'Action(Of DomEvent)'". The DOM
+    /// signature declares the parameter type, so the erased handler has something concrete to fail
+    /// against.</para>
+    ///
+    /// <para><b>WinForms:</b> the init region comes in the canonical VSIX position — straight after
+    /// <c>New()</c>, with handlers below it — because Owner decision 3 makes that shape canonical
+    /// and because the ordering rule does NOT bite there: measured 2026-09-13, the shipped template
+    /// declares <c>btnClick_Click</c> below the <c>InitializeComponent</c> that wires it and
+    /// compiles through BasicLang and csc with the handler's full parameter types intact. The event
+    /// is an unresolvable .NET member typed as <c>Object</c>, so there is no declared delegate to
+    /// mismatch.</para>
     /// </summary>
     public static FormScaffold Create(string formName, FormTarget target = FormTarget.Web)
     {
@@ -114,6 +125,14 @@ public static class FormScaffolder
             CodeBehind(formName, documentFileName, target));
     }
 
+    private static void AppendInitRegion(
+        StringBuilder sb, string documentFileName, string emptyHash, string indent)
+    {
+        sb.Append(RegionMarkers.FormatOpen(RegionMarkers.Init, documentFileName, emptyHash, indent)).Append('\n');
+        sb.Append(RegionMarkers.FormatClose(indent)).Append('\n');
+        sb.Append('\n');
+    }
+
     private static string CodeBehind(string formName, string documentFileName, FormTarget target)
     {
         const string indent = "    ";
@@ -145,14 +164,23 @@ public static class FormScaffolder
         sb.Append($"{indent}End Sub\n");
         sb.Append('\n');
 
-        sb.Append($"{indent}' Your event handlers go here, ABOVE the designer's init region —\n");
-        sb.Append($"{indent}' an AddressOf naming a Sub declared later loses its parameter types.\n");
-        sb.Append('\n');
-
-        // Region 2: the generated InitializeComponent. Last, per D8's ordering rule.
-        sb.Append(RegionMarkers.FormatOpen(RegionMarkers.Init, documentFileName, emptyHash, indent)).Append('\n');
-        sb.Append(RegionMarkers.FormatClose(indent)).Append('\n');
-        sb.Append('\n');
+        if (target == FormTarget.WinForms)
+        {
+            // Canonical VSIX order: InitializeComponent right after New(), handlers below it.
+            AppendInitRegion(sb, documentFileName, emptyHash, indent);
+            sb.Append($"{indent}' Your event handlers go here.\n");
+            sb.Append('\n');
+        }
+        else
+        {
+            // ⛔ Web only: handlers MUST precede the region that wires them, or addEventListener
+            // rejects the erased Action(Of Object).
+            sb.Append($"{indent}' Your event handlers go here, ABOVE the designer's init region —\n");
+            sb.Append($"{indent}' on the web an AddressOf naming a Sub declared later loses its\n");
+            sb.Append($"{indent}' parameter types and addEventListener will not accept it.\n");
+            sb.Append('\n');
+            AppendInitRegion(sb, documentFileName, emptyHash, indent);
+        }
 
         sb.Append("End Class\n");
         return sb.ToString();

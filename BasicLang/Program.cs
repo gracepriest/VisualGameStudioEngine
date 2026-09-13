@@ -176,8 +176,32 @@ namespace BasicLang.Compiler.Driver
             // lexed or importable), so it must be admitted here explicitly or the CLI never routes
             // it at all — it falls through to "unrecognized argument" and exits 2, which reads as a
             // typo rather than as "that is not a program". Same reason .blproj is checked separately.
-            var fileArg = args.FirstOrDefault(a => !a.StartsWith("-") &&
-                (ModuleResolver.IsSourceFile(a) || a.EndsWith(".blproj") || BasicCompiler.IsFormDocument(a)));
+            var fileArgs = args.Where(a => !a.StartsWith("-") &&
+                (ModuleResolver.IsSourceFile(a) || a.EndsWith(".blproj") || BasicCompiler.IsFormDocument(a)))
+                .ToList();
+
+            // ⛔ EXTRA SOURCE FILES ARE REFUSED, not ignored. This used to be FirstOrDefault, so
+            // `basiclang Program.bas MainForm.bas --target=csharp` compiled ONLY Program.bas,
+            // printed "Compilation successful!" and "Files compiled: 1", and exited 0 — while the
+            // emitted C# referenced a class that had never been compiled and failed at csc with
+            // "The type or namespace name 'MainForm' could not be found". Measured 2026-09-13 on
+            // the shipped VSIX WinForms template, which is exactly two files.
+            //
+            // Single-file compilation is the documented contract (CLAUDE.md: "CLI compile a
+            // file"); multi-file is what a project is for, and the resolver only ever sees the
+            // files a project lists. So the fix is to say so rather than to silently widen either
+            // one.
+            if (fileArgs.Count > 1)
+            {
+                Console.Error.WriteLine(
+                    $"error: {fileArgs.Count} source files were given, but compiling a file directly " +
+                    "takes exactly one — the others would be silently ignored. Put them in a " +
+                    ".blproj and build that instead:");
+                Console.Error.WriteLine("  basiclang build MyProject.blproj");
+                return 2;
+            }
+
+            var fileArg = fileArgs.FirstOrDefault();
 
             if (fileArg != null)
             {

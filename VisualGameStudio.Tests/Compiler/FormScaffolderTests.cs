@@ -100,11 +100,14 @@ public class FormScaffolderTests
     }
 
     [Test]
-    public void Create_PutsTheInitRegionAfterTheHandlerArea()
+    public void Create_Web_PutsTheInitRegionAfterTheHandlerArea()
     {
-        // ⛔⛔ D8's ordering rule: an AddressOf naming a Sub declared LATER erases its parameter
-        // types and then fails to match the event's delegate. This is the opposite of the layout in
-        // D1's worked example, which illustrates the marker shape rather than the ordering.
+        // ⛔⛔ D8's ordering rule, and it is real ON THE WEB — measured 2026-09-13:
+        // `addEventListener("click", AddressOf H)` with H declared later fails with "cannot
+        // convert from 'Action(Of Object)' to 'Action(Of DomEvent)'". The DOM signature declares
+        // the parameter type, so the erased handler has something concrete to fail against.
+        // This is the opposite of the layout in D1's worked example, which illustrates the marker
+        // shape rather than the ordering.
         var text = FormScaffolder.Create("LoginForm").CodeText;
 
         var controls = text.IndexOf("region=\"controls\"", StringComparison.Ordinal);
@@ -116,7 +119,32 @@ public class FormScaffolderTests
             Assert.That(controls, Is.GreaterThan(0));
             Assert.That(handlerArea, Is.GreaterThan(controls));
             Assert.That(init, Is.GreaterThan(handlerArea),
-                "the init region must come after where handlers are written, or AddressOf breaks");
+                "on the web the init region must come after where handlers are written");
+        });
+    }
+
+    [Test]
+    public void Create_WinForms_PutsTheInitRegionWhereTheShippedTemplateDoes()
+    {
+        // ⛔⛔ The OPPOSITE order from the web, and deliberately so. Owner decision 3 makes the
+        // VSIX shape canonical, and that template declares btnClick_Click BELOW the
+        // InitializeComponent that wires it. Measured 2026-09-13: it compiles through BasicLang
+        // AND csc, and the handler binds with its full parameter types (object sender, EventArgs
+        // e) — the event is an unresolvable .NET member typed as Object, so there is no declared
+        // delegate for an erased handler to mismatch. Emitting the web order here would make the
+        // designer generate something that disagrees with the template it is modelled on.
+        var text = FormScaffolder.Create("MainForm", FormTarget.WinForms).CodeText;
+
+        var ctor = text.IndexOf("Public Sub New()", StringComparison.Ordinal);
+        var init = text.IndexOf("region=\"init\"", StringComparison.Ordinal);
+        var handlerArea = text.IndexOf("Your event handlers go here", StringComparison.Ordinal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ctor, Is.GreaterThan(0));
+            Assert.That(init, Is.GreaterThan(ctor), "InitializeComponent follows the constructor");
+            Assert.That(handlerArea, Is.GreaterThan(init),
+                "handlers sit below the init region, as the shipped VSIX template has them");
         });
     }
 

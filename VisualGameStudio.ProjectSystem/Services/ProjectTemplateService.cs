@@ -429,7 +429,10 @@ public class ProjectTemplateService : IProjectTemplateService
             "class-library" => new List<string> { "Library.mod", "Types.cls" },
             // GUI templates also generate UIHelpers.bas on disk; it must be a
             // compile item or it becomes an orphan excluded from the build.
-            "winforms-app" => new List<string> { "Main.bas", "UIHelpers.bas" },
+            // ⛔ MainForm.bas MUST be listed. GetSourceFiles() globs **/*.bas only while a project
+            // has no explicit <Compile> items, and these templates are explicit — an unlisted file
+            // is an orphan excluded from the build, with no diagnostic.
+            "winforms-app" => new List<string> { "Main.bas", "MainForm.bas", "UIHelpers.bas" },
             "wpf-app" => new List<string> { "Main.bas", "UIHelpers.bas" },
             "avalonia-app" => new List<string> { "Main.bas", "UIHelpers.bas" },
             "cpp-console-app" => new List<string> { "main.cpp" },
@@ -606,6 +609,21 @@ End Module
 ";
     }
 
+    // ⛔⛔ THE CANONICAL WINFORMS SHAPE (Owner decision 3). This file is the ENTRY POINT ONLY;
+    // the form lives in its own MainForm.bas, written by GenerateWinFormsFilesAsync, and carries a
+    // real InitializeComponent.
+    //
+    // Until 2026-09-13 this template emitted ONE file holding both the module and the form, with
+    // all control setup inline in `Public Sub New()` and no InitializeComponent at all — while the
+    // shipped VSIX template (BasicLang.VisualStudio/.../Templates/Projects/WinFormsApp/) emitted
+    // two files WITH one, and the CLI had no WinForms template at all. Three shapes, and the
+    // designer has to write into whichever one the user happens to have. The VSIX shape wins: it
+    // is the one proven end to end, and it is what the designer's region writer generates.
+    //
+    // ⚠ Deliberate deviation from the VSIX NAMING: the entry file stays `Main.bas` rather than
+    // becoming `Program.bas`, because every IDE template writes `Main.<ext>` through one shared
+    // path — singling this one out would trade a cross-product divergence for an in-product one.
+    // The shape that matters to the designer is identical.
     private static string GenerateWinFormsMain(string ns)
     {
         return $@"' {ns} - Windows Forms Application
@@ -613,46 +631,82 @@ End Module
 ' Requires .NET backend compilation
 
 Using System
-Using System.Drawing
 Using System.Windows.Forms
 
 Module Program
+    ''' <summary>Main entry point for the application.</summary>
     Sub Main()
         Application.EnableVisualStyles()
         Application.SetCompatibleTextRenderingDefault(False)
         Application.Run(New MainForm())
     End Sub
 End Module
+";
+    }
 
+    /// <summary>
+    /// <c>MainForm.bas</c> — the canonical form shape, matching the shipped VSIX template.
+    ///
+    /// <para>⛔ The handler is named <c>btnClick_Click</c> (<c>&lt;control&gt;_&lt;Event&gt;</c>),
+    /// not <c>OnButtonClick</c>. That is the name the designer generates and the name its
+    /// recognizer expects when importing; a template that disagrees hands every new project a
+    /// handler the designer will not re-wire.</para>
+    ///
+    /// <para>⚠ The handler is declared BELOW the InitializeComponent that wires it, exactly as the
+    /// VSIX template has it. Measured 2026-09-13: that compiles through BasicLang and csc with the
+    /// handler's full parameter types intact. The web ordering rule does NOT apply here — there is
+    /// no declared delegate for an erased handler to mismatch.</para>
+    ///
+    /// <para>⚠ One deliberate difference from the VSIX file: <c>Me.ClientSize</c>, where that
+    /// template writes <c>Me.Size</c>. The designer's own model calls Width/Height the CLIENT size
+    /// and its region writer emits <c>ClientSize</c>, so a template using <c>Size</c> would be
+    /// silently RESIZED the first time the form was saved from the designer — the two differ by
+    /// the border and title bar. Matching the generated shape keeps that round trip stable.</para>
+    /// </summary>
+    private static string GenerateWinFormsForm(string ns)
+    {
+        return $@"' MainForm.bas - Main application window
+' {ns}
+
+Using System
+Using System.Drawing
+Using System.Windows.Forms
+
+    ''' <summary>Main application form.</summary>
 Public Class MainForm
     Inherits Form
 
     Private lblMessage As Label
     Private btnClick As Button
 
+    ''' <summary>Creates a new instance of MainForm.</summary>
     Public Sub New()
+        InitializeComponent()
+    End Sub
+
+    ''' <summary>Initializes form components.</summary>
+    Private Sub InitializeComponent()
         Me.Text = ""{ns}""
-        Me.Size = New Size(400, 300)
+        Me.ClientSize = New Size(400, 300)
         Me.StartPosition = FormStartPosition.CenterScreen
 
-        ' Create label
         lblMessage = New Label()
-        lblMessage.Text = ""Hello, {ns}!""
         lblMessage.Location = New Point(20, 20)
         lblMessage.Size = New Size(300, 30)
+        lblMessage.Text = ""Hello, {ns}!""
         lblMessage.Font = New Font(""Segoe UI"", 12)
         Me.Controls.Add(lblMessage)
 
-        ' Create button
         btnClick = New Button()
-        btnClick.Text = ""Click Me""
         btnClick.Location = New Point(20, 60)
         btnClick.Size = New Size(100, 30)
-        AddHandler btnClick.Click, AddressOf OnButtonClick
+        btnClick.Text = ""Click Me""
+        AddHandler btnClick.Click, AddressOf btnClick_Click
         Me.Controls.Add(btnClick)
     End Sub
 
-    Private Sub OnButtonClick(sender As Object, e As EventArgs)
+    ''' <summary>Handles the button click.</summary>
+    Private Sub btnClick_Click(sender As Object, e As EventArgs)
         MessageBox.Show(""Button clicked!"", ""{ns}"", MessageBoxButtons.OK, MessageBoxIcon.Information)
     End Sub
 End Class
@@ -1048,6 +1102,12 @@ End Class
     private async Task GenerateWinFormsFilesAsync(string projectDir, CreateProjectOptions options, CancellationToken cancellationToken)
     {
         var ns = options.Namespace ?? options.Name;
+
+        // The form itself, in its own file — the canonical VSIX split. Main.bas is the entry
+        // point only.
+        await File.WriteAllTextAsync(
+            Path.Combine(projectDir, $"MainForm{options.SolutionType.SourceExtension}"),
+            GenerateWinFormsForm(ns), cancellationToken);
 
         // Create UI helper file
         var formFile = Path.Combine(projectDir, $"UIHelpers{options.SolutionType.SourceExtension}");

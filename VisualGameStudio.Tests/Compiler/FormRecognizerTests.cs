@@ -65,19 +65,31 @@ public class FormRecognizerTests
     }
 
     // ==================================================================
-    // Fixture 1 — the winforms-app template. Controls live in Public Sub New().
+    // Fixture 1 — the winforms-app template. Controls live in InitializeComponent().
+    //
+    // ⛔ The template CHANGED on 2026-09-13 (Task 18): it was one Main.bas with everything inline
+    // in Public Sub New() and no InitializeComponent; it is now Main.bas (entry point) +
+    // MainForm.bas (the canonical VSIX form shape). The previous fixture here carried an explicit
+    // tripwire — "if the template gained an InitializeComponent, add a separate fixture rather
+    // than relaxing this" — and that is exactly what happened below: the template fixture now
+    // reads MainForm.bas, and the constructor-body path keeps its own coverage against a
+    // hand-written source, because no shipped template has that shape any more.
     // ==================================================================
 
     [Test]
-    public async Task WinForms_RecoversTheTemplatesControls_FromAConstructorBody()
+    public async Task WinForms_RecoversTheTemplatesControls_FromInitializeComponent()
     {
-        var source = await GenerateAsync("winforms-app", SolutionTypes.DotNet, "Main.bas");
+        var source = await GenerateAsync("winforms-app", SolutionTypes.DotNet, "MainForm.bas");
 
-        // The shape this gate exists for: the IDE's own template has no InitializeComponent.
-        Assert.That(source, Does.Not.Contain("InitializeComponent"),
-            "if the template gained an InitializeComponent, this fixture no longer proves the " +
-            "constructor-body path works — add a separate fixture rather than relaxing this");
-        Assert.That(source, Does.Contain("Public Sub New()"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(source, Does.Contain("Private Sub InitializeComponent()"),
+                "the shipped template is the canonical VSIX shape and must carry one");
+            Assert.That(source, Does.Contain("AddressOf btnClick_Click"),
+                "handlers are named <control>_<Event> — the name the designer generates");
+            Assert.That(source, Does.Not.Contain("OnButtonClick"),
+                "the old IDE-only handler name is retired");
+        });
 
         var form = WinFormsDialect.Read(source);
 
@@ -85,10 +97,10 @@ public class FormRecognizerTests
         {
             Assert.That(form.ClassName, Is.EqualTo("MainForm"));
             Assert.That(form.BaseType, Is.EqualTo("Form"));
-            Assert.That(form.BuiltIn, Is.EqualTo("New"),
-                "the controls are built in the constructor, and the recognizer must say so");
+            Assert.That(form.BuiltIn, Is.EqualTo("InitializeComponent"),
+                "the controls are built in InitializeComponent, and the recognizer must say so");
             Assert.That(form.Controls.Select(c => c.Id), Is.EqualTo(new[] { "lblMessage", "btnClick" }),
-                "exactly the two controls ProjectTemplateService.GenerateWinFormsMain constructs, in order");
+                "exactly the two controls ProjectTemplateService.GenerateWinFormsForm constructs, in order");
             Assert.That(form.IsRefused, Is.False);
         });
 
@@ -116,7 +128,7 @@ public class FormRecognizerTests
             Assert.That(button.Properties["Text"], Is.EqualTo("\"Click Me\""));
             Assert.That(button.Handlers, Has.Count.EqualTo(1));
             Assert.That(button.Handlers[0].Event, Is.EqualTo("Click"));
-            Assert.That(button.Handlers[0].Handler, Is.EqualTo("OnButtonClick"));
+            Assert.That(button.Handlers[0].Handler, Is.EqualTo("btnClick_Click"));
             Assert.That(button.Handlers[0].IsInline, Is.False);
         });
     }
@@ -124,13 +136,13 @@ public class FormRecognizerTests
     [Test]
     public async Task WinForms_RecoversFormLevelProperties_AndNotTheirConstructorNoise()
     {
-        var source = await GenerateAsync("winforms-app", SolutionTypes.DotNet, "Main.bas");
+        var source = await GenerateAsync("winforms-app", SolutionTypes.DotNet, "MainForm.bas");
         var form = WinFormsDialect.Read(source);
 
         Assert.Multiple(() =>
         {
             Assert.That(form.FormProperties["Text"], Is.EqualTo("\"Recog\""));
-            Assert.That(form.FormProperties["Size"], Is.EqualTo("New Size(400, 300)"));
+            Assert.That(form.FormProperties["ClientSize"], Is.EqualTo("New Size(400, 300)"));
             Assert.That(form.FormProperties["StartPosition"], Is.EqualTo("FormStartPosition.CenterScreen"));
 
             // New Size / New Point / New Font all match the `<id> = New <Type>(` shape. None is a
@@ -143,7 +155,7 @@ public class FormRecognizerTests
     [Test]
     public async Task WinForms_RecoversPositions_NotJustNames()
     {
-        var source = await GenerateAsync("winforms-app", SolutionTypes.DotNet, "Main.bas");
+        var source = await GenerateAsync("winforms-app", SolutionTypes.DotNet, "MainForm.bas");
         var form = WinFormsDialect.Read(source);
 
         var lines = source.Replace("\r\n", "\n").Split('\n');
@@ -155,6 +167,25 @@ public class FormRecognizerTests
                 "the declaration line must point at the declaration — the writer edits by offset");
             Assert.That(lines[label.ConstructionLine - 1], Does.Contain("lblMessage = New Label()"));
             Assert.That(label.DeclarationLine, Is.LessThan(label.ConstructionLine));
+        });
+    }
+
+    [Test]
+    public void WinForms_StillRecoversControls_FromAConstructorBody()
+    {
+        // ⛔ The constructor-body path is still REACHABLE — every WinForms file written before the
+        // designer existed puts its controls in New(), and D12 makes importing those the point of
+        // the recognizer. No shipped template has that shape any more, so this is pinned against a
+        // hand-written source rather than against a generated one. Losing this fixture when the
+        // template changed would have been a silent loss of the entire import route's coverage.
+        var form = WinFormsDialect.Read(TemplateShapedSource);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(form.BuiltIn, Is.EqualTo("New"));
+            Assert.That(form.Controls.Select(c => c.Id), Is.EqualTo(new[] { "lblMessage", "btnClick" }));
+            Assert.That(form["btnClick"]!.Handlers[0].Handler, Is.EqualTo("OnButtonClick"));
+            Assert.That(form.IsRefused, Is.False);
         });
     }
 
