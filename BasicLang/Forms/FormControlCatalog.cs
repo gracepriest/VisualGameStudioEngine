@@ -171,6 +171,21 @@ public static class FormControlCatalog
     public static FormControlDef? Find(string kind) =>
         All.FirstOrDefault(c => string.Equals(c.Kind, kind, StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>
+    /// The single kind that emits this HTML tag, or null when none does OR more than one does.
+    ///
+    /// <para>Ambiguity returns null deliberately. <c>select</c> is both ComboBox and ListBox, and
+    /// <c>input</c> is three kinds separated only by <c>type=</c> — which
+    /// <c>document.createElement("input")</c> does not carry. Guessing would silently rewrite a
+    /// multi-select as a dropdown on the next save; reporting "no catalog row" lets the caller say
+    /// so instead.</para>
+    /// </summary>
+    public static FormControlDef? FindByHtmlTag(string tag)
+    {
+        var matches = All.Where(c => string.Equals(c.HtmlTag, tag, StringComparison.OrdinalIgnoreCase)).ToList();
+        return matches.Count == 1 ? matches[0] : null;
+    }
+
     /// <summary>The kinds usable in a given document format.</summary>
     public static IEnumerable<FormControlDef> For(FormTarget target) => All.Where(c => c.SupportsTarget(target));
 
