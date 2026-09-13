@@ -716,10 +716,21 @@ public class BuildService : IBuildService
                         extension = ".js";
                         break;
 
-                    default: // csharp
+                    case "csharp":
                         generatedCode = new BasicLang.Compiler.CodeGen.CSharp.CSharpCodeGenerator().Generate(compilation.CombinedIR);
                         extension = ".cs";
                         break;
+
+                    // ⛔ Never make this arm default to C#. It used to, and a backend without an
+                    // arm therefore did not fail — it silently generated C#, wrote a .cs, and
+                    // reported the build as succeeded. That is how a JavaScript project emitted C#
+                    // while every other layer already understood JavaScript. `backend` comes only
+                    // from GetBackendId over the closed TargetBackend enum, so this can fire only
+                    // when a new backend is added without an arm here, which is when it must.
+                    default:
+                        throw new NotSupportedException(
+                            $"Backend '{backend}' has no code-generation arm in BuildService — add one. " +
+                            "A missing arm must not silently fall back to C#.");
                 }
             }
             catch (Exception genEx)
@@ -880,17 +891,22 @@ public class BuildService : IBuildService
 
     /// <summary>Maps the IDE's backend enum to the compiler's backend identifier.</summary>
     /// <remarks>
-    /// ⚠ The <c>_ => "csharp"</c> default means a MISSING arm does not fail — it silently
-    /// builds C# instead. That is how a JavaScript project would have emitted C# even with the
-    /// codegen arm in place, and it is the same shape of bug the CLI project route carried.
+    /// ⛔ Every member of <see cref="TargetBackend"/> gets an explicit arm and the default THROWS.
+    /// This used to end in <c>_ => "csharp"</c>, which meant a missing arm did not fail — it
+    /// silently built C# and reported success. That is how a JavaScript project would have emitted
+    /// C# even with the codegen arm in place, and it is the same shape of bug the CLI project route
+    /// carried. Add a backend, add an arm; never widen the default.
     /// </remarks>
     private static string GetBackendId(TargetBackend backend) => backend switch
     {
+        TargetBackend.CSharp => "csharp",
         TargetBackend.Cpp => "cpp",
         TargetBackend.LLVM => "llvm",
         TargetBackend.MSIL => "msil",
         TargetBackend.JavaScript => "javascript",
-        _ => "csharp"
+        _ => throw new NotSupportedException(
+            $"TargetBackend '{backend}' has no backend-id mapping in BuildService — add an arm. " +
+            "A missing arm must not silently build C#.")
     };
 
     /// <summary>
@@ -1122,6 +1138,20 @@ public class BuildService : IBuildService
         if (enableWpf)
         {
             sb.AppendLine("    <UseWPF>true</UseWPF>");
+        }
+
+        // WinForms defaults to the legacy DPI-unaware mode, in which the form designer's pixel
+        // coordinates and the running window's are different units on any scaled display. The
+        // .blproj value wins; PerMonitorV2 is the fallback so a project that never set one still
+        // runs in the mode the designer lays out for.
+        if (enableWindowsForms)
+        {
+            var highDpiMode = cliProject?.ApplicationHighDpiMode;
+            if (string.IsNullOrWhiteSpace(highDpiMode))
+            {
+                highDpiMode = "PerMonitorV2";
+            }
+            sb.AppendLine($"    <ApplicationHighDpiMode>{MSBuildText.EscapeValue(highDpiMode)}</ApplicationHighDpiMode>");
         }
 
         sb.AppendLine("  </PropertyGroup>");

@@ -1,5 +1,7 @@
+using System.Reflection;
 using NUnit.Framework;
 using VisualGameStudio.Core.Abstractions.Services;
+using VisualGameStudio.Core.Models;
 using VisualGameStudio.ProjectSystem.Services;
 
 namespace VisualGameStudio.Tests.Services;
@@ -179,5 +181,150 @@ public class ProjectTemplateBackendMappingTests
         Assert.That(result.Error, Does.Contain("stray").And.Contain("TargetBackend"));
         Assert.That(File.Exists(Path.Combine(_rootDir, "Stray", "Stray.blproj")), Is.False,
             "no project file may be written for an unmapped solution type");
+    }
+
+    // ------------------------------------------------------------------
+    // The wizard's TFM picker stops being decorative
+    // ------------------------------------------------------------------
+
+    [Test]
+    public async Task CreateProject_WritesTheChosenTargetFramework()
+    {
+        // CreateProjectOptions.TargetFramework was collected by the wizard and then discarded by
+        // GenerateProjectFileContent, so every project silently got the "net8.0" default however
+        // the picker was set.
+        var result = await _service.CreateProjectAsync(new CreateProjectOptions
+        {
+            Name = "Tfm",
+            Location = _rootDir,
+            SolutionType = SolutionTypes.DotNet,
+            Template = ProjectTemplates.All.Single(t => t.Id == "console-app"),
+            TargetFramework = "net9.0",
+            CreateSolutionFolder = false,
+            CreateGitRepository = false
+        });
+
+        Assert.That(result.Success, Is.True, result.Error);
+        Assert.That(File.ReadAllText(result.ProjectPath!),
+            Does.Contain("<TargetFramework>net9.0</TargetFramework>"),
+            "the TFM the user picked must reach the project file");
+
+        var reloaded = await new VisualGameStudio.ProjectSystem.Serialization.ProjectSerializer()
+            .LoadAsync(result.ProjectPath!);
+        Assert.That(reloaded.TargetFramework, Is.EqualTo("net9.0"),
+            "...and must round-trip through the IDE's own loader");
+    }
+
+    [Test]
+    public async Task CreateProject_WinForms_DefinesTheHighDpiMode()
+    {
+        var result = await _service.CreateProjectAsync(new CreateProjectOptions
+        {
+            Name = "Dpi",
+            Location = _rootDir,
+            SolutionType = SolutionTypes.DotNet,
+            Template = ProjectTemplates.All.Single(t => t.Id == "winforms-app"),
+            CreateSolutionFolder = false,
+            CreateGitRepository = false
+        });
+
+        Assert.That(result.Success, Is.True, result.Error);
+        Assert.That(File.ReadAllText(result.ProjectPath!),
+            Does.Contain("<ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>"),
+            "a WinForms project must declare a DPI mode: in the legacy unaware mode the designer's " +
+            "pixel coordinates and the running window's are different units on a scaled display");
+
+        var reloaded = await new VisualGameStudio.ProjectSystem.Serialization.ProjectSerializer()
+            .LoadAsync(result.ProjectPath!);
+        Assert.That(reloaded.ApplicationHighDpiMode, Is.EqualTo("PerMonitorV2"));
+    }
+
+    // ------------------------------------------------------------------
+    // The same "never widen the default" rule, applied to BuildService
+    // ------------------------------------------------------------------
+    //
+    // ProjectTemplateService's mapping was hardened first; BuildService kept two dispatches that
+    // still ended in a silent C# fallback, so a backend with no arm built C# and reported success.
+    // These pin the one that is reachable from a unit test. The codegen switch in BuildProject is
+    // inline in a large async method and cannot be invoked without a real compile — it is covered
+    // by TemplateBuildSweepTests (Integration), and its default now throws rather than emitting C#.
+
+    private static MethodInfo GetBackendIdMethod()
+    {
+        var method = typeof(BuildService).GetMethod(
+            "GetBackendId", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.That(method, Is.Not.Null,
+            "BuildService.GetBackendId was renamed or removed — this test pins its totality, so " +
+            "update it rather than deleting it.");
+        return method!;
+    }
+
+    [Test]
+    public void GetBackendId_MapsEveryTargetBackend_WithNoSilentCSharpFallback()
+    {
+        var method = GetBackendIdMethod();
+        var expected = new Dictionary<TargetBackend, string>
+        {
+            [TargetBackend.CSharp] = "csharp",
+            [TargetBackend.Cpp] = "cpp",
+            [TargetBackend.LLVM] = "llvm",
+            [TargetBackend.MSIL] = "msil",
+            [TargetBackend.JavaScript] = "javascript",
+        };
+
+        foreach (TargetBackend backend in Enum.GetValues<TargetBackend>())
+        {
+            Assert.That(expected.ContainsKey(backend), Is.True,
+                $"TargetBackend gained '{backend}' — add its id here AND an explicit arm to " +
+                "BuildService.GetBackendId. A missing arm must not fall back to C#.");
+            Assert.That(method.Invoke(null, new object[] { backend }), Is.EqualTo(expected[backend]),
+                $"backend '{backend}' must map to its own id");
+        }
+    }
+
+    [Test]
+    public void GetBackendId_Throws_ForABackendWithNoArm()
+    {
+        // The regression itself: before this, an unmapped value returned "csharp" and the build
+        // went on to emit C# and report success. Cast past the end of the enum to stand in for a
+        // member someone adds tomorrow without touching the switch.
+        var unmapped = (TargetBackend)9999;
+
+        var ex = Assert.Throws<TargetInvocationException>(
+            () => GetBackendIdMethod().Invoke(null, new object[] { unmapped }));
+
+        Assert.That(ex!.InnerException, Is.TypeOf<NotSupportedException>(),
+            "an unmapped backend must fail loudly, not silently build C#");
+        Assert.That(ex.InnerException!.Message, Does.Contain("no backend-id mapping"));
+    }
+
+    // ------------------------------------------------------------------
+    // winforms-app no longer offers the MSIL pipeline
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void WinFormsTemplate_DoesNotOfferMsil()
+    {
+        var winforms = ProjectTemplates.All.Single(t => t.Id == "winforms-app");
+        Assert.That(winforms.SupportedSolutionTypes, Does.Not.Contain("msil"),
+            "the MSIL pipeline stops at a .il file — it never produces the executable a WinForms " +
+            "app is, and the combination has never been exercised");
+        Assert.That(winforms.SupportedSolutionTypes, Does.Contain("dotnet"),
+            "...but the template must still be reachable from the .NET solution type");
+    }
+
+    [Test]
+    public void MsilSolutionType_KeepsTemplateCoverage_AfterWinFormsDroppedIt()
+    {
+        // Pins WHY dropping "msil" from winforms-app was safe: EverySolutionType_HasAtLeastOneTemplate
+        // would have started failing if winforms-app had been msil's only template.
+        var msilTemplates = ProjectTemplates.All
+            .Where(t => t.SupportedSolutionTypes.Contains("msil"))
+            .Select(t => t.Id)
+            .ToList();
+
+        Assert.That(msilTemplates, Is.Not.Empty,
+            "the msil solution type would now render an empty template list in the wizard");
+        Assert.That(msilTemplates, Does.Contain("console-app"));
     }
 }

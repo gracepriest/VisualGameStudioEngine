@@ -106,6 +106,14 @@ namespace BasicLang.Compiler.ProjectSystem
         public bool UseWindowsForms { get; set; } = false;
         public bool UseWpf { get; set; } = false;
 
+        /// <summary>
+        /// &lt;ApplicationHighDpiMode&gt; — a System.Windows.Forms.HighDpiMode name, normally
+        /// PerMonitorV2. Null means the project file does not say, and the csproj emitter supplies
+        /// PerMonitorV2 for a WinForms build. In the legacy DPI-unaware mode the form designer's
+        /// pixel coordinates and the running window's are different units.
+        /// </summary>
+        public string? ApplicationHighDpiMode { get; set; }
+
         // Build configurations
         public Dictionary<string, BuildConfiguration> Configurations { get; set; } = new Dictionary<string, BuildConfiguration>();
 
@@ -174,6 +182,9 @@ namespace BasicLang.Compiler.ProjectSystem
 
                 var useWpf = propertyGroup.Element("UseWPF")?.Value;
                 if (useWpf != null && bool.TryParse(useWpf, out var uwp)) project.UseWpf = uwp;
+
+                var highDpiMode = propertyGroup.Element("ApplicationHighDpiMode")?.Value?.Trim();
+                if (!string.IsNullOrEmpty(highDpiMode)) project.ApplicationHighDpiMode = highDpiMode;
             }
 
             // Parse ItemGroup for various references

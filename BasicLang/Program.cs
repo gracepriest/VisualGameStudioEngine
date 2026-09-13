@@ -707,6 +707,18 @@ namespace BasicLang.Compiler.Driver
                         uiFrameworkProps.AppendLine("    <UseWindowsForms>true</UseWindowsForms>");
                     if (project.UseWpf)
                         uiFrameworkProps.AppendLine("    <UseWPF>true</UseWPF>");
+                    // WinForms defaults to the legacy DPI-unaware mode, in which the form
+                    // designer's pixel coordinates and the running window's are different units
+                    // on a scaled display. Kept in step with BuildService.GenerateCsprojContent —
+                    // the CLI and the IDE must emit the same csproj.
+                    if (project.UseWindowsForms)
+                    {
+                        var highDpiMode = string.IsNullOrWhiteSpace(project.ApplicationHighDpiMode)
+                            ? "PerMonitorV2"
+                            : project.ApplicationHighDpiMode;
+                        uiFrameworkProps.AppendLine(
+                            $"    <ApplicationHighDpiMode>{MSBuildText.EscapeValue(highDpiMode)}</ApplicationHighDpiMode>");
+                    }
 
                     // User-controlled values are XML/MSBuild-escaped: ';' in a
                     // project name splits derived item paths (MSB4094), '&'

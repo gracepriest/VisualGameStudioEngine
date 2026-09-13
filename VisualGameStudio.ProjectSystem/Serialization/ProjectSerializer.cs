@@ -87,26 +87,35 @@ public class ProjectSerializer
                 // .NET framework/UI properties. Absent element => null, never a default: the
                 // serializer writes a property only when the model disagrees with the file, so a
                 // null keeps a project that omits these byte-identical across a save.
-                var targetFramework = propertyGroup.Element("TargetFramework")?.Value.Trim();
+                // Read case-insensitively: MSBuild property names are case-insensitive but XLinq
+                // lookup is not, and the spellings genuinely differ in the wild — the IDE's own
+                // template emits <UseWPF> while <UseWpf> is just as valid.
+                var targetFramework = PropertyValue(propertyGroup, "TargetFramework")?.Trim();
                 if (!string.IsNullOrEmpty(targetFramework))
                 {
                     project.TargetFramework = targetFramework;
                 }
 
-                var assemblyName = propertyGroup.Element("AssemblyName")?.Value.Trim();
+                var assemblyName = PropertyValue(propertyGroup, "AssemblyName")?.Trim();
                 if (!string.IsNullOrEmpty(assemblyName))
                 {
                     project.AssemblyName = assemblyName;
                 }
 
-                if (bool.TryParse(propertyGroup.Element("UseWindowsForms")?.Value, out var useWinForms))
+                if (bool.TryParse(PropertyValue(propertyGroup, "UseWindowsForms"), out var useWinForms))
                 {
                     project.UseWindowsForms = useWinForms;
                 }
 
-                if (bool.TryParse(propertyGroup.Element("UseWpf")?.Value, out var useWpf))
+                if (bool.TryParse(PropertyValue(propertyGroup, "UseWPF"), out var useWpf))
                 {
                     project.UseWpf = useWpf;
+                }
+
+                var highDpiMode = PropertyValue(propertyGroup, "ApplicationHighDpiMode")?.Trim();
+                if (!string.IsNullOrEmpty(highDpiMode))
+                {
+                    project.ApplicationHighDpiMode = highDpiMode;
                 }
             }
             else
@@ -331,7 +340,10 @@ public class ProjectSerializer
                         ? new XElement("UseWindowsForms", project.UseWindowsForms.Value ? "true" : "false")
                         : null,
                     project.UseWpf != null
-                        ? new XElement("UseWpf", project.UseWpf.Value ? "true" : "false")
+                        ? new XElement("UseWPF", project.UseWpf.Value ? "true" : "false")
+                        : null,
+                    project.ApplicationHighDpiMode != null
+                        ? new XElement("ApplicationHighDpiMode", project.ApplicationHighDpiMode)
                         : null
                 )
             )
@@ -493,7 +505,8 @@ public class ProjectSerializer
         changed |= UpsertProperty(root, "TargetFramework", project.TargetFramework, baseline.TargetFramework);
         changed |= UpsertProperty(root, "AssemblyName", project.AssemblyName, baseline.AssemblyName);
         changed |= UpsertProperty(root, "UseWindowsForms", BoolText(project.UseWindowsForms), BoolText(baseline.UseWindowsForms));
-        changed |= UpsertProperty(root, "UseWpf", BoolText(project.UseWpf), BoolText(baseline.UseWpf));
+        changed |= UpsertProperty(root, "UseWPF", BoolText(project.UseWpf), BoolText(baseline.UseWpf));
+        changed |= UpsertProperty(root, "ApplicationHighDpiMode", project.ApplicationHighDpiMode, baseline.ApplicationHighDpiMode);
 
         // <Language> is emitted only for a C++ project: a BasicLang project must never gain one,
         // even when TargetBackend=Cpp makes it a native build (design decision D8).
@@ -535,6 +548,12 @@ public class ProjectSerializer
         return true;
     }
 
+    /// <summary>Reads one property element by name, case-insensitively (MSBuild property names are).</summary>
+    private static string? PropertyValue(XElement propertyGroup, string name) =>
+        propertyGroup.Elements()
+            .FirstOrDefault(e => string.Equals(e.Name.LocalName, name, StringComparison.OrdinalIgnoreCase))
+            ?.Value;
+
     private static string? BoolText(bool? value) => value == null ? null : value.Value ? "true" : "false";
 
     private static string? NullIfEmpty(string? value) => string.IsNullOrEmpty(value) ? null : value;
@@ -554,7 +573,13 @@ public class ProjectSerializer
             .Where(g => string.IsNullOrEmpty(g.Attribute("Condition")?.Value))
             .ToList();
 
-        var existing = globalGroups.SelectMany(g => g.Elements(name)).FirstOrDefault();
+        // Case-insensitive: MSBuild property names are case-insensitive but XLinq lookup is not,
+        // and the spellings genuinely differ in the wild — the IDE's own template emits <UseWPF>
+        // while <UseWpf> is just as valid. A case-sensitive match would append a second element
+        // instead of updating the one already there.
+        var existing = globalGroups
+            .SelectMany(g => g.Elements())
+            .FirstOrDefault(e => string.Equals(e.Name.LocalName, name, StringComparison.OrdinalIgnoreCase));
 
         if (desired == null)
         {

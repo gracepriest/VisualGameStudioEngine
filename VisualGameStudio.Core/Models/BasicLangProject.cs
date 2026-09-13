@@ -41,6 +41,17 @@ public class BasicLangProject
     /// <summary>&lt;AssemblyName&gt;. Null when the file omits it (the build then falls back to the project name).</summary>
     public string? AssemblyName { get; set; }
 
+    /// <summary>
+    /// <c>&lt;ApplicationHighDpiMode&gt;</c> — a <c>System.Windows.Forms.HighDpiMode</c> name,
+    /// normally <c>PerMonitorV2</c>. Null means the project file does not say, and the csproj
+    /// emitters supply <c>PerMonitorV2</c> for a WinForms build.
+    ///
+    /// <para>Load-bearing for the form designer: in the legacy DPI-unaware mode the designer's
+    /// pixel coordinates and the running window's are different units, so a form laid out at 100%
+    /// comes up clipped on a scaled display.</para>
+    /// </summary>
+    public string? ApplicationHighDpiMode { get; set; }
+
     public List<ProjectItem> Items { get; set; } = new();
     public List<ProjectReference> References { get; set; } = new();
     public List<PackageReference> PackageReferences { get; set; } = new();

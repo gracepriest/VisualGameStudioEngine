@@ -287,6 +287,15 @@ public class ProjectTemplateService : IProjectTemplateService
         sb.AppendLine($"    <OutputType>{outputType switch { "exe" => "Exe", "library" => "Library", _ => "WinExe" }}</OutputType>");
         sb.AppendLine($"    <RootNamespace>{Xml(options.Namespace ?? options.Name)}</RootNamespace>");
         sb.AppendLine($"    <TargetBackend>{targetBackend}</TargetBackend>");
+        // The wizard's TFM picker was decorative until this line: ProjectCreationOptions
+        // .TargetFramework was collected and then discarded, so every generated project silently
+        // got the "net8.0" default no matter what the user chose. Both csproj emitters append
+        // "-windows" themselves when a UI framework is on, so a desktop template need not
+        // pre-suffix it here.
+        if (!string.IsNullOrWhiteSpace(options.TargetFramework))
+        {
+            sb.AppendLine($"    <TargetFramework>{Xml(options.TargetFramework)}</TargetFramework>");
+        }
         // Pure C++ projects (Language=Cpp): user-authored C++ built by
         // CppProjectBuilder through a discovered native toolchain — the
         // BasicLang pipeline is not involved.
@@ -303,6 +312,11 @@ public class ProjectTemplateService : IProjectTemplateService
         if (options.Template.Id == "winforms-app")
         {
             sb.AppendLine("    <UseWindowsForms>true</UseWindowsForms>");
+            // Without a DPI mode WinForms runs in the legacy unaware mode, where the designer's
+            // pixel coordinates and the running window's disagree on any scaled display — a form
+            // laid out at 100% comes up clipped at 150%. PerMonitorV2 is the mode that makes
+            // designer pixels and runtime pixels the same unit.
+            sb.AppendLine("    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>");
         }
         else if (options.Template.Id == "wpf-app")
         {
@@ -325,7 +339,7 @@ public class ProjectTemplateService : IProjectTemplateService
         var compileItems = GetCompileItems(options.Template.Id);
         foreach (var item in compileItems)
         {
-            sb.AppendLine($"    <Compile Include=\"{item}\" />");
+            sb.AppendLine($"    <Compile Include=\"{XmlAttr(item)}\" />");
         }
 
         // The C++ game template links the engine import library; CppProjectBuilder
@@ -362,6 +376,16 @@ public class ProjectTemplateService : IProjectTemplateService
         .Replace("&", "&amp;")
         .Replace("<", "&lt;")
         .Replace(">", "&gt;");
+
+    /// <summary>
+    /// Escapes text destined for a double-quoted XML ATTRIBUTE value, where <see cref="Xml"/> is
+    /// not enough — an unescaped <c>"</c> closes the attribute early and makes the file unparseable.
+    ///
+    /// <para>ℹ️ Prospective hardening rather than a live defect: every compile-item path reaching
+    /// this today comes from a closed switch of literal filenames in <c>GetCompileItems</c>. It
+    /// becomes live as soon as an item is named by the user, which is what creating a form does.</para>
+    /// </summary>
+    private static string XmlAttr(string text) => Xml(text).Replace("\"", "&quot;");
 
     private static List<(string PackageId, string Version)> GetPackageReferences(string templateId)
     {
