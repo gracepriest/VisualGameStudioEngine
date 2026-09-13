@@ -1,6 +1,6 @@
 # blnet C++ facade — an ergonomic header over the generated proxy slots
 
-**Status:** Tasks 1-4 implemented; Task 5 open
+**Status:** Implemented (Tasks 1-5)
 **Date:** 2026-09-13
 **Builds on:** `2026-07-29-p2a-dotnet-access-aot-shim-design.md` (P2a, Implemented) — §7.3
 mangling, §8.3 wire forms, §9.1 generated artifacts.
@@ -220,7 +220,31 @@ functions, no ODR presence), and unconditional emission keeps the drift test sim
   wrapper types already disambiguate most handle overloads and the rest differ in arity. So BL6027
   is expected to be rare in practice, which is exactly why it needed a test that constructs the
   collision rather than hoping to find one.
-- [ ] **Task 5 — the coverage drift test (§6) and wiring into `NetProxyEmitter.Emit`.**
+- [x] **Task 5 — the coverage drift test (§6) and wiring into `NetProxyEmitter.Emit`.** *Done.*
+  The `Emit` wiring landed with Task 1; this is the drift test, in
+  `NetFacadeCoverageDriftTests`, over a REAL framework surface (`Console`, `Regex`, `Int32`,
+  `TimeSpan` — 234 slots) rather than the curated probe.
+
+  **§6 as written was not sufficient, and the mutation proved it.** A set identity is satisfied by
+  skipping EVERYTHING: `rendered = ∅`, `skipped = all`, every reason stated, green. Mutating
+  `ClassifyForFacade` to skip every slot left `EveryRealSlotIsEitherRenderedOrSkippedWithAReason`
+  PASSING — so coverage needs a floor as well as an identity. The three assertions have separate,
+  demonstrated jobs:
+
+  | Assertion | Catches | Shown by |
+  |---|---|---|
+  | Set identity | a slot in NEITHER bucket | dropping a skip silently — and *only* that |
+  | Floor (¾ + named members) | a bucket swallowing the surface | widening one arm, which the other two miss |
+  | Closed reason set | a new, unrecorded skip category | a new arm with a new reason string |
+
+  Measured at the time of writing: **223 of 234 real slots render**; the 11 skips are nine ByRef
+  parameters and two multi-slot ones, and the framework produces ZERO collisions — pinned, because
+  it is the reason BL6027's tests must construct a collision rather than wait to meet one.
+
+  Note for anyone extending the surface: `StringBuilder`, `DateTime` and `Uri` cannot appear in it
+  at all. `Emit` throws BL6019 for each (a §6.4 by-value-pointer result; `Deconstruct(out DateOnly,
+  out TimeOnly)`; a constructor taking `in UriCreationOptions`), so the failure says nothing about
+  facade coverage. That is upstream of this plan.
 
 ### Task 1 — two findings worth carrying into Tasks 2-5
 
@@ -256,3 +280,15 @@ about leaves the surface quietly meaning less than it says.
 ⚠ **The trap to avoid, from P2a-2's own history.** Do not assert "the facade compiles" and call
 it covered — an empty facade compiles perfectly. Coverage must be the set identity, and the
 compile test is the SECOND oracle, for shape.
+
+⚠ **And the set identity is not sufficient either — corrected in Task 5.** The same sentence above
+is true of the identity: skipping EVERY slot satisfies `rendered ∪ skipped == all` with every
+reason dutifully stated. Measured rather than reasoned about — mutating `ClassifyForFacade` to skip
+every slot left the identity test GREEN. Coverage needs a FLOOR beside the identity (the facade
+renders the large majority of a real surface, and these named members are present), and the two
+catch different failures: the identity catches a slot in neither bucket, the floor catches a bucket
+that swallows the surface.
+
+⚠ **Assert it against a surface nobody curated.** A probe assembly whose members were chosen to
+exercise the arms the emitter already has reports coverage it did not earn. Task 5's fixture uses
+real framework types for exactly this reason.

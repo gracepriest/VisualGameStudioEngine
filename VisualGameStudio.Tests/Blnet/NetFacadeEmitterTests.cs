@@ -123,6 +123,13 @@ public class NetFacadeEmitterTests
 
         Assert.That(all, Is.Not.Empty, "guard: no slots, so this proves nothing");
 
+        // The identity alone is satisfied by skipping EVERYTHING — rendered = empty, skipped =
+        // all, every reason stated, green. The floor belongs with it. Asserted properly against a
+        // real framework surface in NetFacadeCoverageDriftTests; this is the local guard.
+        Assert.That(rendered, Is.Not.Empty,
+            "the facade rendered NOTHING, which satisfies the set identity below perfectly and "
+            + "means the header is empty.");
+
         Assert.That(rendered.Concat(skipped.Select(s => s.SlotName)),
             Is.EquivalentTo(all),
             "a proxy slot is neither rendered in the facade nor on its skip list. Both buckets "

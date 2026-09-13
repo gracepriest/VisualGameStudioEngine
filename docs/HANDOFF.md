@@ -164,11 +164,17 @@ fails only when the Native tier runs alongside it). The fast subset shows the tw
 - **blnet C++ facade (`blnet_facade.g.hpp`)** — an ergonomic C++ rendering of the proxy slots,
   so hand-written C++ can say `System::Console::WriteLine("hi")` instead of naming a mangled
   slot whose trailing hash moves whenever the signature does. Plan:
-  `docs/superpowers/plans/2026-09-13-blnet-cpp-facade.md`. **Tasks 1-4 are done and proven** —
+  `docs/superpowers/plans/2026-09-13-blnet-cpp-facade.md`. **All five tasks are done and proven** —
   methods (static and instance), constructors, and properties, so `Regex r("^a+$"); r.IsMatch(s)`
   works from C++; name and signature collisions are omitted rather than guessed at, and reported
-  as **BL6027 (always a warning — never fails a build)**. Task 5 is open: the coverage drift
-  wiring. The header is emitted unconditionally and included by nobody —
+  as **BL6027 (always a warning — never fails a build)**; coverage is pinned against a REAL
+  framework surface at 223 of 234 slots.
+  ⚠ **A coverage set identity needs a FLOOR beside it** — skipping every slot satisfies
+  `rendered ∪ skipped == all` perfectly. Measured, not theorised: mutating the classifier to skip
+  everything left the identity test green. `NetFacadeCoverageDriftTests` asserts both.
+  ⚠ `StringBuilder`, `DateTime` and `Uri` **cannot be `<NetProxy>` types at all** — `Emit` throws
+  BL6019 for each (§6.4 by-value-pointer result; ByRef handles §8.3 leaves unspecified). Upstream
+  of the facade; a surface containing one cannot be emitted. The header is emitted unconditionally and included by nobody —
   `using namespace BasicLang::netfx;` is the one opt-in line.
   ⚠ **A property's `set_X()` is usually absent**, and that is the SURFACE, not the facade: a
   `<NetProxy>` declared type draws only property READ slots, because a setter descriptor is
