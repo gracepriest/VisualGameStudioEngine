@@ -97,7 +97,25 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     /// empty model a refusal produces. A refusal's model is deliberately unpopulated; drawing it
     /// would tell the user their form has no controls.</para>
     /// </summary>
-    public BasicLang.Forms.FormDocument? DesignDocument
+    public BasicLang.Forms.FormDocument? DesignDocument => DesignFile?.Model;
+
+    private BasicLang.Forms.Serialization.FormFile? _designFile;
+    private string? _designFileText;
+
+    /// <summary>
+    /// The loaded form file — the model plus the diagnostics and D9 tiers reading it produced.
+    ///
+    /// <para>⛔ Cached against the TEXT it was parsed from, and re-parsed only when that text
+    /// changes. Not an optimisation: the canvas and the property grid hold references to
+    /// <c>FormControl</c> objects out of this model, and re-parsing on every read would hand each
+    /// caller a DIFFERENT object graph. The selected control would then never reference-equal
+    /// anything in the document being drawn, so the selection outline would vanish and the property
+    /// grid would edit a model nothing else can see.</para>
+    ///
+    /// <para>⚠ Still follows the text. An edit in Code view invalidates the cache, so the canvas
+    /// never shows a form the file no longer describes.</para>
+    /// </summary>
+    public BasicLang.Forms.Serialization.FormFile? DesignFile
     {
         get
         {
@@ -106,13 +124,96 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
                 return null;
             }
 
+            if (_designFile != null && string.Equals(_designFileText, Text, StringComparison.Ordinal))
+            {
+                return _designFile;
+            }
+
             var form = BasicLang.Forms.Serialization.FormDocumentReader.Read(FilePath!, Text);
-            return form.IsRefused ? null : form.Model;
+            _designFileText = Text;
+            _designFile = form.IsRefused ? null : form;
+            return _designFile;
         }
     }
 
     [RelayCommand]
-    private void ToggleDesignMode() => IsDesignMode = !IsDesignMode;
+    private void ToggleDesignMode()
+    {
+        IsDesignMode = !IsDesignMode;
+        if (IsDesignMode)
+        {
+            SyncDesignerPanels();
+        }
+    }
+
+    /// <summary>The property grid beside the canvas. Always present; empty until something is selected.</summary>
+    public ViewModels.Designer.FormPropertyGridViewModel PropertyGrid { get; } = new();
+
+    /// <summary>The toolbox beside the canvas, driven from the catalog for this document's target.</summary>
+    public ViewModels.Designer.FormToolboxViewModel Toolbox { get; } = new();
+
+    private bool _designerPanelsWired;
+    private bool _applyingDesignerEdit;
+
+    /// <summary>
+    /// Points the designer panels at the current document.
+    ///
+    /// <para>⚠ The <c>Edited</c> subscription is wired ONCE. The panels are owned by this view
+    /// model and live as long as it does, so re-subscribing on every sync would add a handler per
+    /// toggle into Design view — and each edit would then write the document two, three, four
+    /// times over.</para>
+    /// </summary>
+    private void SyncDesignerPanels()
+    {
+        var file = DesignFile;
+
+        if (!_designerPanelsWired)
+        {
+            PropertyGrid.Edited += OnDesignerEdited;
+            _designerPanelsWired = true;
+        }
+
+        PropertyGrid.Load(file);
+        if (file != null)
+        {
+            Toolbox.Target = file.Model.Target;
+        }
+    }
+
+    /// <summary>
+    /// A property-grid edit, written back through the structure-preserving writer.
+    ///
+    /// <para>⛔⛔ <c>_applyingDesignerEdit</c> exists because setting <see cref="Text"/> normally
+    /// invalidates the parsed document — which is right for a Code-view edit and WRONG here. The
+    /// cached model is not stale: it is precisely the model this new text was written FROM.
+    /// Dropping it would re-parse into a fresh object graph, and the control the user has selected
+    /// would no longer be in the document being drawn — the selection outline would vanish and the
+    /// property grid would go empty on every keystroke they committed.</para>
+    ///
+    /// <para>⚠ The writer returns the original text unchanged when the model asked for nothing, so
+    /// a no-op edit sets Text to what it already was and marks nothing dirty.</para>
+    /// </summary>
+    private void OnDesignerEdited(object? sender, EventArgs e)
+    {
+        var file = DesignFile;
+        if (file == null)
+        {
+            return;
+        }
+
+        var written = BasicLang.Forms.Serialization.FormDocumentWriter.Write(file);
+
+        _applyingDesignerEdit = true;
+        try
+        {
+            Text = written;
+            _designFileText = written;
+        }
+        finally
+        {
+            _applyingDesignerEdit = false;
+        }
+    }
     public new string Title => GetTitle();
     public new bool CanClose => true;
 
@@ -233,9 +334,15 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     {
         // The Design view reads DesignDocument from Text on demand, so it only redraws when told
         // the property changed. Without this, an edit in Code view leaves a stale canvas.
-        if (IsFormDocument)
+        // ⛔ Not while the designer is writing its OWN edit back — see OnDesignerEdited. The
+        // cached model is what produced this text, so discarding it would drop the selection.
+        if (IsFormDocument && !_applyingDesignerEdit)
         {
+            _designFile = null;
+            _designFileText = null;
+            OnPropertyChanged(nameof(DesignFile));
             OnPropertyChanged(nameof(DesignDocument));
+            SyncDesignerPanels();
         }
 
         var wasDirty = IsDirty;

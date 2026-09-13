@@ -121,6 +121,111 @@ public class FormDesignModeTests
         Assert.That(vm.DesignDocument, Is.Null);
     }
 
+    // ==================================================================
+    // The designer panels, and the round trip back to text
+    // ==================================================================
+
+    [Test]
+    public void EnteringDesignMode_PointsThePanelsAtTheDocument()
+    {
+        var vm = NewViewModel();
+        vm.FilePath = "/tmp/LoginForm.blwebform";
+        vm.Text = WebForm;
+
+        vm.ToggleDesignModeCommand.Execute(null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.Toolbox.Target, Is.EqualTo(FormTarget.Web));
+            Assert.That(vm.PropertyGrid.IsEmpty, Is.True, "nothing is selected yet");
+        });
+    }
+
+    [Test]
+    public void APropertyGridEdit_ReachesTheText()
+    {
+        var vm = NewViewModel();
+        vm.FilePath = "/tmp/LoginForm.blwebform";
+        vm.Text = WebForm;
+        vm.ToggleDesignModeCommand.Execute(null);
+
+        vm.PropertyGrid.SelectedControl = vm.DesignDocument!.FindById("btnLogin");
+        vm.PropertyGrid.Rows.Single(r => r.Name == "Text").StringValue = "Log in";
+
+        Assert.That(vm.Text, Does.Contain("Log in"),
+            "an edit in the property grid must be written back through the document writer");
+    }
+
+    [Test]
+    public void APropertyGridEdit_KeepsTheSelection()
+    {
+        // ⛔⛔ Writing the document sets Text, and a Text change normally discards the parsed
+        // model. Doing that here would re-parse into a FRESH object graph, so the control the user
+        // has selected would no longer be in the document being drawn — the selection outline
+        // would vanish and the grid would go empty on every committed edit.
+        var vm = NewViewModel();
+        vm.FilePath = "/tmp/LoginForm.blwebform";
+        vm.Text = WebForm;
+        vm.ToggleDesignModeCommand.Execute(null);
+
+        var button = vm.DesignDocument!.FindById("btnLogin");
+        vm.PropertyGrid.SelectedControl = button;
+        vm.PropertyGrid.Rows.Single(r => r.Name == "Text").StringValue = "Log in";
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.PropertyGrid.SelectedControl, Is.SameAs(button), "still the same control");
+            Assert.That(vm.PropertyGrid.Rows, Is.Not.Empty, "and the grid still shows it");
+            Assert.That(vm.DesignDocument!.FindById("btnLogin"), Is.SameAs(button),
+                "the canvas and the grid must still be looking at ONE object graph");
+        });
+    }
+
+    [Test]
+    public void AnEditInCodeView_StillResetsThePanels()
+    {
+        // The guard above must not swallow a real Code-view edit — that text did NOT come from
+        // the designer and the cached model really is stale.
+        var vm = NewViewModel();
+        vm.FilePath = "/tmp/LoginForm.blwebform";
+        vm.Text = WebForm;
+        vm.ToggleDesignModeCommand.Execute(null);
+        vm.PropertyGrid.SelectedControl = vm.DesignDocument!.FindById("btnLogin");
+
+        vm.Text = WebForm.Replace("btnLogin", "btnRenamed");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.PropertyGrid.SelectedControl, Is.Null, "the old selection is gone");
+            Assert.That(vm.DesignDocument!.FindById("btnRenamed"), Is.Not.Null);
+        });
+    }
+
+    [Test]
+    public void TogglingDesignModeRepeatedly_DoesNotMultiplyTheWriteBack()
+    {
+        // ⚠ The Edited subscription is wired ONCE. Re-subscribing per toggle would write the
+        // document two, three, four times over — each one re-entering the writer.
+        var vm = NewViewModel();
+        vm.FilePath = "/tmp/LoginForm.blwebform";
+        vm.Text = WebForm;
+
+        for (var i = 0; i < 4; i++)
+        {
+            vm.ToggleDesignModeCommand.Execute(null);
+        }
+
+        vm.ToggleDesignModeCommand.Execute(null);
+        vm.PropertyGrid.SelectedControl = vm.DesignDocument!.FindById("btnLogin");
+
+        var texts = new List<string>();
+        vm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(vm.Text)) texts.Add(vm.Text); };
+
+        vm.PropertyGrid.Rows.Single(r => r.Name == "Text").StringValue = "Log in";
+
+        Assert.That(texts, Has.Count.EqualTo(1), "exactly one write per edit");
+    }
+
     [Test]
     public void ToggleDesignMode_FlipsTheMode()
     {
