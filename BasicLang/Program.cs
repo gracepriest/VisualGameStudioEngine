@@ -626,6 +626,35 @@ namespace BasicLang.Compiler.Driver
                 return 1;
             }
 
+            // ⛔⛔ Form documents come from their OWN glob, not from GetSourceFiles(). That glob
+            // cannot yield a .blwebform by design (it feeds the lexer, and a form document is XML),
+            // so handing it to the page emitter meant a project with explicit <Compile> items got
+            // pages and a default one — same files on disk — got none, silently.
+            var webForms = Forms.FormDocumentLoader.LoadWebForms(
+                project.GetFormDocuments(), m => Console.Error.WriteLine($"  Warning: {m}"));
+
+            // ⛔⛔ D7's dispatch, as a real source file compiled with everything else. Without
+            // this the `data-form` attribute every generated page carries is read by NOTHING: the
+            // helper existed only as a string the emitter could produce and no caller ever asked
+            // for, so three forms produced three pages that all ran the same Main() and showed
+            // nothing at all.
+            if (IsJavaScriptTarget(project.Backend?.ToLowerInvariant() ?? "csharp"))
+            {
+                var dispatchPath = Forms.FormDispatch.Write(
+                    webForms, Path.Combine(projectDir, "obj", configuration),
+                    m => Console.Error.WriteLine($"  Warning: {m}"));
+
+                if (dispatchPath != null)
+                {
+                    if (!Forms.FormDispatch.IsCalled(sourceFiles))
+                    {
+                        Console.Error.WriteLine($"  Warning: {Forms.FormDispatch.NotCalledMessage}");
+                    }
+
+                    sourceFiles.Add(dispatchPath);
+                }
+            }
+
             var options = new BasicLang.Compiler.CompilerOptions
             {
                 TargetBackend = project.Backend.ToLowerInvariant(),
@@ -749,8 +778,7 @@ namespace BasicLang.Compiler.Driver
                         // ⛔ Without this the markup emitter never runs: a project containing a
                         // .blwebform built successfully and wrote no .html and no .css, because
                         // `forms` is optional and nothing but the tests ever passed it.
-                        forms: Forms.FormDocumentLoader.LoadWebForms(
-                            sourceFiles, m => Console.Error.WriteLine($"  Warning: {m}")),
+                        forms: webForms,
                         warn: m => Console.Error.WriteLine($"  Warning: {m}"));
                     Console.WriteLine($"  Site written to: {outputDir}");
                 }

@@ -35,7 +35,8 @@ public static class FormDocumentReader
         var model = new FormDocument
         {
             Target = claimed ?? FormTarget.Web,
-            Name = Path.GetFileNameWithoutExtension(filePath)
+            Name = Path.GetFileNameWithoutExtension(filePath),
+            SourcePath = filePath
         };
 
         var positions = new Dictionary<FormControl, XElement>();

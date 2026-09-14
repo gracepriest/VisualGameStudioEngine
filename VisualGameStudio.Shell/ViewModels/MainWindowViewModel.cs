@@ -575,6 +575,12 @@ public partial class MainWindowViewModel : ViewModelBase
         _debugService.Stopped += OnDebugStopped;
         _debugService.OutputReceived += OnDebugOutput;
 
+        // ⚠ The form designer's own findings. Keyed as their own COLLECTION so a designer refusal
+        // and the language server's diagnostics for the same .bas do not erase one another — the
+        // same reasoning as the extension collections below, and the reason an empty publish is
+        // meaningful rather than a no-op: it is how the previous save's findings are cleared.
+        _eventAggregator.Subscribe<DiagnosticsUpdatedEvent>(OnDesignerDiagnostics);
+
         // Subscribe to solution events
         _solutionService.SolutionLoaded += OnSolutionLoaded;
         _solutionService.SolutionClosed += OnSolutionClosed;
@@ -1573,6 +1579,36 @@ public partial class MainWindowViewModel : ViewModelBase
                 e.Completion.TrySetResult(false);
             }
         });
+    }
+
+    /// <summary>
+    /// Designer findings for one file, straight into the Error List.
+    ///
+    /// <para>⛔ Without this the designer could refuse to write a hand-edited region (BL8011) and
+    /// the user would see a save that appeared to work and a form that never changed. A refusal
+    /// nobody is shown is indistinguishable from the feature being broken.</para>
+    /// </summary>
+    private void OnDesignerDiagnostics(DiagnosticsUpdatedEvent e)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(e.FilePath))
+            {
+                return;
+            }
+
+            _diagnosticsAggregator.SetExtensionDiagnostics(
+                Documents.CodeEditorDocumentViewModel.DesignerDiagnosticSource, e.FilePath, e.Diagnostics);
+
+            ErrorList.UpdateDiagnostics(_diagnosticsAggregator.GetSnapshot());
+            Problems.ReplaceAllDiagnostics(_diagnosticsAggregator.GetSnapshot());
+        }
+        catch (Exception ex)
+        {
+            _outputService?.WriteError(
+                $"[Designer] Failed to apply diagnostics for {e.FilePath}: {ex.Message}",
+                OutputCategory.General);
+        }
     }
 
     private void OnExtensionDiagnosticsReceived(object? sender, ExtensionDiagnosticsEventArgs e)

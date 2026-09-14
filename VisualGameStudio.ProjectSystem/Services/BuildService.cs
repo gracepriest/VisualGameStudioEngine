@@ -622,6 +622,45 @@ public class BuildService : IBuildService
             var backend = GetBackendId(project.TargetBackend);
             var outputDir = Path.Combine(project.ProjectDirectory, config.OutputPath);
 
+            // ⛔⛔ Form documents come from their OWN glob, not from the compile item list. That
+            // glob cannot yield a .blwebform by design (it feeds the lexer, and a form document is
+            // XML), so a project with explicit <Compile> items got pages and a default one — same
+            // files on disk — got none, silently.
+            var webForms = BasicLang.Forms.FormDocumentLoader.LoadWebForms(
+                cliProject != null
+                    ? cliProject.GetFormDocuments()
+                    : sourceFiles.Select(item => Path.Combine(project.ProjectDirectory, item.Include)),
+                m => _outputService.WriteLine($"Warning: {m}", OutputCategory.Build));
+
+            // ⛔⛔ D7's dispatch, as a real source file compiled with everything else — the CLI
+            // does exactly this, and the two routes must agree. Without it the `data-form`
+            // attribute every generated page carries is read by NOTHING, so every page loads the
+            // one script, runs the one Main(), and shows the same thing.
+            if (backend == "javascript")
+            {
+                var dispatchPath = BasicLang.Forms.FormDispatch.Write(
+                    webForms, Path.Combine(project.ProjectDirectory, "obj", config.Name),
+                    m => _outputService.WriteLine($"Warning: {m}", OutputCategory.Build));
+
+                if (dispatchPath != null)
+                {
+                    if (!BasicLang.Forms.FormDispatch.IsCalled(absoluteSourcePaths))
+                    {
+                        result.Diagnostics.Add(new DiagnosticItem
+                        {
+                            Id = BasicLang.Forms.DesignCodes.DispatchNotCalled,
+                            Message = BasicLang.Forms.FormDispatch.NotCalledMessage,
+                            FilePath = project.FilePath,
+                            Severity = DiagnosticSeverity.Warning
+                        });
+                        _outputService.WriteLine(
+                            $"Warning: {BasicLang.Forms.FormDispatch.NotCalledMessage}", OutputCategory.Build);
+                    }
+
+                    absoluteSourcePaths.Add(dispatchPath);
+                }
+            }
+
             var compilerOptions = new CompilerOptions
             {
                 TargetBackend = backend,
@@ -766,7 +805,7 @@ public class BuildService : IBuildService
                 if (backend == "javascript")
                 {
                     EmitJavaScriptSite(outputDir, result.GeneratedFileName, generatedCode,
-                        project, jsGenerator, compilation.CombinedIR.JsImports);
+                        project, jsGenerator, webForms, compilation.CombinedIR.JsImports);
                 }
 
                 var toolchainHint = backend switch
@@ -927,6 +966,7 @@ public class BuildService : IBuildService
     private void EmitJavaScriptSite(string outputDir, string scriptFileName, string generatedCode,
         BasicLangProject project,
         BasicLang.Compiler.CodeGen.JavaScript.JavaScriptCodeGenerator generator,
+        IReadOnlyList<BasicLang.Forms.FormDocument> webForms,
         IReadOnlyList<BasicLang.Compiler.IR.JsImportDirective> jsImports = null)
     {
         string mapJson = null;
@@ -947,13 +987,11 @@ public class BuildService : IBuildService
             // ⛔ The IDE route needs this as much as the CLI's. `forms` is optional and only the
             // tests ever passed it, so the markup emitter never ran in either shipping path: a
             // project containing a .blwebform built green and produced no page at all.
-            forms: BasicLang.Forms.FormDocumentLoader.LoadWebForms(
-                // ⚠ Resolved against the project directory, exactly as the compile route resolves
-                // them — a ProjectItem's Include is relative, and reading it as a path would find
-                // nothing and emit no page, silently.
-                project.GetSourceFiles()
-                    .Select(item => Path.Combine(project.ProjectDirectory, item.Include)),
-                m => _outputService.WriteLine($"Warning: {m}", OutputCategory.Build)),
+            //
+            // ⚠ Loaded ONCE by the caller and passed in, because the dispatch helper is generated
+            // from the same list before the compile — reading the documents twice would let the
+            // pages and the dispatch disagree about which forms exist.
+            forms: webForms,
             importBaseDirectory: project.ProjectDirectory,
             // WriteLine, not WriteError: a missing #JsImport target does not fail the build, and
             // colouring it as an error would make a warning look like one.

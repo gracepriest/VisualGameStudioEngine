@@ -804,13 +804,117 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
             TitleChanged?.Invoke(this, EventArgs.Empty);
 
             _eventAggregator.Publish(new FileSavedEvent(FilePath));
-            return true;
         }
         catch
         {
             return false;
         }
+
+        // ⚠ OUTSIDE the try that owns the save, and deliberately last. The document is already
+        // on disk and the save has already succeeded; a problem regenerating the companion .bas is
+        // reported as a diagnostic on that file, not as a failed save of this one.
+        await RegenerateDesignerRegionsAsync(cancellationToken);
+        return true;
     }
+
+    /// <summary>
+    /// Puts the saved document's controls into the user's own <c>.bas</c> (D1).
+    ///
+    /// <para>⛔⛔ <b>This is what makes the designer more than a drawing.</b> The document
+    /// describes the form; nothing on the desktop compiles from it. Only the two marked regions in
+    /// the <c>.bas</c> declare the fields and build the controls, so without this call a user could
+    /// drag a button onto the canvas, save, build, and get an error about the
+    /// <c>InitializeComponent</c> the scaffold calls — in a file they never wrote a line of.</para>
+    ///
+    /// <para>⚠ On SAVE rather than on each edit. The two files are one unit: regenerating on every
+    /// committed property change would put the .bas on disk while the .blform it was generated from
+    /// was still an unsaved buffer, so a crash or a discarded edit would leave the pair describing
+    /// two different forms.</para>
+    ///
+    /// <para>⚠ A refusal WRITES NOTHING and must still be seen. RegionWriter refuses rather than
+    /// overwriting a hand-edited region (BL8011), and a refusal the user is never shown is
+    /// indistinguishable from the designer quietly not working — so the findings go to the error
+    /// list either way, keyed to the .bas they are about.</para>
+    /// </summary>
+    private async Task RegenerateDesignerRegionsAsync(CancellationToken cancellationToken)
+    {
+        if (!IsFormDocument || FilePath == null)
+        {
+            return;
+        }
+
+        try
+        {
+            // A REFUSED document has no trustworthy model to generate from; the designer has
+            // already opened it read-only and said why.
+            var file = DesignFile;
+            if (file == null)
+            {
+                return;
+            }
+
+            var codePath = BasicLang.Forms.FormCodeBehind.PathFor(FilePath);
+            if (!await _fileService.FileExistsAsync(codePath))
+            {
+                _eventAggregator.Publish(new DiagnosticsUpdatedEvent(codePath, new[]
+                {
+                    new DiagnosticItem
+                    {
+                        Id = BasicLang.Forms.DesignCodes.RegionAbsent,
+                        Message = $"'{Path.GetFileName(FilePath)}' has no code-behind: expected " +
+                                  $"'{Path.GetFileName(codePath)}' beside it. The designer has " +
+                                  "nowhere to write the controls, so nothing was generated.",
+                        Severity = DiagnosticSeverity.Warning,
+                        FilePath = codePath,
+                        Source = DesignerDiagnosticSource
+                    }
+                }));
+                return;
+            }
+
+            var before = await _fileService.ReadFileAsync(codePath, cancellationToken);
+            var result = BasicLang.Forms.FormCodeBehind.Regenerate(file, codePath, before);
+
+            if (result.Changed)
+            {
+                await _fileService.WriteFileAsync(codePath, result.Text, cancellationToken);
+                _eventAggregator.Publish(new FileSavedEvent(codePath));
+            }
+
+            // Published even when empty — that is how the previous save's findings are cleared.
+            _eventAggregator.Publish(new DiagnosticsUpdatedEvent(
+                codePath, result.Diagnostics.Select(ToDiagnosticItem).ToList()));
+        }
+        catch (Exception ex)
+        {
+            _eventAggregator.Publish(new DiagnosticsUpdatedEvent(FilePath, new[]
+            {
+                new DiagnosticItem
+                {
+                    Id = BasicLang.Forms.DesignCodes.RegionAbsent,
+                    Message = $"the designer could not update the code-behind: {ex.Message}",
+                    Severity = DiagnosticSeverity.Error,
+                    FilePath = FilePath,
+                    Source = DesignerDiagnosticSource
+                }
+            }));
+        }
+    }
+
+    /// <summary>Names the collection these findings own, so a republish replaces only its own.</summary>
+    public const string DesignerDiagnosticSource = "Form designer";
+
+    private static DiagnosticItem ToDiagnosticItem(BasicLang.Forms.DesignDiagnostic diagnostic) =>
+        new()
+        {
+            Id = diagnostic.Code,
+            Message = diagnostic.Message,
+            Severity = diagnostic.IsWarning ? DiagnosticSeverity.Warning : DiagnosticSeverity.Error,
+            FilePath = diagnostic.FilePath,
+            Line = diagnostic.Line,
+            Column = diagnostic.Column,
+            Source = DesignerDiagnosticSource
+        };
 
     public async Task<bool> SaveAsAsync(string path, CancellationToken cancellationToken = default)
     {

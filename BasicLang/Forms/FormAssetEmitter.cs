@@ -20,8 +20,24 @@ public static class FormAssetEmitter
     /// The one generated top-level name in the whole project (D7). Fixed spelling so
     /// <c>design --check</c> can collision-check it once with <c>BL8031</c>; per-control fields are
     /// class members and cannot collide across forms.
+    ///
+    /// <para>⛔⛔ <b>It is a MODULE MEMBER, not a bare top-level Sub</b> — D7 describes the
+    /// latter and the latter does not build. MEASURED 2026-09-14 with a real
+    /// <c>BasicLang build</c>: a top-level <c>Sub Helper()</c> in one .bas called as
+    /// <c>Helper()</c> from another fails at the JavaScript backend with <i>"no lowering for
+    /// 'Helper.Helper' — neither declared by this program nor supported by JavaScriptStdLib"</i>.
+    /// Nothing about the failure names the real cause, and it is not specific to generated code:
+    /// two hand-written files do it too. The same Sub inside <c>Public Module VgsForms</c> resolves
+    /// and lowers correctly, so the dispatch is generated that way and called as
+    /// <see cref="DispatchCall"/>.</para>
     /// </summary>
     public const string DispatchSubName = "VgsDispatchForm";
+
+    /// <summary>The module the dispatch lives in — see <see cref="DispatchSubName"/> for why.</summary>
+    public const string DispatchModuleName = "VgsForms";
+
+    /// <summary>Exactly what a user writes in <c>Main()</c> to hand control to the dispatch.</summary>
+    public const string DispatchCall = DispatchModuleName + "." + DispatchSubName + "()";
 
     /// <summary>
     /// Writes <c>&lt;Name&gt;.html</c> and <c>&lt;Name&gt;.css</c> for each form.
@@ -349,30 +365,32 @@ public static class FormAssetEmitter
     public static string DispatchSource(IEnumerable<string> formNames)
     {
         var sb = new StringBuilder();
-        sb.Append($"Sub {DispatchSubName}()\n");
-        sb.Append("    Dim doc As Document = ::document\n");
-        sb.Append("    Dim b As Element = doc.body\n");
-        sb.Append("    Dim formName As String = b.getAttribute(\"data-form\")\n");
+        sb.Append($"Public Module {DispatchModuleName}\n");
+        sb.Append($"    Public Sub {DispatchSubName}()\n");
+        sb.Append("        Dim doc As Document = ::document\n");
+        sb.Append("        Dim b As Element = doc.body\n");
+        sb.Append("        Dim formName As String = b.getAttribute(\"data-form\")\n");
 
         var first = true;
         foreach (var name in formNames)
         {
-            sb.Append($"    {(first ? "If" : "ElseIf")} formName = \"{name}\" Then\n");
+            sb.Append($"        {(first ? "If" : "ElseIf")} formName = \"{name}\" Then\n");
             // ⛔ Constructing the form is ENOUGH — the scaffolded `Public Sub New()` already calls
             // InitializeComponent (FormScaffolder.CodeBehind). Calling it again here ran the whole
             // init body TWICE, so every addEventListener registered its handler twice and one
             // click fired it twice. It is also generated Private, so the second call was reaching
             // for a member this module has no business touching.
-            sb.Append($"        Dim f As New {name}()\n");
+            sb.Append($"            Dim f As New {name}()\n");
             first = false;
         }
 
         if (!first)
         {
-            sb.Append("    End If\n");
+            sb.Append("        End If\n");
         }
 
-        sb.Append("End Sub\n");
+        sb.Append("    End Sub\n");
+        sb.Append("End Module\n");
         return sb.ToString();
     }
 

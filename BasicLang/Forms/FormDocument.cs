@@ -30,6 +30,16 @@ public sealed class FormDocument
     /// <summary>Document format version. 1 in v1; a reader must refuse a version it does not know.</summary>
     public int Version { get; set; } = 1;
 
+    /// <summary>
+    /// Where this document was read from, or empty for one built in memory.
+    ///
+    /// <para>⚠ Not part of the document — it is never written and never round-tripped. It is here
+    /// because the build has to find the <c>.bas</c> that pairs with the form (D7's dispatch may
+    /// only name a class that exists), and threading the path alongside every list of documents
+    /// meant every caller could forget it.</para>
+    /// </summary>
+    public string SourcePath { get; set; } = "";
+
     /// <summary>The document element name: <c>Form</c> for .blform, <c>WebForm</c> for .blwebform.</summary>
     public string RootElementName => Target == FormTarget.WinForms ? "Form" : "WebForm";
 

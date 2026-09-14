@@ -112,6 +112,20 @@ namespace BasicLang.Compiler.ProjectSystem
         public static readonly string[] BasicLangSourceExtensions =
             { ".bas", ".bl", ".basic", ".mod", ".cls", ".class", ".bli" };   // .bli = declarations (plan 2c)
 
+        /// <summary>
+        /// Form DOCUMENT extensions — deliberately NOT in
+        /// <see cref="BasicLangSourceExtensions"/>, and never to be merged into it: that list feeds
+        /// the lexer and a form document is XML.
+        ///
+        /// <para>⛔ It still needs a glob of its own. A project with explicit
+        /// <c>&lt;Compile&gt;</c> items listed its .blwebform and got pages; a project with NO
+        /// explicit items — the default shape — got none, silently: the page emitter was handed
+        /// GetSourceFiles(), whose glob cannot yield a form document by design, so the build
+        /// succeeded and wrote no .html at all. Two project shapes, two behaviours, no diagnostic.
+        /// </para>
+        /// </summary>
+        public static readonly string[] FormDocumentExtensions = { ".blform", ".blwebform" };
+
         // Windows desktop UI frameworks (require the net*-windows TFM)
         public bool UseWindowsForms { get; set; } = false;
         public bool UseWpf { get; set; } = false;
@@ -471,6 +485,37 @@ namespace BasicLang.Compiler.ProjectSystem
                         foreach (var file in Directory.GetFiles(dir, filePattern))
                             yield return file;
                     }
+                }
+            }
+        }
+
+        /// <summary>
+        /// The form documents this project owns.
+        ///
+        /// <para>⚠ The SAME rule as <see cref="GetSourceFiles"/>, one extension list over:
+        /// no explicit <c>&lt;Compile&gt;</c> items means a recursive glob, explicit items mean
+        /// exactly what was listed, filtered to form extensions. Anything else makes the default
+        /// project shape and the explicit one disagree about whether a form exists — which is
+        /// precisely the bug this method was added for.</para>
+        /// </summary>
+        public IEnumerable<string> GetFormDocuments()
+        {
+            var projectDir = Path.GetDirectoryName(FilePath) ?? ".";
+
+            if (SourceFiles.Count == 0)
+            {
+                foreach (var ext in FormDocumentExtensions)
+                    foreach (var file in Directory.GetFiles(projectDir, "*" + ext, SearchOption.AllDirectories))
+                        yield return file;
+
+                yield break;
+            }
+
+            foreach (var file in GetSourceFiles())
+            {
+                if (FormDocumentExtensions.Contains(Path.GetExtension(file), StringComparer.OrdinalIgnoreCase))
+                {
+                    yield return file;
                 }
             }
         }

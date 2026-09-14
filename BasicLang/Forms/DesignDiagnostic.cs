@@ -60,8 +60,12 @@ public static class DesignCodes
     //   BL8002..BL8010  recognizer and design-check findings (here)
     //   BL8010          illegal/missing control id (here)
     //   BL8011..BL8017  designer-owned region states, region-writer and document findings
+    //   BL8018          the generated D7 dispatch helper is never called (here)
+    //   BL8019, BL8020  free
     //   BL8021, BL8022  document-level refusals in a form document (here)
-    //   BL8031          reserved
+    //   BL8031          reserved — the spec and plan both name it for ONE thing: the --check
+    //                   collision between a user's own top-level name and the dispatch helper.
+    //                   BL8018 below is a different finding and takes a different number.
     //
     // Nothing in this band lives in BasicLang.Compiler.ErrorCode as a string; the enum registration
     // there is for discoverability only, and adding a member there does not claim a number here.
@@ -71,6 +75,12 @@ public static class DesignCodes
 
     /// <summary>A <c>With</c> block over a control — its property assignments are silently discarded.</summary>
     public const string WithBlock = "BL8003";
+
+    /// <summary>
+    /// The project has form pages but nothing calls the generated dispatch helper, so every page
+    /// loads its script and shows nothing.
+    /// </summary>
+    public const string DispatchNotCalled = "BL8018";
 
     /// <summary>A control whose type has no catalog row, so the designer cannot edit it.</summary>
     public const string UnsupportedControl = "BL8004";
