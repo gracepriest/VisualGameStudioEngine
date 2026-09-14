@@ -334,7 +334,7 @@ public static class FormClipboard
             TabIndex = IntAttribute(element, "TabIndex") ?? 0
         };
 
-        control.Geometry = ReadGeometry(element);
+        control.Geometry = ReadGeometry(element, target);
 
         foreach (var attribute in element.Attributes())
         {
@@ -384,12 +384,24 @@ public static class FormClipboard
         return control;
     }
 
-    private static FormGeometry? ReadGeometry(XElement element)
+    /// <summary>
+    /// The pasted control's geometry, in the vocabulary of the TARGET being pasted into.
+    ///
+    /// <para>⛔⛔ Selected by TARGET, never by sniffing which attributes are present — the same
+    /// rule <c>FormDocumentReader</c> follows, and for the same reason. Sniffing read
+    /// <c>&lt;Button X="10" Col="2" Row="1"/&gt;</c> as PIXEL geometry on a web form: the paste
+    /// landed with Col and Row silently dropped, every pasted control stacked at grid cell 0,0, and
+    /// the document then wrote back X/Y a web form has no meaning for. A stray attribute from the
+    /// other format is exactly what a clipboard carries, since copying from a .blform and pasting
+    /// into a .blwebform is a thing a user can do in two keystrokes.</para>
+    ///
+    /// <para>⛔ int.TryParse, never a (int?) cast. The XLinq cast THROWS FormatException on a value
+    /// it cannot parse, and the clipboard is exactly where unvetted text arrives — a paste of a
+    /// fragment carrying X="20px" would take the IDE down rather than declining the paste.</para>
+    /// </summary>
+    private static FormGeometry? ReadGeometry(XElement element, FormTarget target)
     {
-        // ⛔ int.TryParse, never a (int?) cast. The XLinq cast THROWS FormatException on a value it
-        // cannot parse, and the clipboard is exactly where unvetted text arrives — a paste of a
-        // fragment carrying X="20px" would take the IDE down rather than declining the paste.
-        if (element.Attribute("X") != null || element.Attribute("Y") != null)
+        if (target == FormTarget.WinForms)
         {
             return new PixelGeometry
             {
@@ -402,18 +414,13 @@ public static class FormClipboard
             };
         }
 
-        if (element.Attribute("Col") != null || element.Attribute("Row") != null)
+        return new GridGeometry
         {
-            return new GridGeometry
-            {
-                Col = IntAttribute(element, "Col") ?? 0,
-                Row = IntAttribute(element, "Row") ?? 0,
-                ColSpan = IntAttribute(element, "ColSpan") ?? 1,
-                RowSpan = IntAttribute(element, "RowSpan") ?? 1
-            };
-        }
-
-        return null;
+            Col = IntAttribute(element, "Col") ?? 0,
+            Row = IntAttribute(element, "Row") ?? 0,
+            ColSpan = IntAttribute(element, "ColSpan") ?? 1,
+            RowSpan = IntAttribute(element, "RowSpan") ?? 1
+        };
     }
 
     /// <summary>An integer attribute, or null when absent OR unparseable. Never throws.</summary>

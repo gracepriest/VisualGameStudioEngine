@@ -497,7 +497,12 @@ public class ProjectSerializer
         // to a rebuild.
         if (root.Name.Namespace != XNamespace.None)
         {
-            throw new InvalidOperationException(
+            // ⚠ A NAMED type, not a bare InvalidOperationException. Eleven call sites await
+            // SaveProjectAsync and none of them caught anything, so a bare throw traded one silent
+            // failure for an unhandled exception in whichever flow the user was in — worse than the
+            // bug it fixed. This is a refusal the caller is expected to report.
+            throw new VisualGameStudio.Core.Models.ProjectSaveRefusedException(
+                project.FilePath,
                 $"'{project.FilePath}' uses an XML namespace ({root.Name.Namespace}), which this " +
                 "project format does not. Saving would have to rebuild the file from a model that " +
                 "never read it, discarding everything the loader does not model — so nothing was " +

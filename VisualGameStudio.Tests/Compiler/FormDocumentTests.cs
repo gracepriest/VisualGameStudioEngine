@@ -292,6 +292,34 @@ public class FormDocumentTests
     }
 
     [Test]
+    public void Clipboard_ReadsGeometryByTarget_NotByWhichAttributesArePresent()
+    {
+        // ⛔⛔ The document reader refuses to guess the vocabulary from the attributes present,
+        // and this had stayed behind on the old rule. A WEB fragment carrying a stray X — a
+        // hand-edited document, or one written by a designer that models both — was read as PIXEL
+        // geometry: Col and Row silently dropped, every pasted control stacked at cell 0,0, and
+        // X/Y written back into a form that has no meaning for them. The fragment says which
+        // target it is; that is the answer.
+        //
+        // ⚠ A fragment from the OTHER target never gets this far — DeserializeSubtree refuses a
+        // whole-target mismatch above. This is the within-target case, which it cannot refuse.
+        const string xml = """
+            <FormSubtree Target="Web" Version="1">
+              <Button Id="btn" X="190" Col="2" Row="1" ColSpan="3" TabIndex="0"/>
+            </FormSubtree>
+            """;
+
+        var pasted = FormClipboard.DeserializeSubtree(xml, FormTarget.Web, _ => false);
+
+        Assert.That(pasted, Has.Count.EqualTo(1));
+        Assert.That(pasted[0].Geometry, Is.TypeOf<GridGeometry>(),
+            "a web form's control is placed in the grid, whatever stray attributes came along");
+
+        var grid = (GridGeometry)pasted[0].Geometry!;
+        Assert.That((grid.Col, grid.Row, grid.ColSpan), Is.EqualTo((2, 1, 3)));
+    }
+
+    [Test]
     public void Clipboard_RenamesACollidingId_AndRetargetsItsConventionHandler()
     {
         var button = new FormControl { Kind = "Button", Id = "btnLogin" };

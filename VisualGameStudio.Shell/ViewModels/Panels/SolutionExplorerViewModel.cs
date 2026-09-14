@@ -1121,7 +1121,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
                 Include = relativePath,
                 ItemType = GetItemTypeForExtension(name)
             });
-            await _projectService.SaveProjectAsync();
+            await SaveProjectOrReportAsync();
 
             CancelNewItem();
             RefreshTree(_projectService.CurrentProject);
@@ -1217,7 +1217,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
             ItemType = GetItemTypeForExtension(fileName)
         });
 
-        await _projectService.SaveProjectAsync();
+        await SaveProjectOrReportAsync();
         RefreshTree(_projectService.CurrentProject);
         FileOpenRequested?.Invoke(this, filePath);
     }
@@ -1237,6 +1237,37 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     /// the next load.</para>
     /// </summary>
     [RelayCommand]
+    /// <summary>
+    /// Saves the project, turning a REFUSED save into something the user can read.
+    ///
+    /// <para>⛔⛔ Every "add item" flow ends by writing the project file, and a save the
+    /// serializer refuses (today: a project whose root carries an old-style MSBuild
+    /// <c>xmlns</c>, which the structure-preserving writer cannot edit without discarding
+    /// everything the loader does not model) used to return QUIETLY — the IDE said "saved", the
+    /// user believed it, and the change was gone at the next reload. Making it throw fixed the lie
+    /// and created a new one: nothing here caught it, so adding a form to such a project would take
+    /// down the flow AFTER both files were already on disk. Reported, not thrown and not
+    /// swallowed.</para>
+    ///
+    /// <para>⚠ The files that were already written are LEFT. They are valid on their own; only
+    /// the project file's record of them is missing, and deleting the user's new source to tidy up
+    /// a bookkeeping failure would be the worse mistake.</para>
+    /// </summary>
+    private async Task SaveProjectOrReportAsync()
+    {
+        try
+        {
+            await _projectService.SaveProjectAsync();
+        }
+        catch (VisualGameStudio.Core.Models.ProjectSaveRefusedException ex)
+        {
+            await _dialogService.ShowMessageAsync(
+                "The project file was not saved",
+                $"{ex.Message}\n\nAny files just created are still on disk; the project file does " +
+                "not list them yet.");
+        }
+    }
+
     private async Task AddNewFormAsync()
     {
         var project = _projectService.CurrentProject;
@@ -1312,7 +1343,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
             });
         }
 
-        await _projectService.SaveProjectAsync();
+        await SaveProjectOrReportAsync();
         RefreshTree(project);
 
         // The code-behind is what the user edits; the document is the designer's.
@@ -1364,7 +1395,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
             ItemType = GetItemTypeForExtension(fileName)
         });
 
-        await _projectService.SaveProjectAsync();
+        await SaveProjectOrReportAsync();
         RefreshTree(_projectService.CurrentProject);
         FileOpenRequested?.Invoke(this, filePath);
     }
@@ -1421,7 +1452,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
             });
         }
 
-        await _projectService.SaveProjectAsync();
+        await SaveProjectOrReportAsync();
         RefreshTree(_projectService.CurrentProject);
     }
 
@@ -1492,7 +1523,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
                     if (item != null)
                     {
                         item.Include = newRelative;
-                        await _projectService.SaveProjectAsync();
+                        await SaveProjectOrReportAsync();
                     }
                 }
 
@@ -1515,7 +1546,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
                         }
                     }
 
-                    await _projectService.SaveProjectAsync();
+                    await SaveProjectOrReportAsync();
                 }
             }
 
@@ -1611,7 +1642,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
                 }
             }
 
-            await _projectService.SaveProjectAsync();
+            await SaveProjectOrReportAsync();
             SelectedNodes.Clear();
             RefreshTree(_projectService.CurrentProject);
         }
@@ -1786,7 +1817,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
                 _isCutOperation = false;
             }
 
-            await _projectService.SaveProjectAsync();
+            await SaveProjectOrReportAsync();
             RefreshTree(_projectService.CurrentProject);
         }
         catch (Exception ex)
@@ -2125,7 +2156,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
                 }
             }
 
-            await _projectService.SaveProjectAsync();
+            await SaveProjectOrReportAsync();
             RefreshTree(_projectService.CurrentProject);
         }
         catch (Exception ex)

@@ -112,3 +112,45 @@ package restores fine, and `IDE/Avalonia.Controls.ColorPicker.dll` is already in
 The property grid's colour rows are text for now. Adopting the real control needs its theme included
 in `App.axaml`, and a missing style include renders a blank control — which is not something a
 headless run or a build will tell you. **Do this on a machine where you can see it.**
+
+### 11. `FormClipboard` is complete and nothing calls it
+`FormClipboard.SerializeSubtree` / `DeserializeSubtree` (`FormDocument.cs`) do the whole job —
+target-matched fragments, id collision renaming, handler retargeting by convention — and the only
+callers are tests. The canvas has no Copy/Cut/Paste commands, so a user cannot reach any of it.
+
+This is the same shape as the two dead generators fixed in `49a9bda` (`RegionWriter.Write` and
+`DispatchSource`), and it is the one that is left. Wiring it is a canvas feature — keyboard bindings,
+a selection-to-fragment path, a paste-at-cursor offset rule — not a fix, so it is filed rather than
+bolted on. **Until it is wired, treat the clipboard tests as design notes, not as coverage of
+anything a user can do.**
+
+### 12. D7 describes a dispatch shape that does not build
+The spec says the dispatch helper is "the only generated **top-level** name". A top-level `Sub` in
+one `.bas` is **not callable from another** — measured 2026-09-14 with two hand-written files and a
+real `BasicLang build`:
+
+```
+Sub Helper() ... End Sub     ' Helper.bas
+Sub Main()  Helper()  End Sub ' Main.bas
+→ JavaScript backend: no lowering for 'Helper.Helper'. It is neither declared by this
+  program nor supported by JavaScriptStdLib.
+```
+
+Nothing in that message names the real cause, and it is not specific to generated code. The same
+`Sub` inside `Public Module VgsForms` resolves and lowers correctly, so the generator emits it that
+way and `Main()` calls `VgsForms.VgsDispatchForm()`.
+
+**Two consequences to decide on:** the spec's D7 text and `BL8031`'s reserved purpose both now refer
+to a module member rather than a top-level name; and the cross-file top-level `Sub` limitation is a
+**compiler** gap worth its own investigation — it is not a form-designer problem and it will bite
+anyone splitting procedural code across files on the JavaScript backend.
+
+### 13. Nothing makes `Main()` call the dispatch for you
+`BL8018` warns when a project has form pages and no source calls `VgsForms.VgsDispatchForm()`, which
+is the honest minimum: the backend emits exactly one invocation, for `Main`, so an uncalled helper
+is a page that loads a script and does nothing.
+
+But a warning is not the same as it working. The options are to have **File → New Form** offer to
+insert the call into the project's `Main()` the first time a form is added, or to make the web
+project template ship a `Main()` that already dispatches. Both edit the user's code, which is why
+neither was done unilaterally.

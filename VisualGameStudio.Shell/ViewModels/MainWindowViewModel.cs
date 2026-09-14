@@ -3206,7 +3206,17 @@ public partial class MainWindowViewModel : ViewModelBase
 
         if (_projectService.HasUnsavedChanges)
         {
-            await _projectService.SaveProjectAsync();
+            try
+            {
+                await _projectService.SaveProjectAsync();
+            }
+            catch (VisualGameStudio.Core.Models.ProjectSaveRefusedException ex)
+            {
+                // ⚠ Save All must not take the window down because ONE file could not be written,
+                // and must not claim success either. The document saves above already happened.
+                _outputService?.WriteError(
+                    $"The project file was not saved: {ex.Message}", OutputCategory.General);
+            }
         }
     }
 
