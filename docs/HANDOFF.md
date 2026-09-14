@@ -147,12 +147,14 @@ dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --fi
 
 | Run | Count | Time |
 |---|---|---|
-| Full suite at **`ee3c086`** (branch `claude/jolly-pasteur-l4mpzs`, **Windows**) | **4 failures — all baseline, zero new** | ~2h |
+| Full suite at **`ee3c086`** (branch `claude/jolly-pasteur-l4mpzs`, **Windows**) | **5893 passed / 4 failed / 2 skipped of 5899 — all 4 baseline, zero new** | 55m42s |
 | Full suite at **`f54416b`** (Windows) | **5826 total, 4 failures — all baseline** | ~2h |
 | Full suite at `6139386` | 5792 passed / 5 failed / 2 skipped of 5799 | ~2h |
 | Fast subset at `6139386` | 4897 passed / 2 failed / 1 skipped | ~2 min |
 
-The 5799 → 5826 move is P2a-2 Task 14's additions. The 5th failure in the `6139386` run was a
+The 5799 → 5826 move is P2a-2 Task 14's additions; 5826 → 5899 is this branch's six new test
+files (the facade, delegate-wire, admissibility, coverage-drift, foreign-concat and toolchain-args
+suites). The 5th failure in the `6139386` run was a
 **contention timeout**, not a defect — `NothingInAHandleSlot_…_PinnedDivergence` "failed" after
 8m49s in a loaded full run and passed alone in 34s.
 
@@ -167,6 +169,11 @@ is most of what matters for this branch: the **22 §12.5 blnet integration rows*
 win-x64 ILC shim publish, `EveryProxyTableSlotResolvesInThePublishedShim` among them, and
 `AddressOfAsADotNetDelegateArgument_LowersAndRuns`. Every Linux gate in this branch's history was
 taken WITHOUT those rows; this run is the one that covers them.
+⭐ Those two rows were then re-run ALONE against the same gated binaries — `Passed: 2, Total: 2` in
+52s, with a real `cl.exe` compile and a real Native AOT shim publish in the log. A passing test
+prints nothing at normal verbosity, so "absent from the failure list" is not by itself evidence it
+ran; the two rows the claim rests on were measured, not inferred. The run's 2 skips are unrelated
+(`Build_CppLanguageProject_NoToolchain_…`, `ReleasePins_MatchTheRunbookOnceFilled`).
 
 ⛔ **The fast subset is not a gate for codegen work** — execution tests are
 `[Category("Integration")]`. Four fixes once gated green on it, then the first full run found
