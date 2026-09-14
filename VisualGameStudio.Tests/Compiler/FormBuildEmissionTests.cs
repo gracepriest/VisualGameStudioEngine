@@ -306,6 +306,17 @@ public class FormBuildEmissionTests
             Assert.That(File.Exists(Path.Combine(OutputDir, "LoginForm.html")), Is.True);
             Assert.That(File.Exists(Path.Combine(OutputDir, "SignupForm.html")), Is.True);
         });
+
+        // ⛔⛔ And then RUN it, once per branch. The string assertions above are the same kind
+        // that were green while the dispatch threw `ReferenceError` on every page load — and this
+        // test was described in its own commit message as "runs the result" when it did no such
+        // thing. Each `data-form` value takes a different branch, and a branch is only known to
+        // work when it has been executed.
+        foreach (var formName in new[] { "LoginForm", "SignupForm", "NoSuchForm" })
+        {
+            Assert.That(RunEmittedScript(formName), Is.Empty.Or.Null,
+                $"the page for data-form=\"{formName}\" must run without throwing");
+        }
     }
 
     [Test]

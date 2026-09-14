@@ -335,10 +335,15 @@ I reviewed my own second-round fixes and ran the gate I had only run FILTERED. B
 
 **The full-suite gate corrected the record.** The pre-branch baseline at `6a6d224` is
 **212 failed / 5837**, not the 174 this file and the PR body both claimed. The branch is
-**174 failed / 6228**. So the failure sets were never "identical": the branch **turns 38 tests
+**174 failed / 6234**. So the failure sets were never "identical": the branch **turns 38 tests
 green** (the `CliTestHarness.CliPath()` apphost fix) and introduces **zero** regressions. Better
 than advertised, but the claim was wrong and the numbers here and in the PR are now the measured
 ones.
+
+⚠ 6234, not 6228. The suite was run TWICE on the branch — 6228 before the source-glob fix and
+6234 after the six tests it came with. This file briefly carried the earlier total, in the section
+whose whole purpose is correcting a number. Take the totals from the FINAL run of a session, and
+re-read what you wrote against the run you actually finished with.
 
 ⚠ Two gate traps worth carrying forward: `git stash` WITHOUT `-u` leaves new untracked files
 behind, so nothing compiles and you get a bogus "0 failures" baseline; and a worktree baseline run
@@ -384,13 +389,45 @@ is worth more than any number of string assertions.
 | 5 | Reused the general `DiagnosticsUpdatedEvent` | A future publisher would have had its findings filed as the designer's AND would have cleared the designer's. Now its own `DesignerDiagnosticsEvent` |
 
 ⚠ Also: the multi-form dispatch was only ever STRING-asserted — `DispatchSource` with two names was
-never handed to a compiler. It now builds two real forms and runs the result.
+never handed to a compiler. It now builds two real forms and executes the emitted script once per
+branch.
+
+⛔ **That sentence was itself an overclaim for one commit** — a fourth review pass caught it. The
+two-form test built and string-asserted, and the commit message said it "runs the result"; only the
+ONE-form test executed anything. Writing that a test runs something is not the same as it running,
+and the gap is invisible from the test name. Check the body.
+
+### 2026-09-14 — a FOURTH pass, on the third pass's own fixes
+
+The base rate justified it: pass 2's fixes contained two regressions, and pass 3's headline fix was
+outright broken. Four findings, all real, all mine:
+
+1. **An overclaim in the commit message and in this file** — the two-form dispatch test "runs the
+   result". It did not; it built and string-asserted, and only the one-form test executed anything.
+   Now every branch is executed (`LoginForm`, `SignupForm`, and an unknown name).
+2. ⛔ **I changed one side of a mirrored pair.** `ProjectGlobSafety.MaterialiseGlobbedSources`
+   exists to mirror `GetSourceFiles`' default branch EXACTLY — its own comment says so, and
+   `CLAUDE.md` says "change it once, not per-consumer". The exact-extension guard went into one and
+   not the other, so it could materialise an explicit `<Compile>` item for a file the compiler's
+   glob rejects — and once the list is explicit, `GetSourceFiles` takes its explicit branch, which
+   does NO extension filtering. Adding a form to a project could have made it start compiling a
+   backup file.
+3. **6228 vs 6234**, in the very section that exists to correct a number (see above).
+4. **A measurement I asserted that does not reproduce.** The Win32 prefix over-match justifying the
+   form-document guard applies only to THREE-character patterns, and `.blform`/`.blwebform` are too
+   long. The guard is harmless and stays; the reasoning was invented.
+
+✅ And a genuine discovery from the same pass, worth more than the fixes: the exact-extension guard
+on `GetSourceFiles` is **load-bearing on Windows for reasons that predate this branch** — `*.bas`
+matches `.basic` and `*.cls` matches `.class`, so those files were being yielded and compiled
+**twice** by every glob-shaped project. Nobody knew. It cannot be reproduced on Linux, so it is
+unverified here and worth confirming on the Windows run.
 
 ### What the next session should pick up
 
 1. **Re-run the full suite on Windows.** Everything above is a Linux measurement. The Windows
    number to beat is 5826 total / 4 failures at `f54416b`; this branch adds ~390 tests. On Linux:
-   branch **174 failed / 6228**, baseline `6a6d224` **212 failed / 5837** — zero regressions, 38
+   branch **174 failed / 6234**, baseline `6a6d224` **212 failed / 5837** — zero regressions, 38
    turned green.
 2. **Open the IDE and look at the designer and the Settings dialog** — see *Still unverified* above.
    ⚠ Now also: **save a form and confirm the `.bas` is regenerated**, and that a hand-edited region

@@ -90,7 +90,14 @@ hides a regression that lands as another test goes green. Windows remains the re
   via the IDE or the CLI. Exercise both.
 - **Some resolver source is shared across consumers — change it once, not per-consumer.**
   `ModuleResolver.cs` backs both the compiler and the LSP; `ModuleTypeWalker.cs` is shared
-  across the compiler and the C++ backend / capability checkers.
+  across the compiler and the C++ backend / capability checkers. ⚠ Also MIRRORED rather than shared:
+  `ProjectFile.GetSourceFiles`' default glob and `ProjectGlobSafety.MaterialiseGlobbedSources` —
+  the second exists to reproduce the first exactly, and a guard added to one and not the other let
+  the IDE write an explicit `<Compile>` item for a file the compiler's glob rejects. Once the list
+  is explicit, `GetSourceFiles` takes its explicit branch, which does **no** extension filtering.
+- ⚠ **Win32 globbing over-matches THREE-character extensions**: `*.bas` matches `.basic` and `*.cls`
+  matches `.class`, so both globs above need an exact-extension check or those files are swept twice.
+  Not reproducible on Linux — confirm it on the Windows run.
 
 ## Compiler layout (`BasicLang/`)
 

@@ -517,11 +517,15 @@ namespace BasicLang.Compiler.ProjectSystem
             {
                 foreach (var ext in FormDocumentExtensions)
                     foreach (var file in Directory.GetFiles(projectDir, "*" + ext, SearchOption.AllDirectories))
-                        // ⚠ The same two guards GetCppTranslationUnits documents, for the same two
-                        // reasons: Win32 globbing lets "*.blform" match a longer extension that
-                        // merely starts with it (a `.blformbackup` beside the real file would get
-                        // a page emitted for it, on Windows only), and bin/ and obj/ live under the
+                        // ⚠ The bin/obj exclusion is the load-bearing one here: they live under the
                         // project directory, so an unguarded recursive glob walks the build output.
+                        //
+                        // The exact-extension check is DEFENSIVE ONLY, and the justification first
+                        // written here was wrong: Win32's prefix over-match applies to
+                        // three-character patterns (which is why "*.bas" matching `.basic` is real
+                        // and matters in GetSourceFiles above), and ".blform"/".blwebform" are too
+                        // long to be short-name extensions. It costs nothing and keeps the two
+                        // globs the same shape, but no measurement supports needing it.
                         if (string.Equals(Path.GetExtension(file), ext, StringComparison.OrdinalIgnoreCase)
                             && !IsInBuildOutputDir(projectDir, file))
                             yield return file;

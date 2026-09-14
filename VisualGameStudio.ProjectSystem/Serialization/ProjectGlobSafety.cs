@@ -49,8 +49,23 @@ public static class ProjectGlobSafety
         {
             foreach (var file in Directory.GetFiles(directory, "*" + extension, SearchOption.AllDirectories))
             {
-                // Skip build output — the glob does not exclude it, but adding bin\ and obj\ content
-                // as explicit items would make the project build its own artifacts forever after.
+                // ⛔⛔ The exact-extension check, because Win32 globbing lets a three-character
+                // pattern match LONGER extensions: "*.bas" matches `Main.basic` and, worse, a
+                // stray `Main.bas~`. Without it this method materialises an explicit <Compile>
+                // item for a file the compiler's own glob rejects — and the moment the list
+                // becomes explicit, GetSourceFiles takes its explicit branch, which does NO
+                // extension filtering at all. So adding a form to a project could make it start
+                // compiling a backup file. This guard was added to GetSourceFiles and missed here
+                // for exactly one commit, which is precisely the divergence the comment above
+                // warns about.
+                if (!string.Equals(Path.GetExtension(file), extension, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                // Skip build output. Both globs exclude it now; this one must regardless, because
+                // adding bin\ and obj\ content as EXPLICIT items would freeze generated output
+                // into the project file forever after rather than merely for one build.
                 if (IsUnderBuildOutput(directory, file))
                 {
                     continue;
@@ -71,10 +86,14 @@ public static class ProjectGlobSafety
     }
 
     /// <summary>
-    /// ⚠ A deliberate divergence from the compiler's glob, and the only one. <c>GetSourceFiles</c>
-    /// sweeps <c>bin\</c> and <c>obj\</c> too, which is harmless while the list is recomputed every
-    /// build but would be permanent once written into the project file. Freezing generated output
-    /// into the source list is a worse failure than the asymmetry.
+    /// ⚠ This used to be a deliberate divergence: <c>GetSourceFiles</c> swept <c>bin\</c> and
+    /// <c>obj\</c>, which was harmless while the list is recomputed every build but would be
+    /// permanent once written into the project file.
+    ///
+    /// <para>It is no longer a divergence — the compiler's glob excludes build output too, after a
+    /// generated source under <c>obj/</c> got swept back in and compiled twice on the second build.
+    /// The exclusion stays here on its own merits: an EXPLICIT item freezes the mistake into the
+    /// project file rather than lasting one build.</para>
     /// </summary>
     private static bool IsUnderBuildOutput(string projectDirectory, string file)
     {
