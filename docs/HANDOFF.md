@@ -1,4 +1,4 @@
-# Handoff snapshot — 2026-09-11, updated 2026-09-13
+# Handoff snapshot — 2026-09-11, updated 2026-09-14
 
 **Why this file exists.** Working state for this repo normally lives in a per-machine
 auto-memory directory (`~/.claude/projects/…/memory/`) that is **outside the repo and does not
@@ -140,7 +140,7 @@ four items cannot be done off Windows.
 |---|---|
 | Full suite, both entry points | ✅ Run every commit; see the table above |
 | Update `docs/HANDOFF.md` and `CLAUDE.md` | ✅ This file, plus a durable *Form designer* section in `CLAUDE.md` |
-| File the follow-up chips | ⚠ **Written up, not filed** — `docs/form-designer-followups.md` has all ten, filable verbatim. Opening issues is outward-facing and nobody asked. |
+| File the follow-up chips | ⚠ **Written up, not filed** — `docs/form-designer-followups.md` has all **thirteen**, filable verbatim. Opening issues is outward-facing and nobody asked. |
 | Refresh the `IDE/` drop | ❌ **Must not happen here.** `IDE/BasicLang.exe` is a **PE32+ Windows binary**; refreshing it from a Linux build would swap the Windows executables for ELF apphosts and break the drop for everyone. Do it on Windows with `robocopy` — never `/MIR`. |
 
 ⛔ `docs/MULTI_FILE_SYSTEM_PLAN.md:21` is **untouched**, per owner decision 2 — `.frm` stays reserved
@@ -263,16 +263,93 @@ Not this writer's call, so it refuses and says why.
    in `SemanticAnalyzer` to widen that last one with, and comparing class names would flag
    `EventArgs` against `MouseEventArgs` — the ordinary correct shape of a handler.
 
+### ⛔⛔ 2026-09-14 — TWO REVIEW ROUNDS FOUND TWENTY DEFECTS. READ THIS BEFORE TRUSTING A GREEN SUITE.
+
+Both rounds were asked the same second question, and it is the one that kept paying:
+
+> a targeted audit for **functionality reachable ONLY from tests** — optional parameters no
+> production caller passes, public methods whose only callers are tests, wiring that exists but is
+> never invoked from a shipping path.
+
+**It found the feature's three biggest holes, and the suite was green through all of them.**
+
+| Dead thing | What the user actually got | Fixed in |
+|---|---|---|
+| `JavaScriptEmitter.Emit(forms:)` — optional, no caller passed it | a `.blwebform` built green and wrote **no `.html`, no `.css`** | `525aa88` |
+| `RegionWriter.Write` — **no production caller at all** | scaffold a form, drop a button, save, build → **the build fails on the `InitializeComponent` the scaffold itself calls**. Canvas drew, grid edited, document round-tripped byte for byte, program missing a member. | `49a9bda` |
+| `FormAssetEmitter.DispatchSource` — no production caller | every page carried `<body data-form="...">` and **nothing read it**: three forms → three pages that all ran the same `Main()` | `49a9bda` |
+
+⚠ **`FormClipboard` is the one still standing** — complete, tested, and the canvas has no
+Copy/Cut/Paste to reach it. Filed as follow-up 11, not bolted on.
+
+**Two defects were regressions the FIRST round's own fixes introduced** (`48cc51e` → fixed in
+`0d3e7c3`). Both came from one mistake: answering *"is this value already source?"* with the **shape
+of the string** (a `Type.Member` regex) instead of asking the catalog.
+
+- `Text="config.json"` matched the shape → emitted **unquoted** → the user's form stopped building
+  because a Label's caption had a file extension in it.
+- `TextAlign="ContentAlignment.Bogus"` matched the shape → waved past the Degraded check into
+  **CS0117 with zero diagnostics** — the exact failure that check had just been added to stop.
+
+The comment justifying the widening cited an "import route" that **does not exist**:
+`RecognizedForm` never becomes a `FormDocument` anywhere in production. Only the catalog row knows
+its own enum type and its own members, so only the row may answer — `FormPropertyDef.IsSourceForm`.
+
+⚠ **And one fix planted a landmine.** Making `ProjectSerializer` throw on a namespaced project was
+right (it used to return quietly, so the IDE said "saved" and the change was gone at the next
+reload) — but **eleven `SaveProjectAsync` call sites caught nothing**, so it turned one silent
+failure into an unhandled exception in whichever flow the user was in. Adding a form throws it after
+both files are on disk. Now `ProjectSaveRefusedException`, reported at every site (`687e559`).
+
+#### Two things only a REAL build could tell me
+
+Both measured 2026-09-14 with `BasicLang.dll build` on a real project, after the unit tests were
+green:
+
+1. **D7's dispatch shape does not build.** The spec says top-level `Sub`; a top-level `Sub` in one
+   `.bas` is not callable from another — `Helper()` across two **hand-written** files fails with
+   *"no lowering for `Helper.Helper`"*, and nothing in that message names the cause. Inside
+   `Public Module VgsForms` it resolves. This is a **compiler** gap, not a designer one (follow-up
+   12).
+2. **Dispatching to a form with no code-behind turned a green build red** with BL7007 against the
+   *generated* file — one the user cannot open — for a problem that is really "this `.blwebform`
+   has no `.bas`". Such a form is now skipped, its page still emitted, and the finding lands on the
+   file the user can fix.
+
+#### The other five, in one line each
+
+`SelectedIndex` never reached the page (same cross-target divergence as `Items`) · `ColSpan="02"`
+rewritten to `"2"` by a save that changed nothing · the duplicate-Id diagnostic reported `(0,0)`,
+the only finding that names two places in the file and could point at neither · a pasted Web
+control with a stray `X` lost its `Col`/`Row` · the **default project shape** (no explicit
+`<Compile>` items) emitted no pages at all, because the source glob cannot yield a `.blwebform` by
+design — form documents now have their own glob following the same rule.
+
+**BL8018** is claimed and documented in the band table (a project has form pages but nothing calls
+`VgsForms.VgsDispatchForm()`). **BL8031 is left alone** — the spec and plan both reserve it for one
+specific `--check` collision.
+
 ### What the next session should pick up
 
 1. **Re-run the full suite on Windows.** Everything above is a Linux measurement. The Windows
-   number to beat is 5826 total / 4 failures at `f54416b`; this branch adds 354 tests.
+   number to beat is 5826 total / 4 failures at `f54416b`; this branch adds ~380 tests.
 2. **Open the IDE and look at the designer and the Settings dialog** — see *Still unverified* above.
+   ⚠ Now also: **save a form and confirm the `.bas` is regenerated**, and that a hand-edited region
+   puts BL8011 in the Error List. That path is covered by caller tests driving the real `SaveAsync`,
+   but nobody has watched it happen.
 3. **Decide the multi-edge `Anchor` question above.** Until then anchoring is single-edge or `Dock`.
-4. **File the ten chips** in `docs/form-designer-followups.md`. Two are runtime failures from clean
-   builds, which is the highest-severity shape this repo tracks.
-5. **Refresh the `IDE/` drop on Windows**, and finish Task 19.
-6. **PR #3 (`claude/busy-newton-gsispd`)** is still open carrying a superseded spec/plan pair.
+4. **Decide follow-up 13**: nothing makes `Main()` call the dispatch. BL8018 warns, which is the
+   honest minimum, but a warning is not the feature working. Both ways to close it edit the user's
+   code, which is why neither was done unilaterally.
+5. **File the thirteen chips** in `docs/form-designer-followups.md`. Several are runtime failures
+   from clean builds, which is the highest-severity shape this repo tracks.
+6. **Refresh the `IDE/` drop on Windows**, and finish Task 19.
+7. **PR #3 (`claude/busy-newton-gsispd`)** is still open carrying a superseded spec/plan pair.
+
+⛔ **Do not take a green suite as evidence the feature works.** Three separate pieces of this
+branch were complete, unit-tested and unreachable, and the suite was green through every one. When
+you add a generator here, the question that matters is *who calls it in a shipping build* — and the
+answer has to be a test that drives the real entry point, not one that constructs the generator.
 
 ---
 

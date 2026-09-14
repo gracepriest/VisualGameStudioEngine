@@ -127,6 +127,22 @@ a second document type.
   measured. On WinForms the same shape compiles, which is why the shipped VSIX template does it.
 - The canvas is a **schematic**, not a preview: the IDE has no browser and no WinForms surface. F5
   to the real target is the renderer.
+- ⛔⛔ **A generator with no caller is the failure mode here — three separate pieces of this feature
+  were complete, unit-tested and unreachable, with a green suite throughout.** `RegionWriter.Write`
+  never ran, so a scaffolded form's `InitializeComponent` was never generated; `DispatchSource`
+  never ran, so every page's `data-form` was read by nothing; `JavaScriptEmitter.Emit(forms:)` was
+  optional and only tests passed it, so no page was ever written. When you add one, the question is
+  **who calls it in a shipping build** — and the answer must be a test that drives the real entry
+  point (`SaveAsync`, the CLI), not one that constructs the generator. `FormClipboard` is still
+  unreachable; see `docs/form-designer-followups.md`.
+- ⛔ **Ask the CATALOG what a value means, never the shape of the string.** A `Type.Member` regex
+  used to decide "is this already source?" and was wrong in both directions:
+  `Text="config.json"` emitted unquoted (form stops building), and
+  `TextAlign="ContentAlignment.Bogus"` sailed past the Degraded check into CS0117 with no
+  diagnostic. `FormPropertyDef.IsSourceForm` is the answer.
+- ⚠ **The D7 dispatch is a MODULE member, not a top-level `Sub`** — the spec says otherwise and the
+  spec's shape does not build. A top-level `Sub` in one `.bas` is not callable from another
+  (*"no lowering for 'Helper.Helper'"*), which is a **compiler** gap, not a designer one.
 
 ## BasicLang language
 
