@@ -1,0 +1,16 @@
+{
+  "groups": [
+    { "title": "Start here", "pillar": "meta",
+      "pages": ["overview", "architecture", "getting-started", "repo-map"] },
+    { "title": "BasicLang", "pillar": "compiler",
+      "pages": ["language", "pipeline", "backends", "cpp-interop", "js-backend", "net-interop", "diagnostics", "cli", "projects"] },
+    { "title": "Tooling", "pillar": "compiler",
+      "pages": ["lsp", "debugging"] },
+    { "title": "The IDE", "pillar": "ide",
+      "pages": ["ide", "ide-panels", "ide-editor", "ide-services", "ide-extensions", "editors"] },
+    { "title": "Game engine", "pillar": "engine",
+      "pages": ["engine", "engine-api", "engine-ecs", "engine-binding"] },
+    { "title": "Working on it", "pillar": "meta",
+      "pages": ["build-test", "conventions", "samples", "roadmap", "glossary"] }
+  ]
+}
