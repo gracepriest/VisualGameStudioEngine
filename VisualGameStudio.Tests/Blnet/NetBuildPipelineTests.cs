@@ -116,7 +116,7 @@ public class NetBuildPipelineTests
     /// standalone <c>Sub Main</c>, so <c>emitMain</c> is true.</item>
     /// <item><c>BasicLangRuntime.g.h</c>.</item>
     /// </list>
-    /// Six names are conspicuously ABSENT — <see cref="NetProxyEmitter"/>'s — and that absence
+    /// Seven names are conspicuously ABSENT — <see cref="NetProxyEmitter"/>'s — and that absence
     /// is the whole point.
     /// </summary>
     private static readonly string[] ExpectedGeneratedFileNames =
@@ -346,7 +346,7 @@ public class NetBuildPipelineTests
 
         Assert.Multiple(() =>
         {
-            // The artifact set is NetProxyEmitter's six and ONLY those: with no .bas files there
+            // The artifact set is NetProxyEmitter's seven and ONLY those: with no .bas files there
             // is no split at all, so anything else here came from somewhere it should not have.
             Assert.That(GeneratedFileNames(), Is.EqualTo(new[]
                 {
@@ -356,6 +356,7 @@ public class NetBuildPipelineTests
                     NetProxyEmitter.ContractHeaderFileName,
                     NetProxyEmitter.RuntimeHeaderFileName,
                     NetProxyEmitter.MarshalHeaderFileName,   // §6.4 conversion pairs (P2a-2 Task 6)
+                    NetProxyEmitter.FacadeFileName,          // ergonomic rendering (facade plan D9)
                 }.OrderBy(n => n, StringComparer.Ordinal)),
                 "A pure-C++ project with a .NET surface did not get exactly NetProxyEmitter's "
                 + "artifact set in obj/gen. If it got NOTHING, the obj/gen write is still gated on "
@@ -502,6 +503,7 @@ public class NetBuildPipelineTests
                 NetProxyEmitter.BindingsFileName,
                 NetProxyEmitter.ProxiesFileName,
                 NetProxyEmitter.StartupFileName,
+                NetProxyEmitter.FacadeFileName,
             })
             .OrderBy(n => n, StringComparer.Ordinal);
 
@@ -704,17 +706,78 @@ public class NetBuildPipelineTests
     }
 
     // =====================================================================================
+    // 4b. BL6027 — a facade collision must reach the BUILD, not just the generated header.
+    // =====================================================================================
+
+    /// <summary>
+    /// A facade name collision surfaces as a BL6027 WARNING on the build result.
+    ///
+    /// <para><b>Why this exists alongside the emitter's own test.</b> <c>NetFacadeEmitterTests</c>
+    /// proves <c>FacadeDiagnostics</c> computes the right findings; nothing there proves the
+    /// builder ever ASKS. A diagnostic that is wired but never fires is exactly the failure mode
+    /// BL6027 was added to prevent — the collision was already reported inside
+    /// <c>blnet_facade.g.hpp</c>, and a comment in a generated file nobody opens is not a notice.
+    /// </para>
+    ///
+    /// <para>The surface is two members that differ only in their .NET parameter TYPE. §8.3 maps
+    /// both handle-represented types onto <c>NetRef</c>, so they are one C++ signature — the D8
+    /// shape, built directly rather than via an assembly because the seam under test is the
+    /// builder, not the collector.</para>
+    /// </summary>
+    [Test]
+    public void AFacadeCollision_WarnsWithBl6027_AndTheBuildStillSucceeds()
+    {
+        var collidingSurface = new NetSurface(new[]
+        {
+            NetProxyEmitterTests.HandleArgMember("Overloaded", "MyLib.Alpha"),
+            NetProxyEmitterTests.HandleArgMember("Overloaded", "MyLib.Beta"),
+        }, Array.Empty<string>());
+
+        var (result, _) = Emit(PureCppProject(), surfaceOverride: collidingSurface);
+
+        var bl6027 = result.Diagnostics.Where(d => d.Code == "BL6027").ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(bl6027, Is.Not.Empty,
+                "the build never reported the facade collision. CppProjectBuilder.EmitCore must "
+                + "call NetProxyEmitter.FacadeDiagnostics and merge the result — otherwise the "
+                + "omission is announced only inside obj/gen/blnet_facade.g.hpp, which nobody "
+                + "opens to find out why a name they expected is missing. Codes seen: "
+                + string.Join(" | ", result.Diagnostics.Select(d => d.Code)));
+
+            Assert.That(bl6027.Select(d => d.IsWarning), Has.All.True,
+                "BL6027 must be a WARNING. Every colliding member is still callable under its "
+                + "mangled name, so the build is correct — merely less ergonomic. Making it an "
+                + "error would let a convenience header stop a working project from building.");
+
+            // Scoped to BL6027 rather than "the build has no errors". The build can carry
+            // UNRELATED errors that say nothing about this rule — on a machine without MSVC,
+            // BL6015 fires for every BasicLang native project — and asserting a clean build here
+            // would make this test report the environment instead of the rule.
+            Assert.That(result.Diagnostics.Where(d => !d.IsWarning).Select(d => d.Code),
+                Does.Not.Contain("BL6027"),
+                "a facade collision must never be an ERROR: every colliding member is still "
+                + "callable under its mangled name.");
+        });
+    }
+
+    // =====================================================================================
     // 5. CleanGeneratedDir must cover every artifact NetProxyEmitter can write.
     // =====================================================================================
 
     /// <summary>
     /// <b>A drift invariant, not a restatement.</b> The oracle is
     /// <see cref="NetProxyEmitter.Emit"/>'s ACTUAL key set for a non-empty surface; the subject
-    /// is <c>CppProjectBuilder.CleanGeneratedDir</c>'s filter. Four of the five artifacts escape
-    /// the historical <c>.g.cpp</c>/<c>.g.h</c> suffix test (<c>blnet.h</c>,
-    /// <c>blnet_runtime.hpp</c> and the two <c>.g.hpp</c> headers), so a project that STOPS using
-    /// .NET would otherwise leave a removed member's proxy header on the include path where user
-    /// C++ can still <c>#include</c> it. Goes red the moment a sixth artifact is added.
+    /// is <c>CppProjectBuilder.CleanGeneratedDir</c>'s filter. All but ONE artifact
+    /// (<c>blnet_startup.g.cpp</c>) escape the historical <c>.g.cpp</c>/<c>.g.h</c> suffix test —
+    /// note that a <c>.g.hpp</c> header does NOT end in <c>.g.h</c> — so a project that STOPS
+    /// using .NET would otherwise leave a removed member's proxy header on the include path where
+    /// user C++ can still <c>#include</c> it.
+    ///
+    /// <para>Deliberately states no COUNT: the oracle is <c>Emit</c>'s live key set, so this goes
+    /// red the moment ANY new artifact is added without a matching name in the filter — which is
+    /// exactly how <c>blnet_facade.g.hpp</c> was caught.</para>
     /// </summary>
     [Test]
     public void CleanGeneratedDirRemovesEveryNetArtifact()
@@ -746,7 +809,7 @@ public class NetBuildPipelineTests
     /// <summary>
     /// The other side of the same filter: it must not eat a hand-written file that happens to
     /// share the directory. Pins that the widened filter added exact NAMES, never a new SUFFIX
-    /// class — a <c>.h</c> or <c>.hpp</c> that is not one of the five survives.
+    /// class — a <c>.h</c> or <c>.hpp</c> that is not one of the listed names survives.
     /// </summary>
     [Test]
     public void CleanGeneratedDirLeavesFilesItDoesNotOwn()

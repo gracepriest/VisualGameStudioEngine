@@ -27,10 +27,13 @@ namespace VisualGameStudio.Tests.Blnet;
 /// (BL6016/17/18/19/23/24) become build ERRORS on the native backend while the C#
 /// backend keeps §6.3's warning row.
 ///
-/// <para><b>What this fixture deliberately does NOT cover:</b> call lowering (a resolved
-/// <c>r.IsMatch("x")</c> still emits pre-flip call shapes — Task 7a), collections crossing
-/// the boundary (§8.5, Task 9), and the shim publish (Task 7b). Everything here is
-/// analyzer/checker/declaration-level.</para>
+/// <para><b>What this fixture deliberately does NOT cover:</b> call lowering, collections
+/// crossing the boundary (§8.5), and the shim publish. Everything here is
+/// analyzer/checker/declaration-level; each of those three is covered by its own fixture.
+/// (Updated at Task 15: this note used to name Tasks 7a/7b/9 as pending and described a
+/// resolved <c>r.IsMatch("x")</c> as "still emitting pre-flip call shapes". All three have
+/// shipped. Stated as SCOPE rather than schedule so it cannot re-stale as later tasks land.)
+/// </para>
 /// </summary>
 [TestFixture]
 [NonParallelizable]

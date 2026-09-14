@@ -2192,9 +2192,37 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     WriteLine($"{result} = {leftText} + {rightText};");
                     return;
                 }
-                // Deliberate fall-through for the types StringifyForText refuses (today:
-                // Single/Double). They keep producing a C++ compile error rather than a
-                // plausible-looking wrong string — see that method's note.
+
+                // ONE side is enough, and requiring BOTH was a hole. A FOREIGN `::` call has no
+                // BasicLang type, so StringifyForText refuses it — and the all-or-nothing pair
+                // then stripped the wrap off the side that WAS known, emitting
+                // `"text " + demo::GetName()`: a bare const char* on the left, which is the very
+                // pointer arithmetic this block exists to stop. Unlike the Single/Double case it
+                // does not fail to build; it compiles (at most a -Wstring-plus-int warning) and
+                // walks off the literal.
+                //
+                // Wrapping only the known side hands the decision to C++ overload resolution,
+                // which is exactly right here because the foreign return type is knowable there
+                // and not here:
+                //     const char* / std::string -> correct concatenation
+                //     integer                   -> no operator+(std::string, int): a BUILD BREAK
+                // and a build break is the outcome this module already prefers to a plausible
+                // wrong string.
+                //
+                // Single/Double are unaffected: `"v" & aDouble` becomes
+                // `std::string("v") + aDouble`, which has no operator either, so the deliberate
+                // refusal still refuses.
+                if (leftText != null || rightText != null)
+                {
+                    WriteLine($"{result} = {leftText ?? left} + {rightText ?? right};");
+                    return;
+                }
+
+                // Neither side stringifies. Unreachable for Concat today — the analyzer refuses
+                // `&` unless at least one operand is a string ("Operator '&' requires at least
+                // one string operand"), which is what makes foreign & foreign a diagnostic
+                // rather than a silent pointer walk. Left as a fall-through rather than a throw
+                // so a future analyzer relaxation degrades to a C++ compile error.
             }
 
             WriteLine($"{result} = {left} {op} {right};");
