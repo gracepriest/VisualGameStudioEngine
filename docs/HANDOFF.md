@@ -147,7 +147,8 @@ dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --fi
 
 | Run | Count | Time |
 |---|---|---|
-| Full suite at **`f54416b`** (current master, Windows) | **5826 total, 4 failures — all baseline** | ~2h |
+| Full suite at **`ee3c086`** (branch `claude/jolly-pasteur-l4mpzs`, **Windows**) | **4 failures — all baseline, zero new** | ~2h |
+| Full suite at **`f54416b`** (Windows) | **5826 total, 4 failures — all baseline** | ~2h |
 | Full suite at `6139386` | 5792 passed / 5 failed / 2 skipped of 5799 | ~2h |
 | Fast subset at `6139386` | 4897 passed / 2 failed / 1 skipped | ~2 min |
 
@@ -159,6 +160,13 @@ The 5799 → 5826 move is P2a-2 Task 14's additions. The 5th failure in the `613
 `Cli_Build_CppProject_ProjectReference_Warns…`, and `NonEx_variants…` (which passes alone and
 fails only when the Native tier runs alongside it). The fast subset shows the two
 `SearchSnippets` ones.
+
+✅ **`ee3c086` is WINDOWS-GATED (2026-09-14).** The four failures are exactly the baseline four
+named above — so everything a Linux container structurally cannot exercise ran and passed, which
+is most of what matters for this branch: the **22 §12.5 blnet integration rows** needing the
+win-x64 ILC shim publish, `EveryProxyTableSlotResolvesInThePublishedShim` among them, and
+`AddressOfAsADotNetDelegateArgument_LowersAndRuns`. Every Linux gate in this branch's history was
+taken WITHOUT those rows; this run is the one that covers them.
 
 ⛔ **The fast subset is not a gate for codegen work** — execution tests are
 `[Category("Integration")]`. Four fixes once gated green on it, then the first full run found
@@ -180,7 +188,8 @@ fails only when the Native tier runs alongside it). The fast subset shows the tw
   methods (static and instance), constructors, and properties, so `Regex r("^a+$"); r.IsMatch(s)`
   works from C++; name and signature collisions are omitted rather than guessed at, and reported
   as **BL6027 (always a warning — never fails a build)**; coverage is pinned against a REAL
-  framework surface at 223 of 234 slots.
+  framework surface at 223 of 234 slots. **Windows-gated at `ee3c086`** — 4 failures, all
+  baseline.
   ⚠ **A coverage set identity needs a FLOOR beside it** — skipping every slot satisfies
   `rendered ∪ skipped == all` perfectly. Measured, not theorised: mutating the classifier to skip
   everything left the identity test green. `NetFacadeCoverageDriftTests` asserts both.
