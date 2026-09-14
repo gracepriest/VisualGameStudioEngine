@@ -82,7 +82,7 @@ namespace BasicLang.Compiler.CodeGen.Net
     /// boundary together. <see cref="NetShimGenerator"/> derives its export set from the SAME
     /// function, so the two agree by construction.</para>
     /// </summary>
-    internal static class NetProxyEmitter
+    internal static partial class NetProxyEmitter
     {
         /// <summary>P0's C contract header — spliced verbatim from <see cref="BlnetRuntimeSources"/>.</summary>
         internal const string ContractHeaderFileName = "blnet.h";
@@ -164,6 +164,7 @@ namespace BasicLang.Compiler.CodeGen.Net
                 [BindingsFileName] = EmitBindingsText(surface, plans),
                 [ProxiesFileName] = EmitProxies(surface, plans),
                 [StartupFileName] = EmitStartup(surface, plans, shimModuleFileName),
+                [FacadeFileName] = EmitFacade(surface, plans),
             };
         }
 

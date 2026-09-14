@@ -98,6 +98,7 @@ typedef struct BlnetNativeVtable {
 #include ""blnet.h""
 #include <atomic>
 #include <cstring>
+#include <type_traits>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -192,6 +193,41 @@ namespace detail {
         }
     };
     inline NetRefHookBinder g_netref_hook_binder;
+}
+
+/* ---- 8.4 wire conversions: THE seam both wire halves must agree on ----
+
+   A delegate slot travels as a 64-bit WORD. A word is a BIT PATTERN, not a number: the
+   managed dispatcher packs one and the native adapter unpacks it. For an integer row a
+   value cast and a bit copy agree, so `static_cast` was correct and nothing noticed that
+   it was correct for the wrong reason. For a FLOATING row they do not agree at all --
+   static_cast<double>(w) reads the word as an integer COUNT, so the bits of 1.5
+   (0x3FF8000000000000) arrive as 4.6e18 and every subsequent digit is noise.
+
+   These two functions exist so that question is answered in ONE place instead of at each
+   cast site. Do not open-code a cast in an adapter: that is the defect this replaced
+   (chip task_75064f2e), and it was invisible precisely because each site looked locally
+   reasonable.
+
+   memcpy rather than std::bit_cast: <cstring> is already a dependency here and the copy
+   compiles to the same move, so the seam costs no new include. float occupies the LOW 32
+   bits of the word, matching BitConverter.SingleToInt32Bits widened on the managed side. */
+template <class T>
+inline T wire_to(uint64_t w) {
+    if constexpr (std::is_floating_point_v<T>) {
+        T v{}; std::memcpy(&v, &w, sizeof(T)); return v;
+    } else {
+        return static_cast<T>(w);
+    }
+}
+
+template <class T>
+inline uint64_t wire_from(T v) {
+    if constexpr (std::is_floating_point_v<T>) {
+        uint64_t w = 0; std::memcpy(&w, &v, sizeof(T)); return w;
+    } else {
+        return static_cast<uint64_t>(v);
+    }
 }
 
 /* ---- C5: callback table (generation-tagged, mirrors C2) ---- */

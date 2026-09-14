@@ -376,3 +376,8 @@ IDE/GeneratedCode/
 IDE/nul
 IDE2/
 test_lsp.ps1
+
+# Scratch git worktrees. `docs/HANDOFF.md` has sessions materialise a detached
+# worktree at .worktrees/p2a1base (the P2a-1 baseline) for the empty-surface
+# inertness diff. It is a second checkout, never repo content.
+.worktrees/
