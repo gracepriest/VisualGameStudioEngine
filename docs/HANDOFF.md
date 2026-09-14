@@ -155,8 +155,8 @@ four items cannot be done off Windows.
 |---|---|
 | Full suite, both entry points | ✅ Run every commit; see the table above |
 | Update `docs/HANDOFF.md` and `CLAUDE.md` | ✅ This file, plus a durable *Form designer* section in `CLAUDE.md` |
-| File the follow-up chips | ⚠ **Written up, not filed** — `docs/form-designer-followups.md` has all **thirteen**, filable verbatim. Opening issues is outward-facing and nobody asked. |
-| Refresh the `IDE/` drop | ❌ **Must not happen here.** `IDE/BasicLang.exe` is a **PE32+ Windows binary**; refreshing it from a Linux build would swap the Windows executables for ELF apphosts and break the drop for everyone. Do it on Windows with `robocopy` — never `/MIR`. |
+| File the follow-up chips | ⚠ **Written up, not filed** — `docs/form-designer-followups.md` has all **fifteen**, filable verbatim. Opening issues is outward-facing and nobody asked. |
+| Refresh the `IDE/` drop | ✅ **Done on Windows** — landed with `claude/jolly-pasteur-l4mpzs`, in master at `77e415b`. It must never be refreshed from a Linux build: `IDE/BasicLang.exe` is a **PE32+ Windows binary** and a Linux refresh swaps the Windows executables for ELF apphosts. `robocopy` on Windows — never `/MIR`. |
 
 ⛔ `docs/MULTI_FILE_SYSTEM_PLAN.md:21` is **untouched**, per owner decision 2 — `.frm` stays reserved
 for a user-authored form file and is not obsoleted by `.blform`.
