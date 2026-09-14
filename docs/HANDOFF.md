@@ -349,9 +349,10 @@ finding that matters needs a gate or a filed issue.
 ### What the next session should pick up
 
 1. **Re-run the full suite on Windows.** Everything above is a Linux measurement. The Windows
-   number to beat is 5826 total / 4 failures at `f54416b`; this branch adds ~390 tests. On Linux:
-   branch **174 failed / 6234**, baseline `6a6d224` **212 failed / 5837** — zero regressions, 38
-   turned green.
+   number to beat is 5893 passed / 4 failed at `ee3c086`. On Linux, **re-gated against the current
+   master `77e415b`** (2026-09-14): baseline **213 failed / 5876**, `feat/form-designer` **175 /
+   6273 — 0 new, 38 fixed**, `fix/js-module-qualified-call` **213 / 5882 — 0 new**. Both PRs now
+   carry master merged in, so those are the numbers a Windows run should be checked against.
 2. **Open the IDE and look at the designer and the Settings dialog** — see *Still unverified* above.
    ⚠ Now also: **save a form and confirm the `.bas` is regenerated**, and that a hand-edited region
    puts BL8011 in the Error List. That path is covered by caller tests driving the real `SaveAsync`,
@@ -364,8 +365,14 @@ finding that matters needs a gate or a filed issue.
    from clean builds, which is the highest-severity shape this repo tracks. Entries 3 and 14 are
    the SAME compiler bug — file them together. Entry 15's residue (Win32 `*.bas` matching `.basic`)
    is unverified on Linux; confirm it during the Windows run.
-6. **Refresh the `IDE/` drop on Windows**, and finish Task 19.
+6. **Finish Task 19.** (The `IDE/` drop refresh is DONE — it landed with
+   `claude/jolly-pasteur-l4mpzs` in master `77e415b`.)
 7. **PR #3 (`claude/busy-newton-gsispd`)** is still open carrying a superseded spec/plan pair.
+8. **Decide the C# and C++ halves of the module-call bug.** PR #6 fixes JavaScript only. Re-measured
+   on `77e415b` (2026-09-14): **C++ is still broken** — `M.Go()` gives clang *"use of undeclared
+   identifier 'M'"*, `IRBuilder.cs` untouched by the facade merge — and C# still rejects the
+   unqualified `Go()` with CS0103. Matrix and per-backend fix shapes in
+   `docs/form-designer-followups.md` 14.
 
 ⛔ **Do not take a green suite as evidence the feature works.** Three separate pieces of this
 branch were complete, unit-tested and unreachable, and the suite was green through every one. When
@@ -529,6 +536,20 @@ dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --fi
 ⛔ And the rule those serve: **compare sorted FAILURE NAMES with `comm -23`, never counts.** A
 count hides a regression that lands as another test goes green — which is not hypothetical here:
 this branch turns 38 tests green while introducing none, so its count moved for two reasons at once.
+
+**Re-gated 2026-09-14 against the CURRENT master `77e415b`** (Linux container, this box). The
+earlier numbers below were taken against `6a6d224`; master has moved twice since, so these are the
+ones that count for the two open PRs:
+
+| Run (Linux, `77e415b` baseline) | Failed / Total | Names vs baseline | Time |
+|---|---|---|---|
+| **Baseline `77e415b`** (worktree) | 213 / 5876 | — | 7m31s |
+| **`feat/form-designer`** merged to `77e415b` (`05f736f`, PR #4) | **175 / 6273** | **0 new, 38 fixed** | 11m40s |
+| **`fix/js-module-qualified-call`** merged to `77e415b` (`7cbff64`, PR #6) | **213 / 5882** | **0 new, 0 fixed** | 7m05s |
+
+Both diffs are by sorted failure NAME (`comm -13`), not by count — and the form-designer row is
+exactly why: its count moved 213 → 175 for two reasons at once. PR #6's six new tests pass (5876 →
+5882 total) without disturbing the set, which is the shape a compiler fix should have.
 
 | Run | Count | Time |
 |---|---|---|
