@@ -38,6 +38,46 @@ public class CppToolchainArgsTests
         Assert.That(args, Does.Not.Contain(@"C:\proj\util.cpp"), "per-TU entry lists only its own file");
     }
 
+    /// <summary>
+    /// The generated blnet runtime guards its callback and invocation-queue tables with
+    /// <c>std::mutex</c>, so a .NET-enabled native project needs a threading library at LINK
+    /// time. <c>-pthread</c> is the portable spelling and must be in the GCC/Clang flag set.
+    ///
+    /// <para><b>⛔ Why a flag test rather than a build test.</b> This defect is INVISIBLE on
+    /// Linux. Since glibc 2.34 the pthread symbols live in libc, so clang++ resolves
+    /// <c>std::mutex</c> with no flag and the identical project links clean — there is no
+    /// Linux build that can go red for it. On MinGW the POSIX threading model routes those
+    /// calls through <c>gthr-default.h</c> to winpthreads, which is not on the link line by
+    /// default, and EVERY translation unit fails with <c>undefined reference to
+    /// pthread_mutex_init</c> (measured: helper.o, Main.o, and the generated blnet_startup.o).
+    /// Pinning the flag is therefore the only oracle that works on both platforms.</para>
+    /// </summary>
+    [Test]
+    public void ClangLike_PerTuArguments_RequestAThreadingLibrary()
+    {
+        var args = CppToolchain.BuildCompileCommandArguments(
+            CppToolchainKind.ClangLike, "clang++", Request(), @"C:\proj\main.cpp");
+
+        Assert.That(args, Does.Contain("-pthread"),
+            "the GCC/Clang flag set lost -pthread. blnet_runtime.hpp uses std::mutex, so a MinGW "
+            + "link of any .NET-enabled native project will fail with `undefined reference to "
+            + "pthread_mutex_*` from every object file — including generated ones the user never "
+            + "wrote. A Linux build will NOT reproduce it: glibc 2.34+ puts those symbols in "
+            + "libc. Do not delete this because 'the build is green here'.");
+    }
+
+    /// <summary>MSVC's standard library threading is built in; -pthread is a GCC/Clang spelling
+    /// and must never reach a <c>cl</c> command line.</summary>
+    [Test]
+    public void Msvc_PerTuArguments_DoNotRequestPthread()
+    {
+        var args = CppToolchain.BuildCompileCommandArguments(
+            CppToolchainKind.Msvc, "cl", Request(), @"C:\proj\main.cpp");
+
+        Assert.That(args, Does.Not.Contain("-pthread"),
+            "-pthread is a GCC/Clang flag; cl would reject it as an unknown option.");
+    }
+
     [Test]
     public void Msvc_PerTuArguments_UseSlashFlags()
     {
