@@ -455,6 +455,13 @@ These are measured, not cautionary. Each one shipped a green build that did the 
   operand and stops. Name new CFGs exactly like `Visit(IfStatementNode)` does. The JS backend
   differs again (it derives the merge via `FindMergeBlock`, so the true target must never *be*
   the merge); C++ is goto-based and tolerates any shape.
+- ⛔⛔ **`git merge-tree` gave FALSE NEGATIVES on conflict detection — repeatedly.** Across several
+  check-ins it reported both open PRs as conflict-free against master; the real
+  `git merge origin/master` conflicted in `docs/HANDOFF.md` every time. The check said "clean" while
+  the merge did not, so the branch looked mergeable for days. **Test-merge for real** — add a
+  DETACHED worktree at the branch tip (`git worktree add --detach <dir> <sha>`; without `--detach`
+  it refuses with *"already used by worktree"*), run the actual merge there, read the conflicts,
+  then throw the worktree away. Nothing else answers the question.
 - ⛔ **Every shipping route runs the IR optimizer; the unit-test helper does not.** A fixture
   can be green while the CLI and the IDE both miscompile. Validate codegen through the CLI or
   an optimizer-running helper. **stdout is the only valid oracle.**

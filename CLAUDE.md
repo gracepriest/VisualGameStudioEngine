@@ -95,6 +95,11 @@ hides a regression that lands as another test goes green. Windows remains the re
   the second exists to reproduce the first exactly, and a guard added to one and not the other let
   the IDE write an explicit `<Compile>` item for a file the compiler's glob rejects. Once the list
   is explicit, `GetSourceFiles` takes its explicit branch, which does **no** extension filtering.
+- ⛔ **`git merge-tree` is not a conflict check here — it has given false negatives repeatedly.**
+  It reported branches as clean against master while the real merge conflicted. To answer "will this
+  merge", do the merge: `git worktree add --detach <dir> <sha>` (the `--detach` is required, or it
+  refuses with *"already used by worktree"*), `git merge origin/master` in it, read the result, then
+  remove the worktree.
 - ⚠ **Win32 globbing over-matches THREE-character extensions**: `*.bas` matches `.basic` and `*.cls`
   matches `.class`, so both globs above need an exact-extension check or those files are swept twice.
   Not reproducible on Linux — confirm it on the Windows run.
