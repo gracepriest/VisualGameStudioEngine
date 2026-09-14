@@ -173,27 +173,74 @@ including the person who wrote it. The entry below is the reproduction and the b
 bullet never had; treat it as evidence attached to a known bug, and treat the near-miss as the
 reason a one-line entry in a long list is not the same as a filed issue.
 
-`Public Module VgsForms` with a `Public Shared`-less `Public Sub Dispatch()`, called from another
-file as `VgsForms.Dispatch()`, compiles with no diagnostic and emits:
+#### Minimal reproduction — 8 lines, ONE file, no form designer
 
-```js
-function Dispatch() { ... }        // the module is FLATTENED to a bare global
-...
-VgsForms.Dispatch();               // but the call site stays QUALIFIED
+```basic
+Public Module M
+    Public Sub Go()
+        Console.WriteLine("go")
+    End Sub
+End Module
+
+Sub Main()
+    M.Go()
+End Sub
 ```
 
-There is no `VgsForms` anywhere in the output. The page dies on load with
-**`ReferenceError: VgsForms is not defined`**. Measured 2026-09-14 by building a real project and
-running the emitted script under node.
+Builds clean. Emits:
 
-The designer works around it by generating `Public Class VgsForms` with a `Public Shared Sub`,
-which emits a real `class VgsForms { static ... }`. **The workaround is in the generator, so the
-underlying bug is untouched and will bite the next person who writes a module and calls it across
-files** — which is ordinary, correct BasicLang.
+```js
+function Go() { console.log("go"); return; }   // the module is FLATTENED to a bare global
+function Main() { M.Go(); return; }            // but the call site stays QUALIFIED
+Main();
+```
+
+`M` is defined nowhere. Running it: **`ReferenceError: M is not defined`.**
+
+#### ⛔ It is NOT cross-file only — the blast radius is wider than first written
+
+Measured 2026-09-14, all three with a real `BasicLang build` and the output executed under node:
+
+| Shape | Result |
+|---|---|
+| `M.Go()` from **another file** | compiles → **`ReferenceError` at run time** |
+| `M.Go()` in the **SAME file** | compiles → **identical broken output**, same `ReferenceError` |
+| `Go()` unqualified, same file | ✅ emits `Go()` and runs correctly |
+
+So the trigger is **qualifying a module member at all**, not crossing a file boundary. Anyone who
+writes `MyModule.Helper()` — ordinary, correct BasicLang, and the shape most people reach for
+precisely because it is explicit — gets a clean build and a dead program.
+
+#### Root cause
+
+`IRBuilder.Visit(ModuleNode)` (`BasicLang/IRBuilder.cs:385`) treats a module as purely
+organizational: *"Modules are organizational - process members"*. It visits the members directly, so
+each `Sub` becomes a **top-level `IRFunction`** carrying only a `ModuleName` string — there is no
+container in the IR for the backend to emit. The call site, meanwhile, keeps the qualifier. Nothing
+downstream reconciles the two.
+
+Two candidate fixes, neither attempted here:
+- **Backend-only:** when lowering a qualified call whose receiver matches a known module name and
+  whose member is a top-level function with that `ModuleName`, emit the bare name. Surgical, and
+  only touches calls that are broken today.
+- **Emit the container:** after the top-level functions, emit `const M = { Go };` per module. Makes
+  the qualified form real, but introduces a global that can collide with a class or variable.
+
+⚠ The C# and C++ backends were not checked. **Check them before assuming this is JavaScript-only.**
+
+#### Why it was not fixed on the form-designer branch
+
+The designer works around it by generating `Public Class VgsForms` with a `Public Shared Sub`, which
+emits a real `class VgsForms { static ... }`. That is a generator-side workaround: **the underlying
+bug is untouched.** Fixing it means changing call lowering for every JavaScript program, which does
+not belong stacked onto a 37-commit feature branch awaiting review — it wants its own branch, its
+own PR, and its own full-suite gate.
 
 ⚠ Related and also unfixed: a bare top-level `Sub` in one `.bas` cannot be called from another at
-all (*"no lowering for `Helper.Helper`"*) — follow-up 12. Between the two, the only shape that
-works across files on this backend is a class.
+all (*"no lowering for `Helper.Helper`"*) — follow-up 12. **These are two DIFFERENT paths**: that one
+fails at COMPILE time through `JavaScriptBackend.CallTarget`'s dotted-name arm
+(`JavaScriptBackend.cs:1296`), this one slips past it and fails at RUN time. Between them, a class is
+the only shape that works across files on this backend.
 
 ### 15. The default source glob walked `bin/` and `obj/`
 `ProjectFile.GetSourceFiles()`'s glob branch recursed the whole project directory with no build-output
