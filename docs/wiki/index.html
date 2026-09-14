@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Visual Game Studio Engine Wiki</title>
+<meta name="description" content="Reference wiki for the BasicLang compiler, the Visual Game Studio IDE, and the 2D game engine.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&family=IBM+Plex+Sans+Condensed:wght@600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="wiki.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">VG</div>
+      <div class="brand-text">
+        <span class="brand-name">Visual Game Studio</span>
+        <span class="brand-sub">Engine &middot; wiki</span>
+      </div>
+    </div>
+    <div class="search-wrap">
+      <div class="search-field">
+        <input id="search" type="search" autocomplete="off" spellcheck="false"
+               placeholder="Search the wiki" aria-label="Search the wiki">
+        <span class="search-key" aria-hidden="true">/</span>
+      </div>
+      <div class="results" id="results" role="listbox" aria-label="Search results"></div>
+    </div>
+    <nav class="nav" id="nav" aria-label="Wiki sections"></nav>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <button class="icon-btn menu-btn" id="menu" aria-label="Toggle navigation">Menu</button>
+      <div class="crumb" id="crumb"></div>
+      <div class="topbar-spacer"></div>
+      <button class="icon-btn" id="theme">Dark</button>
+    </div>
+    <div class="page-wrap">
+      <article id="article"></article>
+      <nav class="toc" id="toc" aria-label="On this page"></nav>
+    </div>
+  </main>
+</div>
+
+<script src="wiki-content.js"></script>
+<script src="wiki.js"></script>
+</body>
+</html>
