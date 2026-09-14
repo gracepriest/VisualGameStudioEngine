@@ -112,6 +112,18 @@ These are measured, not cautionary. Each one shipped a green build that did the 
   `NetProxyEmitterTests.ExpectedArtifacts`, `CppProjectBuilder.NetArtifactFileNames`, and
   `NetBuildPipelineTests`' two merged-set lists. A *header* must NOT go into
   `TranslationUnitFileNames` — that list is translation units only.
+- ⛔ **`&` against a FOREIGN `::` call had no type to recognise, so the KNOWN side lost its
+  wrap too.** `CppCodeGenerator.StringifyForText` coerces each operand so `+` means
+  concatenation rather than pointer arithmetic, but it required BOTH operands to be recognised
+  and a foreign call has no BasicLang type. The pair being all-or-nothing then emitted
+  `"text " + demo::GetName()` — a bare `const char*` on the left. **Fixed:** one recognised side
+  is enough, and the unrecognised side is handed to C++ overload resolution, which is the only
+  place a foreign return type is knowable (`const char*`/`std::string` concatenate; an integer
+  has no operator and becomes a build break). Note the asymmetry that made this worth fixing:
+  the same fall-through is SAFE for Single/Double, which fail to build loudly, and unsafe for a
+  foreign integer, which compiles with at most `-Wstring-plus-int` and walks off the literal.
+  **A build break is the intended outcome for the numeric case** — do not "fix" it by reaching
+  for `std::to_string` on an operand whose type you do not know.
 - ⛔ **A "Passed!" summary line does not mean the suite passed.** A crashed test host still
   prints a per-assembly summary; the abort goes to **stderr**. Capture both streams and check
   the total against the expected count, not just `Failed: 0`.
