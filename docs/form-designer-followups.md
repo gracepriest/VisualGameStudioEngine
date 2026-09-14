@@ -34,7 +34,9 @@ Measured 2026-09-11:
   `ReferenceError` at run time;
 - `Me.Method()` inside a lambda hard-errors — class members are not populated
   (*"Available members: btn, .ctor0"*);
-- a **qualified module call** emits a reference to a container JS does not have → `ReferenceError`;
+- a **qualified module call** emits a reference to a container JS does not have → `ReferenceError`
+  — ⛔ **see entry 14**, which is this same defect, reproduced and measured, after it shipped in
+  the designer's own dispatch three days after this line was written;
 - **chained access through a declared `Property`** loses its type
   (`doc.body.getAttribute(…)` → `Object`).
 
@@ -136,14 +138,19 @@ Sub Main()  Helper()  End Sub ' Main.bas
   program nor supported by JavaScriptStdLib.
 ```
 
-Nothing in that message names the real cause, and it is not specific to generated code. The same
-`Sub` inside `Public Module VgsForms` resolves and lowers correctly, so the generator emits it that
-way and `Main()` calls `VgsForms.VgsDispatchForm()`.
+Nothing in that message names the real cause, and it is not specific to generated code — two
+hand-written files do it too.
+
+⛔ **This entry first said the fix was `Public Module VgsForms`. That was wrong**, and the correction
+is entry 14 below: a module COMPILES and then throws `ReferenceError` at run time, because the
+backend flattens its members to bare globals while emitting the call site qualified. The generator
+emits `Public Class` + `Public Shared Sub`, which is the only shape measured to both compile and run
+across files on this backend.
 
 **Two consequences to decide on:** the spec's D7 text and `BL8031`'s reserved purpose both now refer
-to a module member rather than a top-level name; and the cross-file top-level `Sub` limitation is a
-**compiler** gap worth its own investigation — it is not a form-designer problem and it will bite
-anyone splitting procedural code across files on the JavaScript backend.
+to a shared method on a class rather than a top-level name; and the cross-file top-level `Sub`
+limitation is a **compiler** gap worth its own investigation — it is not a form-designer problem and
+it will bite anyone splitting procedural code across files on the JavaScript backend.
 
 ### 13. Nothing makes `Main()` call the dispatch for you
 `BL8018` warns when a project has form pages and no source calls `VgsForms.VgsDispatchForm()`, which
@@ -156,8 +163,15 @@ project template ship a `Main()` that already dispatches. Both edit the user's c
 neither was done unilaterally.
 
 ### 14. ⛔⛔ The JavaScript backend emits calls to module objects it never defines
-**This is a runtime failure from a clean, green build**, and it is a COMPILER bug — the form
-designer only found it.
+**This is a runtime failure from a clean, green build**, and it is a COMPILER bug.
+
+⛔⛔ **File this as the same issue as the third bullet of entry 3, not as a new one.** That bullet
+— *"a qualified module call emits a reference to a container JS does not have → `ReferenceError`"*,
+measured **2026-09-11** — is this exact defect, written down in this exact document three days
+before the designer's dispatch was generated as a module and shipped broken. Nobody read it,
+including the person who wrote it. The entry below is the reproduction and the blast radius that
+bullet never had; treat it as evidence attached to a known bug, and treat the near-miss as the
+reason a one-line entry in a long list is not the same as a filed issue.
 
 `Public Module VgsForms` with a `Public Shared`-less `Public Sub Dispatch()`, called from another
 file as `VgsForms.Dispatch()`, compiles with no diagnostic and emits:
@@ -190,4 +204,15 @@ project swept its own output back in and compiled the file twice — from a buil
 Fixed here by giving the glob the same two guards the C++ one documents (build-output exclusion and
 an exact-extension check). **Worth knowing that this was latent for every generated source, not just
 this one** — anything a future build step writes under `obj/` would have been compiled on the next run.
+
+⚠ **The actionable residue is a WINDOWS-ONLY defect that predates this branch and is still
+unverified.** Win32 globbing over-matches three-character patterns, so `*.bas` matches `.basic` and
+`*.cls` matches `.class`: every glob-shaped project has been yielding — and compiling — those files
+**twice**. The exact-extension check fixes it, but it cannot be reproduced on Linux, so nobody has
+watched it happen. **Confirm it on the Windows run**, and if it reproduces, this is worth filing on
+its own account rather than as a footnote to the form designer.
+
+⚠ Its mirror, `ProjectGlobSafety.MaterialiseGlobbedSources`, needed the same guard and did not get
+it for one commit — see the fourth-pass notes in `docs/HANDOFF.md`. The two are mirrored by
+construction and not shared; anything added to one belongs in the other.
 

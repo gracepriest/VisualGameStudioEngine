@@ -423,6 +423,24 @@ matches `.basic` and `*.cls` matches `.class`, so those files were being yielded
 **twice** by every glob-shaped project. Nobody knew. It cannot be reproduced on Linux, so it is
 unverified here and worth confirming on the Windows run.
 
+### ⛔⛔ THE MODULE BUG WAS ALREADY IN OUR OWN NOTES
+
+`docs/form-designer-followups.md` entry 3, third bullet, **measured 2026-09-11**:
+
+> a **qualified module call** emits a reference to a container JS does not have → `ReferenceError`
+
+That is exactly the defect that shipped in the designer's dispatch on 2026-09-14 and threw on every
+page load. It was written down, in that file, by this same effort, three days earlier — and when the
+moment came to choose a shape for the generated dispatch, nobody reread it. I measured that a module
+COMPILES across files, concluded it worked, and did not check the list of known backend defects that
+contains this one.
+
+**The lesson is not "read more carefully".** It is that a one-line bullet inside a
+fifteen-entry follow-up document is not a working safeguard. The things that actually caught this
+were running the output and comparing failure sets — mechanisms, not memory. When a finding matters,
+it needs a gate or a filed issue, because a list nobody rereads is a list that does not protect
+anyone. Entries 3 and 14 are now cross-linked so that filing one does not lose the other.
+
 ### What the next session should pick up
 
 1. **Re-run the full suite on Windows.** Everything above is a Linux measurement. The Windows
