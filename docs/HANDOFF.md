@@ -11,6 +11,16 @@ relying on it.** The 2026-09-13 section immediately below is newer than the rest
 and supersedes it wherever they disagree — in particular about whether a cloud container can
 build and test this repo.
 
+### → START HERE
+
+| If you want | Go to |
+|---|---|
+| **What to do next** | *What the next session should pick up* |
+| Can this machine build and gate? | *READ FIRST — a cloud container CAN build and test* (next section) |
+| How to run a trustworthy baseline | *Gates and expected numbers* — including three ways a baseline run LIES |
+| Why a green suite proved nothing here | *FOUR REVIEW PASSES* — read before trusting one |
+| Decisions waiting on a human | *AN OPEN DECISION: multi-edge `Anchor`*, and items 3–4 of the next-session list |
+
 ---
 
 ## ⛔ READ FIRST — 2026-09-13: a cloud container CAN build and test this repo
@@ -263,183 +273,73 @@ Not this writer's call, so it refuses and says why.
    in `SemanticAnalyzer` to widen that last one with, and comparing class names would flag
    `EventArgs` against `MouseEventArgs` — the ordinary correct shape of a handler.
 
-### ⛔⛔ 2026-09-14 — TWO REVIEW ROUNDS FOUND TWENTY DEFECTS. READ THIS BEFORE TRUSTING A GREEN SUITE.
+### ⛔⛔ 2026-09-14 — FOUR REVIEW PASSES, ~30 DEFECTS. READ THIS BEFORE TRUSTING A GREEN SUITE.
 
-Both rounds were asked the same second question, and it is the one that kept paying:
+*(Blow-by-blow is in `git log 0d3e7c3..313da82`. What follows is only what stays true.)*
+
+**The question that found nearly all of it**, asked of every pass:
 
 > a targeted audit for **functionality reachable ONLY from tests** — optional parameters no
 > production caller passes, public methods whose only callers are tests, wiring that exists but is
 > never invoked from a shipping path.
 
-**It found the feature's three biggest holes, and the suite was green through all of them.**
+**Four pieces of this feature were complete, unit-tested and unreachable. The suite was green
+through every one.**
 
-| Dead thing | What the user actually got | Fixed in |
-|---|---|---|
-| `JavaScriptEmitter.Emit(forms:)` — optional, no caller passed it | a `.blwebform` built green and wrote **no `.html`, no `.css`** | `525aa88` |
-| `RegionWriter.Write` — **no production caller at all** | scaffold a form, drop a button, save, build → **the build fails on the `InitializeComponent` the scaffold itself calls**. Canvas drew, grid edited, document round-tripped byte for byte, program missing a member. | `49a9bda` |
-| `FormAssetEmitter.DispatchSource` — no production caller | every page carried `<body data-form="...">` and **nothing read it**: three forms → three pages that all ran the same `Main()` | `49a9bda` |
+| Dead thing | What the user actually got |
+|---|---|
+| `JavaScriptEmitter.Emit(forms:)` — optional, no caller passed it | a `.blwebform` built green and wrote **no `.html`, no `.css`** |
+| `RegionWriter.Write` — **no production caller at all** | scaffold a form, drop a button, save, build → **the build fails on the `InitializeComponent` the scaffold itself calls**. Canvas drew, grid edited, document round-tripped byte for byte, program missing a member |
+| `FormAssetEmitter.DispatchSource` — no production caller | every page carried `<body data-form="…">` and **nothing read it** |
+| The **default project shape** (no explicit `<Compile>` items) | emitted no pages at all — the source glob cannot yield a `.blwebform` by design |
 
 ⚠ **`FormClipboard` is the one still standing** — complete, tested, and the canvas has no
-Copy/Cut/Paste to reach it. Filed as follow-up 11, not bolted on.
+Copy/Cut/Paste to reach it. Follow-up 11.
 
-**Two defects were regressions the FIRST round's own fixes introduced** (`48cc51e` → fixed in
-`0d3e7c3`). Both came from one mistake: answering *"is this value already source?"* with the **shape
-of the string** (a `Type.Member` regex) instead of asking the catalog.
+#### ⛔⛔ The one that shipped: a green build is not a running page
 
-- `Text="config.json"` matched the shape → emitted **unquoted** → the user's form stopped building
-  because a Label's caption had a file extension in it.
-- `TextAlign="ContentAlignment.Bogus"` matched the shape → waved past the Degraded check into
-  **CS0117 with zero diagnostics** — the exact failure that check had just been added to stop.
+The dispatch was generated as a `Public Module`. It compiled clean, every string the tests looked
+for was present, and every page died on load with **`ReferenceError: VgsForms is not defined`** —
+the JavaScript backend FLATTENS a module's members to bare globals while emitting the call site
+QUALIFIED, so the script referenced an object appearing nowhere in the file. I read that exact
+output and called it success: one line said `VgsForms.VgsDispatchForm();` and another said
+`function VgsDispatchForm() {`, two lines that contradict each other.
 
-The comment justifying the widening cited an "import route" that **does not exist**:
-`RecognizedForm` never becomes a `FormDocument` anywhere in production. Only the catalog row knows
-its own enum type and its own members, so only the row may answer — `FormPropertyDef.IsSourceForm`.
+Generated as `Public Class` + `Public Shared Sub` now. **The backend bug is UNFIXED and belongs to
+the compiler** (follow-ups 3 and 14) — anyone calling a module across files gets a clean build and
+a dead page.
 
-⚠ **And one fix planted a landmine.** Making `ProjectSerializer` throw on a namespaced project was
-right (it used to return quietly, so the IDE said "saved" and the change was gone at the next
-reload) — but **eleven `SaveProjectAsync` call sites caught nothing**, so it turned one silent
-failure into an unhandled exception in whichever flow the user was in. Adding a form throws it after
-both files are on disk. Now `ProjectSaveRefusedException`, reported at every site (`687e559`).
+✅ **`node` v22 is on PATH here, and `FormBuildEmissionTests` RUNS the emitted script** against a
+stub `document`. That gate is what catches this class. Keep it green.
 
-#### Two things only a REAL build could tell me
+⛔⛔ **And that bug was already in our own notes** — `docs/form-designer-followups.md` entry 3,
+third bullet, measured three days earlier: *"a qualified module call emits a reference to a
+container JS does not have → ReferenceError"*. Nobody reread it, including the person who wrote it.
+**The lesson is not "read more carefully": a bullet in a fifteen-entry list is not a safeguard.**
+What caught this was running the output and comparing failure sets — mechanisms, not memory. A
+finding that matters needs a gate or a filed issue.
 
-Both measured 2026-09-14 with `BasicLang.dll build` on a real project, after the unit tests were
-green:
+#### The four rules that came out of it
 
-1. **D7's dispatch shape does not build.** The spec says top-level `Sub`; a top-level `Sub` in one
-   `.bas` is not callable from another — `Helper()` across two **hand-written** files fails with
-   *"no lowering for `Helper.Helper`"*, and nothing in that message names the cause. Inside
-   `Public Module VgsForms` it resolves. This is a **compiler** gap, not a designer one (follow-up
-   12).
-2. **Dispatching to a form with no code-behind turned a green build red** with BL7007 against the
-   *generated* file — one the user cannot open — for a problem that is really "this `.blwebform`
-   has no `.bas`". Such a form is now skipped, its page still emitted, and the finding lands on the
-   file the user can fix.
+1. **Ask the CATALOG what a value means, never the SHAPE of the string.** A `Type.Member` regex
+   answering *"is this already source?"* was wrong both ways: `Text="config.json"` emitted unquoted
+   (form stops building), and `TextAlign="ContentAlignment.Bogus"` sailed past the Degraded check
+   into CS0117 with no diagnostic. `FormPropertyDef.IsSourceForm` is the answer.
+2. **A throw needs a catcher before it is an improvement.** Making `ProjectSerializer` refuse a
+   namespaced save was right — it used to lie — but eleven `SaveProjectAsync` call sites caught
+   nothing, so it traded a silent failure for an unhandled exception *after* both new files were on
+   disk. Now `ProjectSaveRefusedException`, reported everywhere.
+3. **Mirrored code is not shared code.** `ProjectGlobSafety.MaterialiseGlobbedSources` exists to
+   reproduce `GetSourceFiles`' glob exactly. A guard added to one and not the other let the IDE
+   write an explicit `<Compile>` item for a file the compiler's glob rejects — and the explicit
+   branch does no extension filtering at all.
+4. **Writing that a test runs something is not it running.** A two-form test was described in its
+   own commit message as executing the result; it built and string-asserted. Check the body.
 
-#### The other five, in one line each
+#### Diagnostics
 
-`SelectedIndex` never reached the page (same cross-target divergence as `Items`) · `ColSpan="02"`
-rewritten to `"2"` by a save that changed nothing · the duplicate-Id diagnostic reported `(0,0)`,
-the only finding that names two places in the file and could point at neither · a pasted Web
-control with a stray `X` lost its `Col`/`Row` · the **default project shape** (no explicit
-`<Compile>` items) emitted no pages at all, because the source glob cannot yield a `.blwebform` by
-design — form documents now have their own glob following the same rule.
-
-**BL8018** is claimed and documented in the band table (a project has form pages but nothing calls
-`VgsForms.VgsDispatchForm()`). **BL8031 is left alone** — the spec and plan both reserve it for one
-specific `--check` collision.
-
-### ⛔⛔ 2026-09-14, LATER — A THIRD PASS, AND THE WORST DEFECT OF THE THREE
-
-I reviewed my own second-round fixes and ran the gate I had only run FILTERED. Both found things.
-
-**The full-suite gate corrected the record.** The pre-branch baseline at `6a6d224` is
-**212 failed / 5837**, not the 174 this file and the PR body both claimed. The branch is
-**174 failed / 6234**. So the failure sets were never "identical": the branch **turns 38 tests
-green** (the `CliTestHarness.CliPath()` apphost fix) and introduces **zero** regressions. Better
-than advertised, but the claim was wrong and the numbers here and in the PR are now the measured
-ones.
-
-⚠ 6234, not 6228. The suite was run TWICE on the branch — 6228 before the source-glob fix and
-6234 after the six tests it came with. This file briefly carried the earlier total, in the section
-whose whole purpose is correcting a number. Take the totals from the FINAL run of a session, and
-re-read what you wrote against the run you actually finished with.
-
-⚠ Two gate traps worth carrying forward: `git stash` WITHOUT `-u` leaves new untracked files
-behind, so nothing compiles and you get a bogus "0 failures" baseline; and a worktree baseline run
-can die mid-suite (the C++ end-to-end tests), leaving a truncated file with no summary line — check
-for `Failed!`/`Passed!` before trusting a count.
-
-#### ⛔⛔ THE DISPATCH COMPILED, SHIPPED, AND THREW ON EVERY PAGE LOAD
-
-The second round's headline fix — generating D7's dispatch as a `Public Module` — **did not work**.
-The JavaScript backend FLATTENS a module's members to bare globals (`function VgsDispatchForm()`)
-while emitting the call site QUALIFIED (`VgsForms.VgsDispatchForm()`), so the emitted script
-referenced a `VgsForms` that appears nowhere in the file:
-
-```
-ReferenceError: VgsForms is not defined
-```
-
-The build was green. Every string the tests looked for was present. I had personally read that exact
-output and called it success, because line 10 said `VgsForms.VgsDispatchForm();` and line 15 said
-`function VgsDispatchForm() {` — two lines that contradict each other, in a file I looked straight
-at.
-
-**Fixed by generating `Public Class VgsForms` with a `Public Shared Sub`**, which emits a real
-`class VgsForms { static … }`. Reproduced first (reverted the generator, rebuilt, ran the page's
-script: `ReferenceError`), then confirmed (rebuilt with the fix: runs clean).
-
-⛔ **The underlying backend bug is UNFIXED** and is a compiler problem, not a designer one —
-follow-up 14. Anyone writing a `Module` and calling it across files on the JavaScript backend gets a
-clean build and a dead page.
-
-**`node` v22 is on PATH in this container**, and `FormBuildEmissionTests` now RUNS the emitted script
-against a stub `document` instead of reading it. That is the gate that catches this whole class; it
-is worth more than any number of string assertions.
-
-#### The other five, from reviewing my own commits
-
-| | Defect | Why it mattered |
-|---|---|---|
-| 1 | The source glob walked `bin/` and `obj/` | The build writes the generated dispatch into `obj/`, so the **second** build of a glob project compiled it TWICE — and reported success. Latent for any generated source, not just this one. Now carries the same two guards `GetCppTranslationUnits` has always documented |
-| 2 | Designer findings published on the `.blform` key, cleared on the `.bas` key | The aggregator keys by (collection, FILE), so one transient IO error left a phantom Error List entry **nothing could ever remove** |
-| 3 | The clipboard always returned a geometry | A pasted control with no position gained `X="0" Y="0"`, which the writer would then persist — the byte-identity wound again, arriving through paste |
-| 4 | The IDE announced its file list before adding the generated file | The IDE undercounted and omitted it while the CLI named it: the two entry points disagreed about what they compiled |
-| 5 | Reused the general `DiagnosticsUpdatedEvent` | A future publisher would have had its findings filed as the designer's AND would have cleared the designer's. Now its own `DesignerDiagnosticsEvent` |
-
-⚠ Also: the multi-form dispatch was only ever STRING-asserted — `DispatchSource` with two names was
-never handed to a compiler. It now builds two real forms and executes the emitted script once per
-branch.
-
-⛔ **That sentence was itself an overclaim for one commit** — a fourth review pass caught it. The
-two-form test built and string-asserted, and the commit message said it "runs the result"; only the
-ONE-form test executed anything. Writing that a test runs something is not the same as it running,
-and the gap is invisible from the test name. Check the body.
-
-### 2026-09-14 — a FOURTH pass, on the third pass's own fixes
-
-The base rate justified it: pass 2's fixes contained two regressions, and pass 3's headline fix was
-outright broken. Four findings, all real, all mine:
-
-1. **An overclaim in the commit message and in this file** — the two-form dispatch test "runs the
-   result". It did not; it built and string-asserted, and only the one-form test executed anything.
-   Now every branch is executed (`LoginForm`, `SignupForm`, and an unknown name).
-2. ⛔ **I changed one side of a mirrored pair.** `ProjectGlobSafety.MaterialiseGlobbedSources`
-   exists to mirror `GetSourceFiles`' default branch EXACTLY — its own comment says so, and
-   `CLAUDE.md` says "change it once, not per-consumer". The exact-extension guard went into one and
-   not the other, so it could materialise an explicit `<Compile>` item for a file the compiler's
-   glob rejects — and once the list is explicit, `GetSourceFiles` takes its explicit branch, which
-   does NO extension filtering. Adding a form to a project could have made it start compiling a
-   backup file.
-3. **6228 vs 6234**, in the very section that exists to correct a number (see above).
-4. **A measurement I asserted that does not reproduce.** The Win32 prefix over-match justifying the
-   form-document guard applies only to THREE-character patterns, and `.blform`/`.blwebform` are too
-   long. The guard is harmless and stays; the reasoning was invented.
-
-✅ And a genuine discovery from the same pass, worth more than the fixes: the exact-extension guard
-on `GetSourceFiles` is **load-bearing on Windows for reasons that predate this branch** — `*.bas`
-matches `.basic` and `*.cls` matches `.class`, so those files were being yielded and compiled
-**twice** by every glob-shaped project. Nobody knew. It cannot be reproduced on Linux, so it is
-unverified here and worth confirming on the Windows run.
-
-### ⛔⛔ THE MODULE BUG WAS ALREADY IN OUR OWN NOTES
-
-`docs/form-designer-followups.md` entry 3, third bullet, **measured 2026-09-11**:
-
-> a **qualified module call** emits a reference to a container JS does not have → `ReferenceError`
-
-That is exactly the defect that shipped in the designer's dispatch on 2026-09-14 and threw on every
-page load. It was written down, in that file, by this same effort, three days earlier — and when the
-moment came to choose a shape for the generated dispatch, nobody reread it. I measured that a module
-COMPILES across files, concluded it worked, and did not check the list of known backend defects that
-contains this one.
-
-**The lesson is not "read more carefully".** It is that a one-line bullet inside a
-fifteen-entry follow-up document is not a working safeguard. The things that actually caught this
-were running the output and comparing failure sets — mechanisms, not memory. When a finding matters,
-it needs a gate or a filed issue, because a list nobody rereads is a list that does not protect
-anyone. Entries 3 and 14 are now cross-linked so that filing one does not lose the other.
+**BL8018** claimed and in the band table (form pages exist, nothing calls the dispatch).
+**BL8031 left alone** — the spec and plan reserve it for one specific `--check` collision.
 
 ### What the next session should pick up
 
@@ -455,8 +355,10 @@ anyone. Entries 3 and 14 are now cross-linked so that filing one does not lose t
 4. **Decide follow-up 13**: nothing makes `Main()` call the dispatch. BL8018 warns, which is the
    honest minimum, but a warning is not the feature working. Both ways to close it edit the user's
    code, which is why neither was done unilaterally.
-5. **File the thirteen chips** in `docs/form-designer-followups.md`. Several are runtime failures
-   from clean builds, which is the highest-severity shape this repo tracks.
+5. **File the fifteen chips** in `docs/form-designer-followups.md`. Several are runtime failures
+   from clean builds, which is the highest-severity shape this repo tracks. Entries 3 and 14 are
+   the SAME compiler bug — file them together. Entry 15's residue (Win32 `*.bas` matching `.basic`)
+   is unverified on Linux; confirm it during the Windows run.
 6. **Refresh the `IDE/` drop on Windows**, and finish Task 19.
 7. **PR #3 (`claude/busy-newton-gsispd`)** is still open carrying a superseded spec/plan pair.
 
@@ -559,6 +461,22 @@ dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --fi
 
 ⚠ These are **Windows** numbers. For Linux/cloud numbers — and for the worktree-diff method that
 should be used instead of comparing raw counts — see the 2026-09-13 section at the top.
+
+### ⛔ Three ways a baseline run lies, all three hit in one session
+
+1. **`git stash` without `-u` leaves new UNTRACKED files behind.** Nothing compiles, the run
+   produces zero test results, and you read it as "0 failures" — a baseline that looks perfect
+   because it never ran. Use a `git worktree`, or `git stash -u`.
+2. **A worktree run can die mid-suite** (the C++ end-to-end tests are where it happened), leaving a
+   truncated file with failures in it and **no summary line**. Always confirm a `Failed!`/`Passed!`
+   line exists before trusting any count you grepped out.
+3. **Take totals from the FINAL run of a session.** Two runs a few commits apart differ by whatever
+   tests landed between them, and quoting the earlier one into a document is how a corrected number
+   gets un-corrected.
+
+⛔ And the rule those serve: **compare sorted FAILURE NAMES with `comm -23`, never counts.** A
+count hides a regression that lands as another test goes green — which is not hypothetical here:
+this branch turns 38 tests green while introducing none, so its count moved for two reasons at once.
 
 | Run | Count | Time |
 |---|---|---|
