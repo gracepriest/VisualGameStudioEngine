@@ -39,10 +39,13 @@ enumerated splices (Task 1's `NetException`, Task 5's `NetRef`) and nothing else
 > is not "done" but CANCELLED — Task 2's Step 5 (`ConfigureTypeRegistry` into `CompileUnit`) was
 > removed by measurement, as the "What P2a-2 deliberately does NOT do" section records.
 >
-> Genuinely open work, as of 2026-09-11: **Task 15 Steps 1 (partial), 4 and 5**, and the
-> Task 8 Step 2b carry-forward between Tasks 8c and 9 — the two non-step boxes at the
-> "admissibility⇄wire-form tie" bullet, of which the SECOND (`WireShapeSurface` blind to nine
-> rows) its own text says is already closed.
+> Genuinely open work: **NONE, as of 2026-09-14.** What this note listed as open on 2026-09-11 —
+> Task 15 Steps 1 (partial), 4 and 5, and the Task 8 Step 2b carry-forward — has all since
+> closed: Step 1 discharged on Windows, Step 5 with the spec header, the carry-forward with
+> run-level tests, and Step 4 (the `IDE/` refresh) on 2026-09-14 in `fbb3694`.
+>
+> The unchecked boxes below still mean nothing, for the reason above. Do not read them as
+> remaining work, and do not tick them.
 
 
 ## Baseline and gates
@@ -1901,7 +1904,7 @@ duplicate; grep `BlnetContractTests`/`NetShimGeneratorTests` first).
 - [ ] **Step 2:** invariant gap-fill after a grep audit of existing coverage.
 - [ ] **Step 3:** fast subset; commit (`test(p2a2): integration + drift invariants`).
 
-### Task 15: full verification + closeout  ✅ DONE except Step 4 (IDE refresh — needs Windows)
+### Task 15: full verification + closeout  ✅ DONE
 
 - [x] **Step 1:** full gates — **DISCHARGED on Windows 2026-09-11 (`d6b57b6`): 5826 tests, 4
   failures, and the 4 are exactly the standing baseline.** The combination `87a6c5e` merged
@@ -1956,21 +1959,29 @@ duplicate; grep `BlnetContractTests`/`NetShimGeneratorTests` first).
   `NetFlipTests`'s scope note naming Tasks 7a/7b/9 as pending (all shipped — reworded as scope
   rather than schedule so it cannot re-stale). No line numbers are cited in the replacements:
   this plan's own had drifted within one task (`:511`/`:1076` are now `:519`/`:1102`).
-- [ ] **Step 4: OPEN — needs Windows.** IDE binary refresh: the prebuilt `IDE/` binaries ship
-  the compiler, so they are stale against P2a-2's whole delivery. Same procedure as `aada862`,
-  including the deps.json closure check via `dotnet exec --depsfile`. `robocopy <Shell bin> IDE
-  /E` — **never `/MIR`**, which would delete the engine DLL and import lib that live only there.
-  Not doable from a Linux container.
+- [x] **Step 4: DONE 2026-09-14 (`fbb3694`), on Windows.** IDE binary refresh — the prebuilt
+  `IDE/` binaries ship the compiler, so they were stale against P2a-2's whole delivery plus the
+  blnet C++ facade and the foreign-concat codegen fix. Redeployed from a fresh Release build of
+  the Shell with `robocopy /E` — **never `/MIR`**: ten files live ONLY in `IDE/`
+  (`VisualGameStudioEngine.dll` and its import `.lib`, three project `.deps.json`, three Avalonia
+  assemblies, `dbgshim.dll`), and a mirror would delete them. All verified present afterwards,
+  along with `IDE/lib/js/dom-core.bli`.
+
+  **Verified by deployed BYTES, not timestamps**, per this repo's standing trap that a stale drop
+  has been mistaken for a code bug more than once: `BasicLang.dll` 3057152 → 3089408 with a new
+  hash, `BL6027` found as UTF-16 (a user-facing string literal) and `EmitFacade` as UTF-8 (a
+  metadata name), and `IDE\BasicLang.exe new --list` returning 11 templates at exit 0. The two
+  encodings are the point — searching only one misses half the surface.
 - [x] **Step 5: CLOSED 2026-09-11.** Spec header `Draft` → `Implemented`; §14.15/§15.11/§15.6
   recorded (Step 3); `AbiVersion` re-asserted as 1. This repo keeps its working state in
   `docs/HANDOFF.md` rather than an auto-memory file when the session has none, so that is what
   was updated.
 
-  **P2a is functionally complete.** Everything §1.3 scoped is implemented and gated: the Windows
-  full suite is green at baseline, Task 14's 27 tests are proven by twelve mutations, and the two
-  chips that outlived the tasks — the delegate wire (`task_75064f2e`) and the
-  admissibility⇄wire-form tie — are closed with run-level tests. Step 4 is the one remaining
-  item and is a deployment chore, not development.
+  **P2a is COMPLETE.** Everything §1.3 scoped is implemented and gated: the Windows full suite is
+  green at baseline, Task 14's 27 tests are proven by twelve mutations, and the two chips that
+  outlived the tasks — the delegate wire (`task_75064f2e`) and the admissibility⇄wire-form tie —
+  are closed with run-level tests. Step 4, the last item, shipped 2026-09-14; nothing in this plan
+  is outstanding.
 
 ---
 
