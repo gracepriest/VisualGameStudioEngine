@@ -226,7 +226,38 @@ Two candidate fixes, neither attempted here:
 - **Emit the container:** after the top-level functions, emit `const M = { Go };` per module. Makes
   the qualified form real, but introduces a global that can collide with a class or variable.
 
-⚠ The C# and C++ backends were not checked. **Check them before assuming this is JavaScript-only.**
+#### ⛔⛔ CHECKED, 2026-09-14: all three backends are broken, in DIFFERENT directions
+
+Same eight-line program, each backend generated and then actually COMPILED and RUN:
+
+| Backend | `M.Go()` qualified | `Go()` unqualified |
+|---|---|---|
+| **JavaScript** | ❌ builds clean, **`ReferenceError: M is not defined` at RUN time** | ✅ works |
+| **C#** | ✅ works — emits `public static class M`, runs | ❌ **`CS0103: The name 'Go' does not exist in the current context`** |
+| **C++** | ❌ clang: **`error: use of undeclared identifier 'M'`** | ✅ compiles and runs |
+
+⛔⛔ **There is no spelling of a module-member call that works on all three backends.** JavaScript
+and C++ require the unqualified form; C# requires the qualified one. Any program that calls a module
+member is therefore locked to a subset of targets, silently — and the language is VB-like, where
+module members are supposed to be reachable BOTH ways.
+
+Two distinct root causes, one shared origin:
+
+- **JavaScript and C++** hoist module members to bare top-level functions (`IRBuilder.Visit(ModuleNode)`)
+  and then emit the call site qualified anyway. JS ships the broken program; C++ is caught by clang,
+  so it cannot ship — but the error names a generated identifier the user never wrote.
+- **C#** does the opposite and gets the container right: it groups members into a per-module
+  `public static class`. Its bug is the UNQUALIFIED call, which it emits bare from a sibling class
+  that cannot see the member.
+
+⚠ C++ additionally binds the call's result (`void* t0 = {}; t0 = M.Go();`) for a `Sub` that returns
+nothing. That is a symptom of the qualified path being lowered as an instance call, not a separate
+defect — the unqualified C++ output has no such binding and compiles clean.
+
+✅ gracepriest/VisualGameStudioEngine#6 fixes the JavaScript half, and after it JS is the only backend on which
+**both** spellings work. **C# and C++ are untouched by that PR** and each still needs its own fix:
+C++ the same container-or-rewrite decision as JS, C# the reverse one (resolve an unqualified call to
+the module class that declares it).
 
 #### Why it was not fixed on the form-designer branch
 

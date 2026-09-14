@@ -158,12 +158,21 @@ a second document type.
 - ⚠ A bare top-level `Sub` in one `.bas` is not callable from another at all
   (*"no lowering for 'Helper.Helper'"*). Between that and the above, **a class is the only shape that
   works across files on the JavaScript backend** — both are compiler gaps, not designer ones.
-- ⛔⛔ **Qualifying a MODULE member emits a dead reference — in ONE file too, not just across
-  files.** `M.Go()` for a `Public Module M` builds clean and throws `ReferenceError: M is not
-  defined`; unqualified `Go()` works. Root cause: `IRBuilder.Visit(ModuleNode)` (`IRBuilder.cs:385`)
-  hoists members to top-level functions while call sites keep the qualifier. 8-line repro, root
-  cause and two candidate fixes in `docs/form-designer-followups.md` 14. **C# and C++ backends
-  unchecked.**
+- ⛔⛔ **A MODULE member call is broken on all three backends, in DIFFERENT directions** — measured
+  by generating, compiling and RUNNING the same eight-line program on each:
+
+  | | `M.Go()` qualified | `Go()` unqualified |
+  |---|---|---|
+  | JavaScript | builds clean, `ReferenceError` at RUN time | ✅ |
+  | C# | ✅ | `CS0103: The name 'Go' does not exist` |
+  | C++ | clang: `undeclared identifier 'M'` | ✅ |
+
+  **No spelling works everywhere**, so a program calling a module member is silently locked to a
+  subset of targets. JS/C++ hoist members to bare top-level functions
+  (`IRBuilder.Visit(ModuleNode)`, `IRBuilder.cs:385`) and emit the call qualified anyway; C# gets the
+  container right (`public static class M`) and breaks the unqualified call instead. Repro, matrix
+  and per-backend fix shapes in `docs/form-designer-followups.md` 14. **PR #6 fixes JavaScript
+  only** — C# and C++ still need theirs.
 
 ## BasicLang language
 
