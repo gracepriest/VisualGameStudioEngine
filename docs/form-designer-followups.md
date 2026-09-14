@@ -154,3 +154,40 @@ But a warning is not the same as it working. The options are to have **File → 
 insert the call into the project's `Main()` the first time a form is added, or to make the web
 project template ship a `Main()` that already dispatches. Both edit the user's code, which is why
 neither was done unilaterally.
+
+### 14. ⛔⛔ The JavaScript backend emits calls to module objects it never defines
+**This is a runtime failure from a clean, green build**, and it is a COMPILER bug — the form
+designer only found it.
+
+`Public Module VgsForms` with a `Public Shared`-less `Public Sub Dispatch()`, called from another
+file as `VgsForms.Dispatch()`, compiles with no diagnostic and emits:
+
+```js
+function Dispatch() { ... }        // the module is FLATTENED to a bare global
+...
+VgsForms.Dispatch();               // but the call site stays QUALIFIED
+```
+
+There is no `VgsForms` anywhere in the output. The page dies on load with
+**`ReferenceError: VgsForms is not defined`**. Measured 2026-09-14 by building a real project and
+running the emitted script under node.
+
+The designer works around it by generating `Public Class VgsForms` with a `Public Shared Sub`,
+which emits a real `class VgsForms { static ... }`. **The workaround is in the generator, so the
+underlying bug is untouched and will bite the next person who writes a module and calls it across
+files** — which is ordinary, correct BasicLang.
+
+⚠ Related and also unfixed: a bare top-level `Sub` in one `.bas` cannot be called from another at
+all (*"no lowering for `Helper.Helper`"*) — follow-up 12. Between the two, the only shape that
+works across files on this backend is a class.
+
+### 15. The default source glob walked `bin/` and `obj/`
+`ProjectFile.GetSourceFiles()`'s glob branch recursed the whole project directory with no build-output
+exclusion, while `GetCppTranslationUnits()` two methods below has always excluded them. Once the build
+started writing a generated `VgsFormDispatch.g.bas` into `obj/`, the **second** build of a glob-shaped
+project swept its own output back in and compiled the file twice — from a build that reported success.
+
+Fixed here by giving the glob the same two guards the C++ one documents (build-output exclusion and
+an exact-extension check). **Worth knowing that this was latent for every generated source, not just
+this one** — anything a future build step writes under `obj/` would have been compiled on the next run.
+

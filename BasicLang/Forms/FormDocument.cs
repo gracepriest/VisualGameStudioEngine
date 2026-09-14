@@ -401,8 +401,20 @@ public static class FormClipboard
     /// </summary>
     private static FormGeometry? ReadGeometry(XElement element, FormTarget target)
     {
+        // ⚠ The target picks the VOCABULARY; absence still means null WITHIN that vocabulary,
+        // exactly as FormDocumentReader.ReadGeometry decides it. Always returning a zeroed geometry
+        // instead would give a pasted control a position it never had, and the writer would then
+        // persist X="0" Y="0" into a document that carried neither — the same byte-identity wound
+        // as the no-op-save defects, arriving through the clipboard.
         if (target == FormTarget.WinForms)
         {
+            if (element.Attribute("X") == null && element.Attribute("Y") == null &&
+                element.Attribute("Width") == null && element.Attribute("Height") == null &&
+                element.Attribute("Anchor") == null && element.Attribute("Dock") == null)
+            {
+                return null;
+            }
+
             return new PixelGeometry
             {
                 X = IntAttribute(element, "X") ?? 0,
@@ -412,6 +424,11 @@ public static class FormClipboard
                 Anchor = (string?)element.Attribute("Anchor"),
                 Dock = (string?)element.Attribute("Dock")
             };
+        }
+
+        if (element.Attribute("Col") == null && element.Attribute("Row") == null)
+        {
+            return null;
         }
 
         return new GridGeometry

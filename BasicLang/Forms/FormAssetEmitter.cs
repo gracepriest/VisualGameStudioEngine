@@ -21,19 +21,30 @@ public static class FormAssetEmitter
     /// <c>design --check</c> can collision-check it once with <c>BL8031</c>; per-control fields are
     /// class members and cannot collide across forms.
     ///
-    /// <para>⛔⛔ <b>It is a MODULE MEMBER, not a bare top-level Sub</b> — D7 describes the
-    /// latter and the latter does not build. MEASURED 2026-09-14 with a real
-    /// <c>BasicLang build</c>: a top-level <c>Sub Helper()</c> in one .bas called as
-    /// <c>Helper()</c> from another fails at the JavaScript backend with <i>"no lowering for
-    /// 'Helper.Helper' — neither declared by this program nor supported by JavaScriptStdLib"</i>.
-    /// Nothing about the failure names the real cause, and it is not specific to generated code:
-    /// two hand-written files do it too. The same Sub inside <c>Public Module VgsForms</c> resolves
-    /// and lowers correctly, so the dispatch is generated that way and called as
-    /// <see cref="DispatchCall"/>.</para>
+    /// <para>⛔⛔ <b>It is a SHARED METHOD ON A CLASS</b>, and the two shapes that look more
+    /// natural were each measured and each rejected — with a real <c>BasicLang build</c>, and then
+    /// by RUNNING what came out:</para>
+    /// <list type="number">
+    ///   <item><b>A bare top-level Sub</b> (what D7 describes) does not COMPILE across files. A
+    ///   <c>Sub Helper()</c> in one .bas called as <c>Helper()</c> from another fails with <i>"no
+    ///   lowering for 'Helper.Helper'"</i>, and nothing in that message names the cause. Not
+    ///   specific to generated code — two hand-written files do it too.</item>
+    ///   <item><b><c>Public Module</c> compiles and then throws at RUN TIME.</b> The JavaScript
+    ///   backend FLATTENS a module's members to bare globals (<c>function VgsDispatchForm()</c>)
+    ///   while emitting the call site qualified (<c>VgsForms.VgsDispatchForm()</c>), so the emitted
+    ///   script references a <c>VgsForms</c> that appears nowhere in the file and every page died
+    ///   on load with <i>ReferenceError: VgsForms is not defined</i>. The build was green, every
+    ///   expected string was present, and the feature did not work. That is a COMPILER bug, not a
+    ///   designer one — see docs/form-designer-followups.md.</item>
+    /// </list>
+    /// <para>A class with a <c>Shared</c> method emits a real <c>class VgsForms</c> with a
+    /// <c>static</c> member, which is what the qualified call resolves against.
+    /// <c>FormBuildEmissionTests</c> now RUNS the emitted script under node instead of reading it,
+    /// because reading it is exactly what missed this.</para>
     /// </summary>
     public const string DispatchSubName = "VgsDispatchForm";
 
-    /// <summary>The module the dispatch lives in — see <see cref="DispatchSubName"/> for why.</summary>
+    /// <summary>The class the dispatch lives on — see <see cref="DispatchSubName"/> for why.</summary>
     public const string DispatchModuleName = "VgsForms";
 
     /// <summary>Exactly what a user writes in <c>Main()</c> to hand control to the dispatch.</summary>
@@ -365,8 +376,8 @@ public static class FormAssetEmitter
     public static string DispatchSource(IEnumerable<string> formNames)
     {
         var sb = new StringBuilder();
-        sb.Append($"Public Module {DispatchModuleName}\n");
-        sb.Append($"    Public Sub {DispatchSubName}()\n");
+        sb.Append($"Public Class {DispatchModuleName}\n");
+        sb.Append($"    Public Shared Sub {DispatchSubName}()\n");
         sb.Append("        Dim doc As Document = ::document\n");
         sb.Append("        Dim b As Element = doc.body\n");
         sb.Append("        Dim formName As String = b.getAttribute(\"data-form\")\n");
@@ -390,7 +401,7 @@ public static class FormAssetEmitter
         }
 
         sb.Append("    End Sub\n");
-        sb.Append("End Module\n");
+        sb.Append("End Class\n");
         return sb.ToString();
     }
 

@@ -59,7 +59,7 @@ public class FormCodeBehindWriteTests
     }
 
     /// <summary>A scaffolded pair on "disk", plus a document view model open on the form.</summary>
-    private static (CodeEditorDocumentViewModel Vm, Files Files, List<DiagnosticsUpdatedEvent> Published)
+    private static (CodeEditorDocumentViewModel Vm, Files Files, List<DesignerDiagnosticsEvent> Published)
         Open(string formName, FormTarget target, string? documentText = null)
     {
         var scaffold = FormScaffolder.Create(formName, target);
@@ -67,10 +67,10 @@ public class FormCodeBehindWriteTests
         files.Contents[Dir + scaffold.DocumentFileName] = documentText ?? scaffold.DocumentText;
         files.Contents[Dir + scaffold.CodeFileName] = scaffold.CodeText;
 
-        var published = new List<DiagnosticsUpdatedEvent>();
+        var published = new List<DesignerDiagnosticsEvent>();
         var events = new Mock<IEventAggregator>();
-        events.Setup(e => e.Publish(It.IsAny<DiagnosticsUpdatedEvent>()))
-            .Callback((DiagnosticsUpdatedEvent e) => published.Add(e));
+        events.Setup(e => e.Publish(It.IsAny<DesignerDiagnosticsEvent>()))
+            .Callback((DesignerDiagnosticsEvent e) => published.Add(e));
 
         var vm = new CodeEditorDocumentViewModel(files.Service, events.Object)
         {
@@ -228,5 +228,59 @@ public class FormCodeBehindWriteTests
 
         Assert.That(await vm.SaveAsync(), Is.True);
         Assert.That(files.Writes, Is.EqualTo(new[] { Dir + "Program.bas" }));
+    }
+
+    [Test]
+    public async Task EverySavePublishes_OnTheCodeBehindsKey_SoAStaleFindingCanBeRetracted()
+    {
+        // ⛔⛔ The aggregator keys findings by (collection, FILE). A finding published against
+        // the .blform is a DIFFERENT key from one against the .bas, so a later good save — which
+        // publishes on the .bas — would never clear it: one transient IO error left a phantom
+        // entry in the Error List for the rest of the session, pointing at a problem that no
+        // longer existed and that nothing could remove.
+        var (vm, files, published) = Open("LoginForm", FormTarget.WinForms);
+
+        // A missing code-behind: a finding.
+        files.Contents.Remove(Dir + "LoginForm.bas");
+        await vm.SaveAsync();
+
+        // Put it back and save again: the finding must be RETRACTED, which means an empty publish
+        // on the very same key.
+        files.Contents[Dir + "LoginForm.bas"] =
+            FormScaffolder.Create("LoginForm", FormTarget.WinForms).CodeText;
+        published.Clear();
+        vm.Text = vm.Text.Replace("Version=\"1\"", "Version=\"1\" ");
+        await vm.SaveAsync();
+
+        Assert.That(published, Is.Not.Empty, "a save always publishes, so a stale finding can clear");
+        Assert.Multiple(() =>
+        {
+            Assert.That(published.Select(p => p.FilePath), Is.All.EqualTo(Dir + "LoginForm.bas"),
+                "always the code-behind's key, never the document's");
+            Assert.That(published[^1].Diagnostics, Is.Empty, "and empty, which is the retraction");
+        });
+    }
+
+    [Test]
+    public async Task ARefusedDocument_SaysTheCodeBehindIsNowOutOfStep()
+    {
+        // ⚠ A document that cannot be read leaves the .bas describing the LAST good version while
+        // the user has just saved a different one. Returning silently reads as "the designer wrote
+        // it" — the failure mode this whole round was about.
+        var (vm, files, published) = Open("LoginForm", FormTarget.WinForms);
+
+        var codeBefore = files.Contents[Dir + "LoginForm.bas"];
+        vm.Text = "<Form Name=\"LoginForm\" Version=\"1\"><Controls>";   // not well-formed
+
+        Assert.That(await vm.SaveAsync(), Is.True, "the DOCUMENT still saves");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(files.Contents[Dir + "LoginForm.bas"], Is.EqualTo(codeBefore),
+                "nothing is generated from a document that could not be read");
+            Assert.That(published.SelectMany(p => p.Diagnostics), Is.Not.Empty,
+                "and the user is told the pair no longer match");
+            Assert.That(published.Select(p => p.FilePath), Is.All.EqualTo(Dir + "LoginForm.bas"));
+        });
     }
 }

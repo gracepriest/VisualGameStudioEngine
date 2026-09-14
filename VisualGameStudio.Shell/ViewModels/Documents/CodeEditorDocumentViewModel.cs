@@ -843,62 +843,76 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
             return;
         }
 
+        // ⛔⛔ EVERY path below publishes exactly once, and always on THIS key. The aggregator
+        // keys findings by (collection, file), so a finding published against the .blform is a
+        // DIFFERENT key from one against the .bas — and a later good save, which publishes on the
+        // .bas, would never clear it. One transient IO error would have left a phantom entry in
+        // the Error List for the rest of the session, pointing at a problem that no longer exists
+        // and that nothing could remove. Same reason the early returns publish an empty list
+        // rather than returning silently: an empty publish is how the previous save's findings
+        // are retracted.
+        var codePath = BasicLang.Forms.FormCodeBehind.PathFor(FilePath);
+        var findings = new List<DiagnosticItem>();
+
         try
         {
-            // A REFUSED document has no trustworthy model to generate from; the designer has
-            // already opened it read-only and said why.
+            // A REFUSED document has no trustworthy model to generate from. The designer has
+            // already opened it read-only and said why, but the .bas is now out of step with a
+            // document the user just saved, and silence would read as "the designer wrote it".
             var file = DesignFile;
             if (file == null)
             {
-                return;
-            }
-
-            var codePath = BasicLang.Forms.FormCodeBehind.PathFor(FilePath);
-            if (!await _fileService.FileExistsAsync(codePath))
-            {
-                _eventAggregator.Publish(new DiagnosticsUpdatedEvent(codePath, new[]
+                findings.Add(new DiagnosticItem
                 {
-                    new DiagnosticItem
-                    {
-                        Id = BasicLang.Forms.DesignCodes.RegionAbsent,
-                        Message = $"'{Path.GetFileName(FilePath)}' has no code-behind: expected " +
-                                  $"'{Path.GetFileName(codePath)}' beside it. The designer has " +
-                                  "nowhere to write the controls, so nothing was generated.",
-                        Severity = DiagnosticSeverity.Warning,
-                        FilePath = codePath,
-                        Source = DesignerDiagnosticSource
-                    }
-                }));
-                return;
+                    Id = BasicLang.Forms.DesignCodes.MalformedDocument,
+                    Message = $"'{Path.GetFileName(FilePath)}' could not be read as a form, so " +
+                              $"'{Path.GetFileName(codePath)}' was not regenerated and no longer " +
+                              "matches it. Fix the document and save again.",
+                    Severity = DiagnosticSeverity.Warning,
+                    FilePath = codePath,
+                    Source = DesignerDiagnosticSource
+                });
             }
-
-            var before = await _fileService.ReadFileAsync(codePath, cancellationToken);
-            var result = BasicLang.Forms.FormCodeBehind.Regenerate(file, codePath, before);
-
-            if (result.Changed)
+            else if (!await _fileService.FileExistsAsync(codePath))
             {
-                await _fileService.WriteFileAsync(codePath, result.Text, cancellationToken);
-                _eventAggregator.Publish(new FileSavedEvent(codePath));
+                findings.Add(new DiagnosticItem
+                {
+                    Id = BasicLang.Forms.DesignCodes.RegionAbsent,
+                    Message = $"'{Path.GetFileName(FilePath)}' has no code-behind: expected " +
+                              $"'{Path.GetFileName(codePath)}' beside it. The designer has " +
+                              "nowhere to write the controls, so nothing was generated.",
+                    Severity = DiagnosticSeverity.Warning,
+                    FilePath = codePath,
+                    Source = DesignerDiagnosticSource
+                });
             }
+            else
+            {
+                var before = await _fileService.ReadFileAsync(codePath, cancellationToken);
+                var result = BasicLang.Forms.FormCodeBehind.Regenerate(file, codePath, before);
 
-            // Published even when empty — that is how the previous save's findings are cleared.
-            _eventAggregator.Publish(new DiagnosticsUpdatedEvent(
-                codePath, result.Diagnostics.Select(ToDiagnosticItem).ToList()));
+                if (result.Changed)
+                {
+                    await _fileService.WriteFileAsync(codePath, result.Text, cancellationToken);
+                    _eventAggregator.Publish(new FileSavedEvent(codePath));
+                }
+
+                findings.AddRange(result.Diagnostics.Select(ToDiagnosticItem));
+            }
         }
         catch (Exception ex)
         {
-            _eventAggregator.Publish(new DiagnosticsUpdatedEvent(FilePath, new[]
+            findings.Add(new DiagnosticItem
             {
-                new DiagnosticItem
-                {
-                    Id = BasicLang.Forms.DesignCodes.RegionAbsent,
-                    Message = $"the designer could not update the code-behind: {ex.Message}",
-                    Severity = DiagnosticSeverity.Error,
-                    FilePath = FilePath,
-                    Source = DesignerDiagnosticSource
-                }
-            }));
+                Id = BasicLang.Forms.DesignCodes.RegionAbsent,
+                Message = $"the designer could not update '{Path.GetFileName(codePath)}': {ex.Message}",
+                Severity = DiagnosticSeverity.Error,
+                FilePath = codePath,
+                Source = DesignerDiagnosticSource
+            });
         }
+
+        _eventAggregator.Publish(new DesignerDiagnosticsEvent(codePath, findings));
     }
 
     /// <summary>Names the collection these findings own, so a republish replaces only its own.</summary>

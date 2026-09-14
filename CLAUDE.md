@@ -140,9 +140,17 @@ a second document type.
   `Text="config.json"` emitted unquoted (form stops building), and
   `TextAlign="ContentAlignment.Bogus"` sailed past the Degraded check into CS0117 with no
   diagnostic. `FormPropertyDef.IsSourceForm` is the answer.
-- ⚠ **The D7 dispatch is a MODULE member, not a top-level `Sub`** — the spec says otherwise and the
-  spec's shape does not build. A top-level `Sub` in one `.bas` is not callable from another
-  (*"no lowering for 'Helper.Helper'"*), which is a **compiler** gap, not a designer one.
+- ⛔⛔ **A GREEN BUILD IS NOT A RUNNING PAGE.** The D7 dispatch was generated from a
+  `Public Module`; it compiled clean, every string a test looked for was there, and every page died
+  on load with `ReferenceError: VgsForms is not defined` — the JavaScript backend **flattens a
+  module's members to bare globals while emitting the call site qualified**, so the script referenced
+  an object that appears nowhere in the file. No string assertion can see that. `FormBuildEmissionTests`
+  now RUNS the emitted script under node. The dispatch is generated as `Public Class` + `Public Shared
+  Sub`, which emits a real `class` with a `static` member. The backend bug itself is UNFIXED
+  (`docs/form-designer-followups.md` 14) and will bite anyone calling a module across files.
+- ⚠ A bare top-level `Sub` in one `.bas` is not callable from another at all
+  (*"no lowering for 'Helper.Helper'"*). Between that and the above, **a class is the only shape that
+  works across files on the JavaScript backend** — both are compiler gaps, not designer ones.
 
 ## BasicLang language
 

@@ -626,20 +626,25 @@ namespace BasicLang.Compiler.Driver
                 return 1;
             }
 
-            // ⛔⛔ Form documents come from their OWN glob, not from GetSourceFiles(). That glob
-            // cannot yield a .blwebform by design (it feeds the lexer, and a form document is XML),
-            // so handing it to the page emitter meant a project with explicit <Compile> items got
-            // pages and a default one — same files on disk — got none, silently.
-            var webForms = Forms.FormDocumentLoader.LoadWebForms(
-                project.GetFormDocuments(), m => Console.Error.WriteLine($"  Warning: {m}"));
+            // ⚠ JavaScript only — reading every form document on a C++ or C# build costs nothing
+            // useful and puts a page-emitter warning into a build that will never emit a page.
+            IReadOnlyList<Forms.FormDocument> webForms = Array.Empty<Forms.FormDocument>();
 
-            // ⛔⛔ D7's dispatch, as a real source file compiled with everything else. Without
-            // this the `data-form` attribute every generated page carries is read by NOTHING: the
-            // helper existed only as a string the emitter could produce and no caller ever asked
-            // for, so three forms produced three pages that all ran the same Main() and showed
-            // nothing at all.
             if (IsJavaScriptTarget(project.Backend?.ToLowerInvariant() ?? "csharp"))
             {
+                // ⛔⛔ Form documents come from their OWN glob, not from GetSourceFiles(). That
+                // glob cannot yield a .blwebform by design (it feeds the lexer, and a form document
+                // is XML), so handing it to the page emitter meant a project with explicit
+                // <Compile> items got pages and a default one — same files on disk — got none,
+                // silently.
+                webForms = Forms.FormDocumentLoader.LoadWebForms(
+                    project.GetFormDocuments(), m => Console.Error.WriteLine($"  Warning: {m}"));
+
+                // ⛔⛔ D7's dispatch, as a real source file compiled with everything else. Without
+                // this the `data-form` attribute every generated page carries is read by NOTHING:
+                // the helper existed only as a string the emitter could produce and no caller ever
+                // asked for, so three forms produced three pages that all ran the same Main() and
+                // showed nothing at all.
                 var dispatchPath = Forms.FormDispatch.Write(
                     webForms, Path.Combine(projectDir, "obj", configuration),
                     m => Console.Error.WriteLine($"  Warning: {m}"));

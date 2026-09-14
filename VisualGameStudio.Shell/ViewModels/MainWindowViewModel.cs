@@ -579,7 +579,7 @@ public partial class MainWindowViewModel : ViewModelBase
         // and the language server's diagnostics for the same .bas do not erase one another — the
         // same reasoning as the extension collections below, and the reason an empty publish is
         // meaningful rather than a no-op: it is how the previous save's findings are cleared.
-        _eventAggregator.Subscribe<DiagnosticsUpdatedEvent>(OnDesignerDiagnostics);
+        _eventAggregator.Subscribe<DesignerDiagnosticsEvent>(OnDesignerDiagnostics);
 
         // Subscribe to solution events
         _solutionService.SolutionLoaded += OnSolutionLoaded;
@@ -1588,7 +1588,7 @@ public partial class MainWindowViewModel : ViewModelBase
     /// the user would see a save that appeared to work and a form that never changed. A refusal
     /// nobody is shown is indistinguishable from the feature being broken.</para>
     /// </summary>
-    private void OnDesignerDiagnostics(DiagnosticsUpdatedEvent e)
+    private void OnDesignerDiagnostics(DesignerDiagnosticsEvent e)
     {
         try
         {

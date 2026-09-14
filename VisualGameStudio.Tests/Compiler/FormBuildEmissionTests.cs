@@ -91,6 +91,45 @@ public class FormBuildEmissionTests
 
     private string OutputDir => Path.Combine(_dir, "bin", "Debug", "net8.0");
 
+    /// <summary>
+    /// RUNS the emitted script, with a minimal <c>document</c> standing in for the browser, and
+    /// returns whatever it wrote to stderr.
+    ///
+    /// <para>⛔⛔ <b>Reading the emitted JavaScript is what missed the worst defect on this
+    /// branch.</b> The dispatch was generated from a <c>Public Module</c>, the build was green, and
+    /// every string a test looked for was present — but the backend FLATTENS a module's members to
+    /// bare globals while emitting the call site qualified, so the script referenced a
+    /// <c>VgsForms</c> that appeared nowhere in the file and every page died on load with
+    /// <i>ReferenceError: VgsForms is not defined</i>. No string assertion can see that. Executing
+    /// it can.</para>
+    ///
+    /// <para>⚠ Returns null when node is not on PATH, so the fixture degrades to its other
+    /// assertions on a machine without it rather than failing for the wrong reason.</para>
+    /// </summary>
+    private string? RunEmittedScript(string dataForm)
+    {
+        // The emitted file is an ES module; node needs the extension to treat it as one.
+        File.Copy(Path.Combine(OutputDir, "App.js"), Path.Combine(OutputDir, "app.mjs"), overwrite: true);
+        File.WriteAllText(Path.Combine(OutputDir, "harness.mjs"),
+            "globalThis.document = { body: { getAttribute: () => " +
+            $"{System.Text.Json.JsonSerializer.Serialize(dataForm)} }} }};\n" +
+            "await import(\"./app.mjs\");\n");
+
+        try
+        {
+            // Resolved off PATH; absence surfaces as the Win32Exception caught below rather than
+            // as a hardcoded path that would silently be wrong on someone else's machine.
+            var (exit, stdout, stderr) = CliTestHarness.RunProcess(
+                "node", new[] { "harness.mjs" }, OutputDir, timeoutMs: 30_000);
+
+            return exit == 0 ? "" : stdout + stderr;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return null;   // no node on this machine
+        }
+    }
+
     [Test]
     public void ARealBuild_EmitsThePageForEachFormDocument()
     {
@@ -236,5 +275,84 @@ public class FormBuildEmissionTests
             Assert.That(File.Exists(Path.Combine(OutputDir, "LoginForm.html")), Is.True,
                 "the page is still generated");
         });
+    }
+
+    [Test]
+    public void TwoForms_BothReachTheDispatch_AndItStillCompiles()
+    {
+        // ⛔⛔ The multi-form dispatch was only ever STRING-asserted — `DispatchSource` with two
+        // names was checked for the right If/ElseIf text and never once handed to the compiler.
+        // That is the exact shape of every dead-path defect on this branch: the generator's own
+        // tests are green and nothing ever proves the output BUILDS. Each branch declares its own
+        // `Dim f As New <Form>()` inside one Sub, which is precisely the kind of thing a string
+        // assertion cannot judge.
+        WriteProject("Main.bas", "LoginForm.blwebform", "LoginForm.bas",
+                     "SignupForm.blwebform", "SignupForm.bas");
+        Write("LoginForm.blwebform", LoginForm);
+        Write("SignupForm.blwebform", LoginForm.Replace("LoginForm", "SignupForm"));
+        WriteCodeBehind("LoginForm");
+        WriteCodeBehind("SignupForm");
+        Write("Main.bas", $"Sub Main()\n    {BasicLang.Forms.FormAssetEmitter.DispatchCall}\nEnd Sub\n");
+
+        var (exit, stdout, stderr) = Build();
+        Assert.That(exit, Is.Zero, $"STDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+
+        var js = File.ReadAllText(Path.Combine(OutputDir, "App.js"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(js, Does.Contain("new LoginForm()"));
+            Assert.That(js, Does.Contain("new SignupForm()"));
+            Assert.That(File.Exists(Path.Combine(OutputDir, "LoginForm.html")), Is.True);
+            Assert.That(File.Exists(Path.Combine(OutputDir, "SignupForm.html")), Is.True);
+        });
+    }
+
+    [Test]
+    public void TheEmittedScript_ACTUALLY_RUNS()
+    {
+        // ⛔⛔ THE defect this fixture exists for, in its purest form. The dispatch was generated
+        // from a `Public Module`; the build was GREEN, every expected string was present, and the
+        // page threw `ReferenceError: VgsForms is not defined` on load — because the backend
+        // flattens a module's members to bare globals while emitting the call site qualified.
+        // Reading the output cannot see that. Running it can.
+        WriteProject("Main.bas", "LoginForm.blwebform", "LoginForm.bas");
+        Write("LoginForm.blwebform", LoginForm);
+        WriteCodeBehind("LoginForm");
+        Write("Main.bas", $"Sub Main()\n    {BasicLang.Forms.FormAssetEmitter.DispatchCall}\nEnd Sub\n");
+
+        var (exit, stdout, stderr) = Build();
+        Assert.That(exit, Is.Zero, $"STDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+
+        var failure = RunEmittedScript("LoginForm");
+        if (failure == null)
+        {
+            Assert.Ignore("node is not on PATH, so the emitted script cannot be executed here");
+        }
+
+        Assert.That(failure, Is.Empty,
+            "the page's own script must run without throwing — a green build does not say it does");
+    }
+
+    [Test]
+    public void ASecondBuild_DoesNotCompileItsOwnGeneratedDispatchTwice()
+    {
+        // ⛔⛔ The source glob walked bin/ and obj/. The build writes VgsFormDispatch.g.bas into
+        // obj/, so the SECOND build of a glob-shaped project swept its own output back in and
+        // compiled the file twice — from a build that still reported success. Every test here ran
+        // one build, which is exactly why nothing saw it.
+        WriteGlobProject();
+        Write("Main.bas", $"Sub Main()\n    {BasicLang.Forms.FormAssetEmitter.DispatchCall}\nEnd Sub\n");
+        Write("LoginForm.blwebform", LoginForm);
+        WriteCodeBehind("LoginForm");
+
+        Assert.That(Build().Exit, Is.Zero, "first build");
+
+        var (exit, stdout, stderr) = Build();
+
+        Assert.That(exit, Is.Zero, $"STDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+        Assert.That(
+            stdout.Split(BasicLang.Forms.FormDispatch.GeneratedFileName).Length - 1, Is.EqualTo(1),
+            "the generated dispatch is compiled exactly once, however many times you build");
     }
 }

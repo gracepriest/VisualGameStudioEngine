@@ -611,33 +611,33 @@ public class BuildService : IBuildService
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            // ---------- Phase 2: compile with the real compiler engine ----------
-            _outputService.WriteLine($"Compiling {absoluteSourcePaths.Count} file(s)...", OutputCategory.Build);
-            foreach (var path in absoluteSourcePaths)
-            {
-                _outputService.WriteLine($"  Compiling {Path.GetFileName(path)}...", OutputCategory.Build);
-            }
-            BuildProgress?.Invoke(this, new BuildProgressEventArgs("Parsing and analyzing sources...", 20));
-
             var backend = GetBackendId(project.TargetBackend);
             var outputDir = Path.Combine(project.ProjectDirectory, config.OutputPath);
 
-            // ⛔⛔ Form documents come from their OWN glob, not from the compile item list. That
-            // glob cannot yield a .blwebform by design (it feeds the lexer, and a form document is
-            // XML), so a project with explicit <Compile> items got pages and a default one — same
-            // files on disk — got none, silently.
-            var webForms = BasicLang.Forms.FormDocumentLoader.LoadWebForms(
-                cliProject != null
-                    ? cliProject.GetFormDocuments()
-                    : sourceFiles.Select(item => Path.Combine(project.ProjectDirectory, item.Include)),
-                m => _outputService.WriteLine($"Warning: {m}", OutputCategory.Build));
+            // ⚠ JavaScript only, and BEFORE the "Compiling N file(s)" announcement below. Reading
+            // every form document on a C++ or C# build costs nothing useful and puts a page-emitter
+            // warning into a build that will never emit a page; announcing the file list before the
+            // generated dispatch joins it made the IDE report a count and a list that both left it
+            // out, while the CLI named it — the two routes must say the same thing about what they
+            // compiled.
+            IReadOnlyList<BasicLang.Forms.FormDocument> webForms = Array.Empty<BasicLang.Forms.FormDocument>();
 
-            // ⛔⛔ D7's dispatch, as a real source file compiled with everything else — the CLI
-            // does exactly this, and the two routes must agree. Without it the `data-form`
-            // attribute every generated page carries is read by NOTHING, so every page loads the
-            // one script, runs the one Main(), and shows the same thing.
             if (backend == "javascript")
             {
+                // ⛔⛔ Form documents come from their OWN glob, not from the compile item list.
+                // That glob cannot yield a .blwebform by design (it feeds the lexer, and a form
+                // document is XML), so a project with explicit <Compile> items got pages and a
+                // default one — same files on disk — got none, silently.
+                webForms = BasicLang.Forms.FormDocumentLoader.LoadWebForms(
+                    cliProject != null
+                        ? cliProject.GetFormDocuments()
+                        : sourceFiles.Select(item => Path.Combine(project.ProjectDirectory, item.Include)),
+                    m => _outputService.WriteLine($"Warning: {m}", OutputCategory.Build));
+
+                // ⛔⛔ D7's dispatch, as a real source file compiled with everything else — the
+                // CLI does exactly this, and the two routes must agree. Without it the `data-form`
+                // attribute every generated page carries is read by NOTHING, so every page loads
+                // the one script, runs the one Main(), and shows the same thing.
                 var dispatchPath = BasicLang.Forms.FormDispatch.Write(
                     webForms, Path.Combine(project.ProjectDirectory, "obj", config.Name),
                     m => _outputService.WriteLine($"Warning: {m}", OutputCategory.Build));
@@ -660,6 +660,14 @@ public class BuildService : IBuildService
                     absoluteSourcePaths.Add(dispatchPath);
                 }
             }
+
+            // ---------- Phase 2: compile with the real compiler engine ----------
+            _outputService.WriteLine($"Compiling {absoluteSourcePaths.Count} file(s)...", OutputCategory.Build);
+            foreach (var path in absoluteSourcePaths)
+            {
+                _outputService.WriteLine($"  Compiling {Path.GetFileName(path)}...", OutputCategory.Build);
+            }
+            BuildProgress?.Invoke(this, new BuildProgressEventArgs("Parsing and analyzing sources...", 20));
 
             var compilerOptions = new CompilerOptions
             {

@@ -329,10 +329,69 @@ design — form documents now have their own glob following the same rule.
 `VgsForms.VgsDispatchForm()`). **BL8031 is left alone** — the spec and plan both reserve it for one
 specific `--check` collision.
 
+### ⛔⛔ 2026-09-14, LATER — A THIRD PASS, AND THE WORST DEFECT OF THE THREE
+
+I reviewed my own second-round fixes and ran the gate I had only run FILTERED. Both found things.
+
+**The full-suite gate corrected the record.** The pre-branch baseline at `6a6d224` is
+**212 failed / 5837**, not the 174 this file and the PR body both claimed. The branch is
+**174 failed / 6228**. So the failure sets were never "identical": the branch **turns 38 tests
+green** (the `CliTestHarness.CliPath()` apphost fix) and introduces **zero** regressions. Better
+than advertised, but the claim was wrong and the numbers here and in the PR are now the measured
+ones.
+
+⚠ Two gate traps worth carrying forward: `git stash` WITHOUT `-u` leaves new untracked files
+behind, so nothing compiles and you get a bogus "0 failures" baseline; and a worktree baseline run
+can die mid-suite (the C++ end-to-end tests), leaving a truncated file with no summary line — check
+for `Failed!`/`Passed!` before trusting a count.
+
+#### ⛔⛔ THE DISPATCH COMPILED, SHIPPED, AND THREW ON EVERY PAGE LOAD
+
+The second round's headline fix — generating D7's dispatch as a `Public Module` — **did not work**.
+The JavaScript backend FLATTENS a module's members to bare globals (`function VgsDispatchForm()`)
+while emitting the call site QUALIFIED (`VgsForms.VgsDispatchForm()`), so the emitted script
+referenced a `VgsForms` that appears nowhere in the file:
+
+```
+ReferenceError: VgsForms is not defined
+```
+
+The build was green. Every string the tests looked for was present. I had personally read that exact
+output and called it success, because line 10 said `VgsForms.VgsDispatchForm();` and line 15 said
+`function VgsDispatchForm() {` — two lines that contradict each other, in a file I looked straight
+at.
+
+**Fixed by generating `Public Class VgsForms` with a `Public Shared Sub`**, which emits a real
+`class VgsForms { static … }`. Reproduced first (reverted the generator, rebuilt, ran the page's
+script: `ReferenceError`), then confirmed (rebuilt with the fix: runs clean).
+
+⛔ **The underlying backend bug is UNFIXED** and is a compiler problem, not a designer one —
+follow-up 14. Anyone writing a `Module` and calling it across files on the JavaScript backend gets a
+clean build and a dead page.
+
+**`node` v22 is on PATH in this container**, and `FormBuildEmissionTests` now RUNS the emitted script
+against a stub `document` instead of reading it. That is the gate that catches this whole class; it
+is worth more than any number of string assertions.
+
+#### The other five, from reviewing my own commits
+
+| | Defect | Why it mattered |
+|---|---|---|
+| 1 | The source glob walked `bin/` and `obj/` | The build writes the generated dispatch into `obj/`, so the **second** build of a glob project compiled it TWICE — and reported success. Latent for any generated source, not just this one. Now carries the same two guards `GetCppTranslationUnits` has always documented |
+| 2 | Designer findings published on the `.blform` key, cleared on the `.bas` key | The aggregator keys by (collection, FILE), so one transient IO error left a phantom Error List entry **nothing could ever remove** |
+| 3 | The clipboard always returned a geometry | A pasted control with no position gained `X="0" Y="0"`, which the writer would then persist — the byte-identity wound again, arriving through paste |
+| 4 | The IDE announced its file list before adding the generated file | The IDE undercounted and omitted it while the CLI named it: the two entry points disagreed about what they compiled |
+| 5 | Reused the general `DiagnosticsUpdatedEvent` | A future publisher would have had its findings filed as the designer's AND would have cleared the designer's. Now its own `DesignerDiagnosticsEvent` |
+
+⚠ Also: the multi-form dispatch was only ever STRING-asserted — `DispatchSource` with two names was
+never handed to a compiler. It now builds two real forms and runs the result.
+
 ### What the next session should pick up
 
 1. **Re-run the full suite on Windows.** Everything above is a Linux measurement. The Windows
-   number to beat is 5826 total / 4 failures at `f54416b`; this branch adds ~380 tests.
+   number to beat is 5826 total / 4 failures at `f54416b`; this branch adds ~390 tests. On Linux:
+   branch **174 failed / 6228**, baseline `6a6d224` **212 failed / 5837** — zero regressions, 38
+   turned green.
 2. **Open the IDE and look at the designer and the Settings dialog** — see *Still unverified* above.
    ⚠ Now also: **save a form and confirm the `.bas` is regenerated**, and that a hand-edited region
    puts BL8011 in the Error List. That path is covered by caller tests driving the real `SaveAsync`,

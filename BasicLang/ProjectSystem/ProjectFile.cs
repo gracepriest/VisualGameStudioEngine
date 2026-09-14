@@ -468,9 +468,20 @@ namespace BasicLang.Compiler.ProjectSystem
             {
                 // Default: all .bas, .bl, .basic, .mod, .cls, and .class files (same
                 // patterns, same order as before — driven off the shared extension list).
+                //
+                // ⛔⛔ bin/ and obj/ are EXCLUDED, the same rule GetCppTranslationUnits has always
+                // had. Measured: the build writes a generated VgsFormDispatch.g.bas into obj/, and
+                // on the SECOND build of a glob-shaped project this walk swept it back in — the
+                // build log read "Compiling VgsFormDispatch.g.bas..." TWICE, from a build that
+                // still reported success. Generated sources under obj/ are the build's own output;
+                // compiling your own output is never what a glob means, and the exact-extension
+                // check is here for the reason the C++ one names: Win32 globbing lets "*.bas"
+                // match a longer extension that merely starts with it.
                 foreach (var ext in BasicLangSourceExtensions)
                     foreach (var file in Directory.GetFiles(projectDir, "*" + ext, SearchOption.AllDirectories))
-                        yield return file;
+                        if (string.Equals(Path.GetExtension(file), ext, StringComparison.OrdinalIgnoreCase)
+                            && !IsInBuildOutputDir(projectDir, file))
+                            yield return file;
             }
             else
             {
@@ -506,7 +517,14 @@ namespace BasicLang.Compiler.ProjectSystem
             {
                 foreach (var ext in FormDocumentExtensions)
                     foreach (var file in Directory.GetFiles(projectDir, "*" + ext, SearchOption.AllDirectories))
-                        yield return file;
+                        // ⚠ The same two guards GetCppTranslationUnits documents, for the same two
+                        // reasons: Win32 globbing lets "*.blform" match a longer extension that
+                        // merely starts with it (a `.blformbackup` beside the real file would get
+                        // a page emitted for it, on Windows only), and bin/ and obj/ live under the
+                        // project directory, so an unguarded recursive glob walks the build output.
+                        if (string.Equals(Path.GetExtension(file), ext, StringComparison.OrdinalIgnoreCase)
+                            && !IsInBuildOutputDir(projectDir, file))
+                            yield return file;
 
                 yield break;
             }

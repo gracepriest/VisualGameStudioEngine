@@ -320,6 +320,25 @@ public class FormDocumentTests
     }
 
     [Test]
+    public void Clipboard_LeavesAGeometrylessControlWithoutOne()
+    {
+        // ⚠ The target picks the VOCABULARY, but absence still means null within it — the same
+        // rule FormDocumentReader follows. Always handing back a zeroed geometry would give a
+        // pasted control a position it never had, and the writer would then persist X="0" Y="0"
+        // into a document that carried neither.
+        const string xml = """
+            <FormSubtree Target="WinForms" Version="1">
+              <Button Id="btn" TabIndex="0"/>
+            </FormSubtree>
+            """;
+
+        var pasted = FormClipboard.DeserializeSubtree(xml, FormTarget.WinForms, _ => false);
+
+        Assert.That(pasted, Has.Count.EqualTo(1));
+        Assert.That(pasted[0].Geometry, Is.Null);
+    }
+
+    [Test]
     public void Clipboard_RenamesACollidingId_AndRetargetsItsConventionHandler()
     {
         var button = new FormControl { Kind = "Button", Id = "btnLogin" };
