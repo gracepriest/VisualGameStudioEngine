@@ -4,6 +4,11 @@ A Raylib-based 2D game engine with C++ core, VB.NET bindings, and a full-feature
 
 Visual Game Studio is a modern game development environment designed to make creating 2D games fast, flexible, and fun. It combines a lightweight yet powerful framework built on top of the proven RayLib library with a complete IDE featuring code completion, syntax highlighting, debugging, and more.
 
+> 📖 **[Project wiki](docs/wiki/)** — 30 cross-linked pages covering the language, the
+> compiler pipeline and its backends, the IDE, the engine API, and the conventions and
+> traps worth knowing before you change anything. Open `docs/wiki/index.html` in a
+> browser; it needs no build step and no network.
+
 ## Components
 
 ### Game Engine (C++ DLL)
@@ -423,6 +428,7 @@ The `docs/` folder contains detailed documentation:
 
 | File | Contents |
 |------|----------|
+| **`docs/wiki/`** | **The project wiki — 30 pages covering everything below and more, cross-linked and searchable. Open `index.html`.** |
 | `docs/GETTING_STARTED.md` | Quick-start guide with step-by-step examples |
 | `docs/API_REFERENCE.md` | Full game engine API with code examples (35+ systems) |
 | `docs/BasicLang-Reference.md` | Full language syntax reference |
