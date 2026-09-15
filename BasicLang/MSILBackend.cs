@@ -1482,33 +1482,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             EmitLoadValue(compare.Left);
             EmitLoadValue(compare.Right);
 
-            switch (compare.Comparison)
-            {
-                case CompareKind.Eq:
-                    WriteLine("    ceq");
-                    break;
-                case CompareKind.Ne:
-                    WriteLine("    ceq");
-                    WriteLine("    ldc.i4.0");
-                    WriteLine("    ceq"); // Not equal = !(a == b)
-                    break;
-                case CompareKind.Lt:
-                    WriteLine("    clt");
-                    break;
-                case CompareKind.Le:
-                    WriteLine("    cgt");
-                    WriteLine("    ldc.i4.0");
-                    WriteLine("    ceq"); // <= is !(a > b)
-                    break;
-                case CompareKind.Gt:
-                    WriteLine("    cgt");
-                    break;
-                case CompareKind.Ge:
-                    WriteLine("    clt");
-                    WriteLine("    ldc.i4.0");
-                    WriteLine("    ceq"); // >= is !(a < b)
-                    break;
-            }
+            EmitCompareOpcodes(compare.Comparison);
 
             _currentStack--; // Net effect
 
@@ -1961,16 +1935,375 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _currentStack--;
         }
 
+        /// <summary>
+        /// Lowers a <c>Select Case</c> to an ordered chain of comparisons — one test per case in
+        /// source order, first match wins, falling through to the Else/default target.
+        ///
+        /// <para>⛔ <b>Do not "restore" the IL <c>switch</c> instruction here.</b> It was what
+        /// this method emitted, and it was wrong twice over. First, IL <c>switch</c> is
+        /// <b>index</b>-based: it pops an unsigned int32 <i>i</i> and jumps to the <i>i</i>-th
+        /// label, so even a fully populated table sends <c>Case 1, 2, 3</c> to the wrong arms and
+        /// cannot express a string, a range, a comparison or a <c>When</c> guard at all. Second,
+        /// the table it built came from <see cref="IRSwitch.Cases"/>, and the parser routes EVERY
+        /// case value into <see cref="IRSwitch.PatternCases"/> — <c>Cases</c> stays empty (the
+        /// same fact <c>ControlFlowGraph</c> and <c>CppCodeGenerator</c> both record). So the
+        /// emitted table was <c>switch ()</c>, empty, followed by an UNCONDITIONAL branch to the
+        /// default: every input took <c>Case Else</c>, in code that assembled and ran clean. The
+        /// legacy <c>Cases</c> list is still walked below, ahead of the patterns, so a future
+        /// front end that does populate it keeps working.</para>
+        ///
+        /// <para>This mirrors <c>CppCodeGenerator.Visit(IRSwitch)</c>, which lowers the same IR to
+        /// an if/else-if chain of gotos for the same reason. The pattern VALUES (range bounds,
+        /// comparison operands) were already emitted into this block by <c>IRBuilder</c> before
+        /// the switch instruction, so re-loading them here cannot re-run a side effect.</para>
+        /// </summary>
         public override void Visit(IRSwitch switchInst)
         {
-            EmitLoadValue(switchInst.Value);
+            var subject = switchInst.Value;
 
-            var targets = switchInst.Cases.Select(c => SanitizeLabel(c.Target.Name)).ToList();
-            var targetList = string.Join(", ", targets);
+            foreach (var (caseValue, target) in switchInst.Cases)
+            {
+                var noMatch = NextCaseLabel();
+                EmitCaseEqualityTest(subject, caseValue, noMatch);
+                WriteLine($"    br {SanitizeLabel(target.Name)}");
+                WriteLine($"  {noMatch}:");
+            }
 
-            WriteLine($"    switch ({targetList})");
+            foreach (var patternCase in switchInst.PatternCases)
+            {
+                var noMatch = NextCaseLabel();
+                EmitPatternTest(subject, patternCase, noMatch);
+                WriteLine($"    br {SanitizeLabel(patternCase.Target.Name)}");
+                WriteLine($"  {noMatch}:");
+            }
+
             WriteLine($"    br {SanitizeLabel(switchInst.DefaultTarget.Name)}");
+        }
+
+        /// <summary>A fresh IL label for one link of a Select Case comparison chain.</summary>
+        private string NextCaseLabel() => $"case_test_{_labelCounter++}";
+
+        /// <summary>
+        /// Emits the full test for one pattern case: the value test AND its optional <c>When</c>
+        /// guard. Falls through when the case matches; branches to <paramref name="noMatch"/>
+        /// when it does not. Leaves the evaluation stack balanced on both paths.
+        /// </summary>
+        private void EmitPatternTest(IRValue subject, IRPatternCase patternCase, string noMatch)
+        {
+            EmitPatternValueTest(subject, patternCase, noMatch);
+
+            if (patternCase.WhenGuard != null)
+            {
+                EmitInlineValue(patternCase.WhenGuard);
+                WriteLine($"    brfalse {noMatch}");
+                _currentStack--;
+            }
+        }
+
+        /// <summary>
+        /// The value/range/comparison half of a pattern test, without the <c>When</c> guard.
+        /// Recursion target for <c>Or</c> alternatives — which is why it is split out, and why
+        /// an alternative's own guard is not evaluated here (<c>CppCodeGenerator</c> makes the
+        /// same split for the same reason; the parser attaches <c>When</c> to the case, not to
+        /// an alternative).
+        /// </summary>
+        private void EmitPatternValueTest(IRValue subject, IRPatternCase patternCase, string noMatch)
+        {
+            switch (patternCase)
+            {
+                case IRConstantPatternCase constantCase:
+                    EmitCaseEqualityTest(subject, constantCase.Value, noMatch);
+                    break;
+
+                case IRRangePatternCase rangeCase:
+                    EmitCaseRelationalTest(subject, rangeCase.LowerBound, ">=", noMatch);
+                    EmitCaseRelationalTest(subject, rangeCase.UpperBound, "<=", noMatch);
+                    break;
+
+                case IRComparisonPatternCase comparisonCase:
+                    EmitCaseRelationalTest(subject, comparisonCase.CompareValue, comparisonCase.Operator, noMatch);
+                    break;
+
+                case IRNothingPatternCase:
+                    EmitNothingTest(subject, noMatch);
+                    break;
+
+                case IROrPatternCase orCase:
+                    if (orCase.Alternatives.Count == 0)
+                    {
+                        WriteLine($"    br {noMatch}");
+                        break;
+                    }
+
+                    var matched = NextCaseLabel();
+                    foreach (var alternative in orCase.Alternatives)
+                    {
+                        var nextAlternative = NextCaseLabel();
+                        EmitPatternValueTest(subject, alternative, nextAlternative);
+                        WriteLine($"    br {matched}");
+                        WriteLine($"  {nextAlternative}:");
+                    }
+                    WriteLine($"    br {noMatch}");
+                    WriteLine($"  {matched}:");
+                    break;
+
+                default:
+                    throw new ForeignFeatureException(
+                        $"MSIL: the Select Case pattern '{patternCase.GetType().Name}' has no IL "
+                        + "lowering. MSIL carries constant, range, comparison, Nothing and Or "
+                        + "patterns plus When guards; a type/tuple/binding pattern needs "
+                        + "isinst/deconstruction support this backend does not have. Emitting "
+                        + "nothing for it would silently route the case to Case Else, so it is "
+                        + "refused here instead.");
+            }
+        }
+
+        /// <summary>
+        /// Compares <paramref name="subject"/> with <paramref name="value"/> and branches to
+        /// <paramref name="branchTo"/>. By default that is the NO-MATCH edge of a <c>Case x</c>,
+        /// so the branch is taken when the two are UNEQUAL; <paramref name="branchWhenEqual"/>
+        /// flips it for <c>Case Is &lt;&gt; x</c>, whose no-match edge is equality.
+        ///
+        /// <para>A string operand goes through <c>String::Equals</c>, not <c>beq</c>/<c>bne.un</c>:
+        /// those compare the REFERENCE, so <c>Select Case s</c> over string cases would match only
+        /// when the two strings happened to be the same interned object — true for literals the
+        /// runtime interned together, false for a string that was built or read at run time. That
+        /// is a wrong answer that passes every test written with literals. Numeric and reference
+        /// cases use <c>beq</c>/<c>bne.un</c>, bit-exact for integers and NaN-correct for floats.</para>
+        /// </summary>
+        private void EmitCaseEqualityTest(IRValue subject, IRValue value, string branchTo, bool branchWhenEqual = false)
+        {
+            EmitLoadValue(subject);
+            EmitLoadValue(value);
+
+            if (IsStringOperand(subject) || IsStringOperand(value))
+            {
+                WriteLine("    call bool [mscorlib]System.String::Equals(string, string)");
+                _currentStack--;
+                WriteLine($"    {(branchWhenEqual ? "brtrue" : "brfalse")} {branchTo}");
+                _currentStack--;
+                return;
+            }
+
+            WriteLine($"    {(branchWhenEqual ? "beq" : "bne.un")} {branchTo}");
+            _currentStack -= 2;
+        }
+
+        /// <summary>
+        /// <c>subject op value</c> for a <c>Case Is &gt; x</c> / range bound, branching to
+        /// <paramref name="noMatch"/> when the relation is false.
+        ///
+        /// <para>Built from <c>clt</c>/<c>cgt</c>/<c>ceq</c> + a <c>brtrue</c>/<c>brfalse</c>
+        /// rather than the <c>blt</c>/<c>bgt</c> branch forms, because the NEGATION of an
+        /// ordered comparison is not one opcode: <c>!(a &gt; b)</c> is <c>ble</c> for signed
+        /// integers but <c>ble.un</c> for floats (NaN must fail the test), and picking one
+        /// spelling silently mis-handles the other type. Computing the POSITIVE relation with
+        /// <c>clt</c>/<c>cgt</c> — signed for integers, ordered for floats — and then branching
+        /// on the boolean is correct for both without inspecting the operand type. The one case
+        /// it does not cover is an unsigned 32/64-bit subject, which needs the <c>.un</c>
+        /// compare forms; that is selected explicitly.</para>
+        /// </summary>
+        private void EmitCaseRelationalTest(IRValue subject, IRValue value, string op, string noMatch)
+        {
+            // '=' and '<>' are equality, not ordering — route them through the equality path so a
+            // string `Case Is = "x"` still gets String::Equals rather than a reference compare.
+            if (op == "=")
+            {
+                EmitCaseEqualityTest(subject, value, noMatch);
+                return;
+            }
+
+            if (op == "<>")
+            {
+                EmitCaseEqualityTest(subject, value, noMatch, branchWhenEqual: true);
+                return;
+            }
+
+            if (IsStringOperand(subject) || IsStringOperand(value))
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: 'Case Is {op}' on a String has no IL lowering. IL's ordering opcodes "
+                    + "(clt/cgt) are defined for numeric and native-int operands only — applied "
+                    + "to two object references they produce an unverifiable method that throws "
+                    + "InvalidProgramException at run time, so this is refused here instead. "
+                    + "String equality (Case \"x\", Case Is = \"x\", Case Is <> \"x\") is "
+                    + "supported and routes through String::Equals.");
+            }
+
+            var unsigned = IsUnsignedOperand(subject);
+
+            EmitLoadValue(subject);
+            EmitLoadValue(value);
+
+            switch (op)
+            {
+                case ">":
+                    WriteLine(unsigned ? "    cgt.un" : "    cgt");
+                    WriteLine($"    brfalse {noMatch}");
+                    break;
+                case "<":
+                    WriteLine(unsigned ? "    clt.un" : "    clt");
+                    WriteLine($"    brfalse {noMatch}");
+                    break;
+                case ">=":
+                    WriteLine(unsigned ? "    clt.un" : "    clt");
+                    WriteLine($"    brtrue {noMatch}");
+                    break;
+                case "<=":
+                    WriteLine(unsigned ? "    cgt.un" : "    cgt");
+                    WriteLine($"    brtrue {noMatch}");
+                    break;
+                default:
+                    throw new ForeignFeatureException(
+                        $"MSIL: unknown Select Case comparison operator '{op}'. The parser emits "
+                        + "=, <>, >, <, >= and <=; anything else would fall through untested and "
+                        + "silently match, so it is refused here instead.");
+            }
+
+            _currentStack -= 2;
+        }
+
+        /// <summary>
+        /// <c>Case Nothing</c>. <c>brtrue</c> is right for both shapes VB gives this: a null
+        /// reference and a zero integer both fall through to the match, anything else branches
+        /// away. Floating-point subjects are refused — <c>brtrue</c> is not defined for an F
+        /// operand and produces an unverifiable method.
+        /// </summary>
+        private void EmitNothingTest(IRValue subject, string noMatch)
+        {
+            var spec = subject?.Type != null ? IlTypeSpec(subject.Type) : "object";
+            if (spec == "float32" || spec == "float64")
+            {
+                throw new ForeignFeatureException(
+                    "MSIL: 'Case Nothing' on a floating-point value has no IL lowering — brtrue "
+                    + "is undefined for an F operand and yields an unverifiable method, so it is "
+                    + "refused here rather than emitted. Compare against 0 explicitly "
+                    + "(Case 0 / Case Is = 0).");
+            }
+
+            EmitLoadValue(subject);
+            WriteLine($"    brtrue {noMatch}");
             _currentStack--;
+        }
+
+        /// <summary>True when the value is typed as an IL <c>string</c>.</summary>
+        private bool IsStringOperand(IRValue value) =>
+            value?.Type != null && IlTypeSpec(value.Type) == "string";
+
+        /// <summary>
+        /// True for the IL primitives whose ordering needs the <c>.un</c> compare forms.
+        /// <c>uint8</c>/<c>uint16</c>/<c>char</c> are deliberately absent: they are zero-extended
+        /// to int32 on the evaluation stack, so the SIGNED compare already gives the right answer
+        /// for them, and <c>.un</c> would be a no-op at best.
+        /// </summary>
+        private bool IsUnsignedOperand(IRValue value)
+        {
+            if (value?.Type == null) return false;
+            var spec = IlTypeSpec(value.Type);
+            return spec == "uint32" || spec == "uint64";
+        }
+
+        /// <summary>
+        /// Emits an un-emitted expression tree — a suppressed <c>When</c> guard — leaving its
+        /// value on the stack.
+        ///
+        /// <para><c>IRBuilder</c> builds a guard with <c>_suppressEmit</c> set so optimization
+        /// passes cannot rewrite it, which means the guard's operand instructions never entered a
+        /// block and were never given a local slot. <see cref="EmitLoadValue"/> alone would find
+        /// no slot for them, write a <c>// WARNING</c> comment, and push NOTHING — unbalancing
+        /// the stack and turning a wrong answer into an InvalidProgramException. So recurse over
+        /// the guard's shape instead, and refuse loudly at any node this cannot rebuild rather
+        /// than emitting a comment where a value belongs. (<c>CppCodeGenerator.RenderInline</c>
+        /// is the same function for the same reason, over C++ expression text.)</para>
+        /// </summary>
+        private void EmitInlineValue(IRValue value)
+        {
+            switch (value)
+            {
+                case IRConstant constant:
+                    EmitLoadConstant(constant);
+                    return;
+
+                case IRVariable variable:
+                    EmitLoadLocal(variable.Name);
+                    return;
+
+                case IRBinaryOp binaryOp:
+                    EmitInlineValue(binaryOp.Left);
+                    EmitInlineValue(binaryOp.Right);
+                    WriteLine($"    {_typeMapper.MapBinaryOperator(binaryOp.Operation)}");
+                    _currentStack--;
+                    return;
+
+                case IRCompare compare:
+                    EmitInlineValue(compare.Left);
+                    EmitInlineValue(compare.Right);
+                    EmitCompareOpcodes(compare.Comparison);
+                    _currentStack--;
+                    return;
+
+                case IRUnaryOp unaryOp:
+                    EmitInlineValue(unaryOp.Operand);
+                    WriteLine($"    {_typeMapper.MapUnaryOperator(unaryOp.Operation)}");
+                    return;
+            }
+
+            // A leaf that IS already in a slot (a value computed before the Select Case and
+            // merely referenced by the guard) is loadable the ordinary way.
+            if (value != null
+                && (_tempIndices.ContainsKey(value)
+                    || (!string.IsNullOrEmpty(value.Name)
+                        && (_declaredIdentifiers.Contains(value.Name) || _tempNameIndices.ContainsKey(value.Name)))))
+            {
+                EmitLoadValue(value);
+                return;
+            }
+
+            throw new ForeignFeatureException(
+                $"MSIL: the 'When' guard node '{value?.GetType().Name ?? "null"}' has no IL "
+                + "lowering. A guard is built with instruction emission suppressed, so only "
+                + "shapes this backend can rebuild in place are supported: constants, variables, "
+                + "binary/compare/unary operators over them, and values already computed before "
+                + "the Select Case. Anything else would push no value and corrupt the evaluation "
+                + "stack, so it is refused here instead.");
+        }
+
+        /// <summary>
+        /// The IL opcode(s) that turn two loaded operands into the boolean for
+        /// <paramref name="comparison"/>. Shared by <see cref="Visit(IRCompare)"/> and the
+        /// <c>When</c>-guard renderer so an ordinary comparison and a guard comparison cannot
+        /// disagree. IL has only <c>ceq</c>/<c>clt</c>/<c>cgt</c>, so the other three are built
+        /// by negating with <c>ldc.i4.0; ceq</c>.
+        /// </summary>
+        private void EmitCompareOpcodes(CompareKind comparison)
+        {
+            switch (comparison)
+            {
+                case CompareKind.Eq:
+                    WriteLine("    ceq");
+                    break;
+                case CompareKind.Ne:
+                    WriteLine("    ceq");
+                    WriteLine("    ldc.i4.0");
+                    WriteLine("    ceq"); // Not equal = !(a == b)
+                    break;
+                case CompareKind.Lt:
+                    WriteLine("    clt");
+                    break;
+                case CompareKind.Le:
+                    WriteLine("    cgt");
+                    WriteLine("    ldc.i4.0");
+                    WriteLine("    ceq"); // <= is !(a > b)
+                    break;
+                case CompareKind.Gt:
+                    WriteLine("    cgt");
+                    break;
+                case CompareKind.Ge:
+                    WriteLine("    clt");
+                    WriteLine("    ldc.i4.0");
+                    WriteLine("    ceq"); // >= is !(a < b)
+                    break;
+            }
         }
 
         public override void Visit(IRPhi phi)

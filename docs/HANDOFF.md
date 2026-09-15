@@ -201,7 +201,13 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   `VisualGameStudio.Tests/Msil/MsilHarness.cs`: source → `.il` → `ilasm` → a real process →
   stdout. **Never assert on emitted IL text alone here.** The defect that motivated the harness
   was a `Select Case` that assembles, runs, and answers `Case Else` for every input; a text
-  assertion would have had to already know `beq` was missing to catch it. `ilasm` is located,
+  assertion would have had to already know `beq` was missing to catch it. **That one is fixed
+  (2026-09-15)** — `Select Case` now lowers to an ordered comparison chain (the shape
+  `CppCodeGenerator` uses for the same IR), because IL's `switch` is *index*-based and the parser
+  routes every case value into `IRSwitch.PatternCases` while the old emitter read only
+  `IRSwitch.Cases`. Constant / multi-value / range / comparison / `Nothing` / `Or` patterns and
+  `When` guards all run; type, tuple and binding patterns are **refused** rather than dropped,
+  because dropping one reproduces the original silent-`Case Else` failure exactly. `ilasm` is located,
   not required — Windows ships one in-box under `%WINDIR%\Microsoft.NET\Framework64`, elsewhere
   restore `runtime.<rid>.Microsoft.NETCore.ILAsm` or set `BASICLANG_ILASM`; a machine with none
   gets `Assert.Ignore`. Known gaps are pinned as `_PinnedDivergence` tests that each name a root
