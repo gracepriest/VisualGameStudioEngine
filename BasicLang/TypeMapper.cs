@@ -511,15 +511,22 @@ namespace BasicLang.Compiler.CodeGen
             // Bitwise
             _binaryOpMap[BinaryOpKind.And] = "and";
             _binaryOpMap[BinaryOpKind.Or] = "or";
-            // ⚠ Mapped so an unmapped-kind lookup cannot throw, but these emit the
-            // NON-short-circuit instruction and that is a SEMANTIC defect, not a limitation:
-            // `If o IsNot Nothing AndAlso o.X` evaluates o.X unconditionally. Genuine
-            // short-circuiting needs branches.
+            // Mapped so an unmapped-kind lookup cannot throw. These entries are UNREACHABLE:
+            // IRBuilder lowers AndAlso/OrElse to real control flow before codegen (see its
+            // "Lowers AndAlso/OrElse to real CONTROL FLOW" remarks), so an AndAlso never
+            // arrives here as a binary operator to look up.
             //
-            // ⛔ Do NOT cite "MSIL is not maintained" here — that policy was retired on
-            // 2026-09-15 when MSIL became a maintained target aiming at C#-backend parity.
-            // This is now a known gap with a test owed, not an accepted one. (LLVM keeps the
-            // old policy; see LLVMTypeMapper.)
+            // ⚠ An earlier revision of this comment (2026-09-15) claimed the non-short-circuit
+            // spelling was a live SEMANTIC defect — that `If o IsNot Nothing AndAlso o.X`
+            // evaluates o.X unconditionally. That was wrong, and measuring settled it twice
+            // over: poisoning these two values with markers that would be unmistakable in the
+            // output puts ZERO of them in the emitted IL, and the full short-circuit truth
+            // table runs correctly on MSIL. Pinned by MsilRoundTripTests' short-circuit cases,
+            // which exist because nothing else held this.
+            //
+            // ⛔ Leave the entries in place regardless: the map is looked up by kind and a
+            // missing key throws. Their VALUE is arbitrary precisely because it is never read —
+            // which is also why changing it cannot be used as evidence about behaviour.
             _binaryOpMap[BinaryOpKind.AndAlso] = "and";
             _binaryOpMap[BinaryOpKind.OrElse] = "or";
             _binaryOpMap[BinaryOpKind.Xor] = "xor";

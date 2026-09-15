@@ -119,6 +119,53 @@ public class MsilRoundTripTests
             """), Is.EqualTo("FORTY-TWO\n"));
     }
 
+    /// <summary>
+    /// <b><c>AndAlso</c>/<c>OrElse</c> short-circuit correctly on MSIL</b> — the complete truth
+    /// table, asserted by whether the right operand's SIDE EFFECT happened.
+    ///
+    /// <para><b>Why this fixture pins something that already works.</b> Nothing did. The
+    /// behaviour comes from <c>IRBuilder</c> lowering these to real control flow before codegen,
+    /// which is invisible from the backend — and <c>MSILTypeMapper</c> carries
+    /// <c>AndAlso → "and"</c>, the non-short-circuit instruction, which reads like a live bug
+    /// and was briefly documented as one. It is unreachable: poisoning those map values with
+    /// unmistakable markers puts zero of them in the emitted IL. Should anyone ever "simplify"
+    /// the IRBuilder lowering into a plain binary operator, these go red rather than the
+    /// program quietly evaluating things it must not.</para>
+    ///
+    /// <para>The left operand is computed from a variable on purpose. <c>False AndAlso f()</c>
+    /// is constant-folded, so it short-circuits whatever the backend does — a test built on it
+    /// passes for a reason that has nothing to do with the property under test.</para>
+    /// </summary>
+    [TestCase("AndAlso", -1, "END\n", TestName = "ShortCircuit(AndAlso, left FALSE -> right must NOT run)")]
+    [TestCase("AndAlso", 1, "RIGHT-RAN\nTAKEN\nEND\n", TestName = "ShortCircuit(AndAlso, left TRUE -> right runs)")]
+    [TestCase("OrElse", 1, "TAKEN\nEND\n", TestName = "ShortCircuit(OrElse, left TRUE -> right must NOT run)")]
+    [TestCase("OrElse", -1, "RIGHT-RAN\nTAKEN\nEND\n", TestName = "ShortCircuit(OrElse, left FALSE -> right runs)")]
+    public void ShortCircuit(string op, int n, string expected)
+    {
+        var source = $"""
+            Module M
+             Function Mark() As Boolean
+              PrintLine("RIGHT-RAN")
+              Return True
+             End Function
+             Function Val(v As Integer) As Boolean
+              Return v > 0
+             End Function
+             Sub Main()
+              Dim n As Integer = {n}
+              If Val(n) {op} Mark() Then
+               PrintLine("TAKEN")
+              End If
+              PrintLine("END")
+             End Sub
+            End Module
+            """;
+
+        Assert.That(RunExpectingSuccess(source), Is.EqualTo(expected),
+            "a missing RIGHT-RAN where one is expected, or a present one where it is not, means "
+            + "the right operand's evaluation stopped following the left's value.");
+    }
+
     // ====================================================================================
     // Pinned divergences. Each names its root cause; each goes RED when fixed.
     // ====================================================================================
