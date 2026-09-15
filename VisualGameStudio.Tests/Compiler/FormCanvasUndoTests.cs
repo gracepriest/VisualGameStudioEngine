@@ -185,6 +185,68 @@ public class FormCanvasUndoTests
     }
 
     [Test]
+    public void AReparentingDrag_NestsTheControlInTheFile()
+    {
+        // ⛔⛔ The caller test for reparenting. The writer is structure-preserving and works one
+        // container at a time: a reparent is a REMOVE from the old container's element list and an
+        // INSERT into the new one's. If it could only do one of those, the control would end up in
+        // both places or neither, and the model and the file would disagree from then on.
+        var vm = Open("""
+            <Form Name="LoginForm" Version="1" Width="800" Height="450" Text="LoginForm">
+              <Controls>
+                <Panel Id="pnlSide" X="50" Y="40" Width="200" Height="150" TabIndex="0"/>
+                <Button Id="btnLogin" Text="Sign in" X="10" Y="300" Width="75" Height="23" TabIndex="1"/>
+              </Controls>
+            </Form>
+            """);
+
+        var button = vm.DesignDocument!.FindById("btnLogin")!;
+        FormGeometryEdit.MoveToForm(vm.DesignDocument!, button, 100, 90);
+        vm.CommitGeometryCommand.Execute(null);
+
+        var reread = BasicLang.Forms.Serialization.FormDocumentReader.Read(vm.FilePath!, vm.Text);
+        var panel = reread.Model.FindById("pnlSide")!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(panel.Children.Select(c => c.Id), Does.Contain("btnLogin"),
+                "the Button is inside the Panel element now");
+            Assert.That(reread.Model.Controls.Select(c => c.Id), Does.Not.Contain("btnLogin"),
+                "and no longer a sibling of it");
+        });
+
+        var pixel = (PixelGeometry)panel.Children.Single(c => c.Id == "btnLogin").Geometry!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(pixel.X, Is.EqualTo(50), "re-based into the Panel's coordinate space");
+            Assert.That(pixel.Y, Is.EqualTo(50));
+        });
+    }
+
+    [Test]
+    public void UndoingAReparent_PutsTheControlBackWhereItLived()
+    {
+        const string before = """
+            <Form Name="LoginForm" Version="1" Width="800" Height="450" Text="LoginForm">
+              <Controls>
+                <Panel Id="pnlSide" X="50" Y="40" Width="200" Height="150" TabIndex="0"/>
+                <Button Id="btnLogin" Text="Sign in" X="10" Y="300" Width="75" Height="23" TabIndex="1"/>
+              </Controls>
+            </Form>
+            """;
+        var vm = Open(before);
+
+        var button = vm.DesignDocument!.FindById("btnLogin")!;
+        FormGeometryEdit.MoveToForm(vm.DesignDocument!, button, 100, 90);
+        vm.CommitGeometryCommand.Execute(null);
+
+        vm.UndoDesignerEditCommand.Execute(null);
+
+        Assert.That(vm.Text, Is.EqualTo(before), "one press puts the whole reparent back");
+        Assert.That(vm.DesignDocument!.FindById("pnlSide")!.Children, Is.Empty,
+            "and the canvas shows it outside the Panel again");
+    }
+
+    [Test]
     public void UndoWithNothingToUndo_DoesNothing()
     {
         // The file as opened is not an undoable step — SetContent clears the stack. Undo here must

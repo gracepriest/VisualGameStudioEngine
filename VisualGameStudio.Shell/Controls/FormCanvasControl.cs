@@ -215,6 +215,13 @@ public class FormCanvasControl : Control
             _dragHandle = handle;
             _dragOrigin = point;
             _dragStart = (pixel.X, pixel.Y, pixel.Width, pixel.Height);
+
+            // ⛔ The ABSOLUTE position too, because a move is tracked in form space so it can cross
+            // a container boundary: the control's own X/Y mean something different on each side of
+            // one, and a drag that re-bases them halfway through would jump.
+            _dragStartForm = FormBoundsOf(document, SelectedControl)?.TopLeft
+                             ?? new Point(pixel.X, pixel.Y);
+
             _dragChanged = false;
             e.Pointer.Capture(this);
         }
@@ -268,7 +275,11 @@ public class FormCanvasControl : Control
         bool changed;
         if (_dragHandle == FormResizeHandle.None)
         {
-            changed = FormGeometryEdit.MoveTo(document, control, start.X + dx, start.Y + dy);
+            // Absolute, so the control re-parents when the pointer crosses into or out of a Panel.
+            changed = FormGeometryEdit.MoveToForm(
+                document, control,
+                (int)Math.Round(_dragStartForm.X) + dx,
+                (int)Math.Round(_dragStartForm.Y) + dy);
         }
         else
         {
@@ -363,13 +374,21 @@ public class FormCanvasControl : Control
     }
 
     /// <summary>A control's rectangle in CANVAS space, or null when it has no pixel geometry.</summary>
-    private Rect? CanvasBoundsOf(FormDocument document, FormControl control)
+    private Rect? CanvasBoundsOf(FormDocument document, FormControl control) =>
+        FormBoundsOf(document, control) is { } bounds ? _transform.ToCanvas(bounds) : null;
+
+    /// <summary>
+    /// A control's ABSOLUTE rectangle in form space — its own coordinates plus every container
+    /// origin above it. <c>Layout</c> already walks that chain, so this asks it rather than adding
+    /// a second accumulation that could drift from the one the canvas draws with.
+    /// </summary>
+    private static Rect? FormBoundsOf(FormDocument document, FormControl control)
     {
         foreach (var (candidate, bounds) in FormCanvasTransform.Layout(document))
         {
             if (ReferenceEquals(candidate, control))
             {
-                return _transform.ToCanvas(bounds);
+                return bounds;
             }
         }
 
@@ -377,6 +396,7 @@ public class FormCanvasControl : Control
     }
 
     private Point? _dragOrigin;
+    private Point _dragStartForm;
     private FormResizeHandle _dragHandle;
     private (int X, int Y, int Width, int Height) _dragStart;
     private bool _dragChanged;

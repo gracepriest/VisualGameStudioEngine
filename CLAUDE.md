@@ -147,6 +147,18 @@ a second document type.
   **who calls it in a shipping build** — and the answer must be a test that drives the real entry
   point (`SaveAsync`, the CLI), not one that constructs the generator. `FormClipboard` is still
   unreachable; see `docs/form-designer-followups.md`.
+- ⛔⛔ **A drag that re-parents must exclude the dragged subtree from the search for a target.**
+  Two failures, one fix. The pointer is over the control being dragged, so without excluding it a
+  non-container swallows its own point and nothing can ever be dragged into anything. And a
+  container dropped into ITSELF or its own descendant makes a loop in the tree — which every walker
+  here recurses through (`FormDocumentWriter`, `FormCanvasTransform.Layout`, `RegionWriter`,
+  `AllControls`), so the symptom is a stack overflow that takes the IDE down with no diagnostic.
+  `FormCanvasTransform.ContainerAt` takes an `ignore` for exactly this.
+- ⛔ **Canvas drags are tracked in ABSOLUTE form space, not the control's own coordinates.** A
+  child's X/Y are relative to its container, so the same point on screen is different numbers on
+  each side of a Panel boundary; a drag that re-bases halfway through jumps. `MoveToForm` converts
+  once, into whichever container the control landed in. `MoveTo` (parent-relative, no reparent) is
+  the other one — don't mix them up.
 - ⛔ **Ask the CATALOG what a value means, never the shape of the string.** A `Type.Member` regex
   used to decide "is this already source?" and was wrong in both directions:
   `Text="config.json"` emitted unquoted (form stops building), and

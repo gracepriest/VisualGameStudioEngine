@@ -177,19 +177,37 @@ public sealed class FormCanvasTransform
     /// the form at that spot, not into whatever sits behind the Button. Walking past it to a
     /// container underneath would nest controls into a Panel the user cannot see at that point.</para>
     /// </summary>
-    public static (FormControl Container, Point Origin)? ContainerAt(FormDocument document, Point formPoint)
+    /// <param name="ignore">
+    /// A control to skip, together with everything inside it.
+    ///
+    /// <para>⛔⛔ Two separate reasons, both load-bearing while DRAGGING. First, the pointer is over
+    /// the dragged control — that is what dragging is — so without skipping it a Button swallows
+    /// its own point and reports "no container here", and nothing can ever be dragged into
+    /// anything. Second, and worse: a Panel whose target is itself or one of its own descendants
+    /// makes a LOOP in the tree, and every walker in this feature recurses — the writer, the canvas
+    /// layout, the region writer, <c>AllControls</c>. That is a stack overflow that takes the IDE
+    /// down with no diagnostic, so the illegal targets are excluded from the search rather than
+    /// detected after the fact.</para>
+    /// </param>
+    public static (FormControl Container, Point Origin)? ContainerAt(
+        FormDocument document, Point formPoint, FormControl? ignore = null)
     {
         ArgumentNullException.ThrowIfNull(document);
-        return ContainerAt(document.Controls, formPoint, new Point(0, 0));
+        return ContainerAt(document.Controls, formPoint, new Point(0, 0), ignore);
     }
 
     private static (FormControl, Point)? ContainerAt(
-        IReadOnlyList<FormControl> controls, Point formPoint, Point containerOrigin)
+        IReadOnlyList<FormControl> controls, Point formPoint, Point containerOrigin, FormControl? ignore)
     {
         // Topmost first, exactly as HitTest does — document order is z-order.
         for (var i = controls.Count - 1; i >= 0; i--)
         {
             var control = controls[i];
+            if (ReferenceEquals(control, ignore))
+            {
+                continue;
+            }
+
             var bounds = BoundsOf(control, containerOrigin);
             if (bounds == null || !bounds.Value.Contains(formPoint))
             {
@@ -201,7 +219,7 @@ public sealed class FormCanvasTransform
                 return null;
             }
 
-            var nested = ContainerAt(control.Children, formPoint, bounds.Value.TopLeft);
+            var nested = ContainerAt(control.Children, formPoint, bounds.Value.TopLeft, ignore);
             return nested ?? (control, bounds.Value.TopLeft);
         }
 

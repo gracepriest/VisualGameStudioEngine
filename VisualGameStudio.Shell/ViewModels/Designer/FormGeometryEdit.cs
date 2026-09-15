@@ -1,4 +1,6 @@
+using Avalonia;
 using BasicLang.Forms;
+using VisualGameStudio.Shell.Controls;
 
 namespace VisualGameStudio.Shell.ViewModels.Designer;
 
@@ -27,11 +29,11 @@ public enum FormResizeHandle
 /// nothing becomes invisible AND unclickable, so it cannot be recovered with the pointer that lost
 /// it. The canvas has no undo yet, which makes both of those one-way trips.</para>
 ///
-/// <para>⚠ Neither operation reparents. Dragging a control out of a Panel moves it to the Panel's
-/// edge and stops; it does not become a child of the form. Reparenting mid-drag changes which
-/// coordinate space the control is in — every pixel of the drag would have to be re-based — and
-/// silently rewrites the generated <c>Controls.Add</c> target. Worth doing, worth doing
-/// deliberately, and not smuggled into this.</para>
+/// <para>⚠ Two move operations, and the difference matters. <see cref="MoveTo"/> takes the
+/// control's OWN coordinates and keeps its parent; <see cref="MoveToForm"/> takes absolute form
+/// coordinates and re-parents into whatever container is under them. A canvas drag uses the second,
+/// because a drag can cross a Panel boundary and the coordinate space changes when it does.
+/// <see cref="Resize"/> never reparents: a resize moves an edge, not the control.</para>
 /// </summary>
 public static class FormGeometryEdit
 {
@@ -63,6 +65,62 @@ public static class FormGeometryEdit
         if (newX == pixel.X && newY == pixel.Y)
         {
             return false;
+        }
+
+        pixel.X = newX;
+        pixel.Y = newY;
+        return true;
+    }
+
+    /// <summary>
+    /// Moves a control to an ABSOLUTE point in form space, re-parenting it into whatever container
+    /// is there — or out of the one it is in. Returns whether anything changed.
+    ///
+    /// <para>⛔⛔ Form space, not the control's own space, and that is the whole reason this exists
+    /// beside <see cref="MoveTo"/>. A child's X/Y are relative to its container, so the same place
+    /// on screen is different numbers depending on whose child the control is — and a drag that
+    /// crosses a Panel boundary changes that mid-gesture. Tracking the drag in absolute coordinates
+    /// and converting ONCE, into whichever container the control ended up in, is what keeps the
+    /// control under the pointer across the boundary. Doing it the other way round draws correctly
+    /// for the rest of the drag and puts the control somewhere else when the program runs.</para>
+    ///
+    /// <para>⚠ The target search excludes the dragged control and everything inside it — see
+    /// <see cref="FormCanvasTransform.ContainerAt"/>. Without that a control hides its target from
+    /// itself, and a container dropped into its own subtree makes a loop that every recursive
+    /// walker in this feature follows off the end of the stack.</para>
+    /// </summary>
+    public static bool MoveToForm(FormDocument document, FormControl control, int formX, int formY)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(control);
+
+        if (control.Geometry is not PixelGeometry pixel)
+        {
+            return false;
+        }
+
+        var target = FormCanvasTransform.ContainerAt(document, new Point(formX, formY), ignore: control);
+        var newParent = target?.Container;
+        var origin = target?.Origin ?? new Point(0, 0);
+
+        var currentParent = ParentOf(document, control);
+        var reparented = !ReferenceEquals(currentParent, newParent);
+
+        var (surfaceWidth, surfaceHeight) = SurfaceOf(document, newParent);
+        var newX = Clamp((int)(formX - origin.X), pixel.Width, surfaceWidth);
+        var newY = Clamp((int)(formY - origin.Y), pixel.Height, surfaceHeight);
+
+        if (!reparented && newX == pixel.X && newY == pixel.Y)
+        {
+            return false;
+        }
+
+        if (reparented)
+        {
+            // ⚠ Remove THEN add, and append: the control arrives on top in its new parent, which is
+            // where a thing you just dropped belongs. Document order is z-order.
+            (currentParent?.Children ?? document.Controls).Remove(control);
+            (newParent?.Children ?? document.Controls).Add(control);
         }
 
         pixel.X = newX;
@@ -149,9 +207,13 @@ public static class FormGeometryEdit
     /// The form fallbacks match <c>FormCanvasControl.Fit</c>'s, so a control cannot be clamped to a
     /// surface different from the one the canvas drew.
     /// </summary>
-    private static (int Width, int Height) SurfaceFor(FormDocument document, FormControl control)
+    private static (int Width, int Height) SurfaceFor(FormDocument document, FormControl control) =>
+        SurfaceOf(document, ParentOf(document, control));
+
+    /// <summary>The usable box inside a container, or the form's client size when there is none.</summary>
+    private static (int Width, int Height) SurfaceOf(FormDocument document, FormControl? container)
     {
-        if (ParentOf(document, control)?.Geometry is PixelGeometry parent)
+        if (container?.Geometry is PixelGeometry parent)
         {
             return (parent.Width, parent.Height);
         }
