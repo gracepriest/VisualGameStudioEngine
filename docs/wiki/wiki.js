@@ -49,10 +49,18 @@
     return out;
   }
 
+  // Inline HTML the page content is allowed to use verbatim (status pills, breaks).
+  // Everything else is escaped, so stray angle brackets in prose stay literal.
+  var INLINE_HTML = /<\/?(?:span|br|kbd|sup|sub)(?:\s[^<>]*)?\/?>/g;
+
   function inline(s) {
     var stash = [];
     s = s.replace(/`([^`]+)`/g, function (_, c) {
       stash.push('<code>' + esc(c) + '</code>');
+      return SENT + (stash.length - 1) + SENT;
+    });
+    s = s.replace(INLINE_HTML, function (tag) {
+      stash.push(tag);
       return SENT + (stash.length - 1) + SENT;
     });
     s = esc(s);

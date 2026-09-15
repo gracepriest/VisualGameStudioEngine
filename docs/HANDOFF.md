@@ -11,8 +11,9 @@ dates from `6139386`. Re-verify before relying on it. **The 2026-09-13 and 2026-
 newer than the rest of this file and supersede it wherever they disagree** — in particular about
 whether a cloud container can build and test this repo.
 
-**P2a-2 is functionally complete.** Tasks 1-15 are done including Task 15 Step 4 — the `IDE/`
-binary refresh landed with branch `claude/jolly-pasteur-l4mpzs`, now merged to master (`77e415b`).
+**P2a-2 is COMPLETE.** Tasks 1-15 are done, Step 4 included — the `IDE/` refresh shipped
+2026-09-14 in `fbb3694`. The work merged to master in `77e415b`, together with the blnet C++
+facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
@@ -589,11 +590,10 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
 
 ## Open work
 
-- **P2a-2 (.NET classes in native projects) — Task 14 is most of the way done; see below.**
-  Task 15 is the closeout. Plan: `docs/superpowers/plans/2026-08-02-p2a2-dotnet-native-flip.md`
-  (Task 14 at :1834, Task 15 at :1862); spec:
-  `docs/superpowers/specs/2026-07-29-p2a-dotnet-access-aot-shim-design.md` (§12.4 at :1256,
-  §12.5 at :1290).
+- ~~**P2a-2 (.NET classes in native projects)**~~ — **DONE and merged (`77e415b`).** Kept here
+  only as a pointer: plan `docs/superpowers/plans/2026-08-02-p2a2-dotnet-native-flip.md`, spec
+  `docs/superpowers/specs/2026-07-29-p2a-dotnet-access-aot-shim-design.md` (§12.4 drift
+  invariants, §12.5 the integration set a Linux run cannot exercise).
 - **blnet C++ facade (`blnet_facade.g.hpp`)** — an ergonomic C++ rendering of the proxy slots,
   so hand-written C++ can say `System::Console::WriteLine("hi")` instead of naming a mangled
   slot whose trailing hash moves whenever the signature does. Plan:
@@ -725,13 +725,11 @@ value casts; a **denormal (~4.9e-324)** means the wire's two halves were split a
 worse than the original defect; a **BL6017 naming a static type of `Func`** on the AddressOf row
 means the target-typing arm was lost.
 
-**Still open — the one remaining item, and it needs Windows:**
-
-- **Task 15 Step 4 — the `IDE/` binary refresh.** The prebuilt `IDE/` binaries ship the compiler,
-  so they are stale against all of P2a-2. Procedure per `aada862`, including the deps.json
-  closure check via `dotnet exec --depsfile`. `robocopy <Shell bin> IDE /E` — **never `/MIR`**,
-  which deletes the engine DLL and import lib that live only there. A deployment chore, not
-  development.
+**Nothing is open.** Task 15 Step 4 — the `IDE/` binary refresh — shipped 2026-09-14 in
+`fbb3694`: redeployed with `robocopy /E` (never `/MIR`; ten files live only in `IDE/`) and
+verified by deployed BYTES rather than timestamps — `BasicLang.dll` 3057152 → 3089408 with a new
+hash, `BL6027` found as UTF-16 and `EmitFacade` as UTF-8, `IDE\BasicLang.exe new --list`
+returning 11 templates. Searching one encoding would have missed half the surface.
 
 ⚠ **Two corrections the inertness measurement produced, both now in the plan:** there are
 **THREE** runtime splices, not two — `485bbe1` adds a `BasicLang::String` alias — and `2752a96`
