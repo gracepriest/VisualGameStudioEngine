@@ -191,7 +191,7 @@ internal static class MsilHarness
     /// The whole round trip. Never throws for a BACKEND failure — the outcome is the result,
     /// so a test can pin "this shape does not work yet" as precisely as it pins one that does.
     /// </summary>
-    internal static MsilRun Run(string source, string moduleName = "MsilProbe")
+    internal static MsilRun Run(string source, string moduleName = "MsilProbe", string stdin = null)
     {
         var ilasm = RequireIlasm();
 
@@ -225,7 +225,7 @@ internal static class MsilHarness
                 "{\"runtimeOptions\":{\"tfm\":\"net8.0\",\"framework\":"
                 + "{\"name\":\"Microsoft.NETCore.App\",\"version\":\"8.0.0\"}}}");
 
-            var run = Exec("dotnet", $"\"{exePath}\"", dir);
+            var run = Exec("dotnet", $"\"{exePath}\"", dir, stdin);
             var combined = (run.Output + run.Error).Replace("\r\n", "\n");
 
             // The CLR reports a rejected program on stderr with a zero-ish exit in some hosts,
@@ -247,30 +247,40 @@ internal static class MsilHarness
     }
 
     /// <summary>The round trip, asserting it ran and returning what it printed.</summary>
-    internal static string RunExpectingSuccess(string source, string moduleName = "MsilProbe")
+    internal static string RunExpectingSuccess(
+        string source, string moduleName = "MsilProbe", string stdin = null)
     {
-        var r = Run(source, moduleName);
+        var r = Run(source, moduleName, stdin);
         Assert.That(r.Outcome, Is.EqualTo(MsilOutcome.Ran), r.Report);
         return r.Output;
     }
 
     private sealed record ExecResult(int ExitCode, string Output, string Error);
 
-    private static ExecResult Exec(string exe, string args, string workingDir)
+    /// <param name="stdin">
+    /// Text to feed the program, for a shape that reads input (<c>Console.ReadLine</c>). Always
+    /// CLOSED after writing, even when null: a program that reads with nothing on the pipe must
+    /// see end-of-input and return null rather than block until the 30s timeout.
+    /// </param>
+    private static ExecResult Exec(string exe, string args, string workingDir, string stdin = null)
     {
         using var p = Process.Start(new ProcessStartInfo(exe, args)
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            RedirectStandardInput = true,
             UseShellExecute = false,
             CreateNoWindow = true,
             WorkingDirectory = workingDir,
         });
         Assert.That(p, Is.Not.Null, $"could not start {exe}");
 
+        if (!string.IsNullOrEmpty(stdin)) p!.StandardInput.Write(stdin);
+        p!.StandardInput.Close();
+
         // Read both pipes before waiting: a program that fills one while we block on the other
         // deadlocks, and generated code is exactly the thing that produces surprising output.
-        var stdout = p!.StandardOutput.ReadToEndAsync();
+        var stdout = p.StandardOutput.ReadToEndAsync();
         var stderr = p.StandardError.ReadToEndAsync();
 
         if (!p.WaitForExit(30_000))

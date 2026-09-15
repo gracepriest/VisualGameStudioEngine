@@ -1636,8 +1636,10 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Handle standard library calls
             if (TryEmitStdLibCall(funcName, call.Arguments.ToList(), hasReturn))
             {
-                // Store result if needed
-                if (hasReturn && !string.IsNullOrEmpty(call.Name))
+                // Store result if needed — unless the arm emitted a statement, which leaves
+                // nothing on the stack for a stloc to take.
+                if (hasReturn && !string.IsNullOrEmpty(call.Name)
+                    && !IsVoidStdLibArm(ResolveStdLibArm(funcName)))
                 {
                     if (_declaredIdentifiers.Contains(call.Name))
                     {
@@ -1693,9 +1695,69 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
         }
 
+        /// <summary>
+        /// The .NET <c>Console</c> spellings, mapped onto the stdlib arm that already emits
+        /// them. <c>IRBuilder</c> names a static member call <c>Type.Member</c> — with the dot —
+        /// so <c>Console.WriteLine("x")</c> arrives here as <c>"Console.WriteLine"</c>, matches
+        /// no arm, and used to fall through to the emit-a-call-on-the-current-class default:
+        /// <c>call object Combined::ConsoleWriteLine(string)</c>, a method nothing defines.
+        /// ilasm accepts that (a MemberRef needs no definition) and it dies at RUN time with
+        /// MissingMethodException — the phantom self-call.
+        ///
+        /// <para><b>An explicit table, not qualifier-stripping.</b> Dropping the <c>Type.</c>
+        /// prefix and re-matching would route <c>Decimal.Round</c> onto the <c>Math.Round</c>
+        /// arm, which is a silent mis-emission rather than a missing one. Only the spellings
+        /// written here are aliased.</para>
+        ///
+        /// <para>The targets are deliberate and mirror <c>CppCodeGenerator.StdLibArm</c>, which
+        /// carries the same two dotted arms: on that backend <c>PrintLine</c> and
+        /// <c>Console.WriteLine</c> emit identical code on purpose, because "a split where
+        /// PrintLine printed 'A' and Console.WriteLine printed 65 would be a fresh internal
+        /// inconsistency". The <c>printline</c>/<c>print</c> arms already handle the ZERO-ARG
+        /// case (<c>Console.WriteLine()</c> is a bare newline), so that behaviour comes along
+        /// for free rather than needing a second implementation.</para>
+        /// </summary>
+        /// <summary>
+        /// The stdlib ARM a call name resolves to, after dotted aliasing. Used by both the
+        /// emitter and <see cref="IsVoidStdLibArm"/> so the two cannot disagree about which arm
+        /// ran — a disagreement there is exactly the stack underflow described above.
+        /// </summary>
+        private static string ResolveStdLibArm(string funcName)
+        {
+            var lower = funcName?.ToLower() ?? "";
+            return DottedStdLibAliases.TryGetValue(lower, out var aliased) ? aliased : lower;
+        }
+
+        private static readonly Dictionary<string, string> DottedStdLibAliases =
+            new(StringComparer.Ordinal)
+            {
+                ["console.writeline"] = "printline",
+                ["console.write"] = "print",
+                ["console.readline"] = "readline",
+            };
+
+        /// <summary>
+        /// Stdlib arms that emit a STATEMENT, not a value — their IL pushes nothing, so the
+        /// caller must not store a result even when the IR types the call as value-returning.
+        ///
+        /// <para>⛔ This is the second half of the Console fix and is not optional. <c>IRBuilder</c>
+        /// types <c>Console.WriteLine(x)</c> as returning <c>Object</c>, so routing it to the
+        /// <c>printline</c> arm — which correctly emits <c>call void …Console::WriteLine(string)</c>
+        /// — left the caller emitting a <c>stloc</c> for a value nothing pushed. That is a stack
+        /// underflow: ilasm accepts it and the CLR rejects the method with
+        /// InvalidProgramException. Fixing only the call name turned a MissingMethodException
+        /// into an InvalidProgramException.</para>
+        ///
+        /// <para><c>CppCodeGenerator.IsVoidStdLibCall</c> is the same predicate for the same
+        /// reason, and carries the same names. The two lists are separate because the backends
+        /// share no emission code, so a name added to one arm set needs adding to both.</para>
+        /// </summary>
+        private static bool IsVoidStdLibArm(string loweredName) =>
+            loweredName is "print" or "printline" or "randomize";
+
         private bool TryEmitStdLibCall(string funcName, List<IRValue> args, bool hasReturn)
         {
-            var lower = funcName.ToLower();
+            var lower = ResolveStdLibArm(funcName);
 
             switch (lower)
             {
