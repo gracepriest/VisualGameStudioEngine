@@ -196,6 +196,14 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   as **BL6027 (always a warning — never fails a build)**; coverage is pinned against a REAL
   framework surface at 223 of 234 slots. **Windows-gated at `ee3c086`** — 4 failures, all
   baseline.
+  ⚠ **A `BlnetSlotDesc[]` kind that lies fails SILENTLY** (§8.4, 2026-09-15). The array is what
+  `blnet_invoke_callback` reads to decide what to deep-copy when a callback is QUEUED rather than
+  run inline: HANDLE addrefs at enqueue, STRING deep-copies, VALUE does neither. Label a handle
+  slot VALUE and it compiles, links and passes every INLINE test — then the object can be
+  collected before the pump runs. Nothing on that path is a compile error, which is why the
+  classification is derived ONCE (`NetDelegateDispatch.TryClassifySlot`) and the managed
+  dispatcher, the native adapter and the descriptor array all project from it. Never re-decide it
+  locally.
   ⚠ **A coverage set identity needs a FLOOR beside it** — skipping every slot satisfies
   `rendered ∪ skipped == all` perfectly. Measured, not theorised: mutating the classifier to skip
   everything left the identity test green. `NetFacadeCoverageDriftTests` asserts both.

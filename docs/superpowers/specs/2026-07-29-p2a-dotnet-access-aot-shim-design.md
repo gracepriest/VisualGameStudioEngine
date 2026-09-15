@@ -749,6 +749,60 @@ is never set by codegen.
 Everything else — the thunk, `BlnetSlotDesc` encoding, `BlnetCallScope`, inline vs queued
 dispatch, `blnet_pump()` — already exists and is tested.
 
+#### Slot marshaling contract — *resolved 2026-09-15*
+
+Earlier revisions never said which slot SHAPES a callback may carry. The restriction lived only
+in code comments — "v1 admits blittable scalars only" — and three gates refused handles and
+strings on the strength of it, while the native runtime had already implemented its half:
+`BLNET_SLOT_HANDLE` addrefs at enqueue and the pump releases, `BLNET_SLOT_STRING` deep-copies.
+The shapes were transportable; what was missing was the **ownership**, which is what this
+specifies.
+
+A callback slot is one 64-bit word. Three kinds are admitted, in both parameter and return
+position:
+
+| Kind | Word | Parameter (managed → native) | Return (native → managed) |
+|---|---|---|---|
+| `VALUE` | the scalar's bit pattern | `WirePack`/`wire_to` — a **bit** copy, never a value cast | `wire_from`/`WireUnpack` |
+| `HANDLE` | `blnet_handle` | managed mints a **fresh** handle (`ToHandle`), **keeps** it for the call, releases it in a `finally`; native takes its **own** reference (`NetRef::Share`) | native **addrefs** before packing; managed reads the object out and **releases** |
+| `STRING` | UTF-8 `char*` | managed allocates, native **copies** into a `std::string`, managed frees in the same `finally` | native allocates through `g_shim.alloc` — the managed allocator — and managed frees it |
+
+> **NORMATIVE — the handle rule.** A handle in a callback slot is **borrowed, never
+> transferred**, in the parameter direction: the side that minted it keeps it for the duration
+> of the call and releases it afterwards, and the receiving side takes an independent reference
+> if it needs one. Both alternatives are wrong in opposite directions — adopting the word
+> double-releases it, and treating it as non-owning dangles as soon as the callback stores it.
+> The return direction transfers exactly one reference, addref'd by the producer and released by
+> the consumer once it has the object.
+
+Two consequences worth stating, because neither is visible at the point it goes wrong:
+
+- **`BlnetSlotDesc[]` must carry the real kind per slot.** It is what `blnet_invoke_callback`
+  reads to decide what to deep-copy when an invocation is QUEUED rather than run inline. A
+  handle slot mislabelled `VALUE` compiles, links, and passes every inline test — and then skips
+  the enqueue addref, so the object can be collected before the pump runs. There is no compile
+  error anywhere on that path, which is why the classification is derived **once**
+  (`NetDelegateDispatch.TryClassifySlot`) and the managed dispatcher, the native adapter and the
+  descriptor array all project from it.
+- **The `finally` is load-bearing.** The thunk reports a native failure as a status, but a
+  managed exception thrown by the callback body unwinds straight through the dispatcher frame.
+  A release parked after the call leaks one table slot — or one buffer — per invocation, on
+  something that is typically invoked in a loop.
+
+⚠ What stays refused, and why each is a *different* question:
+
+| Shape | The unresolved part |
+|---|---|
+| `System.Object` | §8.3 rejects it **permanently**, in every position: `void*` erasure is unsound. It has no marshal row, and "no row" is the handle rule — so it needs its own arm ahead of that, or the handle rule admits the one type §8.3 never will |
+| `Boolean`, `Char` | their WIRE spelling (`int32_t`/`uint16_t`) differs from their C++ spelling, so the adapter's parameter and the slot are not the same type. Pre-existing, and unrelated to ownership |
+| §6.4 conversion and multi-slot rows | a slot is ONE word; these need a converted temporary or several |
+
+⚠ **Reach.** This unblocks the managed dispatcher, so a `<NetProxy>` declared surface containing
+`Regex.Replace(String, MatchEvaluator)`, `Action<Task>` or `Func<Task>` now generates. The native
+adapter's handle half is emitted but not yet reachable from BasicLang: `CppCapabilityChecker` has
+no mapping for a .NET reference type in a **lambda parameter**, so `Function(m As Match) …` is
+refused before §8.4 is consulted. That is a codegen gap, not a marshaling one.
+
 ### 8.5 Consuming handle-represented collections
 
 A .NET array or collection arrives as an opaque handle, and **a handle supports no operation the

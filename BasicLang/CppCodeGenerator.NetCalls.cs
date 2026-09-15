@@ -678,26 +678,40 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     + $"('{parameter.DelegateInvokeSignature}') could not be read.");
             }
 
-            string CppSlotType(string netFullName, string what)
+            // §8.4's slot classification is NetDelegateDispatch's, not this file's — the same
+            // verdict drives the managed pack/unpack and the BlnetSlotDesc[] the runtime reads.
+            // Re-deciding it here is how the native adapter and the enqueue deep-copy drift
+            // apart, and that particular drift is silent (see CppSlotDescriptors).
+            NetSlotKind SlotKindOf(string netFullName, string what)
             {
-                if (NetMarshalTable.TryGetWireRow(netFullName, out var row)
-                    && row.Shape == NetWireShape.Scalar
-                    && !string.IsNullOrEmpty(row.CWire))
-                {
-                    return row.CWire;
-                }
+                if (NetDelegateDispatch.TryClassifySlot(netFullName, out var kind, out var refusal))
+                    return kind;
 
                 throw NetLoweringRefusal("BL6019",
                     $"'{targetDisplay}': argument {position} is a delegate whose {what} type "
-                    + $"'{netFullName}' is not a §8.3 by-value scalar. §8.4 v1 carries blittable "
-                    + "scalars only — Boolean and Char are excluded because their wire spelling "
-                    + "differs from their C++ spelling, and handle/String slots need a "
-                    + "marshaling contract §8.4 does not yet specify.");
+                    + refusal);
             }
 
+            // The C++ type the ADAPTER's lambda takes for one slot. A VALUE slot is its wire
+            // spelling; a handle is a NetRef and a string a std::string, which is what the
+            // BasicLang lambda on the other side is actually typed as.
+            string CppSlotType(string netFullName, string what) =>
+                SlotKindOf(netFullName, what) switch
+                {
+                    NetSlotKind.Handle => "BasicLang::blnet::NetRef",
+                    NetSlotKind.String => "std::string",
+                    _ => NetMarshalTable.TryGetWireRow(netFullName, out var row) ? row.CWire : null,
+                };
+
+            var slotKinds = invokeParams.Select(t => SlotKindOf(t, "parameter")).ToList();
             var slotTypes = invokeParams.Select(t => CppSlotType(t, "parameter")).ToList();
             var isVoid = string.Equals(returnType, "System.Void", StringComparison.Ordinal);
-            var cppReturn = isVoid ? "void" : CppSlotType(returnType, "return");
+
+            // ⛔ Not just a classification — SlotKindOf THROWS the BL6019 for an inadmissible
+            // return type, so this line is the return-position gate. It replaced an unused
+            // `cppReturn` local that existed only for that same side effect; keeping both ran
+            // the gate twice and left a variable nothing read.
+            var returnKind = isVoid ? NetSlotKind.Value : SlotKindOf(returnType, "return");
 
             var guard = NextNetTemp();
             var callee = GetValueName(argument);
@@ -722,15 +736,64 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // is right for an integer row and silently lossy for a floating one (chip
             // task_75064f2e: the bits of 1.5 read as an integer count are 4.6e18). The seam in
             // blnet_runtime.hpp decides per type; see its comment before adding a cast here.
+            // §8.4 per-kind unpack.
+            //
+            //   VALUE  — wire_to, never a cast (a cast is silently lossy for a floating row).
+            //   HANDLE — NetRef::Share, NOT NetRef(word). The managed dispatcher minted this
+            //            handle, still holds it for the duration of the thunk call, and
+            //            releases it when the call returns. Adopting the word would release it
+            //            twice; treating it as non-owning would dangle the moment the BasicLang
+            //            lambda stores the NetRef. Share takes our own reference, which is
+            //            correct either way.
+            //   STRING — a COPY into std::string. The buffer is the caller's for the call only;
+            //            on the queued path it is already the runtime's deep copy, and either
+            //            way the lambda may outlive it.
             var unpacked = string.Join(", ",
-                slotTypes.Select((t, i) => "BasicLang::blnet::wire_to<" + t + ">(blnet_a["
-                    + i.ToString(CultureInfo.InvariantCulture) + "])"));
+                slotKinds.Select((kind, i) =>
+                {
+                    var slot = "blnet_a[" + i.ToString(CultureInfo.InvariantCulture) + "]";
+                    return kind switch
+                    {
+                        NetSlotKind.Handle => "BasicLang::blnet::NetRef::Share(" + slot + ")",
+                        NetSlotKind.String => "std::string(reinterpret_cast<const char*>(" + slot
+                            + ") ? reinterpret_cast<const char*>(" + slot + ") : \"\")",
+                        _ => "BasicLang::blnet::wire_to<" + slotTypes[i] + ">(" + slot + ")",
+                    };
+                }));
             var invoke = guard + "_fn(" + unpacked + ")";
 
-            var body = isVoid
-                ? invoke + "; return 0;"
-                : "auto blnet_r = " + invoke + "; if (blnet_result) *blnet_result = "
-                  + "BasicLang::blnet::wire_from(blnet_r); return 0;";
+            // §8.4 per-kind RESULT pack, the mirror of the managed side's unpack.
+            //
+            //   HANDLE — addref before packing. Our NetRef dies as this lambda returns, so an
+            //            un-addref'd word would reach managed code already released. The
+            //            dispatcher releases the reference we add here once it has the object.
+            //   STRING — allocate through g_shim.alloc, which IS the managed allocator, so the
+            //            dispatcher's NativeMemory.Free is the matching half rather than a
+            //            cross-allocator free. A null alloc (unbound shim) yields a null word,
+            //            which Utf8ToString maps to null rather than reading wild memory.
+            string PackResult() => returnKind switch
+            {
+                NetSlotKind.Handle =>
+                    "auto blnet_r = " + invoke + "; if (blnet_result) { "
+                    + "if (blnet_r && BasicLang::blnet::g_shim.addref) "
+                    + "BasicLang::blnet::NetCheck(BasicLang::blnet::g_shim.addref(blnet_r.get())); "
+                    + "*blnet_result = blnet_r.get(); } return 0;",
+
+                NetSlotKind.String =>
+                    "auto blnet_r = " + invoke + "; if (blnet_result) { "
+                    + "char* blnet_buf = nullptr; "
+                    + "if (BasicLang::blnet::g_shim.alloc) { "
+                    + "blnet_buf = static_cast<char*>(BasicLang::blnet::g_shim.alloc("
+                    + "static_cast<int64_t>(blnet_r.size()) + 1)); "
+                    + "if (blnet_buf) { std::memcpy(blnet_buf, blnet_r.data(), blnet_r.size()); "
+                    + "blnet_buf[blnet_r.size()] = '\\0'; } } "
+                    + "*blnet_result = reinterpret_cast<uint64_t>(blnet_buf); } return 0;",
+
+                _ => "auto blnet_r = " + invoke + "; if (blnet_result) *blnet_result = "
+                     + "BasicLang::blnet::wire_from(blnet_r); return 0;",
+            };
+
+            var body = isVoid ? invoke + "; return 0;" : PackResult();
 
             prologue.Add(
                 "BasicLang::blnet::CallbackRef " + guard + "(["

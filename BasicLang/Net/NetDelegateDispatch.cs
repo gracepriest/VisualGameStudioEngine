@@ -65,8 +65,115 @@ namespace BasicLang.Net
     /// export set is part of §10.2's shim cache key, and an order that depended on IR walk order
     /// would produce false cache misses (a ~27 s republish for an unchanged surface).</para>
     /// </summary>
+    /// <summary>How one §8.4 callback slot's 64-bit word is encoded. Mirrors the native
+    /// <c>BlnetSlotKind</c> — the values are NOT parallel by accident, <see
+    /// cref="NetDelegateDispatch.CppSlotDescriptors"/> renders these straight into it.</summary>
+    internal enum NetSlotKind
+    {
+        /// <summary><c>BLNET_SLOT_VALUE</c> — a blittable scalar, in-slot.</summary>
+        Value,
+
+        /// <summary><c>BLNET_SLOT_STRING</c> — a UTF-8 <c>char*</c>, C3 ownership.</summary>
+        String,
+
+        /// <summary><c>BLNET_SLOT_HANDLE</c> — a <c>blnet_handle</c>, refcounted.</summary>
+        Handle,
+    }
+
     internal static class NetDelegateDispatch
     {
+        /// <summary>
+        /// <b>THE</b> §8.4 slot classification — which wire form a delegate's parameter or
+        /// return type crosses as, and why it is refused when it does not.
+        ///
+        /// <para><b>Why it lives here rather than in either emitter.</b> Three places have to
+        /// agree about a callback slot, and they are in three different languages:
+        /// <c>NetShimGenerator</c> emits the managed pack/unpack, <c>CppCodeGenerator</c> emits
+        /// the native adapter, and <see cref="CppSlotDescriptors"/> emits the
+        /// <c>BlnetSlotDesc[]</c> the RUNTIME reads to decide what to deep-copy at enqueue.
+        /// Disagreement between the first two is a compile error; disagreement with the THIRD is
+        /// silent — a handle slot mislabelled <c>VALUE</c> skips the enqueue addref and the
+        /// object can be collected before the pump runs it. So the classification is derived
+        /// once, here, and the other three project from it.</para>
+        ///
+        /// <para><b>What stays refused, each for its own reason</b> (§8.4, resolved 2026-09-15 —
+        /// and, exactly as §8.3 insists, no one of these may be widened by analogy with
+        /// another):</para>
+        /// <list type="bullet">
+        /// <item><description><c>System.Object</c> — §8.3 rejects it PERMANENTLY, in every
+        /// position, because <c>void*</c> erasure is unsound. It reaches this function as a
+        /// type with no marshal row, which is the handle rule, so it needs its own arm ahead of
+        /// that or the handle rule would quietly admit the one type §8.3 never will.</description></item>
+        /// <item><description><c>Boolean</c> and <c>Char</c> — their WIRE spelling differs from
+        /// their C++ spelling (<c>int32_t</c>/<c>uint16_t</c> against <c>bool</c>/<c>char16_t</c>),
+        /// so the adapter's parameter type and the slot's type are not the same type. A
+        /// pre-existing refusal, unrelated to the marshaling contract this resolves.</description></item>
+        /// <item><description>§6.4 conversion rows and multi-slot pairs — a callback slot is
+        /// ONE 64-bit word and these need a converted temporary or several words.</description></item>
+        /// </list>
+        /// </summary>
+        internal static bool TryClassifySlot(
+            string typeFullName, out NetSlotKind kind, out string refusal)
+        {
+            kind = default;
+            refusal = null;
+
+            // ⛔ MUST precede the no-row handle rule below. Object HAS no marshal row, so that
+            // rule would admit it as a handle — and §8.3 rejects it permanently.
+            if (typeFullName == "System.Object")
+            {
+                refusal = "'System.Object' is permanently unmarshalable (§8.3): it erases to "
+                    + "void* and nothing on either side can recover what it was. Use the "
+                    + "concrete type the callback actually receives.";
+                return false;
+            }
+
+            if (!NetMarshalTable.TryGetWireRow(typeFullName, out var row))
+            {
+                // Every reference type with no special row crosses as an opaque handle — the
+                // safe default §8.3 already relies on.
+                kind = NetSlotKind.Handle;
+                return true;
+            }
+
+            switch (row.Shape)
+            {
+                case NetWireShape.Scalar when !string.IsNullOrEmpty(row.CWire):
+                    kind = NetSlotKind.Value;
+                    return true;
+
+                case NetWireShape.String:
+                    kind = NetSlotKind.String;
+                    return true;
+
+                case NetWireShape.Boolean:
+                case NetWireShape.Char:
+                    refusal = $"'{typeFullName}' has a wire spelling ({row.CWire}) that differs "
+                        + "from its C++ spelling, so the adapter's parameter and the slot are "
+                        + "not the same type. Unrelated to §8.4's marshaling contract; use the "
+                        + "wire-width integer instead.";
+                    return false;
+
+                default:
+                    refusal = $"'{typeFullName}' is a §6.4 conversion or multi-slot row, and a "
+                        + "callback slot is ONE 64-bit word. §8.4 admits blittable scalars, "
+                        + "handles and strings; a converted temporary or a multi-word slot "
+                        + "needs a contract §8.4 does not specify.";
+                    return false;
+            }
+        }
+
+        /// <summary>
+        /// <see cref="TryClassifySlot"/>'s verdict for a slot already known to be admissible.
+        /// Throws rather than returning a default, because a default here is the silent
+        /// mislabelling <see cref="TryClassifySlot"/>'s remarks describe.
+        /// </summary>
+        internal static NetSlotKind SlotKind(string typeFullName) =>
+            TryClassifySlot(typeFullName, out var kind, out var refusal)
+                ? kind
+                : throw new NotSupportedException(
+                    "§8.4 slot classification asked for an inadmissible type: " + refusal);
+
         /// <summary>
         /// The delegate types <paramref name="surface"/> needs dispatchers for: every distinct
         /// delegate-typed PARAMETER across its collected members, ordinal by type name.
@@ -163,17 +270,35 @@ namespace BasicLang.Net
         /// explicitly (<c>if (argc &gt; 0) e.slots.assign(…)</c>), so a zero-arg registration
         /// may legally pass <c>nullptr</c> and allocating an empty array would be pretend-work.
         ///
-        /// <para>Every slot is <c>BLNET_SLOT_VALUE</c> with size 0 because v1 admits blittable
-        /// scalars only — the gate lives in <c>NetShimGenerator</c>'s dispatcher emission, which
-        /// throws at generation time for anything else, so a non-scalar delegate never reaches
-        /// here. <c>size</c> is documented as meaningful only for STRUCT and OUT.</para>
+        /// <para><b>The kind per slot is load-bearing, and its failure mode is silent.</b>
+        /// This array is what <c>blnet_invoke_callback</c> reads when a callback is QUEUED
+        /// rather than run inline: <c>BLNET_SLOT_HANDLE</c> makes it addref the handle at
+        /// enqueue (the pump releases it after), <c>BLNET_SLOT_STRING</c> makes it deep-copy the
+        /// buffer, and <c>BLNET_SLOT_VALUE</c> makes it do neither. Labelling a handle slot
+        /// VALUE therefore compiles, links, and passes every inline test — and then lets the
+        /// object be collected before the pump runs. That is why this renders
+        /// <see cref="TryClassifySlot"/>'s verdict rather than a constant, and why
+        /// <c>NetDelegateSlotWireTests</c> pins the rendering per kind.</para>
+        ///
+        /// <para><c>size</c> stays 0: it is documented as meaningful only for STRUCT and OUT,
+        /// and §8.4 admits neither.</para>
         /// </summary>
         internal static string CppSlotDescriptors(string invokeSignature)
         {
-            var count = SlotCount(invokeSignature);
-            if (count == 0) return null;
+            if (!TryParseInvokeSignature(invokeSignature, out _, out var parameters)
+                || parameters.Count == 0)
+            {
+                return null;
+            }
 
-            return "{ " + string.Join(", ", Enumerable.Repeat("{BLNET_SLOT_VALUE, 0}", count)) + " }";
+            var descriptors = parameters.Select(t => SlotKind(t) switch
+            {
+                NetSlotKind.Handle => "{BLNET_SLOT_HANDLE, 0}",
+                NetSlotKind.String => "{BLNET_SLOT_STRING, 0}",
+                _ => "{BLNET_SLOT_VALUE, 0}",
+            });
+
+            return "{ " + string.Join(", ", descriptors) + " }";
         }
 
         /// <summary>
