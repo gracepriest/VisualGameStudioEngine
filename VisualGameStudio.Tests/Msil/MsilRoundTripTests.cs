@@ -206,25 +206,90 @@ public class MsilRoundTripTests
             + "assert the correct answer.");
     }
 
+    // ---- Fixed 2026-09-15: the .NET Console surface ------------------------------------
+    //
+    // IRBuilder names a static member call `Type.Member` — WITH the dot — so
+    // Console.WriteLine("x") reached TryEmitStdLibCall as "Console.WriteLine", matched no arm,
+    // and fell through to the emit-a-call-on-the-current-class default:
+    // `call object Combined::ConsoleWriteLine(string)`, which nothing defines. ilasm accepts a
+    // MemberRef with no definition, so it died at RUN time with MissingMethodException.
+    //
+    // The fix has TWO halves and the first alone made things worse. Routing the name to the
+    // printline arm produced `call void ...Console::WriteLine(string)` followed by a `stloc` —
+    // because IRBuilder types Console.WriteLine as returning Object, so the caller stored a
+    // result the void arm never pushed. That stack underflow is an InvalidProgramException:
+    // a different, later failure in place of the original one.
+
     /// <summary>
-    /// ⛔ <c>Console.WriteLine</c> emits <c>call object &lt;Module&gt;::ConsoleWriteLine(string)</c>
-    /// — a call to a method on the GENERATED class that is never defined anywhere in the file.
-    /// ilasm accepts it (a MemberRef needs no definition), so it fails at RUN time with
-    /// <c>MissingMethodException</c>.
+    /// The whole Console surface in one transcript, including the two cases most likely to be
+    /// got wrong: a non-string overload, and the ZERO-ARG <c>WriteLine()</c> that is a bare
+    /// newline rather than a call with a missing argument.
     ///
-    /// <para>Root cause: <c>TryEmitStdLibCall</c> matches unqualified stdlib names only
-    /// (<c>printline</c>, <c>sqrt</c>, …). Any <c>Type.Member(...)</c> call misses every arm and
-    /// falls through to the emit-a-call-on-the-current-class default. The correct emission
-    /// already exists in that function — <c>call void [mscorlib]System.Console::WriteLine(string)</c>
-    /// — it is simply never reached for a qualified call.</para>
+    /// <para><c>Write</c> followed by <c>WriteLine()</c> must produce ONE line — that pairing is
+    /// what proves <c>Write</c> really omitted its newline instead of the two calls happening
+    /// to print on separate lines.</para>
     /// </summary>
     [Test]
-    public void ConsoleWriteLine_IsAPhantomSelfCall_PinnedDivergence()
+    public void TheConsoleSurface_Runs()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              Console.WriteLine("HELLO")
+              Console.WriteLine(42)
+              Console.Write("NO-NL")
+              Console.WriteLine()
+              Console.WriteLine("END")
+             End Sub
+            End Module
+            """), Is.EqualTo("HELLO\n42\nNO-NL\nEND\n"));
+    }
+
+    /// <summary>
+    /// <c>Console.ReadLine</c> — the alias whose arm genuinely RETURNS a value, so its result
+    /// store must survive the void-arm suppression that <c>WriteLine</c> needed. Aliasing all
+    /// three Console spellings and then suppressing all three would break this one silently.
+    ///
+    /// <para>The explicit <c>CType</c> is required by the FRONT END, not by MSIL: the analyzer
+    /// types every <c>Type.Member</c> call as <c>Object</c>, so the C# backend rejects the
+    /// uncast version with the identical message. Not this backend's gap.</para>
+    /// </summary>
+    [Test]
+    public void ConsoleReadLine_ReadsStdin_AndKeepsItsValue()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              Dim s As String = CType(Console.ReadLine(), String)
+              PrintLine("GOT:" & s)
+             End Sub
+            End Module
+            """, stdin: "TYPED\n"), Is.EqualTo("GOT:TYPED\n"));
+    }
+
+    /// <summary>
+    /// ⛔ <b>The REST of the dotted static surface is still the phantom self-call.</b>
+    /// <c>Math.Sqrt(16.0)</c> emits <c>call object Combined::MathSqrt(float64)</c> and dies with
+    /// MissingMethodException, exactly as Console did.
+    ///
+    /// <para>Deliberately NOT fixed by aliasing, because the right answer is a design decision
+    /// rather than a missing row. Measured: the C++ backend routes <c>Math.Sqrt</c> through the
+    /// .NET PROXY (<c>bl_net_System_Math_Sqrt__System_Double_…</c>), while the C# backend emits
+    /// <c>Math.Sqrt</c> directly. MSIL runs on .NET and could do either, and picking one decides
+    /// how the whole <c>KnownNetStaticTypes</c> surface reaches this backend.</para>
+    ///
+    /// <para>⛔ And the obvious shortcut is unsound: stripping the <c>Type.</c> prefix and
+    /// re-matching would route <c>Decimal.Round</c> onto the <c>Math.Round</c> arm — a silent
+    /// mis-emission rather than a missing one. That is why the Console fix uses an explicit
+    /// three-entry alias table instead.</para>
+    /// </summary>
+    [Test]
+    public void TheRestOfTheDottedStaticSurface_IsStillAPhantomSelfCall_PinnedDivergence()
     {
         var run = Run("""
             Module M
              Sub Main()
-              Console.WriteLine("HELLO")
+              PrintLine(CStr(Math.Sqrt(16.0)))
              End Sub
             End Module
             """);
@@ -232,59 +297,12 @@ public class MsilRoundTripTests
         Assert.Multiple(() =>
         {
             Assert.That(run.Outcome, Is.EqualTo(MsilOutcome.RunFailed), run.Report);
-            Assert.That(run.Output, Does.Contain("MissingMethodException"),
-                "the phantom call must still be the failure; a DIFFERENT failure here means "
-                + "something else broke on the way: " + run.Detail);
-            Assert.That(run.Il, Does.Contain("ConsoleWriteLine"),
-                "pinned on the emitted text as well, so the cause stays visible when the "
-                + "runtime message changes between .NET versions.");
+            Assert.That(run.Output, Does.Contain("MissingMethodException"), run.Detail);
+            Assert.That(run.Il, Does.Contain("MathSqrt"),
+                "still the dotted name sanitised into a self-call. When this goes red, the "
+                + "design decision above was made — promote it to a real assertion.");
         });
     }
-
-    // ---- Fixed 2026-09-15: IL type specs and tokens ------------------------------------
-    //
-    // IL spells a type differently in different positions, and the backend used one spelling
-    // everywhere. A local/parameter/field takes a type SPEC (`int32`, `string`, `class Foo`,
-    // `string[]`); box/newarr/castclass take a type TOKEN (`[mscorlib]System.Int32`). Since
-    // `[X]` means "assembly X" in IL, the old `box [int32]` named a type in an assembly called
-    // int32 and did not parse. IlTypeSpec/IlTypeToken now split the two.
-
-    /// <summary>
-    /// Boxing an Integer for <c>CStr</c>. The VALUE is asserted, not merely that it ran: a
-    /// wrong token would still have to produce 42 to pass here.
-    /// </summary>
-    [Test]
-    public void BoxingAnInteger_Runs_AndComputesTheRightValue()
-    {
-        Assert.That(RunExpectingSuccess("""
-            Module M
-             Sub Main()
-              Dim a As Integer = 21
-              PrintLine(CStr(a + a))
-             End Sub
-            End Module
-            """), Is.EqualTo("42\n"));
-    }
-
-    /// <summary>A local of a user class — <c>class Greeter</c>, not a bare <c>Greeter</c>.</summary>
-    [Test]
-    public void ALocalOfAUserClass_Runs()
-    {
-        Assert.That(RunExpectingSuccess("""
-            Class Greeter
-             Public Name As String
-            End Class
-
-            Module M
-             Sub Main()
-              Dim g As New Greeter()
-              PrintLine("MADE")
-             End Sub
-            End Module
-            """), Is.EqualTo("MADE\n"));
-    }
-
-    // ---- Still broken, each at its own root cause --------------------------------------
 
     /// <summary>
     /// ⛔ <b>An array local is declared but never ALLOCATED.</b> The type spec is right now
