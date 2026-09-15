@@ -306,30 +306,41 @@ namespace BasicLang.Compiler.CodeGen.Net
                         + "ByRef and convert at the call site.");
                 }
 
-                if (p.RefKind != NetRefKind.None && wire.Kind != WireKind.Scalar
+                if (p.RefKind != NetRefKind.None
+                    && wire.Kind != WireKind.Scalar
+                    && wire.Kind != WireKind.Handle
                     && !NetArrayCopy.TryGetFormForArray(p.TypeFullName, out _))
                 {
-                    // Loud rather than wrong. §8.3 says "ref/out -> pointer slot" and stops
-                    // there; for a handle that leaves ownership undefined (writing back a NEW
-                    // NetRef over the caller's releases a handle the callee may have returned
-                    // unchanged — a double release), and for a string it leaves the in
-                    // direction untransmittable through a char**. Neither is guessable, and
-                    // shipping a guess here is a use-after-free in generated C++.
+                    // Loud rather than wrong, for the shapes §8.3 still leaves open. Each is a
+                    // DIFFERENT unresolved question, so none of them may be widened by analogy
+                    // with another:
+                    //
+                    //   String  — ownership runs opposite ways per direction (in-params borrow,
+                    //             out-params transfer a blnet_alloc buffer). One char** cannot
+                    //             carry both.
+                    //   §6.4    — the managed side holds a marshalled COPY, not a pointer into
+                    //             native memory, so "the callee writes through your pointer" is
+                    //             not what happens.
+                    //
+                    // The HANDLE row is no longer among them: §8.3's "ByRef handle ownership"
+                    // section (resolved 2026-09-15) makes the write-back well-defined, because
+                    // the managed side always writes a FRESHLY created handle and never an
+                    // incoming one. See the remarks on FromWire.
                     throw new NotSupportedException(
                         $"Cannot emit a proxy for '{member}': parameter {index} is passed "
                         + $"{p.RefKind} with wire form {wire.Kind}. Spec §8.3 pins ByRef slots "
-                        + "only for by-value scalars; ByRef handle and ByRef String ownership "
-                        + "is unspecified. Specify it in §8.3 and extend NetProxyEmitter.WireOf "
-                        + "— do not widen this check.");
+                        + "to by-value scalars and handle rows; ByRef String and ByRef §6.4 "
+                        + "ownership is still unspecified. Specify it in §8.3 and extend "
+                        + "NetProxyEmitter.WireOf — do not widen this check.");
                 }
-                // The ONE widening, and it is specified: §8.6's `ref`/`out` array slot. The
-                // ownership objection above does not apply, because the caller MINTED the
-                // incoming handle itself (bl_net_array_new_… copies a std::vector in at
-                // refcount 1) rather than borrowing one the callee might hand straight back.
-                // Writing a new handle over it therefore releases something this frame owns,
-                // which is the definition of well-defined. §8.6 also makes ref/out the EXEMPTION
-                // from §14.11's one-way divergence, so the write-back is not an optimisation —
-                // the whole row exists to carry it.
+                // §8.6's `ref`/`out` array slot rides the same handle rule. Note its ORIGINAL
+                // justification — "the caller MINTED the incoming handle itself" — is NOT the
+                // load-bearing one and must not be cited as such: minting decides who releases
+                // what, not whether the write-back is well-defined. What makes it well-defined
+                // is that Table.Create has no identity map, so a re-handled object yields a
+                // SECOND independent table reference (§8.3, ByRef handle ownership).
+                // §8.6 also makes ref/out the EXEMPTION from §14.11's one-way divergence, so the
+                // write-back is not an optimisation — the whole row exists to carry it.
                 parameters.Add(new ParameterPlan(p, wire, index++));
             }
 
@@ -971,11 +982,16 @@ namespace BasicLang.Compiler.CodeGen.Net
             : expression;
 
         /// <summary>
-        /// Wire value back to C++ value, for ByRef write-back and scalar returns. The handle arm
-        /// is reached only by §8.6's ref/out array row: assigning a fresh <c>NetRef</c> over the
-        /// parameter releases the handle this frame minted and takes ownership of whatever the
-        /// callee left in the slot — including the SAME array re-handled, which is two table
+        /// Wire value back to C++ value, for ByRef write-back and scalar returns.
+        ///
+        /// <para>The handle arm carries §8.3's ByRef handle rule (resolved 2026-09-15), of which
+        /// §8.6's ref/out array row was only the first instance: assigning a fresh <c>NetRef</c>
+        /// over the parameter releases the handle the caller held and takes ownership of whatever
+        /// the callee left in the slot — including the SAME object re-handled, which is two table
         /// references to one object and therefore two independent releases, not a double free.
+        /// <c>HandleTable.Create</c> has no identity map, which is what makes that true; the
+        /// managed side must never write back an INCOMING handle value, and <c>ToHandle</c>
+        /// guarantees it does not.</para>
         /// </summary>
         private static string FromWire(WireForm wire, string expression) =>
             wire.Kind == WireKind.Handle ? "BasicLang::blnet::NetRef(" + expression + ")"

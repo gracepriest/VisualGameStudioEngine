@@ -671,7 +671,9 @@ up front (§6.1) is sufficient; no separate marshaling calculus is needed.
 | Delegate parameters | callback handle via P0's thunk | §8.4 |
 | Other **non-`ref`** value types | handle (boxed) | blittable-by-value is a later optimization |
 | `ref struct` — `Span<T>`, `ReadOnlySpan<T>`, `Regex.ValueMatchEnumerator`, … | **not marshalable — BL6019** | cannot be boxed; `GCHandle.Alloc(object)` (`HandleTable.cs:26`) cannot take one |
-| `ref` / `out` | pointer slot | `IRCall.ByRefArguments` today is populated only for resolved *user* functions; extending it is required work |
+| `ref` / `out` **of a by-value scalar** | pointer slot | `IRCall.ByRefArguments` today is populated only for resolved *user* functions; extending it is required work |
+| `ref` / `out` / `in` **of a handle row** | `uint64_t*` — **fresh-handle rule below** | resolved 2026-09-15; see *ByRef handle ownership* |
+| `ref` / `out` of a `String`, an enum, or a §6.4 by-value-pointer row | **not marshalable — BL6019** | each has its own unresolved question; see below |
 
 **When BL6019 fires.** A type outside this table is an error **only when it is actually used** —
 reached from a BasicLang call site, or required by a member the program calls. A `<NetProxy>`
@@ -688,6 +690,45 @@ type would fail on its inherited `Equals(Object)` since `Object` is permanently 
 **Returned reference types** are registered with `Table.Create(...)` at refcount 1, transferring
 ownership to the native `NetRef`. This rule is implied by P0's `blnet_test_create_list` but was
 never written down generally; it is normative here.
+
+#### ByRef handle ownership — *resolved 2026-09-15*
+
+Earlier revisions left this undefined and three gates refused `ref`/`out`/`in` of a handle row on
+that basis, each saying the same thing: writing back would "release a handle the callee may have
+returned unchanged — a double release". **That premise is false for shim-generated code, and the
+rule below is what makes it false.**
+
+> **NORMATIVE.** The managed side writes a **freshly created** handle into a ByRef slot —
+> `ToHandle(x)` → `Table.Create(x)`, refcount 1 — and **never writes back an incoming handle
+> value**. The native side unconditionally adopts whatever it finds in the slot into a new
+> `NetRef`; the assignment releases the handle the caller held.
+>
+> This applies to **all four** ref kinds. `NetShimGenerator` writes `*aN = ToHandle(local)` for
+> every ByRef slot, so `in` and `ref readonly` are not exceptions: the managed side cannot have
+> *changed* the object, but it still hands back a newly created handle **for that same object**,
+> and the caller ends up holding a different handle than it passed. That is the wasteful-looking
+> case, and it is also the one that proves the rule is doing the work — were `in` to write the
+> incoming value back instead, the adopting assignment would release the caller's only reference
+> and then hold a stale handle to a collected object.
+
+The safety argument is one sentence: `HandleTable.Create` allocates a **new slot with its own
+`GCHandle` and its own refcount** on every call and has no identity map, so two `Create` calls on
+one object yield two *independent* table references. Re-handling an unchanged object therefore
+produces two independent releases, **not** a double free — which is exactly what
+`NetProxyEmitter.FromWire`'s remarks already said about §8.6's array row. §8.6 was never a special
+case; it was this general rule, observed in the one place it had already been needed.
+
+The narrower justification §8.6 carried — "the caller MINTED the incoming handle itself" — is
+therefore **not** load-bearing and must not be cited as the reason. Minting matters for who
+releases what, not for whether the write-back is well-defined.
+
+⚠ What stays refused, and why each is a *different* question:
+
+| Shape | The unresolved part |
+|---|---|
+| ByRef `String` | ownership runs opposite ways per direction: in-params borrow, out-params transfer a `blnet_alloc` buffer. One `char**` slot cannot carry both |
+| ByRef enum | §8.3 crosses an enum as its underlying integral, a by-value row; writing back needs a widening contract |
+| ByRef §6.4 by-value-pointer | the managed side holds a marshalled copy, not a pointer into native memory, so "the callee writes through your pointer" is not what happens |
 
 ### 8.4 Delegate arguments
 

@@ -622,13 +622,23 @@ public class NetProxyEmitterTests
     // ---- Refusals -----------------------------------------------------------------------
 
     /// <summary>
-    /// §8.3 pins ByRef slots only for by-value scalars. Guessing at ByRef-handle ownership
-    /// produces a double release, and ByRef String cannot carry the in direction through a
-    /// <c>char**</c> at all — both are use-after-free in generated C++, so the emitter refuses
-    /// rather than emitting something plausible.
+    /// §8.3 pins ByRef slots to by-value scalars and, since the 2026-09-15 "ByRef handle
+    /// ownership" resolution, handle rows. What is left over is refused rather than emitted
+    /// plausibly: a ByRef <b>String</b> cannot carry both directions through one
+    /// <c>char**</c> (an in-parameter borrows the caller's buffer, an out-parameter transfers a
+    /// <c>blnet_alloc</c> one), and a ByRef <b>§6.4</b> row points at a buffer the managed side
+    /// marshals a COPY out of, so a write-back would need a re-marshal contract the spec does
+    /// not define. Two open questions, not one — neither may be widened by analogy with the
+    /// other, nor with the handle row that was just settled.
+    ///
+    /// <para>⛔ The HANDLE case (<c>Regex</c>) used to be a third row here, refused on the
+    /// grounds that a write-back "produces a double release". That premise was false:
+    /// <c>HandleTable.Create</c> has no identity map, so a re-handled object yields a second
+    /// INDEPENDENT table reference. See <see cref="NetByRefHandleTests"/>, which pins both the
+    /// table property the rule rests on and the run-level release sequence.</para>
     /// </summary>
     [TestCase("System.String")]
-    [TestCase("System.Text.RegularExpressions.Regex")]
+    [TestCase("System.Guid")]
     public void ByRefNonScalarParametersAreRefusedLoudly(string parameterType)
     {
         var surface = new NetSurface(

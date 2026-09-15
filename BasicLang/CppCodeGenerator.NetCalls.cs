@@ -852,13 +852,19 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// <c>default</c> before the call), and converting an uninitialized BasicLang local
         /// through a range-checking §6.4 converter would throw on a value nobody passed.</para>
         ///
-        /// <para><b>What still refuses, and why it is not a guess we could make.</b> A ByRef
-        /// STRING has no single wire type — <c>const char*</c> in, <c>char**</c> out, with
-        /// opposite ownership — and a ByRef HANDLE leaves ownership undefined: writing a NEW
-        /// handle over the caller's releases one the callee may have returned unchanged, a
-        /// double release. §8.3 says "ref/out → pointer slot" and stops there, so both refuse
-        /// here exactly as <c>NetProxyEmitter.PlanMember</c> refuses to emit them. The analyzer
-        /// reports the same shapes at their source positions first.</para>
+        /// <para><b>What still refuses, and the two reasons are NOT the same.</b> A ByRef
+        /// STRING or §6.4 row has no single wire type — <c>const char*</c> in, <c>char**</c>
+        /// out, with opposite ownership; a §6.4 slot is already a pointer to a buffer the
+        /// managed side copies out of — and §8.3 leaves both unspecified, so
+        /// <c>NetProxyEmitter.PlanMember</c> refuses them too.</para>
+        ///
+        /// <para>A ByRef HANDLE is different: §8.3's <i>ByRef handle ownership</i> (resolved
+        /// 2026-09-15) specifies it and the emitter now emits it, so what refuses here is THIS
+        /// lowering — <c>IRCall.ByRefArguments</c> is populated for resolved user functions
+        /// only, so a call site has no way to hand a <c>NetRef&amp;</c> to the slot. ⛔ Do not
+        /// reintroduce the old "double release" reason: <c>HandleTable.Create</c> has no
+        /// identity map, so a re-handled object yields a second INDEPENDENT reference. The
+        /// analyzer reports the same shapes at their source positions first.</para>
         /// </summary>
         private NetArgEmission MarshalNetByRefArgument(
             string targetDisplay, NetParameterDescriptor parameter, string position, IRValue argument)
@@ -867,9 +873,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var passing = parameter.RefKind.ToString().ToLowerInvariant();
 
             // §8.6 row 4 — a ref/out ARRAY slot: copies in AND reads back. Handled before the
-            // by-value-scalar gate below, which would otherwise refuse it for having no single
-            // wire slot. The ownership objection that gate names does not apply here: the handle
-            // in the slot is one this frame MINTED, not one it borrowed.
+            // gates below, which would otherwise refuse it for having no single wire slot.
+            // ⛔ Do NOT restate the old justification, "the handle in the slot is one this frame
+            // MINTED": §8.3 (ByRef handle ownership) says explicitly that minting is not what
+            // makes the write-back sound — Table.Create has no identity map, so a re-handled
+            // object yields a second INDEPENDENT reference. §8.6 was this general rule all
+            // along, observed in the one place it had already been needed.
             if (argument is IRVariable
                 && TryMarshalNetArrayArgument(
                     targetDisplay, paramType, position, argument, byRef: true, out var byRefArray))
@@ -877,14 +886,34 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return byRefArray;
             }
 
-            if (!NetMarshalTable.TryGetWireRow(paramType, out var row) || !row.HasByValueScalarSlot)
+            // A type with NO marshal row crosses as a handle. §8.3's "ByRef handle ownership"
+            // (resolved 2026-09-15) specifies that shape and NetProxyEmitter emits it, so the
+            // reason this refusal used to give — "a double release" — is no longer true and
+            // must not be restated here. What is actually missing is THIS lowering: a BasicLang
+            // call site has no way to hand a NetRef& to the slot, because IRCall.ByRefArguments
+            // is populated for resolved user functions only. A not-yet, not a cannot.
+            if (!NetMarshalTable.TryGetWireRow(paramType, out var row))
+            {
+                throw NetLoweringRefusal("BL6019",
+                    $"'{targetDisplay}': parameter {position} ('{parameter}') is passed "
+                    + $"{passing} and its type '{paramType}' crosses as a .NET handle. §8.3 "
+                    + "specifies ByRef handles and a <NetProxy> declared surface emits them, "
+                    + "but a BasicLang call site cannot pass one yet — the lowering does not "
+                    + "carry a handle through ByRef arguments. Use an overload that returns the "
+                    + "value instead.");
+            }
+
+            // Everything left has a row but no single by-value slot: String, the §6.4
+            // by-value-pointer rows, and the multi-slot pairs. Each is a DIFFERENT open
+            // question in §8.3 — none of them is the handle one that was settled.
+            if (!row.HasByValueScalarSlot)
             {
                 throw NetLoweringRefusal("BL6019",
                     $"'{targetDisplay}': parameter {position} ('{parameter}') is passed "
                     + $"{passing} and its type '{paramType}' has no single by-value wire slot. "
-                    + "§8.3 pins ByRef slots to by-value scalars only: a ByRef String has "
-                    + "opposite ownership in each direction, and a ByRef .NET object would "
-                    + "leave handle ownership undefined (a double release). Pass it by value, "
+                    + "§8.3 pins ByRef slots to by-value scalars and handle rows: a ByRef "
+                    + "String has opposite ownership in each direction, and a ByRef §6.4 row "
+                    + "points at a buffer the managed side holds a copy of. Pass it by value, "
                     + "or use an overload that returns the value instead.");
             }
 

@@ -73,7 +73,8 @@ C++ functions through `blnet_facade.g.hpp`. What you get is a *subset* of the .N
 dropped.
 
 The list below is **measured, not exhaustive.** 42 well-known types across the 17 ambient
-namespaces were probed on .NET 8; 31 were admitted. Plenty of untested BCL types will work too —
+namespaces were probed on .NET 8; 37 were admitted — 31 originally, plus the six that §8.3's
+*ByRef handle ownership* resolution (2026-09-15) unblocked. Plenty of untested BCL types will work too —
 try the one you want. What the list *is* good for is the failure column, because the blockers
 share very few root causes.
 
@@ -88,36 +89,64 @@ share very few root causes.
 | `System.Text`, `.Json`, `.Json.Nodes`, `.RegularExpressions` | `Encoding` 57, `JsonSerializer` 3, `JsonDocument` 7, `JsonNode` 21, `Regex` 57, `Match` 14 | |
 | `System.Threading`, `.Tasks` | `Monitor` 1, `Task` 55 | |
 
-Declaring all 32 at once emits an 8,781-line / 439 KB facade that compiles clean. Nothing is
-included by default — a project with no `<NetProxy>` emits no proxy artifacts at all.
+Declaring all 32 at once emits an 8,781-line / 439 KB facade. Nothing is included by default —
+a project with no `<NetProxy>` emits no proxy artifacts at all.
 
-#### The eleven that are refused, and why
+**Six more became usable on 2026-09-15**, when §8.3 specified ByRef handle ownership. Each had
+been failing the whole build on a `ref`/`out`/`in` parameter whose wire form is a handle; all six
+now emit with zero `BL6019`. Counted as **proxy slots in a single-type project**, which is a
+different measurement from the column above — it is the whole surface, before the facade decides
+what it can render ergonomically:
+
+| Type | Proxy slots | `BL6026` |
+|---|---|---|
+| `System.DateTime` | 97 | 13 |
+| `System.Threading.Thread` | 75 | 7 |
+| `System.Uri` | 72 | 2 |
+| `System.Net.IPAddress` | 35 | 8 |
+| `System.Text.Json.Nodes.JsonObject` | 32 | 4 |
+| `System.Diagnostics.Debug` | 28 | 11 |
+
+Declaring all 38 together emits a 10,329-line / 509 KB facade — 420 `BL6026` and 63 `BL6027`.
+
+#### The five that are refused, and why
 
 These raise **`BL6019` and fail the build** — a hard refusal, not a silent omission:
 
 | Type | Cause |
 |---|---|
-| `System.DateTime`, `System.Uri`, `System.Diagnostics.Debug`, `System.Net.IPAddress`, `System.Text.Json.Nodes.JsonObject`, `System.Threading.Thread` | a `ref`/`out`/`in` parameter whose wire form is a **handle** |
 | `System.Net.Sockets.Socket` | a ByRef **enum** |
 | `System.Runtime.InteropServices.Marshal` | a ByRef **by-value-pointer** (§6.4) |
 | `System.Guid`, `System.Text.StringBuilder` | a §6.4 by-value-pointer **result** |
 
-Nine of the eleven are the same unspecified rule: §8.3 pins ByRef slots to by-value scalars and
-leaves ByRef handle ownership undefined, so the emitter refuses rather than guessing a double
-release. **Specifying that one rule in §8.3 would unblock most of this list at once.**
+This list used to have eleven entries, and six of them shared one cause: a `ref`/`out`/`in`
+parameter whose wire form is a handle. That was refused because §8.3 left the ownership
+undefined — writing a new handle over the caller's looked like it could release one the callee
+had returned unchanged, a double release.
 
-> [note] Three of the refused types — `DateTime`, `Guid`, `StringBuilder` — you do not need
-> proxied. P1 ships **native C++ implementations** of `DateTime`, `DateTimeOffset`, `TimeSpan`,
-> `Decimal`, `Guid` and `StringBuilder`, compiled into the program with no boundary crossing at
-> all. Note they are different types with the same name: a facade call returning a managed
+**It could not.** `HandleTable.Create` allocates a fresh slot, `GCHandle` and refcount on every
+call and has no identity map, so re-handling an object the caller already holds produces a
+*second independent* table reference — two independent releases, not a double free. §8.3 now
+states the rule normatively (the managed side always writes a freshly created handle, never an
+incoming one) and those six emit.
+
+What is left is **three separate unresolved questions**, not one, so none of them is unblocked by
+analogy with the handle row: a ByRef `String` has opposite ownership per direction and one
+`char**` cannot carry both; a ByRef enum crosses as a by-value integral and writing back needs a
+widening contract; a ByRef §6.4 row points at a buffer the managed side holds a *copy* of, so
+"the callee writes through your pointer" is not what happens.
+
+> [note] Two of the refused types — `Guid` and `StringBuilder` — you do not need proxied. P1
+> ships **native C++ implementations** of `DateTime`, `DateTimeOffset`, `TimeSpan`, `Decimal`,
+> `Guid` and `StringBuilder`, compiled into the program with no boundary crossing at all. Note they are different types with the same name: a facade call returning a managed
 > `DateTime` hands back a `NetRef` handle, not the native struct.
 
 #### Two more things the build tells you
 
 **`BL6026`, one per omitted member.** The 32-type facade produced 375: 279 where a parameter or
-return type has no §8.3 wire form (`Span<T>`, `char*`, a handle in ByRef position), 55 generic
-methods whose type parameter cannot cross, and 40 marked `[RequiresUnreferencedCode]` or
-`[RequiresDynamicCode]`, which cannot run under Native AOT.
+return type has no §8.3 wire form (`Span<T>`, `ref struct` enumerators, `System.Object`), 55
+generic methods whose type parameter cannot cross, and 40 marked `[RequiresUnreferencedCode]` or
+`[RequiresDynamicCode]`, which cannot run under Native AOT. The 38-type facade produces 420.
 
 **`BL6027`, one per collided name** — a warning, never an error. 62 of them at 32 types, almost
 all `System.Convert`: .NET distinguishes `Char` from `UInt16`, C++ does not, so `ToBoolean(Char)`
