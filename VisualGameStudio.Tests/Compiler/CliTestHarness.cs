@@ -15,12 +15,28 @@ namespace VisualGameStudio.Tests.Compiler;
 /// </summary>
 internal static class CliTestHarness
 {
+    /// <summary>
+    /// The real CLI deployed next to the tests.
+    ///
+    /// <para>⛔ The apphost is named <c>BasicLang.exe</c> on Windows and <c>BasicLang</c> with no
+    /// extension everywhere else. Hardcoding the <c>.exe</c> spelling did not fail loudly — it
+    /// failed as "not deployed — project reference output changed?", which reads as a build-layout
+    /// problem and is why every spawned-CLI test in this suite was simply red off Windows rather
+    /// than reported as unsupported.</para>
+    /// </summary>
     public static string CliPath()
     {
-        var cliPath = Path.Combine(AppContext.BaseDirectory, "BasicLang.exe");
-        Assert.That(File.Exists(cliPath), Is.True,
-            "BasicLang.exe not deployed next to the tests — project reference output changed?");
-        return cliPath;
+        var candidates = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "BasicLang.exe"),
+            Path.Combine(AppContext.BaseDirectory, "BasicLang")
+        };
+
+        var cliPath = candidates.FirstOrDefault(File.Exists);
+        Assert.That(cliPath, Is.Not.Null,
+            "neither BasicLang.exe nor BasicLang is deployed next to the tests — project " +
+            "reference output changed?");
+        return cliPath!;
     }
 
     public static Task<(int ExitCode, string StdOut, string StdErr)> RunCli(

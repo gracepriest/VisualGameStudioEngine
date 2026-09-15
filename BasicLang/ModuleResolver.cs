@@ -16,6 +16,9 @@ namespace BasicLang.Compiler
         // runtime, e.g. the DOM for the JavaScript backend). Resolved and compiled like any other
         // unit, but never an entry point: BasicCompiler.IsEntryLikeFile and the CLI refuse it as
         // a program. Plan 2c.
+        // ⛔ NEVER add .blform or .blwebform here. This is the second copy of the same list (the
+        // first is ProjectFile.BasicLangSourceExtensions) and it resolves an Import/Using to a file
+        // that will be lexed as BasicLang. A form document is XML and is not importable.
         private static readonly string[] SupportedExtensions = { ".bas", ".bl", ".basic", ".mod", ".cls", ".class", ".bli" };
 
         /// <summary>

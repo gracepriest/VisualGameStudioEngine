@@ -4,6 +4,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Dialogs"
         xmlns:views="using:VisualGameStudio.Shell.Views.Dialogs"
+        xmlns:controls="using:VisualGameStudio.Shell.Views.Controls"
         mc:Ignorable="d" d:DesignWidth="960" d:DesignHeight="700"
         x:Class="VisualGameStudio.Shell.Views.Dialogs.SettingsDialog"
         x:DataType="vm:SettingsViewModel"
@@ -166,15 +167,7 @@
 
                     <!-- Control -->
                     <Panel Grid.Row="0" Grid.Column="1" VerticalAlignment="Center" Margin="8,0">
-                      <ToggleSwitch IsChecked="{Binding BoolValue}" IsVisible="{Binding IsCheckBox}"
-                                    OnContent="" OffContent="" Padding="0" Margin="0"/>
-                      <NumericUpDown Value="{Binding IntValue}"
-                                    Minimum="{Binding Minimum}" Maximum="{Binding Maximum}" Increment="{Binding Increment}"
-                                    Width="110" IsVisible="{Binding IsNumericUpDown}"/>
-                      <ComboBox ItemsSource="{Binding Choices}" SelectedItem="{Binding StringValue}"
-                                MinWidth="170" IsVisible="{Binding IsComboBox}"/>
-                      <TextBox Text="{Binding StringValue, Mode=TwoWay}"
-                               MinWidth="200" IsVisible="{Binding IsTextBox}"/>
+                      <controls:TypedValueEditor/>
                       <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding IsFilePath}">
                         <TextBox Text="{Binding StringValue, Mode=TwoWay}" MinWidth="220"
                                  FontFamily="Cascadia Code, Consolas, monospace" FontSize="12"/>
@@ -289,15 +282,7 @@
 
                       <!-- Control -->
                       <Panel Grid.Row="0" Grid.Column="1" VerticalAlignment="Center" Margin="8,0">
-                        <ToggleSwitch IsChecked="{Binding BoolValue}" IsVisible="{Binding IsCheckBox}"
-                                      OnContent="" OffContent="" Padding="0" Margin="0"/>
-                        <NumericUpDown Value="{Binding IntValue}"
-                                      Minimum="{Binding Minimum}" Maximum="{Binding Maximum}" Increment="{Binding Increment}"
-                                      Width="110" IsVisible="{Binding IsNumericUpDown}"/>
-                        <ComboBox ItemsSource="{Binding Choices}" SelectedItem="{Binding StringValue}"
-                                  MinWidth="170" IsVisible="{Binding IsComboBox}"/>
-                        <TextBox Text="{Binding StringValue, Mode=TwoWay}"
-                                 MinWidth="200" IsVisible="{Binding IsTextBox}"/>
+                        <controls:TypedValueEditor/>
                         <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding IsFilePath}">
                           <TextBox Text="{Binding StringValue, Mode=TwoWay}" MinWidth="220"
                                    FontFamily="Cascadia Code, Consolas, monospace" FontSize="12"/>

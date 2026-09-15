@@ -1,4 +1,6 @@
+using System;
 using System.Linq;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -8,6 +10,8 @@ using VisualGameStudio.Editor.Completion;
 using VisualGameStudio.Editor.Controls;
 using VisualGameStudio.Editor.Margins;
 using VisualGameStudio.Shell.ViewModels;
+using VisualGameStudio.Shell.Controls;
+using VisualGameStudio.Shell.ViewModels.Designer;
 using VisualGameStudio.Shell.ViewModels.Dialogs;
 using VisualGameStudio.Shell.ViewModels.Documents;
 using VisualGameStudio.Shell.Views.Controls;
@@ -2019,6 +2023,86 @@ public partial class CodeEditorDocumentView : UserControl
         {
             // Settings application is non-critical
         }
+    }
+
+    #endregion
+
+    #region Designer toolbox drag source
+
+    // ⛔⛔ Without these three handlers the toolbox is a LIST, not a source. That was the state
+    // this feature shipped in first: a toolbox naming ten control kinds, a canvas that drew and
+    // selected, and no way whatsoever to put a control on a form except by typing XML in Code view.
+    // "A generator with no caller" has a user-facing twin, and this is it.
+
+    /// <summary>Where the press landed and what it was on, or null when no drag is pending.</summary>
+    private Point? _toolboxDragOrigin;
+    private string? _toolboxDragKind;
+
+    private void OnToolboxPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        _toolboxDragOrigin = null;
+        _toolboxDragKind = null;
+
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        {
+            return;
+        }
+
+        // ⚠ The kind comes from the item under the POINTER, not from ListBox.SelectedItem: on a
+        // press the selection has not moved yet, so using it would drag whatever was selected last
+        // — the previous row, or nothing at all on the very first drag of a session.
+        if ((e.Source as Control)?.DataContext is FormToolboxItem item)
+        {
+            _toolboxDragOrigin = e.GetPosition(this);
+            _toolboxDragKind = item.Kind;
+        }
+    }
+
+    private async void OnToolboxPointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (_toolboxDragOrigin is not { } origin || _toolboxDragKind is not { } kind)
+        {
+            return;
+        }
+
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        {
+            _toolboxDragOrigin = null;
+            return;
+        }
+
+        // ⚠ A threshold, so a plain click still selects the row instead of starting a drag nobody
+        // asked for. Without it every click on the toolbox becomes a drag gesture and the list
+        // stops behaving like a list.
+        var moved = e.GetPosition(this) - origin;
+        if (Math.Abs(moved.X) < 4 && Math.Abs(moved.Y) < 4)
+        {
+            return;
+        }
+
+        // Cleared BEFORE the await: DoDragDrop runs a nested loop until the drop, and a second
+        // PointerMoved arriving in the meantime would start a second drag for the same press.
+        _toolboxDragOrigin = null;
+        _toolboxDragKind = null;
+
+        var data = new DataObject();
+        data.Set(FormCanvasControl.ControlKindFormat, kind);
+
+        try
+        {
+            await DragDrop.DoDragDrop(e, data, DragDropEffects.Copy);
+        }
+        catch (Exception)
+        {
+            // A drag that the platform refuses to start is not worth taking the IDE down for. The
+            // toolbox stays usable and the user can try again.
+        }
+    }
+
+    private void OnToolboxPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        _toolboxDragOrigin = null;
+        _toolboxDragKind = null;
     }
 
     #endregion

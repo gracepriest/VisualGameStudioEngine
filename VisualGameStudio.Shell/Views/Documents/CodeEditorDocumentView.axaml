@@ -5,6 +5,8 @@
              xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Documents"
              xmlns:editor="using:VisualGameStudio.Editor.Controls"
              xmlns:controls="using:VisualGameStudio.Shell.Views.Controls"
+             xmlns:designer="using:VisualGameStudio.Shell.Controls"
+             xmlns:designerVm="using:VisualGameStudio.Shell.ViewModels.Designer"
              xmlns:avalonEdit="https://github.com/avaloniaui/avaloniaedit"
              mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="400"
              x:Class="VisualGameStudio.Shell.Views.Documents.CodeEditorDocumentView"
@@ -147,12 +149,122 @@
                                 CaretPositionChanged="OnCaretPositionChanged"/>
     </Grid>
 
+    <!-- Design view. Overlays the editor rather than replacing it: MainEditor and both split
+         containers already carry their own IsVisible bindings, and threading a third condition
+         through all three is how a rarely-used mode makes the COMMON path go blank. An opaque
+         overlay leaves every one of those bindings exactly as it was. -->
+    <Border Background="{DynamicResource IdeBg}"
+            IsVisible="{Binding IsDesignMode}">
+      <!-- Ctrl+Z here, not only in the editor underneath: the canvas takes focus on a click, so
+           without these the design view would have no undo at all for the user who never leaves
+           it. Both gestures are bound because Ctrl+Y and Ctrl+Shift+Z are each "redo" depending on
+           what the user came from. -->
+      <Border.KeyBindings>
+        <KeyBinding Gesture="Ctrl+Z" Command="{Binding UndoDesignerEditCommand}"/>
+        <KeyBinding Gesture="Ctrl+Y" Command="{Binding RedoDesignerEditCommand}"/>
+        <KeyBinding Gesture="Ctrl+Shift+Z" Command="{Binding RedoDesignerEditCommand}"/>
+      </Border.KeyBindings>
+      <Grid ColumnDefinitions="150,*,260">
+
+        <!-- Toolbox: the control kinds this document's target actually has. -->
+        <Border Grid.Column="0" Background="{DynamicResource IdePanelBg}" Padding="6">
+          <DockPanel>
+            <TextBlock DockPanel.Dock="Top" Text="Toolbox" FontWeight="SemiBold"
+                       FontSize="11" Opacity="0.7" Margin="2,0,0,6"/>
+            <!-- Drag a row onto the canvas to place one. PointerPressed records the row;
+                 PointerMoved starts the drag once the pointer has actually travelled, so a plain
+                 click still just selects. -->
+            <ListBox x:Name="ToolboxList"
+                     ItemsSource="{Binding Toolbox.Items}"
+                     Background="Transparent"
+                     PointerPressed="OnToolboxPointerPressed"
+                     PointerMoved="OnToolboxPointerMoved"
+                     PointerReleased="OnToolboxPointerReleased">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="designerVm:FormToolboxItem">
+                  <StackPanel Margin="0,1">
+                    <TextBlock Text="{Binding Kind}" FontSize="12"/>
+                    <TextBlock Text="{Binding Description}" FontSize="10" Opacity="0.5"
+                               FontFamily="Cascadia Code, Consolas, monospace"/>
+                  </StackPanel>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+        </Border>
+
+        <designer:FormCanvasControl Grid.Column="1"
+                                    Document="{Binding DesignDocument}"
+                                    ModelRevision="{Binding DesignModelRevision}"
+                                    DropCommand="{Binding PlaceDroppedControlCommand}"
+                                    CommitGeometryCommand="{Binding CommitGeometryCommand}"
+                                    SelectedControl="{Binding PropertyGrid.SelectedControl, Mode=TwoWay}"/>
+
+        <!-- Property grid: the catalog's properties for the selection, with D9's tiers. -->
+        <Border Grid.Column="2" Background="{DynamicResource IdePanelBg}" Padding="6">
+          <DockPanel>
+            <TextBlock DockPanel.Dock="Top" Text="{Binding PropertyGrid.Header}"
+                       FontWeight="SemiBold" FontSize="11" Opacity="0.7" Margin="2,0,0,6"/>
+            <TextBlock DockPanel.Dock="Top" Text="Select a control on the canvas."
+                       FontSize="11" Opacity="0.45" TextWrapping="Wrap" Margin="2,0,0,6"
+                       IsVisible="{Binding PropertyGrid.IsEmpty}"/>
+            <ScrollViewer>
+              <ItemsControl ItemsSource="{Binding PropertyGrid.Rows}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="designerVm:FormPropertyRow">
+                    <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,6">
+                      <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding Name}" FontSize="12"/>
+                        <TextBlock Text="{Binding TypeName}" FontSize="10" Opacity="0.45"/>
+                      </StackPanel>
+
+                      <!-- Editable: the SAME four editors the Settings dialog uses. -->
+                      <controls:TypedValueEditor Grid.Column="1" VerticalAlignment="Center"
+                                                 IsVisible="{Binding IsEditable}"/>
+
+                      <!-- ⛔⛔ D9 Degraded. The raw value, read-only, with the reason underneath.
+                           A typed editor here would coerce the value the moment it rendered. -->
+                      <StackPanel Grid.Column="1" VerticalAlignment="Center" MaxWidth="150"
+                                  IsVisible="{Binding IsFrozen}">
+                        <TextBox Text="{Binding RawValue}" IsReadOnly="True" FontSize="11"
+                                 FontFamily="Cascadia Code, Consolas, monospace"/>
+                        <TextBlock Text="{Binding FrozenReason}" FontSize="10" TextWrapping="Wrap"
+                                   Opacity="0.7" Margin="0,2,0,0"/>
+                      </StackPanel>
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+          </DockPanel>
+        </Border>
+      </Grid>
+    </Border>
+
     <!-- Split View Toggle Button -->
     <StackPanel Orientation="Horizontal"
                 HorizontalAlignment="Right"
                 VerticalAlignment="Top"
                 Margin="0,2,20,0"
                 Spacing="2">
+      <!-- Design|Code. Only for a form document — every other file has nothing to draw. -->
+      <Button Command="{Binding ToggleDesignModeCommand}"
+              ToolTip.Tip="Toggle Design / Code view"
+              Height="20"
+              Padding="6,2"
+              Background="Transparent"
+              Opacity="0.6"
+              IsVisible="{Binding IsFormDocument}">
+        <!-- Two labels rather than a value converter: the label is the only thing that varies,
+             and a converter would be a new public type, a namespace import and a registration to
+             carry one string each way. -->
+        <Panel>
+          <TextBlock FontSize="10" Foreground="{DynamicResource IdeFg}"
+                     Text="Design" IsVisible="{Binding !IsDesignMode}"/>
+          <TextBlock FontSize="10" Foreground="{DynamicResource IdeFg}"
+                     Text="Code" IsVisible="{Binding IsDesignMode}"/>
+        </Panel>
+      </Button>
       <Button Command="{Binding SplitHorizontalCommand}"
               ToolTip.Tip="Split Horizontal"
               Width="20" Height="20"
