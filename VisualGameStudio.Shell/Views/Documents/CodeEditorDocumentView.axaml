@@ -155,6 +155,15 @@
          overlay leaves every one of those bindings exactly as it was. -->
     <Border Background="{DynamicResource IdeBg}"
             IsVisible="{Binding IsDesignMode}">
+      <!-- Ctrl+Z here, not only in the editor underneath: the canvas takes focus on a click, so
+           without these the design view would have no undo at all for the user who never leaves
+           it. Both gestures are bound because Ctrl+Y and Ctrl+Shift+Z are each "redo" depending on
+           what the user came from. -->
+      <Border.KeyBindings>
+        <KeyBinding Gesture="Ctrl+Z" Command="{Binding UndoDesignerEditCommand}"/>
+        <KeyBinding Gesture="Ctrl+Y" Command="{Binding RedoDesignerEditCommand}"/>
+        <KeyBinding Gesture="Ctrl+Shift+Z" Command="{Binding RedoDesignerEditCommand}"/>
+      </Border.KeyBindings>
       <Grid ColumnDefinitions="150,*,260">
 
         <!-- Toolbox: the control kinds this document's target actually has. -->

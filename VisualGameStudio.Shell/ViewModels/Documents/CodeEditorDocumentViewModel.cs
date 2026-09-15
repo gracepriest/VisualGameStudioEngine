@@ -310,13 +310,81 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         _applyingDesignerEdit = true;
         try
         {
+            // ⛔ ORDER MATTERS, and getting it wrong is silent. Text first: its setter is what
+            // raises the change notification the canvas and the dirty indicator listen for, and it
+            // only raises when the backing field actually changes. ReplaceContent writes that same
+            // field directly, so doing it first leaves the setter with nothing to notice — one
+            // edit, zero notifications, a canvas that never repaints.
             Text = written;
+
+            // ⛔⛔ Then the EDITOR'S document. The two are one document kept in two places, and the
+            // editor owns the undo stack. Writing only Text left the editor holding the pre-edit
+            // copy — and the view syncs that copy back on every keystroke, so the first character
+            // typed in Code view silently discarded every drop, move and resize the user had made.
+            // ReplaceContent is the same call the refactoring tools use: it writes the editor's
+            // document as ONE undoable operation, which is also the whole of the designer's undo.
+            ReplaceContent(written);
             _designFileText = written;
         }
         finally
         {
             _applyingDesignerEdit = false;
         }
+    }
+
+    /// <summary>
+    /// Undoes the last designer edit — a drop, a move, a resize, a property change.
+    ///
+    /// <para>⛔ The editor's undo stack, deliberately, not a second one of the designer's own. The
+    /// document text is the truth; a model-level stack would be a second truth that can disagree
+    /// with it, and the disagreement would surface as a form that redraws one way and saves
+    /// another. It also means Ctrl+Z means the same thing in both views.</para>
+    /// </summary>
+    [RelayCommand]
+    private void UndoDesignerEdit()
+    {
+        if (!TextDocument.UndoStack.CanUndo)
+        {
+            return;
+        }
+
+        TextDocument.UndoStack.Undo();
+        AdoptDocumentText();
+    }
+
+    /// <summary>Redoes what <see cref="UndoDesignerEdit"/> took away.</summary>
+    [RelayCommand]
+    private void RedoDesignerEdit()
+    {
+        if (!TextDocument.UndoStack.CanRedo)
+        {
+            return;
+        }
+
+        TextDocument.UndoStack.Redo();
+        AdoptDocumentText();
+    }
+
+    /// <summary>
+    /// Takes the editor document's text as the truth after an undo or redo, and rebuilds the
+    /// designer's view of it.
+    ///
+    /// <para>⛔ The re-parse is the point. Undo rewinds TEXT; the canvas and the property grid hold
+    /// references into the model that text was parsed from, and that model still has the control
+    /// the undo just removed. Without dropping it, the control stays on the canvas and comes back
+    /// on the next save — the file and the picture disagreeing, which is the failure a designer
+    /// cannot have.</para>
+    /// </summary>
+    private void AdoptDocumentText()
+    {
+        Text = TextDocument.Text;
+
+        _designFile = null;
+        _designFileText = null;
+        OnPropertyChanged(nameof(DesignFile));
+        OnPropertyChanged(nameof(DesignDocument));
+        SyncDesignerPanels();
+        DesignModelRevision++;
     }
     public new string Title => GetTitle();
     public new bool CanClose => true;
@@ -1041,8 +1109,14 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     public void SetContent(string content)
     {
         _originalText = content;
-        // Set the TextDocument's text - this will clear undo history (which is correct for initial load)
+
+        // ⛔ Setting Text does NOT clear the undo stack — it is an ordinary replace, and an
+        // ordinary replace is undoable. The comment here used to claim the opposite, and the claim
+        // was false: opening a file left "load the file" sitting on the stack as step one, so a
+        // single Ctrl+Z on a freshly opened document emptied it. Found by a designer-undo test,
+        // but it was never designer-specific — Code view had it too.
         TextDocument.Text = content;
+        TextDocument.UndoStack.ClearAll();
         // Keep Text in sync for backward compatibility
         Text = content;
         IsDirty = false;
@@ -1088,9 +1162,26 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     /// </summary>
     public void UpdateTextFromEditor(string newText)
     {
+        var changed = !string.Equals(_text, newText, StringComparison.Ordinal);
+
         // Update the backing field directly to avoid triggering property change
         // that would push back to the editor and clear undo
         _text = newText;
+
+        // ⛔ The canvas draws DesignDocument, which is bound — so it only refreshes when told the
+        // property changed, and this path deliberately bypasses the property setter. Without this
+        // the canvas keeps drawing the form as it was: edit the XML in Code view and switch to
+        // Design and you see the OLD form, and — now that the editor's own Ctrl+Z can undo a
+        // designer edit, because those edits are on its stack — undoing from the editor would move
+        // the control in the file and leave it where it was on screen.
+        if (changed && IsFormDocument)
+        {
+            _designFile = null;
+            _designFileText = null;
+            OnPropertyChanged(nameof(DesignFile));
+            OnPropertyChanged(nameof(DesignDocument));
+            DesignModelRevision++;
+        }
 
         // Update dirty state
         var wasDirty = IsDirty;

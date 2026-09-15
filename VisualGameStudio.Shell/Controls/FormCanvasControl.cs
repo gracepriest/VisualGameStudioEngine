@@ -130,6 +130,13 @@ public class FormCanvasControl : Control
         DragDrop.SetAllowDrop(this, true);
         AddHandler(DragDrop.DragOverEvent, OnDragOver);
         AddHandler(DragDrop.DropEvent, OnDrop);
+
+        // ⛔ Focusable so the design view's Ctrl+Z reaches it. A Control is not focusable by
+        // default, so without this the keyboard focus stays on the code editor UNDERNEATH the
+        // design overlay: Ctrl+Z would run the EDITOR's undo, which now shares this document's
+        // undo stack, so the text would rewind correctly and the canvas would keep drawing the
+        // control where it used to be.
+        Focusable = true;
     }
 
     /// <summary>
@@ -178,6 +185,10 @@ public class FormCanvasControl : Control
         }
 
         var point = e.GetPosition(this);
+
+        // Take focus so the design view's key bindings (Ctrl+Z, Ctrl+Y) are on this element's
+        // route rather than the hidden editor's.
+        Focus();
 
         // ⚠ Left button only. Arming a drag on a right-click means the context menu gesture also
         // moves the control the user was about to right-click.
