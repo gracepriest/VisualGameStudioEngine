@@ -365,6 +365,53 @@ public class MsilRoundTripTests
     }
 
     /// <summary>
+    /// A collection crossing a function SIGNATURE, which is a different emission path from a
+    /// local and was broken in a different way.
+    ///
+    /// <para>Signature sites read the parameter's type NAME, and a string cannot carry generic
+    /// arguments — so a <c>List(Of Integer)</c> parameter emitted a bare <c>List</c> in both
+    /// the declaration and the call, and neither assembled. The full suite caught this through
+    /// the honesty-matrix guard tests after the narrower MSIL filter had gone green, which is
+    /// the argument for running the whole suite before merging a backend change.</para>
+    /// </summary>
+    [Test]
+    public void ACollectionCrossesAFunctionSignature()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Function Total(items As List(Of Integer)) As Integer
+              Return items.Count
+             End Function
+             Sub Main()
+              Dim l As New List(Of Integer)
+              l.Add(7)
+              l.Add(8)
+              PrintLine(CStr(Total(l)))
+             End Sub
+            End Module
+            """), Is.EqualTo("2\n"));
+    }
+
+    /// <summary>
+    /// A collection that never becomes a local at all — an expression temporary whose member is
+    /// read directly.
+    /// </summary>
+    [Test]
+    public void ACollectionExpressionTemporary_Runs()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module Program
+             Function GetCount() As Integer
+              Return New List(Of Integer)().Count
+             End Function
+             Sub Main()
+              PrintLine(CStr(GetCount()))
+             End Sub
+            End Module
+            """), Is.EqualTo("0\n"));
+    }
+
+    /// <summary>
     /// <b>A collection member OUTSIDE the table is refused, and that is what makes a narrow
     /// table safe to ship.</b>
     ///

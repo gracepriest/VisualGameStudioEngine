@@ -163,7 +163,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         {
             var delegateName = SanitizeName(irDelegate.Name);
             var returnType = MapType(irDelegate.ReturnType);
-            var paramTypes = string.Join(", ", irDelegate.Parameters.Select(p => MapTypeName(p.TypeName)));
+            var paramTypes = string.Join(", ", irDelegate.Parameters.Select(IlParameterSpec));
 
             WriteLine($".class public auto ansi sealed {delegateName}");
             WriteLine("       extends [mscorlib]System.MulticastDelegate");
@@ -306,6 +306,21 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             token = $"[mscorlib]{shape.ClrName}`{shape.Arity}<{string.Join(", ", rendered)}>";
             return true;
         }
+
+        /// <summary>
+        /// A parameter's IL type spec for a SIGNATURE position (interface members, delegate
+        /// Invoke, method declarations).
+        ///
+        /// <para>⛔ These sites used to read <c>p.TypeName</c>, a STRING, which cannot carry
+        /// generic arguments — so a <c>List(Of Integer)</c> parameter emitted a bare
+        /// <c>List</c> and the whole method failed to assemble. The parameter already holds the
+        /// resolved <see cref="TypeInfo"/>; that is what knows the element type.</para>
+        ///
+        /// <para>The name is kept as the fallback for a parameter whose TypeInfo never got
+        /// populated, so this cannot be a regression for shapes that worked before.</para>
+        /// </summary>
+        private string IlParameterSpec(IRParameter parameter) =>
+            parameter?.Type != null ? IlTypeSpec(parameter.Type) : MapTypeName(parameter?.TypeName);
 
         /// <summary>
         /// One collection member's IL signature, written in terms of the GENERIC DEFINITION.
@@ -504,7 +519,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             {
                 var returnType = MapType(method.ReturnType);
                 var methodName = SanitizeName(method.Name);
-                var paramTypes = string.Join(", ", method.Parameters.Select(p => MapTypeName(p.TypeName)));
+                var paramTypes = string.Join(", ", method.Parameters.Select(IlParameterSpec));
 
                 WriteLine("  .method public hidebysig newslot abstract virtual");
                 WriteLine($"          instance {returnType} {methodName}({paramTypes}) cil managed");
@@ -765,7 +780,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (ctor.Implementation != null)
             {
                 paramTypes = string.Join(", ", ctor.Implementation.Parameters.Select(p =>
-                    $"{MapType(p.Type)} {SanitizeName(p.Name)}"));
+                    $"{IlTypeSpec(p.Type)} {SanitizeName(p.Name)}"));
             }
 
             WriteLine("  .method public hidebysig specialname rtspecialname");
@@ -841,7 +856,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (method.Implementation != null)
             {
                 paramTypes = string.Join(", ", method.Implementation.Parameters.Select(p =>
-                    $"{MapType(p.Type)} {SanitizeName(p.Name)}"));
+                    $"{IlTypeSpec(p.Type)} {SanitizeName(p.Name)}"));
             }
 
             WriteLine($"  .method public hidebysig {modifiers}{staticMod}");
@@ -1005,7 +1020,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             // Parameters
             var paramList = string.Join(", ", function.Parameters.Select(p =>
-                $"{MapType(p.Type)} {SanitizeName(p.Name)}"));
+                $"{IlTypeSpec(p.Type)} {SanitizeName(p.Name)}"));
 
             WriteLine($"          {returnType} {methodName}({paramList}) cil managed");
 
@@ -1644,8 +1659,10 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
 
             // Generate call
-            var returnType = MapType(call.Type);
-            var paramTypes = string.Join(", ", call.Arguments.Select(a => MapType(a.Type)));
+            // Type SPECS: the declaration these resolve to spells its parameters the same way,
+            // and a call whose signature disagrees with the declaration binds to nothing.
+            var returnType = IlTypeSpec(call.Type);
+            var paramTypes = string.Join(", ", call.Arguments.Select(a => IlTypeSpec(a.Type)));
             var sanitizedName = SanitizeName(funcName);
 
             // Use module name for class reference
