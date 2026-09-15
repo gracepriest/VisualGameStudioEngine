@@ -1229,15 +1229,6 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Creates a form: the <c>.blwebform</c> document AND the <c>.bas</c> code-behind, as a pair.
-    ///
-    /// <para>⛔ Modelled on <see cref="ConfirmNewItemAsync"/>, which adds the item <b>and</b> calls
-    /// <c>SaveProjectAsync</c> — deliberately NOT on <c>ProjectService.AddFileToProjectAsync</c>,
-    /// which mutates the model and never writes, so the new files would vanish from the project on
-    /// the next load.</para>
-    /// </summary>
-    [RelayCommand]
-    /// <summary>
     /// Saves the project, turning a REFUSED save into something the user can read.
     ///
     /// <para>⛔⛔ Every "add item" flow ends by writing the project file, and a save the
@@ -1268,6 +1259,21 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// Creates a form: the document (<c>.blform</c> or <c>.blwebform</c>, chosen from the project)
+    /// AND the <c>.bas</c> code-behind, as a pair.
+    ///
+    /// <para>⛔ Modelled on <see cref="ConfirmNewItemAsync"/>, which adds the item <b>and</b> calls
+    /// <c>SaveProjectAsync</c> — deliberately NOT on <c>ProjectService.AddFileToProjectAsync</c>,
+    /// which mutates the model and never writes, so the new files would vanish from the project on
+    /// the next load.</para>
+    /// </summary>
+    // ⛔ This attribute sat above SaveProjectOrReportAsync, which was inserted between it and the
+    // method it was written for. The toolkit generated SaveProjectOrReportCommand and no
+    // AddNewFormCommand, so the menu item below had nothing to bind to and form creation — fully
+    // implemented, right here — was unreachable. It compiles either way: attributes bind to the
+    // next DECLARATION and a doc comment in between is trivia. Keep it adjacent.
+    [RelayCommand]
     private async Task AddNewFormAsync()
     {
         var project = _projectService.CurrentProject;

@@ -52,6 +52,11 @@
                   <TextBlock Text="B" FontSize="12" FontWeight="Bold" Foreground="#569CD6"/>
                 </MenuItem.Icon>
               </MenuItem>
+              <MenuItem Header="New Form" Command="{Binding #SolutionTreeView.DataContext.AddNewFormCommand}">
+                <MenuItem.Icon>
+                  <TextBlock Text="F" FontSize="12" FontWeight="Bold" Foreground="#C586C0"/>
+                </MenuItem.Icon>
+              </MenuItem>
               <MenuItem Header="New Module (.mod)" Command="{Binding #SolutionTreeView.DataContext.AddNewModuleCommand}">
                 <MenuItem.Icon>
                   <TextBlock Text="M" FontSize="12" FontWeight="Bold" Foreground="#4FC3F7"/>
