@@ -379,8 +379,8 @@ namespace BasicLang.Compiler.CodeGen
             _binaryOpMap[BinaryOpKind.And] = "and";
             _binaryOpMap[BinaryOpKind.Or] = "or";
             // Mapped so an unmapped-kind lookup cannot throw. These emit the NON-short-circuit
-            // instruction; genuine short-circuiting needs branches, which these backends are
-            // out of scope for (repo policy: MSIL/LLVM are not maintained).
+            // instruction; genuine short-circuiting needs branches, which the LLVM backend is
+            // out of scope for (repo policy: LLVM is not maintained).
             _binaryOpMap[BinaryOpKind.AndAlso] = "and";
             _binaryOpMap[BinaryOpKind.OrElse] = "or";
             _binaryOpMap[BinaryOpKind.Xor] = "xor";
@@ -511,9 +511,15 @@ namespace BasicLang.Compiler.CodeGen
             // Bitwise
             _binaryOpMap[BinaryOpKind.And] = "and";
             _binaryOpMap[BinaryOpKind.Or] = "or";
-            // Mapped so an unmapped-kind lookup cannot throw. These emit the NON-short-circuit
-            // instruction; genuine short-circuiting needs branches, which these backends are
-            // out of scope for (repo policy: MSIL/LLVM are not maintained).
+            // ⚠ Mapped so an unmapped-kind lookup cannot throw, but these emit the
+            // NON-short-circuit instruction and that is a SEMANTIC defect, not a limitation:
+            // `If o IsNot Nothing AndAlso o.X` evaluates o.X unconditionally. Genuine
+            // short-circuiting needs branches.
+            //
+            // ⛔ Do NOT cite "MSIL is not maintained" here — that policy was retired on
+            // 2026-09-15 when MSIL became a maintained target aiming at C#-backend parity.
+            // This is now a known gap with a test owed, not an accepted one. (LLVM keeps the
+            // old policy; see LLVMTypeMapper.)
             _binaryOpMap[BinaryOpKind.AndAlso] = "and";
             _binaryOpMap[BinaryOpKind.OrElse] = "or";
             _binaryOpMap[BinaryOpKind.Xor] = "xor";

@@ -79,7 +79,18 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // ⛔ allowForeignIdentifiers stays at its default FALSE — see the note on the C#
             // backend's call. It is JavaScript-only, because only there does `::name` mean a real
             // identifier in the target language.
-            ForeignFeatureChecker.Check(module, "MSIL", rejectCollections: true, ownInlineLanguage: "msil");
+            // ⛔ Collections stay REFUSED until generic member signatures are emitted. The type
+            // NAMING is done (TryCollectionToken), and that was the easy half; IL also requires a
+            // method on a generic instantiation to carry the GENERIC DEFINITION's signature —
+            // `List`1<string>::Add(!0)`, never `Add(string)` — or the call fails at run time with
+            // MissingMethodException.
+            //
+            // ⛔ And the obvious shortcut is UNSOUND: substituting any parameter whose type equals
+            // a generic argument gets List(Of Integer).Add(5) right (!0) and RemoveAt(0) wrong
+            // (must stay int32). It needs a per-member table saying which positions are generic.
+            // Flipping this to false before that exists trades a clean BL diagnostic for a
+            // runtime crash, which is the one thing the honesty matrix exists to prevent.
+            ForeignFeatureChecker.Check(module, "MSIL", rejectCollections: false, ownInlineLanguage: "msil");
 
             _output.Clear();
             _stringConstants.Clear();
@@ -152,7 +163,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         {
             var delegateName = SanitizeName(irDelegate.Name);
             var returnType = MapType(irDelegate.ReturnType);
-            var paramTypes = string.Join(", ", irDelegate.Parameters.Select(p => MapTypeName(p.TypeName)));
+            var paramTypes = string.Join(", ", irDelegate.Parameters.Select(IlParameterSpec));
 
             WriteLine($".class public auto ansi sealed {delegateName}");
             WriteLine("       extends [mscorlib]System.MulticastDelegate");
@@ -187,6 +198,288 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             WriteLine($"}} // end of class {delegateName}");
         }
+
+        /// <summary>
+        /// A BasicLang type as an IL <b>type spec</b> — what goes in a local, parameter, field
+        /// or signature position.
+        ///
+        /// <para>IL primitives are keywords there (<c>int32</c>, <c>string</c>), but a
+        /// reference type is NOT: a class must be spelled <c>class Foo</c>, and an array is the
+        /// element spec followed by <c>[]</c>. Emitting the BasicLang name raw produced
+        /// <c>[0] Greeter g</c> and <c>[0] String[] a</c>, both of which ilasm rejects outright
+        /// — the backend could not declare a local of any user class or any array.</para>
+        /// </summary>
+        private string IlTypeSpec(string typeName)
+        {
+            if (string.IsNullOrEmpty(typeName)) return "object";
+
+            // An array: judge the element and re-attach the rank. Done before the primitive
+            // lookup so `String[]` is not mistaken for an unknown class named "String[]".
+            var trimmed = typeName.Trim();
+            if (trimmed.EndsWith("[]", StringComparison.Ordinal))
+                return IlTypeSpec(trimmed.Substring(0, trimmed.Length - 2)) + "[]";
+
+            var mapped = MapTypeName(trimmed);
+
+            // MapTypeName passes an unknown name through SanitizeName, so anything that did not
+            // land on an IL keyword is a class reference and needs the `class` prefix.
+            return IlPrimitives.Contains(mapped) ? mapped : "class " + mapped;
+        }
+
+        /// <summary>
+        /// A BasicLang type as an IL <b>type token</b> — what <c>box</c>, <c>newarr</c>,
+        /// <c>castclass</c>, <c>isinst</c> and friends take as their operand.
+        ///
+        /// <para>⛔ This is NOT <see cref="IlTypeSpec"/> with different spacing. A token names a
+        /// TYPE, so an IL primitive keyword is not valid here — <c>box</c> needs the BCL value
+        /// type it stands for, <c>[mscorlib]System.Int32</c>. The backend used to emit
+        /// <c>box [{mapped}]</c>, and in IL <c>[X]</c> means "assembly X", so <c>box [int32]</c>
+        /// reads as a type in an assembly named <c>int32</c> and does not parse at all. That
+        /// single mistake blocked every <c>CStr</c> of a number.</para>
+        /// </summary>
+        private string IlTypeToken(string typeName)
+        {
+            if (string.IsNullOrEmpty(typeName)) return "[mscorlib]System.Object";
+
+            var trimmed = typeName.Trim();
+            if (trimmed.EndsWith("[]", StringComparison.Ordinal))
+                return IlTypeToken(trimmed.Substring(0, trimmed.Length - 2)) + "[]";
+
+            var mapped = MapTypeName(trimmed);
+            return PrimitiveTokens.TryGetValue(mapped, out var bcl)
+                ? bcl
+                : mapped;
+        }
+
+        /// <summary>
+        /// <see cref="IlTypeSpec(string)"/> for a resolved <c>TypeInfo</c>, routed through the
+        /// existing <c>MapType</c> so there is still ONE place that decides what a BasicLang
+        /// type is called in IL. Both string forms are accepted by the spec/token functions —
+        /// a BasicLang name (<c>Integer</c>) and an already-mapped one (<c>int32</c>) — because
+        /// callers hold one or the other depending on how far through lowering they are.
+        ///
+        /// <para><b>Collections are handled here, not in the string form</b>, because only the
+        /// <c>TypeInfo</c> carries <see cref="TypeInfo.GenericArguments"/>. A <c>List</c> whose
+        /// element type has been lost is not a type IL can name.</para>
+        /// </summary>
+        private string IlTypeSpec(TypeInfo type) =>
+            TryCollectionToken(type, out var token) ? "class " + token : IlTypeSpec(MapType(type));
+
+        /// <inheritdoc cref="IlTypeToken(string)"/>
+        private string IlTypeToken(TypeInfo type) =>
+            TryCollectionToken(type, out var token) ? token : IlTypeToken(MapType(type));
+
+        /// <summary>
+        /// The BCL generic token for a BasicLang collection — <c>List</c> →
+        /// <c>[mscorlib]System.Collections.Generic.List`1&lt;string&gt;</c>.
+        ///
+        /// <para><b>Why MSIL gets these natively and LLVM does not.</b> Until 2026-09-15 the
+        /// backend honesty matrix (spec decision 12) refused collections on LLVM and MSIL
+        /// together. That grouping was right for LLVM, which has no BCL to reach for — and
+        /// wrong for MSIL the moment it became a maintained target, because MSIL RUNS on .NET:
+        /// <c>List`1</c> is already in the runtime it targets, exactly as the C# backend uses
+        /// it. Nothing needs implementing, only naming.</para>
+        ///
+        /// <para>⛔ Generic ARGUMENTS are required, not decorative. <c>class List</c> — the name
+        /// with its arguments dropped — is what the backend emitted before this, and ilasm
+        /// rejects it as an undefined class. An arity-1 collection with no recorded argument is
+        /// therefore NOT guessed at: this returns false and lets the ordinary path refuse it,
+        /// rather than emitting <c>List`1&lt;object&gt;</c> and silently widening the element
+        /// type.</para>
+        /// </summary>
+        private bool TryCollectionToken(TypeInfo type, out string token)
+        {
+            token = null;
+            if (type?.Name == null) return false;
+
+            if (!CollectionArities.TryGetValue(type.Name, out var shape)) return false;
+
+            var args = type.GenericArguments;
+            if (args == null || args.Count != shape.Arity) return false;
+
+            // ⛔ Arguments are type SPECS, not tokens: IL writes `List`1<string>`, never
+            // `List`1<[mscorlib]System.String>`. The generated indexer call has always spelled
+            // it the first way (`IList`1<string>::get_Item`), so getting this wrong here would
+            // have produced two different spellings of one type in a single method.
+            var rendered = args.Select(IlTypeSpec);
+
+            token = $"[mscorlib]{shape.ClrName}`{shape.Arity}<{string.Join(", ", rendered)}>";
+            return true;
+        }
+
+        /// <summary>
+        /// A parameter's IL type spec for a SIGNATURE position (interface members, delegate
+        /// Invoke, method declarations).
+        ///
+        /// <para>⛔ These sites used to read <c>p.TypeName</c>, a STRING, which cannot carry
+        /// generic arguments — so a <c>List(Of Integer)</c> parameter emitted a bare
+        /// <c>List</c> and the whole method failed to assemble. The parameter already holds the
+        /// resolved <see cref="TypeInfo"/>; that is what knows the element type.</para>
+        ///
+        /// <para>The name is kept as the fallback for a parameter whose TypeInfo never got
+        /// populated, so this cannot be a regression for shapes that worked before.</para>
+        /// </summary>
+        private string IlParameterSpec(IRParameter parameter) =>
+            parameter?.Type != null ? IlTypeSpec(parameter.Type) : MapTypeName(parameter?.TypeName);
+
+        /// <summary>
+        /// One collection member's IL signature, written in terms of the GENERIC DEFINITION.
+        /// </summary>
+        /// <param name="Il">
+        /// The member name as IL spells it — a property becomes its accessor
+        /// (<c>Count</c> → <c>get_Count</c>).
+        /// </param>
+        /// <param name="Ret">Return type, with <c>!0</c>/<c>!1</c> for generic positions.</param>
+        /// <param name="Params">Parameter types, same convention.</param>
+        private sealed record CollectionMember(string Il, string Ret, string Params);
+
+        /// <summary>
+        /// <b>The narrow supported surface of <c>List</c> and <c>Dictionary</c> on MSIL</b>
+        /// (2026-09-15), keyed by CLR type name and BasicLang member name.
+        ///
+        /// <para><b>Why a table and not a rule.</b> IL requires a method on a generic
+        /// instantiation to carry the generic definition's signature —
+        /// <c>List`1&lt;string&gt;::Add(!0)</c>, never <c>Add(string)</c> — so something has to
+        /// say which positions are generic. The tempting rule, "substitute any parameter whose
+        /// type equals a generic argument", is UNSOUND: it gets <c>List(Of Integer).Add(5)</c>
+        /// right (<c>!0</c>) and <c>RemoveAt(0)</c> wrong, because that index must stay
+        /// <c>int32</c>. Nothing about the argument types distinguishes those two cases, so the
+        /// positions are recorded rather than inferred.</para>
+        ///
+        /// <para><b>A member missing from this table is REFUSED, never guessed.</b> That is the
+        /// whole reason a narrow table is safe to ship: the supported set is exactly what is
+        /// written here, and everything else still gets the clean BasicLang diagnostic it got
+        /// when collections were refused wholesale. Widening the set means adding a row and a
+        /// round-trip test, not relaxing a check.</para>
+        /// </summary>
+        private static readonly Dictionary<string, Dictionary<string, CollectionMember>> CollectionMembers =
+            new(StringComparer.Ordinal)
+            {
+                ["System.Collections.Generic.List"] = new(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["Add"] = new("Add", "void", "!0"),
+                    ["Count"] = new("get_Count", "int32", ""),
+                    ["Contains"] = new("Contains", "bool", "!0"),
+                    // The indexer. `Item` is the BasicLang spelling; IL wants the accessors, and
+                    // the INDEX is int32 while the element is generic — the exact asymmetry the
+                    // unsound rule above would have flattened.
+                    ["get_Item"] = new("get_Item", "!0", "int32"),
+                    ["set_Item"] = new("set_Item", "void", "int32, !0"),
+                },
+                ["System.Collections.Generic.Dictionary"] = new(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["Add"] = new("Add", "void", "!0, !1"),
+                    ["Count"] = new("get_Count", "int32", ""),
+                    ["ContainsKey"] = new("ContainsKey", "bool", "!0"),
+                    // Keyed by !0, yielding !1 — and the backend used to emit this as
+                    // `IList`1<int32>::get_Item(string)`, which names the VALUE type as the
+                    // list's element and the KEY type as an integer index. Wrong in both
+                    // positions, on a call that assembled.
+                    ["get_Item"] = new("get_Item", "!1", "!0"),
+                    ["set_Item"] = new("set_Item", "void", "!0, !1"),
+                },
+            };
+
+        /// <summary>
+        /// The supported signature for <paramref name="member"/> on a collection receiver, or
+        /// null when the receiver is not a collection at all (leave it to the ordinary path).
+        /// Throws for a collection member OUTSIDE the table — see
+        /// <see cref="CollectionMembers"/> for why that refusal is the point.
+        /// </summary>
+        private bool TryCollectionMember(
+            TypeInfo receiver, string member, out string token, out CollectionMember signature)
+        {
+            token = null;
+            signature = null;
+            if (!TryCollectionToken(receiver, out token)) return false;
+
+            var clr = CollectionArities[receiver.Name].ClrName;
+            if (CollectionMembers.TryGetValue(clr, out var members)
+                && members.TryGetValue(member, out signature))
+            {
+                return true;
+            }
+
+            throw new ForeignFeatureException(
+                $"MSIL: '{receiver.Name}.{member}' is outside the supported collection surface. "
+                + "MSIL carries List and Dictionary natively, but only the members whose IL "
+                + "generic signatures are recorded (Add, Count, Contains/ContainsKey, and the "
+                + "indexer). Emitting a guessed signature produces a call that assembles and "
+                + "then fails with MissingMethodException at run time, so it is refused here "
+                + "instead. Add a row to MSILCodeGenerator.CollectionMembers plus a round-trip "
+                + "test to widen the set.");
+        }
+
+        /// <summary>
+        /// The token naming the type a member is called ON, for <c>callvirt</c>/<c>call</c>/
+        /// <c>newobj</c>.
+        ///
+        /// <para>Three shapes, and the difference is not cosmetic. A generic needs the
+        /// <c>class</c> prefix (<c>class [mscorlib]…List`1&lt;string&gt;</c>) — the existing
+        /// indexer emission already spells it that way. A non-generic BCL type is written bare
+        /// (<c>[mscorlib]System.String</c>), matching the <c>Object::ToString</c> call this file
+        /// has always emitted. A type in the assembly being generated is just its name.</para>
+        ///
+        /// <para>Before this, the receiver was <c>SanitizeName(type.Name)</c> unconditionally,
+        /// so <c>s.ToUpper()</c> emitted a call on a class literally named <c>String</c> and
+        /// <c>l.Add(x)</c> one on <c>List</c> — neither of which exists. One missing resolution
+        /// step, two symptoms.</para>
+        /// </summary>
+        private string IlReceiverToken(TypeInfo type)
+        {
+            if (type?.Name == null) return "[mscorlib]System.Object";
+
+            if (TryCollectionToken(type, out var collection)) return "class " + collection;
+
+            var mapped = MapTypeName(type.Name);
+            return PrimitiveTokens.TryGetValue(mapped, out var bcl) ? bcl : mapped;
+        }
+
+        /// <summary>
+        /// The collections <c>ForeignFeatureChecker.IsCollectionName</c> recognises, with the
+        /// CLR type each denotes. Kept beside <see cref="TryCollectionToken"/> so the set the
+        /// checker ADMITS and the set this backend can NAME cannot drift apart — a type allowed
+        /// through the gate with no entry here would reach ilasm as a bare name.
+        /// </summary>
+        private static readonly Dictionary<string, (string ClrName, int Arity)> CollectionArities =
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["List"] = ("System.Collections.Generic.List", 1),
+                ["HashSet"] = ("System.Collections.Generic.HashSet", 1),
+                ["Queue"] = ("System.Collections.Generic.Queue", 1),
+                ["Stack"] = ("System.Collections.Generic.Stack", 1),
+                ["Dictionary"] = ("System.Collections.Generic.Dictionary", 2),
+            };
+
+        /// <summary>The IL keywords <see cref="MapTypeName"/> can produce — anything else is a class.</summary>
+        private static readonly HashSet<string> IlPrimitives = new(StringComparer.Ordinal)
+        {
+            "int8", "uint8", "int16", "uint16", "int32", "uint32", "int64", "uint64",
+            "float32", "float64", "bool", "char", "string", "object", "void", "native int",
+        };
+
+        /// <summary>
+        /// IL keyword → the BCL type it denotes, for token positions. <c>string</c> and
+        /// <c>object</c> are reference types and never need boxing, but they DO need a real
+        /// token for <c>newarr</c>/<c>castclass</c>, so they are carried here too.
+        /// </summary>
+        private static readonly Dictionary<string, string> PrimitiveTokens = new(StringComparer.Ordinal)
+        {
+            ["int8"] = "[mscorlib]System.SByte",
+            ["uint8"] = "[mscorlib]System.Byte",
+            ["int16"] = "[mscorlib]System.Int16",
+            ["uint16"] = "[mscorlib]System.UInt16",
+            ["int32"] = "[mscorlib]System.Int32",
+            ["uint32"] = "[mscorlib]System.UInt32",
+            ["int64"] = "[mscorlib]System.Int64",
+            ["uint64"] = "[mscorlib]System.UInt64",
+            ["float32"] = "[mscorlib]System.Single",
+            ["float64"] = "[mscorlib]System.Double",
+            ["bool"] = "[mscorlib]System.Boolean",
+            ["char"] = "[mscorlib]System.Char",
+            ["string"] = "[mscorlib]System.String",
+            ["object"] = "[mscorlib]System.Object",
+        };
 
         private string MapTypeName(string typeName)
         {
@@ -226,7 +519,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             {
                 var returnType = MapType(method.ReturnType);
                 var methodName = SanitizeName(method.Name);
-                var paramTypes = string.Join(", ", method.Parameters.Select(p => MapTypeName(p.TypeName)));
+                var paramTypes = string.Join(", ", method.Parameters.Select(IlParameterSpec));
 
                 WriteLine("  .method public hidebysig newslot abstract virtual");
                 WriteLine($"          instance {returnType} {methodName}({paramTypes}) cil managed");
@@ -487,7 +780,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (ctor.Implementation != null)
             {
                 paramTypes = string.Join(", ", ctor.Implementation.Parameters.Select(p =>
-                    $"{MapType(p.Type)} {SanitizeName(p.Name)}"));
+                    $"{IlTypeSpec(p.Type)} {SanitizeName(p.Name)}"));
             }
 
             WriteLine("  .method public hidebysig specialname rtspecialname");
@@ -563,7 +856,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (method.Implementation != null)
             {
                 paramTypes = string.Join(", ", method.Implementation.Parameters.Select(p =>
-                    $"{MapType(p.Type)} {SanitizeName(p.Name)}"));
+                    $"{IlTypeSpec(p.Type)} {SanitizeName(p.Name)}"));
             }
 
             WriteLine($"  .method public hidebysig {modifiers}{staticMod}");
@@ -727,7 +1020,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             // Parameters
             var paramList = string.Join(", ", function.Parameters.Select(p =>
-                $"{MapType(p.Type)} {SanitizeName(p.Name)}"));
+                $"{IlTypeSpec(p.Type)} {SanitizeName(p.Name)}"));
 
             WriteLine($"          {returnType} {methodName}({paramList}) cil managed");
 
@@ -807,14 +1100,14 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Declared local variables
             foreach (var local in function.LocalVariables)
             {
-                var localType = MapType(local.Type);
+                var localType = IlTypeSpec(local.Type);
                 locals.Add($"      [{_localIndices[local.Name]}] {localType} {SanitizeName(local.Name)}");
             }
 
             // Temporary variables
             foreach (var (temp, index) in _tempIndices)
             {
-                var tempType = MapType(temp.Type);
+                var tempType = IlTypeSpec(temp.Type);
                 locals.Add($"      [{index}] {tempType} V_{index}");
             }
 
@@ -1366,8 +1659,10 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
 
             // Generate call
-            var returnType = MapType(call.Type);
-            var paramTypes = string.Join(", ", call.Arguments.Select(a => MapType(a.Type)));
+            // Type SPECS: the declaration these resolve to spells its parameters the same way,
+            // and a call whose signature disagrees with the declaration binds to nothing.
+            var returnType = IlTypeSpec(call.Type);
+            var paramTypes = string.Join(", ", call.Arguments.Select(a => IlTypeSpec(a.Type)));
             var sanitizedName = SanitizeName(funcName);
 
             // Use module name for class reference
@@ -1559,7 +1854,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     var srcType = MapType(args[0].Type);
                     if (srcType != "string")
                     {
-                        WriteLine($"    box [{srcType}]");
+                        // box takes a TYPE TOKEN. `box [int32]` named an assembly, not a type.
+                        WriteLine($"    box {IlTypeToken(args[0].Type)}");
                         WriteLine("    callvirt instance string [mscorlib]System.Object::ToString()");
                     }
                     return true;
@@ -1754,8 +2050,11 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
         public override void Visit(IRNewObject newObj)
         {
-            // Generate newobj instruction
-            var className = SanitizeName(newObj.ClassName);
+            // Generate newobj instruction. A collection construction needs its BCL generic
+            // token — `newobj instance void List::.ctor()` names nothing.
+            var className = TryCollectionToken(newObj.Type, out var collectionToken)
+                ? "class " + collectionToken
+                : SanitizeName(newObj.ClassName);
 
             // Load arguments first
             foreach (var arg in newObj.Arguments)
@@ -1800,11 +2099,23 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
 
             // Build method signature
-            var returnType = MapType(methodCall.Type);
-            var paramTypes = string.Join(", ", methodCall.Arguments.Select(a => MapType(a.Type)));
-            var className = methodCall.Object?.Type?.Name != null ? SanitizeName(methodCall.Object.Type.Name) : "object";
-            var methodName = SanitizeName(methodCall.MethodName);
-
+            string returnType, paramTypes, className, methodName;
+            if (TryCollectionMember(
+                    methodCall.Object?.Type, methodCall.MethodName, out var collToken, out var collSig))
+            {
+                // Generic definition signature, per the table — not the substituted types.
+                className = "class " + collToken;
+                methodName = collSig.Il;
+                returnType = collSig.Ret;
+                paramTypes = collSig.Params;
+            }
+            else
+            {
+                returnType = IlTypeSpec(methodCall.Type);
+                paramTypes = string.Join(", ", methodCall.Arguments.Select(a => IlTypeSpec(a.Type)));
+                className = IlReceiverToken(methodCall.Object?.Type);
+                methodName = SanitizeName(methodCall.MethodName);
+            }
             // Use callvirt for virtual dispatch (polymorphic behavior)
             // For non-virtual calls, the backend should use 'call instance' instead, but callvirt is safer as default
             var callInstruction = methodCall.IsVirtual || !methodCall.IsVirtual ? "callvirt" : "call";
@@ -1891,28 +2202,44 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Load object reference
             EmitLoadValue(fieldAccess.Object);
 
+            // ⛔ A collection's Count reaches here as a FIELD access, and it is not a field —
+            // `ldfld int32 List::Count` names a bare class and a member that does not exist.
+            // It is a property, so it has to become its accessor call.
+            if (TryCollectionMember(
+                    fieldAccess.Object?.Type, fieldAccess.FieldName, out var collToken, out var collSig))
+            {
+                WriteLine($"    callvirt instance {collSig.Ret} class {collToken}::{collSig.Il}({collSig.Params})");
+                _currentStack--;
+                _currentStack++;
+                EmitFieldAccessResult(fieldAccess);
+                return;
+            }
+
             // Load field value from object
-            var fieldType = MapType(fieldAccess.Type);
-            var className = fieldAccess.Object?.Type?.Name != null ? SanitizeName(fieldAccess.Object.Type.Name) : "object";
+            var fieldType = IlTypeSpec(fieldAccess.Type);
+            var className = IlReceiverToken(fieldAccess.Object?.Type);
             var fieldName = SanitizeName(fieldAccess.FieldName);
 
             WriteLine($"    ldfld {fieldType} {className}::{fieldName}");
             _currentStack--; // Pop object reference
             _currentStack++; // Push field value
 
-            // Store result if needed
-            if (!string.IsNullOrEmpty(fieldAccess.Name))
-            {
-                if (_declaredIdentifiers.Contains(fieldAccess.Name))
-                {
-                    EmitStoreLocal(fieldAccess.Name);
-                }
-                else
-                {
-                    var tempIdx = GetTempIndex(fieldAccess);
-                    EmitStloc(tempIdx);
-                }
-            }
+            EmitFieldAccessResult(fieldAccess);
+        }
+
+        /// <summary>
+        /// Parks the value a field access (or the property call that stands in for one) left on
+        /// the stack. Shared so the collection-property arm cannot drift from the field arm —
+        /// both push exactly one value and both have to store it the same way.
+        /// </summary>
+        private void EmitFieldAccessResult(IRFieldAccess fieldAccess)
+        {
+            if (string.IsNullOrEmpty(fieldAccess.Name)) return;
+
+            if (_declaredIdentifiers.Contains(fieldAccess.Name))
+                EmitStoreLocal(fieldAccess.Name);
+            else
+                EmitStloc(GetTempIndex(fieldAccess));
         }
 
         public override void Visit(IRFieldStore fieldStore)
@@ -2102,20 +2429,35 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 EmitLoadValue(index);
             }
 
-            // Call indexer (get_Item method)
-            var indexTypes = string.Join(", ", indexer.Indices.Select(i => MapType(i.Type)));
-            WriteLine($"    callvirt instance {resultType} class [mscorlib]System.Collections.Generic.IList`1<{resultType}>::get_Item({indexTypes})");
+            // Call the indexer on the RECEIVER's own type. This used to be hard-coded to
+            // IList`1<resultType>, which is wrong for a Dictionary in both positions: it named
+            // the VALUE type as the list's element and passed the KEY as an integer index.
+            if (TryCollectionMember(indexer.Collection?.Type, "get_Item", out var collToken, out var collSig))
+            {
+                WriteLine($"    callvirt instance {collSig.Ret} class {collToken}::get_Item({collSig.Params})");
+            }
+            else
+            {
+                var indexTypes = string.Join(", ", indexer.Indices.Select(i => IlTypeSpec(i.Type)));
+                WriteLine($"    callvirt instance {resultType} class [mscorlib]System.Collections.Generic.IList`1<{resultType}>::get_Item({indexTypes})");
+            }
 
             // Update stack
             _currentStack -= indexer.Indices.Count; // Pop indices
             // Collection was already on stack, now replaced with result
 
-            // Store result name
+            // ⛔ Store the result the way EVERY other visit does. This used to hand itself a
+            // fresh slot with `_localCounter++` and register it in _localIndices — allocating a
+            // local that GenerateLocalsDeclaration had already handed to something else. The
+            // result was a silent miscompile: `PrintLine(l(1))` stored the element over the
+            // LIST's own slot and then printed a different, uninitialized local, so the program
+            // ran, printed garbage, and corrupted the collection for every later use.
             if (!string.IsNullOrEmpty(indexer.Name))
             {
-                var resultLocal = _localCounter++;
-                _localIndices[indexer.Name] = resultLocal;
-                WriteLine($"    stloc.s {resultLocal}");
+                if (_declaredIdentifiers.Contains(indexer.Name))
+                    EmitStoreLocal(indexer.Name);
+                else
+                    EmitStloc(GetTempIndex(indexer));
                 _currentStack--;
             }
         }

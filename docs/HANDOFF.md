@@ -196,6 +196,16 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   as **BL6027 (always a warning — never fails a build)**; coverage is pinned against a REAL
   framework surface at 223 of 234 slots. **Windows-gated at `ee3c086`** — 4 failures, all
   baseline.
+  ⚠ **The MSIL backend is a MAINTAINED target as of 2026-09-15** (it was not before; the old
+  "MSIL/LLVM are not maintained" policy now covers LLVM only). It has a round-trip harness —
+  `VisualGameStudio.Tests/Msil/MsilHarness.cs`: source → `.il` → `ilasm` → a real process →
+  stdout. **Never assert on emitted IL text alone here.** The defect that motivated the harness
+  was a `Select Case` that assembles, runs, and answers `Case Else` for every input; a text
+  assertion would have had to already know `beq` was missing to catch it. `ilasm` is located,
+  not required — Windows ships one in-box under `%WINDIR%\Microsoft.NET\Framework64`, elsewhere
+  restore `runtime.<rid>.Microsoft.NETCore.ILAsm` or set `BASICLANG_ILASM`; a machine with none
+  gets `Assert.Ignore`. Known gaps are pinned as `_PinnedDivergence` tests that each name a root
+  cause and go RED when fixed — read those before starting MSIL work.
   ⚠ **A `BlnetSlotDesc[]` kind that lies fails SILENTLY** (§8.4, 2026-09-15). The array is what
   `blnet_invoke_callback` reads to decide what to deep-copy when a callback is QUEUED rather than
   run inline: HANDLE addrefs at enqueue, STRING deep-copies, VALUE does neither. Label a handle
