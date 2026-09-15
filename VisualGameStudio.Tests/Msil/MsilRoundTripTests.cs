@@ -274,33 +274,65 @@ public class MsilRoundTripTests
     }
 
     /// <summary>
-    /// ⛔ <b>A member call on a BCL receiver does not resolve to a BCL token</b> — the same
-    /// root cause as <see cref="ConsoleWriteLine_IsAPhantomSelfCall_PinnedDivergence"/>, seen
-    /// from the other side. <c>s.ToUpper()</c> emits a call on a class literally named
-    /// <c>String</c> rather than <c>[mscorlib]System.String</c>, and ilasm refuses it outright
-    /// instead of deferring to run time as it does for the phantom self-call.
+    /// A member call on a BCL receiver resolves to the BCL type — <c>s.ToUpper()</c> runs.
     ///
-    /// <para>Both are one missing step: qualified calls need the receiver's type resolved to an
-    /// assembly-qualified token before the call is emitted.</para>
+    /// <para>The receiver used to be <c>SanitizeName(type.Name)</c> unconditionally, so this
+    /// emitted a call on a class literally named <c>String</c> and ilasm refused it. The same
+    /// missing step produced <c>Console.WriteLine</c>'s phantom self-call, which is still open
+    /// because it arrives through a different path — see
+    /// <see cref="ConsoleWriteLine_IsAPhantomSelfCall_PinnedDivergence"/>.</para>
     /// </summary>
     [Test]
-    public void AStringMethodCall_DoesNotResolveToTheBclType_PinnedDivergence()
+    public void AStringMethodCall_ResolvesToTheBclType_AndRuns()
     {
-        var run = Run("""
+        Assert.That(RunExpectingSuccess("""
             Module M
              Sub Main()
               Dim s As String = "hello"
               PrintLine(s.ToUpper())
              End Sub
             End Module
+            """), Is.EqualTo("HELLO\n"));
+    }
+
+    /// <summary>
+    /// ⛔ <b>Collections remain refused on MSIL, and the reason has MOVED.</b>
+    ///
+    /// <para>The backend honesty matrix (spec decision 12) grouped MSIL with LLVM here. For
+    /// LLVM that is permanent — there is no BCL to reach for. For MSIL it was only ever true
+    /// while the backend was unmaintained: MSIL runs on .NET, so <c>List`1</c> is already in
+    /// the runtime it targets.</para>
+    ///
+    /// <para><b>What actually blocks it, measured.</b> Naming the type is done —
+    /// <c>TryCollectionToken</c> renders
+    /// <c>class [mscorlib]System.Collections.Generic.List`1&lt;string&gt;</c>, and with the gate
+    /// opened a <c>List(Of String)</c> program assembles. It then fails at RUN time, because IL
+    /// requires a method on a generic instantiation to carry the GENERIC DEFINITION's
+    /// signature: <c>List`1&lt;string&gt;::Add(!0)</c>, not <c>Add(string)</c>.</para>
+    ///
+    /// <para>⛔ And the shortcut is unsound, which is why this is still closed rather than
+    /// half-open: substituting any parameter whose type equals a generic argument gets
+    /// <c>List(Of Integer).Add(5)</c> right (<c>!0</c>) and <c>RemoveAt(0)</c> wrong — it must
+    /// stay <c>int32</c>. A per-member table of which positions are generic is the sound fix.
+    /// Until then the clean BL diagnostic is strictly better than a
+    /// <c>MissingMethodException</c>.</para>
+    /// </summary>
+    [Test]
+    public void Collections_AreStillRefused_PendingGenericMemberSignatures()
+    {
+        var run = Run("""
+            Module M
+             Sub Main()
+              Dim l As New List(Of String)
+              l.Add("ITEM")
+             End Sub
+            End Module
             """);
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(run.Outcome, Is.EqualTo(MsilOutcome.AssembleFailed), run.Report);
-            Assert.That(run.Detail, Does.Contain("String"),
-                "ilasm must still be refusing an undefined class 'String': " + run.Detail);
-        });
+        Assert.That(run.Outcome, Is.EqualTo(MsilOutcome.GenerateFailed),
+            "a refusal BEFORE any IL is emitted is the honest state. If this starts generating, "
+            + "the generic member signatures had better exist — assembling is not enough, the "
+            + "call has to RESOLVE: " + run.Report);
     }
 
     /// <summary>

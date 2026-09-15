@@ -79,6 +79,17 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // ⛔ allowForeignIdentifiers stays at its default FALSE — see the note on the C#
             // backend's call. It is JavaScript-only, because only there does `::name` mean a real
             // identifier in the target language.
+            // ⛔ Collections stay REFUSED until generic member signatures are emitted. The type
+            // NAMING is done (TryCollectionToken), and that was the easy half; IL also requires a
+            // method on a generic instantiation to carry the GENERIC DEFINITION's signature —
+            // `List`1<string>::Add(!0)`, never `Add(string)` — or the call fails at run time with
+            // MissingMethodException.
+            //
+            // ⛔ And the obvious shortcut is UNSOUND: substituting any parameter whose type equals
+            // a generic argument gets List(Of Integer).Add(5) right (!0) and RemoveAt(0) wrong
+            // (must stay int32). It needs a per-member table saying which positions are generic.
+            // Flipping this to false before that exists trades a clean BL diagnostic for a
+            // runtime crash, which is the one thing the honesty matrix exists to prevent.
             ForeignFeatureChecker.Check(module, "MSIL", rejectCollections: true, ownInlineLanguage: "msil");
 
             _output.Clear();
@@ -246,11 +257,96 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// type is called in IL. Both string forms are accepted by the spec/token functions —
         /// a BasicLang name (<c>Integer</c>) and an already-mapped one (<c>int32</c>) — because
         /// callers hold one or the other depending on how far through lowering they are.
+        ///
+        /// <para><b>Collections are handled here, not in the string form</b>, because only the
+        /// <c>TypeInfo</c> carries <see cref="TypeInfo.GenericArguments"/>. A <c>List</c> whose
+        /// element type has been lost is not a type IL can name.</para>
         /// </summary>
-        private string IlTypeSpec(TypeInfo type) => IlTypeSpec(MapType(type));
+        private string IlTypeSpec(TypeInfo type) =>
+            TryCollectionToken(type, out var token) ? "class " + token : IlTypeSpec(MapType(type));
 
         /// <inheritdoc cref="IlTypeToken(string)"/>
-        private string IlTypeToken(TypeInfo type) => IlTypeToken(MapType(type));
+        private string IlTypeToken(TypeInfo type) =>
+            TryCollectionToken(type, out var token) ? token : IlTypeToken(MapType(type));
+
+        /// <summary>
+        /// The BCL generic token for a BasicLang collection — <c>List</c> →
+        /// <c>[mscorlib]System.Collections.Generic.List`1&lt;string&gt;</c>.
+        ///
+        /// <para><b>Why MSIL gets these natively and LLVM does not.</b> Until 2026-09-15 the
+        /// backend honesty matrix (spec decision 12) refused collections on LLVM and MSIL
+        /// together. That grouping was right for LLVM, which has no BCL to reach for — and
+        /// wrong for MSIL the moment it became a maintained target, because MSIL RUNS on .NET:
+        /// <c>List`1</c> is already in the runtime it targets, exactly as the C# backend uses
+        /// it. Nothing needs implementing, only naming.</para>
+        ///
+        /// <para>⛔ Generic ARGUMENTS are required, not decorative. <c>class List</c> — the name
+        /// with its arguments dropped — is what the backend emitted before this, and ilasm
+        /// rejects it as an undefined class. An arity-1 collection with no recorded argument is
+        /// therefore NOT guessed at: this returns false and lets the ordinary path refuse it,
+        /// rather than emitting <c>List`1&lt;object&gt;</c> and silently widening the element
+        /// type.</para>
+        /// </summary>
+        private bool TryCollectionToken(TypeInfo type, out string token)
+        {
+            token = null;
+            if (type?.Name == null) return false;
+
+            if (!CollectionArities.TryGetValue(type.Name, out var shape)) return false;
+
+            var args = type.GenericArguments;
+            if (args == null || args.Count != shape.Arity) return false;
+
+            // ⛔ Arguments are type SPECS, not tokens: IL writes `List`1<string>`, never
+            // `List`1<[mscorlib]System.String>`. The generated indexer call has always spelled
+            // it the first way (`IList`1<string>::get_Item`), so getting this wrong here would
+            // have produced two different spellings of one type in a single method.
+            var rendered = args.Select(IlTypeSpec);
+
+            token = $"[mscorlib]{shape.ClrName}`{shape.Arity}<{string.Join(", ", rendered)}>";
+            return true;
+        }
+
+        /// <summary>
+        /// The token naming the type a member is called ON, for <c>callvirt</c>/<c>call</c>/
+        /// <c>newobj</c>.
+        ///
+        /// <para>Three shapes, and the difference is not cosmetic. A generic needs the
+        /// <c>class</c> prefix (<c>class [mscorlib]…List`1&lt;string&gt;</c>) — the existing
+        /// indexer emission already spells it that way. A non-generic BCL type is written bare
+        /// (<c>[mscorlib]System.String</c>), matching the <c>Object::ToString</c> call this file
+        /// has always emitted. A type in the assembly being generated is just its name.</para>
+        ///
+        /// <para>Before this, the receiver was <c>SanitizeName(type.Name)</c> unconditionally,
+        /// so <c>s.ToUpper()</c> emitted a call on a class literally named <c>String</c> and
+        /// <c>l.Add(x)</c> one on <c>List</c> — neither of which exists. One missing resolution
+        /// step, two symptoms.</para>
+        /// </summary>
+        private string IlReceiverToken(TypeInfo type)
+        {
+            if (type?.Name == null) return "[mscorlib]System.Object";
+
+            if (TryCollectionToken(type, out var collection)) return "class " + collection;
+
+            var mapped = MapTypeName(type.Name);
+            return PrimitiveTokens.TryGetValue(mapped, out var bcl) ? bcl : mapped;
+        }
+
+        /// <summary>
+        /// The collections <c>ForeignFeatureChecker.IsCollectionName</c> recognises, with the
+        /// CLR type each denotes. Kept beside <see cref="TryCollectionToken"/> so the set the
+        /// checker ADMITS and the set this backend can NAME cannot drift apart — a type allowed
+        /// through the gate with no entry here would reach ilasm as a bare name.
+        /// </summary>
+        private static readonly Dictionary<string, (string ClrName, int Arity)> CollectionArities =
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["List"] = ("System.Collections.Generic.List", 1),
+                ["HashSet"] = ("System.Collections.Generic.HashSet", 1),
+                ["Queue"] = ("System.Collections.Generic.Queue", 1),
+                ["Stack"] = ("System.Collections.Generic.Stack", 1),
+                ["Dictionary"] = ("System.Collections.Generic.Dictionary", 2),
+            };
 
         /// <summary>The IL keywords <see cref="MapTypeName"/> can produce — anything else is a class.</summary>
         private static readonly HashSet<string> IlPrimitives = new(StringComparer.Ordinal)
@@ -1849,8 +1945,11 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
         public override void Visit(IRNewObject newObj)
         {
-            // Generate newobj instruction
-            var className = SanitizeName(newObj.ClassName);
+            // Generate newobj instruction. A collection construction needs its BCL generic
+            // token — `newobj instance void List::.ctor()` names nothing.
+            var className = TryCollectionToken(newObj.Type, out var collectionToken)
+                ? "class " + collectionToken
+                : SanitizeName(newObj.ClassName);
 
             // Load arguments first
             foreach (var arg in newObj.Arguments)
@@ -1895,9 +1994,9 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
 
             // Build method signature
-            var returnType = MapType(methodCall.Type);
-            var paramTypes = string.Join(", ", methodCall.Arguments.Select(a => MapType(a.Type)));
-            var className = methodCall.Object?.Type?.Name != null ? SanitizeName(methodCall.Object.Type.Name) : "object";
+            var returnType = IlTypeSpec(methodCall.Type);
+            var paramTypes = string.Join(", ", methodCall.Arguments.Select(a => IlTypeSpec(a.Type)));
+            var className = IlReceiverToken(methodCall.Object?.Type);
             var methodName = SanitizeName(methodCall.MethodName);
 
             // Use callvirt for virtual dispatch (polymorphic behavior)
