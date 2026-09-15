@@ -3229,11 +3229,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// still refuse, and neither is guessable:</para>
         /// <list type="bullet">
         /// <item><description>a type with no single by-value wire slot — a <c>String</c>
-        /// (<c>const char*</c> in, <c>char**</c> out, opposite ownership in each direction), a
-        /// .NET object handle (writing a NEW handle over the caller's releases one the callee
-        /// may have returned unchanged — a double release), or a multi-slot §6.4 pair. This is
-        /// the same line <c>NetProxyEmitter.PlanMember</c> refuses to cross, reported HERE with
-        /// a source position instead of as a positionless codegen refusal;</description></item>
+        /// (<c>const char*</c> in, <c>char**</c> out, opposite ownership in each direction) or a
+        /// §6.4 by-value-pointer / multi-slot pair. <c>NetProxyEmitter.PlanMember</c> refuses
+        /// exactly these too, and reporting HERE is what gives them a source position instead of
+        /// a positionless codegen refusal;</description></item>
+        /// <item><description>a .NET object HANDLE — but for a different reason, and only at a
+        /// call site. §8.3's <i>ByRef handle ownership</i> (resolved 2026-09-15) specifies the
+        /// shape and <c>NetProxyEmitter</c> emits it for declared surfaces; what is missing is
+        /// the C++ lowering, which cannot carry a handle through a ByRef argument. ⛔ It is NOT
+        /// refused for being a "double release" — that premise was disproven (<c>Table.Create</c>
+        /// has no identity map) and must not be reintroduced here;</description></item>
         /// <item><description>an argument that is not a plain variable. The callee writes back
         /// through the slot, and there is nowhere to write an expression or a literal — VB's own
         /// ByRef rules say the same thing.</description></item>
@@ -3245,11 +3250,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
         {
             var passing = parameter.RefKind.ToString().ToLowerInvariant();
 
-            // §8.6 row 4 — a ref/out ARRAY slot is the ONE specified widening of the rule below,
-            // and it is admitted here rather than exempted downstream. The ownership objection
-            // the message names does not apply: the handle in the slot is one the CALLER minted
-            // (bl_net_array_new_… copies a std::vector in at refcount 1), so writing a new handle
-            // over it releases something the caller owns. §8.6 also makes ref/out the EXEMPTION
+            // §8.6 row 4 — a ref/out ARRAY slot is admitted here rather than exempted
+            // downstream. ⛔ Do NOT restate its old justification, "the handle in the slot is
+            // one the CALLER minted": §8.3 (ByRef handle ownership, resolved 2026-09-15) says
+            // minting is not what makes the write-back sound — Table.Create has no identity
+            // map, so a re-handled object yields a second INDEPENDENT reference and the managed
+            // side never writes an incoming handle back. §8.6 also makes ref/out the EXEMPTION
             // from §14.11's one-way divergence — refusing it here would make §12.1's parity
             // program unauthorable. The argument-must-be-a-variable rule below still applies, so
             // this admits the shape without skipping the check that has nothing to do with it.
@@ -3257,16 +3263,33 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 if (argument is IdentifierExpressionNode) return false;
             }
-            else if (!NetMarshalTable.TryGetWireRow(parameter.TypeFullName, out var row)
-                     || !row.HasByValueScalarSlot)
+            // No marshal row means the type crosses as a HANDLE. §8.3's "ByRef handle
+            // ownership" (resolved 2026-09-15) specifies that shape, so the old reason — "a
+            // double release" — is false and must not be restated. The real blocker is the C++
+            // call-site lowering, which cannot carry a handle through a ByRef argument yet;
+            // CppCodeGenerator.NetCalls draws the same line, and reporting it HERE is what
+            // gives it a source position.
+            else if (!NetMarshalTable.TryGetWireRow(parameter.TypeFullName, out var row))
+            {
+                NetWarning("BL6019",
+                    $"'{target}': parameter {position} ('{parameter}') is passed {passing} and "
+                    + $"its type '{parameter.TypeFullName}' crosses as a .NET handle. §8.3 "
+                    + "specifies ByRef handles and a <NetProxy> declared surface emits them, "
+                    + "but a BasicLang call site cannot pass one yet — the lowering does not "
+                    + "carry a handle through ByRef arguments. Use an overload that returns "
+                    + "the value instead.",
+                    line, column);
+                return true;
+            }
+            else if (!row.HasByValueScalarSlot)
             {
                 NetWarning("BL6019",
                     $"'{target}': parameter {position} ('{parameter}') is passed {passing} and "
                     + $"its type '{parameter.TypeFullName}' has no single by-value wire slot. "
-                    + "§8.3 pins ByRef slots to by-value scalars: a ByRef String has opposite "
-                    + "ownership in each direction, and a ByRef .NET object would leave handle "
-                    + "ownership undefined (a double release). Pass it by value, or use an "
-                    + "overload that returns the value instead.",
+                    + "§8.3 pins ByRef slots to by-value scalars and handle rows: a ByRef "
+                    + "String has opposite ownership in each direction, and a ByRef §6.4 row "
+                    + "points at a buffer the managed side holds a copy of. Pass it by value, "
+                    + "or use an overload that returns the value instead.",
                     line, column);
                 return true;
             }

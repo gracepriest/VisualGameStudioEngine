@@ -199,9 +199,10 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   ⚠ **A coverage set identity needs a FLOOR beside it** — skipping every slot satisfies
   `rendered ∪ skipped == all` perfectly. Measured, not theorised: mutating the classifier to skip
   everything left the identity test green. `NetFacadeCoverageDriftTests` asserts both.
-  ⚠ `StringBuilder`, `DateTime` and `Uri` **cannot be `<NetProxy>` types at all** — `Emit` throws
-  BL6019 for each (§6.4 by-value-pointer result; ByRef handles §8.3 leaves unspecified). Upstream
-  of the facade; a surface containing one cannot be emitted. The header is emitted unconditionally and included by nobody —
+  ⚠ `StringBuilder` and `Guid` **cannot be `<NetProxy>` types at all** — `Emit` throws BL6019 for
+  each (a §6.4 by-value-pointer RESULT). Upstream of the facade; a surface containing one cannot
+  be emitted. `DateTime` and `Uri` used to be on this list for a ByRef HANDLE parameter; §8.3's
+  *ByRef handle ownership* resolution (2026-09-15) specified that shape and they emit now. The header is emitted unconditionally and included by nobody —
   `using namespace BasicLang::netfx;` is the one opt-in line.
   ⚠ **A property's `set_X()` is usually absent**, and that is the SURFACE, not the facade: a
   `<NetProxy>` declared type draws only property READ slots, because a setter descriptor is
