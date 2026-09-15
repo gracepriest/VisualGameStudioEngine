@@ -27,6 +27,23 @@ public class FormCanvasDropTests
 {
     private const string Dir = "/proj/";
 
+    /// <summary>A 2x2 grid on the default 400x300 surface: each cell is exactly 200x150.</summary>
+    private const string WebGridPage = """
+        <WebForm Name="LoginForm" Version="1">
+          <Layout Kind="Grid" Cols="1fr,1fr" Rows="1fr,1fr" Gap="0px"/>
+          <Controls>
+          </Controls>
+        </WebForm>
+        """;
+
+    private const string FlowPage = """
+        <WebForm Name="LoginForm" Version="1">
+          <Layout Kind="Flow" Dir="Vertical"/>
+          <Controls>
+          </Controls>
+        </WebForm>
+        """;
+
     private static (CodeEditorDocumentViewModel Vm, Dictionary<string, string> Files) Open(
         FormTarget target, string? documentText = null)
     {
@@ -142,9 +159,46 @@ public class FormCanvasDropTests
     }
 
     [Test]
-    public void ADropOnAWebDocument_IsRefused_AndChangesNothing()
+    public void ADropOnAWebGrid_ReachesTheFileAsAColAndRow()
     {
-        var (vm, _) = Open(FormTarget.Web);
+        // ⛔⛔ The web half of the caller test. A .blwebform records a CELL, not a pixel, so this is
+        // what proves the grid the canvas draws and the geometry the file carries are one thing.
+        var (vm, _) = Open(FormTarget.Web, WebGridPage);
+
+        var refusal = vm.PlaceControl("Button", 300, 250);   // right column, second row
+
+        Assert.That(refusal, Is.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.Text, Does.Contain("Col=\"1\""));
+            Assert.That(vm.Text, Does.Contain("Row=\"1\""));
+            Assert.That(vm.Text, Does.Not.Contain("ColSpan"), "span 1 is the default and is not written");
+            Assert.That(vm.Text, Does.Not.Contain("X=\""), "a page has no pixel geometry");
+        });
+    }
+
+    [Test]
+    public void AWebDropSurvivesAReRead_InTheSameCell()
+    {
+        var (vm, _) = Open(FormTarget.Web, WebGridPage);
+
+        vm.PlaceControl("Button", 300, 250);
+
+        var reread = BasicLang.Forms.Serialization.FormDocumentReader.Read(vm.FilePath!, vm.Text);
+        var grid = (GridGeometry)reread.Model.FindById("Button1")!.Geometry!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(grid.Col, Is.EqualTo(1));
+            Assert.That(grid.Row, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void ADropOnAFlowPage_IsRefused_AndChangesNothing()
+    {
+        // Flow positions by document ORDER, so there is no cell a point could mean. The refusal
+        // still has to be SAID — a silent no-op is the failure this feature exists to remove.
+        var (vm, _) = Open(FormTarget.Web, FlowPage);
         var before = vm.Text;
 
         var refusal = vm.PlaceControl("Button", 10, 10);

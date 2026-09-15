@@ -482,7 +482,12 @@ public class FormCanvasControl : Control
         // Handles LAST, over everything. Drawn in the loop they would be painted over by the next
         // control, so the selection's handles would disappear behind whatever overlaps it — which
         // is exactly when you most need to grab them.
-        if (SelectedControl != null && CanvasBoundsOf(document, SelectedControl) is { } selection)
+        // ⚠ Handles only where they DO something. A web control lives in a grid cell — its size is
+        // the cell's, so there is nothing to drag an edge of, and OnPointerPressed will not arm a
+        // resize for it. Drawing eight grips on it would advertise a gesture that silently does
+        // nothing, which is worse than drawing none.
+        if (SelectedControl?.Geometry is PixelGeometry &&
+            CanvasBoundsOf(document, SelectedControl) is { } selection)
         {
             DrawHandles(context, selection);
         }
@@ -522,8 +527,9 @@ public class FormCanvasControl : Control
     /// </summary>
     private static FormCanvasTransform Fit(FormDocument document, Size viewport)
     {
-        var width = document.Width is > 0 ? document.Width.Value : 400;
-        var height = document.Height is > 0 ? document.Height.Value : 300;
+        var surface = FormCanvasTransform.SurfaceSize(document);
+        var width = surface.Width;
+        var height = surface.Height;
 
         if (viewport.Width <= 0 || viewport.Height <= 0)
         {
@@ -545,11 +551,21 @@ public class FormCanvasControl : Control
 
     private void DrawSurface(DrawingContext context, FormDocument document)
     {
-        var width = document.Width is > 0 ? document.Width.Value : 400;
-        var height = document.Height is > 0 ? document.Height.Value : 300;
-
-        var surface = _transform.ToCanvas(new Rect(0, 0, width, height));
+        var size = FormCanvasTransform.SurfaceSize(document);
+        var surface = _transform.ToCanvas(new Rect(0, 0, size.Width, size.Height));
         context.DrawRectangle(SurfaceBrush, SurfacePen, surface);
+
+        // ⛔ The grid, UNDER the controls. Without it a web page is a blank rectangle with no clue
+        // where a drop will land — the cells are the only thing on screen that says what a
+        // .blwebform's geometry even means, because its controls are placed by cell and not by
+        // pixel. Drawn faintly: they are guides, not content.
+        if (document.Target == FormTarget.Web && document.Layout?.Kind == FormLayoutKind.Grid)
+        {
+            foreach (var (_, _, cell) in FormGridLayout.Cells(document.Layout, size))
+            {
+                context.DrawRectangle(null, GridPen, _transform.ToCanvas(cell));
+            }
+        }
 
         var caption = document.Text ?? document.Name;
         if (!string.IsNullOrEmpty(caption))
@@ -598,6 +614,8 @@ public class FormCanvasControl : Control
     private static readonly IPen SelectionPen = new Pen(new SolidColorBrush(Color.FromRgb(0x00, 0x7A, 0xCC)), 2);
     private static readonly IBrush LabelBrush = new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0));
     private static readonly IBrush CaptionBrush = new SolidColorBrush(Color.FromRgb(0xB0, 0xB0, 0xB8));
+    private static readonly IPen GridPen = new Pen(
+        new SolidColorBrush(Color.FromRgb(0x50, 0x50, 0x58)), dashStyle: DashStyle.Dash);
     private static readonly IBrush HandleBrush = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF));
     private static readonly IPen HandlePen = new Pen(new SolidColorBrush(Color.FromRgb(0x00, 0x7A, 0xCC)));
 

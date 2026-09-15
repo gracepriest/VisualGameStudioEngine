@@ -308,4 +308,102 @@ public class FormCanvasTransformTests
                 Is.EqualTo(FormResizeHandle.TopLeft));
         });
     }
+
+    // ==================================================================
+    // Web documents — laid out on the grid, not on pixels
+    // ==================================================================
+
+    private static FormDocument WebGrid(params FormControl[] controls)
+    {
+        var document = new FormDocument
+        {
+            Target = FormTarget.Web,
+            Name = "Page",
+            Layout = new FormLayout
+            {
+                Kind = FormLayoutKind.Grid, Cols = "1fr,1fr", Rows = "1fr,1fr", Gap = "0px"
+            }
+        };
+
+        foreach (var control in controls)
+        {
+            document.Controls.Add(control);
+        }
+
+        return document;
+    }
+
+    private static FormControl InCell(string id, int col, int row, int colSpan = 1, int rowSpan = 1) =>
+        new()
+        {
+            Kind = "Button",
+            Id = id,
+            Geometry = new GridGeometry { Col = col, Row = row, ColSpan = colSpan, RowSpan = rowSpan }
+        };
+
+    [Test]
+    public void AWebControl_IsLaidOutInItsCell()
+    {
+        // ⛔⛔ Without this the canvas draws NOTHING for a .blwebform — BoundsOf only understands
+        // pixel geometry — so a control dropped on a page was invisible everywhere but Code view.
+        var document = WebGrid(InCell("btn", 1, 1));
+
+        var laid = FormCanvasTransform.Layout(document).ToList();
+
+        Assert.That(laid, Has.Count.EqualTo(1));
+        Assert.That(laid[0].Bounds, Is.EqualTo(new Rect(200, 150, 200, 150)),
+            "bottom-right cell of a 2x2 grid on the default 400x300 surface");
+    }
+
+    [Test]
+    public void AWebControlThatSpans_CoversItsCells()
+    {
+        var document = WebGrid(InCell("btn", 0, 0, colSpan: 2));
+
+        var laid = FormCanvasTransform.Layout(document).Single();
+
+        Assert.That(laid.Bounds.Width, Is.EqualTo(400));
+    }
+
+    [Test]
+    public void AFlowPage_LaysOutNothing()
+    {
+        // ⚠ Flow positions by document ORDER. There is no cell to draw, and drawing a guess would
+        // be the preview this canvas must never pretend to be.
+        var document = WebGrid(InCell("btn", 0, 0));
+        document.Layout!.Kind = FormLayoutKind.Flow;
+
+        Assert.That(FormCanvasTransform.Layout(document), Is.Empty);
+    }
+
+    [Test]
+    public void ClickingAWebCell_SelectsTheControlInIt()
+    {
+        var document = WebGrid(InCell("first", 0, 0), InCell("second", 1, 1));
+        var transform = new FormCanvasTransform();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(transform.HitTest(document, new Point(50, 50))?.Id, Is.EqualTo("first"));
+            Assert.That(transform.HitTest(document, new Point(300, 250))?.Id, Is.EqualTo("second"));
+        });
+    }
+
+    [Test]
+    public void ClickingAnEmptyWebCell_SelectsNothing()
+    {
+        var document = WebGrid(InCell("first", 0, 0));
+
+        Assert.That(new FormCanvasTransform().HitTest(document, new Point(300, 250)), Is.Null);
+    }
+
+    [Test]
+    public void TwoWebControlsInOneCell_SelectTheTopmost()
+    {
+        // CSS grid lets two items share a cell, so the document can too. Document order is z-order,
+        // exactly as on WinForms.
+        var document = WebGrid(InCell("under", 0, 0), InCell("over", 0, 0));
+
+        Assert.That(new FormCanvasTransform().HitTest(document, new Point(50, 50))?.Id, Is.EqualTo("over"));
+    }
 }

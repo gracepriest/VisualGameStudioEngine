@@ -51,16 +51,11 @@ public static class FormPlacement
                 null, $"{definition.Kind} is not available on a {document.Target} form.");
         }
 
-        // ⛔ D3. A .blwebform positions controls by Grid/Flow cell, not by X/Y, and the canvas draws
-        // nothing at all for grid geometry — so a "successful" drop here would add a control the
-        // user can see only in the Code view. Refusing is honest; placing an invisible control is
-        // the silent-success failure this feature exists to avoid.
+        // ⛔ D3. A .blwebform positions controls by CELL, not by pixel, so the web path produces a
+        // GridGeometry from the cell the pointer is in rather than an X/Y.
         if (document.Target != FormTarget.WinForms)
         {
-            return new FormPlacementResult(
-                null,
-                "A web form positions controls by its layout, not by pixels — " +
-                "add the control in Code view and give it a Col and Row.");
+            return PlaceOnWeb(document, definition, x, y);
         }
 
         var container = FormCanvasTransform.ContainerAt(document, new Point(x, y));
@@ -101,6 +96,66 @@ public static class FormPlacement
     }
 
     /// <summary>
+    /// A drop on a <c>.blwebform</c>: the control goes in the CELL the pointer is over.
+    ///
+    /// <para>⚠ Grid only, and the refusals say why. <c>Flow</c> is flexbox — position comes from
+    /// document ORDER, not from a cell, so a point on the canvas means nothing there. A page with
+    /// no <c>&lt;Layout&gt;</c> gets no grid CSS either, so a Col and Row would describe a grid the
+    /// emitted page does not have. Both are better said than guessed at.</para>
+    ///
+    /// <para>⚠ Always a top-level control. A web container's children carry Col/Row against a grid
+    /// that the model has no vocabulary for — <see cref="FormLayout"/> is a property of the
+    /// DOCUMENT, not of a Panel — so there is no nested grid to drop into, and pretending otherwise
+    /// would write geometry nothing can lay out.</para>
+    /// </summary>
+    private static FormPlacementResult PlaceOnWeb(
+        FormDocument document, FormControlDef definition, int x, int y)
+    {
+        if (document.Layout == null)
+        {
+            return new FormPlacementResult(
+                null,
+                "This page has no <Layout>, so there are no cells to drop into. " +
+                "Add a Grid layout in Code view first.");
+        }
+
+        if (document.Layout.Kind != FormLayoutKind.Grid)
+        {
+            return new FormPlacementResult(
+                null,
+                $"A {document.Layout.Kind} layout positions controls by document order, not by " +
+                "cell, so there is nothing here to drop onto. Add the control in Code view.");
+        }
+
+        var cell = FormGridLayout.CellAt(
+            document.Layout, FormCanvasTransform.SurfaceSize(document), new Point(x, y));
+
+        if (cell == null)
+        {
+            return new FormPlacementResult(null, "That is outside the page.");
+        }
+
+        var control = new FormControl
+        {
+            Kind = definition.Kind,
+            Id = NextId(document, definition.Kind),
+            TabIndex = NextTabIndex(document),
+
+            // ⚠ Span 1 is the default and the writer deliberately omits it, so setting anything
+            // else here would stamp ColSpan="1" into every element the designer touches.
+            Geometry = new GridGeometry { Col = cell.Value.Col, Row = cell.Value.Row }
+        };
+
+        if (definition.Property("Text") != null)
+        {
+            control.Properties["Text"] = control.Id;
+        }
+
+        document.Controls.Add(control);
+        return new FormPlacementResult(control, null);
+    }
+
+    /// <summary>
     /// Keeps the whole control on its surface. A control dropped half off the edge is placeable in
     /// a real designer only because you can drag it back; this one cannot be dragged yet.
     /// </summary>
@@ -119,8 +174,8 @@ public static class FormPlacement
             return (pixel.Width, pixel.Height);
         }
 
-        return (document.Width is > 0 ? document.Width.Value : 400,
-                document.Height is > 0 ? document.Height.Value : 300);
+        var surface = FormCanvasTransform.SurfaceSize(document);
+        return ((int)surface.Width, (int)surface.Height);
     }
 
     /// <summary>

@@ -218,8 +218,8 @@ public static class FormGeometryEdit
             return (parent.Width, parent.Height);
         }
 
-        return (document.Width is > 0 ? document.Width.Value : 400,
-                document.Height is > 0 ? document.Height.Value : 300);
+        var surface = FormCanvasTransform.SurfaceSize(document);
+        return ((int)surface.Width, (int)surface.Height);
     }
 
     private static FormControl? ParentOf(FormDocument document, FormControl control) =>

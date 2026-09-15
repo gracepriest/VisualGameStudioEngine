@@ -325,13 +325,111 @@ public class FormPlacementTests
         });
     }
 
+    // ==================================================================
+    // Web documents — placed by CELL, not by pixel (D3)
+    // ==================================================================
+
+    private static FormDocument WebGrid(string cols = "1fr,1fr", string rows = "1fr,1fr") =>
+        new()
+        {
+            Target = FormTarget.Web,
+            Name = "LoginForm",
+            Layout = new FormLayout { Kind = FormLayoutKind.Grid, Cols = cols, Rows = rows, Gap = "0px" }
+        };
+
     [Test]
-    public void AWebDocument_IsRefusedBecauseItsControlsAreNotPositionedInPixels()
+    public void ADropOnAWebGrid_LandsInTheCellUnderThePointer()
     {
-        // ⛔ D3: a .blwebform positions controls by Grid/Flow cell, not by X/Y — and the canvas
-        // draws nothing for grid geometry, so a "successful" drop here would add a control the user
-        // cannot see anywhere but the Code view. Refusing with a reason is the honest answer until
-        // the canvas can draw cells.
+        // The web half of a drop. A .blwebform records WHICH CELL a control is in, so that — not a
+        // pixel — is what the drop has to produce.
+        var document = WebGrid();
+
+        var result = FormPlacement.Place(document, "Button", 300, 250);   // right column, second row
+
+        Assert.That(result.Refusal, Is.Null);
+        var grid = (GridGeometry)result.Control!.Geometry!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(grid.Col, Is.EqualTo(1));
+            Assert.That(grid.Row, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void AWebControl_SpansOneCell()
+    {
+        // ⚠ Span 1 is the default and is deliberately NOT written out by the writer, so inventing
+        // anything else here would put ColSpan="1" into every element the designer touches.
+        var document = WebGrid();
+
+        var result = FormPlacement.Place(document, "Button", 50, 50);
+
+        var grid = (GridGeometry)result.Control!.Geometry!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(grid.ColSpan, Is.EqualTo(1));
+            Assert.That(grid.RowSpan, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void AWebDrop_GetsTheSameIdAndCaptionRulesAsAWinFormsOne()
+    {
+        var document = WebGrid();
+
+        var result = FormPlacement.Place(document, "Button", 50, 50);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Control!.Id, Is.EqualTo("Button1"));
+            Assert.That(result.Control.Properties["Text"], Is.EqualTo("Button1"));
+            Assert.That(result.Control.TabIndex, Is.EqualTo(0));
+        });
+    }
+
+    [Test]
+    public void AWebDropOutsideThePage_IsRefused()
+    {
+        var document = WebGrid();
+
+        var result = FormPlacement.Place(document, "Button", -50, -50);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Control, Is.Null);
+            Assert.That(result.Refusal, Is.Not.Null.And.Not.Empty);
+            Assert.That(document.Controls, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void AFlowLayout_IsStillRefused_BecauseItHasNoCells()
+    {
+        // ⛔ Flow is flexbox: position comes from document ORDER, not from a cell, so there is
+        // nothing on the canvas for a point to mean. Refusing with a reason beats inventing a Col
+        // and Row that the emitted page would ignore.
+        var document = new FormDocument
+        {
+            Target = FormTarget.Web,
+            Name = "LoginForm",
+            Layout = new FormLayout { Kind = FormLayoutKind.Flow, Dir = "Vertical" }
+        };
+
+        var result = FormPlacement.Place(document, "Button", 10, 10);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Control, Is.Null);
+            Assert.That(result.Refusal, Does.Contain("Flow"));
+            Assert.That(document.Controls, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void APageWithNoLayout_IsRefused()
+    {
+        // No <Layout> means no grid in the emitted CSS either, so a Col and Row would describe a
+        // grid the page does not have.
         var document = new FormDocument { Target = FormTarget.Web, Name = "LoginForm" };
 
         var result = FormPlacement.Place(document, "Button", 10, 10);

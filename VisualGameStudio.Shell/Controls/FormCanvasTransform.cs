@@ -89,7 +89,20 @@ public sealed class FormCanvasTransform
     public FormControl? HitTest(FormDocument document, Point canvasPoint)
     {
         ArgumentNullException.ThrowIfNull(document);
-        return HitTest(document.Controls, ToForm(canvasPoint), new Point(0, 0));
+
+        var formPoint = ToForm(canvasPoint);
+
+        // A web page has no pixel geometry to walk — its controls are in CELLS. Layout already
+        // knows how to find them, and reading it backwards gives the same topmost-wins rule.
+        if (document.Target == FormTarget.Web)
+        {
+            return Layout(document)
+                .Where(entry => entry.Bounds.Contains(formPoint))
+                .Select(entry => entry.Control)
+                .LastOrDefault();
+        }
+
+        return HitTest(document.Controls, formPoint, new Point(0, 0));
     }
 
     private static FormControl? HitTest(
@@ -110,6 +123,24 @@ public sealed class FormCanvasTransform
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// The form's drawable area in FORM units — its client size, or a default for a page that has
+    /// no intrinsic one.
+    ///
+    /// <para>⛔ ONE authority, because four things have to agree about it: the rectangle the canvas
+    /// draws, the transform that fits it to the viewport, the clamp that keeps controls on it, and
+    /// the grid a web page's cells are computed from. A second copy that drifts puts the grid lines
+    /// somewhere other than the page they are supposed to divide — and a drop then lands in a cell
+    /// the user did not aim at, with nothing on screen looking wrong.</para>
+    /// </summary>
+    public static Size SurfaceSize(FormDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        return new Size(
+            document.Width is > 0 ? document.Width.Value : 400,
+            document.Height is > 0 ? document.Height.Value : 300);
     }
 
     /// <summary>
@@ -253,7 +284,39 @@ public sealed class FormCanvasTransform
     public static IEnumerable<(FormControl Control, Rect Bounds)> Layout(FormDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
-        return Layout(document.Controls, new Point(0, 0));
+
+        return document.Target == FormTarget.Web
+            ? WebLayout(document)
+            : Layout(document.Controls, new Point(0, 0));
+    }
+
+    /// <summary>
+    /// A web page's controls, each in the grid cell it names.
+    ///
+    /// <para>⚠ TOP LEVEL only, and that is the model's limit rather than a shortcut:
+    /// <see cref="FormLayout"/> is a property of the DOCUMENT, so a Panel's children carry Col/Row
+    /// against a grid that is not described anywhere. Laying them out would mean inventing one.</para>
+    ///
+    /// <para>⚠ Grid only. <c>Flow</c> positions by document order and <c>Canvas</c> is the
+    /// unimplemented pixel escape hatch; for both, there is no cell a point could mean, and drawing
+    /// a guess is exactly the preview this canvas must not pretend to be.</para>
+    /// </summary>
+    private static IEnumerable<(FormControl Control, Rect Bounds)> WebLayout(FormDocument document)
+    {
+        if (document.Layout?.Kind != FormLayoutKind.Grid)
+        {
+            yield break;
+        }
+
+        var surface = SurfaceSize(document);
+        foreach (var control in document.Controls)
+        {
+            if (control.Geometry is GridGeometry grid)
+            {
+                yield return (control, FormGridLayout.CellRect(
+                    document.Layout, surface, grid.Col, grid.Row, grid.ColSpan, grid.RowSpan));
+            }
+        }
     }
 
     private static IEnumerable<(FormControl, Rect)> Layout(
