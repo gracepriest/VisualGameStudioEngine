@@ -295,44 +295,105 @@ public class MsilRoundTripTests
             """), Is.EqualTo("HELLO\n"));
     }
 
+    // ---- Collections, native on MSIL as of 2026-09-15 ----------------------------------
+    //
+    // The honesty matrix (spec decision 12) grouped MSIL with LLVM here. That is permanent for
+    // LLVM, which has no BCL to reach for; it was only ever true for MSIL while the backend was
+    // unmaintained, because MSIL RUNS on .NET and List`1 is already in the runtime it targets.
+    //
+    // What made it non-trivial: IL requires a method on a generic instantiation to carry the
+    // GENERIC DEFINITION's signature — List`1<string>::Add(!0), never Add(string) — and the
+    // tempting rule ("substitute any parameter whose type equals a generic argument") is
+    // UNSOUND, getting List(Of Integer).Add(5) right and RemoveAt(0) wrong. So the generic
+    // positions are recorded per member in MSILCodeGenerator.CollectionMembers, and a member
+    // outside that table is REFUSED rather than guessed.
+
     /// <summary>
-    /// ⛔ <b>Collections remain refused on MSIL, and the reason has MOVED.</b>
+    /// <c>List(Of String)</c> end to end: element read through the indexer, <c>Count</c>, and
+    /// <c>Contains</c> — all three asserted on their VALUES.
     ///
-    /// <para>The backend honesty matrix (spec decision 12) grouped MSIL with LLVM here. For
-    /// LLVM that is permanent — there is no BCL to reach for. For MSIL it was only ever true
-    /// while the backend was unmaintained: MSIL runs on .NET, so <c>List`1</c> is already in
-    /// the runtime it targets.</para>
-    ///
-    /// <para><b>What actually blocks it, measured.</b> Naming the type is done —
-    /// <c>TryCollectionToken</c> renders
-    /// <c>class [mscorlib]System.Collections.Generic.List`1&lt;string&gt;</c>, and with the gate
-    /// opened a <c>List(Of String)</c> program assembles. It then fails at RUN time, because IL
-    /// requires a method on a generic instantiation to carry the GENERIC DEFINITION's
-    /// signature: <c>List`1&lt;string&gt;::Add(!0)</c>, not <c>Add(string)</c>.</para>
-    ///
-    /// <para>⛔ And the shortcut is unsound, which is why this is still closed rather than
-    /// half-open: substituting any parameter whose type equals a generic argument gets
-    /// <c>List(Of Integer).Add(5)</c> right (<c>!0</c>) and <c>RemoveAt(0)</c> wrong — it must
-    /// stay <c>int32</c>. A per-member table of which positions are generic is the sound fix.
-    /// Until then the clean BL diagnostic is strictly better than a
-    /// <c>MissingMethodException</c>.</para>
+    /// <para>The values matter more than usual here. An earlier revision of this ran, printed
+    /// <c>4259924</c>, and carried on: the indexer stored its result over the LIST's own local
+    /// slot and then read a different, uninitialized one. It did not crash, and it corrupted
+    /// the collection for every later use.</para>
     /// </summary>
     [Test]
-    public void Collections_AreStillRefused_PendingGenericMemberSignatures()
+    public void AList_ReadsIndexesCountsAndContains()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              Dim l As New List(Of String)
+              l.Add("ALPHA")
+              l.Add("BETA")
+              PrintLine(l(1))
+              PrintLine(CStr(l.Count))
+              If l.Contains("ALPHA") Then
+               PrintLine("HAS-ALPHA")
+              End If
+             End Sub
+            End Module
+            """), Is.EqualTo("BETA\n2\nHAS-ALPHA\n"));
+    }
+
+    /// <summary>
+    /// <c>Dictionary(Of String, Integer)</c> end to end.
+    ///
+    /// <para>The indexer is the assertion that earns its place: it used to emit
+    /// <c>IList`1&lt;int32&gt;::get_Item(string)</c> — naming the VALUE type as the list's
+    /// element and passing the KEY as an integer index. Wrong in both positions, on a call that
+    /// assembled cleanly. It is now <c>Dictionary`2&lt;string,int32&gt;::get_Item(!0)</c>
+    /// returning <c>!1</c>, and <c>d("k") + 1</c> proves the value really came back as an
+    /// Integer rather than something that merely type-checked.</para>
+    /// </summary>
+    [Test]
+    public void ADictionary_ReadsByKeyCountsAndContainsKey()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              Dim d As New Dictionary(Of String, Integer)
+              d.Add("k", 41)
+              PrintLine(CStr(d("k") + 1))
+              PrintLine(CStr(d.Count))
+              If d.ContainsKey("k") Then
+               PrintLine("HAS-K")
+              End If
+             End Sub
+            End Module
+            """), Is.EqualTo("42\n1\nHAS-K\n"));
+    }
+
+    /// <summary>
+    /// <b>A collection member OUTSIDE the table is refused, and that is what makes a narrow
+    /// table safe to ship.</b>
+    ///
+    /// <para><c>RemoveAt</c> is the example on purpose: it is exactly the member the unsound
+    /// substitution rule would have mis-emitted as <c>RemoveAt(!0)</c> on a
+    /// <c>List(Of Integer)</c>. Refusing before any IL is emitted keeps the clean BasicLang
+    /// diagnostic users had when collections were refused wholesale — the alternative is a call
+    /// that assembles and dies with <c>MissingMethodException</c>.</para>
+    /// </summary>
+    [Test]
+    public void ACollectionMemberOutsideTheTable_IsRefusedNotGuessed()
     {
         var run = Run("""
             Module M
              Sub Main()
               Dim l As New List(Of String)
-              l.Add("ITEM")
+              l.Add("A")
+              l.RemoveAt(0)
              End Sub
             End Module
             """);
 
-        Assert.That(run.Outcome, Is.EqualTo(MsilOutcome.GenerateFailed),
-            "a refusal BEFORE any IL is emitted is the honest state. If this starts generating, "
-            + "the generic member signatures had better exist — assembling is not enough, the "
-            + "call has to RESOLVE: " + run.Report);
+        Assert.Multiple(() =>
+        {
+            Assert.That(run.Outcome, Is.EqualTo(MsilOutcome.GenerateFailed),
+                "refusal must come BEFORE any IL exists: " + run.Report);
+            Assert.That(run.Detail, Does.Contain("RemoveAt").And.Contain("supported collection surface"),
+                "and it must name the member and say how to widen the set: " + run.Detail);
+        });
     }
 
     /// <summary>
