@@ -199,6 +199,28 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             foreach (var f in module.Functions)
                 if (!string.IsNullOrEmpty(f.Name)) _userFunctionNames.Add(f.Name);
 
+            // ⛔⛔ Which top-level functions came from which `Module`. IRBuilder treats a module
+            // as purely organisational (IRBuilder.Visit(ModuleNode)) — its members become
+            // TOP-LEVEL functions carrying only a ModuleName string, with no container in the IR.
+            // The call site keeps the qualifier, so `M.Go()` emitted a member call on an `M` that
+            // is declared nowhere: a clean build and `ReferenceError: M is not defined`. This map
+            // is what lets InstanceCall recognise that shape and drop the qualifier.
+            //
+            // ⚠ module.Name is EXCLUDED. A function outside any Module gets ModuleName =
+            // module.Name as a fallback, so including it would make the compilation unit's own
+            // name behave like a module and rewrite calls on a receiver that merely shares it.
+            _moduleFunctions = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+            foreach (var f in module.Functions)
+            {
+                if (string.IsNullOrEmpty(f.Name) || string.IsNullOrEmpty(f.ModuleName)) continue;
+                if (string.Equals(f.ModuleName, module.Name, StringComparison.Ordinal)) continue;
+
+                if (!_moduleFunctions.TryGetValue(f.ModuleName, out var names))
+                    _moduleFunctions[f.ModuleName] = names = new HashSet<string>(StringComparer.Ordinal);
+
+                names.Add(f.Name);
+            }
+
             // Classes BEFORE free functions: JS class declarations are not hoisted the way
             // function declarations are, so a `new Person()` reached from the entry point
             // would hit the temporal dead zone.
@@ -1127,6 +1149,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// form and the user's code never runs.
         /// </summary>
         private HashSet<string> _userFunctionNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Top-level function names per declaring <c>Module</c>. See where it is built.</summary>
+        private Dictionary<string, HashSet<string>> _moduleFunctions =
+            new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
 
         /// <summary>
         /// Renders a BasicLang string builtin as its JavaScript equivalent, or returns false
@@ -2568,7 +2594,45 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 return linq;
             }
 
+            // ⛔⛔ A qualified MODULE member is not a member call at all. `M.Go()` for a
+            // `Public Module M` reaches here as an instance call on a receiver that is declared
+            // NOWHERE, and the line below would emit `M.Go(...)` — a clean build whose output dies
+            // with `ReferenceError: M is not defined`. Measured: one file is enough, the same-file
+            // and cross-file shapes are identical, and unqualified `Go()` has always worked.
+            if (TryModuleFunctionCall(mc, receiver, args, out var moduleCall)) return moduleCall;
+
             return $"{receiver}.{SanitizeName(mc.MethodName)}({string.Join(", ", args)})";
+        }
+
+        /// <summary>
+        /// Rewrites <c>M.Go(...)</c> to <c>Go(...)</c> when <c>M</c> is a <c>Module</c> whose
+        /// members were hoisted to top-level functions.
+        ///
+        /// <para>⚠ SHADOWING IS CHECKED FIRST, and it is the whole risk of this rewrite. A local,
+        /// a parameter or a module-level Dim named <c>M</c> is a real value, and rewriting a call
+        /// on it would silently redirect the program to a same-named free function. Only a receiver
+        /// that resolves to NOTHING — which is exactly the broken case, and nothing else — is
+        /// eligible.</para>
+        ///
+        /// <para>⚠ Ordinal, case-SENSITIVE throughout. BasicLang is case-insensitive about
+        /// identifiers but the emitted JavaScript is not, and the function this rewrites to is
+        /// emitted under its declared spelling.</para>
+        /// </summary>
+        private bool TryModuleFunctionCall(
+            IRInstanceMethodCall mc, string receiver, List<string> args, out string result)
+        {
+            result = null;
+
+            if (string.IsNullOrEmpty(receiver) || string.IsNullOrEmpty(mc.MethodName)) return false;
+
+            // A real value in scope, at any of the three levels VariableRef consults.
+            if (_declaredNames.Contains(receiver) || _globalNames.Contains(receiver)) return false;
+
+            if (!_moduleFunctions.TryGetValue(receiver, out var functions)) return false;
+            if (!functions.Contains(mc.MethodName)) return false;
+
+            result = $"{SanitizeName(mc.MethodName)}({string.Join(", ", args)})";
+            return true;
         }
 
         /// <summary>
