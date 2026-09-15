@@ -188,6 +188,100 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine($"}} // end of class {delegateName}");
         }
 
+        /// <summary>
+        /// A BasicLang type as an IL <b>type spec</b> — what goes in a local, parameter, field
+        /// or signature position.
+        ///
+        /// <para>IL primitives are keywords there (<c>int32</c>, <c>string</c>), but a
+        /// reference type is NOT: a class must be spelled <c>class Foo</c>, and an array is the
+        /// element spec followed by <c>[]</c>. Emitting the BasicLang name raw produced
+        /// <c>[0] Greeter g</c> and <c>[0] String[] a</c>, both of which ilasm rejects outright
+        /// — the backend could not declare a local of any user class or any array.</para>
+        /// </summary>
+        private string IlTypeSpec(string typeName)
+        {
+            if (string.IsNullOrEmpty(typeName)) return "object";
+
+            // An array: judge the element and re-attach the rank. Done before the primitive
+            // lookup so `String[]` is not mistaken for an unknown class named "String[]".
+            var trimmed = typeName.Trim();
+            if (trimmed.EndsWith("[]", StringComparison.Ordinal))
+                return IlTypeSpec(trimmed.Substring(0, trimmed.Length - 2)) + "[]";
+
+            var mapped = MapTypeName(trimmed);
+
+            // MapTypeName passes an unknown name through SanitizeName, so anything that did not
+            // land on an IL keyword is a class reference and needs the `class` prefix.
+            return IlPrimitives.Contains(mapped) ? mapped : "class " + mapped;
+        }
+
+        /// <summary>
+        /// A BasicLang type as an IL <b>type token</b> — what <c>box</c>, <c>newarr</c>,
+        /// <c>castclass</c>, <c>isinst</c> and friends take as their operand.
+        ///
+        /// <para>⛔ This is NOT <see cref="IlTypeSpec"/> with different spacing. A token names a
+        /// TYPE, so an IL primitive keyword is not valid here — <c>box</c> needs the BCL value
+        /// type it stands for, <c>[mscorlib]System.Int32</c>. The backend used to emit
+        /// <c>box [{mapped}]</c>, and in IL <c>[X]</c> means "assembly X", so <c>box [int32]</c>
+        /// reads as a type in an assembly named <c>int32</c> and does not parse at all. That
+        /// single mistake blocked every <c>CStr</c> of a number.</para>
+        /// </summary>
+        private string IlTypeToken(string typeName)
+        {
+            if (string.IsNullOrEmpty(typeName)) return "[mscorlib]System.Object";
+
+            var trimmed = typeName.Trim();
+            if (trimmed.EndsWith("[]", StringComparison.Ordinal))
+                return IlTypeToken(trimmed.Substring(0, trimmed.Length - 2)) + "[]";
+
+            var mapped = MapTypeName(trimmed);
+            return PrimitiveTokens.TryGetValue(mapped, out var bcl)
+                ? bcl
+                : mapped;
+        }
+
+        /// <summary>
+        /// <see cref="IlTypeSpec(string)"/> for a resolved <c>TypeInfo</c>, routed through the
+        /// existing <c>MapType</c> so there is still ONE place that decides what a BasicLang
+        /// type is called in IL. Both string forms are accepted by the spec/token functions —
+        /// a BasicLang name (<c>Integer</c>) and an already-mapped one (<c>int32</c>) — because
+        /// callers hold one or the other depending on how far through lowering they are.
+        /// </summary>
+        private string IlTypeSpec(TypeInfo type) => IlTypeSpec(MapType(type));
+
+        /// <inheritdoc cref="IlTypeToken(string)"/>
+        private string IlTypeToken(TypeInfo type) => IlTypeToken(MapType(type));
+
+        /// <summary>The IL keywords <see cref="MapTypeName"/> can produce — anything else is a class.</summary>
+        private static readonly HashSet<string> IlPrimitives = new(StringComparer.Ordinal)
+        {
+            "int8", "uint8", "int16", "uint16", "int32", "uint32", "int64", "uint64",
+            "float32", "float64", "bool", "char", "string", "object", "void", "native int",
+        };
+
+        /// <summary>
+        /// IL keyword → the BCL type it denotes, for token positions. <c>string</c> and
+        /// <c>object</c> are reference types and never need boxing, but they DO need a real
+        /// token for <c>newarr</c>/<c>castclass</c>, so they are carried here too.
+        /// </summary>
+        private static readonly Dictionary<string, string> PrimitiveTokens = new(StringComparer.Ordinal)
+        {
+            ["int8"] = "[mscorlib]System.SByte",
+            ["uint8"] = "[mscorlib]System.Byte",
+            ["int16"] = "[mscorlib]System.Int16",
+            ["uint16"] = "[mscorlib]System.UInt16",
+            ["int32"] = "[mscorlib]System.Int32",
+            ["uint32"] = "[mscorlib]System.UInt32",
+            ["int64"] = "[mscorlib]System.Int64",
+            ["uint64"] = "[mscorlib]System.UInt64",
+            ["float32"] = "[mscorlib]System.Single",
+            ["float64"] = "[mscorlib]System.Double",
+            ["bool"] = "[mscorlib]System.Boolean",
+            ["char"] = "[mscorlib]System.Char",
+            ["string"] = "[mscorlib]System.String",
+            ["object"] = "[mscorlib]System.Object",
+        };
+
         private string MapTypeName(string typeName)
         {
             if (string.IsNullOrEmpty(typeName)) return "object";
@@ -807,14 +901,14 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Declared local variables
             foreach (var local in function.LocalVariables)
             {
-                var localType = MapType(local.Type);
+                var localType = IlTypeSpec(local.Type);
                 locals.Add($"      [{_localIndices[local.Name]}] {localType} {SanitizeName(local.Name)}");
             }
 
             // Temporary variables
             foreach (var (temp, index) in _tempIndices)
             {
-                var tempType = MapType(temp.Type);
+                var tempType = IlTypeSpec(temp.Type);
                 locals.Add($"      [{index}] {tempType} V_{index}");
             }
 
@@ -1559,7 +1653,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     var srcType = MapType(args[0].Type);
                     if (srcType != "string")
                     {
-                        WriteLine($"    box [{srcType}]");
+                        // box takes a TYPE TOKEN. `box [int32]` named an assembly, not a type.
+                        WriteLine($"    box {IlTypeToken(args[0].Type)}");
                         WriteLine("    callvirt instance string [mscorlib]System.Object::ToString()");
                     }
                     return true;
