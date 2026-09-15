@@ -1,5 +1,6 @@
 using Avalonia;
 using BasicLang.Forms;
+using VisualGameStudio.Shell.ViewModels.Designer;
 
 namespace VisualGameStudio.Shell.Controls;
 
@@ -109,6 +110,58 @@ public sealed class FormCanvasTransform
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Half the side of a resize handle's grab area, in CANVAS pixels. The handle straddles the
+    /// border, so this much of it lies outside the control and this much inside.
+    /// </summary>
+    public const double HandleReach = 4;
+
+    /// <summary>
+    /// Which handle of <paramref name="canvasBounds"/> the point grabbed, or
+    /// <see cref="FormResizeHandle.None"/> for the body (a move) or a miss.
+    ///
+    /// <para>⛔⛔ Takes CANVAS coordinates, and that is the whole design. A grab area measured in
+    /// FORM pixels shrinks with the form: the canvas zooms to fit, so an 800x450 form in a docked
+    /// panel draws at well under 1:1 and a handle sized in form pixels becomes one or two physical
+    /// pixels. The control silently stops being resizable, with nothing on screen to explain why
+    /// and nothing failing anywhere. In canvas space the grab area is the same size on screen at
+    /// every zoom.</para>
+    ///
+    /// <para>⚠ Corners are tested before edges. They overlap, and a corner is the more specific
+    /// gesture — testing edges first makes the corners unreachable, so a control can be stretched
+    /// in one direction at a time but never scaled.</para>
+    /// </summary>
+    public static FormResizeHandle HandleAt(Rect canvasBounds, Point canvasPoint)
+    {
+        var onLeft = Math.Abs(canvasPoint.X - canvasBounds.X) <= HandleReach;
+        var onRight = Math.Abs(canvasPoint.X - canvasBounds.Right) <= HandleReach;
+        var onTop = Math.Abs(canvasPoint.Y - canvasBounds.Y) <= HandleReach;
+        var onBottom = Math.Abs(canvasPoint.Y - canvasBounds.Bottom) <= HandleReach;
+
+        var withinX = canvasPoint.X >= canvasBounds.X - HandleReach &&
+                      canvasPoint.X <= canvasBounds.Right + HandleReach;
+        var withinY = canvasPoint.Y >= canvasBounds.Y - HandleReach &&
+                      canvasPoint.Y <= canvasBounds.Bottom + HandleReach;
+
+        if (!withinX || !withinY)
+        {
+            return FormResizeHandle.None;
+        }
+
+        return (onLeft, onRight, onTop, onBottom) switch
+        {
+            (true, _, true, _) => FormResizeHandle.TopLeft,
+            (_, true, true, _) => FormResizeHandle.TopRight,
+            (true, _, _, true) => FormResizeHandle.BottomLeft,
+            (_, true, _, true) => FormResizeHandle.BottomRight,
+            (true, _, _, _) => FormResizeHandle.Left,
+            (_, true, _, _) => FormResizeHandle.Right,
+            (_, _, true, _) => FormResizeHandle.Top,
+            (_, _, _, true) => FormResizeHandle.Bottom,
+            _ => FormResizeHandle.None
+        };
     }
 
     /// <summary>

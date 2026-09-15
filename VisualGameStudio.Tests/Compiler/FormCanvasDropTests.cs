@@ -194,6 +194,60 @@ public class FormCanvasDropTests
     }
 
     [Test]
+    public void AFinishedDrag_WritesTheNewGeometryToTheDocument()
+    {
+        // ⛔⛔ The move/resize equivalent of the drop seam. The canvas mutates the shared model as
+        // the pointer moves and executes CommitGeometryCommand ONCE on release; if that command did
+        // not write, every drag would look right on screen, survive until the tab was reloaded, and
+        // then be gone — the worst possible shape, because the user would believe it was saved.
+        var (vm, _) = Open(FormTarget.WinForms, """
+            <Form Name="LoginForm" Version="1" Width="800" Height="450" Text="LoginForm">
+              <Controls>
+                <Button Id="btnLogin" Text="Sign in" X="10" Y="10" Width="75" Height="23" TabIndex="0"/>
+              </Controls>
+            </Form>
+            """);
+
+        // What the canvas does while the pointer moves.
+        var button = vm.DesignDocument!.FindById("btnLogin")!;
+        VisualGameStudio.Shell.ViewModels.Designer.FormGeometryEdit.MoveTo(vm.DesignDocument!, button, 120, 64);
+        VisualGameStudio.Shell.ViewModels.Designer.FormGeometryEdit.Resize(
+            vm.DesignDocument!, button, VisualGameStudio.Shell.ViewModels.Designer.FormResizeHandle.BottomRight, 25, 7);
+
+        vm.CommitGeometryCommand.Execute(null);
+
+        var reread = BasicLang.Forms.Serialization.FormDocumentReader.Read(vm.FilePath!, vm.Text);
+        var pixel = (PixelGeometry)reread.Model.FindById("btnLogin")!.Geometry!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(pixel.X, Is.EqualTo(120));
+            Assert.That(pixel.Y, Is.EqualTo(64));
+            Assert.That(pixel.Width, Is.EqualTo(100));
+            Assert.That(pixel.Height, Is.EqualTo(30));
+        });
+    }
+
+    [Test]
+    public void ADragThatMovedNothing_LeavesTheDocumentByteForByte()
+    {
+        // A click that selects without moving still ends in a release. Committing that must not
+        // rewrite the file — it would mark a clean document dirty and, on a hand-written .blform,
+        // spend its one-time normalisation for nothing.
+        const string original = """
+            <Form Name="LoginForm" Version="1" Width="800" Height="450" Text="LoginForm">
+              <Controls>
+                <Button Id="btnLogin"   Text="Sign in"  X="10" Y="10" Width="75" Height="23" TabIndex="0"/>
+              </Controls>
+            </Form>
+            """;
+        var (vm, _) = Open(FormTarget.WinForms, original);
+
+        vm.CommitGeometryCommand.Execute(null);
+
+        Assert.That(vm.Text, Is.EqualTo(original));
+    }
+
+    [Test]
     public void ADroppedControl_DoesNotDisturbWhatWasAlreadyThere()
     {
         // ⚠ The .blform is the user's file: a drop adds one element and must not reorder, restamp

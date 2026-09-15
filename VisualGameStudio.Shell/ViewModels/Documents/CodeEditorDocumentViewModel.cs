@@ -257,6 +257,21 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         }));
     }
 
+    /// <summary>
+    /// Writes a finished move or resize back to the document. Bound to the canvas's
+    /// <c>CommitGeometryCommand</c> and executed once, when the drag ends.
+    ///
+    /// <para>⛔ The canvas has already mutated the model — it shares this view model's object graph
+    /// — so there is nothing to apply here, only to persist. Re-applying the drag from a delta
+    /// would be a second implementation of the geometry maths, and the two would drift.</para>
+    ///
+    /// <para>⚠ A drag that ended where it started still lands here on some paths. That is harmless:
+    /// the structure-preserving writer returns the original text unchanged when the model asked for
+    /// nothing, so a no-op commit writes nothing and marks nothing dirty.</para>
+    /// </summary>
+    [RelayCommand]
+    private void CommitGeometry() => WriteDesignerEditBack();
+
     public string? PlaceControl(string kind, int x, int y)
     {
         var file = DesignFile;

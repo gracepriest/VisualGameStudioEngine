@@ -2,6 +2,7 @@ using Avalonia;
 using BasicLang.Forms;
 using NUnit.Framework;
 using VisualGameStudio.Shell.Controls;
+using VisualGameStudio.Shell.ViewModels.Designer;
 
 namespace VisualGameStudio.Tests.Compiler;
 
@@ -219,6 +220,92 @@ public class FormCanvasTransformTests
         {
             Assert.That(laid.Select(x => x.Control.Id), Is.EqualTo(new[] { "pnl", "inner" }));
             Assert.That(laid[1].Bounds, Is.EqualTo(new Rect(110, 110, 50, 50)));
+        });
+    }
+
+    // ==================================================================
+    // Resize handles — grabbed in CANVAS space, deliberately
+    // ==================================================================
+
+    [Test]
+    public void APointOnACorner_GrabsThatCorner()
+    {
+        var bounds = new Rect(100, 100, 80, 40);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(FormCanvasTransform.HandleAt(bounds, new Point(100, 100)),
+                Is.EqualTo(FormResizeHandle.TopLeft));
+            Assert.That(FormCanvasTransform.HandleAt(bounds, new Point(180, 140)),
+                Is.EqualTo(FormResizeHandle.BottomRight));
+            Assert.That(FormCanvasTransform.HandleAt(bounds, new Point(180, 100)),
+                Is.EqualTo(FormResizeHandle.TopRight));
+            Assert.That(FormCanvasTransform.HandleAt(bounds, new Point(100, 140)),
+                Is.EqualTo(FormResizeHandle.BottomLeft));
+        });
+    }
+
+    [Test]
+    public void APointOnAnEdgeMidpoint_GrabsThatEdge()
+    {
+        var bounds = new Rect(100, 100, 80, 40);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(FormCanvasTransform.HandleAt(bounds, new Point(140, 100)),
+                Is.EqualTo(FormResizeHandle.Top));
+            Assert.That(FormCanvasTransform.HandleAt(bounds, new Point(140, 140)),
+                Is.EqualTo(FormResizeHandle.Bottom));
+            Assert.That(FormCanvasTransform.HandleAt(bounds, new Point(100, 120)),
+                Is.EqualTo(FormResizeHandle.Left));
+            Assert.That(FormCanvasTransform.HandleAt(bounds, new Point(180, 120)),
+                Is.EqualTo(FormResizeHandle.Right));
+        });
+    }
+
+    [Test]
+    public void APointInTheMiddle_GrabsNoHandle()
+    {
+        // The middle is a MOVE, not a resize. Returning a handle here would make dragging the body
+        // of a control silently stretch it.
+        Assert.That(FormCanvasTransform.HandleAt(new Rect(100, 100, 80, 40), new Point(140, 120)),
+            Is.EqualTo(FormResizeHandle.None));
+    }
+
+    [Test]
+    public void APointWellOutsideTheControl_GrabsNoHandle()
+    {
+        Assert.That(FormCanvasTransform.HandleAt(new Rect(100, 100, 80, 40), new Point(300, 300)),
+            Is.EqualTo(FormResizeHandle.None));
+    }
+
+    [Test]
+    public void AHandleIsGrabbableJustOutsideTheControl()
+    {
+        // ⚠ Handles straddle the border — half in, half out — which is what makes a thin control
+        // resizable at all. A handle entirely inside a 23-pixel-high Button would overlap its own
+        // opposite edge.
+        Assert.That(FormCanvasTransform.HandleAt(new Rect(100, 100, 80, 40), new Point(97, 97)),
+            Is.EqualTo(FormResizeHandle.TopLeft));
+    }
+
+    [Test]
+    public void HandlesAreTheSameSizeOnScreenAtEveryZoom()
+    {
+        // ⛔⛔ THE reason HandleAt takes CANVAS coordinates rather than form ones. A handle sized in
+        // form pixels shrinks with the form: at the zoom the canvas picks to fit an 800x450 form
+        // into a docked panel, a 6-pixel handle becomes barely two physical pixels and the user
+        // cannot hit it — the control simply stops being resizable, with nothing on screen to
+        // explain why. The bounds passed in are already in canvas space, so the grab area is fixed.
+        var tiny = new Rect(10, 10, 12, 6);       // a control drawn small because the form is zoomed out
+        var large = new Rect(10, 10, 400, 200);   // the same control at 1:1
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(FormCanvasTransform.HandleAt(tiny, new Point(10, 10)),
+                Is.EqualTo(FormResizeHandle.TopLeft));
+            Assert.That(FormCanvasTransform.HandleAt(large, new Point(10, 10)),
+                Is.EqualTo(FormResizeHandle.TopLeft));
         });
     }
 }

@@ -5,6 +5,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
 using BasicLang.Forms;
+using VisualGameStudio.Shell.ViewModels.Designer;
 
 namespace VisualGameStudio.Shell.Controls;
 
@@ -62,6 +63,18 @@ public class FormCanvasControl : Control
         AvaloniaProperty.Register<FormCanvasControl, ICommand?>(nameof(DropCommand));
 
     /// <summary>
+    /// Invoked ONCE when a move or resize drag ends, so the host writes the document.
+    ///
+    /// <para>⛔⛔ Once, on RELEASE — not per pointer-move. A commit per move would run the
+    /// structure-preserving writer, re-serialize the document and reset the editor's text on every
+    /// mouse event: dozens of writes per drag, dozens of undo entries to get back one nudge, and
+    /// the text of the file changing under the user's own Code view while they are still holding
+    /// the button down. The model is mutated live so the canvas repaints; only the FILE waits.</para>
+    /// </summary>
+    public static readonly StyledProperty<ICommand?> CommitGeometryCommandProperty =
+        AvaloniaProperty.Register<FormCanvasControl, ICommand?>(nameof(CommitGeometryCommand));
+
+    /// <summary>
     /// The drag payload a toolbox item carries: the catalog kind, as a string.
     ///
     /// <para>⚠ A private format rather than <c>DataFormats.Text</c>. Dragging text out of the
@@ -101,6 +114,12 @@ public class FormCanvasControl : Control
     {
         get => GetValue(DropCommandProperty);
         set => SetValue(DropCommandProperty, value);
+    }
+
+    public ICommand? CommitGeometryCommand
+    {
+        get => GetValue(CommitGeometryCommandProperty);
+        set => SetValue(CommitGeometryCommandProperty, value);
     }
 
     public FormCanvasControl()
@@ -158,10 +177,198 @@ public class FormCanvasControl : Control
             return;
         }
 
-        // The SAME transform the last Render used, so selection cannot disagree with the picture.
-        SelectedControl = _transform.HitTest(document, e.GetPosition(this));
+        var point = e.GetPosition(this);
+
+        // ⚠ Left button only. Arming a drag on a right-click means the context menu gesture also
+        // moves the control the user was about to right-click.
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        {
+            SelectedControl = _transform.HitTest(document, point);
+            e.Handled = true;
+            return;
+        }
+
+        // A handle of the CURRENT selection wins over what is underneath it. Handles straddle the
+        // border, so the outer half of one sits over whatever is behind the control — hit-testing
+        // first would make every handle on a control's outer edge unusable.
+        var handle = HandleUnder(document, point);
+
+        if (handle == FormResizeHandle.None)
+        {
+            // The SAME transform the last Render used, so selection cannot disagree with the picture.
+            SelectedControl = _transform.HitTest(document, point);
+        }
+
+        if (SelectedControl?.Geometry is PixelGeometry pixel)
+        {
+            _dragHandle = handle;
+            _dragOrigin = point;
+            _dragStart = (pixel.X, pixel.Y, pixel.Width, pixel.Height);
+            _dragChanged = false;
+            e.Pointer.Capture(this);
+        }
+
         e.Handled = true;
     }
+
+    /// <summary>
+    /// Drags the selection. The geometry is recomputed from where the drag STARTED each time, never
+    /// nudged by the last step.
+    ///
+    /// <para>⛔ Applying each frame's delta to the current geometry compounds every clamp: drag a
+    /// control into the left edge, keep pulling, come back, and it has crept away from the pointer
+    /// by exactly as much as the edge held it. Re-deriving from the start point and the TOTAL delta
+    /// makes the control track the pointer exactly, and makes a drag that returns to where it began
+    /// a genuine no-op.</para>
+    /// </summary>
+    protected override void OnPointerMoved(PointerEventArgs e)
+    {
+        base.OnPointerMoved(e);
+
+        var document = Document;
+        if (document == null)
+        {
+            return;
+        }
+
+        if (_dragOrigin == null || SelectedControl is not { } control)
+        {
+            UpdateCursor(document, e.GetPosition(this));
+            return;
+        }
+
+        // ⚠ Capture can be lost without a release — the window deactivates, another control grabs
+        // the pointer, the platform cancels the gesture. Without this the canvas keeps "dragging"
+        // on every subsequent mouse move with no button held: the control follows the pointer
+        // around the screen and only stops when the user clicks, which reads as the IDE going mad.
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        {
+            _dragOrigin = null;
+            _dragHandle = FormResizeHandle.None;
+            _dragChanged = false;
+            return;
+        }
+
+        var start = _dragStart;
+        var total = _transform.ToForm(e.GetPosition(this)) - _transform.ToForm(_dragOrigin.Value);
+        var dx = (int)Math.Round(total.X);
+        var dy = (int)Math.Round(total.Y);
+
+        bool changed;
+        if (_dragHandle == FormResizeHandle.None)
+        {
+            changed = FormGeometryEdit.MoveTo(document, control, start.X + dx, start.Y + dy);
+        }
+        else
+        {
+            // Rewind to the geometry the drag began with, then apply the whole delta once.
+            if (control.Geometry is PixelGeometry pixel)
+            {
+                (pixel.X, pixel.Y, pixel.Width, pixel.Height) = start;
+            }
+
+            changed = FormGeometryEdit.Resize(document, control, _dragHandle, dx, dy);
+        }
+
+        if (changed)
+        {
+            _dragChanged = true;
+
+            // The model was mutated in place behind an unchanged Document reference, so nothing
+            // invalidates on its own — the same reason ModelRevision exists for the property grid.
+            InvalidateVisual();
+        }
+
+        e.Handled = true;
+    }
+
+    protected override void OnPointerReleased(PointerReleasedEventArgs e)
+    {
+        base.OnPointerReleased(e);
+
+        var wasDragging = _dragOrigin != null;
+        _dragOrigin = null;
+        _dragHandle = FormResizeHandle.None;
+        e.Pointer.Capture(null);
+
+        if (!wasDragging || !_dragChanged)
+        {
+            return;
+        }
+
+        _dragChanged = false;
+
+        var command = CommitGeometryCommand;
+        if (command?.CanExecute(null) == true)
+        {
+            command.Execute(null);
+        }
+
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// The pointer is the only thing telling the user a control can be resized at all — there is no
+    /// tooltip and no status bar for it. A wrong cursor here is a feature nobody discovers.
+    /// </summary>
+    private void UpdateCursor(FormDocument document, Point point)
+    {
+        var handle = HandleUnder(document, point);
+
+        // ⛔ Cached and assigned only on CHANGE. A Cursor wraps a platform handle, and this runs on
+        // every pointer move across the canvas — building a new one each time allocates a native
+        // object per mouse event and churns the cursor while the user is trying to aim at a handle
+        // four pixels wide.
+        var cursor = handle switch
+        {
+            FormResizeHandle.Left or FormResizeHandle.Right => WestEastCursor,
+            FormResizeHandle.Top or FormResizeHandle.Bottom => NorthSouthCursor,
+            FormResizeHandle.None => ArrowCursor,
+            _ => SizeAllCursor
+        };
+
+        if (!ReferenceEquals(Cursor, cursor))
+        {
+            Cursor = cursor;
+        }
+    }
+
+    /// <summary>
+    /// The handle of the current selection under a canvas point.
+    ///
+    /// <para>⚠ Returns None when the selection has no drawn rectangle — a web control, say. Testing
+    /// against a default <c>Rect</c> instead would put a phantom set of handles at the canvas
+    /// origin, where a click would arm a resize on something that has no pixel geometry AND skip
+    /// the hit-test that should have changed the selection.</para>
+    /// </summary>
+    private FormResizeHandle HandleUnder(FormDocument document, Point point)
+    {
+        if (SelectedControl == null || CanvasBoundsOf(document, SelectedControl) is not { } bounds)
+        {
+            return FormResizeHandle.None;
+        }
+
+        return FormCanvasTransform.HandleAt(bounds, point);
+    }
+
+    /// <summary>A control's rectangle in CANVAS space, or null when it has no pixel geometry.</summary>
+    private Rect? CanvasBoundsOf(FormDocument document, FormControl control)
+    {
+        foreach (var (candidate, bounds) in FormCanvasTransform.Layout(document))
+        {
+            if (ReferenceEquals(candidate, control))
+            {
+                return _transform.ToCanvas(bounds);
+            }
+        }
+
+        return null;
+    }
+
+    private Point? _dragOrigin;
+    private FormResizeHandle _dragHandle;
+    private (int X, int Y, int Width, int Height) _dragStart;
+    private bool _dragChanged;
 
     /// <summary>
     /// Shows the "you can drop here" cursor only where a drop would actually do something.
@@ -239,6 +446,39 @@ public class FormCanvasControl : Control
         foreach (var (control, bounds) in FormCanvasTransform.Layout(document))
         {
             DrawControl(context, control, _transform.ToCanvas(bounds));
+        }
+
+        // Handles LAST, over everything. Drawn in the loop they would be painted over by the next
+        // control, so the selection's handles would disappear behind whatever overlaps it — which
+        // is exactly when you most need to grab them.
+        if (SelectedControl != null && CanvasBoundsOf(document, SelectedControl) is { } selection)
+        {
+            DrawHandles(context, selection);
+        }
+    }
+
+    /// <summary>
+    /// The eight grab points, drawn at <see cref="FormCanvasTransform.HandleReach"/> so what the
+    /// user aims at is what <c>HandleAt</c> tests. A handle drawn larger than its hit area is a
+    /// control that ignores clicks near its own corner; drawn smaller, it grabs when the user meant
+    /// to select.
+    /// </summary>
+    private static void DrawHandles(DrawingContext context, Rect bounds)
+    {
+        var reach = FormCanvasTransform.HandleReach;
+
+        foreach (var centre in new[]
+        {
+            bounds.TopLeft, new Point(bounds.Center.X, bounds.Y), bounds.TopRight,
+            new Point(bounds.Right, bounds.Center.Y), bounds.BottomRight,
+            new Point(bounds.Center.X, bounds.Bottom), bounds.BottomLeft,
+            new Point(bounds.X, bounds.Center.Y)
+        })
+        {
+            context.DrawRectangle(
+                HandleBrush,
+                HandlePen,
+                new Rect(centre.X - reach, centre.Y - reach, reach * 2, reach * 2));
         }
     }
 
@@ -327,6 +567,14 @@ public class FormCanvasControl : Control
     private static readonly IPen SelectionPen = new Pen(new SolidColorBrush(Color.FromRgb(0x00, 0x7A, 0xCC)), 2);
     private static readonly IBrush LabelBrush = new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0));
     private static readonly IBrush CaptionBrush = new SolidColorBrush(Color.FromRgb(0xB0, 0xB0, 0xB8));
+    private static readonly IBrush HandleBrush = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF));
+    private static readonly IPen HandlePen = new Pen(new SolidColorBrush(Color.FromRgb(0x00, 0x7A, 0xCC)));
+
+    // One each, for the life of the type — see UpdateCursor.
+    private static readonly Cursor ArrowCursor = new(StandardCursorType.Arrow);
+    private static readonly Cursor SizeAllCursor = new(StandardCursorType.SizeAll);
+    private static readonly Cursor WestEastCursor = new(StandardCursorType.SizeWestEast);
+    private static readonly Cursor NorthSouthCursor = new(StandardCursorType.SizeNorthSouth);
 }
 
 /// <summary>
