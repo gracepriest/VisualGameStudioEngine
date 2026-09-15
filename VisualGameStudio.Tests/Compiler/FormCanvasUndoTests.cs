@@ -33,12 +33,13 @@ public class FormCanvasUndoTests
         </Form>
         """;
 
-    private static CodeEditorDocumentViewModel Open(string documentText = LoginForm)
+    private static CodeEditorDocumentViewModel Open(
+        string documentText = LoginForm, string fileName = "LoginForm.blform")
     {
         var files = new Mock<IFileService>();
         var vm = new CodeEditorDocumentViewModel(files.Object, new Mock<IEventAggregator>().Object)
         {
-            FilePath = Dir + "LoginForm.blform"
+            FilePath = Dir + fileName
         };
 
         // SetContent is what a real open does: it seeds BOTH stores and clears the undo stack, so
@@ -244,6 +245,56 @@ public class FormCanvasUndoTests
         Assert.That(vm.Text, Is.EqualTo(before), "one press puts the whole reparent back");
         Assert.That(vm.DesignDocument!.FindById("pnlSide")!.Children, Is.Empty,
             "and the canvas shows it outside the Panel again");
+    }
+
+    [Test]
+    public void AWebControlDraggedToAnotherCell_ReachesTheFile()
+    {
+        // ⛔⛔ The caller test for a cell move. The canvas mutates Col/Row as the pointer crosses
+        // cells and commits ONCE on release — the same shape as a WinForms drag, against a
+        // completely different geometry.
+        var vm = Open("""
+            <WebForm Name="LoginForm" Version="1">
+              <Layout Kind="Grid" Cols="1fr,1fr" Rows="1fr,1fr" Gap="0px"/>
+              <Controls>
+                <Button Id="btnLogin" Text="Sign in" Col="0" Row="0" TabIndex="0"/>
+              </Controls>
+            </WebForm>
+            """, "LoginForm.blwebform");
+
+        var button = vm.DesignDocument!.FindById("btnLogin")!;
+        FormGeometryEdit.MoveToCell(vm.DesignDocument!, button, 300, 250);
+        vm.CommitGeometryCommand.Execute(null);
+
+        var reread = BasicLang.Forms.Serialization.FormDocumentReader.Read(vm.FilePath!, vm.Text);
+        var grid = (GridGeometry)reread.Model.FindById("btnLogin")!.Geometry!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(grid.Col, Is.EqualTo(1));
+            Assert.That(grid.Row, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void UndoingAWebCellMove_PutsTheControlBackInItsCell()
+    {
+        const string before = """
+            <WebForm Name="LoginForm" Version="1">
+              <Layout Kind="Grid" Cols="1fr,1fr" Rows="1fr,1fr" Gap="0px"/>
+              <Controls>
+                <Button Id="btnLogin" Text="Sign in" Col="0" Row="0" TabIndex="0"/>
+              </Controls>
+            </WebForm>
+            """;
+        var vm = Open(before, "LoginForm.blwebform");
+
+        var button = vm.DesignDocument!.FindById("btnLogin")!;
+        FormGeometryEdit.MoveToCell(vm.DesignDocument!, button, 300, 250);
+        vm.CommitGeometryCommand.Execute(null);
+
+        vm.UndoDesignerEditCommand.Execute(null);
+
+        Assert.That(vm.Text, Is.EqualTo(before), "one press puts the cell back");
     }
 
     [Test]

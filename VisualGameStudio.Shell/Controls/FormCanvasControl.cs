@@ -210,7 +210,18 @@ public class FormCanvasControl : Control
             SelectedControl = _transform.HitTest(document, point);
         }
 
-        if (SelectedControl?.Geometry is PixelGeometry pixel)
+        if (SelectedControl?.Geometry is GridGeometry)
+        {
+            // A web control has no pixel geometry to rewind to and no handles to grab: the whole
+            // gesture is "which cell is the pointer over", answered afresh on every move.
+            _dragHandle = FormResizeHandle.None;
+            _dragOrigin = point;
+            _dragStart = default;
+            _dragStartForm = default;
+            _dragChanged = false;
+            e.Pointer.Capture(this);
+        }
+        else if (SelectedControl?.Geometry is PixelGeometry pixel)
         {
             _dragHandle = handle;
             _dragOrigin = point;
@@ -273,7 +284,15 @@ public class FormCanvasControl : Control
         var dy = (int)Math.Round(total.Y);
 
         bool changed;
-        if (_dragHandle == FormResizeHandle.None)
+        if (control.Geometry is GridGeometry)
+        {
+            // ⛔ The pointer's own position, NOT the drag-start origin plus a delta. See
+            // FormGeometryEdit.MoveToCell: on a grid you point at the cell you want.
+            var pointer = _transform.ToForm(e.GetPosition(this));
+            changed = FormGeometryEdit.MoveToCell(
+                document, control, (int)Math.Round(pointer.X), (int)Math.Round(pointer.Y));
+        }
+        else if (_dragHandle == FormResizeHandle.None)
         {
             // Absolute, so the control re-parents when the pointer crosses into or out of a Panel.
             changed = FormGeometryEdit.MoveToForm(
@@ -365,7 +384,12 @@ public class FormCanvasControl : Control
     /// </summary>
     private FormResizeHandle HandleUnder(FormDocument document, Point point)
     {
-        if (SelectedControl == null || CanvasBoundsOf(document, SelectedControl) is not { } bounds)
+        // ⚠ Pixel geometry only. A web control's size IS its cell, so there is no edge to drag —
+        // and since the canvas now lays web controls out, CanvasBoundsOf returns a rectangle for
+        // them too. Without this guard a click near a cell edge would arm a resize that can never
+        // do anything AND swallow the move the user was starting.
+        if (SelectedControl?.Geometry is not PixelGeometry ||
+            CanvasBoundsOf(document, SelectedControl) is not { } bounds)
         {
             return FormResizeHandle.None;
         }

@@ -294,3 +294,39 @@ its own account rather than as a footnote to the form designer.
 it for one commit — see the fourth-pass notes in `docs/HANDOFF.md`. The two are mirrored by
 construction and not shared; anything added to one belongs in the other.
 
+
+### 16. A CSS track function with a comma cannot be expressed in `Cols`/`Rows` at all
+
+⛔ **Pre-existing, ships today, and independent of the designer canvas.** `<Layout Cols="…">` is a
+**comma-separated** list, and `FormAssetEmitter.Tracks` renders it by splitting on those commas and
+rejoining with spaces:
+
+```csharp
+private static string Tracks(string commaSeparated) =>
+    string.Join(" ", commaSeparated.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+```
+
+So every CSS track function that takes arguments — `minmax(100px, 1fr)`, `repeat(2, 1fr)`,
+`clamp(…)`, `fit-content(…)` — is **torn in half**. `Cols="minmax(100px, 1fr),1fr"` reaches the page
+as `grid-template-columns: minmax(100px 1fr) 1fr`, which is invalid CSS: the browser drops the whole
+declaration and the page falls back to a single implicit column. No diagnostic anywhere, and the
+`.blwebform` round-trips perfectly — the damage is only in the emitted stylesheet.
+
+**Measured, not assumed:** `FormGridLayout` on the canvas splits on exactly the same commas, on
+purpose, so the schematic shows the same torn tracks the page will get rather than a grid the page
+does not have. `ATrackFunctionContainingACommaSplitsApart_MatchingWhatTheEmitterDoes` pins that
+agreement and names this entry.
+
+**The fix is a format decision, which is why it is filed rather than made.** Three options, in
+increasing cost:
+
+| Option | Cost | Loses |
+|---|---|---|
+| Split on commas **not inside parentheses** | A dozen lines in `Tracks` and `ParseTracks`, both of which must change together (they are mirrored by construction) | Nothing — `Cols="minmax(100px, 1fr),1fr"` starts working |
+| Store the track list **verbatim** and emit it unchanged | Simplest emitter, but the attribute is then CSS rather than a list | The reader/writer can no longer count tracks without a CSS parser — and the canvas needs that count to draw cells |
+| Separate tracks with **spaces**, not commas | Matches CSS exactly | Breaks every existing `.blwebform`, including the shipped template |
+
+⚠ Whichever is chosen, **`FormAssetEmitter.Tracks` and `FormGridLayout.ParseTracks` must change in
+the same commit.** They are a mirrored pair by design: the canvas draws the grid the emitter
+produces, and a canvas that split differently would put the cells somewhere the page does not have
+them — with nothing on screen looking wrong.

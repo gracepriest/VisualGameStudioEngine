@@ -159,6 +159,17 @@ a second document type.
   each side of a Panel boundary; a drag that re-bases halfway through jumps. `MoveToForm` converts
   once, into whichever container the control landed in. `MoveTo` (parent-relative, no reparent) is
   the other one — don't mix them up.
+- ⛔ **A `.blwebform` is laid out by CELL, and the canvas grid is an approximation that says so.**
+  `Cols`/`Rows` are CSS `grid-template-*` lists kept verbatim because the browser is the renderer;
+  `FormGridLayout` honours `fr` and `px` and draws everything else (`auto`, `%`, `calc()`) as one
+  flexible share. It shows WHICH CELL a control is in — never what the page will look like.
+  ⚠ `FormAssetEmitter.Tracks` and `FormGridLayout.ParseTracks` are a MIRRORED pair: both split the
+  track list on commas, and a canvas that split differently would draw a grid the page does not
+  have. Change them in the same commit (`docs/form-designer-followups.md` 16).
+- ⚠ **`SurfaceSize` on `FormCanvasTransform` is the ONE answer to "how big is the form".** Four
+  places had their own `Width ?? 400, Height ?? 300` and the web grid would have been a fifth; a
+  drifted copy puts the grid lines somewhere other than the page they divide, so a drop lands in a
+  cell the user did not aim at with nothing looking wrong.
 - ⛔ **Ask the CATALOG what a value means, never the shape of the string.** A `Type.Member` regex
   used to decide "is this already source?" and was wrong in both directions:
   `Text="config.json"` emitted unquoted (form stops building), and

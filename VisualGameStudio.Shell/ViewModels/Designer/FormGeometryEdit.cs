@@ -129,6 +129,43 @@ public static class FormGeometryEdit
     }
 
     /// <summary>
+    /// Moves a web control into the grid cell under a form-space point. Returns whether it moved.
+    ///
+    /// <para>⛔ The POINTER's cell, not the control's origin plus a drag delta. A grid control fills
+    /// its cell, so origin-plus-delta lands a half-cell from where the user is pointing and the
+    /// target becomes a guess — on a grid you point AT the cell you want. That is also why this is
+    /// a separate operation from <see cref="MoveToForm"/> rather than a branch inside it: the two
+    /// take different points and mean different things.</para>
+    ///
+    /// <para>⚠ Changes the cell and nothing else — not the span, not document order. A cell move
+    /// has no parent to change and no z-order to churn, unlike a WinForms reparent.</para>
+    /// </summary>
+    public static bool MoveToCell(FormDocument document, FormControl control, int formX, int formY)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(control);
+
+        if (control.Geometry is not GridGeometry grid || document.Layout?.Kind != FormLayoutKind.Grid)
+        {
+            return false;
+        }
+
+        var cell = FormGridLayout.CellAt(
+            document.Layout, FormCanvasTransform.SurfaceSize(document), new Point(formX, formY));
+
+        // ⚠ Off the page holds the control where it is. Snapping it to the nearest edge cell would
+        // move it somewhere the user never pointed at, and they would have to undo to find out.
+        if (cell == null || (cell.Value.Col == grid.Col && cell.Value.Row == grid.Row))
+        {
+            return false;
+        }
+
+        grid.Col = cell.Value.Col;
+        grid.Row = cell.Value.Row;
+        return true;
+    }
+
+    /// <summary>
     /// Drags one handle of a control by (<paramref name="dx"/>, <paramref name="dy"/>) form pixels.
     /// Returns whether anything changed.
     /// </summary>

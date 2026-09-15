@@ -343,4 +343,132 @@ public class FormGeometryEditTests
 
         Assert.That(FormGeometryEdit.Resize(document, button, FormResizeHandle.None, 50, 50), Is.False);
     }
+
+    // ==================================================================
+    // Web pages — a move changes the CELL, not a coordinate
+    // ==================================================================
+
+    private static FormDocument WebGrid()
+        => new()
+        {
+            Target = FormTarget.Web,
+            Name = "Page",
+            Layout = new FormLayout
+            {
+                Kind = FormLayoutKind.Grid, Cols = "1fr,1fr", Rows = "1fr,1fr", Gap = "0px"
+            }
+        };
+
+    private static FormControl InCell(string id, int col, int row, int colSpan = 1, int rowSpan = 1)
+        => new()
+        {
+            Kind = "Button",
+            Id = id,
+            Geometry = new GridGeometry { Col = col, Row = row, ColSpan = colSpan, RowSpan = rowSpan }
+        };
+
+    [Test]
+    public void DraggingAWebControl_MovesItToTheCellUnderThePointer()
+    {
+        // ⛔ The POINTER's cell, not the control's origin plus a delta. A grid control fills its
+        // cell, so origin-plus-delta lands a half-cell away from where the user is pointing and the
+        // target becomes a guess. On a grid you point AT the cell you want.
+        var document = WebGrid();
+        var button = InCell("btn", 0, 0);
+        document.Controls.Add(button);
+
+        var changed = FormGeometryEdit.MoveToCell(document, button, 300, 250);
+
+        Assert.That(changed, Is.True);
+        var grid = (GridGeometry)button.Geometry!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(grid.Col, Is.EqualTo(1));
+            Assert.That(grid.Row, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void AWebMoveKeepsTheSpan()
+    {
+        var document = WebGrid();
+        var button = InCell("btn", 0, 0, colSpan: 2, rowSpan: 1);
+        document.Controls.Add(button);
+
+        FormGeometryEdit.MoveToCell(document, button, 300, 250);
+
+        var grid = (GridGeometry)button.Geometry!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(grid.ColSpan, Is.EqualTo(2), "a move is not a resize");
+            Assert.That(grid.RowSpan, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void AWebMoveToTheSameCell_SaysNothingChanged()
+    {
+        var document = WebGrid();
+        var button = InCell("btn", 1, 1);
+        document.Controls.Add(button);
+
+        Assert.That(FormGeometryEdit.MoveToCell(document, button, 300, 250), Is.False);
+    }
+
+    [Test]
+    public void AWebMoveOffThePage_LeavesTheControlWhereItWas()
+    {
+        // Dragging past the edge must not move the control to a cell that does not exist, and must
+        // not be a silent no-op that loses the drag either — the geometry simply holds.
+        var document = WebGrid();
+        var button = InCell("btn", 1, 1);
+        document.Controls.Add(button);
+
+        var changed = FormGeometryEdit.MoveToCell(document, button, -50, -50);
+
+        var grid = (GridGeometry)button.Geometry!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(changed, Is.False);
+            Assert.That(grid.Col, Is.EqualTo(1));
+            Assert.That(grid.Row, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void AWebMove_DoesNotReorderTheDocument()
+    {
+        // ⚠ Unlike a WinForms reparent, a cell move changes no parent and no z-order. Reordering
+        // would churn the file for nothing and move the control behind its neighbours.
+        var document = WebGrid();
+        var first = InCell("first", 0, 0);
+        var second = InCell("second", 1, 0);
+        document.Controls.Add(first);
+        document.Controls.Add(second);
+
+        FormGeometryEdit.MoveToCell(document, first, 300, 250);
+
+        Assert.That(document.Controls, Is.EqualTo(new[] { first, second }));
+    }
+
+    [Test]
+    public void APixelControl_IsNotMovedByCell()
+    {
+        var document = Document();
+        var button = Control("Button", "Button1", 10, 10, 75, 23);
+        document.Controls.Add(button);
+
+        Assert.That(FormGeometryEdit.MoveToCell(document, button, 300, 250), Is.False);
+    }
+
+    [Test]
+    public void AFlowPage_HasNoCellsToMoveBetween()
+    {
+        var document = WebGrid();
+        document.Layout!.Kind = FormLayoutKind.Flow;
+        var button = InCell("btn", 0, 0);
+        document.Controls.Add(button);
+
+        Assert.That(FormGeometryEdit.MoveToCell(document, button, 300, 250), Is.False);
+    }
 }
