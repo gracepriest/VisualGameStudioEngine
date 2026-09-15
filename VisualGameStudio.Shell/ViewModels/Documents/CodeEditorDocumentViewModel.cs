@@ -205,7 +205,81 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     /// <para>⚠ The writer returns the original text unchanged when the model asked for nothing, so
     /// a no-op edit sets Text to what it already was and marks nothing dirty.</para>
     /// </summary>
-    private void OnDesignerEdited(object? sender, EventArgs e)
+    private void OnDesignerEdited(object? sender, EventArgs e) => WriteDesignerEditBack();
+
+    /// <summary>
+    /// Places a control of <paramref name="kind"/> at a point in FORM space — the model half of a
+    /// toolbox drop, and the only way a drop reaches the file.
+    ///
+    /// <para>⛔⛔ This method exists so that something in a shipping build CALLS the placer. Three
+    /// pieces of this feature have already shipped complete, unit-tested and unreachable; a placer
+    /// with no caller would be the fourth, and the symptom is the one the user actually reports —
+    /// "I drag a Button onto the form and nothing happens".</para>
+    ///
+    /// <para>⚠ The point is in FORM space, not canvas pixels. The canvas converts, using the same
+    /// <c>FormCanvasTransform</c> it rendered and hit-tested with, so the control lands under the
+    /// pointer at any zoom.</para>
+    /// </summary>
+    /// <returns>Null when the control was placed; otherwise why it was not.</returns>
+    /// <summary>
+    /// What the canvas's <c>DropCommand</c> is bound to. A refusal is reported the way every other
+    /// designer finding is — through the Error List — rather than being swallowed.
+    /// </summary>
+    [RelayCommand]
+    private void PlaceDroppedControl(Controls.FormControlDropRequest? request)
+    {
+        if (request == null)
+        {
+            return;
+        }
+
+        var refusal = PlaceControl(request.Kind, request.X, request.Y);
+        if (refusal == null)
+        {
+            return;
+        }
+
+        // ⛔ A drop that does nothing and says nothing is the failure this feature was added to
+        // fix. The finding goes on the CODE-BEHIND's key, like every other designer diagnostic, so
+        // the next good save clears it — see RegenerateDesignerRegionsAsync, which republishes the
+        // same (collection, file) pair and would otherwise leave this stranded in the Error List.
+        var codePath = BasicLang.Forms.FormCodeBehind.PathFor(FilePath ?? "");
+        _eventAggregator.Publish(new DesignerDiagnosticsEvent(codePath, new List<DiagnosticItem>
+        {
+            new()
+            {
+                Id = BasicLang.Forms.DesignCodes.PlacementRefused,
+                Message = refusal,
+                Severity = DiagnosticSeverity.Warning,
+                FilePath = codePath,
+                Source = DesignerDiagnosticSource
+            }
+        }));
+    }
+
+    public string? PlaceControl(string kind, int x, int y)
+    {
+        var file = DesignFile;
+        if (file == null)
+        {
+            return "This document is not a form the designer can edit.";
+        }
+
+        var result = ViewModels.Designer.FormPlacement.Place(file.Model, kind, x, y);
+        if (result.Control == null)
+        {
+            return result.Refusal ?? $"'{kind}' could not be placed.";
+        }
+
+        WriteDesignerEditBack();
+
+        // A designer drops a control and puts its properties in front of you. Selecting it also
+        // draws the selection outline, which is how the user sees WHERE it landed.
+        PropertyGrid.SelectedControl = result.Control;
+        return null;
+    }
+
+    private void WriteDesignerEditBack()
     {
         var file = DesignFile;
         if (file == null)

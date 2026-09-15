@@ -112,6 +112,50 @@ public sealed class FormCanvasTransform
     }
 
     /// <summary>
+    /// The innermost CONTAINER a drop at <paramref name="formPoint"/> lands in, with its origin in
+    /// form space — or null for the form surface itself.
+    ///
+    /// <para>⛔⛔ Lives here, beside <see cref="HitTest"/>, and walks the tree the same way for the
+    /// same reason the transform is one object: if placement decided containment differently from
+    /// selection, you would drop a Button onto a Panel the canvas agrees you are over and it would
+    /// land on the form behind it — or worse, the reverse. Two rules, one picture, no symptom.</para>
+    ///
+    /// <para>⚠ A NON-container under the point swallows it: dropping on a Button means dropping on
+    /// the form at that spot, not into whatever sits behind the Button. Walking past it to a
+    /// container underneath would nest controls into a Panel the user cannot see at that point.</para>
+    /// </summary>
+    public static (FormControl Container, Point Origin)? ContainerAt(FormDocument document, Point formPoint)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        return ContainerAt(document.Controls, formPoint, new Point(0, 0));
+    }
+
+    private static (FormControl, Point)? ContainerAt(
+        IReadOnlyList<FormControl> controls, Point formPoint, Point containerOrigin)
+    {
+        // Topmost first, exactly as HitTest does — document order is z-order.
+        for (var i = controls.Count - 1; i >= 0; i--)
+        {
+            var control = controls[i];
+            var bounds = BoundsOf(control, containerOrigin);
+            if (bounds == null || !bounds.Value.Contains(formPoint))
+            {
+                continue;
+            }
+
+            if (control.Definition?.IsContainer != true)
+            {
+                return null;
+            }
+
+            var nested = ContainerAt(control.Children, formPoint, bounds.Value.TopLeft);
+            return nested ?? (control, bounds.Value.TopLeft);
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// A control's rectangle in FORM space, or null when it carries no pixel geometry.
     ///
     /// <para>⚠ Null rather than an empty rect: a control with no geometry has no position, and an

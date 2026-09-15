@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Windows.Input;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -46,6 +47,30 @@ public class FormCanvasControl : Control
     public static readonly StyledProperty<int> ModelRevisionProperty =
         AvaloniaProperty.Register<FormCanvasControl, int>(nameof(ModelRevision));
 
+    /// <summary>
+    /// Invoked with a <see cref="FormControlDropRequest"/> when a toolbox control is dropped.
+    ///
+    /// <para>⛔ A COMMAND, not an event, and that is deliberate. This control's contract is "state
+    /// arrives through styled properties, redraws come from AffectsRender, input comes from an
+    /// override" — precisely so it holds nothing that needs tearing down when Dock re-attaches the
+    /// same instance on a tab drag or a panel maximize. A C# event here would need the host to
+    /// subscribe, and the host has no single place to unsubscribe; the symptom of getting that
+    /// wrong is one extra handler per re-dock, so a single drop eventually places two or three
+    /// controls. A bound command has no such lifetime.</para>
+    /// </summary>
+    public static readonly StyledProperty<ICommand?> DropCommandProperty =
+        AvaloniaProperty.Register<FormCanvasControl, ICommand?>(nameof(DropCommand));
+
+    /// <summary>
+    /// The drag payload a toolbox item carries: the catalog kind, as a string.
+    ///
+    /// <para>⚠ A private format rather than <c>DataFormats.Text</c>. Dragging text out of the
+    /// editor — or in from another application — would otherwise look exactly like a toolbox drag,
+    /// and dropping a paragraph of prose on the form would place a control named after its first
+    /// word, or refuse with a message about a control kind the user never mentioned.</para>
+    /// </summary>
+    public const string ControlKindFormat = "vgs/form-control-kind";
+
     static FormCanvasControl()
     {
         // Re-draw when what is drawn changes. Without this the canvas keeps showing the previous
@@ -70,6 +95,22 @@ public class FormCanvasControl : Control
     {
         get => GetValue(ModelRevisionProperty);
         set => SetValue(ModelRevisionProperty, value);
+    }
+
+    public ICommand? DropCommand
+    {
+        get => GetValue(DropCommandProperty);
+        set => SetValue(DropCommandProperty, value);
+    }
+
+    public FormCanvasControl()
+    {
+        // ⚠ These two handlers are on THIS control's own attached routed events — they live and die
+        // with the instance and are not the external subscription the note below warns about. The
+        // canvas still holds no handler on anything it does not own.
+        DragDrop.SetAllowDrop(this, true);
+        AddHandler(DragDrop.DragOverEvent, OnDragOver);
+        AddHandler(DragDrop.DropEvent, OnDrop);
     }
 
     /// <summary>
@@ -122,6 +163,52 @@ public class FormCanvasControl : Control
         e.Handled = true;
     }
 
+    /// <summary>
+    /// Shows the "you can drop here" cursor only where a drop would actually do something.
+    ///
+    /// <para>⚠ Without this, Avalonia's default is NO drop effect and the drag is refused with no
+    /// explanation — the user drags a Button across the canvas, the cursor says no, and there is
+    /// nothing to read. The inverse is worse: advertising a drop on a document that will refuse it.
+    /// So the answer is the same one the drop itself will give.</para>
+    /// </summary>
+    private void OnDragOver(object? sender, DragEventArgs e)
+    {
+        e.DragEffects = CanAccept(e) ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    private void OnDrop(object? sender, DragEventArgs e)
+    {
+        e.Handled = true;
+        if (!CanAccept(e))
+        {
+            e.DragEffects = DragDropEffects.None;
+            return;
+        }
+
+        var kind = (string)e.Data.Get(ControlKindFormat)!;
+
+        // ⛔ Through the SAME transform that rendered, so the control lands under the pointer at
+        // any zoom or pan. Re-deriving the mapping here is the drift this type exists to prevent.
+        var point = _transform.ToForm(e.GetPosition(this));
+        var request = new FormControlDropRequest(kind, (int)Math.Round(point.X), (int)Math.Round(point.Y));
+
+        var command = DropCommand;
+        if (command?.CanExecute(request) == true)
+        {
+            command.Execute(request);
+        }
+
+        e.DragEffects = DragDropEffects.Copy;
+    }
+
+    private bool CanAccept(DragEventArgs e) =>
+        Document != null &&
+        DropCommand != null &&
+        e.Data.Contains(ControlKindFormat) &&
+        e.Data.Get(ControlKindFormat) is string kind &&
+        !string.IsNullOrEmpty(kind);
+
     // ==================================================================
     // Render
     // ==================================================================
@@ -129,6 +216,13 @@ public class FormCanvasControl : Control
     public override void Render(DrawingContext context)
     {
         base.Render(context);
+
+        // ⛔ The whole viewport, transparent, FIRST — and it is input, not decoration. A Control
+        // that draws nothing at a point is not hit-testable there, so without this the canvas
+        // receives pointer and drop events only over the rectangles it painted: dropping a Button
+        // on the empty margin around the form would do nothing at all, and the failure would look
+        // exactly like a drag-and-drop that was never wired up. Costs no pixels.
+        context.FillRectangle(Brushes.Transparent, new Rect(Bounds.Size));
 
         var document = Document;
         if (document == null)
@@ -234,3 +328,12 @@ public class FormCanvasControl : Control
     private static readonly IBrush LabelBrush = new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0));
     private static readonly IBrush CaptionBrush = new SolidColorBrush(Color.FromRgb(0xB0, 0xB0, 0xB8));
 }
+
+/// <summary>
+/// A toolbox control dropped on the canvas, in FORM coordinates.
+///
+/// <para>⚠ Form space, not canvas pixels — the canvas has already applied its transform. A request
+/// carrying canvas pixels would place controls correctly at 100% zoom and wrongly at every other,
+/// which is the class of bug that only shows up on someone else's monitor.</para>
+/// </summary>
+public sealed record FormControlDropRequest(string Kind, int X, int Y);

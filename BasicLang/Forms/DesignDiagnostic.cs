@@ -61,7 +61,8 @@ public static class DesignCodes
     //   BL8010          illegal/missing control id (here)
     //   BL8011..BL8017  designer-owned region states, region-writer and document findings
     //   BL8018          the generated D7 dispatch helper is never called (here)
-    //   BL8019, BL8020  free
+    //   BL8019          a toolbox drop the designer refused (here)
+    //   BL8020          free
     //   BL8021, BL8022  document-level refusals in a form document (here)
     //   BL8031          reserved — the spec and plan both name it for ONE thing: the --check
     //                   collision between a user's own top-level name and the dispatch helper.
@@ -102,6 +103,17 @@ public static class DesignCodes
 
     /// <summary>A designer marker is missing its partner, nested, or duplicated. Never written to.</summary>
     public const string RegionMalformed = "BL8012";
+
+    /// <summary>
+    /// A control dragged from the toolbox could not be placed where it was dropped.
+    ///
+    /// <para>⛔ Exists so a refused drop is never SILENT. A drop that does nothing and says nothing
+    /// is indistinguishable from a designer that ignored the gesture, crashed, or was never wired
+    /// up — which is exactly how a user experiences a missing feature. The reasons are all
+    /// actionable: an unknown kind, a kind the target does not have, or a web document, whose
+    /// controls are positioned by its layout rather than by pixels.</para>
+    /// </summary>
+    public const string PlacementRefused = "BL8019";
 
     /// <summary>
     /// A handler is declared AFTER the designer region that wires it. An <c>AddressOf</c> naming a

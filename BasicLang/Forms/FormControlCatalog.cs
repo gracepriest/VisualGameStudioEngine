@@ -232,13 +232,17 @@ public sealed record FormPropertyDef(
 /// </param>
 /// <param name="IsContainer">True when the control may hold child controls (Panel, GroupBox).</param>
 /// <param name="Properties">Editable properties, in the order a property grid should show them.</param>
+/// <param name="DefaultWidth">Width in form pixels given to one dropped from the toolbox.</param>
+/// <param name="DefaultHeight">Height in form pixels given to one dropped from the toolbox.</param>
 public sealed record FormControlDef(
     string Kind,
     string? WinFormsType,
     string? HtmlTag,
     string? HtmlInputType,
     bool IsContainer,
-    IReadOnlyList<FormPropertyDef> Properties)
+    IReadOnlyList<FormPropertyDef> Properties,
+    int DefaultWidth = 100,
+    int DefaultHeight = 24)
 {
     public bool SupportsTarget(FormTarget target) => target switch
     {
@@ -305,7 +309,8 @@ public static class FormControlCatalog
     /// </summary>
     public static readonly IReadOnlyList<FormControlDef> All = new List<FormControlDef>
     {
-        new("Label",       "Label",       "label",    null,       false, Common(Text, TextAlign)),
+        new("Label",       "Label",       "label",    null,       false, Common(Text, TextAlign),
+            DefaultWidth: 100, DefaultHeight: 23),
         new("TextBox",     "TextBox",     "input",    "text",     false, Common(
             Text,
             new FormPropertyDef("Multiline", FormPropertyType.Bool, "false"),
@@ -313,21 +318,26 @@ public static class FormControlCatalog
             new FormPropertyDef("MaxLength", FormPropertyType.Int),
             // WinForms PasswordChar is a char, not a string — assigning one is CS0029.
             new FormPropertyDef("PasswordChar", FormPropertyType.String,
-                WinFormsFactory: "Convert.ToChar"))),
-        new("Button",      "Button",      "button",   null,       false, Common(Text, TextAlign)),
-        new("CheckBox",    "CheckBox",    "input",    "checkbox", false, Common(Text, Checked)),
+                WinFormsFactory: "Convert.ToChar")),
+            DefaultWidth: 100, DefaultHeight: 23),
+        new("Button",      "Button",      "button",   null,       false, Common(Text, TextAlign),
+            DefaultWidth: 75, DefaultHeight: 23),
+        new("CheckBox",    "CheckBox",    "input",    "checkbox", false, Common(Text, Checked),
+            DefaultWidth: 104, DefaultHeight: 24),
         new("RadioButton", "RadioButton", "input",    "radio",    false, Common(
             Text,
             Checked,
             // ⛔ WEB ONLY. The DOM groups radios by name=; WinForms groups them by CONTAINER and
             // has no GroupName property at all — csc says CS1061, BasicLang says nothing.
             new FormPropertyDef("GroupName", FormPropertyType.String,
-                Targets: new[] { FormTarget.Web }))),
+                Targets: new[] { FormTarget.Web })),
+            DefaultWidth: 104, DefaultHeight: 24),
         new("ComboBox",    "ComboBox",    "select",   null,       false, Common(
             Text,
             // Items is a get-only collection on WinForms — assigning it is CS0200.
             new FormPropertyDef("Items", FormPropertyType.String, IsItemCollection: true),
-            new FormPropertyDef("SelectedIndex", FormPropertyType.Int, "-1"))),
+            new FormPropertyDef("SelectedIndex", FormPropertyType.Int, "-1")),
+            DefaultWidth: 121, DefaultHeight: 23),
         new("ListBox",     "ListBox",     "select",   null,       false, Common(
             new FormPropertyDef("Items", FormPropertyType.String, IsItemCollection: true),
             new FormPropertyDef("SelectedIndex", FormPropertyType.Int, "-1"),
@@ -335,19 +345,23 @@ public static class FormControlCatalog
             // Mapping a Bool onto it is a design decision v1 has not made, so the property stays
             // web-only rather than being silently approximated.
             new FormPropertyDef("MultiSelect", FormPropertyType.Bool, "false",
-                Targets: new[] { FormTarget.Web }))),
+                Targets: new[] { FormTarget.Web })),
+            DefaultWidth: 120, DefaultHeight: 95),
         new("Panel",       "Panel",       "div",      null,       true,  Common(
             new FormPropertyDef("BorderStyle", FormPropertyType.Enum, "None",
                 new[] { "None", "FixedSingle", "Fixed3D" },
-                WinFormsEnumType: "BorderStyle"))),
-        new("GroupBox",    "GroupBox",    "fieldset", null,       true,  Common(Text)),
+                WinFormsEnumType: "BorderStyle")),
+            DefaultWidth: 200, DefaultHeight: 100),
+        new("GroupBox",    "GroupBox",    "fieldset", null,       true,  Common(Text),
+            DefaultWidth: 200, DefaultHeight: 100),
         new("PictureBox",  "PictureBox",  "img",      null,       false, Common(
             // WinForms Image is a System.Drawing.Image, not a path string (CS0029).
             new FormPropertyDef("Image", FormPropertyType.String,
                 WinFormsFactory: "Image.FromFile"),
             new FormPropertyDef("SizeMode", FormPropertyType.Enum, "Normal",
                 new[] { "Normal", "StretchImage", "AutoSize", "CenterImage", "Zoom" },
-                WinFormsEnumType: "PictureBoxSizeMode"))),
+                WinFormsEnumType: "PictureBoxSizeMode")),
+            DefaultWidth: 100, DefaultHeight: 50),
     };
 
     public static FormControlDef? Find(string kind) =>
