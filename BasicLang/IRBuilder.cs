@@ -3251,6 +3251,59 @@ namespace BasicLang.Compiler.IR
         }
 
         /// <summary>
+        /// Appends the declared defaults for any trailing <c>Optional</c> parameters the call did
+        /// not supply.
+        ///
+        /// <para>⛔ Only the C# backend handled an omitted Optional, and only because it emits the
+        /// default into the SIGNATURE (<c>int b = 5</c>) and lets csc fill it. Measured for
+        /// <c>Sub One(a As Integer, Optional b As Integer = 5)</c> called as <c>One(1)</c>:
+        /// JavaScript printed <c>one:1,undefined</c> (the function is <c>function One(a, b)</c>,
+        /// no default), C++ did not compile ("no matching function for call to 'One'"), and MSIL
+        /// could not bind — <c>MissingMethodException: One(Int32)</c>. Filling at the CALL is what
+        /// moves all three at once; the emitted C# then passes the value explicitly, which is the
+        /// same program.</para>
+        ///
+        /// <para>⚠ TRAILING only, which is all the language can express: BasicLang has no
+        /// named-argument or skipped-argument syntax, so an omitted Optional is always at the end.
+        /// The defaults are appended in declaration order and coerced like any other argument, so
+        /// <c>Optional d As Double = 7</c> arrives as a Double rather than an int32 bit
+        /// pattern.</para>
+        ///
+        /// <para>⚠ The early returns are FAIL-SAFE and none can be killed by a test today, which
+        /// is why they are returns and not <c>continue</c>s. <c>DefaultValueExpression</c> is
+        /// populated only from a <c>ParameterNode</c>, and the parser marks a parameter Optional
+        /// whenever it parses a default — the sole exception, a <c>ParamArray</c> WITH a default,
+        /// does not parse at all ("Expected 'As' but found LeftParen"). So a parameter that is not
+        /// Optional never has one recorded, and both guards are reached only if the front end
+        /// changes. Kept in that form deliberately: stopping makes this do NOTHING on a shape it
+        /// has not been taught, where skipping ahead would silently misalign the argument
+        /// list.</para>
+        /// </summary>
+        private void AppendOmittedOptionalArguments(
+            List<IRValue> arguments, List<bool> byRefFlags, Symbol callee)
+        {
+            var parameters = callee?.Parameters;
+            if (parameters == null) return;
+
+            for (var i = arguments.Count; i < parameters.Count; i++)
+            {
+                var parameter = parameters[i];
+                if (!parameter.IsOptional) return;
+                if (!(parameter.DefaultValueExpression is ExpressionNode expression)) return;
+
+                var value = BuildExpressionValue(expression);
+                if (value == null) return;
+
+                arguments.Add(CoerceToDeclaredType(value, parameter.Type));
+
+                // ⚠ Always by VALUE. A filled default is a fresh temporary, so there is nothing
+                // for a callee to write back into — and IRCall documents ByRefArguments as indexed
+                // in lockstep with Arguments, so the entry has to exist either way.
+                byRefFlags.Add(false);
+            }
+        }
+
+        /// <summary>
         /// The parameter list of the ONLY constructor of <paramref name="className"/> that takes
         /// <paramref name="argumentCount"/> arguments, or null when that does not identify one.
         ///
@@ -4300,6 +4353,20 @@ namespace BasicLang.Compiler.IR
                         call.ByRefArguments.Add(refKind != BasicLang.Net.NetRefKind.None);
                         call.NetArgumentRefKinds.Add(refKind);
                     }
+
+                    // ⚠ USER callees only, deliberately. This arm also serves .NET targets the
+                    // analyzer resolved, whose arguments are marshalled against the descriptor
+                    // recorded in NetArgumentRefKinds — appending behind that list's back would
+                    // leave the two out of step. Filling a .NET optional is a separate job from
+                    // this one, so the guard makes this do NOTHING there rather than guess. Like
+                    // the constructor-ambiguity branch below it is fail-safe by construction: the
+                    // arguments keep exactly what they had before this existed.
+                    if (call.ResolvedNetTarget == null)
+                    {
+                        AppendOmittedOptionalArguments(
+                            call.Arguments, call.ByRefArguments, staticCalleeSymbol);
+                    }
+
                     EmitInstruction(call);
                     _expressionResult = call;
                 }
@@ -4342,6 +4409,9 @@ namespace BasicLang.Compiler.IR
                             methodParams != null && methodCall.Arguments.Count - 1 < methodParams.Count
                             && methodParams[methodCall.Arguments.Count - 1].IsByRef);
                     }
+
+                    AppendOmittedOptionalArguments(
+                        methodCall.Arguments, methodCall.ByRefArguments, methodSymbol);
 
                     EmitInstruction(methodCall);
                     _expressionResult = methodCall;
@@ -4450,6 +4520,8 @@ namespace BasicLang.Compiler.IR
                     }
                     call.ByRefArguments.Add(isByRef);
                 }
+
+                AppendOmittedOptionalArguments(call.Arguments, call.ByRefArguments, funcSymbol);
 
                 EmitInstruction(call);
                 _expressionResult = call;
