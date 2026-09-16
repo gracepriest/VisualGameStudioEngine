@@ -634,7 +634,13 @@ namespace BasicLang.Compiler.IR
                 if (node.Initializer != null)
                 {
                     node.Initializer.Accept(this);
-                    var initValue = _expressionResult;
+
+                    // ⚠ `varType` and NOT `initValue.Type`: the point is the DECLARED type.
+                    // `Dim d As Integer = 7 / 2` carries a Double, and without this the rename
+                    // below makes the Double temp *be* `d`, so the Integer is never honoured.
+                    // An inferred declaration (`Dim x = expr`, node.IsAuto) has no declared type
+                    // to disagree with — varType IS the initializer's type, so this no-ops.
+                    var initValue = CoerceToDeclaredType(_expressionResult, varType);
 
                     // For memory-backed variables, emit a store
                     if (needsMemory)
@@ -3151,13 +3157,56 @@ namespace BasicLang.Compiler.IR
         /// <c>IEnumerable(Of T)</c>, <c>Object</c>, a String or a class type is never touched —
         /// boxing and generic returns keep whatever handling they already had.</para>
         /// </summary>
-        private IRValue CoerceToDeclaredReturnType(IRValue value)
+        private IRValue CoerceToDeclaredReturnType(IRValue value) =>
+            CoerceToDeclaredType(value, _currentFunction?.ReturnType);
+
+        /// <summary>
+        /// The shared numeric coercion: narrows or widens <paramref name="value"/> to
+        /// <paramref name="declared"/> when both are numeric and disagree, and returns it
+        /// unchanged otherwise.
+        ///
+        /// <para>⛔ Used at STORE sites as well as returns, and the store half is not a mirror of
+        /// the return half — it was measured separately. <c>Dim d As Integer = 7 / 2</c>,
+        /// <c>e = 7 / 2</c>, <c>a(0) = 7 / 2</c> and a module-level <c>G = 7 / 2</c> each failed
+        /// differently: five CS0266s on C# (it does not build), <c>3.5</c> at every site on
+        /// JavaScript, and on MSIL <c>dim=1074528256 asn=0 arr=0 glob=0</c> followed by a
+        /// SEGFAULT — raw float64 bit patterns read as int32. C++ alone was right, by narrowing
+        /// implicitly.</para>
+        ///
+        /// <para>⚠ At an assignment the declared type comes from the TARGET NODE, not from the
+        /// target variable: <c>GetOrCreateVariable</c> is handed <c>value.Type</c>, and
+        /// <see cref="TryRenameToVariable"/> then renames the Double temp to the target outright,
+        /// so the local's declared Integer never enters the picture. Coercing first is what puts
+        /// it back — and it also stops the rename, because an <c>IRCast</c> is not one of the
+        /// node kinds that helper will rename.</para>
+        /// </summary>
+        private IRValue CoerceToDeclaredType(IRValue value, TypeInfo declared)
         {
-            var declared = _currentFunction?.ReturnType;
             var actual = value?.Type;
 
-            if (!IsNumericPrimitive(declared) || !IsNumericPrimitive(actual)) return value;
+            // ⚠ ONE guard, not two. An earlier version also tested a broad
+            // `IsNumericPrimitive` (any integral or floating type) before this; it is redundant,
+            // because every type this admits is one that would admit — and a mutation removing it
+            // killed nothing. Narrow numeric targets (Byte/SByte/Short/unsigned) fall out here and
+            // keep exactly what they did before this coercion existed: see TryConvertConstant for
+            // why the optimizer cannot be handed their CLR types, and note that an IRCast is no
+            // safer for them — it would change the emission of shapes that already work
+            // (`Dim b As Byte = 65` is a plain literal today) to buy a case nothing measured as
+            // broken. String, Object, class and generic targets fall out here too.
+            if (!IsFoldableNumeric(declared) || !IsFoldableNumeric(actual)) return value;
             if (string.Equals(declared.Name, actual.Name, StringComparison.Ordinal)) return value;
+
+            // ⛔ A LITERAL is re-typed in place rather than wrapped. Wrapping regressed
+            // PropertySet_LowersToTheSynthesizedSetterSlot: `st.Position = 5` writes an Integer
+            // literal to a Long property — a legal widening — and the cast turned the pinned
+            // proxy call `…(st, 5)` into a call on a cast temp. Converting the constant is also
+            // strictly better code: there is no run-time conversion to perform, and on MSIL it
+            // makes `Dim w As Double = 7` emit `ldc.r8` instead of an int32 bit pattern that
+            // needs a `conv.r8` to rescue it.
+            if (value is IRConstant constant && TryConvertConstant(constant.Value, declared) is object converted)
+            {
+                return new IRConstant(converted, declared);
+            }
 
             var castName = _currentFunction.GetNextTempName();
             var cast = new IRCast(castName, value, actual, declared,
@@ -3166,9 +3215,65 @@ namespace BasicLang.Compiler.IR
             return cast;
         }
 
-        /// <summary>A type whose conversions <see cref="DetermineCastKind"/> can actually name.</summary>
-        private static bool IsNumericPrimitive(TypeInfo type) =>
-            type != null && (type.IsIntegral() || type.IsFloatingPoint());
+        /// <summary>
+        /// A numeric literal converted to <paramref name="declared"/> at COMPILE time, or null
+        /// when it cannot be.
+        ///
+        /// <para>⚠ Narrowing TRUNCATES, to match what the run-time cast does on all four backends.
+        /// Rounding here instead would make <c>Dim d As Integer = 7.9</c> answer 8 while the same
+        /// value reaching the same variable through a variable answered 7 — the constant-folded
+        /// and non-folded paths of one expression disagreeing, which is worse than either
+        /// answer.</para>
+        /// </summary>
+        private static object TryConvertConstant(object value, TypeInfo declared)
+        {
+            if (value == null) return null;
+
+            double asDouble;
+            switch (value)
+            {
+                case int i: asDouble = i; break;
+                case long l: asDouble = l; break;
+                case short sh: asDouble = sh; break;
+                case byte b: asDouble = b; break;
+                case sbyte sb: asDouble = sb; break;
+                case float f: asDouble = f; break;
+                case double d: asDouble = d; break;
+                default: return null;
+            }
+
+            // ⛔ ONLY these four CLR types. `IROptimizer`'s folders — FoldAdd, CompareLt,
+            // CompareGt and friends — are written against int/long/float/double and nothing else,
+            // and its own comment says CompareLt/CompareGt "blindly report FALSE for type pairs
+            // outside int/long/float/double". Handing them an `sbyte` is therefore not a missing
+            // optimization, it is a MISCOMPILE: measured, retyping `Dim lo As SByte = -3` folded
+            // `lo < hi` to `if (false)` and silently dropped the branch body.
+            //
+            // A Byte/SByte/Short/unsigned target keeps whatever it did before this coercion
+            // existed — nothing. That leaves `Dim b As Byte = 7.9` unnarrowed, which is a real
+            // gap; closing it means teaching the optimizer's folders every numeric CLR type,
+            // which is its own change with its own blast radius.
+            var truncated = Math.Truncate(asDouble);
+            switch (declared.Name)
+            {
+                case "Double": return asDouble;
+                case "Single": return (float)asDouble;
+                case "Long": return (long)truncated;
+                case "Integer": return (int)truncated;
+                default: return null;
+            }
+        }
+
+        /// <summary>
+        /// A numeric type whose CLR representation <c>IROptimizer</c>'s constant folders handle.
+        /// Everything narrower is left uncoerced rather than miscompiled — see
+        /// <see cref="TryConvertConstant"/>.
+        /// </summary>
+        private static bool IsFoldableNumeric(TypeInfo type) => type?.Name switch
+        {
+            "Integer" or "Long" or "Single" or "Double" => true,
+            _ => false,
+        };
 
         public void Visit(ExitStatementNode node)
         {
@@ -3235,11 +3340,33 @@ namespace BasicLang.Compiler.IR
                     _ => throw new Exception($"Unknown assignment operator: {node.Operator}")
                 };
 
+                // ⛔ `/=` is FLOATING division, exactly as binary `/` is, and typing the result
+                // from the target (`currentValue.Type`) made it Integer — so the coercion below
+                // saw no mismatch and did nothing, while the optimizer later constant-folded
+                // `n /= 4` on an Integer 10 to the Double 2.5. Measured: C# emitted `n = 2.5;`
+                // (CS0266) and JavaScript printed 2.5 from a variable declared As Integer.
+                // Widening the OPERANDS is the same fix, and the same reasoning, as
+                // WidenDivisionOperand in Visit(BinaryExpressionNode) — a Double-typed result
+                // over two Integer operands still divides as integers on the C-family backends.
+                // `\=` (IntDiv) is excluded there and is excluded here: it must keep truncating.
+                var resultType = currentValue.Type;
+                if (op == BinaryOpKind.Div)
+                {
+                    resultType = new TypeInfo("Double", TypeKind.Primitive);
+                    currentValue = WidenDivisionOperand(currentValue, resultType);
+                    value = WidenDivisionOperand(value, resultType);
+                }
+
                 var tempName = _currentFunction.GetNextTempName();
-                var result = new IRBinaryOp(tempName, op, currentValue, value, currentValue.Type);
+                var result = new IRBinaryOp(tempName, op, currentValue, value, resultType);
                 EmitInstruction(result);
                 value = result;
             }
+
+            // ⛔ AFTER the compound fold, so `n /= 2` on an Integer is narrowed too, and BEFORE
+            // every target arm, so the identifier, field, array-element and indexer stores all
+            // get it from one place. The target NODE's type is the declared one for all four.
+            value = CoerceToDeclaredType(value, _semanticAnalyzer.GetNodeType(node.Target));
 
             // Store to target
             if (node.Target is IdentifierExpressionNode idExpr && idExpr.IsForeignQualified)

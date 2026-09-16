@@ -229,6 +229,16 @@ public class ReturnCoercionTests
     }
 
     /// <summary>
+    /// The Roslyn check, shared with <see cref="AssignmentCoercionTests"/> — the store half of
+    /// this same coercion needs exactly the same assertion, and two copies would drift about
+    /// which diagnostics count.
+    /// </summary>
+    internal static string[] CompileEmittedCSharpForTest(string source) => CompileEmittedCSharp(source);
+
+    /// <summary>The emitted C# itself, for the few properties that are invisible at run time.</summary>
+    internal static string EmitCSharpForTest(string source) => EmitCSharp(source);
+
+    /// <summary>
     /// The emitted C#, run past Roslyn. Returns the ERROR diagnostics only — warnings are not this
     /// fixture's business, and the defect it exists for is an error.
     /// </summary>
