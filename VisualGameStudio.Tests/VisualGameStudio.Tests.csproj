@@ -27,6 +27,21 @@
     <PackageReference Include="Moq" Version="4.20.70" />
     <PackageReference Include="Avalonia" Version="11.3.13" />
     <PackageReference Include="Avalonia.AvaloniaEdit" Version="11.3.0" />
+    <!-- ⛔ The designer canvas and the toolbox drag are VIEW code, and view code is where every
+         unreachable piece of this feature hid: FIVE shipped complete, unit-tested and never
+         executed, with the suite green throughout. Nothing could drive a real Avalonia control
+         here, so "not visually verified" was written into FormCanvasControl itself and believed.
+
+         It is verifiable. Headless restores and runs, and with Skia it RENDERS, so a test can
+         drive the actual control and compare the actual pixels — which is the only thing that
+         would have caught a canvas drawing all ten control kinds as the same grey box.
+
+         ⚠ Avalonia.Headless.NUnit is what makes it usable from NUnit: [AvaloniaTest] runs the
+         body on the dispatcher thread. Without it the control constructs on a worker thread and
+         fails in ways that look like product bugs. -->
+    <PackageReference Include="Avalonia.Headless" Version="11.3.13" />
+    <PackageReference Include="Avalonia.Headless.NUnit" Version="11.3.13" />
+    <PackageReference Include="Avalonia.Skia" Version="11.3.13" />
     <!-- Roslyn: compile-and-run the C# the backend generates, proving the SAME BasicLang
          source that runs on the C++ backend also runs on the C# backend (Task 3 portability). -->
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.9.2" />
