@@ -441,10 +441,50 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   `ParamArray xs As Integer()` are both syntax errors), so a guard clause for it was written and
   then removed — untestable, and redundant anyway since an array-typed parameter is already
   rejected by the Integer/Long/Single/Double restriction.
-  ⚠ **Still failing for unrelated reasons, all pre-existing**: an `Optional` parameter omitted at
-  the call site (`Opt(7/2)` → `MissingMethodException: Opt(Int32)` — the call supplies one argument
-  where the method declares two); a `Shared` method on a user class has no JS lowering and emits an
-  undeclared identifier on C++; MSIL fails any ByRef call with InvalidProgramException.
+  ⚠ **Still failing for unrelated reasons, all pre-existing**: a `Shared` method on a user class
+  has no JS lowering and emits an undeclared identifier on C++; MSIL fails any ByRef call with
+  InvalidProgramException.
+  ⚠ **Omitted `Optional` arguments are filled at the CALL as of 2026-09-16** —
+  `IRBuilder.AppendOmittedOptionalArguments`, at the same three arms the argument coercion uses.
+  ⛔ **One backend of four was right, and it was right by accident.** C# emits the default into the
+  SIGNATURE (`int b = 5`) and lets csc fill it, so nothing in the compiler ever produced the value.
+  Measured for `Sub One(a As Integer, Optional b As Integer = 5)` called as `One(1)`: JS printed
+  `one:1,undefined` (and a Function returning `a + b` printed **0**, because `CStr(NaN)` is 0),
+  C++ did not build ("too few arguments to function"), MSIL could not bind
+  (`MissingMethodException: Void Combined.One(Int32)`). The declaration side would have been three
+  separate per-backend mechanisms; the call site is one.
+  ⛔ **FOUR analyzer sites record `Symbol.DefaultValueExpression`, and ABLATION proved every one
+  load-bearing** — which one a call reads depends on where the callee is declared, so patching the
+  obvious one leaves the rest silently broken. `Visit(ParameterNode)` covers a callee declared
+  BEFORE the caller and every class member; `RegisterSubSignature` / `RegisterFunctionSignature`
+  cover one declared AFTER it (a forward reference binds to the PRE-PASS symbol, and the
+  declaration's own visit installs a different object — measured by identity, call site #47891719
+  vs the rebuilt #958745); `BuildSiblingSignatureParameters` covers a callee in another FILE.
+  ⛔ **The default is on the SYMBOL, not looked up from the callee's `IRFunction`.**
+  `IRVariable.DefaultValue` carries the same fact at the declaration, but `IRModule.Functions` is
+  appended as each function is visited, so a call to one defined further down the file finds
+  nothing — a fix built on that lookup works for one declaration order and silently not the other.
+  ⛔ **A CONSTRUCTOR with an omitted Optional is still refused by the analyzer**, before the IR
+  builder sees it: constructors are keyed by ARITY (`.ctor1`, `.ctor2`) in the type's member table,
+  so `New Box(4)` looks up `.ctor1` and gets "No constructor for 'Box' takes 1 argument(s)".
+  `UnambiguousConstructorParameters` selects by arity too; both have to move together. Pinned.
+  ⛔ **`Optional ByRef` is broken on every backend, before and after, and there is deliberately NO
+  by-ref guard in the fill** — a guard would change nothing observable anywhere and no test could
+  kill it. Measured: C# emits `ref int n = 5` (CS1741), JS refuses ByRef outright (BL7002), MSIL
+  emits no `&` at all and the CLR rejects the program, and C++ trades "too few arguments" for
+  "cannot bind non-const lvalue reference … to an rvalue". The DECLARATION side has to be fixed
+  first. Pinned.
+  ⚠ **A cross-file call reaches only C# today**, so that one test is structural rather than a run:
+  JS refuses it ("no lowering for 'Helpers.Greet'") and MSIL emits
+  `call void Combined::HelpersGreet(int32, object)` against a method declared
+  `void Greet(int32 a, int32 b)` — the qualified name mangled into the method name and the
+  signature spelled from the arguments. Both pre-existing cross-file gaps, unrelated to Optionals.
+  ⚠ **Three mutations SURVIVE and the code is kept anyway, all fail-safe**: filling a non-Optional
+  parameter, `continue` instead of `return` at the first unfillable one, and filling a resolved
+  .NET target. Each is unreachable today — `DefaultValueExpression` is populated only from a
+  `ParameterNode`, and the parser marks a parameter Optional whenever it parses a default (the one
+  exception, a `ParamArray` WITH a default, does not parse at all). Each makes the fill do NOTHING
+  rather than act, which is the same rule the constructor-ambiguity branch above is kept under.
   ⚠ **A `BlnetSlotDesc[]` kind that lies fails SILENTLY** (§8.4, 2026-09-15). The array is what
   `blnet_invoke_callback` reads to decide what to deep-copy when a callback is QUEUED rather than
   run inline: HANDLE addrefs at enqueue, STRING deep-copies, VALUE does neither. Label a handle

@@ -701,7 +701,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     IsOptional = param.IsOptional || param.DefaultValue != null,
                     IsByRef = param.IsByRef,
-                    IsParamArray = param.IsParamArray
+                    IsParamArray = param.IsParamArray,
+                    DefaultValueExpression = param.DefaultValue
                 });
             }
             return result;
@@ -4498,7 +4499,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             foreach (var param in node.Parameters)
             {
                 var paramType = _typeManager.GetType(param.Type?.Name ?? "Object") ?? _typeManager.ObjectType;
-                parameters.Add(new Symbol(param.Name, SymbolKind.Parameter, paramType, param.Line, param.Column) { IsOptional = param.IsOptional, IsByRef = param.IsByRef, IsParamArray = param.IsParamArray });
+                parameters.Add(new Symbol(param.Name, SymbolKind.Parameter, paramType, param.Line, param.Column) { IsOptional = param.IsOptional, IsByRef = param.IsByRef, IsParamArray = param.IsParamArray, DefaultValueExpression = param.DefaultValue });
             }
 
             // Check if already defined
@@ -4518,7 +4519,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             foreach (var param in node.Parameters)
             {
                 var paramType = _typeManager.GetType(param.Type?.Name ?? "Object") ?? _typeManager.ObjectType;
-                parameters.Add(new Symbol(param.Name, SymbolKind.Parameter, paramType, param.Line, param.Column) { IsOptional = param.IsOptional, IsByRef = param.IsByRef, IsParamArray = param.IsParamArray });
+                parameters.Add(new Symbol(param.Name, SymbolKind.Parameter, paramType, param.Line, param.Column) { IsOptional = param.IsOptional, IsByRef = param.IsByRef, IsParamArray = param.IsParamArray, DefaultValueExpression = param.DefaultValue });
             }
 
             // Check if already defined
@@ -5108,7 +5109,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 IsOptional = node.IsOptional,
                 IsParamArray = node.IsParamArray,
-                IsByRef = node.IsByRef
+                IsByRef = node.IsByRef,
+                DefaultValueExpression = node.DefaultValue
             };
 
             if (!_currentScope.Define(symbol))
