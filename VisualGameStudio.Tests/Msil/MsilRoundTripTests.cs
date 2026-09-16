@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using NUnit.Framework;
 using static VisualGameStudio.Tests.Msil.MsilHarness;
 
@@ -166,25 +167,23 @@ public class MsilRoundTripTests
             + "the right operand's evaluation stopped following the left's value.");
     }
 
-    // ====================================================================================
-    // Pinned divergences. Each names its root cause; each goes RED when fixed.
-    // ====================================================================================
+    // ---- Select Case, fixed 2026-09-15 -------------------------------------------------
+    //
+    // Was the most dangerous defect in this backend: it assembled, it ran, and EVERY input fell
+    // to Case Else. The generator emitted IL's `switch` instruction over IRSwitch.Cases — but
+    // the parser routes every case value into IRSwitch.PatternCases, so the table was literally
+    // `switch ()` followed by an unconditional `br` to the default. No conditional branch of any
+    // kind existed. (IL `switch` is also INDEX-based, so a populated table would still have been
+    // wrong for `Case 1, 2, 3`.) It now lowers to an ordered comparison chain, the same shape
+    // CppCodeGenerator uses for the same IR.
+    //
+    // Every test below runs the program, because that is the only oracle that catches this class
+    // of defect: the broken generator produced IL that assembled clean and exited zero.
 
-    /// <summary>
-    /// ⛔ <b>Select Case is silently WRONG — the most dangerous defect in this backend.</b>
-    ///
-    /// <para>It assembles and runs, and every input falls to <c>Case Else</c>. The generated IL
-    /// for a two-case switch is <c>ldc.i4.2 / ldloc.0 / br switch0default</c> — both operands
-    /// are loaded and then an UNCONDITIONAL branch is taken. No <c>beq</c>, no <c>ceq</c>, no
-    /// conditional branch of any kind is emitted, so the case tests do not exist.</para>
-    ///
-    /// <para>Cross-checked: the C# backend emits <c>case 2: "TWO"</c> for this same source, so
-    /// this is an MSIL defect and not a language semantic.</para>
-    /// </summary>
     [Test]
-    public void SelectCase_AlwaysTakesElse_PinnedDivergence()
+    public void SelectCase_TakesTheMatchingArm()
     {
-        var output = RunExpectingSuccess("""
+        Assert.That(RunExpectingSuccess("""
             Module M
              Sub Main()
               Dim n As Integer = 2
@@ -198,13 +197,392 @@ public class MsilRoundTripTests
               End Select
              End Sub
             End Module
+            """), Is.EqualTo("TWO\n"),
+            "n = 2 must reach Case 2. A fall to OTHER is the original defect returning: the "
+            + "case tests were not emitted at all.");
+    }
+
+    [Test]
+    public void SelectCase_WithNoMatchingArm_TakesElse()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              Dim n As Integer = 99
+              Select Case n
+               Case 1
+                PrintLine("ONE")
+               Case 2
+                PrintLine("TWO")
+               Case Else
+                PrintLine("OTHER")
+              End Select
+             End Sub
+            End Module
+            """), Is.EqualTo("OTHER\n"),
+            "the Else arm must still be reachable — this is the half the broken generator got "
+            + "right, and a comparison chain that never falls through would break it.");
+    }
+
+    /// <summary>
+    /// The four value-pattern shapes plus multiple values per clause, in one program so an
+    /// ordering or label-collision bug between consecutive switches in one method shows up.
+    /// </summary>
+    [Test]
+    public void SelectCase_MatchesEveryValuePatternShape()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              Dim i As Integer = 3
+              Select Case i
+               Case 1, 2
+                PrintLine("LOW")
+               Case 3, 4
+                PrintLine("MID")
+               Case Else
+                PrintLine("HIGH")
+              End Select
+
+              Dim r As Integer = 7
+              Select Case r
+               Case 1 To 5
+                PrintLine("R1-5")
+               Case 6 To 10
+                PrintLine("R6-10")
+               Case Else
+                PrintLine("ROUT")
+              End Select
+
+              Dim c As Integer = -4
+              Select Case c
+               Case Is > 0
+                PrintLine("POS")
+               Case Is < 0
+                PrintLine("NEG")
+               Case Else
+                PrintLine("ZERO")
+              End Select
+
+              Dim o As Integer = 2
+              Select Case o
+               Case 1 Or 2 Or 3
+                PrintLine("ORMATCH")
+               Case Else
+                PrintLine("OROTHER")
+              End Select
+             End Sub
+            End Module
+            """), Is.EqualTo("MID\nR6-10\nNEG\nORMATCH\n"),
+            "comma-separated values, a range, a comparison and an Or pattern, in that order. "
+            + "NEG in particular pins the SIGNED comparison: c = -4 read as unsigned is a huge "
+            + "positive number and would print POS.");
+    }
+
+    [Test]
+    public void SelectCase_IsEqualAndIsNotEqual_Match()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              Dim n As Integer = 7
+              Select Case n
+               Case Is = 7
+                PrintLine("EQ7")
+               Case Else
+                PrintLine("NOTEQ7")
+              End Select
+              Select Case n
+               Case Is <> 7
+                PrintLine("NE7")
+               Case Else
+                PrintLine("ISEQ7")
+              End Select
+             End Sub
+            End Module
+            """), Is.EqualTo("EQ7\nISEQ7\n"),
+            "'Case Is <>' is the one comparison whose no-match edge is EQUALITY; inverting it "
+            + "the wrong way prints NE7.");
+    }
+
+    /// <summary>
+    /// ⚠ <b>This test is worthless if the subject is a literal.</b> The CLR interns literals, so
+    /// a reference compare matches two equal literals and a test written that way confirms a
+    /// broken generator. The subject here is CONCATENATED at run time — the IL really does call
+    /// <c>String::Concat</c> before the switch — so the resulting string is a different object
+    /// from the interned <c>"hello"</c> the case loads. A <c>ceq</c>/<c>bne.un</c> lowering
+    /// prints SOTHER; only <c>String::Equals</c> prints HELLO.
+    /// </summary>
+    [Test]
+    public void SelectCase_OnStrings_ComparesByValueNotByReference()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              Dim a As String = "he"
+              Dim b As String = "llo"
+              Dim s As String = a & b
+              Select Case s
+               Case "nope"
+                PrintLine("NOPE")
+               Case "hello"
+                PrintLine("HELLO")
+               Case Else
+                PrintLine("SOTHER")
+              End Select
+
+              Dim z As String = "zz"
+              Select Case z
+               Case Is <> "zz"
+                PrintLine("SNE")
+               Case Else
+                PrintLine("SEQ")
+              End Select
+             End Sub
+            End Module
+            """), Is.EqualTo("HELLO\nSEQ\n"),
+            "SOTHER means the string case compared REFERENCES, which is wrong for every string "
+            + "that was not interned by the runtime.");
+    }
+
+    /// <summary>
+    /// A <c>When</c> guard is built by IRBuilder with instruction emission SUPPRESSED, so its
+    /// operands never entered a block and never got a local slot. Loading them the ordinary way
+    /// pushes nothing and unbalances the stack; the generator rebuilds the guard tree in place
+    /// instead. Two cases share the value 5 here so the test also pins that a FAILED guard falls
+    /// through to the next case rather than jumping to Else.
+    /// </summary>
+    [Test]
+    public void SelectCase_WhenGuard_IsEvaluated_AndFallsThroughOnFailure()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              Dim g As Integer = 5
+              Dim k As Integer = 1
+              Select Case g
+               Case 5 When k > 2
+                PrintLine("GUARD-FIRST")
+               Case 5 When k > 0
+                PrintLine("GUARD-SECOND")
+               Case Else
+                PrintLine("GUARD-ELSE")
+              End Select
+             End Sub
+            End Module
+            """), Is.EqualTo("GUARD-SECOND\n"),
+            "GUARD-FIRST means the guard was never evaluated; GUARD-ELSE means a failed guard "
+            + "abandoned the whole Select instead of trying the next case.");
+    }
+
+    [Test]
+    public void SelectCase_TakesTheFirstMatchingArm_InSourceOrder()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              Dim d As Integer = 4
+              Select Case d
+               Case Is >= 4
+                PrintLine("FIRST")
+               Case 4
+                PrintLine("SECOND")
+               Case Else
+                PrintLine("NEITHER")
+              End Select
+             End Sub
+            End Module
+            """), Is.EqualTo("FIRST\n"),
+            "both arms match 4; VB takes the first in source order. (The C# backend cannot even "
+            + "compile this shape — Roslyn rejects the second case as unreachable — so MSIL is "
+            + "the only backend that pins the ordering rule.)");
+    }
+
+    /// <summary>
+    /// Nesting, a loop body, a Function whose arms <c>Return</c> with no <c>Case Else</c>, and a
+    /// floating-point range — the shapes where a single shared label counter or a missing
+    /// fall-through would produce unassemblable or mis-branching IL.
+    /// </summary>
+    [Test]
+    public void SelectCase_Nested_InALoop_AndInAReturningFunction()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Function Classify(v As Integer) As String
+              Select Case v
+               Case Is < 0
+                Return "NEG"
+               Case 0
+                Return "ZERO"
+               Case Is > 100
+                Return "BIG"
+              End Select
+              Return "SMALL"
+             End Function
+
+             Sub Main()
+              Dim i As Integer
+              For i = 0 To 2
+               Dim label As String = ""
+               Select Case i
+                Case 0
+                 label = "a"
+                Case 1
+                 Select Case i * 2
+                  Case 2
+                   label = "b-nested"
+                  Case Else
+                   label = "b-else"
+                 End Select
+                Case Else
+                 label = "z"
+               End Select
+               PrintLine(label)
+              Next
+
+              PrintLine(Classify(-5))
+              PrintLine(Classify(0))
+              PrintLine(Classify(500))
+              PrintLine(Classify(7))
+
+              Dim d As Double = 2.5
+              Select Case d
+               Case 1.5 To 3.0
+                PrintLine("DRANGE")
+               Case Else
+                PrintLine("DOUT")
+              End Select
+             End Sub
+            End Module
+            """), Is.EqualTo("a\nb-nested\nz\nNEG\nZERO\nBIG\nSMALL\nDRANGE\n"),
+            "SMALL in particular pins the no-Case-Else path: the default target must fall out of "
+            + "the Select and reach the trailing Return.");
+    }
+
+    [Test]
+    public void SelectCase_Nothing_MatchesTheDefaultValue()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              Dim z As Integer = 0
+              Select Case z
+               Case Nothing
+                PrintLine("ZNOTHING")
+               Case Else
+                PrintLine("ZOTHER")
+              End Select
+             End Sub
+            End Module
+            """), Is.EqualTo("ZNOTHING\n"),
+            "VB's Nothing is the type's default value, so a zero Integer matches it.");
+    }
+
+    /// <summary>
+    /// The comparison chain must END in an explicit branch to the default target.
+    ///
+    /// <para>⚠ <b>This is a text assertion on purpose, and it is the only kind that can hold
+    /// this.</b> Every other Select Case test here runs the program, but no run-time oracle can
+    /// see this property: <c>ControlFlowGraph</c> adds the default edge FIRST, so
+    /// <c>GenerateBasicBlock</c> always lays the default block out immediately after the switch
+    /// block, and a chain that just runs off its end falls into the default anyway and answers
+    /// correctly. Deleting the branch passes all eleven round-trip tests. It stays because that
+    /// adjacency is incidental — nothing in the emitter promises it — and the day a case block
+    /// is laid out first, falling through would silently execute the wrong arm. So the branch is
+    /// pinned where it is visible: in the generated text.</para>
+    /// </summary>
+    [Test]
+    public void SelectCase_ChainEndsWithAnExplicitBranchToTheDefault()
+    {
+        var il = CompileToIl("""
+            Module M
+             Sub Main()
+              Dim n As Integer = 2
+              Select Case n
+               Case 1
+                PrintLine("ONE")
+               Case Else
+                PrintLine("OTHER")
+              End Select
+             End Sub
+            End Module
             """);
 
-        Assert.That(output, Is.EqualTo("OTHER\n"),
-            "PINNED WRONG ANSWER: n = 2 must print TWO. When this goes red because it prints "
-            + "TWO, the generator learned to emit case comparisons — delete this test and "
-            + "assert the correct answer.");
+        var lines = il.Split('\n').Select(l => l.TrimEnd('\r').Trim()).ToList();
+        var defaultLabel = lines.FindIndex(l => l == "switch0default:");
+        Assert.That(defaultLabel, Is.GreaterThan(0), "no default block in:\n" + il);
+        Assert.That(lines[defaultLabel - 1], Is.EqualTo("br switch0default"),
+            "the instruction before the default block's label must be an explicit branch to it, "
+            + "not a fall-through that depends on block layout:\n" + il);
     }
+
+    /// <summary>
+    /// A type pattern needs <c>isinst</c> plus a binding slot, which this backend does not have.
+    /// Emitting nothing for it is what the old generator effectively did — the case vanished and
+    /// the input silently took Else — so it is refused at generation time instead.
+    /// </summary>
+    [Test]
+    public void SelectCase_TypePattern_IsRefusedNotDropped()
+    {
+        var run = Run("""
+            Module M
+             Sub Main()
+              Dim o As Object = 5
+              Select Case o
+               Case x As Integer
+                PrintLine("INT")
+               Case Else
+                PrintLine("OTHER")
+              End Select
+             End Sub
+            End Module
+            """);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(run.Outcome, Is.EqualTo(MsilOutcome.GenerateFailed),
+                "refusal must come BEFORE any IL exists: " + run.Report);
+            Assert.That(run.Detail,
+                Does.Contain("IRTypePatternCase").And.Contain("no IL lowering"),
+                "and it must name the pattern it cannot lower: " + run.Detail);
+        });
+    }
+
+    /// <summary>
+    /// IL's ordering opcodes are numeric-only. Applied to two object references they assemble
+    /// but produce an unverifiable method, so <c>Case Is &gt; "b"</c> would have become an
+    /// InvalidProgramException at run time — the failure mode this backend has hit twice before.
+    /// </summary>
+    [Test]
+    public void SelectCase_OrderingComparisonOnStrings_IsRefused()
+    {
+        var run = Run("""
+            Module M
+             Sub Main()
+              Dim s As String = "m"
+              Select Case s
+               Case Is > "b"
+                PrintLine("GT")
+               Case Else
+                PrintLine("OTHER")
+              End Select
+             End Sub
+            End Module
+            """);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(run.Outcome, Is.EqualTo(MsilOutcome.GenerateFailed),
+                "refusal must come BEFORE any IL exists: " + run.Report);
+            Assert.That(run.Detail,
+                Does.Contain("String").And.Contain("String::Equals"),
+                "and it must point at the string shapes that DO work: " + run.Detail);
+        });
+    }
+
+    // ====================================================================================
+    // Pinned divergences. Each names its root cause; each goes RED when fixed.
+    // ====================================================================================
 
     // ---- Fixed 2026-09-15: the .NET Console surface ------------------------------------
     //
