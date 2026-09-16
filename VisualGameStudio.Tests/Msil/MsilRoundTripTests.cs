@@ -645,40 +645,201 @@ public class MsilRoundTripTests
             """, stdin: "TYPED\n"), Is.EqualTo("GOT:TYPED\n"));
     }
 
+    // ---- The dotted static surface, fixed 2026-09-16 -----------------------------------
+    //
+    // `Math.Sqrt(16.0)` sanitised the dot out of the name and emitted
+    // `call object Combined::MathSqrt(float64)` — a call on THIS module's class, to a method
+    // nothing defines, dying with MissingMethodException exactly as Console did.
+    //
+    // ⚠ The pin this replaces said the choice was "the C++ proxy route or the C# direct route,
+    // MSIL could do either". That was WRONG and is worth recording, because it nearly drove the
+    // work in the wrong direction. The .NET proxy is a NATIVE C ABI bridge:
+    // [UnmanagedCallersOnly] exports on a Native AOT shim reached through a function-pointer
+    // table, which exists because native code has no other way into .NET. Managed code cannot
+    // call an UnmanagedCallersOnly method at all — so MSIL could only reach the proxy by
+    // P/Invoking the native export so it could call BACK into the CLR, for members the CLR
+    // already offers, and every emitted binary would gain a dependency on that shim. Measured
+    // too: ResolvedNetTarget, the descriptor that drives proxy lowering, is null on this path.
+    // There was only ever one route for this backend.
+    //
+    // So: direct IL from a table of recorded signatures, keyed on the FULL dotted name.
+
+    [Test]
+    public void ADottedStaticCall_EmitsARealBclCall()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              PrintLine(CStr(Math.Sqrt(16.0)))
+             End Sub
+            End Module
+            """), Is.EqualTo("4\n"),
+            "a MissingMethodException naming Combined::MathSqrt means the dotted name was "
+            + "sanitised into a self-call again.");
+    }
+
+    [Test]
+    public void TheRecordedStaticSurface_Runs()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              PrintLine(CStr(Math.Sqrt(9.0)))
+              PrintLine(CStr(Math.Floor(3.7)))
+              PrintLine(CStr(Math.Pow(2.0, 10.0)))
+              PrintLine(CStr(Math.Abs(-7)))
+              PrintLine(CStr(Math.Max(3, 9)))
+              PrintLine(CStr(Math.Min(3, 9)))
+              PrintLine(CStr(Convert.ToInt32("123")))
+              PrintLine(CStr(Convert.ToDouble("2.5")))
+             End Sub
+            End Module
+            """), Is.EqualTo("3\n3\n1024\n7\n9\n3\n123\n2.5\n"));
+    }
+
     /// <summary>
-    /// ⛔ <b>The REST of the dotted static surface is still the phantom self-call.</b>
-    /// <c>Math.Sqrt(16.0)</c> emits <c>call object Combined::MathSqrt(float64)</c> and dies with
-    /// MissingMethodException, exactly as Console did.
-    ///
-    /// <para>Deliberately NOT fixed by aliasing, because the right answer is a design decision
-    /// rather than a missing row. Measured: the C++ backend routes <c>Math.Sqrt</c> through the
-    /// .NET PROXY (<c>bl_net_System_Math_Sqrt__System_Double_…</c>), while the C# backend emits
-    /// <c>Math.Sqrt</c> directly. MSIL runs on .NET and could do either, and picking one decides
-    /// how the whole <c>KnownNetStaticTypes</c> surface reaches this backend.</para>
-    ///
-    /// <para>⛔ And the obvious shortcut is unsound: stripping the <c>Type.</c> prefix and
-    /// re-matching would route <c>Decimal.Round</c> onto the <c>Math.Round</c> arm — a silent
-    /// mis-emission rather than a missing one. That is why the Console fix uses an explicit
-    /// three-entry alias table instead.</para>
+    /// ⛔ The soundness property the old pin named as the reason not to take the shortcut:
+    /// stripping the <c>Type.</c> prefix and matching the member alone routes
+    /// <c>Decimal.Round</c> onto <c>Math.Round</c> — a silent WRONG ANSWER rather than a missing
+    /// one. The table is keyed on the full dotted name, so <c>Decimal.Round</c> is simply absent.
     /// </summary>
     [Test]
-    public void TheRestOfTheDottedStaticSurface_IsStillAPhantomSelfCall_PinnedDivergence()
+    public void AStaticOnAnUnrecordedType_IsRefusedNotReroutedOntoAnotherType()
     {
         var run = Run("""
             Module M
              Sub Main()
-              PrintLine(CStr(Math.Sqrt(16.0)))
+              PrintLine(CStr(Decimal.Round(3.567)))
              End Sub
             End Module
             """);
 
         Assert.Multiple(() =>
         {
-            Assert.That(run.Outcome, Is.EqualTo(MsilOutcome.RunFailed), run.Report);
-            Assert.That(run.Output, Does.Contain("MissingMethodException"), run.Detail);
-            Assert.That(run.Il, Does.Contain("MathSqrt"),
-                "still the dotted name sanitised into a self-call. When this goes red, the "
-                + "design decision above was made — promote it to a real assertion.");
+            Assert.That(run.Outcome, Is.EqualTo(MsilOutcome.GenerateFailed),
+                "refusal must come BEFORE any IL exists: " + run.Report);
+            Assert.That(run.Detail,
+                Does.Contain("Decimal.Round").And.Contain("Math.Round"),
+                "and it must name the mis-routing it is preventing: " + run.Detail);
+        });
+    }
+
+    [Test]
+    public void AnUnrecordedMemberOfARecordedType_IsRefused()
+    {
+        var run = Run("""
+            Module M
+             Sub Main()
+              PrintLine(CStr(Math.Tan(1.0)))
+             End Sub
+            End Module
+            """);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(run.Outcome, Is.EqualTo(MsilOutcome.GenerateFailed), run.Report);
+            Assert.That(run.Detail,
+                Does.Contain("Math.Tan").And.Contain("supported .NET static surface"),
+                "and it must say how to widen the set: " + run.Detail);
+        });
+    }
+
+    /// <summary>
+    /// Overloads are matched on argument TYPES, never on count. <c>Math.Abs</c> has int32, int64
+    /// and float64 forms that differ only in signature, so an exact match must be preferred over
+    /// a widening — <c>Abs(-7)</c> takes the int32 form and stays an integer.
+    /// </summary>
+    [Test]
+    public void AnExactOverloadWins_OverAWidenedOne()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              PrintLine(CStr(Math.Abs(-7)))
+              PrintLine(CStr(Math.Abs(-7.5)))
+             End Sub
+            End Module
+            """), Is.EqualTo("7\n7.5\n"),
+            "7 then 7.5: the integer argument must not be widened onto the float64 overload, and "
+            + "the double argument must not be truncated onto the int32 one.");
+    }
+
+    /// <summary>
+    /// That an exact overload wins is pinned in the IL, because <b>it cannot be seen at run
+    /// time</b>.
+    ///
+    /// <para>⚠ Measured, not assumed: with the float64 overload declared first and the
+    /// exact-match pass removed, <c>Math.Abs(-7)</c> selects <c>Abs(float64)</c> and still prints
+    /// <c>7</c>. The output is identical, so every round-trip assertion above stays green while
+    /// the call binds to the wrong member and silently returns a Double where an Integer was
+    /// asked for. Without the exact-match pass, selection would depend on the order rows happen
+    /// to be written in <c>NetStaticMembers</c> — a trap for whoever next edits that table.</para>
+    /// </summary>
+    [Test]
+    public void AnExactOverload_IsChosenRegardlessOfTableOrder()
+    {
+        var il = CompileToIl("""
+            Module M
+             Sub Main()
+              PrintLine(CStr(Math.Abs(-7)))
+             End Sub
+            End Module
+            """);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(il, Does.Contain("Math::Abs(int32)"),
+                "an int32 argument must bind the int32 overload:\n" + il);
+            Assert.That(il, Does.Not.Contain("Math::Abs(float64)"),
+                "and must not be widened onto the float64 one, which prints the same and hides "
+                + "the mis-binding:\n" + il);
+        });
+    }
+
+    /// <summary>
+    /// A LOSSLESS widening is allowed, because the C# backend accepts <c>Math.Sqrt(16)</c> too
+    /// (C# widens implicitly) and refusing it would put two backends at odds over an integer
+    /// literal. ⛔ <c>int64</c>/<c>uint64</c> to <c>float64</c> is deliberately NOT on the list:
+    /// it rounds above 2^53, and silently returning a different number than the caller passed is
+    /// the class of defect this backend keeps producing.
+    /// </summary>
+    [Test]
+    public void AnIntegerArgument_WidensToADoubleParameter()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              PrintLine(CStr(Math.Sqrt(16)))
+             End Sub
+            End Module
+            """), Is.EqualTo("4\n"));
+    }
+
+    /// <summary>
+    /// ⛔ The other half of the widening rule, and the one that keeps it honest: a <c>Long</c>
+    /// argument is REFUSED rather than widened. <c>int64</c> to <c>float64</c> is a legal IL
+    /// conversion but it ROUNDS above 2^53, so admitting it would silently hand the BCL a
+    /// different number than the caller wrote. Refusing says so instead.
+    /// </summary>
+    [Test]
+    public void ALongArgument_IsRefusedRatherThanLossilyWidened()
+    {
+        var run = Run("""
+            Module M
+             Sub Main()
+              Dim big As Long = 9007199254740993
+              PrintLine(CStr(Math.Sqrt(big)))
+             End Sub
+            End Module
+            """);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(run.Outcome, Is.EqualTo(MsilOutcome.GenerateFailed),
+                "a Long must not be silently widened onto Sqrt(float64): " + run.Report);
+            Assert.That(run.Detail,
+                Does.Contain("Math.Sqrt").And.Contain("int64"),
+                "and the refusal must name the argument type it will not accept: " + run.Detail);
         });
     }
 

@@ -226,6 +226,24 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   region (lowered to a result slot plus `leave` to one exit, which is also what runs the finally),
   nested and sibling `Try`s, rethrow, user-defined exception types, and `ex.Message`/`StackTrace`/
   `Source` through a narrow recorded table — anything outside it is refused, not guessed.
+  ⚠ **The dotted static surface emits DIRECT IL as of 2026-09-16**, and ⛔ **the choice this
+  backend appeared to have does not exist** — an earlier pin here claimed MSIL could route
+  `Math.Sqrt` through the .NET proxy like C++ or emit it directly like C#. It cannot do the first.
+  The proxy is a NATIVE C ABI bridge: `[UnmanagedCallersOnly]` exports on a Native AOT shim
+  reached through a function-pointer table, and managed code cannot call an
+  `UnmanagedCallersOnly` method at all. MSIL could only reach it by P/Invoking the native export
+  so it could call BACK into the CLR, for members the CLR already offers, and every emitted binary
+  would then depend on the shim being built. (`ResolvedNetTarget`, which drives proxy lowering, is
+  also null on this path — the resolver is not engaged for a plain compilation.) Don't re-litigate
+  it. Members come from `MSILCodeGenerator.NetStaticMembers`, **keyed on the FULL dotted name**
+  because matching the member alone routes `Decimal.Round` onto `Math.Round` — a silent wrong
+  answer. Overloads match on argument TYPES, exact before widened; only LOSSLESS widenings are
+  allowed (`int64`→`float64` is refused: it rounds above 2^53).
+  ⛔ **The wrong overload is invisible at run time.** Measured: with the float64 row declared
+  first and the exact-match pass removed, `Math.Abs(-7)` binds `Abs(float64)` and still prints
+  `7`. Every round-trip assertion stays green while the call returns a Double where an Integer was
+  asked for, so that property is pinned in the IL text — the third such case in this fixture,
+  beside the Select Case default branch and the variable-less `Catch`'s `pop`.
   ⚠ **Instance methods know about `Me` as of 2026-09-16**, and the pin that covered this named
   the WRONG cause — it said "a CALL-side defect", but the call was always fine (a method touching
   nothing runs), and the stack trace pointed inside the callee. The emitter simply had no notion

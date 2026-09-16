@@ -2173,6 +2173,50 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 return;
             }
 
+            // A .NET static member with a recorded signature — `Math.Sqrt(x)` — emitted as a
+            // direct call. Ahead of the fallback below, which sanitises the dot out of the name
+            // and produces `call object Combined::MathSqrt(float64)`: a call on THIS module's
+            // class, to a method nothing defines.
+            if (TryResolveNetStaticCall(funcName, call.Arguments.ToList(), out var netToken, out var netOverload))
+            {
+                var conversions = _netStaticConversions;
+                for (var i = 0; i < call.Arguments.Count; i++)
+                {
+                    EmitLoadValue(call.Arguments[i]);
+                    if (i < conversions.Length && conversions[i] != null)
+                    {
+                        WriteLine($"    {conversions[i]}");
+                    }
+                }
+
+                var netParams = string.Join(", ", netOverload.ParameterSpecs);
+                WriteLine($"    call {netOverload.ReturnSpec} {netToken}::{SanitizeName(funcName.Substring(funcName.IndexOf('.') + 1))}({netParams})");
+                _currentStack -= call.Arguments.Count;
+
+                if (netOverload.ReturnSpec != "void")
+                {
+                    _currentStack++;
+
+                    // ⛔ IRBuilder cannot know the .NET signature, so it types the call as
+                    // returning Object and the slot is declared `object`. The call really returns
+                    // a value type, and storing a raw float64 into an object slot is a type
+                    // mismatch the CLR follows into a NullReferenceException at the first use.
+                    // Box across that gap — the slot's declared type is what the rest of the
+                    // method reads it back as.
+                    if (NeedsBoxingInto(IlTypeSpec(call.Type), netOverload.ReturnSpec, out var boxToken))
+                    {
+                        WriteLine($"    box {boxToken}");
+                    }
+
+                    if (!string.IsNullOrEmpty(call.Name))
+                    {
+                        if (_declaredIdentifiers.Contains(call.Name)) EmitStoreLocal(call.Name);
+                        else EmitStloc(GetTempIndex(call));
+                    }
+                }
+                return;
+            }
+
             // ⛔ A SIBLING call inside an instance method — `Return Inner() + 1` — needs the
             // receiver pushed first and a `callvirt instance`. It used to fall through to the
             // module-class arm below and emit `call int32 Program::Inner()`: a static call, on a
@@ -2275,6 +2319,229 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 ["console.write"] = "print",
                 ["console.readline"] = "readline",
             };
+
+        /// <summary>One recorded overload: the IL parameter specs it takes and the spec it returns.</summary>
+        private sealed record NetStaticOverload(string ReturnSpec, string[] ParameterSpecs);
+
+        /// <summary>
+        /// The IL primitives that are VALUE types, so a reference-typed slot needs them boxed.
+        /// <c>string</c> and <c>object</c> are deliberately absent — they are IL keywords but
+        /// reference types already, and boxing one is not a no-op to reason about.
+        /// </summary>
+        private static readonly HashSet<string> BoxableSpecs = new(StringComparer.Ordinal)
+        {
+            "int8", "uint8", "int16", "uint16", "int32", "uint32", "int64", "uint64",
+            "float32", "float64", "bool", "char",
+        };
+
+        /// <summary>
+        /// Per-argument conversion opcodes for the overload the last resolve selected; an entry is
+        /// null where the argument already matched. Set by <see cref="TryResolveNetStaticCall"/>
+        /// and consumed immediately by its caller.
+        /// </summary>
+        private string[] _netStaticConversions = System.Array.Empty<string>();
+
+        /// <summary>
+        /// The integer widenings that cannot lose a value, and the opcode each needs.
+        ///
+        /// <para>⛔ <c>int64</c> and <c>uint64</c> are deliberately absent. They widen to
+        /// <c>float64</c> in IL, but above 2^53 the conversion ROUNDS — silently returning a
+        /// different number than the caller passed. Everything here fits in a double exactly.</para>
+        /// </summary>
+        private static readonly Dictionary<(string From, string To), string> LosslessWidenings =
+            new()
+            {
+                [("int8", "float64")] = "conv.r8",
+                [("uint8", "float64")] = "conv.r8",
+                [("int16", "float64")] = "conv.r8",
+                [("uint16", "float64")] = "conv.r8",
+                [("int32", "float64")] = "conv.r8",
+                [("uint32", "float64")] = "conv.r8",
+                [("int8", "int32")] = "conv.i4",
+                [("uint8", "int32")] = "conv.i4",
+                [("int16", "int32")] = "conv.i4",
+                [("uint16", "int32")] = "conv.i4",
+                [("int32", "int64")] = "conv.i8",
+                [("uint32", "int64")] = "conv.i8",
+            };
+
+        private static bool TryLosslessWidening(string from, string to, out string opcode) =>
+            LosslessWidenings.TryGetValue((from, to), out opcode);
+
+        /// <summary>
+        /// True when a value of <paramref name="valueSpec"/> has to be boxed to live in a slot
+        /// declared <paramref name="slotSpec"/>, with the token <c>box</c> needs.
+        /// </summary>
+        private static bool NeedsBoxingInto(string slotSpec, string valueSpec, out string boxToken)
+        {
+            boxToken = null;
+            if (!BoxableSpecs.Contains(valueSpec)) return false;
+            if (BoxableSpecs.Contains(slotSpec)) return false;   // value into value: no bridge
+            return PrimitiveTokens.TryGetValue(valueSpec, out boxToken);
+        }
+
+        /// <summary>
+        /// The .NET STATIC members this backend can emit, and the exact IL signature of each.
+        ///
+        /// <para><b>MSIL emits these DIRECTLY</b> — <c>call float64 [mscorlib]System.Math::Sqrt(float64)</c>
+        /// — rather than through the blnet .NET proxy that the C++ backend uses. That is not a
+        /// preference between two workable routes. The proxy is a NATIVE C ABI bridge:
+        /// <c>[UnmanagedCallersOnly]</c> exports on a Native AOT shim reached through a
+        /// function-pointer table, which exists because native code has no other way into .NET.
+        /// Managed code cannot call an <c>UnmanagedCallersOnly</c> method at all, so an MSIL
+        /// program could only reach the proxy by P/Invoking the native export so it could call
+        /// back into the CLR — for members the CLR already offers — and every emitted binary would
+        /// then depend on the shim being built and deployed. (<c>ResolvedNetTarget</c>, the
+        /// descriptor that drives proxy lowering, is also null on this path: the resolver is not
+        /// engaged for a plain compilation.)</para>
+        ///
+        /// <para>⛔ <b>Keyed on the FULL dotted name, and that is load-bearing.</b> The obvious
+        /// shortcut — strip the <c>Type.</c> prefix and match the member alone — routes
+        /// <c>Decimal.Round</c> onto <c>Math.Round</c>: a silent mis-emission rather than a missing
+        /// one. Here <c>Decimal.Round</c> is simply absent and is refused.</para>
+        ///
+        /// <para><b>Overloads are matched on argument IL specs, never on count alone.</b>
+        /// <c>Math.Abs</c> has int32, int64 and float64 forms that differ only in signature;
+        /// picking by arity would emit a call that binds to the wrong one or to nothing.</para>
+        ///
+        /// <para>Deliberately narrow, on the same principle as <c>CollectionMembers</c> and
+        /// <c>ExceptionMembers</c>: a guessed signature assembles cleanly — ilasm does not resolve
+        /// member references — and fails at run time with MissingMethodException.</para>
+        /// </summary>
+        private static readonly Dictionary<string, (string Token, NetStaticOverload[] Overloads)> NetStaticMembers =
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Math.Sqrt"] = ("[mscorlib]System.Math", new[] { new NetStaticOverload("float64", new[] { "float64" }) }),
+                ["Math.Floor"] = ("[mscorlib]System.Math", new[] { new NetStaticOverload("float64", new[] { "float64" }) }),
+                ["Math.Ceiling"] = ("[mscorlib]System.Math", new[] { new NetStaticOverload("float64", new[] { "float64" }) }),
+                ["Math.Pow"] = ("[mscorlib]System.Math", new[] { new NetStaticOverload("float64", new[] { "float64", "float64" }) }),
+                ["Math.Abs"] = ("[mscorlib]System.Math", new[]
+                {
+                    new NetStaticOverload("int32", new[] { "int32" }),
+                    new NetStaticOverload("int64", new[] { "int64" }),
+                    new NetStaticOverload("float64", new[] { "float64" }),
+                }),
+                ["Math.Min"] = ("[mscorlib]System.Math", new[]
+                {
+                    new NetStaticOverload("int32", new[] { "int32", "int32" }),
+                    new NetStaticOverload("int64", new[] { "int64", "int64" }),
+                    new NetStaticOverload("float64", new[] { "float64", "float64" }),
+                }),
+                ["Math.Max"] = ("[mscorlib]System.Math", new[]
+                {
+                    new NetStaticOverload("int32", new[] { "int32", "int32" }),
+                    new NetStaticOverload("int64", new[] { "int64", "int64" }),
+                    new NetStaticOverload("float64", new[] { "float64", "float64" }),
+                }),
+                ["Math.Round"] = ("[mscorlib]System.Math", new[] { new NetStaticOverload("float64", new[] { "float64" }) }),
+
+                ["Convert.ToInt32"] = ("[mscorlib]System.Convert", new[]
+                {
+                    new NetStaticOverload("int32", new[] { "string" }),
+                    new NetStaticOverload("int32", new[] { "float64" }),
+                }),
+                ["Convert.ToDouble"] = ("[mscorlib]System.Convert", new[]
+                {
+                    new NetStaticOverload("float64", new[] { "string" }),
+                    new NetStaticOverload("float64", new[] { "int32" }),
+                }),
+
+                // ⛔ No String.* rows: `String` is a reserved type keyword and the parser rejects
+                // it at the start of an expression, so `String.IsNullOrEmpty(s)` never reaches
+                // this backend on ANY target. A row here would be untestable by the round-trip
+                // contract the refusal message promises.
+            };
+
+        /// <summary>
+        /// Resolves a dotted static call to its recorded IL signature, matching the overload on
+        /// argument specs. Returns false when the receiver is not a .NET static type at all — that
+        /// call belongs to some other arm — and throws when the type IS one but the member or the
+        /// argument shape has no recorded signature.
+        /// </summary>
+        private bool TryResolveNetStaticCall(
+            string funcName, List<IRValue> args, out string token, out NetStaticOverload overload)
+        {
+            token = null;
+            overload = null;
+
+            var dot = funcName?.IndexOf('.') ?? -1;
+            if (dot <= 0) return false;
+
+            var typeName = funcName.Substring(0, dot);
+            if (!IRBuilder.IsKnownNetStaticTypeName(typeName)) return false;
+
+            // A recognized .NET static type whose member routes elsewhere (the Console aliases)
+            // is not this arm's business.
+            if (DottedStdLibAliases.ContainsKey(funcName.ToLowerInvariant())) return false;
+
+            if (!NetStaticMembers.TryGetValue(funcName, out var entry))
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: '{funcName}' is outside the supported .NET static surface. The members "
+                    + "whose IL signatures are recorded are emitted as direct calls; anything else "
+                    + "would need a guessed signature, which assembles and then fails with "
+                    + "MissingMethodException at run time. ⛔ Matching on the member name alone "
+                    + "instead would be worse: it routes Decimal.Round onto Math.Round, a silent "
+                    + "wrong answer. Add a row to MSILCodeGenerator.NetStaticMembers plus a "
+                    + "round-trip test to widen the set.");
+            }
+
+            var argumentSpecs = args.Select(a => IlTypeSpec(a.Type)).ToArray();
+
+            // Exact match first, so a widening is never preferred over a signature that already
+            // fits — `Math.Abs(-7)` must pick the int32 form, not widen to the float64 one.
+            overload = entry.Overloads.FirstOrDefault(
+                o => o.ParameterSpecs.Length == argumentSpecs.Length
+                     && o.ParameterSpecs.Zip(argumentSpecs, (p, a) => p == a).All(match => match));
+
+            if (overload != null)
+            {
+                _netStaticConversions = new string[argumentSpecs.Length];
+                token = entry.Token;
+                return true;
+            }
+
+            // Then a match reachable by LOSSLESS widening. `Math.Sqrt(16)` is natural to write and
+            // the C# backend accepts it (C# widens implicitly), so refusing it would be a
+            // divergence between two backends over an integer literal. Only widenings that cannot
+            // lose a value are allowed — int64/uint64 to float64 is NOT one of them above 2^53,
+            // and silently rounding a caller's value is the class of defect this file is full of.
+            foreach (var candidate in entry.Overloads)
+            {
+                if (candidate.ParameterSpecs.Length != argumentSpecs.Length) continue;
+
+                var conversions = new string[argumentSpecs.Length];
+                var usable = true;
+                for (var i = 0; i < argumentSpecs.Length; i++)
+                {
+                    if (candidate.ParameterSpecs[i] == argumentSpecs[i]) continue;
+                    if (TryLosslessWidening(argumentSpecs[i], candidate.ParameterSpecs[i], out conversions[i])) continue;
+                    usable = false;
+                    break;
+                }
+
+                if (!usable) continue;
+
+                _netStaticConversions = conversions;
+                overload = candidate;
+                token = entry.Token;
+                return true;
+            }
+
+            if (overload == null)
+            {
+                var got = argumentSpecs.Length == 0 ? "no arguments" : string.Join(", ", argumentSpecs);
+                var offered = string.Join(" | ", entry.Overloads.Select(o => string.Join(", ", o.ParameterSpecs)));
+                throw new ForeignFeatureException(
+                    $"MSIL: '{funcName}' has no recorded overload taking ({got}). Recorded: "
+                    + $"({offered}). Overloads are matched on argument types, never on count — "
+                    + "Math.Abs has int32, int64 and float64 forms that differ only in signature, "
+                    + "so picking by arity emits a call that binds to the wrong one or to nothing.");
+            }
+
+            token = entry.Token;
+            return true;
+        }
 
         /// <summary>
         /// Stdlib arms that emit a STATEMENT, not a value — their IL pushes nothing, so the
