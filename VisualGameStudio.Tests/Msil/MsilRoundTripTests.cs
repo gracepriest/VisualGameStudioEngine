@@ -1923,4 +1923,331 @@ public class MsilRoundTripTests
                 "and it must name the member and say how to widen the set: " + run.Detail);
         });
     }
+
+    // ====================================================================================
+    // Module-level variables.
+    //
+    // ⛔ The backend did not read IRModule.GlobalVariables AT ALL — the identifier did not
+    // appear in MSILBackend.cs. Every one of these programs either died with
+    // InvalidProgramException or, worse, printed the right answer through a stack accident.
+    // ====================================================================================
+
+    /// <summary>
+    /// ⛔ The initializer is NOWHERE in the function IR. Main's instruction list for this program
+    /// is just <c>t0 = call CStr(@n)</c> — nothing in any method body assigns the 7. Emitting the
+    /// field without a type initializer is not a build error, it is a program that prints 0.
+    /// </summary>
+    [Test]
+    public void AModuleLevelVariable_HoldsItsInitializer()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Dim n As Integer = 7
+             Sub Main()
+              PrintLine(CStr(n))
+             End Sub
+            End Module
+            """), Is.EqualTo("7\n"),
+            "a module-level Dim with an initializer must carry that value into Main");
+    }
+
+    /// <summary>
+    /// The point of a module-level variable: one storage location every procedure sees. A
+    /// per-method local would print 1, not 3.
+    /// </summary>
+    [Test]
+    public void AModuleLevelVariable_IsSharedAcrossProcedures()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Dim counter As Integer = 0
+             Sub Bump()
+              counter = counter + 1
+             End Sub
+             Sub Main()
+              Bump()
+              Bump()
+              Bump()
+              PrintLine(CStr(counter))
+             End Sub
+            End Module
+            """), Is.EqualTo("3\n"),
+            "every procedure must read and write the SAME location");
+    }
+
+    /// <summary>
+    /// A sized array global needs storage created for it in the type initializer, for exactly the
+    /// reason a sized array local and a sized array field do: left bare it is a null reference and
+    /// the first <c>g(1) = …</c> throws.
+    /// </summary>
+    [Test]
+    public void AModuleLevelArray_HasStorage()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Dim g(3) As Integer
+             Sub Main()
+              g(1) = 5
+              PrintLine(CStr(g(1)))
+             End Sub
+            End Module
+            """), Is.EqualTo("5\n"));
+    }
+
+    /// <summary>
+    /// ⚠ The counter-case: a global with no initializer needs NO type initializer, because the CLR
+    /// zeroes every static field and zero/null/false is exactly what an uninitialized BasicLang
+    /// variable holds. This pins that the "do nothing" path is right rather than merely untested.
+    /// </summary>
+    [Test]
+    public void AModuleLevelVariableWithNoInitializer_StartsAtItsTypesZero()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Dim s As String
+             Dim k As Integer
+             Dim f As Boolean
+             Sub Main()
+              PrintLine("[" & s & "]")
+              PrintLine(CStr(k))
+              PrintLine(CStr(f))
+             End Sub
+            End Module
+            """), Is.EqualTo("[]\n0\nFalse\n"));
+    }
+
+    /// <summary>
+    /// ⛔ Resolution order, and the reason the global arm goes LAST in <c>EmitLoadLocal</c>. A
+    /// local of the same name must win inside its own procedure while the global stays intact for
+    /// everyone else. Getting this backwards prints 7 then 7 — both readings wrong, and neither
+    /// one crashes.
+    /// </summary>
+    [Test]
+    public void ALocalShadowsAModuleLevelVariableOfTheSameName()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Dim n As Integer = 7
+             Sub Main()
+              Dim n As Integer = 99
+              PrintLine(CStr(n))
+              Show()
+             End Sub
+             Sub Show()
+              PrintLine(CStr(n))
+             End Sub
+            End Module
+            """), Is.EqualTo("99\n7\n"),
+            "the local shadows inside Main; Show still sees the module-level 7");
+    }
+
+    /// <summary>
+    /// ⛔ This is what forces <c>assembly</c> rather than <c>private</c> on the field. IL's
+    /// <c>private</c> means "the declaring type only", and the module class is NOT the class this
+    /// method lives on — so a faithful translation of BasicLang's Private is refused by the CLR
+    /// with FieldAccessException at the first read.
+    /// </summary>
+    [Test]
+    public void AModuleLevelVariable_IsReadableFromAUserClassMethod()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Dim tally As Integer = 10
+             Class Box
+              Public Function Peek() As Integer
+               Return tally
+              End Function
+             End Class
+             Sub Main()
+              Dim b As New Box()
+              PrintLine(CStr(b.Peek()))
+             End Sub
+            End Module
+            """), Is.EqualTo("10\n"));
+    }
+
+    /// <summary>
+    /// ⛔ <c>Dim d As Double = 7</c> carries an int32 constant into a float64 field, and IL does
+    /// not coerce on <c>stsfld</c>. Measured: nothing rejects the mismatch — ilasm assembles it
+    /// silently and the JIT runs it, copying the int32's BIT PATTERN into the low half of the
+    /// slot, so <c>d</c> becomes 3.5E-323 and this program prints <c>1.5</c>. A silent wrong
+    /// answer, which is why the widening is emitted from the field's declared type instead of
+    /// being left to a verifier that never objects.
+    /// </summary>
+    [Test]
+    public void AnIntegerLiteralInitializingADouble_IsWidened_NotBitCopied()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Dim d As Double = 7
+             Dim e As Double = 1.5
+             Sub Main()
+              PrintLine(CStr(d + e))
+             End Sub
+            End Module
+            """), Is.EqualTo("8.5\n"));
+    }
+
+    /// <summary>
+    /// Globals across a protected region: <c>stsfld</c> inside a <c>.try</c>, a <c>catch</c> and a
+    /// <c>finally</c> must each land, and none of them may unbalance the stack that <c>leave</c>
+    /// and <c>endfinally</c> depend on.
+    /// </summary>
+    [Test]
+    public void AModuleLevelVariable_IsWritableFromEveryArmOfATry()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Dim log As String = "start"
+             Sub Main()
+              Try
+               log = log & "-try"
+               Throw New Exception("boom")
+              Catch ex As Exception
+               log = log & "-catch"
+              Finally
+               log = log & "-fin"
+              End Try
+              PrintLine(log)
+             End Sub
+            End Module
+            """), Is.EqualTo("start-try-catch-fin\n"));
+    }
+
+    /// <summary>
+    /// ⛔ IL TEXT, because this property is INVISIBLE at run time. <c>beforefieldinit</c> lets the
+    /// CLR run the type initializer at any point at or before the first static-field access;
+    /// without it the first access is the guaranteed trigger. For the IL this backend emits both
+    /// produce the same answers today, so no round-trip test can hold the line — exactly as the C#
+    /// compiler drops the flag for a class with a static constructor, it is dropped here, and only
+    /// reading the IL can say so.
+    /// </summary>
+    [Test]
+    public void TheModuleClass_DropsBeforeFieldInit_WhenItHasATypeInitializer()
+    {
+        var withInitializer = CompileToIl("""
+            Module M
+             Dim n As Integer = 7
+             Sub Main()
+              PrintLine(CStr(n))
+             End Sub
+            End Module
+            """);
+
+        var withoutInitializer = CompileToIl("""
+            Module M
+             Dim n As Integer
+             Sub Main()
+              PrintLine(CStr(n))
+             End Sub
+            End Module
+            """);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(withInitializer, Does.Contain(".cctor"),
+                "an initialized global needs a type initializer: " + withInitializer);
+            Assert.That(ModuleClassLine(withInitializer), Does.Not.Contain("beforefieldinit"),
+                "and the class carrying it must not be beforefieldinit");
+
+            Assert.That(withoutInitializer, Does.Not.Contain(".cctor"),
+                "a zero-valued global needs no type initializer at all — the CLR already zeroes "
+                + "the field, so emitting one would be dead IL: " + withoutInitializer);
+            Assert.That(ModuleClassLine(withoutInitializer), Does.Contain("beforefieldinit"),
+                "and with no initializer the relaxed flag stays");
+        });
+    }
+
+    /// <summary>
+    /// ⛔ IL TEXT for the same reason: <c>Public</c> and <c>Private</c> globals both READ and WRITE
+    /// identically from inside the assembly, so no program this fixture can run distinguishes
+    /// <c>public</c> from <c>assembly</c> on the field. The distinction only becomes observable to
+    /// a SEPARATE assembly referencing this one, which nothing here does.
+    /// </summary>
+    [Test]
+    public void APublicModuleLevelVariable_IsEmittedPublic_AndAPrivateOneAssembly()
+    {
+        var il = CompileToIl("""
+            Module M
+             Public Exported As Integer = 1
+             Dim Internal As Integer = 2
+             Sub Main()
+              PrintLine(CStr(Exported + Internal))
+             End Sub
+            End Module
+            """);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(il, Does.Contain(".field public static int32 Exported"), il);
+            Assert.That(il, Does.Contain(".field assembly static int32 Internal"),
+                "Private must widen to assembly, not private — see "
+                + nameof(AModuleLevelVariable_IsReadableFromAUserClassMethod) + ": " + il);
+        });
+    }
+
+    /// <summary>
+    /// ⛔ The type initializer is a METHOD, and it is emitted LAST — after every module procedure.
+    /// It therefore inherits whatever local, parameter and temporary tables the previous procedure
+    /// left behind unless they are cleared first, and a global initializer CAN name another global
+    /// (<c>Dim b As Integer = K</c> emits <c>ldsfld</c>). Measured with the reset removed: the
+    /// decoy's <c>Dim K</c> is still in the slot table, so the .cctor resolves the global K to
+    /// <c>ldloc.0</c> — a local slot the .cctor does not declare — and the program dies with
+    /// TypeInitializationException wrapping InvalidProgramException.
+    ///
+    /// <para>The decoy Sub has to come LAST in the module for this: it is the procedure whose
+    /// tables the .cctor would inherit. Reorder it above Main and the shape stops discriminating,
+    /// which is why the name is what it is.</para>
+    /// </summary>
+    [Test]
+    public void TheTypeInitializer_DoesNotInheritTheLastProceduresLocalSlots()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Const K As Integer = 5
+             Dim b As Integer = K
+             Sub Main()
+              Decoy()
+              PrintLine(CStr(b))
+             End Sub
+             Sub Decoy()
+              Dim K As Integer = 111
+              Dim pad As Integer = K
+             End Sub
+            End Module
+            """), Is.EqualTo("5\n"),
+            "the global K, not the decoy's local K");
+    }
+
+    /// <summary>
+    /// The rank &gt; 1 refusal reaches module level too. This is a NEW site for it — the check now
+    /// runs from the module class's own emission, not just from a method prologue or a constructor
+    /// — and it has to refuse there for the same reason: a rank-2 declaration collapses to a
+    /// rank-1 IL type, so allocating one would turn a NullReferenceException into a silent wrong
+    /// answer at the first <c>grid(i, j)</c>.
+    /// </summary>
+    [Test]
+    public void AMultiDimensionalModuleLevelArray_IsRefusedNotAllocated()
+    {
+        var run = Run("""
+            Module M
+             Dim grid(2, 2) As Integer
+             Sub Main()
+              PrintLine("X")
+             End Sub
+            End Module
+            """);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(run.Outcome, Is.EqualTo(MsilOutcome.GenerateFailed),
+                "refusal must come BEFORE any IL exists: " + run.Report);
+            Assert.That(run.Detail, Does.Contain("2-dimensional").And.Contain("wrong answer"),
+                "and it must say what allocating it would cost: " + run.Detail);
+        });
+    }
+
+    /// <summary>The <c>.class</c> line of the module class, whose flags several tests read.</summary>
+    private static string ModuleClassLine(string il) =>
+        il.Split('\n').First(line => line.StartsWith(".class") && line.Contains("MsilProbe"));
 }

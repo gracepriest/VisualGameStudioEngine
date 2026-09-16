@@ -278,6 +278,35 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   exception left underneath. It only becomes an invalid program when a branch join inside the
   handler has to carry the leftover — which is the shape
   `ACatchWithNoVariable_PopsTheException` pins.
+  ⚠ **Module-level variables exist as of 2026-09-16.** Before this, `MSILBackend.cs` never read
+  `IRModule.GlobalVariables` — the identifier did not appear in the file — so a module-level
+  `Dim n As Integer = 7` had no storage anywhere: reads emitted `// WARNING: Unknown local 'n'`
+  and pushed NOTHING, writes emitted `// WARNING: Cannot store to 'n'` and abandoned the value.
+  ⛔ **The abandoned-value half printed right answers.** In `s = "SET" : PrintLine(s)` the dropped
+  `ldstr` was consumed by the `PrintLine` that followed, so the program printed `SET` — correct
+  output from a stack accident that the next statement destroys. Globals are now `assembly static`
+  fields on the module class (⛔ **not `private`** — IL's `private` is "declaring type only", so a
+  user-class method reading a module global would get FieldAccessException; `Public` widens to
+  `public`), with initializers and sized-array storage in a `.cctor`.
+  ⛔ **The initializer is nowhere in the function IR.** `Main`'s instruction list for that program
+  is just `t0 = call CStr(@n)`; nothing in any method body ever assigns the 7. Emitting the field
+  without a type initializer is not a build error, it is a program that prints 0.
+  ⛔ **`stsfld` does not coerce and nothing complains.** Measured: `Dim d As Double = 7` carries an
+  int32 constant, ilasm assembles `ldc.i4.7` / `stsfld float64` without a diagnostic and the JIT
+  runs it, copying the bit pattern into the low half of the slot — `d` becomes 3.5E-323 and
+  `d + 1.5` prints `1.5`. The widening is emitted from the field's declared type, not left to a
+  verifier that never objects.
+  ⛔ **The `.cctor` is emitted LAST, after every module procedure**, so it inherits their local and
+  temp tables unless they are cleared — and a global initializer CAN name another global
+  (`Dim b As Integer = K` emits `ldsfld`). Without the reset, a procedure with a local `K` makes
+  the type initializer resolve the global `K` to `ldloc.0`, a slot it does not declare, and the
+  program dies with TypeInitializationException. `beforefieldinit` is dropped from the module class
+  whenever a `.cctor` exists, as the C# compiler does; that property is invisible at run time and
+  is pinned in IL text.
+  ⚠ **A module-level initializer may only be a literal or another module-level `Const`.** Anything
+  else — `Dim b As Integer = a * 3` with `a` a `Dim`, `= 2 + 3 * 4`, `= SomeFunc()` — crashes the
+  FRONT END with a NullReferenceException before any backend runs, on C# as well as MSIL. That is
+  a pre-existing compiler gap, not an MSIL one; don't chase it in the backend.
   ⚠ **A `BlnetSlotDesc[]` kind that lies fails SILENTLY** (§8.4, 2026-09-15). The array is what
   `blnet_invoke_callback` reads to decide what to deep-copy when a callback is QUEUED rather than
   run inline: HANDLE addrefs at enqueue, STRING deep-copies, VALUE does neither. Label a handle
