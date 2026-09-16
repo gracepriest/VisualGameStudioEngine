@@ -918,16 +918,32 @@ public class MsilRoundTripTests
         });
     }
 
-    /// <summary>
-    /// ⛔ <c>Try</c>/<c>Catch</c> assembles but the CLR rejects the method. IL exception
-    /// handling is structural — <c>.try { … } catch … { … }</c> regions with <c>leave</c> out
-    /// of each, recorded in the method's EH table — and emitting the bodies as straight-line
-    /// code with ordinary branches produces a method the verifier will not accept.
-    /// </summary>
+    // ---- Try/Catch, fixed 2026-09-16 ---------------------------------------------------
+    //
+    // Five separate defects, of which only the first was known:
+    //
+    //  1. Visit(IRTryCatch) inlined the try block's non-branch instructions into `.try { }` and
+    //     hard-coded `leave EndTry`. A Try body is a GRAPH of blocks, so only the entry block's
+    //     straight-line instructions landed in the region — and GenerateBasicBlock then emitted
+    //     those same blocks AGAIN as ordinary labelled blocks, because nothing marked them
+    //     handled. The real work ran OUTSIDE the protected region. A Try around an If printed
+    //     the right answer while protecting nothing.
+    //  2. The catch variable was allocated during emission with a counter unrelated to
+    //     _localIndices, after `.locals init` had already been written — producing `stloc 0` in
+    //     a method with no locals at all, or a store onto an unrelated variable of an unrelated
+    //     type where a slot happened to exist.
+    //  3. FinallyBlock was ignored entirely, leaving `.try { }` with NO handler, which ilasm
+    //     rejects outright.
+    //  4. A catch type was spelled "[mscorlib]System." + the clause's name, so a user-defined
+    //     exception became a reference to a BCL type that does not exist.
+    //  5. Throw emitted NOTHING. ICodeGenerator declares Visit(IRThrow) as an empty virtual and
+    //     MSIL never overrode it, so execution continued straight past every Throw — which is
+    //     why nothing could reach a handler to expose 1–4 in the first place.
+
     [Test]
-    public void TryCatch_ProducesAnInvalidProgram_PinnedDivergence()
+    public void TryCatch_RunsTheTryBlock_WhenNothingThrows()
     {
-        var run = Run("""
+        Assert.That(RunExpectingSuccess("""
             Module M
              Sub Main()
               Try
@@ -935,15 +951,420 @@ public class MsilRoundTripTests
               Catch ex As Exception
                PrintLine("CATCH")
               End Try
+              PrintLine("AFTER")
+             End Sub
+            End Module
+            """), Is.EqualTo("TRY\nAFTER\n"),
+            "the happy path must run the try body once and skip the handler. CATCH here, or a "
+            + "doubled TRY, means the body is being emitted outside its own region.");
+    }
+
+    /// <summary>
+    /// The first test that can fail for the RIGHT reason: it needs <c>Throw</c> to actually
+    /// throw. While <c>Visit(IRThrow)</c> was an inherited no-op, every Try/Catch test was
+    /// vacuous — no input could reach a handler.
+    /// </summary>
+    [Test]
+    public void Throw_ReachesTheCatchBlock()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              Try
+               PrintLine("TRY")
+               Throw New Exception("boom")
+               PrintLine("UNREACHED")
+              Catch ex As Exception
+               PrintLine("CAUGHT")
+              End Try
+              PrintLine("AFTER")
+             End Sub
+            End Module
+            """), Is.EqualTo("TRY\nCAUGHT\nAFTER\n"),
+            "UNREACHED in the output means Throw emitted nothing and execution walked straight "
+            + "past it — the defect that made every other Try/Catch assertion vacuous.");
+    }
+
+    [Test]
+    public void CatchVariable_ReadsTheExceptionMessage()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              Try
+               Throw New InvalidOperationException("kaboom")
+              Catch ex As InvalidOperationException
+               PrintLine(ex.Message)
+              End Try
+             End Sub
+            End Module
+            """), Is.EqualTo("kaboom\n"),
+            "an exception's members arrive as FIELD accesses and none of them are fields; "
+            + "`ldfld ...::Message` assembles and then dies with MissingFieldException.");
+    }
+
+    /// <summary>
+    /// Ordering matters and is observable: the handler runs first, the finally second, and both
+    /// before the statement after End Try.
+    /// </summary>
+    [Test]
+    public void TryCatchFinally_RunsTheHandlerThenTheFinally()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              Try
+               PrintLine("TRY")
+               Throw New Exception("boom")
+              Catch ex As Exception
+               PrintLine("CATCH")
+              Finally
+               PrintLine("FIN")
+              End Try
+              PrintLine("AFTER")
+             End Sub
+            End Module
+            """), Is.EqualTo("TRY\nCATCH\nFIN\nAFTER\n"),
+            "IL forbids catch and finally on ONE region, so this shape must nest — the inner "
+            + "region carries the catches, the outer the finally. A missing FIN means the "
+            + "finally was dropped; FIN before CATCH means the nesting is inverted.");
+    }
+
+    [Test]
+    public void TryFinally_WithNoCatch_RunsTheFinally()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              Try
+               PrintLine("TRY")
+              Finally
+               PrintLine("FIN")
+              End Try
+              PrintLine("AFTER")
+             End Sub
+            End Module
+            """), Is.EqualTo("TRY\nFIN\nAFTER\n"),
+            "a Try with only a Finally used to emit `.try { }` with no handler at all, which "
+            + "ilasm refuses to assemble.");
+    }
+
+    [Test]
+    public void MultipleCatchClauses_SelectTheMatchingType()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              Try
+               Throw New InvalidOperationException("bad")
+              Catch ex As FormatException
+               PrintLine("FORMAT")
+              Catch ex As InvalidOperationException
+               PrintLine("INVALIDOP")
+              Catch ex As Exception
+               PrintLine("GENERAL")
+              End Try
+              PrintLine("AFTER")
+             End Sub
+            End Module
+            """), Is.EqualTo("INVALIDOP\nAFTER\n"),
+            "the clause order is preserved and the type actually discriminates: FORMAT means "
+            + "the first handler ran regardless of type, GENERAL means the specific clause was "
+            + "skipped.");
+    }
+
+    /// <summary>
+    /// A clause whose type cannot match must NOT swallow the exception. The C++ backend shipped
+    /// exactly this bug — every typed Catch emitted a byte-identical handler, so the first one
+    /// stole exceptions from the correct outer handler.
+    /// </summary>
+    [Test]
+    public void ANonMatchingCatch_DoesNotSwallowTheException()
+    {
+        var run = Run("""
+            Module M
+             Sub Main()
+              Try
+               Throw New FormatException("fmt")
+              Catch ex As InvalidOperationException
+               PrintLine("WRONG")
+              End Try
+              PrintLine("AFTER")
              End Sub
             End Module
             """);
 
         Assert.Multiple(() =>
         {
-            Assert.That(run.Outcome, Is.EqualTo(MsilOutcome.RunFailed), run.Report);
-            Assert.That(run.Output, Does.Contain("InvalidProgramException"),
-                "the CLR must still be rejecting the method: " + run.Detail);
+            Assert.That(run.Output, Does.Not.Contain("WRONG"),
+                "a FormatException must not enter an InvalidOperationException handler.");
+            Assert.That(run.Output, Does.Not.Contain("AFTER"),
+                "and it must not be silently swallowed either — nothing after End Try runs.");
+            Assert.That(run.Output, Does.Contain("System.FormatException"),
+                "it propagates out of Main as itself: " + run.Report);
+        });
+    }
+
+    [Test]
+    public void ACatchWithNoVariable_StillRuns()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              Try
+               Throw New Exception("x")
+              Catch
+               PrintLine("CAUGHT-NOVAR")
+              End Try
+              PrintLine("AFTER")
+             End Sub
+            End Module
+            """), Is.EqualTo("CAUGHT-NOVAR\nAFTER\n"));
+    }
+
+    /// <summary>
+    /// The variable-less handler's <c>pop</c>, pinned on a shape that can actually see it.
+    ///
+    /// <para>⚠ <b>The straight-line case above cannot.</b> A handler is entered with the exception
+    /// on the stack, and <c>leave</c> empties the evaluation stack on its way out — so a handler
+    /// that never pops, and whose only exit is a <c>leave</c>, runs correctly with the exception
+    /// sitting underneath everything. Deleting the <c>pop</c> passes it. This shape branches
+    /// inside the handler and nests a Try in it, so the leftover operand has to survive a
+    /// join point, and the CLR rejects the method instead. Measured both ways, not assumed.</para>
+    /// </summary>
+    [Test]
+    public void ACatchWithNoVariable_PopsTheException()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              Dim n As Integer = 5
+              Try
+               Throw New Exception("x")
+              Catch
+               If n > 3 Then
+                PrintLine("BIG")
+               Else
+                PrintLine("SMALL")
+               End If
+               Try
+                Throw New Exception("y")
+               Catch
+                PrintLine("INNER")
+               End Try
+               PrintLine("DONE" & CStr(n + 1))
+              End Try
+              PrintLine("AFTER")
+             End Sub
+            End Module
+            """), Is.EqualTo("BIG\nINNER\nDONE6\nAFTER\n"),
+            "an unpopped exception left under a branch join makes the whole method unverifiable.");
+    }
+
+    /// <summary>
+    /// <c>ret</c> is illegal inside a protected region, so a Return in a Try is lowered to a
+    /// store plus a <c>leave</c> to one exit that owns the real <c>ret</c>. Going out through
+    /// <c>leave</c> is also what runs the finally — which is why FIN must appear before the
+    /// returned value is printed.
+    /// </summary>
+    [Test]
+    public void ReturnInsideATry_ReturnsTheValue_AndStillRunsTheFinally()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Function F() As Integer
+              Try
+               PrintLine("TRY")
+               Return 7
+              Finally
+               PrintLine("FIN")
+              End Try
+             End Function
+             Sub Main()
+              PrintLine(CStr(F()))
+             End Sub
+            End Module
+            """), Is.EqualTo("TRY\nFIN\n7\n"),
+            "FIN missing means the finally was bypassed by the return; a wrong number means the "
+            + "result never reached the exit block.");
+    }
+
+    [Test]
+    public void ReturnFromBothArms_PicksTheArmThatRan()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Function F() As Integer
+              Try
+               Throw New Exception("x")
+              Catch ex As Exception
+               Return 2
+              End Try
+              Return 3
+             End Function
+             Sub Main()
+              PrintLine(CStr(F()))
+             End Sub
+            End Module
+            """), Is.EqualTo("2\n"),
+            "3 means the catch's Return fell through instead of leaving to the exit.");
+    }
+
+    [Test]
+    public void ANestedTry_HandlesItsOwnExceptionWithoutDisturbingTheOuterOne()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              Try
+               PrintLine("OUTER-TRY")
+               Try
+                Throw New Exception("inner")
+               Catch ex As Exception
+                PrintLine("INNER-CATCH")
+               End Try
+               PrintLine("OUTER-CONT")
+              Catch ex As Exception
+               PrintLine("OUTER-CATCH")
+              End Try
+              PrintLine("AFTER")
+             End Sub
+            End Module
+            """), Is.EqualTo("OUTER-TRY\nINNER-CATCH\nOUTER-CONT\nAFTER\n"),
+            "the inner Try owns its arms; collecting them into the enclosing region too emits "
+            + "them twice and ilasm rejects the file with 'Duplicate label'. OUTER-CATCH means "
+            + "the inner handler did not contain the exception.");
+    }
+
+    [Test]
+    public void TwoTryStatementsInOneMethod_DoNotCollide()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              Try
+               Throw New Exception("a")
+              Catch ex As Exception
+               PrintLine("C1")
+              End Try
+              Try
+               Throw New Exception("b")
+              Catch ex As Exception
+               PrintLine("C2")
+              End Try
+              PrintLine("AFTER")
+             End Sub
+            End Module
+            """), Is.EqualTo("C1\nC2\nAFTER\n"),
+            "the region's exit label used to be the fixed string 'EndTry', emitted once per "
+            + "Try — two in a method produced a duplicate label.");
+    }
+
+    [Test]
+    public void ATryInsideALoop_CatchesOncePerIteration()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              Dim i As Integer
+              For i = 1 To 3
+               Try
+                If i = 2 Then
+                 Throw New Exception("two")
+                End If
+                PrintLine("OK" & CStr(i))
+               Catch ex As Exception
+                PrintLine("ERR" & CStr(i))
+               End Try
+              Next
+              PrintLine("AFTER")
+             End Sub
+            End Module
+            """), Is.EqualTo("OK1\nERR2\nOK3\nAFTER\n"),
+            "a multi-block try body inside a loop: the If's blocks must be emitted INSIDE the "
+            + "protected region, and the loop must resume normally after each handler.");
+    }
+
+    [Test]
+    public void ABareThrow_RethrowsToTheCaller()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Inner()
+              Try
+               Throw New Exception("deep")
+              Catch ex As Exception
+               PrintLine("INNER-SAW")
+               Throw
+              End Try
+             End Sub
+             Sub Main()
+              Try
+               Inner()
+              Catch ex As Exception
+               PrintLine("OUTER-CAUGHT")
+              End Try
+              PrintLine("AFTER")
+             End Sub
+            End Module
+            """), Is.EqualTo("INNER-SAW\nOUTER-CAUGHT\nAFTER\n"),
+            "a bare Throw is `rethrow`, valid only inside a catch handler. A missing "
+            + "OUTER-CAUGHT means the rethrow was dropped and the exception died in Inner.");
+    }
+
+    [Test]
+    public void AUserDefinedExceptionType_IsCaughtByItsOwnClause()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Class MyError
+             Inherits Exception
+            End Class
+
+            Module M
+             Sub Main()
+              Try
+               Throw New MyError()
+              Catch ex As MyError
+               PrintLine("MYERR")
+              Catch ex As Exception
+               PrintLine("GENERAL")
+              End Try
+              PrintLine("AFTER")
+             End Sub
+            End Module
+            """), Is.EqualTo("MYERR\nAFTER\n"),
+            "the clause type, the class's `extends`, and its base-constructor call must all name "
+            + "the type the same way. Spelling a user type as '[mscorlib]System.MyError' — or "
+            + "leaving `extends Exception` unqualified — fails to assemble.");
+    }
+
+    /// <summary>
+    /// The exception surface is a narrow recorded table, on the same principle as
+    /// <see cref="ACollectionMemberOutsideTheTable_IsRefusedNotGuessed"/>: a guessed member
+    /// reference assembles cleanly and fails at run time, so it is refused at generation time.
+    /// </summary>
+    [Test]
+    public void AnExceptionMemberOutsideTheTable_IsRefusedNotGuessed()
+    {
+        var run = Run("""
+            Module M
+             Sub Main()
+              Try
+               Throw New Exception("x")
+              Catch ex As Exception
+               PrintLine(ex.HelpLink)
+              End Try
+             End Sub
+            End Module
+            """);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(run.Outcome, Is.EqualTo(MsilOutcome.GenerateFailed),
+                "refusal must come BEFORE any IL exists: " + run.Report);
+            Assert.That(run.Detail,
+                Does.Contain("HelpLink").And.Contain("supported exception surface"),
+                "and it must name the member and say how to widen the set: " + run.Detail);
         });
     }
 }
