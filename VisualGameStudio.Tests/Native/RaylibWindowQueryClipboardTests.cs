@@ -58,7 +58,7 @@ public class RaylibWindowQueryClipboardTests
     public void Raw_window_query_and_clipboard_roundtrip()
     {
         try { Framework_InitWindow(320, 240, "vgs_c2_query_test"); }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return; }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return; }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates rcore Batch core-C2 exports; refresh IDE\\ first."); return; }
 
         if (!Framework_IsWindowReady())

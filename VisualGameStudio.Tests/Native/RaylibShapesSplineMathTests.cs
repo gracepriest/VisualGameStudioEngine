@@ -32,7 +32,7 @@ public class RaylibShapesSplineMathTests
     private static V2 Call(Func<V2> f)
     {
         try { return f(); }
-        catch (DllNotFoundException) { Assert.Ignore("VisualGameStudioEngine.dll not staged; rebuild engine + refresh IDE\\ first."); throw; }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound("VisualGameStudioEngine.dll")); throw; }
         catch (EntryPointNotFoundException) { Assert.Ignore("engine DLL predates Batch 1 exports; refresh IDE\\ first."); throw; }
     }
 

@@ -82,7 +82,7 @@ public class RaylibModelsMeshTests
 
             BoundingBox box;
             try { box = Framework_GetMeshBoundingBox(mesh); }
-            catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return; }
+            catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return; }
             catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates the mesh exports; refresh IDE\\ first."); return; }
 
             Assert.Multiple(() =>
@@ -110,7 +110,7 @@ public class RaylibModelsMeshTests
 
             RayCollision idHit;
             try { idHit = Framework_GetRayCollisionMesh(ray, mesh, Matrix.Identity()); }
-            catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return; }
+            catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return; }
             catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates the mesh exports; refresh IDE\\ first."); return; }
 
             // Identity transform: hit the triangle at z=0, distance 5, at the origin.

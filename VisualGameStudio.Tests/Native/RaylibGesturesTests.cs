@@ -41,7 +41,7 @@ public class RaylibGesturesTests
     public void Gesture_getters_return_well_formed_defaults_headless()
     {
         try { Framework_SetGesturesEnabled(GESTURE_ALL); }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return; }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return; }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates the rgestures exports; refresh IDE\\ first."); return; }
 
         Vector2 drag = Framework_GetGestureDragVector();

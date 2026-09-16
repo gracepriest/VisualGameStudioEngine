@@ -165,7 +165,7 @@ public class RaylibCoreFileCallbacksTests
     private static bool TrySet(Action set)
     {
         try { set(); return true; }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return false; }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return false; }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates the deferred-callback exports; refresh IDE\\ first."); return false; }
     }
 }

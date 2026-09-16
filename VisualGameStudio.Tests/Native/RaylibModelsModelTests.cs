@@ -70,7 +70,7 @@ public class RaylibModelsModelTests
         // (true) path needs a real GPU-loaded model and is covered in RaylibModelsModelGpuTests.
         bool valid;
         try { valid = Framework_IsModelValid(new Model()); }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return; }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return; }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates the model exports; refresh IDE\\ first."); return; }
         Assert.That(valid, Is.False, "a zeroed Model (meshCount 0) is invalid");
     }
@@ -90,7 +90,7 @@ public class RaylibModelsModelTests
 
             BoundingBox box;
             try { box = Framework_GetModelBoundingBox(model); }
-            catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return; }
+            catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return; }
             catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates the model exports; refresh IDE\\ first."); return; }
 
             Assert.Multiple(() =>

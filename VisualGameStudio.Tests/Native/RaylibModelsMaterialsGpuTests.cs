@@ -102,7 +102,7 @@ public class RaylibModelsMaterialsGpuTests
     public void Material_load_set_and_draw_execute_under_a_window()
     {
         try { Framework_InitWindow(320, 240, "vgs_models_materials_test"); }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return; }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return; }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates the material exports; refresh IDE\\ first."); return; }
 
         if (!Framework_IsWindowReady())
