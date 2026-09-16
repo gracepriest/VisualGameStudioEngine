@@ -375,10 +375,49 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   changing every `IRCast` rendering on four backends; it is a decision about the whole narrowing
   surface and was deliberately NOT taken here. `ReturnCoercionTests` pins the current answer so the
   day someone takes it, the test goes red instead of the behaviour drifting.
-  ⚠ **The same gap still exists on ASSIGNMENT**, and was left alone: `Dim b As Integer = 7 / 2`
-  prints **3.5 on JS**, does not compile on C#, and on MSIL prints raw float64 bit patterns and
-  then **segfaults**. Same root (no implicit narrowing where the IR types disagree), different
-  site, and a much wider blast radius than the return case.
+  ⚠ **Assignment coercion landed too, as of 2026-09-16** — the same
+  `CoerceToDeclaredType`, now applied at the declaration site and once in
+  `Visit(AssignmentStatementNode)` ahead of all four target arms (identifier, field, array element,
+  indexer). ⛔ **It was characterized separately rather than assumed to mirror the return case, and
+  it did not mirror it.** Measured for `Dim d As Integer = 7/2`, `e = 7/2`, `a(0) = 7/2` and a
+  module-level `G = 7/2`: C# gave FIVE CS0266s, MSIL gave `dim=1074528256 asn=0 arr=0 glob=0` and
+  then **SEGFAULTED**, JS gave `3.5` at all four sites, and C++ was right at all four.
+  ⛔ **The declared type must come from the TARGET NODE**, not the target variable:
+  `GetOrCreateVariable` is handed `value.Type`, and `TryRenameToVariable` then renames the Double
+  temp to the target outright, so the local's declared Integer never enters the picture.
+  `_semanticAnalyzer.GetNodeType(node.Target)` answers for all four target kinds at once.
+  ⛔ **`n /= 4` needed a SECOND fix and the coercion alone did nothing for it.** The compound path
+  typed its `IRBinaryOp` from the TARGET, so the result claimed Integer, the coercion saw no
+  mismatch — and the optimizer then folded Integer 10 ÷ 4 to the **Double** 2.5. VB's `/=` is
+  floating division exactly as `/` is, so its operands are widened the same way
+  `WidenDivisionOperand` does for the binary form. **`/=` ONLY**: measured with the widening
+  applied to every compound operator, `a = 14;` becomes `a = (int)((double)(a) * (double)(2));` —
+  constant folding lost and an exact integer multiply turned into a run-time Double round trip.
+  ⚠ **`\=` cannot be tested**: `n \= 2` does not PARSE ("Unexpected token in expression: '\'")
+  even though `IRBuilder`'s compound switch has a `\=` → `IntDiv` case. That case is dead until the
+  parser learns the operator.
+  ⛔ **A numeric LITERAL is re-typed in place, not wrapped in a cast.** Wrapping regressed
+  `PropertySet_LowersToTheSynthesizedSetterSlot` (`st.Position = 5` into an Int64 property turned
+  the pinned proxy call `…(st, 5)` into a call on a cast temp; it is now `…(st, 5LL)`, which is the
+  more faithful emission for an int64 slot). Re-typing is also load-bearing: measured on the
+  previous commit, `Dim w As Double = 7` on MSIL stored the int32 bit pattern and printed
+  **3.5E-323**. Constant narrowing TRUNCATES, to match the run-time cast — rounding would make
+  `Dim a As Integer = 7.9` answer 8 while the same value through a variable answered 7.
+  ⛔ **The coercion is restricted to Integer/Long/Single/Double, and that restriction is
+  load-bearing.** `IROptimizer`'s constant folders are written against those four CLR types and
+  nothing else — its own comment says `CompareLt`/`CompareGt` "blindly report false for type pairs
+  outside int/long/float/double". Handing them an `sbyte` is not a missing optimization, it is a
+  MISCOMPILE: measured, re-typing `Dim lo As SByte = -3` folded `lo < hi` to `if (false)` and
+  silently dropped the branch body, breaking
+  `BytePrinting_IsNumeric_NotCharacter_OnEveryPrintSurface`. So a Byte/SByte/Short/unsigned target
+  keeps exactly what it did before the coercion existed — nothing. That leaves
+  `Dim b As Byte = 7.9` unnarrowed, which is a real gap; closing it means teaching the optimizer's
+  folders every numeric CLR type.
+  ⚠ **ARGUMENT passing is still not coerced**, and is a different mechanism: `Take(7 / 2)` where
+  the parameter is Integer is **CS1503** on C# and `MissingMethodException: Take(Double)` on MSIL —
+  the call site spells its signature from the ARGUMENT's type, not the parameter's. Fixing it needs
+  the resolved callee's parameter list (overload resolution), not a store conversion. Don't assume
+  the assignment fix covers it.
   ⚠ **A `BlnetSlotDesc[]` kind that lies fails SILENTLY** (§8.4, 2026-09-15). The array is what
   `blnet_invoke_callback` reads to decide what to deep-copy when a callback is QUEUED rather than
   run inline: HANDLE addrefs at enqueue, STRING deep-copies, VALUE does neither. Label a handle
