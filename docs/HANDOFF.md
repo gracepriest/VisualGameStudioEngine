@@ -156,7 +156,7 @@ four items cannot be done off Windows.
 |---|---|
 | Full suite, both entry points | ✅ Run every commit; see the table above |
 | Update `docs/HANDOFF.md` and `CLAUDE.md` | ✅ This file, plus a durable *Form designer* section in `CLAUDE.md` |
-| File the follow-up chips | ⚠ **Written up, not filed** — `docs/form-designer-followups.md` has all **fifteen**, filable verbatim. Opening issues is outward-facing and nobody asked. |
+| File the follow-up chips | ⚠ **Written up, not filed** — `docs/form-designer-followups.md` has all **seventeen**, filable verbatim. Opening issues is outward-facing and nobody asked. |
 | Refresh the `IDE/` drop | ✅ **Done on Windows** — landed with `claude/jolly-pasteur-l4mpzs`, in master at `77e415b`. It must never be refreshed from a Linux build: `IDE/BasicLang.exe` is a **PE32+ Windows binary** and a Linux refresh swaps the Windows executables for ELF apphosts. `robocopy` on Windows — never `/MIR`. |
 
 ⛔ `docs/MULTI_FILE_SYSTEM_PLAN.md:21` is **untouched**, per owner decision 2 — `.frm` stays reserved
@@ -289,7 +289,7 @@ Not this writer's call, so it refuses and says why.
 > production caller passes, public methods whose only callers are tests, wiring that exists but is
 > never invoked from a shipping path.
 
-**Four pieces of this feature were complete, unit-tested and unreachable. The suite was green
+**FIVE pieces of this feature were complete, unit-tested and unreachable. The suite was green
 through every one.**
 
 | Dead thing | What the user actually got |
@@ -298,6 +298,7 @@ through every one.**
 | `RegionWriter.Write` — **no production caller at all** | scaffold a form, drop a button, save, build → **the build fails on the `InitializeComponent` the scaffold itself calls**. Canvas drew, grid edited, document round-tripped byte for byte, program missing a member |
 | `FormAssetEmitter.DispatchSource` — no production caller | every page carried `<body data-form="…">` and **nothing read it** |
 | The **default project shape** (no explicit `<Compile>` items) | emitted no pages at all — the source glob cannot yield a `.blwebform` by design |
+| `SolutionExplorerViewModel.AddNewFormAsync` — **no `[RelayCommand]`, no menu item, no caller** | **the entry point to the whole designer.** There was no way to create a form in the IDE at all: no Add ▸ New Form, nothing. Found by the owner opening the IDE and asking where the designer was |
 
 ⚠ **`FormClipboard` is the one still standing** — complete, tested, and the canvas has no
 Copy/Cut/Paste to reach it. Follow-up 11.
@@ -321,7 +322,7 @@ stub `document`. That gate is what catches this class. Keep it green.
 ⛔⛔ **And that bug was already in our own notes** — `docs/form-designer-followups.md` entry 3,
 third bullet, measured three days earlier: *"a qualified module call emits a reference to a
 container JS does not have → ReferenceError"*. Nobody reread it, including the person who wrote it.
-**The lesson is not "read more carefully": a bullet in a fifteen-entry list is not a safeguard.**
+**The lesson is not "read more carefully": a bullet in a seventeen-entry list is not a safeguard.**
 What caught this was running the output and comparing failure sets — mechanisms, not memory. A
 finding that matters needs a gate or a filed issue.
 
@@ -362,7 +363,7 @@ finding that matters needs a gate or a filed issue.
 4. **Decide follow-up 13**: nothing makes `Main()` call the dispatch. BL8018 warns, which is the
    honest minimum, but a warning is not the feature working. Both ways to close it edit the user's
    code, which is why neither was done unilaterally.
-5. **File the fifteen chips** in `docs/form-designer-followups.md`. Several are runtime failures
+5. **File the seventeen chips** in `docs/form-designer-followups.md`. Several are runtime failures
    from clean builds, which is the highest-severity shape this repo tracks. Entries 3 and 14 are
    the SAME compiler bug — file them together. Entry 15's residue (Win32 `*.bas` matching `.basic`)
    is unverified on Linux; confirm it during the Windows run.
@@ -375,10 +376,13 @@ finding that matters needs a gate or a filed issue.
    unqualified `Go()` with CS0103. Matrix and per-backend fix shapes in
    `docs/form-designer-followups.md` 14.
 
-⛔ **Do not take a green suite as evidence the feature works.** Three separate pieces of this
-branch were complete, unit-tested and unreachable, and the suite was green through every one. When
-you add a generator here, the question that matters is *who calls it in a shipping build* — and the
-answer has to be a test that drives the real entry point, not one that constructs the generator.
+⛔ **Do not take a green suite as evidence the feature works.** FIVE separate pieces of this
+branch were complete, unit-tested and unreachable, and the suite was green through every one — the
+last of them the Add ▸ New Form command, the only way into the designer at all. When you add
+anything here, the question that matters is *who calls it in a shipping build* — and the answer has
+to be a test that drives the real entry point, not one that constructs the thing. For UI, that
+means a test that reads the AXAML for the binding: a `[RelayCommand]` no menu binds is exactly as
+unreachable as the un-attributed method was.
 
 ---
 

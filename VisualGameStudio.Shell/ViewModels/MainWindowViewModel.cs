@@ -2492,6 +2492,11 @@ public partial class MainWindowViewModel : ViewModelBase
             };
             document.SetContent(content);
 
+            // A .blform/.blwebform opens in its designer rather than in its XML. Here rather than
+            // in the view model's own constructor because this is the file-open route: a later
+            // reload must not throw a user who switched to Code view back into the canvas.
+            document.EnterDesignModeForFormDocument();
+
             // Update status bar for the new document
             StatusBar.UpdateForFile(filePath);
             StatusBar.DetectLineEnding(content);

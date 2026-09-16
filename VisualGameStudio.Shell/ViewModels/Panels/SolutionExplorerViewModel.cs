@@ -1260,19 +1260,25 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Creates a form: the document (<c>.blform</c> or <c>.blwebform</c>, chosen from the project)
-    /// AND the <c>.bas</c> code-behind, as a pair.
+    /// "Add ▸ New Form" — the IDE's only entry point to the form designer.
     ///
-    /// <para>⛔ Modelled on <see cref="ConfirmNewItemAsync"/>, which adds the item <b>and</b> calls
+    /// <para>⛔⛔ The <c>[RelayCommand]</c> and the menu item that binds it are load-bearing, not
+    /// decoration: this method shipped complete, careful and completely unreachable, the fifth
+    /// piece of this feature to do so with a green suite throughout. <c>SolutionExplorerNewFormTests</c>
+    /// drives the generated command and reads the AXAML for the binding for exactly that reason.</para>
+    ///
+    /// <para>⛔ HOW it was unreachable, recorded so it is not repeated: the attribute sat above
+    /// <c>SaveProjectOrReportAsync</c>, which had been inserted between it and the method it was
+    /// written for. Attributes bind to the next DECLARATION and a doc comment in between is trivia,
+    /// so the toolkit generated a <c>SaveProjectOrReportCommand</c> nothing binds and no
+    /// <c>AddNewFormCommand</c> at all — and it compiles either way, the only symptom being a menu
+    /// item that cannot exist. <b>Keep the attribute adjacent to this method.</b></para>
+    ///
+    /// <para>Modelled on <see cref="ConfirmNewItemAsync"/>, which adds the item <b>and</b> calls
     /// <c>SaveProjectAsync</c> — deliberately NOT on <c>ProjectService.AddFileToProjectAsync</c>,
     /// which mutates the model and never writes, so the new files would vanish from the project on
     /// the next load.</para>
     /// </summary>
-    // ⛔ This attribute sat above SaveProjectOrReportAsync, which was inserted between it and the
-    // method it was written for. The toolkit generated SaveProjectOrReportCommand and no
-    // AddNewFormCommand, so the menu item below had nothing to bind to and form creation — fully
-    // implemented, right here — was unreachable. It compiles either way: attributes bind to the
-    // next DECLARATION and a doc comment in between is trivia. Keep it adjacent.
     [RelayCommand]
     private async Task AddNewFormAsync()
     {
@@ -1352,8 +1358,15 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         await SaveProjectOrReportAsync();
         RefreshTree(project);
 
-        // The code-behind is what the user edits; the document is the designer's.
-        FileOpenRequested?.Invoke(this, codePath);
+        // ⛔⛔ The DOCUMENT, not the code-behind. The design view is a mode on the form document's
+        // own editor, so opening the .bas leaves a brand-new form showing Basic source with no
+        // designer anywhere — which is exactly how "I can't see the form designer" happened. The
+        // code-behind sits beside it in the tree, one double-click away.
+        //
+        // ⚠ ONE file. The open handler is `async void`, so two raises race and whichever read
+        // finishes last takes the active tab — "open both, designer last" is not something this
+        // seam can promise.
+        FileOpenRequested?.Invoke(this, documentPath);
     }
 
     [RelayCommand]
