@@ -68,7 +68,7 @@ public class RaylibModelsMeshGpuTests
     public void Mesh_generators_and_management_execute_under_a_window()
     {
         try { Framework_InitWindow(320, 240, "vgs_models_mesh_test"); }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return; }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return; }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates the mesh exports; refresh IDE\\ first."); return; }
 
         if (!Framework_IsWindowReady())

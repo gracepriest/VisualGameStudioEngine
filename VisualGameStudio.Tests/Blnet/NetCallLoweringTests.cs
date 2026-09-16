@@ -385,14 +385,24 @@ public class NetCallLoweringTests
     }
 
     /// <summary>
-    /// A ByRef parameter whose type has no single by-value wire slot must refuse, and §8.3 is
-    /// why rather than a limitation to be lifted casually: a ByRef HANDLE leaves ownership
-    /// undefined — writing a new handle over the caller's releases one the callee may have
-    /// returned unchanged, a double release in generated C++. <c>NetProxyEmitter.PlanMember</c>
-    /// draws the same line; reporting it HERE is what gives it a source position.
+    /// A ByRef handle at a BasicLang CALL SITE still refuses — but as a <b>not-yet</b>, and the
+    /// message has to say which.
+    ///
+    /// <para><c>Version.TryParse</c> is the shape users actually hit. It used to be refused on
+    /// the grounds that a ByRef handle "would leave handle ownership undefined (a double
+    /// release)". §8.3's <i>ByRef handle ownership</i> resolution (2026-09-15) disproved that —
+    /// <c>HandleTable.Create</c> has no identity map — and <c>NetProxyEmitter</c> now emits the
+    /// shape for <c>&lt;NetProxy&gt;</c> declared surfaces. What still blocks a call site is
+    /// this LOWERING: <c>IRCall.ByRefArguments</c> is populated for resolved user functions
+    /// only, so there is no way to hand a <c>NetRef&amp;</c> to the slot.</para>
+    ///
+    /// <para><b>Why the message text is worth a test.</b> A refusal that teaches a false reason
+    /// is worse than one that teaches none: it tells the reader the feature is unsafe when it is
+    /// merely unbuilt, and that is exactly how a resolved question gets re-litigated years
+    /// later. So this asserts the true reason is present AND the disproven one is gone.</para>
     /// </summary>
     [Test]
-    public void ByRefHandleParameter_IsRefusedWithTheOwnershipReason()
+    public void ByRefHandleParameterAtACallSite_IsRefusedAsNotYetLowered_NotAsUnsafe()
     {
         var analyzer = AnalyzeForFindings("""
             Module M
@@ -407,12 +417,15 @@ public class NetCallLoweringTests
         Assert.Multiple(() =>
         {
             Assert.That(finding, Is.Not.Null,
-                "a ByRef .NET object parameter must refuse — its handle ownership is "
-                + "unspecified (§8.3). Findings: " + string.Join(" | ",
-                    analyzer.NetDiagnostics.Select(d => d.Code + ": " + d.Message)));
-            Assert.That(finding?.Message, Does.Contain("ownership"),
-                "the message must TEACH the reason (a double release), not merely say no: "
-                + finding?.Message);
+                "a ByRef .NET object parameter must still refuse at a call site — the lowering "
+                + "cannot carry a handle through a ByRef argument. Findings: " + string.Join(
+                    " | ", analyzer.NetDiagnostics.Select(d => d.Code + ": " + d.Message)));
+            Assert.That(finding?.Message, Does.Contain("cannot pass one yet"),
+                "the message must TEACH the real reason — the lowering is missing — not merely "
+                + "say no: " + finding?.Message);
+            Assert.That(finding?.Message, Does.Not.Contain("double release"),
+                "§8.3 disproved that premise on 2026-09-15; a refusal must not keep citing it. "
+                + "See NetByRefHandleTests, which pins why it is false: " + finding?.Message);
             Assert.That(finding?.IsWarning, Is.False,
                 "native path: a lowering-blocking shape is an ERROR since the flip.");
         });

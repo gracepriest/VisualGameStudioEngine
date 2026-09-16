@@ -671,7 +671,9 @@ up front (§6.1) is sufficient; no separate marshaling calculus is needed.
 | Delegate parameters | callback handle via P0's thunk | §8.4 |
 | Other **non-`ref`** value types | handle (boxed) | blittable-by-value is a later optimization |
 | `ref struct` — `Span<T>`, `ReadOnlySpan<T>`, `Regex.ValueMatchEnumerator`, … | **not marshalable — BL6019** | cannot be boxed; `GCHandle.Alloc(object)` (`HandleTable.cs:26`) cannot take one |
-| `ref` / `out` | pointer slot | `IRCall.ByRefArguments` today is populated only for resolved *user* functions; extending it is required work |
+| `ref` / `out` **of a by-value scalar** | pointer slot | `IRCall.ByRefArguments` today is populated only for resolved *user* functions; extending it is required work |
+| `ref` / `out` / `in` **of a handle row** | `uint64_t*` — **fresh-handle rule below** | resolved 2026-09-15; see *ByRef handle ownership* |
+| `ref` / `out` of a `String`, an enum, or a §6.4 by-value-pointer row | **not marshalable — BL6019** | each has its own unresolved question; see below |
 
 **When BL6019 fires.** A type outside this table is an error **only when it is actually used** —
 reached from a BasicLang call site, or required by a member the program calls. A `<NetProxy>`
@@ -688,6 +690,45 @@ type would fail on its inherited `Equals(Object)` since `Object` is permanently 
 **Returned reference types** are registered with `Table.Create(...)` at refcount 1, transferring
 ownership to the native `NetRef`. This rule is implied by P0's `blnet_test_create_list` but was
 never written down generally; it is normative here.
+
+#### ByRef handle ownership — *resolved 2026-09-15*
+
+Earlier revisions left this undefined and three gates refused `ref`/`out`/`in` of a handle row on
+that basis, each saying the same thing: writing back would "release a handle the callee may have
+returned unchanged — a double release". **That premise is false for shim-generated code, and the
+rule below is what makes it false.**
+
+> **NORMATIVE.** The managed side writes a **freshly created** handle into a ByRef slot —
+> `ToHandle(x)` → `Table.Create(x)`, refcount 1 — and **never writes back an incoming handle
+> value**. The native side unconditionally adopts whatever it finds in the slot into a new
+> `NetRef`; the assignment releases the handle the caller held.
+>
+> This applies to **all four** ref kinds. `NetShimGenerator` writes `*aN = ToHandle(local)` for
+> every ByRef slot, so `in` and `ref readonly` are not exceptions: the managed side cannot have
+> *changed* the object, but it still hands back a newly created handle **for that same object**,
+> and the caller ends up holding a different handle than it passed. That is the wasteful-looking
+> case, and it is also the one that proves the rule is doing the work — were `in` to write the
+> incoming value back instead, the adopting assignment would release the caller's only reference
+> and then hold a stale handle to a collected object.
+
+The safety argument is one sentence: `HandleTable.Create` allocates a **new slot with its own
+`GCHandle` and its own refcount** on every call and has no identity map, so two `Create` calls on
+one object yield two *independent* table references. Re-handling an unchanged object therefore
+produces two independent releases, **not** a double free — which is exactly what
+`NetProxyEmitter.FromWire`'s remarks already said about §8.6's array row. §8.6 was never a special
+case; it was this general rule, observed in the one place it had already been needed.
+
+The narrower justification §8.6 carried — "the caller MINTED the incoming handle itself" — is
+therefore **not** load-bearing and must not be cited as the reason. Minting matters for who
+releases what, not for whether the write-back is well-defined.
+
+⚠ What stays refused, and why each is a *different* question:
+
+| Shape | The unresolved part |
+|---|---|
+| ByRef `String` | ownership runs opposite ways per direction: in-params borrow, out-params transfer a `blnet_alloc` buffer. One `char**` slot cannot carry both |
+| ByRef enum | §8.3 crosses an enum as its underlying integral, a by-value row; writing back needs a widening contract |
+| ByRef §6.4 by-value-pointer | the managed side holds a marshalled copy, not a pointer into native memory, so "the callee writes through your pointer" is not what happens |
 
 ### 8.4 Delegate arguments
 
@@ -707,6 +748,60 @@ is never set by codegen.
 
 Everything else — the thunk, `BlnetSlotDesc` encoding, `BlnetCallScope`, inline vs queued
 dispatch, `blnet_pump()` — already exists and is tested.
+
+#### Slot marshaling contract — *resolved 2026-09-15*
+
+Earlier revisions never said which slot SHAPES a callback may carry. The restriction lived only
+in code comments — "v1 admits blittable scalars only" — and three gates refused handles and
+strings on the strength of it, while the native runtime had already implemented its half:
+`BLNET_SLOT_HANDLE` addrefs at enqueue and the pump releases, `BLNET_SLOT_STRING` deep-copies.
+The shapes were transportable; what was missing was the **ownership**, which is what this
+specifies.
+
+A callback slot is one 64-bit word. Three kinds are admitted, in both parameter and return
+position:
+
+| Kind | Word | Parameter (managed → native) | Return (native → managed) |
+|---|---|---|---|
+| `VALUE` | the scalar's bit pattern | `WirePack`/`wire_to` — a **bit** copy, never a value cast | `wire_from`/`WireUnpack` |
+| `HANDLE` | `blnet_handle` | managed mints a **fresh** handle (`ToHandle`), **keeps** it for the call, releases it in a `finally`; native takes its **own** reference (`NetRef::Share`) | native **addrefs** before packing; managed reads the object out and **releases** |
+| `STRING` | UTF-8 `char*` | managed allocates, native **copies** into a `std::string`, managed frees in the same `finally` | native allocates through `g_shim.alloc` — the managed allocator — and managed frees it |
+
+> **NORMATIVE — the handle rule.** A handle in a callback slot is **borrowed, never
+> transferred**, in the parameter direction: the side that minted it keeps it for the duration
+> of the call and releases it afterwards, and the receiving side takes an independent reference
+> if it needs one. Both alternatives are wrong in opposite directions — adopting the word
+> double-releases it, and treating it as non-owning dangles as soon as the callback stores it.
+> The return direction transfers exactly one reference, addref'd by the producer and released by
+> the consumer once it has the object.
+
+Two consequences worth stating, because neither is visible at the point it goes wrong:
+
+- **`BlnetSlotDesc[]` must carry the real kind per slot.** It is what `blnet_invoke_callback`
+  reads to decide what to deep-copy when an invocation is QUEUED rather than run inline. A
+  handle slot mislabelled `VALUE` compiles, links, and passes every inline test — and then skips
+  the enqueue addref, so the object can be collected before the pump runs. There is no compile
+  error anywhere on that path, which is why the classification is derived **once**
+  (`NetDelegateDispatch.TryClassifySlot`) and the managed dispatcher, the native adapter and the
+  descriptor array all project from it.
+- **The `finally` is load-bearing.** The thunk reports a native failure as a status, but a
+  managed exception thrown by the callback body unwinds straight through the dispatcher frame.
+  A release parked after the call leaks one table slot — or one buffer — per invocation, on
+  something that is typically invoked in a loop.
+
+⚠ What stays refused, and why each is a *different* question:
+
+| Shape | The unresolved part |
+|---|---|
+| `System.Object` | §8.3 rejects it **permanently**, in every position: `void*` erasure is unsound. It has no marshal row, and "no row" is the handle rule — so it needs its own arm ahead of that, or the handle rule admits the one type §8.3 never will |
+| `Boolean`, `Char` | their WIRE spelling (`int32_t`/`uint16_t`) differs from their C++ spelling, so the adapter's parameter and the slot are not the same type. Pre-existing, and unrelated to ownership |
+| §6.4 conversion and multi-slot rows | a slot is ONE word; these need a converted temporary or several |
+
+⚠ **Reach.** This unblocks the managed dispatcher, so a `<NetProxy>` declared surface containing
+`Regex.Replace(String, MatchEvaluator)`, `Action<Task>` or `Func<Task>` now generates. The native
+adapter's handle half is emitted but not yet reachable from BasicLang: `CppCapabilityChecker` has
+no mapping for a .NET reference type in a **lambda parameter**, so `Function(m As Match) …` is
+refused before §8.4 is consulted. That is a codegen gap, not a marshaling one.
 
 ### 8.5 Consuming handle-represented collections
 

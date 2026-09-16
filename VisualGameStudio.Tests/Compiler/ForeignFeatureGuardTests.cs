@@ -175,17 +175,46 @@ public class ForeignFeatureGuardTests
     // MSIL backend: rejects passthrough AND collections.
     // ------------------------------------------------------------------
 
+    /// <summary>
+    /// ⚠ <b>The honesty matrix changed for MSIL on 2026-09-15</b>: collections moved from
+    /// error to NATIVE. This test asserted the old row and is kept, inverted, because the row
+    /// moving is the thing worth pinning.
+    ///
+    /// <para>LLVM keeps the old behaviour and its tests are untouched — the grouping was right
+    /// for LLVM, which has no BCL to reach for, and wrong for MSIL, which runs on .NET and has
+    /// <c>List`1</c> in the runtime it targets.</para>
+    ///
+    /// <para>What is asserted here is only that the GATE lets it through. That the emitted IL
+    /// is correct is a different question, answered by running the program —
+    /// <c>MsilRoundTripTests.AList_ReadsIndexesCountsAndContains</c>.</para>
+    /// </summary>
     [Test]
-    public void MSIL_Collections_ThrowCleanError()
+    public void MSIL_Collections_AreNativeNotRefused()
     {
         var module = BuildModule(
             "Sub Main()\nDim l As New List(Of Integer)()\nEnd Sub",
             runPreprocessor: false);
 
+        Assert.DoesNotThrow(() => new MSILCodeGenerator().Generate(module));
+    }
+
+    /// <summary>
+    /// …and a collection member OUTSIDE the supported table is still refused. The gate opening
+    /// did not make MSIL guess: the supported surface is what
+    /// <c>MSILCodeGenerator.CollectionMembers</c> records, and everything else still fails
+    /// cleanly rather than emitting a call that dies at run time.
+    /// </summary>
+    [Test]
+    public void MSIL_UnsupportedCollectionMember_StillThrowsCleanError()
+    {
+        var module = BuildModule(
+            "Sub Main()\nDim l As New List(Of Integer)()\nl.RemoveAt(0)\nEnd Sub",
+            runPreprocessor: false);
+
         var ex = Assert.Throws<ForeignFeatureException>(
             () => new MSILCodeGenerator().Generate(module));
         Assert.That(ex!.Message, Does.Contain("MSIL"));
-        Assert.That(ex.Message, Does.Contain("List"));
+        Assert.That(ex.Message, Does.Contain("RemoveAt"));
     }
 
     [Test]
@@ -224,17 +253,15 @@ public class ForeignFeatureGuardTests
         Assert.That(ex.Message, Does.Contain("List"));
     }
 
+    /// <summary>A collection as a module-level global — see <see cref="MSIL_Collections_AreNativeNotRefused"/>.</summary>
     [Test]
-    public void MSIL_ModuleGlobalCollection_ThrowsCleanError()
+    public void MSIL_ModuleGlobalCollection_IsNativeNotRefused()
     {
         var module = BuildModule(
             "Dim g As List(Of Integer)\nSub Main()\nEnd Sub",
             runPreprocessor: false);
 
-        var ex = Assert.Throws<ForeignFeatureException>(
-            () => new MSILCodeGenerator().Generate(module));
-        Assert.That(ex!.Message, Does.Contain("MSIL"));
-        Assert.That(ex.Message, Does.Contain("List"));
+        Assert.DoesNotThrow(() => new MSILCodeGenerator().Generate(module));
     }
 
     [Test]
@@ -291,17 +318,20 @@ public class ForeignFeatureGuardTests
         Assert.That(ex.Message, Does.Contain("List"));
     }
 
+    /// <summary>
+    /// A collection in an interface member's SIGNATURE. This position is worth its own test:
+    /// signature sites read the parameter's type NAME, and a string cannot carry generic
+    /// arguments, so a <c>List(Of Integer)</c> parameter emitted a bare <c>List</c> and the
+    /// whole method failed to assemble. It reads the parameter's TypeInfo now.
+    /// </summary>
     [Test]
-    public void MSIL_InterfaceCollectionParam_ThrowsCleanError()
+    public void MSIL_InterfaceCollectionParam_IsNativeNotRefused()
     {
         var module = BuildModule(
             "Interface IStore\nSub AddItems(items As List(Of Integer))\nEnd Interface\nSub Main()\nEnd Sub",
             runPreprocessor: false);
 
-        var ex = Assert.Throws<ForeignFeatureException>(
-            () => new MSILCodeGenerator().Generate(module));
-        Assert.That(ex!.Message, Does.Contain("MSIL"));
-        Assert.That(ex.Message, Does.Contain("List"));
+        Assert.DoesNotThrow(() => new MSILCodeGenerator().Generate(module));
     }
 
     // ------------------------------------------------------------------
@@ -363,15 +393,20 @@ public class ForeignFeatureGuardTests
         Assert.That(ex.Message, Does.Contain("List"));
     }
 
+    /// <summary>
+    /// A collection that exists only as an EXPRESSION TEMPORARY —
+    /// <c>New List(Of Integer)().Count</c>, never stored in a local. Native on MSIL since
+    /// 2026-09-15; the LLVM twin above is unchanged.
+    ///
+    /// <para>Verified to run, not merely to pass the gate: the same program returns 0 through
+    /// the round-trip harness.</para>
+    /// </summary>
     [Test]
-    public void MSIL_ExpressionTempCollection_ThrowsCleanError()
+    public void MSIL_ExpressionTempCollection_IsNativeNotRefused()
     {
         var module = BuildModule(ExprTempListSource, runPreprocessor: false);
 
-        var ex = Assert.Throws<ForeignFeatureException>(
-            () => new MSILCodeGenerator().Generate(module));
-        Assert.That(ex!.Message, Does.Contain("MSIL"));
-        Assert.That(ex.Message, Does.Contain("List"));
+        Assert.DoesNotThrow(() => new MSILCodeGenerator().Generate(module));
     }
 
     [Test]

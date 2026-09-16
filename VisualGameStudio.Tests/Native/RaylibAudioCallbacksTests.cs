@@ -42,7 +42,7 @@ public class RaylibAudioCallbacksTests
     public void Audio_callback_delegates_marshal_under_a_device()
     {
         try { Framework_InitAudioDevice(); }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return; }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return; }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates the deferred-callback exports; refresh IDE\\ first."); return; }
 
         if (!Framework_IsAudioDeviceReady())

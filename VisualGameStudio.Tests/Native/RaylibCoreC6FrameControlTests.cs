@@ -42,7 +42,7 @@ public class RaylibCoreC6FrameControlTests
     public void Frame_control_and_input_stragglers_marshal_under_a_window()
     {
         try { Framework_InitWindow(320, 240, "vgs_c6_frame_test"); }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return; }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return; }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates rcore Batch core-C6 exports; refresh IDE\\ first."); return; }
 
         if (!Framework_IsWindowReady())

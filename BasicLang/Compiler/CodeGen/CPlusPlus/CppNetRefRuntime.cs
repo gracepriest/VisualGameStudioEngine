@@ -57,6 +57,16 @@ public:
         if (other && g_netref_addref) g_netref_addref(other.get());
         return NetRef(other.get());
     }
+    /* Duplicate from a RAW handle word: takes a second, independent reference to a handle
+       somebody else still owns. Used by 8.4's callback adapters, where the managed dispatcher
+       minted the handle, still holds it for the duration of the thunk call, and releases it
+       when the call returns -- so adopting the word outright would double-release it, while
+       merely borrowing it would dangle if the BasicLang lambda stores the NetRef. Taking our
+       own reference is the only option that is correct in both cases. */
+    static NetRef Share(std::uint64_t h) {
+        if (h && g_netref_addref) g_netref_addref(h);
+        return NetRef(h);
+    }
 };
 
 } /* namespace BasicLang */

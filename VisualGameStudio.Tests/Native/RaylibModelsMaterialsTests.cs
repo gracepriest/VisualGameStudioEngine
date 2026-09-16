@@ -66,7 +66,7 @@ public class RaylibModelsMaterialsTests
         // marshals a Material by value, reads shader.id at offset 0, and returns via I1. The valid (true) path is GPU-only.
         bool valid;
         try { valid = Framework_IsMaterialValid(ZeroMaterial()); }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return; }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return; }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates the material exports; refresh IDE\\ first."); return; }
         Assert.That(valid, Is.False, "a zeroed Material (null maps) is invalid");
     }

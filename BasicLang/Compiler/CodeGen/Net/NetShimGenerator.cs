@@ -509,14 +509,24 @@ namespace BasicLang.Compiler.CodeGen.Net
         /// called from a wrapper's argument list on the managed side. See
         /// <see cref="NetDelegateForm.HelperName"/> for why §12.4 does not range over it.</para>
         ///
-        /// <para><b>v1 admits BLITTABLE SCALARS only</b>, in both parameter and return position.
-        /// That is the shape P0 conformance scenario 8 already proves end to end (VALUE slots
-        /// plus a scalar written through <c>*result</c>) and it covers the delegates that
-        /// actually occur in argument position — <c>Comparison&lt;T&gt;</c>,
-        /// <c>Predicate&lt;T&gt;</c>, <c>Action&lt;int&gt;</c>. Handle-, String- and
-        /// struct-slotted signatures throw HERE, at generation time, rather than emitting code
-        /// that would read the wrong table at runtime: a build error names the offender, a wrong
-        /// table read does not.</para>
+        /// <para><b>Admits blittable scalars, handles and strings</b> in both parameter and
+        /// return position (§8.4's slot marshaling contract, resolved 2026-09-15). What stays
+        /// refused — <c>System.Object</c>, <c>Boolean</c>/<c>Char</c>, and the §6.4 rows — is
+        /// refused by <see cref="NetDelegateDispatch.TryClassifySlot"/>, each for its own reason.
+        /// Refusals throw HERE, at generation time, rather than emitting code that would read
+        /// the wrong table at runtime: a build error names the offender, a wrong table read does
+        /// not.</para>
+        ///
+        /// <para><b>The ownership rules this emits, and why each is the only sound one.</b>
+        /// A HANDLE argument is minted fresh by <c>ToHandle</c>, so the dispatcher OWNS that
+        /// reference and releases it in a <c>finally</c> once the thunk returns; native takes
+        /// its own reference if it needs the object longer (the adapter does, and the queued
+        /// path addrefs at enqueue). A handle RESULT arrives already addref'd by the adapter, so
+        /// the dispatcher reads the object out and releases the handle — the object is rooted by
+        /// the managed reference it just took, and not releasing would leak a table slot per
+        /// call. A STRING argument is a buffer this side allocates and frees in the same
+        /// <c>finally</c>; a string RESULT is one the adapter allocated through
+        /// <c>g_shim.alloc</c>, which is this side's own allocator, so this side frees it.</para>
         ///
         /// <para>Handle 0 is <c>Nothing</c> (§8.2) and yields a null delegate rather than a
         /// wrapper that would invoke a callback that was never registered.</para>
@@ -530,9 +540,9 @@ namespace BasicLang.Compiler.CodeGen.Net
                     + $"signature '{form.InvokeSignature}' is not parseable as Return(Param,…).");
 
             foreach (var t in parameters)
-                RequireBlittableScalar(t, form, "parameter");
+                RequireAdmissibleSlot(t, form, "parameter");
             if (returnType != "System.Void")
-                RequireBlittableScalar(returnType, form, "return");
+                RequireAdmissibleSlot(returnType, form, "return");
 
             var names = Enumerable.Range(0, parameters.Count).Select(i => "a" + i).ToList();
 
@@ -541,27 +551,61 @@ namespace BasicLang.Compiler.CodeGen.Net
             L(sb, "    private static " + Qualified(form.DelegateFullName) + " " + form.HelperName + "(ulong cb_)");
             L(sb, "    {");
             L(sb, "        if (cb_ == 0) return null!;");
+            var kinds = parameters
+                .Select(NetDelegateDispatch.SlotKind)
+                .ToList();
+            // A slot this side allocates for the call and must give back afterwards: a handle
+            // minted by ToHandle, or a UTF-8 buffer from AllocUtf8. Both are released in the
+            // SAME finally, because both leak identically when the callback throws.
+            var owned = kinds
+                .Select((k, i) => (Kind: k, Index: i))
+                .Where(t => t.Kind != NetSlotKind.Value)
+                .ToList();
+
             L(sb, "        return (" + string.Join(", ", names) + ") =>");
             L(sb, "        {");
             if (parameters.Count > 0)
             {
                 L(sb, "            ulong* args_ = stackalloc ulong[" + parameters.Count + "];");
                 for (var i = 0; i < parameters.Count; i++)
-                    L(sb, "            args_[" + i + "] = " + WirePack(parameters[i], names[i]) + ";");
+                    L(sb, "            args_[" + i + "] = " + SlotPack(kinds[i], parameters[i], names[i]) + ";");
             }
             else
             {
                 L(sb, "            ulong* args_ = null;");
             }
             L(sb, "            ulong r_ = 0;");
-            L(sb, "            int st_ = _thunk(cb_, args_, " + parameters.Count + ", &r_);");
+
+            if (owned.Count > 0)
+            {
+                L(sb, "            int st_;");
+                L(sb, "            // §8.4: every slot this side allocated goes back even when the");
+                L(sb, "            // callback throws — the thunk surfaces a native exception as a");
+                L(sb, "            // non-OK status, but a managed exception from the delegate body");
+                L(sb, "            // unwinds straight through, and a leak there is per CALL.");
+                L(sb, "            try { st_ = _thunk(cb_, args_, " + parameters.Count + ", &r_); }");
+                L(sb, "            finally");
+                L(sb, "            {");
+                foreach (var (kind, index) in owned)
+                {
+                    L(sb, kind == NetSlotKind.Handle
+                        ? "                if (args_[" + index + "] != 0) Table.Release(args_[" + index + "]);"
+                        : "                NativeMemory.Free((void*)args_[" + index + "]);");
+                }
+                L(sb, "            }");
+            }
+            else
+            {
+                L(sb, "            int st_ = _thunk(cb_, args_, " + parameters.Count + ", &r_);");
+            }
+
             // BLNET_OK is 0 — BlnetContract's status table is the single source, and the value
             // is frozen by contract rule C7 (changing it bumps AbiVersion).
             L(sb, "            if (st_ != 0)");
             L(sb, "                throw new global::System.InvalidOperationException(");
             L(sb, "                    \"blnet: callback invocation failed with status \" + st_);");
             if (returnType != "System.Void")
-                L(sb, "            return " + WireUnpack(returnType, "r_") + ";");
+                EmitSlotUnpackReturn(sb, returnType);
             L(sb, "        };");
             L(sb, "    }");
         }
@@ -589,6 +633,66 @@ namespace BasicLang.Compiler.CodeGen.Net
             _ => "unchecked((ulong)" + expr + ")",
         };
 
+        /// <summary>
+        /// §8.4's per-kind argument pack. A VALUE slot is <see cref="WirePack"/> unchanged; the
+        /// other two allocate, and what they allocate is freed by the <c>finally</c>
+        /// <see cref="EmitDelegateDispatcher"/> emits.
+        ///
+        /// <para><c>ToHandle</c> mints a FRESH handle (it is <c>Table.Create</c>, which has no
+        /// identity map), so this side owns the reference it passes and the native adapter must
+        /// take its own — which <c>NetRef::Share</c> does. Handing the adapter this reference to
+        /// adopt instead would be a genuine double release, because this side releases it when
+        /// the thunk returns.</para>
+        /// </summary>
+        private static string SlotPack(NetSlotKind kind, string typeFullName, string expr) => kind switch
+        {
+            NetSlotKind.Handle => "ToHandle(" + expr + ")",
+            NetSlotKind.String => "(ulong)AllocUtf8(" + expr + " ?? string.Empty)",
+            _ => WirePack(typeFullName, expr),
+        };
+
+        /// <summary>
+        /// §8.4's per-kind RESULT unpack, emitted as statements because the handle and string
+        /// arms both have to free something after reading it.
+        ///
+        /// <para><b>Both non-value arms take ownership, and both must give it back.</b> The
+        /// adapter addref'd the handle before packing it (its own <c>NetRef</c> dies when the
+        /// lambda returns, so an un-addref'd word would already be dangling here); once
+        /// <c>Table.TryGet</c> has handed back the object, the managed reference roots it and
+        /// the table slot is pure overhead — not releasing it leaks one slot per invocation.
+        /// The string buffer came from <c>g_shim.alloc</c>, which IS this side's
+        /// <c>NativeMemory</c>, so freeing it here is the matching half and not a
+        /// cross-allocator free.</para>
+        /// </summary>
+        private static void EmitSlotUnpackReturn(StringBuilder sb, string returnType)
+        {
+            switch (NetDelegateDispatch.SlotKind(returnType))
+            {
+                case NetSlotKind.Handle:
+                    L(sb, "            object? rv_ = null;");
+                    L(sb, "            if (r_ != 0)");
+                    L(sb, "            {");
+                    L(sb, "                var stv_ = Table.TryGet(r_, out rv_);");
+                    L(sb, "                Table.Release(r_);   // the adapter's addref, balanced");
+                    L(sb, "                if (stv_ != BlnetStatus.BLNET_OK)");
+                    L(sb, "                    throw new global::System.InvalidOperationException(");
+                    L(sb, "                        \"blnet: callback result handle was stale\");");
+                    L(sb, "            }");
+                    L(sb, "            return (" + Qualified(returnType) + ")rv_!;");
+                    break;
+
+                case NetSlotKind.String:
+                    L(sb, "            var rs_ = Utf8ToString((byte*)r_);");
+                    L(sb, "            NativeMemory.Free((void*)r_);   // g_shim.alloc IS this allocator");
+                    L(sb, "            return rs_!;");
+                    break;
+
+                default:
+                    L(sb, "            return " + WireUnpack(returnType, "r_") + ";");
+                    break;
+            }
+        }
+
         /// <summary>§8.4's wire unpack — the return leg of <see cref="WirePack"/>.</summary>
         private static string WireUnpack(string typeFullName, string expr) => typeFullName switch
         {
@@ -610,18 +714,14 @@ namespace BasicLang.Compiler.CodeGen.Net
         /// and wire-form were tied by nothing, so <c>Double</c> passed the gate and was then
         /// carried lossily. <c>NetDelegateSlotWireTests</c> now holds the tie by round trip.</para>
         /// </summary>
-        private static void RequireBlittableScalar(
+        private static void RequireAdmissibleSlot(
             string typeFullName, NetDelegateForm form, string position)
         {
-            var wire = WireOf(typeFullName);
-            if (wire.Kind == WireKind.Scalar) return;
+            if (NetDelegateDispatch.TryClassifySlot(typeFullName, out _, out var refusal)) return;
 
             throw new NotSupportedException(
-                $"Cannot emit a §8.4 dispatcher for '{form.DelegateFullName}': its {position} type "
-                + $"'{typeFullName}' has wire form {wire.Kind}, and v1 admits blittable scalars "
-                + "only (P0 conformance scenario 8's proven shape). Handle, String and struct "
-                + "slots need a marshaling contract §8.4 does not yet specify — specify it there "
-                + "before widening this gate.");
+                $"Cannot emit a §8.4 dispatcher for '{form.DelegateFullName}': its {position} "
+                + "type " + refusal);
         }
 
         // ------------------------------------------------------------------------------

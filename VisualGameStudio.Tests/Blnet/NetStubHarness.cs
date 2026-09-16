@@ -207,6 +207,55 @@ internal static class NetStubHarness
     }
 
     /// <summary>
+    /// A throwaway assembly compiled from C# source, for the shapes NO framework type offers.
+    ///
+    /// <para><b>Why it is here.</b> Two fixtures had grown byte-identical private copies of
+    /// this (<c>NetConversionRowLoweringTests</c> and <c>NetDelegateSlotWireTests</c>), differing
+    /// only in their temp-directory prefix, and §8.4's slot-contract fixture needed a third.
+    /// That is the same argument that moved <see cref="Winner"/> and the stub runtime here —
+    /// a copied harness drifts — so it is shared before the third copy exists rather than after.</para>
+    ///
+    /// <para>Compiled against <see cref="NetTypeResolverTestRefs.FrameworkPaths"/>, which is the
+    /// SAME reference set <see cref="CompileShim"/> uses. That is load-bearing, not tidiness: a
+    /// probe built against a different closure makes every use of its types CS0012 in the
+    /// generated shim, and the error points at generated code rather than at the mismatch.</para>
+    /// </summary>
+    internal sealed class ProbeAssembly : IDisposable
+    {
+        private readonly string _dir = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(), "blnet-probe-" + Guid.NewGuid().ToString("N"));
+
+        internal string Path { get; }
+
+        internal ProbeAssembly(string name, string source)
+        {
+            System.IO.Directory.CreateDirectory(_dir);
+            Path = System.IO.Path.Combine(_dir, name + ".dll");
+
+            var compilation = Microsoft.CodeAnalysis.CSharp.CSharpCompilation.Create(
+                name,
+                new[] { Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(source) },
+                NetTypeResolverTestRefs.FrameworkPaths.Select(
+                    p => Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(p)),
+                new Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions(
+                    Microsoft.CodeAnalysis.OutputKind.DynamicallyLinkedLibrary));
+
+            Microsoft.CodeAnalysis.Emit.EmitResult emit;
+            using (var stream = System.IO.File.Create(Path))
+                emit = compilation.Emit(stream);
+
+            Assert.That(emit.Success, Is.True, "probe assembly failed to build: "
+                + string.Join("\n", emit.Diagnostics.Where(
+                    d => d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error)));
+        }
+
+        public void Dispose()
+        {
+            try { System.IO.Directory.Delete(_dir, recursive: true); } catch { /* temp */ }
+        }
+    }
+
+    /// <summary>
     /// One stub slot: the mangled name plus the full C++ lambda text (its signature must match
     /// the slot's C ABI — a mismatch fails the compile, which is the pin).
     /// </summary>

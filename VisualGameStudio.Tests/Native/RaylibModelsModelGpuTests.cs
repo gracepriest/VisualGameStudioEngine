@@ -95,7 +95,7 @@ public class RaylibModelsModelGpuTests
     public void Model_load_query_and_draw_execute_under_a_window()
     {
         try { Framework_InitWindow(320, 240, "vgs_models_model_test"); }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return; }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return; }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates the model exports; refresh IDE\\ first."); return; }
 
         if (!Framework_IsWindowReady())

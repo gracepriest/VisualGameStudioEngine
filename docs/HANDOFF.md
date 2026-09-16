@@ -607,12 +607,132 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   as **BL6027 (always a warning — never fails a build)**; coverage is pinned against a REAL
   framework surface at 223 of 234 slots. **Windows-gated at `ee3c086`** — 4 failures, all
   baseline.
+  ⚠ **The MSIL backend is a MAINTAINED target as of 2026-09-15** (it was not before; the old
+  "MSIL/LLVM are not maintained" policy now covers LLVM only). It has a round-trip harness —
+  `VisualGameStudio.Tests/Msil/MsilHarness.cs`: source → `.il` → `ilasm` → a real process →
+  stdout. **Never assert on emitted IL text alone here.** The defect that motivated the harness
+  was a `Select Case` that assembles, runs, and answers `Case Else` for every input; a text
+  assertion would have had to already know `beq` was missing to catch it. **That one is fixed
+  (2026-09-15)** — `Select Case` now lowers to an ordered comparison chain (the shape
+  `CppCodeGenerator` uses for the same IR), because IL's `switch` is *index*-based and the parser
+  routes every case value into `IRSwitch.PatternCases` while the old emitter read only
+  `IRSwitch.Cases`. Constant / multi-value / range / comparison / `Nothing` / `Or` patterns and
+  `When` guards all run; type, tuple and binding patterns are **refused** rather than dropped,
+  because dropping one reproduces the original silent-`Case Else` failure exactly. `ilasm` is located,
+  not required — Windows ships one in-box under `%WINDIR%\Microsoft.NET\Framework64`, elsewhere
+  restore `runtime.<rid>.Microsoft.NETCore.ILAsm` or set `BASICLANG_ILASM`; a machine with none
+  gets `Assert.Ignore`. Known gaps are pinned as `_PinnedDivergence` tests that each name a root
+  cause and go RED when fixed — read those before starting MSIL work.
+  ⚠ **`Try`/`Catch` is real EH regions as of 2026-09-16**, and the fix was FIVE defects, not one.
+  The emitter inlined only the try block's straight-line instructions into `.try { }` while
+  `GenerateBasicBlock` emitted those same blocks again as ordinary labelled blocks — so the real
+  work ran OUTSIDE the protected region and a `Try` around an `If` printed the right answer while
+  protecting nothing. On top of that: the catch variable got no `.locals` slot (`stloc 0` in a
+  method with no locals, or a store onto an unrelated variable), `FinallyBlock` was ignored
+  entirely, a catch type was spelled `[mscorlib]System.` + the clause name (so a user exception
+  named a BCL type that does not exist), and — the one that hid the rest — **`Throw` emitted
+  NOTHING**: `ICodeGenerator` declares `Visit(IRThrow)` as an empty virtual and MSIL never
+  overrode it, so nothing could ever reach a handler. Now supported: multiple typed catches,
+  `Finally` (nested region, because IL forbids catch and finally on one `.try`), `Return` inside a
+  region (lowered to a result slot plus `leave` to one exit, which is also what runs the finally),
+  nested and sibling `Try`s, rethrow, user-defined exception types, and `ex.Message`/`StackTrace`/
+  `Source` through a narrow recorded table — anything outside it is refused, not guessed.
+  ⚠ **The dotted static surface emits DIRECT IL as of 2026-09-16**, and ⛔ **the choice this
+  backend appeared to have does not exist** — an earlier pin here claimed MSIL could route
+  `Math.Sqrt` through the .NET proxy like C++ or emit it directly like C#. It cannot do the first.
+  The proxy is a NATIVE C ABI bridge: `[UnmanagedCallersOnly]` exports on a Native AOT shim
+  reached through a function-pointer table, and managed code cannot call an
+  `UnmanagedCallersOnly` method at all. MSIL could only reach it by P/Invoking the native export
+  so it could call BACK into the CLR, for members the CLR already offers, and every emitted binary
+  would then depend on the shim being built. (`ResolvedNetTarget`, which drives proxy lowering, is
+  also null on this path — the resolver is not engaged for a plain compilation.) Don't re-litigate
+  it. Members come from `MSILCodeGenerator.NetStaticMembers`, **keyed on the FULL dotted name**
+  because matching the member alone routes `Decimal.Round` onto `Math.Round` — a silent wrong
+  answer. Overloads match on argument TYPES, exact before widened; only LOSSLESS widenings are
+  allowed (`int64`→`float64` is refused: it rounds above 2^53).
+  ⛔ **The wrong overload is invisible at run time.** Measured: with the float64 row declared
+  first and the exact-match pass removed, `Math.Abs(-7)` binds `Abs(float64)` and still prints
+  `7`. Every round-trip assertion stays green while the call returns a Double where an Integer was
+  asked for, so that property is pinned in the IL text — the third such case in this fixture,
+  beside the Select Case default branch and the variable-less `Catch`'s `pop`.
+  ⚠ **Instance methods know about `Me` as of 2026-09-16**, and the pin that covered this named
+  the WRONG cause — it said "a CALL-side defect", but the call was always fine (a method touching
+  nothing runs), and the stack trace pointed inside the callee. The emitter simply had no notion
+  that an instance member is handed its receiver in argument slot 0. ⛔ **The worst consequence
+  was silent**: parameters were numbered from 0, so the first one read the OBJECT REFERENCE —
+  `Add(20, 22)` returned 872452332 instead of 42, and no test was watching. Also fixed by the same
+  notion: bare field reads (pushed nothing), bare field writes (landed in a temporary and were
+  dropped — `stfld` wants the object UNDER the value, so the store goes through a scratch slot
+  because IL has no swap), `Me.X`, and sibling self-calls (emitted a static `call` on a phantom
+  `Program` class). Constructors are instance members too and never emitted a `.locals` directive
+  at all. **The class-member paths now share the module path's state** — exception-handling
+  locals, the emitted-block set, and the lowered-return exit block — so a `Try` inside a class
+  method works; keeping those per-path is what made each of them separately wrong.
+  ⚠ **Arrays allocate as of 2026-09-16.** `Dim a(2) As String` declared the local and stopped —
+  `.locals init` zeroes a slot, it does not construct anything, so every access dereferenced null.
+  Allocation now happens at both declaration sites (locals in the method prologue, fields in every
+  constructor — doing locals only is the trap the C++ backend's own note records). ⛔ **The
+  declared number is an element COUNT, not a VB upper bound**: `Dim a(3)` holds 3 elements at
+  0..2, matching what C#/C++ read from the same `TypeInfo.ArrayDimensionSizes`; `a(3)` is out of
+  range and that is the language's decision, not an off-by-one. **Multi-dimensional arrays are
+  REFUSED**, not allocated: a rank-2 declaration collapses to a rank-1 IL type and indexing emits
+  `ldelema` with `Indices[0]` alone, so `g(i, j)` would silently read and write `g(i)` — allocating
+  it would trade a loud NullReferenceException for a quiet wrong answer.
+  ⛔ **Allocating arrays exposed three defects that had been unreachable behind the null**, which
+  is the pattern to expect when unblocking any path here: an `IRGetElementPtr` temp was typed as
+  the ELEMENT while `ldelema` pushes a managed pointer (`stind` then treated an integer as an
+  address — and the reference-typed half of this *looked like it worked*, printing right answers
+  from unverifiable IL); `.field public Integer[] Cells` carried the BasicLang type name; and the
+  array-literal emitter wrote `stloc t0`, an IR value NAME where IL wants a slot index.
+  ⛔ **A variable-less `Catch` still needs its `pop` even though the obvious test cannot see it**:
+  `leave` empties the evaluation stack, so a straight-line handler runs correctly with the
+  exception left underneath. It only becomes an invalid program when a branch join inside the
+  handler has to carry the leftover — which is the shape
+  `ACatchWithNoVariable_PopsTheException` pins.
+  ⚠ **Module-level variables exist as of 2026-09-16.** Before this, `MSILBackend.cs` never read
+  `IRModule.GlobalVariables` — the identifier did not appear in the file — so a module-level
+  `Dim n As Integer = 7` had no storage anywhere: reads emitted `// WARNING: Unknown local 'n'`
+  and pushed NOTHING, writes emitted `// WARNING: Cannot store to 'n'` and abandoned the value.
+  ⛔ **The abandoned-value half printed right answers.** In `s = "SET" : PrintLine(s)` the dropped
+  `ldstr` was consumed by the `PrintLine` that followed, so the program printed `SET` — correct
+  output from a stack accident that the next statement destroys. Globals are now `assembly static`
+  fields on the module class (⛔ **not `private`** — IL's `private` is "declaring type only", so a
+  user-class method reading a module global would get FieldAccessException; `Public` widens to
+  `public`), with initializers and sized-array storage in a `.cctor`.
+  ⛔ **The initializer is nowhere in the function IR.** `Main`'s instruction list for that program
+  is just `t0 = call CStr(@n)`; nothing in any method body ever assigns the 7. Emitting the field
+  without a type initializer is not a build error, it is a program that prints 0.
+  ⛔ **`stsfld` does not coerce and nothing complains.** Measured: `Dim d As Double = 7` carries an
+  int32 constant, ilasm assembles `ldc.i4.7` / `stsfld float64` without a diagnostic and the JIT
+  runs it, copying the bit pattern into the low half of the slot — `d` becomes 3.5E-323 and
+  `d + 1.5` prints `1.5`. The widening is emitted from the field's declared type, not left to a
+  verifier that never objects.
+  ⛔ **The `.cctor` is emitted LAST, after every module procedure**, so it inherits their local and
+  temp tables unless they are cleared — and a global initializer CAN name another global
+  (`Dim b As Integer = K` emits `ldsfld`). Without the reset, a procedure with a local `K` makes
+  the type initializer resolve the global `K` to `ldloc.0`, a slot it does not declare, and the
+  program dies with TypeInitializationException. `beforefieldinit` is dropped from the module class
+  whenever a `.cctor` exists, as the C# compiler does; that property is invisible at run time and
+  is pinned in IL text.
+  ⚠ **A module-level initializer may only be a literal or another module-level `Const`.** Anything
+  else — `Dim b As Integer = a * 3` with `a` a `Dim`, `= 2 + 3 * 4`, `= SomeFunc()` — crashes the
+  FRONT END with a NullReferenceException before any backend runs, on C# as well as MSIL. That is
+  a pre-existing compiler gap, not an MSIL one; don't chase it in the backend.
+  ⚠ **A `BlnetSlotDesc[]` kind that lies fails SILENTLY** (§8.4, 2026-09-15). The array is what
+  `blnet_invoke_callback` reads to decide what to deep-copy when a callback is QUEUED rather than
+  run inline: HANDLE addrefs at enqueue, STRING deep-copies, VALUE does neither. Label a handle
+  slot VALUE and it compiles, links and passes every INLINE test — then the object can be
+  collected before the pump runs. Nothing on that path is a compile error, which is why the
+  classification is derived ONCE (`NetDelegateDispatch.TryClassifySlot`) and the managed
+  dispatcher, the native adapter and the descriptor array all project from it. Never re-decide it
+  locally.
   ⚠ **A coverage set identity needs a FLOOR beside it** — skipping every slot satisfies
   `rendered ∪ skipped == all` perfectly. Measured, not theorised: mutating the classifier to skip
   everything left the identity test green. `NetFacadeCoverageDriftTests` asserts both.
-  ⚠ `StringBuilder`, `DateTime` and `Uri` **cannot be `<NetProxy>` types at all** — `Emit` throws
-  BL6019 for each (§6.4 by-value-pointer result; ByRef handles §8.3 leaves unspecified). Upstream
-  of the facade; a surface containing one cannot be emitted. The header is emitted unconditionally and included by nobody —
+  ⚠ `StringBuilder` and `Guid` **cannot be `<NetProxy>` types at all** — `Emit` throws BL6019 for
+  each (a §6.4 by-value-pointer RESULT). Upstream of the facade; a surface containing one cannot
+  be emitted. `DateTime` and `Uri` used to be on this list for a ByRef HANDLE parameter; §8.3's
+  *ByRef handle ownership* resolution (2026-09-15) specified that shape and they emit now. The header is emitted unconditionally and included by nobody —
   `using namespace BasicLang::netfx;` is the one opt-in line.
   ⚠ **A property's `set_X()` is usually absent**, and that is the SURFACE, not the facade: a
   `<NetProxy>` declared type draws only property READ slots, because a setter descriptor is

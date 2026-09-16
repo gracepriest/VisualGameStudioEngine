@@ -56,7 +56,7 @@ public class RaylibCameraTests
     {
         var cam = LookDownZ();
         try { Framework_UpdateCamera(ref cam, CAMERA_CUSTOM); return true; }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return false; }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return false; }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates the rcamera exports; refresh IDE\\ first."); return false; }
     }
 

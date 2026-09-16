@@ -147,7 +147,8 @@ enumerated splices (Task 1's `NetException`, Task 5's `NetRef`) and nothing else
   `:519-531`; lambda inlining `:650-657`; `IsNativeOwnedBclType` `:612-614`.
   **`ex.Message` has NO lowering (`what()` appears nowhere in the generator).**
 - Net components: `NetProxyEmitter` (5 artifacts; empty surface writes NOTHING;
-  `NotSupportedException` on ByRef handle/String — currently unreachable and unmapped);
+  `NotSupportedException` on ByRef String/§6.4 — ByRef HANDLE was specified 2026-09-15 and no
+  longer throws);
   `NetShimGenerator.Emit(surface, safeProjectName, referenceAssemblyPaths, valueTypeReceiverNames)`
   (zero production callers; **reverse dependency**: `:171` calls
   `CppProjectBuilder.ShimAssemblyName`); `NetShimPublisher.Publish` (zero production callers);

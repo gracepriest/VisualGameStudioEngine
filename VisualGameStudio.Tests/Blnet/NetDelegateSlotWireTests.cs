@@ -72,13 +72,13 @@ public class NetDelegateSlotWireTests
         }
         """;
 
-    private static ProbeAssembly _probe;
+    private static NetStubHarness.ProbeAssembly _probe;
     private static NetTypeResolver _resolver;
 
     [OneTimeSetUp]
     public void BuildProbe()
     {
-        _probe = new ProbeAssembly("WireProbe", ProbeSource);
+        _probe = new NetStubHarness.ProbeAssembly("WireProbe", ProbeSource);
         _resolver = NetTypeResolver.Create(
             NetTypeResolverTestRefs.FrameworkPaths.Concat(new[] { _probe.Path }));
     }
@@ -297,40 +297,4 @@ public class NetDelegateSlotWireTests
     /// <c>NetConversionRowLoweringTests</c> uses, kept private here for the same reason it is
     /// private there: it owns a temp directory whose lifetime is the fixture's.
     /// </summary>
-    private sealed class ProbeAssembly : IDisposable
-    {
-        private readonly string _dir = System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(), "blnet-wire-" + Guid.NewGuid().ToString("N"));
-
-        internal string Path { get; }
-
-        internal ProbeAssembly(string name, string source)
-        {
-            System.IO.Directory.CreateDirectory(_dir);
-            Path = System.IO.Path.Combine(_dir, name + ".dll");
-
-            var compilation = Microsoft.CodeAnalysis.CSharp.CSharpCompilation.Create(
-                name,
-                new[] { Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(source) },
-                NetTypeResolverTestRefs.FrameworkPaths.Select(
-                    p => Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(p)),
-                new Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions(
-                    Microsoft.CodeAnalysis.OutputKind.DynamicallyLinkedLibrary));
-
-            Microsoft.CodeAnalysis.Emit.EmitResult emit;
-            using (var stream = System.IO.File.Create(Path))
-                emit = compilation.Emit(stream);
-
-            Assert.That(emit.Success, Is.True, "probe assembly failed to build: "
-                + string.Join("\n", emit.Diagnostics.Where(
-                    d => d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error)));
-        }
-
-        public void Dispose()
-        {
-            try { System.IO.Directory.Delete(_dir, recursive: true); }
-            catch (System.IO.IOException) { }
-            catch (UnauthorizedAccessException) { }
-        }
-    }
 }

@@ -678,26 +678,40 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     + $"('{parameter.DelegateInvokeSignature}') could not be read.");
             }
 
-            string CppSlotType(string netFullName, string what)
+            // §8.4's slot classification is NetDelegateDispatch's, not this file's — the same
+            // verdict drives the managed pack/unpack and the BlnetSlotDesc[] the runtime reads.
+            // Re-deciding it here is how the native adapter and the enqueue deep-copy drift
+            // apart, and that particular drift is silent (see CppSlotDescriptors).
+            NetSlotKind SlotKindOf(string netFullName, string what)
             {
-                if (NetMarshalTable.TryGetWireRow(netFullName, out var row)
-                    && row.Shape == NetWireShape.Scalar
-                    && !string.IsNullOrEmpty(row.CWire))
-                {
-                    return row.CWire;
-                }
+                if (NetDelegateDispatch.TryClassifySlot(netFullName, out var kind, out var refusal))
+                    return kind;
 
                 throw NetLoweringRefusal("BL6019",
                     $"'{targetDisplay}': argument {position} is a delegate whose {what} type "
-                    + $"'{netFullName}' is not a §8.3 by-value scalar. §8.4 v1 carries blittable "
-                    + "scalars only — Boolean and Char are excluded because their wire spelling "
-                    + "differs from their C++ spelling, and handle/String slots need a "
-                    + "marshaling contract §8.4 does not yet specify.");
+                    + refusal);
             }
 
+            // The C++ type the ADAPTER's lambda takes for one slot. A VALUE slot is its wire
+            // spelling; a handle is a NetRef and a string a std::string, which is what the
+            // BasicLang lambda on the other side is actually typed as.
+            string CppSlotType(string netFullName, string what) =>
+                SlotKindOf(netFullName, what) switch
+                {
+                    NetSlotKind.Handle => "BasicLang::blnet::NetRef",
+                    NetSlotKind.String => "std::string",
+                    _ => NetMarshalTable.TryGetWireRow(netFullName, out var row) ? row.CWire : null,
+                };
+
+            var slotKinds = invokeParams.Select(t => SlotKindOf(t, "parameter")).ToList();
             var slotTypes = invokeParams.Select(t => CppSlotType(t, "parameter")).ToList();
             var isVoid = string.Equals(returnType, "System.Void", StringComparison.Ordinal);
-            var cppReturn = isVoid ? "void" : CppSlotType(returnType, "return");
+
+            // ⛔ Not just a classification — SlotKindOf THROWS the BL6019 for an inadmissible
+            // return type, so this line is the return-position gate. It replaced an unused
+            // `cppReturn` local that existed only for that same side effect; keeping both ran
+            // the gate twice and left a variable nothing read.
+            var returnKind = isVoid ? NetSlotKind.Value : SlotKindOf(returnType, "return");
 
             var guard = NextNetTemp();
             var callee = GetValueName(argument);
@@ -722,15 +736,64 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // is right for an integer row and silently lossy for a floating one (chip
             // task_75064f2e: the bits of 1.5 read as an integer count are 4.6e18). The seam in
             // blnet_runtime.hpp decides per type; see its comment before adding a cast here.
+            // §8.4 per-kind unpack.
+            //
+            //   VALUE  — wire_to, never a cast (a cast is silently lossy for a floating row).
+            //   HANDLE — NetRef::Share, NOT NetRef(word). The managed dispatcher minted this
+            //            handle, still holds it for the duration of the thunk call, and
+            //            releases it when the call returns. Adopting the word would release it
+            //            twice; treating it as non-owning would dangle the moment the BasicLang
+            //            lambda stores the NetRef. Share takes our own reference, which is
+            //            correct either way.
+            //   STRING — a COPY into std::string. The buffer is the caller's for the call only;
+            //            on the queued path it is already the runtime's deep copy, and either
+            //            way the lambda may outlive it.
             var unpacked = string.Join(", ",
-                slotTypes.Select((t, i) => "BasicLang::blnet::wire_to<" + t + ">(blnet_a["
-                    + i.ToString(CultureInfo.InvariantCulture) + "])"));
+                slotKinds.Select((kind, i) =>
+                {
+                    var slot = "blnet_a[" + i.ToString(CultureInfo.InvariantCulture) + "]";
+                    return kind switch
+                    {
+                        NetSlotKind.Handle => "BasicLang::blnet::NetRef::Share(" + slot + ")",
+                        NetSlotKind.String => "std::string(reinterpret_cast<const char*>(" + slot
+                            + ") ? reinterpret_cast<const char*>(" + slot + ") : \"\")",
+                        _ => "BasicLang::blnet::wire_to<" + slotTypes[i] + ">(" + slot + ")",
+                    };
+                }));
             var invoke = guard + "_fn(" + unpacked + ")";
 
-            var body = isVoid
-                ? invoke + "; return 0;"
-                : "auto blnet_r = " + invoke + "; if (blnet_result) *blnet_result = "
-                  + "BasicLang::blnet::wire_from(blnet_r); return 0;";
+            // §8.4 per-kind RESULT pack, the mirror of the managed side's unpack.
+            //
+            //   HANDLE — addref before packing. Our NetRef dies as this lambda returns, so an
+            //            un-addref'd word would reach managed code already released. The
+            //            dispatcher releases the reference we add here once it has the object.
+            //   STRING — allocate through g_shim.alloc, which IS the managed allocator, so the
+            //            dispatcher's NativeMemory.Free is the matching half rather than a
+            //            cross-allocator free. A null alloc (unbound shim) yields a null word,
+            //            which Utf8ToString maps to null rather than reading wild memory.
+            string PackResult() => returnKind switch
+            {
+                NetSlotKind.Handle =>
+                    "auto blnet_r = " + invoke + "; if (blnet_result) { "
+                    + "if (blnet_r && BasicLang::blnet::g_shim.addref) "
+                    + "BasicLang::blnet::NetCheck(BasicLang::blnet::g_shim.addref(blnet_r.get())); "
+                    + "*blnet_result = blnet_r.get(); } return 0;",
+
+                NetSlotKind.String =>
+                    "auto blnet_r = " + invoke + "; if (blnet_result) { "
+                    + "char* blnet_buf = nullptr; "
+                    + "if (BasicLang::blnet::g_shim.alloc) { "
+                    + "blnet_buf = static_cast<char*>(BasicLang::blnet::g_shim.alloc("
+                    + "static_cast<int64_t>(blnet_r.size()) + 1)); "
+                    + "if (blnet_buf) { std::memcpy(blnet_buf, blnet_r.data(), blnet_r.size()); "
+                    + "blnet_buf[blnet_r.size()] = '\\0'; } } "
+                    + "*blnet_result = reinterpret_cast<uint64_t>(blnet_buf); } return 0;",
+
+                _ => "auto blnet_r = " + invoke + "; if (blnet_result) *blnet_result = "
+                     + "BasicLang::blnet::wire_from(blnet_r); return 0;",
+            };
+
+            var body = isVoid ? invoke + "; return 0;" : PackResult();
 
             prologue.Add(
                 "BasicLang::blnet::CallbackRef " + guard + "(["
@@ -852,13 +915,19 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// <c>default</c> before the call), and converting an uninitialized BasicLang local
         /// through a range-checking §6.4 converter would throw on a value nobody passed.</para>
         ///
-        /// <para><b>What still refuses, and why it is not a guess we could make.</b> A ByRef
-        /// STRING has no single wire type — <c>const char*</c> in, <c>char**</c> out, with
-        /// opposite ownership — and a ByRef HANDLE leaves ownership undefined: writing a NEW
-        /// handle over the caller's releases one the callee may have returned unchanged, a
-        /// double release. §8.3 says "ref/out → pointer slot" and stops there, so both refuse
-        /// here exactly as <c>NetProxyEmitter.PlanMember</c> refuses to emit them. The analyzer
-        /// reports the same shapes at their source positions first.</para>
+        /// <para><b>What still refuses, and the two reasons are NOT the same.</b> A ByRef
+        /// STRING or §6.4 row has no single wire type — <c>const char*</c> in, <c>char**</c>
+        /// out, with opposite ownership; a §6.4 slot is already a pointer to a buffer the
+        /// managed side copies out of — and §8.3 leaves both unspecified, so
+        /// <c>NetProxyEmitter.PlanMember</c> refuses them too.</para>
+        ///
+        /// <para>A ByRef HANDLE is different: §8.3's <i>ByRef handle ownership</i> (resolved
+        /// 2026-09-15) specifies it and the emitter now emits it, so what refuses here is THIS
+        /// lowering — <c>IRCall.ByRefArguments</c> is populated for resolved user functions
+        /// only, so a call site has no way to hand a <c>NetRef&amp;</c> to the slot. ⛔ Do not
+        /// reintroduce the old "double release" reason: <c>HandleTable.Create</c> has no
+        /// identity map, so a re-handled object yields a second INDEPENDENT reference. The
+        /// analyzer reports the same shapes at their source positions first.</para>
         /// </summary>
         private NetArgEmission MarshalNetByRefArgument(
             string targetDisplay, NetParameterDescriptor parameter, string position, IRValue argument)
@@ -867,9 +936,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var passing = parameter.RefKind.ToString().ToLowerInvariant();
 
             // §8.6 row 4 — a ref/out ARRAY slot: copies in AND reads back. Handled before the
-            // by-value-scalar gate below, which would otherwise refuse it for having no single
-            // wire slot. The ownership objection that gate names does not apply here: the handle
-            // in the slot is one this frame MINTED, not one it borrowed.
+            // gates below, which would otherwise refuse it for having no single wire slot.
+            // ⛔ Do NOT restate the old justification, "the handle in the slot is one this frame
+            // MINTED": §8.3 (ByRef handle ownership) says explicitly that minting is not what
+            // makes the write-back sound — Table.Create has no identity map, so a re-handled
+            // object yields a second INDEPENDENT reference. §8.6 was this general rule all
+            // along, observed in the one place it had already been needed.
             if (argument is IRVariable
                 && TryMarshalNetArrayArgument(
                     targetDisplay, paramType, position, argument, byRef: true, out var byRefArray))
@@ -877,14 +949,34 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return byRefArray;
             }
 
-            if (!NetMarshalTable.TryGetWireRow(paramType, out var row) || !row.HasByValueScalarSlot)
+            // A type with NO marshal row crosses as a handle. §8.3's "ByRef handle ownership"
+            // (resolved 2026-09-15) specifies that shape and NetProxyEmitter emits it, so the
+            // reason this refusal used to give — "a double release" — is no longer true and
+            // must not be restated here. What is actually missing is THIS lowering: a BasicLang
+            // call site has no way to hand a NetRef& to the slot, because IRCall.ByRefArguments
+            // is populated for resolved user functions only. A not-yet, not a cannot.
+            if (!NetMarshalTable.TryGetWireRow(paramType, out var row))
+            {
+                throw NetLoweringRefusal("BL6019",
+                    $"'{targetDisplay}': parameter {position} ('{parameter}') is passed "
+                    + $"{passing} and its type '{paramType}' crosses as a .NET handle. §8.3 "
+                    + "specifies ByRef handles and a <NetProxy> declared surface emits them, "
+                    + "but a BasicLang call site cannot pass one yet — the lowering does not "
+                    + "carry a handle through ByRef arguments. Use an overload that returns the "
+                    + "value instead.");
+            }
+
+            // Everything left has a row but no single by-value slot: String, the §6.4
+            // by-value-pointer rows, and the multi-slot pairs. Each is a DIFFERENT open
+            // question in §8.3 — none of them is the handle one that was settled.
+            if (!row.HasByValueScalarSlot)
             {
                 throw NetLoweringRefusal("BL6019",
                     $"'{targetDisplay}': parameter {position} ('{parameter}') is passed "
                     + $"{passing} and its type '{paramType}' has no single by-value wire slot. "
-                    + "§8.3 pins ByRef slots to by-value scalars only: a ByRef String has "
-                    + "opposite ownership in each direction, and a ByRef .NET object would "
-                    + "leave handle ownership undefined (a double release). Pass it by value, "
+                    + "§8.3 pins ByRef slots to by-value scalars and handle rows: a ByRef "
+                    + "String has opposite ownership in each direction, and a ByRef §6.4 row "
+                    + "points at a buffer the managed side holds a copy of. Pass it by value, "
                     + "or use an overload that returns the value instead.");
             }
 

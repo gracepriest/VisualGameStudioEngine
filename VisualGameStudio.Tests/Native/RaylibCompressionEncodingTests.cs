@@ -44,7 +44,7 @@ public class RaylibCompressionEncodingTests
     public void ProbeEngine()
     {
         try { Framework_ComputeCRC32(new byte[] { 1 }, 1); }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates rcore Batch core-C10 exports; refresh IDE\\ first."); }
     }
 

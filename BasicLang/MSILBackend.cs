@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using BasicLang.Compiler.IR;
 using BasicLang.Compiler.SemanticAnalysis;
+using BasicLang.Compiler.CodeGen.CPlusPlus;
 
 namespace BasicLang.Compiler.CodeGen.MSIL
 {
@@ -21,6 +22,27 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         private readonly Dictionary<string, int> _tempNameIndices;
         private readonly HashSet<string> _declaredIdentifiers;
         private readonly List<string> _stringConstants;
+
+        /// <summary>
+        /// Module-level variables, keyed by name, emitted as STATIC FIELDS on the module class.
+        ///
+        /// <para>⛔ This backend used to ignore <see cref="IRModule.GlobalVariables"/> entirely —
+        /// the string "GlobalVariables" did not appear in this file. A module-level
+        /// <c>Dim n As Integer = 7</c> therefore had no storage anywhere: reading it emitted
+        /// <c>// WARNING: Unknown local 'n'</c> and pushed NOTHING, so the next instruction ran an
+        /// operand short and the CLR rejected the method with InvalidProgramException. Writing it
+        /// emitted <c>// WARNING: Cannot store to 'n'</c> and left the value on the stack, which
+        /// is the more dangerous half: in <c>s = "SET" : Console.WriteLine(s)</c> the abandoned
+        /// <c>ldstr</c> was consumed by the WriteLine that followed and the program printed "SET"
+        /// — the right answer, reached by a stack accident that the next statement would
+        /// destroy.</para>
+        ///
+        /// <para>Case-insensitive to match BasicLang name resolution, and populated before ANY
+        /// type is emitted because a method on a user class can read a module global too.</para>
+        /// </summary>
+        private readonly Dictionary<string, IRVariable> _moduleGlobals =
+            new Dictionary<string, IRVariable>(StringComparer.OrdinalIgnoreCase);
+
         private string _moduleName;
         private int _localCounter;
         private int _labelCounter;
@@ -28,6 +50,76 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         private int _currentStack;
         private IRModule _module;
         private IRClass _currentClass;
+
+        // ---- Exception-handling region state ------------------------------------------
+        //
+        // IL's protected regions are not blocks you can branch into or out of freely: leaving
+        // one needs `leave`, a `finally` ends with `endfinally`, and `ret` is illegal inside
+        // either. The emitter therefore needs to know, at every branch and return, whether it is
+        // currently writing inside a region — so the three visitors that emit control flow
+        // (IRBranch, IRConditionalBranch, IRReturn) consult this state rather than each
+        // re-deriving it. Null/false means "not in a region", and everything behaves as before.
+
+        /// <summary>
+        /// The block set <see cref="GenerateBasicBlock"/> is walking, held as a field so
+        /// <see cref="Visit(IRTryCatch)"/> can mark a region's blocks emitted. Without that the
+        /// same blocks are written twice — once inside the region and once as ordinary labelled
+        /// blocks — which is the defect this rewrite replaced.
+        /// </summary>
+        private HashSet<BasicBlock> _visitedBlocks;
+
+        /// <summary>Blocks of the protected region currently being emitted; null when outside one.</summary>
+        private HashSet<BasicBlock> _regionBlocks;
+
+        /// <summary>True while emitting a <c>finally</c> handler, whose only exit is <c>endfinally</c>.</summary>
+        private bool _regionIsFinally;
+
+        /// <summary>True while emitting a <c>catch</c> handler — the only place <c>rethrow</c> is legal.</summary>
+        private bool _regionIsCatch;
+
+        /// <summary>Label a region block falls out to when its IR block has no terminator.</summary>
+        private string _regionLeaveTarget;
+
+        /// <summary>Synthetic common exit for a <c>Return</c> lowered out of a protected region.</summary>
+        private string _methodExitLabel;
+
+        /// <summary>Slot holding a lowered <c>Return</c>'s value; -1 for a void method.</summary>
+        private int _methodExitResultLocal;
+
+        /// <summary>Whether any <c>Return</c> was actually lowered, so the exit block is needed.</summary>
+        private bool _methodExitUsed;
+
+        /// <summary>
+        /// Locals this backend declares that <c>IRFunction.LocalVariables</c> does not carry:
+        /// catch-clause exception variables, the lowered-return result slot, and field-store
+        /// scratch slots.
+        /// </summary>
+        private readonly List<(int Index, string Spec, string Name)> _syntheticLocals = new();
+
+        // ---- Instance-method state ----------------------------------------------------
+        //
+        // An instance method is handed `Me` in argument slot 0, which shifts EVERY declared
+        // parameter up by one and gives the body a receiver it can reach fields and sibling
+        // methods through. The emitter had no notion of any of that: it numbered parameters from
+        // 0 (so `Add(a, b)` emitted `ldarg.0 / ldarg.1 / add` and added the OBJECT REFERENCE to
+        // `a` — a silent wrong answer), and a bare field name resolved to nothing at all.
+
+        /// <summary>True while emitting a method that has <c>Me</c> in argument slot 0.</summary>
+        private bool _currentMethodIsInstance;
+
+        /// <summary>
+        /// The instance fields reachable as bare names in the current method body. Empty for a
+        /// static or module method, which is what keeps their output byte-identical.
+        /// </summary>
+        private readonly Dictionary<string, TypeInfo> _currentClassFields =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Scratch slot per field that the current method ASSIGNS — see <see cref="EmitStoreLocal"/>.</summary>
+        private readonly Dictionary<string, int> _fieldStoreScratch =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>The IL name of the type whose fields <see cref="_currentClassFields"/> holds.</summary>
+        private string _currentClassToken;
 
         public override string BackendName => "MSIL";
         public override TargetPlatform Target => TargetPlatform.MSIL;
@@ -79,11 +171,28 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // ⛔ allowForeignIdentifiers stays at its default FALSE — see the note on the C#
             // backend's call. It is JavaScript-only, because only there does `::name` mean a real
             // identifier in the target language.
-            ForeignFeatureChecker.Check(module, "MSIL", rejectCollections: true, ownInlineLanguage: "msil");
+            // ⛔ Collections stay REFUSED until generic member signatures are emitted. The type
+            // NAMING is done (TryCollectionToken), and that was the easy half; IL also requires a
+            // method on a generic instantiation to carry the GENERIC DEFINITION's signature —
+            // `List`1<string>::Add(!0)`, never `Add(string)` — or the call fails at run time with
+            // MissingMethodException.
+            //
+            // ⛔ And the obvious shortcut is UNSOUND: substituting any parameter whose type equals
+            // a generic argument gets List(Of Integer).Add(5) right (!0) and RemoveAt(0) wrong
+            // (must stay int32). It needs a per-member table saying which positions are generic.
+            // Flipping this to false before that exists trades a clean BL diagnostic for a
+            // runtime crash, which is the one thing the honesty matrix exists to prevent.
+            ForeignFeatureChecker.Check(module, "MSIL", rejectCollections: false, ownInlineLanguage: "msil");
 
             _output.Clear();
             _stringConstants.Clear();
             _labelCounter = 0;
+
+            // ⛔ Both of these must be set BEFORE the first type is emitted, not inside
+            // GenerateClass where the module class is built LAST. A method on a user class can
+            // read a module-level variable, and resolving one needs the owning class's name.
+            _moduleName = SanitizeName(module.Name);
+            CollectModuleGlobals(module);
 
             // Generate assembly header
             GenerateHeader(module);
@@ -152,7 +261,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         {
             var delegateName = SanitizeName(irDelegate.Name);
             var returnType = MapType(irDelegate.ReturnType);
-            var paramTypes = string.Join(", ", irDelegate.Parameters.Select(p => MapTypeName(p.TypeName)));
+            var paramTypes = string.Join(", ", irDelegate.Parameters.Select(IlParameterSpec));
 
             WriteLine($".class public auto ansi sealed {delegateName}");
             WriteLine("       extends [mscorlib]System.MulticastDelegate");
@@ -188,23 +297,316 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine($"}} // end of class {delegateName}");
         }
 
+        /// <summary>
+        /// A BasicLang type as an IL <b>type spec</b> — what goes in a local, parameter, field
+        /// or signature position.
+        ///
+        /// <para>IL primitives are keywords there (<c>int32</c>, <c>string</c>), but a
+        /// reference type is NOT: a class must be spelled <c>class Foo</c>, and an array is the
+        /// element spec followed by <c>[]</c>. Emitting the BasicLang name raw produced
+        /// <c>[0] Greeter g</c> and <c>[0] String[] a</c>, both of which ilasm rejects outright
+        /// — the backend could not declare a local of any user class or any array.</para>
+        /// </summary>
+        private string IlTypeSpec(string typeName)
+        {
+            if (string.IsNullOrEmpty(typeName)) return "object";
+
+            // An array: judge the element and re-attach the rank. Done before the primitive
+            // lookup so `String[]` is not mistaken for an unknown class named "String[]".
+            var trimmed = typeName.Trim();
+            if (trimmed.EndsWith("[]", StringComparison.Ordinal))
+                return IlTypeSpec(trimmed.Substring(0, trimmed.Length - 2)) + "[]";
+
+            var mapped = MapTypeName(trimmed);
+
+            // MapTypeName passes an unknown name through SanitizeName, so anything that did not
+            // land on an IL keyword is a class reference and needs the `class` prefix.
+            return IlPrimitives.Contains(mapped) ? mapped : "class " + mapped;
+        }
+
+        /// <summary>
+        /// A BasicLang type as an IL <b>type token</b> — what <c>box</c>, <c>newarr</c>,
+        /// <c>castclass</c>, <c>isinst</c> and friends take as their operand.
+        ///
+        /// <para>⛔ This is NOT <see cref="IlTypeSpec"/> with different spacing. A token names a
+        /// TYPE, so an IL primitive keyword is not valid here — <c>box</c> needs the BCL value
+        /// type it stands for, <c>[mscorlib]System.Int32</c>. The backend used to emit
+        /// <c>box [{mapped}]</c>, and in IL <c>[X]</c> means "assembly X", so <c>box [int32]</c>
+        /// reads as a type in an assembly named <c>int32</c> and does not parse at all. That
+        /// single mistake blocked every <c>CStr</c> of a number.</para>
+        /// </summary>
+        private string IlTypeToken(string typeName)
+        {
+            if (string.IsNullOrEmpty(typeName)) return "[mscorlib]System.Object";
+
+            var trimmed = typeName.Trim();
+            if (trimmed.EndsWith("[]", StringComparison.Ordinal))
+                return IlTypeToken(trimmed.Substring(0, trimmed.Length - 2)) + "[]";
+
+            var mapped = MapTypeName(trimmed);
+            return PrimitiveTokens.TryGetValue(mapped, out var bcl)
+                ? bcl
+                : mapped;
+        }
+
+        /// <summary>
+        /// <see cref="IlTypeSpec(string)"/> for a resolved <c>TypeInfo</c>, routed through the
+        /// existing <c>MapType</c> so there is still ONE place that decides what a BasicLang
+        /// type is called in IL. Both string forms are accepted by the spec/token functions —
+        /// a BasicLang name (<c>Integer</c>) and an already-mapped one (<c>int32</c>) — because
+        /// callers hold one or the other depending on how far through lowering they are.
+        ///
+        /// <para><b>Collections are handled here, not in the string form</b>, because only the
+        /// <c>TypeInfo</c> carries <see cref="TypeInfo.GenericArguments"/>. A <c>List</c> whose
+        /// element type has been lost is not a type IL can name.</para>
+        /// </summary>
+        private string IlTypeSpec(TypeInfo type) =>
+            TryCollectionToken(type, out var token) ? "class " + token : IlTypeSpec(MapType(type));
+
+        /// <inheritdoc cref="IlTypeToken(string)"/>
+        private string IlTypeToken(TypeInfo type) =>
+            TryCollectionToken(type, out var token) ? token : IlTypeToken(MapType(type));
+
+        /// <summary>
+        /// The BCL generic token for a BasicLang collection — <c>List</c> →
+        /// <c>[mscorlib]System.Collections.Generic.List`1&lt;string&gt;</c>.
+        ///
+        /// <para><b>Why MSIL gets these natively and LLVM does not.</b> Until 2026-09-15 the
+        /// backend honesty matrix (spec decision 12) refused collections on LLVM and MSIL
+        /// together. That grouping was right for LLVM, which has no BCL to reach for — and
+        /// wrong for MSIL the moment it became a maintained target, because MSIL RUNS on .NET:
+        /// <c>List`1</c> is already in the runtime it targets, exactly as the C# backend uses
+        /// it. Nothing needs implementing, only naming.</para>
+        ///
+        /// <para>⛔ Generic ARGUMENTS are required, not decorative. <c>class List</c> — the name
+        /// with its arguments dropped — is what the backend emitted before this, and ilasm
+        /// rejects it as an undefined class. An arity-1 collection with no recorded argument is
+        /// therefore NOT guessed at: this returns false and lets the ordinary path refuse it,
+        /// rather than emitting <c>List`1&lt;object&gt;</c> and silently widening the element
+        /// type.</para>
+        /// </summary>
+        private bool TryCollectionToken(TypeInfo type, out string token)
+        {
+            token = null;
+            if (type?.Name == null) return false;
+
+            if (!CollectionArities.TryGetValue(type.Name, out var shape)) return false;
+
+            var args = type.GenericArguments;
+            if (args == null || args.Count != shape.Arity) return false;
+
+            // ⛔ Arguments are type SPECS, not tokens: IL writes `List`1<string>`, never
+            // `List`1<[mscorlib]System.String>`. The generated indexer call has always spelled
+            // it the first way (`IList`1<string>::get_Item`), so getting this wrong here would
+            // have produced two different spellings of one type in a single method.
+            var rendered = args.Select(IlTypeSpec);
+
+            token = $"[mscorlib]{shape.ClrName}`{shape.Arity}<{string.Join(", ", rendered)}>";
+            return true;
+        }
+
+        /// <summary>
+        /// A parameter's IL type spec for a SIGNATURE position (interface members, delegate
+        /// Invoke, method declarations).
+        ///
+        /// <para>⛔ These sites used to read <c>p.TypeName</c>, a STRING, which cannot carry
+        /// generic arguments — so a <c>List(Of Integer)</c> parameter emitted a bare
+        /// <c>List</c> and the whole method failed to assemble. The parameter already holds the
+        /// resolved <see cref="TypeInfo"/>; that is what knows the element type.</para>
+        ///
+        /// <para>The name is kept as the fallback for a parameter whose TypeInfo never got
+        /// populated, so this cannot be a regression for shapes that worked before.</para>
+        /// </summary>
+        private string IlParameterSpec(IRParameter parameter) =>
+            parameter?.Type != null ? IlTypeSpec(parameter.Type) : MapTypeName(parameter?.TypeName);
+
+        /// <summary>
+        /// One collection member's IL signature, written in terms of the GENERIC DEFINITION.
+        /// </summary>
+        /// <param name="Il">
+        /// The member name as IL spells it — a property becomes its accessor
+        /// (<c>Count</c> → <c>get_Count</c>).
+        /// </param>
+        /// <param name="Ret">Return type, with <c>!0</c>/<c>!1</c> for generic positions.</param>
+        /// <param name="Params">Parameter types, same convention.</param>
+        private sealed record CollectionMember(string Il, string Ret, string Params);
+
+        /// <summary>
+        /// <b>The narrow supported surface of <c>List</c> and <c>Dictionary</c> on MSIL</b>
+        /// (2026-09-15), keyed by CLR type name and BasicLang member name.
+        ///
+        /// <para><b>Why a table and not a rule.</b> IL requires a method on a generic
+        /// instantiation to carry the generic definition's signature —
+        /// <c>List`1&lt;string&gt;::Add(!0)</c>, never <c>Add(string)</c> — so something has to
+        /// say which positions are generic. The tempting rule, "substitute any parameter whose
+        /// type equals a generic argument", is UNSOUND: it gets <c>List(Of Integer).Add(5)</c>
+        /// right (<c>!0</c>) and <c>RemoveAt(0)</c> wrong, because that index must stay
+        /// <c>int32</c>. Nothing about the argument types distinguishes those two cases, so the
+        /// positions are recorded rather than inferred.</para>
+        ///
+        /// <para><b>A member missing from this table is REFUSED, never guessed.</b> That is the
+        /// whole reason a narrow table is safe to ship: the supported set is exactly what is
+        /// written here, and everything else still gets the clean BasicLang diagnostic it got
+        /// when collections were refused wholesale. Widening the set means adding a row and a
+        /// round-trip test, not relaxing a check.</para>
+        /// </summary>
+        private static readonly Dictionary<string, Dictionary<string, CollectionMember>> CollectionMembers =
+            new(StringComparer.Ordinal)
+            {
+                ["System.Collections.Generic.List"] = new(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["Add"] = new("Add", "void", "!0"),
+                    ["Count"] = new("get_Count", "int32", ""),
+                    ["Contains"] = new("Contains", "bool", "!0"),
+                    // The indexer. `Item` is the BasicLang spelling; IL wants the accessors, and
+                    // the INDEX is int32 while the element is generic — the exact asymmetry the
+                    // unsound rule above would have flattened.
+                    ["get_Item"] = new("get_Item", "!0", "int32"),
+                    ["set_Item"] = new("set_Item", "void", "int32, !0"),
+                },
+                ["System.Collections.Generic.Dictionary"] = new(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["Add"] = new("Add", "void", "!0, !1"),
+                    ["Count"] = new("get_Count", "int32", ""),
+                    ["ContainsKey"] = new("ContainsKey", "bool", "!0"),
+                    // Keyed by !0, yielding !1 — and the backend used to emit this as
+                    // `IList`1<int32>::get_Item(string)`, which names the VALUE type as the
+                    // list's element and the KEY type as an integer index. Wrong in both
+                    // positions, on a call that assembled.
+                    ["get_Item"] = new("get_Item", "!1", "!0"),
+                    ["set_Item"] = new("set_Item", "void", "!0, !1"),
+                },
+            };
+
+        /// <summary>
+        /// The supported signature for <paramref name="member"/> on a collection receiver, or
+        /// null when the receiver is not a collection at all (leave it to the ordinary path).
+        /// Throws for a collection member OUTSIDE the table — see
+        /// <see cref="CollectionMembers"/> for why that refusal is the point.
+        /// </summary>
+        private bool TryCollectionMember(
+            TypeInfo receiver, string member, out string token, out CollectionMember signature)
+        {
+            token = null;
+            signature = null;
+            if (!TryCollectionToken(receiver, out token)) return false;
+
+            var clr = CollectionArities[receiver.Name].ClrName;
+            if (CollectionMembers.TryGetValue(clr, out var members)
+                && members.TryGetValue(member, out signature))
+            {
+                return true;
+            }
+
+            throw new ForeignFeatureException(
+                $"MSIL: '{receiver.Name}.{member}' is outside the supported collection surface. "
+                + "MSIL carries List and Dictionary natively, but only the members whose IL "
+                + "generic signatures are recorded (Add, Count, Contains/ContainsKey, and the "
+                + "indexer). Emitting a guessed signature produces a call that assembles and "
+                + "then fails with MissingMethodException at run time, so it is refused here "
+                + "instead. Add a row to MSILCodeGenerator.CollectionMembers plus a round-trip "
+                + "test to widen the set.");
+        }
+
+        /// <summary>
+        /// The token naming the type a member is called ON, for <c>callvirt</c>/<c>call</c>/
+        /// <c>newobj</c>.
+        ///
+        /// <para>Three shapes, and the difference is not cosmetic. A generic needs the
+        /// <c>class</c> prefix (<c>class [mscorlib]…List`1&lt;string&gt;</c>) — the existing
+        /// indexer emission already spells it that way. A non-generic BCL type is written bare
+        /// (<c>[mscorlib]System.String</c>), matching the <c>Object::ToString</c> call this file
+        /// has always emitted. A type in the assembly being generated is just its name.</para>
+        ///
+        /// <para>Before this, the receiver was <c>SanitizeName(type.Name)</c> unconditionally,
+        /// so <c>s.ToUpper()</c> emitted a call on a class literally named <c>String</c> and
+        /// <c>l.Add(x)</c> one on <c>List</c> — neither of which exists. One missing resolution
+        /// step, two symptoms.</para>
+        /// </summary>
+        private string IlReceiverToken(TypeInfo type)
+        {
+            if (type?.Name == null) return "[mscorlib]System.Object";
+
+            if (TryCollectionToken(type, out var collection)) return "class " + collection;
+
+            var mapped = MapTypeName(type.Name);
+            return PrimitiveTokens.TryGetValue(mapped, out var bcl) ? bcl : mapped;
+        }
+
+        /// <summary>
+        /// The collections <c>ForeignFeatureChecker.IsCollectionName</c> recognises, with the
+        /// CLR type each denotes. Kept beside <see cref="TryCollectionToken"/> so the set the
+        /// checker ADMITS and the set this backend can NAME cannot drift apart — a type allowed
+        /// through the gate with no entry here would reach ilasm as a bare name.
+        /// </summary>
+        private static readonly Dictionary<string, (string ClrName, int Arity)> CollectionArities =
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["List"] = ("System.Collections.Generic.List", 1),
+                ["HashSet"] = ("System.Collections.Generic.HashSet", 1),
+                ["Queue"] = ("System.Collections.Generic.Queue", 1),
+                ["Stack"] = ("System.Collections.Generic.Stack", 1),
+                ["Dictionary"] = ("System.Collections.Generic.Dictionary", 2),
+            };
+
+        /// <summary>The IL keywords <see cref="MapTypeName"/> can produce — anything else is a class.</summary>
+        private static readonly HashSet<string> IlPrimitives = new(StringComparer.Ordinal)
+        {
+            "int8", "uint8", "int16", "uint16", "int32", "uint32", "int64", "uint64",
+            "float32", "float64", "bool", "char", "string", "object", "void", "native int",
+        };
+
+        /// <summary>
+        /// IL keyword → the BCL type it denotes, for token positions. <c>string</c> and
+        /// <c>object</c> are reference types and never need boxing, but they DO need a real
+        /// token for <c>newarr</c>/<c>castclass</c>, so they are carried here too.
+        /// </summary>
+        private static readonly Dictionary<string, string> PrimitiveTokens = new(StringComparer.Ordinal)
+        {
+            ["int8"] = "[mscorlib]System.SByte",
+            ["uint8"] = "[mscorlib]System.Byte",
+            ["int16"] = "[mscorlib]System.Int16",
+            ["uint16"] = "[mscorlib]System.UInt16",
+            ["int32"] = "[mscorlib]System.Int32",
+            ["uint32"] = "[mscorlib]System.UInt32",
+            ["int64"] = "[mscorlib]System.Int64",
+            ["uint64"] = "[mscorlib]System.UInt64",
+            ["float32"] = "[mscorlib]System.Single",
+            ["float64"] = "[mscorlib]System.Double",
+            ["bool"] = "[mscorlib]System.Boolean",
+            ["char"] = "[mscorlib]System.Char",
+            ["string"] = "[mscorlib]System.String",
+            ["object"] = "[mscorlib]System.Object",
+        };
+
         private string MapTypeName(string typeName)
         {
             if (string.IsNullOrEmpty(typeName)) return "object";
-            return typeName.ToLowerInvariant() switch
+            switch (typeName.ToLowerInvariant())
             {
-                "integer" => "int32",
-                "long" => "int64",
-                "single" => "float32",
-                "double" => "float64",
-                "string" => "string",
-                "boolean" => "bool",
-                "byte" => "uint8",
-                "short" => "int16",
-                "object" => "object",
-                "void" => "void",
-                _ => SanitizeName(typeName)
-            };
+                case "integer": return "int32";
+                case "long": return "int64";
+                case "single": return "float32";
+                case "double": return "float64";
+                case "string": return "string";
+                case "boolean": return "bool";
+                case "byte": return "uint8";
+                case "short": return "int16";
+                case "object": return "object";
+                case "void": return "void";
+            }
+
+            // A recognized .NET exception is a BCL type and must be spelled with its assembly, in
+            // EVERY position — the local that holds it, the `newobj` that builds it, a parameter
+            // that carries it. Resolving it here rather than at each site is what keeps those in
+            // agreement: `Catch ex As Exception` used to declare `[0] class Exception` and
+            // `Throw New Exception(m)` used to emit `newobj instance void Exception::.ctor(string)`,
+            // both naming a class in no assembly, and ilasm refused the whole file with
+            // "Reference to undefined class 'Exception'".
+            if (CppExceptionTypes.TryGetNetFullName(typeName, out var exceptionFullName))
+                return "[mscorlib]" + exceptionFullName;
+
+            return SanitizeName(typeName);
         }
 
         private void GenerateInterface(IRInterface irInterface)
@@ -226,7 +628,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             {
                 var returnType = MapType(method.ReturnType);
                 var methodName = SanitizeName(method.Name);
-                var paramTypes = string.Join(", ", method.Parameters.Select(p => MapTypeName(p.TypeName)));
+                var paramTypes = string.Join(", ", method.Parameters.Select(IlParameterSpec));
 
                 WriteLine("  .method public hidebysig newslot abstract virtual");
                 WriteLine($"          instance {returnType} {methodName}({paramTypes}) cil managed");
@@ -277,11 +679,14 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _currentClass = irClass;
             var className = SanitizeName(irClass.Name);
 
-            // Build extends and implements
+            // Build extends and implements. The base goes through IlTypeToken, not SanitizeName:
+            // `Class MyError Inherits Exception` emitted `extends Exception`, naming a class in no
+            // assembly, and ilasm refused the file. A base class defined in this compilation still
+            // resolves to its bare sanitized name.
             var extends = "[mscorlib]System.Object";
             if (!string.IsNullOrEmpty(irClass.BaseClass))
             {
-                extends = SanitizeName(irClass.BaseClass);
+                extends = IlTypeToken(irClass.BaseClass);
             }
 
             var implements = "";
@@ -299,7 +704,11 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             {
                 var access = MapAccessModifier(field.Access);
                 var staticMod = field.IsStatic ? "static " : "";
-                var fieldType = MapType(field.Type);
+                // IlTypeSpec, not MapType: a field declaration is a type SPEC position, so a class
+                // needs its `class` prefix and an array needs its element mapped. `Public Cells(3)
+                // As Integer` emitted `.field public Integer[] Cells` — the BasicLang name, which
+                // ilasm rejects outright ("syntax error at token 'Integer'").
+                var fieldType = IlTypeSpec(field.Type);
                 var fieldName = SanitizeName(field.Name);
                 WriteLine($"  .field {access} {staticMod}{fieldType} {fieldName}");
             }
@@ -437,9 +846,15 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 if (prop.Getter.EntryBlock != null)
                 {
                     _currentFunction = prop.Getter;
-                    InitializeMethodContext(prop.Getter);
-                    var visited = new HashSet<BasicBlock>();
+                    InitializeMethodContext(prop.Getter, isInstance: !prop.IsStatic, owner: irClass);
+                    // _visitedBlocks, not a local set: Visit(IRTryCatch) marks a region's blocks THERE so
+                    // GenerateBasicBlock will not write them a second time. A local set left the two
+                    // disagreeing, and a Try inside a class member emitted every region block twice
+                    // ("Duplicate label").
+                    _visitedBlocks = new HashSet<BasicBlock>();
+                    var visited = _visitedBlocks;
                     GenerateBasicBlock(prop.Getter.EntryBlock, visited, isEntry: true);
+                    EmitLoweredReturnExit();
                     _currentFunction = null;
                 }
                 else
@@ -465,9 +880,15 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 if (prop.Setter.EntryBlock != null)
                 {
                     _currentFunction = prop.Setter;
-                    InitializeMethodContext(prop.Setter);
-                    var visited = new HashSet<BasicBlock>();
+                    InitializeMethodContext(prop.Setter, isInstance: !prop.IsStatic, owner: irClass);
+                    // _visitedBlocks, not a local set: Visit(IRTryCatch) marks a region's blocks THERE so
+                    // GenerateBasicBlock will not write them a second time. A local set left the two
+                    // disagreeing, and a Try inside a class member emitted every region block twice
+                    // ("Duplicate label").
+                    _visitedBlocks = new HashSet<BasicBlock>();
+                    var visited = _visitedBlocks;
                     GenerateBasicBlock(prop.Setter.EntryBlock, visited, isEntry: true);
+                    EmitLoweredReturnExit();
                     _currentFunction = null;
                 }
 
@@ -487,7 +908,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (ctor.Implementation != null)
             {
                 paramTypes = string.Join(", ", ctor.Implementation.Parameters.Select(p =>
-                    $"{MapType(p.Type)} {SanitizeName(p.Name)}"));
+                    $"{IlTypeSpec(p.Type)} {SanitizeName(p.Name)}"));
             }
 
             WriteLine("  .method public hidebysig specialname rtspecialname");
@@ -495,18 +916,41 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine("  {");
             WriteLine("    .maxstack 8");
 
+            // ⛔ A constructor body gets locals like any other method, and this never declared
+            // them: `Public Sub New(v As Integer) : N = v` needs a slot to park the value in
+            // before `stfld`, and emitting a store against an undeclared slot is an invalid
+            // program. The context is initialized here, ahead of the base call, so the tables the
+            // declaration is written from are populated.
+            if (ctor.Implementation != null)
+            {
+                _currentFunction = ctor.Implementation;
+                InitializeMethodContext(ctor.Implementation, isInstance: true, owner: irClass);
+                if (_localIndices.Count > 0 || _tempIndices.Count > 0)
+                {
+                    GenerateLocalsDeclaration(ctor.Implementation);
+                }
+            }
+
             // Call base constructor
-            var baseClass = string.IsNullOrEmpty(irClass.BaseClass) ? "[mscorlib]System.Object" : SanitizeName(irClass.BaseClass);
+            var baseClass = string.IsNullOrEmpty(irClass.BaseClass) ? "[mscorlib]System.Object" : IlTypeToken(irClass.BaseClass);
             WriteLine("    ldarg.0");
             WriteLine($"    call instance void {baseClass}::.ctor()");
 
-            // Generate constructor body
+            EmitArrayFieldAllocations(irClass);
+
+            // Generate constructor body. The context was initialized above, before the locals
+            // declaration was written from it — re-initializing here would just rebuild the same
+            // tables.
             if (ctor.Implementation?.EntryBlock != null)
             {
-                _currentFunction = ctor.Implementation;
-                InitializeMethodContext(ctor.Implementation);
-                var visited = new HashSet<BasicBlock>();
+                // _visitedBlocks, not a local set: Visit(IRTryCatch) marks a region's blocks THERE so
+                    // GenerateBasicBlock will not write them a second time. A local set left the two
+                    // disagreeing, and a Try inside a class member emitted every region block twice
+                    // ("Duplicate label").
+                    _visitedBlocks = new HashSet<BasicBlock>();
+                    var visited = _visitedBlocks;
                 GenerateBasicBlock(ctor.Implementation.EntryBlock, visited, isEntry: true);
+                EmitLoweredReturnExit();
                 _currentFunction = null;
             }
 
@@ -519,7 +963,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
         private void GenerateDefaultCtorForClass(IRClass irClass)
         {
-            var baseClass = string.IsNullOrEmpty(irClass.BaseClass) ? "[mscorlib]System.Object" : SanitizeName(irClass.BaseClass);
+            var baseClass = string.IsNullOrEmpty(irClass.BaseClass) ? "[mscorlib]System.Object" : IlTypeToken(irClass.BaseClass);
 
             WriteLine("  .method public hidebysig specialname rtspecialname");
             WriteLine("          instance void .ctor() cil managed");
@@ -527,6 +971,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine("    .maxstack 8");
             WriteLine("    ldarg.0");
             WriteLine($"    call instance void {baseClass}::.ctor()");
+            EmitArrayFieldAllocations(irClass);
             WriteLine("    ret");
             WriteLine("  } // end of method .ctor");
             WriteLine();
@@ -563,7 +1008,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (method.Implementation != null)
             {
                 paramTypes = string.Join(", ", method.Implementation.Parameters.Select(p =>
-                    $"{MapType(p.Type)} {SanitizeName(p.Name)}"));
+                    $"{IlTypeSpec(p.Type)} {SanitizeName(p.Name)}"));
             }
 
             WriteLine($"  .method public hidebysig {modifiers}{staticMod}");
@@ -573,7 +1018,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (method.Implementation != null && !method.IsAbstract)
             {
                 _currentFunction = method.Implementation;
-                InitializeMethodContext(method.Implementation);
+                InitializeMethodContext(method.Implementation, isInstance: !method.IsStatic, owner: irClass);
 
                 // Calculate max stack
                 _maxStack = Math.Max(8, _localIndices.Count + _tempIndices.Count + 4);
@@ -590,8 +1035,14 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 // Generate body
                 if (method.Implementation.EntryBlock != null)
                 {
-                    var visited = new HashSet<BasicBlock>();
+                    // _visitedBlocks, not a local set: Visit(IRTryCatch) marks a region's blocks THERE so
+                    // GenerateBasicBlock will not write them a second time. A local set left the two
+                    // disagreeing, and a Try inside a class member emitted every region block twice
+                    // ("Duplicate label").
+                    _visitedBlocks = new HashSet<BasicBlock>();
+                    var visited = _visitedBlocks;
                     GenerateBasicBlock(method.Implementation.EntryBlock, visited, isEntry: true);
+                    EmitLoweredReturnExit();
                 }
 
                 _currentFunction = null;
@@ -607,7 +1058,15 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine();
         }
 
-        private void InitializeMethodContext(IRFunction function)
+        /// <summary>
+        /// Per-method setup for a CLASS member (method, constructor, property accessor).
+        ///
+        /// <para><paramref name="isInstance"/> is the whole point: an instance member is handed
+        /// <c>Me</c> in argument slot 0, so its first declared parameter is <c>ldarg.1</c>. Passing
+        /// false reproduces the previous numbering exactly, which is why static members and
+        /// module-level functions are untouched by this.</para>
+        /// </summary>
+        private void InitializeMethodContext(IRFunction function, bool isInstance = false, IRClass owner = null)
         {
             _localIndices.Clear();
             _paramIndices.Clear();
@@ -618,10 +1077,44 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _maxStack = 8;
             _currentStack = 0;
 
+            // The same per-method reset GenerateMethod does. Without it a Try inside a class
+            // member would find no exception-handling state prepared for it.
+            _syntheticLocals.Clear();
+            _regionBlocks = null;
+            _regionIsFinally = false;
+            _regionIsCatch = false;
+            _regionLeaveTarget = null;
+            _methodExitResultLocal = -1;
+            _methodExitUsed = false;
+            _methodExitLabel = $"eh_exit_{_labelCounter++}";
+
+            _currentMethodIsInstance = isInstance;
+            _currentClassFields.Clear();
+            _fieldStoreScratch.Clear();
+            _currentClassToken = owner != null ? SanitizeName(owner.Name) : null;
+
+            if (isInstance && owner?.Fields != null)
+            {
+                foreach (var field in owner.Fields)
+                {
+                    if (field.IsStatic || string.IsNullOrEmpty(field.Name)) continue;
+                    _currentClassFields[field.Name] = field.Type;
+
+                    // Register the field as a name the body can resolve. This is what routes an
+                    // assignment's destination through EmitStoreLocal rather than into a temp,
+                    // where `N = N + 1` used to silently land and be dropped.
+                    _declaredIdentifiers.Add(field.Name);
+                }
+            }
+
+            // ⛔ `Me` occupies slot 0, so the first DECLARED parameter is slot 1. Numbering from 0
+            // made every parameter read the argument before it — the first one reading the object
+            // reference itself, which is an integer-shaped wrong answer, not a crash.
+            var argumentSlot = isInstance ? 1 : 0;
             foreach (var param in function.Parameters)
             {
                 _declaredIdentifiers.Add(param.Name);
-                _paramIndices[param.Name] = _paramIndices.Count;
+                _paramIndices[param.Name] = argumentSlot++;
             }
 
             foreach (var local in function.LocalVariables)
@@ -630,7 +1123,58 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 _localIndices[local.Name] = _localIndices.Count;
             }
 
+            RegisterModuleGlobals();
+
+            AllocateExceptionHandlingLocals(function);
+            AllocateFieldStoreScratch(function);
             AllocateTemporaries(function);
+        }
+
+        /// <summary>
+        /// Reserves one scratch slot per field this method ASSIGNS to.
+        ///
+        /// <para><c>stfld</c> wants the object reference UNDER the value, but this backend emits a
+        /// value and then asks for it to be stored — <see cref="EmitStoreLocal"/> is called with
+        /// the value already on the stack and IL has no swap. The scratch slot is how the value
+        /// gets out of the way while <c>ldarg.0</c> goes down: park, push <c>Me</c>, re-push,
+        /// <c>stfld</c>.</para>
+        ///
+        /// <para>Only fields actually written get a slot, found by scanning for instructions whose
+        /// RESULT is named after a field — that is the shape an assignment takes here, since
+        /// <c>N = N + 1</c> lowers to a single binary op named <c>N</c>.</para>
+        /// </summary>
+        private void AllocateFieldStoreScratch(IRFunction function)
+        {
+            if (!_currentMethodIsInstance || _currentClassFields.Count == 0) return;
+
+            foreach (var block in function.Blocks)
+            {
+                foreach (var instruction in block.Instructions)
+                {
+                    // THREE shapes reach EmitStoreLocal with a field's name, and neither of the
+                    // last two is an IRValue — scanning only for named results missed both:
+                    //   `N = N + 1`  a binary op whose RESULT is named N
+                    //   `N = v`      an IRAssignment whose TARGET is the variable N
+                    //   (and IRStore, whose ADDRESS is the variable, for the same reason)
+                    var target = instruction switch
+                    {
+                        IRAssignment assignment => assignment.Target?.Name,
+                        IRStore store when store.Address is IRVariable variable => variable.Name,
+                        IRValue value => value.Name,
+                        _ => null,
+                    };
+
+                    if (string.IsNullOrEmpty(target)) continue;
+                    if (!_currentClassFields.TryGetValue(target, out var fieldType)) continue;
+                    if (_fieldStoreScratch.ContainsKey(target)) continue;
+
+                    var index = _localIndices.Count;
+                    var name = $"fld_scratch_{SanitizeName(target)}";
+                    _localIndices[name] = index;
+                    _fieldStoreScratch[target] = index;
+                    _syntheticLocals.Add((index, IlTypeSpec(fieldType), name));
+                }
+            }
         }
 
         private void GenerateHeader(IRModule module)
@@ -657,9 +1201,20 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         {
             _moduleName = SanitizeName(module.Name);
 
-            WriteLine($".class public auto ansi beforefieldinit {_moduleName}");
+            var needsInitializer = _moduleGlobals.Values.Any(NeedsStaticInitialization);
+
+            // ⚠ `beforefieldinit` is DROPPED when there is a type initializer, exactly as the C#
+            // compiler drops it for a class with a static constructor. With the flag set the CLR
+            // may run .cctor at any point at or before the first static-field access; without it
+            // the first access is the guaranteed trigger. The relaxed form is not wrong for the
+            // code we emit, but the strict form is the one whose ordering is observable and
+            // testable, and it costs nothing here.
+            var flags = needsInitializer ? "" : " beforefieldinit";
+            WriteLine($".class public auto ansi{flags} {_moduleName}");
             WriteLine("       extends [mscorlib]System.Object");
             WriteLine("{");
+
+            GenerateGlobalFields();
 
             // Generate methods
             foreach (var function in module.Functions)
@@ -671,10 +1226,152 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 }
             }
 
+            if (needsInitializer)
+            {
+                GenerateStaticConstructor();
+                WriteLine();
+            }
+
             // Generate default constructor
             GenerateDefaultConstructor();
 
             WriteLine("} // end of class " + _moduleName);
+        }
+
+        /// <summary>
+        /// Records the module's global variables so every later emission — fields, the type
+        /// initializer, and every read and write in every method body — reads one table.
+        /// </summary>
+        private void CollectModuleGlobals(IRModule module)
+        {
+            _moduleGlobals.Clear();
+            if (module.GlobalVariables == null) return;
+
+            foreach (var global in module.GlobalVariables.Values)
+            {
+                if (string.IsNullOrEmpty(global?.Name)) continue;
+                _moduleGlobals[global.Name] = global;
+            }
+        }
+
+        /// <summary>
+        /// One static field per module-level variable.
+        ///
+        /// <para>⛔ The access modifier is NOT a direct translation of the BasicLang one. A
+        /// <c>Private</c> global becomes <c>assembly</c>, not <c>private</c>: IL's <c>private</c>
+        /// means "the declaring type only", so a method on a user class reading a module-level
+        /// variable — which BasicLang allows, they are in the same file — would be refused by the
+        /// CLR with FieldAccessException at the first read. Everything this backend emits lands in
+        /// one assembly, so <c>assembly</c> is the narrowest modifier that still admits every
+        /// reference the language permits.</para>
+        /// </summary>
+        private void GenerateGlobalFields()
+        {
+            if (_moduleGlobals.Count == 0) return;
+
+            WriteLine("  // Module-level variables");
+            foreach (var global in _moduleGlobals.Values)
+            {
+                var access = global.Access == AccessModifier.Public ? "public" : "assembly";
+                WriteLine($"  .field {access} static {IlTypeSpec(global.Type)} {SanitizeName(global.Name)}");
+            }
+            WriteLine();
+        }
+
+        /// <summary>
+        /// True when a global needs the type initializer to run for it: it has a declared
+        /// initializer, or it is a sized array whose storage nothing else creates.
+        ///
+        /// <para>A global with neither is already correct — the CLR zeroes every static field, and
+        /// zero/null/false is exactly what an uninitialized BasicLang variable holds. Emitting a
+        /// <c>.cctor</c> for those alone would be dead IL.</para>
+        /// </summary>
+        private bool NeedsStaticInitialization(IRVariable global) =>
+            global.InitialValue != null || TryArrayAllocation(global.Type, out _, out _);
+
+        /// <summary>
+        /// The module class's type initializer: declared initializers and sized-array storage for
+        /// module-level variables, run once before the first access to any of them.
+        ///
+        /// <para>⛔ This is where a module-level <c>Dim n As Integer = 7</c>'s initializer has to
+        /// go, because it is NOWHERE in the function IR — <c>Main</c>'s instruction list for that
+        /// declaration is just <c>t0 = call CStr(@n)</c>. Nothing in a method body ever assigns
+        /// the 7. Leaving this out does not produce a build error, it produces a program that
+        /// prints 0.</para>
+        ///
+        /// <para>A sized array global is the same case as a sized array local or field: left bare
+        /// it is a null reference and the first <c>g(0) = …</c> throws. <see cref="TryArrayAllocation"/>
+        /// is shared with those two sites so all three agree on the length and refuse rank &gt; 1
+        /// identically.</para>
+        /// </summary>
+        private void GenerateStaticConstructor()
+        {
+            // The initializer is a method: it gets its own stack accounting, and no locals,
+            // parameters or temporaries from whatever was generated before it.
+            _localIndices.Clear();
+            _paramIndices.Clear();
+            _tempIndices.Clear();
+            _tempNameIndices.Clear();
+            _declaredIdentifiers.Clear();
+            _maxStack = 8;
+            _currentStack = 0;
+
+            WriteLine("  .method private hidebysig specialname rtspecialname");
+            WriteLine("          static void .cctor() cil managed");
+            WriteLine("  {");
+            WriteLine("    .maxstack 8");
+
+            foreach (var global in _moduleGlobals.Values)
+            {
+                if (global.InitialValue != null)
+                {
+                    EmitInlineValue(global.InitialValue);
+                    EmitNumericCoercion(global.InitialValue, global.Type);
+                }
+                else if (TryArrayAllocation(global.Type, out var elementToken, out var length))
+                {
+                    EmitLdcI4(length);
+                    _currentStack++;
+                    WriteLine($"    newarr {elementToken}");
+                }
+                else
+                {
+                    continue;
+                }
+
+                WriteLine($"    stsfld {IlTypeSpec(global.Type)} {_moduleName}::{SanitizeName(global.Name)}");
+                _currentStack--;
+            }
+
+            WriteLine("    ret");
+            WriteLine("  } // end of method .cctor");
+        }
+
+        /// <summary>
+        /// Widens an integer literal that is initializing a floating-point or 64-bit global.
+        ///
+        /// <para>⛔ <c>Dim d As Double = 7</c> carries an <c>IRConstant</c> holding a CLR
+        /// <c>int</c>, so the initializer emits <c>ldc.i4.7</c> while the field is
+        /// <c>float64</c>. IL does NOT coerce on <c>stsfld</c>, and — measured, do not assume
+        /// otherwise — nothing rejects the mismatch: ilasm assembles it without a diagnostic and
+        /// the JIT runs it. The int32's BIT PATTERN lands in the low half of the float64 slot, so
+        /// <c>d</c> holds 3.5E-323 and <c>d + 1.5</c> prints <c>1.5</c>. A missing conversion here
+        /// is a silent wrong answer with no crash and no warning comment to find it by, which is
+        /// why it is emitted from the field's declared type rather than trusted to the verifier.
+        /// Only the literal case is handled because only there is the stack type known for
+        /// certain; a computed initializer already carries its operands' type.</para>
+        /// </summary>
+        private void EmitNumericCoercion(IRValue value, TypeInfo target)
+        {
+            if (!(value is IRConstant constant)) return;
+            if (!(constant.Value is int || constant.Value is long)) return;
+
+            switch (IlTypeSpec(target))
+            {
+                case "float64": WriteLine("    conv.r8"); break;
+                case "float32": WriteLine("    conv.r4"); break;
+                case "int64" when constant.Value is int: WriteLine("    conv.i8"); break;
+            }
         }
 
         private void GenerateDefaultConstructor()
@@ -701,6 +1398,17 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _maxStack = 8; // Default, will be calculated
             _currentStack = 0;
 
+            // Exception-handling state is per METHOD: a region, its synthetic locals and its exit
+            // label never outlive the method they were emitted for.
+            _syntheticLocals.Clear();
+            _regionBlocks = null;
+            _regionIsFinally = false;
+            _regionIsCatch = false;
+            _regionLeaveTarget = null;
+            _methodExitResultLocal = -1;
+            _methodExitUsed = false;
+            _methodExitLabel = $"eh_exit_{_labelCounter++}";
+
             // Collect declared identifiers
             foreach (var param in function.Parameters)
             {
@@ -713,6 +1421,13 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 _declaredIdentifiers.Add(local.Name);
                 _localIndices[local.Name] = _localIndices.Count;
             }
+
+            RegisterModuleGlobals();
+
+            // Slots for the things a Try needs that IRFunction.LocalVariables does not carry.
+            // MUST run before AllocateTemporaries: temp indices continue from _localIndices.Count,
+            // and .locals init is written from these tables before any body instruction exists.
+            AllocateExceptionHandlingLocals(function);
 
             // Allocate indices for temporaries
             AllocateTemporaries(function);
@@ -727,7 +1442,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             // Parameters
             var paramList = string.Join(", ", function.Parameters.Select(p =>
-                $"{MapType(p.Type)} {SanitizeName(p.Name)}"));
+                $"{IlTypeSpec(p.Type)} {SanitizeName(p.Name)}"));
 
             WriteLine($"          {returnType} {methodName}({paramList}) cil managed");
 
@@ -753,12 +1468,17 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             WriteLine();
 
+            // Storage for sized array locals, before any statement can index one.
+            EmitArrayLocalAllocations(function);
+
             // Generate method body
             if (function.EntryBlock != null)
             {
-                var visitedBlocks = new HashSet<BasicBlock>();
-                GenerateBasicBlock(function.EntryBlock, visitedBlocks, isEntry: true);
+                _visitedBlocks = new HashSet<BasicBlock>();
+                GenerateBasicBlock(function.EntryBlock, _visitedBlocks, isEntry: true);
             }
+
+            EmitLoweredReturnExit();
 
             // Ensure method ends with ret
             if (returnType == "void" && !EndsWithRet())
@@ -767,6 +1487,247 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
 
             WriteLine($"  }} // end of method {methodName}");
+        }
+
+        /// <summary>
+        /// Reserves the locals a <c>Try</c> needs but <c>IRFunction.LocalVariables</c> never lists:
+        /// each catch clause's exception variable, and — for a non-void function containing a Try
+        /// — one result slot for a <c>Return</c> lowered out of a protected region.
+        ///
+        /// <para><b>Why here and not in IRBuilder.</b> IRBuilder pushes the catch variable onto its
+        /// version stack but never adds it to <c>LocalVariables</c>, so no backend sees it as a
+        /// declared local. Adding it there would move C#, C++, JavaScript and LLVM output too, for
+        /// a defect that is MSIL's alone; this backend declares what IL requires and leaves the
+        /// shared builder untouched.</para>
+        ///
+        /// <para><b>Why a pre-pass.</b> <c>.locals init</c> is written from these tables before the
+        /// first body instruction is emitted. The old emitter allocated the catch variable during
+        /// emission with <c>_localCounter++</c>, a counter unrelated to <c>_localIndices</c>, and
+        /// produced <c>stloc 0</c> in a method with NO locals directive at all — the
+        /// InvalidProgramException this fixes. Where a local did happen to exist at that index, the
+        /// store landed on an unrelated variable of an unrelated type instead.</para>
+        /// </summary>
+        private void AllocateExceptionHandlingLocals(IRFunction function)
+        {
+            var tries = function.Blocks
+                .SelectMany(b => b.Instructions)
+                .OfType<IRTryCatch>()
+                .ToList();
+            if (tries.Count == 0) return;
+
+            foreach (var clause in tries.SelectMany(t => t.CatchClauses))
+            {
+                if (string.IsNullOrEmpty(clause.VariableName)) continue;
+
+                var name = SanitizeName(clause.VariableName);
+                if (_localIndices.ContainsKey(name)) continue;
+
+                var index = _localIndices.Count;
+                _localIndices[name] = index;
+                _declaredIdentifiers.Add(clause.VariableName);
+                _syntheticLocals.Add((index, IlTypeSpec(clause.ExceptionType ?? ExceptionTypeInfo), name));
+            }
+
+            // A Return inside a protected region cannot be a `ret`; it becomes a store plus a
+            // `leave` to one exit that owns the real `ret`. Reserve the slot unconditionally for a
+            // non-void function with a Try — an unused local costs a word and nothing else, while
+            // discovering mid-emission that one is needed is exactly what cannot be fixed then.
+            _methodExitResultLocal = -1;
+            if (MapType(function.ReturnType) != "void")
+            {
+                _methodExitResultLocal = _localIndices.Count;
+                var name = $"eh_result_{_methodExitResultLocal}";
+                _localIndices[name] = _methodExitResultLocal;
+                _syntheticLocals.Add((_methodExitResultLocal, IlTypeSpec(function.ReturnType), name));
+            }
+        }
+
+        /// <summary>
+        /// The one <c>ret</c> that a <c>Return</c> lowered out of a protected region leaves to.
+        ///
+        /// <para>Emitted only when such a Return was actually lowered, so a method without one is
+        /// byte-identical to before. Shared by every path that emits a body — a method, a class
+        /// member, a constructor, a property accessor — because a `leave` to a label nobody writes
+        /// is an unresolved forward reference and ilasm refuses the method outright.</para>
+        /// </summary>
+        private void EmitLoweredReturnExit()
+        {
+            if (!_methodExitUsed) return;
+
+            WriteLine($"  {_methodExitLabel}:");
+            if (_methodExitResultLocal >= 0) EmitLdloc(_methodExitResultLocal);
+            WriteLine("    ret");
+        }
+
+        /// <summary>The implicit <c>Catch</c> type when a clause names none.</summary>
+        private static readonly TypeInfo ExceptionTypeInfo = new TypeInfo("Exception", TypeKind.Class);
+
+        /// <summary>
+        /// Allocates every sized array LOCAL at the top of the method.
+        ///
+        /// <para>⛔ <c>Dim a(2) As String</c> declared <c>[0] string[] a</c> and stopped there. A
+        /// local of reference type starts null, so the very next <c>ldelema</c> dereferenced null
+        /// and the program died with NullReferenceException — the array was never created at all.
+        /// <c>.locals init</c> zeroes a slot; it does not construct anything.</para>
+        ///
+        /// <para>The element count comes from <see cref="TypeInfo.ArrayDimensionSizes"/>, the same
+        /// carrier the C# and C++ backends read, so the three cannot drift on how big
+        /// <c>Dim a(n)</c> is. Note that in BasicLang <c>n</c> is the element COUNT, not a VB-style
+        /// upper bound: the analyzer validates it as a size ("Array size cannot be negative") and
+        /// both other backends allocate exactly <c>n</c>. <c>a(n)</c> is therefore out of range,
+        /// which is the language's decision and not an off-by-one here.</para>
+        /// </summary>
+        private void EmitArrayLocalAllocations(IRFunction function)
+        {
+            foreach (var local in function.LocalVariables)
+            {
+                if (!TryArrayAllocation(local.Type, out var elementToken, out var length)) continue;
+                if (!_localIndices.TryGetValue(SanitizeName(local.Name), out var index)) continue;
+
+                EmitLdcI4(length);
+                _currentStack++;
+                WriteLine($"    newarr {elementToken}");
+                EmitStloc(index);
+            }
+        }
+
+        /// <summary>
+        /// The IL type of a temporary's slot.
+        ///
+        /// <para>⛔ An <see cref="IRGetElementPtr"/> temp holds an ADDRESS, not a value.
+        /// <c>ldelema int32</c> pushes an <c>int32&amp;</c> (a managed pointer), and the old
+        /// declaration typed that slot from the node's own type — <c>int32</c> — so the address
+        /// was stored as if it were the element. The following <c>stind.i4</c> then treated that
+        /// integer as a pointer and the program died with AccessViolationException.</para>
+        ///
+        /// <para>This was invisible until arrays started being allocated: every access previously
+        /// dereferenced a null array and raised NullReferenceException first. The reference-typed
+        /// case looked like it WORKED — a <c>string&amp;</c> in a <c>string</c> slot printed the
+        /// right answer — which makes it the more dangerous half: unverifiable IL that the GC may
+        /// see as an object reference, passing its test by luck.</para>
+        /// </summary>
+        private string TempSlotSpec(IRValue temp) =>
+            temp is IRGetElementPtr ? IlTypeSpec(temp.Type) + "&" : IlTypeSpec(temp.Type);
+
+        /// <summary>
+        /// Allocates every sized array FIELD in a constructor, after the base call and before any
+        /// constructor body can touch one.
+        ///
+        /// <para>Fields are the second site, and they are not optional. The C++ backend's own
+        /// note records that its first version of this fix lived inline in the locals loop and
+        /// left array fields unsized, which turned "does not build" into "builds and
+        /// access-violates". One helper, both constructor paths — the explicit one and the
+        /// generated default — because a class with a declared constructor never reaches the
+        /// other.</para>
+        /// </summary>
+        private void EmitArrayFieldAllocations(IRClass irClass)
+        {
+            if (irClass?.Fields == null) return;
+
+            foreach (var field in irClass.Fields)
+            {
+                if (field.IsStatic) continue;   // a static field is not this instance's to create
+                if (!TryArrayAllocation(field.Type, out var elementToken, out var length)) continue;
+
+                WriteLine("    ldarg.0");
+                EmitLdcI4(length);
+                WriteLine($"    newarr {elementToken}");
+                WriteLine($"    stfld {IlTypeSpec(field.Type)} {SanitizeName(irClass.Name)}::{SanitizeName(field.Name)}");
+            }
+        }
+
+        /// <summary>
+        /// Decides whether a type needs array storage created for it, and with what
+        /// <c>newarr</c> operand and length. False for anything that is not a sized array —
+        /// including <c>Dim a() As String</c>, whose storage an assignment supplies later.
+        ///
+        /// <para>⛔ <b>Rank &gt; 1 is REFUSED, not allocated.</b> A multi-dimensional declaration
+        /// currently collapses to a rank-1 IL type, and <c>Visit(IRGetElementPtr)</c> emits
+        /// <c>ldelema</c> with <c>Indices[0]</c> alone — so <c>g(1, 2)</c> silently reads and
+        /// writes <c>g[1]</c>, dropping the second index entirely. Allocating that array would
+        /// turn a loud NullReferenceException into a quiet wrong answer, which is strictly worse.
+        /// A real rank-2 lowering needs the rectangular form (<c>newobj int32[,]::.ctor</c> plus
+        /// <c>Get</c>/<c>Set</c> calls) on BOTH the declaration and the indexing side.</para>
+        ///
+        /// <para>The operand goes through <see cref="IlTypeToken(string)"/>, so it reads
+        /// <c>newarr [mscorlib]System.String</c>. ⚠ Unlike <c>box</c>, <c>newarr</c> ALSO accepts
+        /// the IL keyword form — <c>newarr int32</c> and <c>newarr string</c> both assemble and
+        /// run, measured directly against ilasm, and a mutation replacing the token with the
+        /// keyword kills no test. The token form is kept for consistency with every other operand
+        /// position in this file, not because the alternative is invalid; don't cite this line as
+        /// evidence that it is.</para>
+        /// </summary>
+        private bool TryArrayAllocation(TypeInfo type, out string elementToken, out int length)
+        {
+            elementToken = null;
+            length = 0;
+
+            if (type?.Kind != TypeKind.Array || type.ElementType == null) return false;
+
+            var sizes = type.ArrayDimensionSizes;
+            if (sizes == null || sizes.Count == 0) return false;
+
+            if (sizes.Count > 1)
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: a {sizes.Count}-dimensional array has no IL lowering. The declaration "
+                    + "collapses to a one-dimensional type and indexing emits ldelema with only "
+                    + "the FIRST index, so g(i, j) silently reads and writes g(i) — allocating it "
+                    + "would replace a NullReferenceException with a wrong answer. A rank-2 array "
+                    + "needs the rectangular IL form (newobj T[,]::.ctor plus Get/Set) on the "
+                    + "declaration and the indexing side together. Use nested rank-1 arrays, or "
+                    + "target C#/C++ which lower this correctly.");
+            }
+
+            // An unsized dimension (`Dim a() As String`) is a declaration without storage: some
+            // later assignment supplies the array. Nothing to create here.
+            if (sizes[0] <= 0) return false;
+
+            elementToken = IlTypeToken(type.ElementType);
+            length = sizes[0];
+            return true;
+        }
+
+        /// <summary>
+        /// The <c>System.Exception</c> members this backend can name, and the accessor each one
+        /// really is. All are <c>string</c>-valued properties declared on <c>Exception</c> itself,
+        /// so a derived exception type inherits them and <c>callvirt</c> on the base is correct.
+        ///
+        /// <para>Deliberately narrow, on the same principle as <c>CollectionMembers</c>: a member
+        /// with no recorded signature is REFUSED rather than guessed, because a guessed member
+        /// reference assembles cleanly and fails at run time.</para>
+        /// </summary>
+        private static readonly Dictionary<string, string> ExceptionMembers =
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Message"] = "get_Message",
+                ["StackTrace"] = "get_StackTrace",
+                ["Source"] = "get_Source",
+            };
+
+        /// <summary>
+        /// Resolves a member read on a recognized .NET exception to its property accessor.
+        /// Returns false for any other receiver, so nothing outside exception types is affected;
+        /// throws for an exception member outside <see cref="ExceptionMembers"/>.
+        /// </summary>
+        private bool TryExceptionMember(TypeInfo receiver, string member, out string token, out string accessor)
+        {
+            token = null;
+            accessor = null;
+
+            var name = receiver?.Name;
+            if (name == null || !CppExceptionTypes.TryGetNetFullName(name, out var fullName)) return false;
+
+            token = "[mscorlib]" + fullName;
+            if (ExceptionMembers.TryGetValue(member ?? "", out accessor)) return true;
+
+            throw new ForeignFeatureException(
+                $"MSIL: '{name}.{member}' is outside the supported exception surface. MSIL carries "
+                + "Message, StackTrace and Source, the string properties whose IL accessor names "
+                + "are recorded. Emitting a guessed member produces a reference that assembles and "
+                + "then fails with MissingFieldException or MissingMethodException at run time, so "
+                + "it is refused here instead. Add a row to MSILCodeGenerator.ExceptionMembers plus "
+                + "a round-trip test to widen the set.");
         }
 
         private void AllocateTemporaries(IRFunction function)
@@ -802,21 +1763,32 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
         private void GenerateLocalsDeclaration(IRFunction function)
         {
-            var locals = new List<string>();
+            // Collected with their indices and SORTED, not appended in source order: the three
+            // sources interleave (a catch variable is allocated between the declared locals and
+            // the temporaries), and ilasm reads `[n]` as the slot number, so an out-of-order list
+            // silently declares the wrong type for a slot.
+            var slots = new List<(int Index, string Text)>();
 
             // Declared local variables
             foreach (var local in function.LocalVariables)
             {
-                var localType = MapType(local.Type);
-                locals.Add($"      [{_localIndices[local.Name]}] {localType} {SanitizeName(local.Name)}");
+                var index = _localIndices[local.Name];
+                slots.Add((index, $"      [{index}] {IlTypeSpec(local.Type)} {SanitizeName(local.Name)}"));
+            }
+
+            // Catch-clause exception variables and the lowered-return result slot
+            foreach (var (index, spec, name) in _syntheticLocals)
+            {
+                slots.Add((index, $"      [{index}] {spec} {name}"));
             }
 
             // Temporary variables
             foreach (var (temp, index) in _tempIndices)
             {
-                var tempType = MapType(temp.Type);
-                locals.Add($"      [{index}] {tempType} V_{index}");
+                slots.Add((index, $"      [{index}] {TempSlotSpec(temp)} V_{index}"));
             }
+
+            var locals = slots.OrderBy(s => s.Index).Select(s => s.Text).ToList();
 
             if (locals.Count > 0)
             {
@@ -919,8 +1891,57 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 return;
             }
 
+            // `Me` is the receiver in argument slot 0. It used to resolve to nothing, so
+            // `Me.Name` emitted a WARNING comment and then `ldfld` with an EMPTY stack.
+            if (_currentMethodIsInstance && IsSelfReference(name))
+            {
+                EmitLdarg(0);
+                return;
+            }
+
+            // A bare field name inside an instance method. This pushed NOTHING, so the very next
+            // instruction ran an operand short — `Return "HI-" & Name` reached String::Concat with
+            // one argument and the CLR rejected the whole method.
+            if (_currentMethodIsInstance && _currentClassFields.TryGetValue(name, out var fieldType))
+            {
+                EmitLdarg(0);
+                WriteLine($"    ldfld {IlTypeSpec(fieldType)} {_currentClassToken}::{SanitizeName(name)}");
+                return;
+            }
+
+            // A module-level variable, LAST so that anything nearer in scope — a local, a
+            // parameter, or a field of the enclosing instance — still shadows it by name.
+            if (_moduleGlobals.TryGetValue(name, out var global))
+            {
+                WriteLine($"    ldsfld {IlTypeSpec(global.Type)} {_moduleName}::{SanitizeName(global.Name)}");
+                _currentStack++;
+                return;
+            }
+
             WriteLine($"    // WARNING: Unknown local '{name}'");
         }
+
+        /// <summary>
+        /// Makes every module-level variable a name the current method body can resolve.
+        ///
+        /// <para>⛔ Registering the FIELD is not enough on its own. <c>_declaredIdentifiers</c> is
+        /// what decides, at every assignment site, whether a computed value is stored to a NAME or
+        /// dropped into an anonymous temporary. A global missing from this set means
+        /// <c>Total = Total + 1</c> computes the sum, parks it in a temp nothing ever reads, and
+        /// leaves the global untouched — a wrong answer with no warning comment to find it by.
+        /// Called AFTER locals and parameters, but the set is unordered: shadowing is decided in
+        /// <see cref="EmitLoadLocal"/>, which consults the slot tables first.</para>
+        /// </summary>
+        private void RegisterModuleGlobals()
+        {
+            foreach (var global in _moduleGlobals.Values)
+                _declaredIdentifiers.Add(global.Name);
+        }
+
+        /// <summary>The spellings of the receiver a BasicLang instance method can name.</summary>
+        private static bool IsSelfReference(string name) =>
+            string.Equals(name, "Me", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "this", StringComparison.OrdinalIgnoreCase);
 
         private void EmitStoreLocal(string name)
         {
@@ -928,6 +1949,31 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (idx >= 0)
             {
                 EmitStloc(idx);
+                return;
+            }
+
+            // Assigning a field of the enclosing instance. The value is ALREADY on the stack and
+            // `stfld` needs the object under it, so park the value, push `Me`, and re-push — IL
+            // has no swap. Without this the assignment landed in a temporary and was dropped:
+            // `N = N + 1` computed the sum and threw it away.
+            if (_currentMethodIsInstance
+                && _currentClassFields.TryGetValue(name, out var fieldType)
+                && _fieldStoreScratch.TryGetValue(name, out var scratch))
+            {
+                EmitStloc(scratch);
+                EmitLdarg(0);
+                EmitLdloc(scratch);
+                WriteLine($"    stfld {IlTypeSpec(fieldType)} {_currentClassToken}::{SanitizeName(name)}");
+                _currentStack -= 2;
+                return;
+            }
+
+            // A module-level variable. Unlike `stfld` this needs NO scratch slot: `stsfld` takes
+            // the value alone, with no object reference under it.
+            if (_moduleGlobals.TryGetValue(name, out var global))
+            {
+                WriteLine($"    stsfld {IlTypeSpec(global.Type)} {_moduleName}::{SanitizeName(global.Name)}");
+                _currentStack--;
                 return;
             }
 
@@ -1189,33 +2235,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             EmitLoadValue(compare.Left);
             EmitLoadValue(compare.Right);
 
-            switch (compare.Comparison)
-            {
-                case CompareKind.Eq:
-                    WriteLine("    ceq");
-                    break;
-                case CompareKind.Ne:
-                    WriteLine("    ceq");
-                    WriteLine("    ldc.i4.0");
-                    WriteLine("    ceq"); // Not equal = !(a == b)
-                    break;
-                case CompareKind.Lt:
-                    WriteLine("    clt");
-                    break;
-                case CompareKind.Le:
-                    WriteLine("    cgt");
-                    WriteLine("    ldc.i4.0");
-                    WriteLine("    ceq"); // <= is !(a > b)
-                    break;
-                case CompareKind.Gt:
-                    WriteLine("    cgt");
-                    break;
-                case CompareKind.Ge:
-                    WriteLine("    clt");
-                    WriteLine("    ldc.i4.0");
-                    WriteLine("    ceq"); // >= is !(a < b)
-                    break;
-            }
+            EmitCompareOpcodes(compare.Comparison);
 
             _currentStack--; // Net effect
 
@@ -1283,6 +2303,17 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 EmitLoadValue(store.Value);
                 EmitStoreLocal(variable.Name);
             }
+            else if (store.Address is IRAlloca alloca)
+            {
+                // ⛔ An alloca is a LOCAL SLOT on this backend, not a pointer — Visit(IRAlloca)
+                // emits nothing precisely because `.locals init` already reserved it. Falling
+                // through to the indirect path below emitted `ldloc N; ldloc M; stind.ref`, which
+                // stores THROUGH the slot's contents; the slot is null, so `Dim a() As Integer =
+                // {10, 20, 30}` died with NullReferenceException after building the array
+                // correctly. Store to the slot instead.
+                EmitLoadValue(store.Value);
+                EmitStloc(GetTempIndex(alloca));
+            }
             else
             {
                 // Indirect store
@@ -1343,8 +2374,10 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Handle standard library calls
             if (TryEmitStdLibCall(funcName, call.Arguments.ToList(), hasReturn))
             {
-                // Store result if needed
-                if (hasReturn && !string.IsNullOrEmpty(call.Name))
+                // Store result if needed — unless the arm emitted a statement, which leaves
+                // nothing on the stack for a stloc to take.
+                if (hasReturn && !string.IsNullOrEmpty(call.Name)
+                    && !IsVoidStdLibArm(ResolveStdLibArm(funcName)))
                 {
                     if (_declaredIdentifiers.Contains(call.Name))
                     {
@@ -1359,6 +2392,63 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 return;
             }
 
+            // A .NET static member with a recorded signature — `Math.Sqrt(x)` — emitted as a
+            // direct call. Ahead of the fallback below, which sanitises the dot out of the name
+            // and produces `call object Combined::MathSqrt(float64)`: a call on THIS module's
+            // class, to a method nothing defines.
+            if (TryResolveNetStaticCall(funcName, call.Arguments.ToList(), out var netToken, out var netOverload))
+            {
+                var conversions = _netStaticConversions;
+                for (var i = 0; i < call.Arguments.Count; i++)
+                {
+                    EmitLoadValue(call.Arguments[i]);
+                    if (i < conversions.Length && conversions[i] != null)
+                    {
+                        WriteLine($"    {conversions[i]}");
+                    }
+                }
+
+                var netParams = string.Join(", ", netOverload.ParameterSpecs);
+                WriteLine($"    call {netOverload.ReturnSpec} {netToken}::{SanitizeName(funcName.Substring(funcName.IndexOf('.') + 1))}({netParams})");
+                _currentStack -= call.Arguments.Count;
+
+                if (netOverload.ReturnSpec != "void")
+                {
+                    _currentStack++;
+
+                    // ⛔ IRBuilder cannot know the .NET signature, so it types the call as
+                    // returning Object and the slot is declared `object`. The call really returns
+                    // a value type, and storing a raw float64 into an object slot is a type
+                    // mismatch the CLR follows into a NullReferenceException at the first use.
+                    // Box across that gap — the slot's declared type is what the rest of the
+                    // method reads it back as.
+                    if (NeedsBoxingInto(IlTypeSpec(call.Type), netOverload.ReturnSpec, out var boxToken))
+                    {
+                        WriteLine($"    box {boxToken}");
+                    }
+
+                    if (!string.IsNullOrEmpty(call.Name))
+                    {
+                        if (_declaredIdentifiers.Contains(call.Name)) EmitStoreLocal(call.Name);
+                        else EmitStloc(GetTempIndex(call));
+                    }
+                }
+                return;
+            }
+
+            // ⛔ A SIBLING call inside an instance method — `Return Inner() + 1` — needs the
+            // receiver pushed first and a `callvirt instance`. It used to fall through to the
+            // module-class arm below and emit `call int32 Program::Inner()`: a static call, on a
+            // class that does not exist, to a method that is not static. `_moduleName` is null
+            // while a class body is being emitted, which is where the phantom `Program` came from.
+            var isSelfCall = _currentMethodIsInstance
+                && _currentClassToken != null
+                && _currentClass?.Methods != null
+                && _currentClass.Methods.Any(m => !m.IsStatic
+                    && string.Equals(m.Name, funcName, StringComparison.OrdinalIgnoreCase));
+
+            if (isSelfCall) EmitLdarg(0);
+
             // Load arguments
             foreach (var arg in call.Arguments)
             {
@@ -1366,13 +2456,23 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
 
             // Generate call
-            var returnType = MapType(call.Type);
-            var paramTypes = string.Join(", ", call.Arguments.Select(a => MapType(a.Type)));
+            // Type SPECS: the declaration these resolve to spells its parameters the same way,
+            // and a call whose signature disagrees with the declaration binds to nothing.
+            var returnType = IlTypeSpec(call.Type);
+            var paramTypes = string.Join(", ", call.Arguments.Select(a => IlTypeSpec(a.Type)));
             var sanitizedName = SanitizeName(funcName);
 
-            // Use module name for class reference
-            var className = _moduleName ?? "Program";
-            WriteLine($"    call {returnType} {className}::{sanitizedName}({paramTypes})");
+            if (isSelfCall)
+            {
+                WriteLine($"    callvirt instance {returnType} {_currentClassToken}::{sanitizedName}({paramTypes})");
+                _currentStack--;   // the receiver
+            }
+            else
+            {
+                // Use module name for class reference
+                var className = _moduleName ?? "Program";
+                WriteLine($"    call {returnType} {className}::{sanitizedName}({paramTypes})");
+            }
 
             _currentStack -= call.Arguments.Count;
             if (hasReturn) _currentStack++;
@@ -1398,9 +2498,292 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
         }
 
+        /// <summary>
+        /// The .NET <c>Console</c> spellings, mapped onto the stdlib arm that already emits
+        /// them. <c>IRBuilder</c> names a static member call <c>Type.Member</c> — with the dot —
+        /// so <c>Console.WriteLine("x")</c> arrives here as <c>"Console.WriteLine"</c>, matches
+        /// no arm, and used to fall through to the emit-a-call-on-the-current-class default:
+        /// <c>call object Combined::ConsoleWriteLine(string)</c>, a method nothing defines.
+        /// ilasm accepts that (a MemberRef needs no definition) and it dies at RUN time with
+        /// MissingMethodException — the phantom self-call.
+        ///
+        /// <para><b>An explicit table, not qualifier-stripping.</b> Dropping the <c>Type.</c>
+        /// prefix and re-matching would route <c>Decimal.Round</c> onto the <c>Math.Round</c>
+        /// arm, which is a silent mis-emission rather than a missing one. Only the spellings
+        /// written here are aliased.</para>
+        ///
+        /// <para>The targets are deliberate and mirror <c>CppCodeGenerator.StdLibArm</c>, which
+        /// carries the same two dotted arms: on that backend <c>PrintLine</c> and
+        /// <c>Console.WriteLine</c> emit identical code on purpose, because "a split where
+        /// PrintLine printed 'A' and Console.WriteLine printed 65 would be a fresh internal
+        /// inconsistency". The <c>printline</c>/<c>print</c> arms already handle the ZERO-ARG
+        /// case (<c>Console.WriteLine()</c> is a bare newline), so that behaviour comes along
+        /// for free rather than needing a second implementation.</para>
+        /// </summary>
+        /// <summary>
+        /// The stdlib ARM a call name resolves to, after dotted aliasing. Used by both the
+        /// emitter and <see cref="IsVoidStdLibArm"/> so the two cannot disagree about which arm
+        /// ran — a disagreement there is exactly the stack underflow described above.
+        /// </summary>
+        private static string ResolveStdLibArm(string funcName)
+        {
+            var lower = funcName?.ToLower() ?? "";
+            return DottedStdLibAliases.TryGetValue(lower, out var aliased) ? aliased : lower;
+        }
+
+        private static readonly Dictionary<string, string> DottedStdLibAliases =
+            new(StringComparer.Ordinal)
+            {
+                ["console.writeline"] = "printline",
+                ["console.write"] = "print",
+                ["console.readline"] = "readline",
+            };
+
+        /// <summary>One recorded overload: the IL parameter specs it takes and the spec it returns.</summary>
+        private sealed record NetStaticOverload(string ReturnSpec, string[] ParameterSpecs);
+
+        /// <summary>
+        /// The IL primitives that are VALUE types, so a reference-typed slot needs them boxed.
+        /// <c>string</c> and <c>object</c> are deliberately absent — they are IL keywords but
+        /// reference types already, and boxing one is not a no-op to reason about.
+        /// </summary>
+        private static readonly HashSet<string> BoxableSpecs = new(StringComparer.Ordinal)
+        {
+            "int8", "uint8", "int16", "uint16", "int32", "uint32", "int64", "uint64",
+            "float32", "float64", "bool", "char",
+        };
+
+        /// <summary>
+        /// Per-argument conversion opcodes for the overload the last resolve selected; an entry is
+        /// null where the argument already matched. Set by <see cref="TryResolveNetStaticCall"/>
+        /// and consumed immediately by its caller.
+        /// </summary>
+        private string[] _netStaticConversions = System.Array.Empty<string>();
+
+        /// <summary>
+        /// The integer widenings that cannot lose a value, and the opcode each needs.
+        ///
+        /// <para>⛔ <c>int64</c> and <c>uint64</c> are deliberately absent. They widen to
+        /// <c>float64</c> in IL, but above 2^53 the conversion ROUNDS — silently returning a
+        /// different number than the caller passed. Everything here fits in a double exactly.</para>
+        /// </summary>
+        private static readonly Dictionary<(string From, string To), string> LosslessWidenings =
+            new()
+            {
+                [("int8", "float64")] = "conv.r8",
+                [("uint8", "float64")] = "conv.r8",
+                [("int16", "float64")] = "conv.r8",
+                [("uint16", "float64")] = "conv.r8",
+                [("int32", "float64")] = "conv.r8",
+                [("uint32", "float64")] = "conv.r8",
+                [("int8", "int32")] = "conv.i4",
+                [("uint8", "int32")] = "conv.i4",
+                [("int16", "int32")] = "conv.i4",
+                [("uint16", "int32")] = "conv.i4",
+                [("int32", "int64")] = "conv.i8",
+                [("uint32", "int64")] = "conv.i8",
+            };
+
+        private static bool TryLosslessWidening(string from, string to, out string opcode) =>
+            LosslessWidenings.TryGetValue((from, to), out opcode);
+
+        /// <summary>
+        /// True when a value of <paramref name="valueSpec"/> has to be boxed to live in a slot
+        /// declared <paramref name="slotSpec"/>, with the token <c>box</c> needs.
+        /// </summary>
+        private static bool NeedsBoxingInto(string slotSpec, string valueSpec, out string boxToken)
+        {
+            boxToken = null;
+            if (!BoxableSpecs.Contains(valueSpec)) return false;
+            if (BoxableSpecs.Contains(slotSpec)) return false;   // value into value: no bridge
+            return PrimitiveTokens.TryGetValue(valueSpec, out boxToken);
+        }
+
+        /// <summary>
+        /// The .NET STATIC members this backend can emit, and the exact IL signature of each.
+        ///
+        /// <para><b>MSIL emits these DIRECTLY</b> — <c>call float64 [mscorlib]System.Math::Sqrt(float64)</c>
+        /// — rather than through the blnet .NET proxy that the C++ backend uses. That is not a
+        /// preference between two workable routes. The proxy is a NATIVE C ABI bridge:
+        /// <c>[UnmanagedCallersOnly]</c> exports on a Native AOT shim reached through a
+        /// function-pointer table, which exists because native code has no other way into .NET.
+        /// Managed code cannot call an <c>UnmanagedCallersOnly</c> method at all, so an MSIL
+        /// program could only reach the proxy by P/Invoking the native export so it could call
+        /// back into the CLR — for members the CLR already offers — and every emitted binary would
+        /// then depend on the shim being built and deployed. (<c>ResolvedNetTarget</c>, the
+        /// descriptor that drives proxy lowering, is also null on this path: the resolver is not
+        /// engaged for a plain compilation.)</para>
+        ///
+        /// <para>⛔ <b>Keyed on the FULL dotted name, and that is load-bearing.</b> The obvious
+        /// shortcut — strip the <c>Type.</c> prefix and match the member alone — routes
+        /// <c>Decimal.Round</c> onto <c>Math.Round</c>: a silent mis-emission rather than a missing
+        /// one. Here <c>Decimal.Round</c> is simply absent and is refused.</para>
+        ///
+        /// <para><b>Overloads are matched on argument IL specs, never on count alone.</b>
+        /// <c>Math.Abs</c> has int32, int64 and float64 forms that differ only in signature;
+        /// picking by arity would emit a call that binds to the wrong one or to nothing.</para>
+        ///
+        /// <para>Deliberately narrow, on the same principle as <c>CollectionMembers</c> and
+        /// <c>ExceptionMembers</c>: a guessed signature assembles cleanly — ilasm does not resolve
+        /// member references — and fails at run time with MissingMethodException.</para>
+        /// </summary>
+        private static readonly Dictionary<string, (string Token, NetStaticOverload[] Overloads)> NetStaticMembers =
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Math.Sqrt"] = ("[mscorlib]System.Math", new[] { new NetStaticOverload("float64", new[] { "float64" }) }),
+                ["Math.Floor"] = ("[mscorlib]System.Math", new[] { new NetStaticOverload("float64", new[] { "float64" }) }),
+                ["Math.Ceiling"] = ("[mscorlib]System.Math", new[] { new NetStaticOverload("float64", new[] { "float64" }) }),
+                ["Math.Pow"] = ("[mscorlib]System.Math", new[] { new NetStaticOverload("float64", new[] { "float64", "float64" }) }),
+                ["Math.Abs"] = ("[mscorlib]System.Math", new[]
+                {
+                    new NetStaticOverload("int32", new[] { "int32" }),
+                    new NetStaticOverload("int64", new[] { "int64" }),
+                    new NetStaticOverload("float64", new[] { "float64" }),
+                }),
+                ["Math.Min"] = ("[mscorlib]System.Math", new[]
+                {
+                    new NetStaticOverload("int32", new[] { "int32", "int32" }),
+                    new NetStaticOverload("int64", new[] { "int64", "int64" }),
+                    new NetStaticOverload("float64", new[] { "float64", "float64" }),
+                }),
+                ["Math.Max"] = ("[mscorlib]System.Math", new[]
+                {
+                    new NetStaticOverload("int32", new[] { "int32", "int32" }),
+                    new NetStaticOverload("int64", new[] { "int64", "int64" }),
+                    new NetStaticOverload("float64", new[] { "float64", "float64" }),
+                }),
+                ["Math.Round"] = ("[mscorlib]System.Math", new[] { new NetStaticOverload("float64", new[] { "float64" }) }),
+
+                ["Convert.ToInt32"] = ("[mscorlib]System.Convert", new[]
+                {
+                    new NetStaticOverload("int32", new[] { "string" }),
+                    new NetStaticOverload("int32", new[] { "float64" }),
+                }),
+                ["Convert.ToDouble"] = ("[mscorlib]System.Convert", new[]
+                {
+                    new NetStaticOverload("float64", new[] { "string" }),
+                    new NetStaticOverload("float64", new[] { "int32" }),
+                }),
+
+                // ⛔ No String.* rows: `String` is a reserved type keyword and the parser rejects
+                // it at the start of an expression, so `String.IsNullOrEmpty(s)` never reaches
+                // this backend on ANY target. A row here would be untestable by the round-trip
+                // contract the refusal message promises.
+            };
+
+        /// <summary>
+        /// Resolves a dotted static call to its recorded IL signature, matching the overload on
+        /// argument specs. Returns false when the receiver is not a .NET static type at all — that
+        /// call belongs to some other arm — and throws when the type IS one but the member or the
+        /// argument shape has no recorded signature.
+        /// </summary>
+        private bool TryResolveNetStaticCall(
+            string funcName, List<IRValue> args, out string token, out NetStaticOverload overload)
+        {
+            token = null;
+            overload = null;
+
+            var dot = funcName?.IndexOf('.') ?? -1;
+            if (dot <= 0) return false;
+
+            var typeName = funcName.Substring(0, dot);
+            if (!IRBuilder.IsKnownNetStaticTypeName(typeName)) return false;
+
+            // A recognized .NET static type whose member routes elsewhere (the Console aliases)
+            // is not this arm's business.
+            if (DottedStdLibAliases.ContainsKey(funcName.ToLowerInvariant())) return false;
+
+            if (!NetStaticMembers.TryGetValue(funcName, out var entry))
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: '{funcName}' is outside the supported .NET static surface. The members "
+                    + "whose IL signatures are recorded are emitted as direct calls; anything else "
+                    + "would need a guessed signature, which assembles and then fails with "
+                    + "MissingMethodException at run time. ⛔ Matching on the member name alone "
+                    + "instead would be worse: it routes Decimal.Round onto Math.Round, a silent "
+                    + "wrong answer. Add a row to MSILCodeGenerator.NetStaticMembers plus a "
+                    + "round-trip test to widen the set.");
+            }
+
+            var argumentSpecs = args.Select(a => IlTypeSpec(a.Type)).ToArray();
+
+            // Exact match first, so a widening is never preferred over a signature that already
+            // fits — `Math.Abs(-7)` must pick the int32 form, not widen to the float64 one.
+            overload = entry.Overloads.FirstOrDefault(
+                o => o.ParameterSpecs.Length == argumentSpecs.Length
+                     && o.ParameterSpecs.Zip(argumentSpecs, (p, a) => p == a).All(match => match));
+
+            if (overload != null)
+            {
+                _netStaticConversions = new string[argumentSpecs.Length];
+                token = entry.Token;
+                return true;
+            }
+
+            // Then a match reachable by LOSSLESS widening. `Math.Sqrt(16)` is natural to write and
+            // the C# backend accepts it (C# widens implicitly), so refusing it would be a
+            // divergence between two backends over an integer literal. Only widenings that cannot
+            // lose a value are allowed — int64/uint64 to float64 is NOT one of them above 2^53,
+            // and silently rounding a caller's value is the class of defect this file is full of.
+            foreach (var candidate in entry.Overloads)
+            {
+                if (candidate.ParameterSpecs.Length != argumentSpecs.Length) continue;
+
+                var conversions = new string[argumentSpecs.Length];
+                var usable = true;
+                for (var i = 0; i < argumentSpecs.Length; i++)
+                {
+                    if (candidate.ParameterSpecs[i] == argumentSpecs[i]) continue;
+                    if (TryLosslessWidening(argumentSpecs[i], candidate.ParameterSpecs[i], out conversions[i])) continue;
+                    usable = false;
+                    break;
+                }
+
+                if (!usable) continue;
+
+                _netStaticConversions = conversions;
+                overload = candidate;
+                token = entry.Token;
+                return true;
+            }
+
+            if (overload == null)
+            {
+                var got = argumentSpecs.Length == 0 ? "no arguments" : string.Join(", ", argumentSpecs);
+                var offered = string.Join(" | ", entry.Overloads.Select(o => string.Join(", ", o.ParameterSpecs)));
+                throw new ForeignFeatureException(
+                    $"MSIL: '{funcName}' has no recorded overload taking ({got}). Recorded: "
+                    + $"({offered}). Overloads are matched on argument types, never on count — "
+                    + "Math.Abs has int32, int64 and float64 forms that differ only in signature, "
+                    + "so picking by arity emits a call that binds to the wrong one or to nothing.");
+            }
+
+            token = entry.Token;
+            return true;
+        }
+
+        /// <summary>
+        /// Stdlib arms that emit a STATEMENT, not a value — their IL pushes nothing, so the
+        /// caller must not store a result even when the IR types the call as value-returning.
+        ///
+        /// <para>⛔ This is the second half of the Console fix and is not optional. <c>IRBuilder</c>
+        /// types <c>Console.WriteLine(x)</c> as returning <c>Object</c>, so routing it to the
+        /// <c>printline</c> arm — which correctly emits <c>call void …Console::WriteLine(string)</c>
+        /// — left the caller emitting a <c>stloc</c> for a value nothing pushed. That is a stack
+        /// underflow: ilasm accepts it and the CLR rejects the method with
+        /// InvalidProgramException. Fixing only the call name turned a MissingMethodException
+        /// into an InvalidProgramException.</para>
+        ///
+        /// <para><c>CppCodeGenerator.IsVoidStdLibCall</c> is the same predicate for the same
+        /// reason, and carries the same names. The two lists are separate because the backends
+        /// share no emission code, so a name added to one arm set needs adding to both.</para>
+        /// </summary>
+        private static bool IsVoidStdLibArm(string loweredName) =>
+            loweredName is "print" or "printline" or "randomize";
+
         private bool TryEmitStdLibCall(string funcName, List<IRValue> args, bool hasReturn)
         {
-            var lower = funcName.ToLower();
+            var lower = ResolveStdLibArm(funcName);
 
             switch (lower)
             {
@@ -1559,7 +2942,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     var srcType = MapType(args[0].Type);
                     if (srcType != "string")
                     {
-                        WriteLine($"    box [{srcType}]");
+                        // box takes a TYPE TOKEN. `box [int32]` named an assembly, not a type.
+                        WriteLine($"    box {IlTypeToken(args[0].Type)}");
                         WriteLine("    callvirt instance string [mscorlib]System.Object::ToString()");
                     }
                     return true;
@@ -1578,41 +2962,470 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
         public override void Visit(IRReturn ret)
         {
+            if (_regionBlocks == null)
+            {
+                if (ret.Value != null)
+                {
+                    EmitLoadValue(ret.Value);
+                }
+                WriteLine("    ret");
+                return;
+            }
+
+            // `ret` is ILLEGAL inside a protected region — the CLR rejects the whole method, which
+            // is what `Return` inside a Try used to produce. Lower it the way a real compiler does:
+            // park the value in a slot and `leave` to the one exit that owns the `ret`. Going out
+            // through `leave` is also what runs an enclosing `finally`, so this is not merely legal
+            // but the only spelling with the right semantics.
+            if (_regionIsFinally)
+            {
+                throw new ForeignFeatureException(
+                    "MSIL: 'Return' inside a Finally block has no IL lowering. A finally handler "
+                    + "may only be left by endfinally — it cannot return, and it cannot swallow the "
+                    + "exception in flight by returning a value. Move the Return after the End Try.");
+            }
+
             if (ret.Value != null)
             {
+                if (_methodExitResultLocal < 0)
+                {
+                    throw new ForeignFeatureException(
+                        "MSIL: a value-returning 'Return' inside a Try appeared in a method with no "
+                        + "result slot reserved. This is an emitter invariant failure, not a source "
+                        + "problem — AllocateExceptionHandlingLocals reserves the slot for every "
+                        + "non-void function containing a Try.");
+                }
                 EmitLoadValue(ret.Value);
+                EmitStloc(_methodExitResultLocal);
             }
-            WriteLine("    ret");
+
+            _methodExitUsed = true;
+            WriteLine($"    leave {_methodExitLabel}");
         }
 
         public override void Visit(IRBranch branch)
         {
-            var target = SanitizeLabel(branch.Target.Name);
-            WriteLine($"    br {target}");
+            EmitRegionAwareBranch(branch.Target);
         }
 
         public override void Visit(IRConditionalBranch condBranch)
         {
             EmitLoadValue(condBranch.Condition);
+            _currentStack--;
 
-            var trueTarget = SanitizeLabel(condBranch.TrueTarget.Name);
-            var falseTarget = SanitizeLabel(condBranch.FalseTarget.Name);
+            var trueTarget = condBranch.TrueTarget;
+            var falseTarget = condBranch.FalseTarget;
 
-            WriteLine($"    brtrue {trueTarget}");
-            WriteLine($"    br {falseTarget}");
+            if (!LeavesRegion(trueTarget))
+            {
+                WriteLine($"    brtrue {SanitizeLabel(trueTarget.Name)}");
+                EmitRegionAwareBranch(falseTarget);
+                return;
+            }
+
+            // `brtrue` cannot cross a protected region's edge — only `leave`/`endfinally` may. Bounce
+            // the taken edge through a trampoline INSIDE the region, which then leaves properly.
+            var trampoline = $"eh_edge_{_labelCounter++}";
+            WriteLine($"    brtrue {trampoline}");
+            EmitRegionAwareBranch(falseTarget);
+            WriteLine($"  {trampoline}:");
+            EmitRegionAwareBranch(trueTarget);
+        }
+
+        /// <summary>
+        /// True when branching to <paramref name="target"/> would cross out of the region being
+        /// emitted. False everywhere outside a region, which is why ordinary code is unaffected.
+        /// </summary>
+        private bool LeavesRegion(BasicBlock target) =>
+            _regionBlocks != null && target != null && !_regionBlocks.Contains(target);
+
+        /// <summary>
+        /// An unconditional transfer to <paramref name="target"/>, spelled the way the CURRENT
+        /// region allows: <c>br</c> within the region (or outside any), <c>leave</c> out of a
+        /// try/catch, and <c>endfinally</c> out of a finally — where the target is implicit,
+        /// because a finally resumes whatever unwinding or <c>leave</c> entered it and cannot
+        /// choose its own destination.
+        /// </summary>
+        private void EmitRegionAwareBranch(BasicBlock target)
+        {
+            if (!LeavesRegion(target))
+            {
+                WriteLine($"    br {SanitizeLabel(target.Name)}");
+                return;
+            }
+
+            WriteLine(_regionIsFinally ? "    endfinally" : $"    leave {SanitizeLabel(target.Name)}");
+        }
+
+        /// <summary>
+        /// Lowers a <c>Select Case</c> to an ordered chain of comparisons — one test per case in
+        /// source order, first match wins, falling through to the Else/default target.
+        ///
+        /// <para>⛔ <b>Do not "restore" the IL <c>switch</c> instruction here.</b> It was what
+        /// this method emitted, and it was wrong twice over. First, IL <c>switch</c> is
+        /// <b>index</b>-based: it pops an unsigned int32 <i>i</i> and jumps to the <i>i</i>-th
+        /// label, so even a fully populated table sends <c>Case 1, 2, 3</c> to the wrong arms and
+        /// cannot express a string, a range, a comparison or a <c>When</c> guard at all. Second,
+        /// the table it built came from <see cref="IRSwitch.Cases"/>, and the parser routes EVERY
+        /// case value into <see cref="IRSwitch.PatternCases"/> — <c>Cases</c> stays empty (the
+        /// same fact <c>ControlFlowGraph</c> and <c>CppCodeGenerator</c> both record). So the
+        /// emitted table was <c>switch ()</c>, empty, followed by an UNCONDITIONAL branch to the
+        /// default: every input took <c>Case Else</c>, in code that assembled and ran clean. The
+        /// legacy <c>Cases</c> list is still walked below, ahead of the patterns, so a future
+        /// front end that does populate it keeps working.</para>
+        ///
+        /// <para>This mirrors <c>CppCodeGenerator.Visit(IRSwitch)</c>, which lowers the same IR to
+        /// an if/else-if chain of gotos for the same reason. The pattern VALUES (range bounds,
+        /// comparison operands) were already emitted into this block by <c>IRBuilder</c> before
+        /// the switch instruction, so re-loading them here cannot re-run a side effect.</para>
+        /// </summary>
+        public override void Visit(IRSwitch switchInst)
+        {
+            var subject = switchInst.Value;
+
+            foreach (var (caseValue, target) in switchInst.Cases)
+            {
+                var noMatch = NextCaseLabel();
+                EmitCaseEqualityTest(subject, caseValue, noMatch);
+                WriteLine($"    br {SanitizeLabel(target.Name)}");
+                WriteLine($"  {noMatch}:");
+            }
+
+            foreach (var patternCase in switchInst.PatternCases)
+            {
+                var noMatch = NextCaseLabel();
+                EmitPatternTest(subject, patternCase, noMatch);
+                WriteLine($"    br {SanitizeLabel(patternCase.Target.Name)}");
+                WriteLine($"  {noMatch}:");
+            }
+
+            WriteLine($"    br {SanitizeLabel(switchInst.DefaultTarget.Name)}");
+        }
+
+        /// <summary>A fresh IL label for one link of a Select Case comparison chain.</summary>
+        private string NextCaseLabel() => $"case_test_{_labelCounter++}";
+
+        /// <summary>
+        /// Emits the full test for one pattern case: the value test AND its optional <c>When</c>
+        /// guard. Falls through when the case matches; branches to <paramref name="noMatch"/>
+        /// when it does not. Leaves the evaluation stack balanced on both paths.
+        /// </summary>
+        private void EmitPatternTest(IRValue subject, IRPatternCase patternCase, string noMatch)
+        {
+            EmitPatternValueTest(subject, patternCase, noMatch);
+
+            if (patternCase.WhenGuard != null)
+            {
+                EmitInlineValue(patternCase.WhenGuard);
+                WriteLine($"    brfalse {noMatch}");
+                _currentStack--;
+            }
+        }
+
+        /// <summary>
+        /// The value/range/comparison half of a pattern test, without the <c>When</c> guard.
+        /// Recursion target for <c>Or</c> alternatives — which is why it is split out, and why
+        /// an alternative's own guard is not evaluated here (<c>CppCodeGenerator</c> makes the
+        /// same split for the same reason; the parser attaches <c>When</c> to the case, not to
+        /// an alternative).
+        /// </summary>
+        private void EmitPatternValueTest(IRValue subject, IRPatternCase patternCase, string noMatch)
+        {
+            switch (patternCase)
+            {
+                case IRConstantPatternCase constantCase:
+                    EmitCaseEqualityTest(subject, constantCase.Value, noMatch);
+                    break;
+
+                case IRRangePatternCase rangeCase:
+                    EmitCaseRelationalTest(subject, rangeCase.LowerBound, ">=", noMatch);
+                    EmitCaseRelationalTest(subject, rangeCase.UpperBound, "<=", noMatch);
+                    break;
+
+                case IRComparisonPatternCase comparisonCase:
+                    EmitCaseRelationalTest(subject, comparisonCase.CompareValue, comparisonCase.Operator, noMatch);
+                    break;
+
+                case IRNothingPatternCase:
+                    EmitNothingTest(subject, noMatch);
+                    break;
+
+                case IROrPatternCase orCase:
+                    if (orCase.Alternatives.Count == 0)
+                    {
+                        WriteLine($"    br {noMatch}");
+                        break;
+                    }
+
+                    var matched = NextCaseLabel();
+                    foreach (var alternative in orCase.Alternatives)
+                    {
+                        var nextAlternative = NextCaseLabel();
+                        EmitPatternValueTest(subject, alternative, nextAlternative);
+                        WriteLine($"    br {matched}");
+                        WriteLine($"  {nextAlternative}:");
+                    }
+                    WriteLine($"    br {noMatch}");
+                    WriteLine($"  {matched}:");
+                    break;
+
+                default:
+                    throw new ForeignFeatureException(
+                        $"MSIL: the Select Case pattern '{patternCase.GetType().Name}' has no IL "
+                        + "lowering. MSIL carries constant, range, comparison, Nothing and Or "
+                        + "patterns plus When guards; a type/tuple/binding pattern needs "
+                        + "isinst/deconstruction support this backend does not have. Emitting "
+                        + "nothing for it would silently route the case to Case Else, so it is "
+                        + "refused here instead.");
+            }
+        }
+
+        /// <summary>
+        /// Compares <paramref name="subject"/> with <paramref name="value"/> and branches to
+        /// <paramref name="branchTo"/>. By default that is the NO-MATCH edge of a <c>Case x</c>,
+        /// so the branch is taken when the two are UNEQUAL; <paramref name="branchWhenEqual"/>
+        /// flips it for <c>Case Is &lt;&gt; x</c>, whose no-match edge is equality.
+        ///
+        /// <para>A string operand goes through <c>String::Equals</c>, not <c>beq</c>/<c>bne.un</c>:
+        /// those compare the REFERENCE, so <c>Select Case s</c> over string cases would match only
+        /// when the two strings happened to be the same interned object — true for literals the
+        /// runtime interned together, false for a string that was built or read at run time. That
+        /// is a wrong answer that passes every test written with literals. Numeric and reference
+        /// cases use <c>beq</c>/<c>bne.un</c>, bit-exact for integers and NaN-correct for floats.</para>
+        /// </summary>
+        private void EmitCaseEqualityTest(IRValue subject, IRValue value, string branchTo, bool branchWhenEqual = false)
+        {
+            EmitLoadValue(subject);
+            EmitLoadValue(value);
+
+            if (IsStringOperand(subject) || IsStringOperand(value))
+            {
+                WriteLine("    call bool [mscorlib]System.String::Equals(string, string)");
+                _currentStack--;
+                WriteLine($"    {(branchWhenEqual ? "brtrue" : "brfalse")} {branchTo}");
+                _currentStack--;
+                return;
+            }
+
+            WriteLine($"    {(branchWhenEqual ? "beq" : "bne.un")} {branchTo}");
+            _currentStack -= 2;
+        }
+
+        /// <summary>
+        /// <c>subject op value</c> for a <c>Case Is &gt; x</c> / range bound, branching to
+        /// <paramref name="noMatch"/> when the relation is false.
+        ///
+        /// <para>Built from <c>clt</c>/<c>cgt</c>/<c>ceq</c> + a <c>brtrue</c>/<c>brfalse</c>
+        /// rather than the <c>blt</c>/<c>bgt</c> branch forms, because the NEGATION of an
+        /// ordered comparison is not one opcode: <c>!(a &gt; b)</c> is <c>ble</c> for signed
+        /// integers but <c>ble.un</c> for floats (NaN must fail the test), and picking one
+        /// spelling silently mis-handles the other type. Computing the POSITIVE relation with
+        /// <c>clt</c>/<c>cgt</c> — signed for integers, ordered for floats — and then branching
+        /// on the boolean is correct for both without inspecting the operand type. The one case
+        /// it does not cover is an unsigned 32/64-bit subject, which needs the <c>.un</c>
+        /// compare forms; that is selected explicitly.</para>
+        /// </summary>
+        private void EmitCaseRelationalTest(IRValue subject, IRValue value, string op, string noMatch)
+        {
+            // '=' and '<>' are equality, not ordering — route them through the equality path so a
+            // string `Case Is = "x"` still gets String::Equals rather than a reference compare.
+            if (op == "=")
+            {
+                EmitCaseEqualityTest(subject, value, noMatch);
+                return;
+            }
+
+            if (op == "<>")
+            {
+                EmitCaseEqualityTest(subject, value, noMatch, branchWhenEqual: true);
+                return;
+            }
+
+            if (IsStringOperand(subject) || IsStringOperand(value))
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: 'Case Is {op}' on a String has no IL lowering. IL's ordering opcodes "
+                    + "(clt/cgt) are defined for numeric and native-int operands only — applied "
+                    + "to two object references they produce an unverifiable method that throws "
+                    + "InvalidProgramException at run time, so this is refused here instead. "
+                    + "String equality (Case \"x\", Case Is = \"x\", Case Is <> \"x\") is "
+                    + "supported and routes through String::Equals.");
+            }
+
+            var unsigned = IsUnsignedOperand(subject);
+
+            EmitLoadValue(subject);
+            EmitLoadValue(value);
+
+            switch (op)
+            {
+                case ">":
+                    WriteLine(unsigned ? "    cgt.un" : "    cgt");
+                    WriteLine($"    brfalse {noMatch}");
+                    break;
+                case "<":
+                    WriteLine(unsigned ? "    clt.un" : "    clt");
+                    WriteLine($"    brfalse {noMatch}");
+                    break;
+                case ">=":
+                    WriteLine(unsigned ? "    clt.un" : "    clt");
+                    WriteLine($"    brtrue {noMatch}");
+                    break;
+                case "<=":
+                    WriteLine(unsigned ? "    cgt.un" : "    cgt");
+                    WriteLine($"    brtrue {noMatch}");
+                    break;
+                default:
+                    throw new ForeignFeatureException(
+                        $"MSIL: unknown Select Case comparison operator '{op}'. The parser emits "
+                        + "=, <>, >, <, >= and <=; anything else would fall through untested and "
+                        + "silently match, so it is refused here instead.");
+            }
+
+            _currentStack -= 2;
+        }
+
+        /// <summary>
+        /// <c>Case Nothing</c>. <c>brtrue</c> is right for both shapes VB gives this: a null
+        /// reference and a zero integer both fall through to the match, anything else branches
+        /// away. Floating-point subjects are refused — <c>brtrue</c> is not defined for an F
+        /// operand and produces an unverifiable method.
+        /// </summary>
+        private void EmitNothingTest(IRValue subject, string noMatch)
+        {
+            var spec = subject?.Type != null ? IlTypeSpec(subject.Type) : "object";
+            if (spec == "float32" || spec == "float64")
+            {
+                throw new ForeignFeatureException(
+                    "MSIL: 'Case Nothing' on a floating-point value has no IL lowering — brtrue "
+                    + "is undefined for an F operand and yields an unverifiable method, so it is "
+                    + "refused here rather than emitted. Compare against 0 explicitly "
+                    + "(Case 0 / Case Is = 0).");
+            }
+
+            EmitLoadValue(subject);
+            WriteLine($"    brtrue {noMatch}");
             _currentStack--;
         }
 
-        public override void Visit(IRSwitch switchInst)
+        /// <summary>True when the value is typed as an IL <c>string</c>.</summary>
+        private bool IsStringOperand(IRValue value) =>
+            value?.Type != null && IlTypeSpec(value.Type) == "string";
+
+        /// <summary>
+        /// True for the IL primitives whose ordering needs the <c>.un</c> compare forms.
+        /// <c>uint8</c>/<c>uint16</c>/<c>char</c> are deliberately absent: they are zero-extended
+        /// to int32 on the evaluation stack, so the SIGNED compare already gives the right answer
+        /// for them, and <c>.un</c> would be a no-op at best.
+        /// </summary>
+        private bool IsUnsignedOperand(IRValue value)
         {
-            EmitLoadValue(switchInst.Value);
+            if (value?.Type == null) return false;
+            var spec = IlTypeSpec(value.Type);
+            return spec == "uint32" || spec == "uint64";
+        }
 
-            var targets = switchInst.Cases.Select(c => SanitizeLabel(c.Target.Name)).ToList();
-            var targetList = string.Join(", ", targets);
+        /// <summary>
+        /// Emits an un-emitted expression tree — a suppressed <c>When</c> guard — leaving its
+        /// value on the stack.
+        ///
+        /// <para><c>IRBuilder</c> builds a guard with <c>_suppressEmit</c> set so optimization
+        /// passes cannot rewrite it, which means the guard's operand instructions never entered a
+        /// block and were never given a local slot. <see cref="EmitLoadValue"/> alone would find
+        /// no slot for them, write a <c>// WARNING</c> comment, and push NOTHING — unbalancing
+        /// the stack and turning a wrong answer into an InvalidProgramException. So recurse over
+        /// the guard's shape instead, and refuse loudly at any node this cannot rebuild rather
+        /// than emitting a comment where a value belongs. (<c>CppCodeGenerator.RenderInline</c>
+        /// is the same function for the same reason, over C++ expression text.)</para>
+        /// </summary>
+        private void EmitInlineValue(IRValue value)
+        {
+            switch (value)
+            {
+                case IRConstant constant:
+                    EmitLoadConstant(constant);
+                    return;
 
-            WriteLine($"    switch ({targetList})");
-            WriteLine($"    br {SanitizeLabel(switchInst.DefaultTarget.Name)}");
-            _currentStack--;
+                case IRVariable variable:
+                    EmitLoadLocal(variable.Name);
+                    return;
+
+                case IRBinaryOp binaryOp:
+                    EmitInlineValue(binaryOp.Left);
+                    EmitInlineValue(binaryOp.Right);
+                    WriteLine($"    {_typeMapper.MapBinaryOperator(binaryOp.Operation)}");
+                    _currentStack--;
+                    return;
+
+                case IRCompare compare:
+                    EmitInlineValue(compare.Left);
+                    EmitInlineValue(compare.Right);
+                    EmitCompareOpcodes(compare.Comparison);
+                    _currentStack--;
+                    return;
+
+                case IRUnaryOp unaryOp:
+                    EmitInlineValue(unaryOp.Operand);
+                    WriteLine($"    {_typeMapper.MapUnaryOperator(unaryOp.Operation)}");
+                    return;
+            }
+
+            // A leaf that IS already in a slot (a value computed before the Select Case and
+            // merely referenced by the guard) is loadable the ordinary way.
+            if (value != null
+                && (_tempIndices.ContainsKey(value)
+                    || (!string.IsNullOrEmpty(value.Name)
+                        && (_declaredIdentifiers.Contains(value.Name) || _tempNameIndices.ContainsKey(value.Name)))))
+            {
+                EmitLoadValue(value);
+                return;
+            }
+
+            throw new ForeignFeatureException(
+                $"MSIL: the 'When' guard node '{value?.GetType().Name ?? "null"}' has no IL "
+                + "lowering. A guard is built with instruction emission suppressed, so only "
+                + "shapes this backend can rebuild in place are supported: constants, variables, "
+                + "binary/compare/unary operators over them, and values already computed before "
+                + "the Select Case. Anything else would push no value and corrupt the evaluation "
+                + "stack, so it is refused here instead.");
+        }
+
+        /// <summary>
+        /// The IL opcode(s) that turn two loaded operands into the boolean for
+        /// <paramref name="comparison"/>. Shared by <see cref="Visit(IRCompare)"/> and the
+        /// <c>When</c>-guard renderer so an ordinary comparison and a guard comparison cannot
+        /// disagree. IL has only <c>ceq</c>/<c>clt</c>/<c>cgt</c>, so the other three are built
+        /// by negating with <c>ldc.i4.0; ceq</c>.
+        /// </summary>
+        private void EmitCompareOpcodes(CompareKind comparison)
+        {
+            switch (comparison)
+            {
+                case CompareKind.Eq:
+                    WriteLine("    ceq");
+                    break;
+                case CompareKind.Ne:
+                    WriteLine("    ceq");
+                    WriteLine("    ldc.i4.0");
+                    WriteLine("    ceq"); // Not equal = !(a == b)
+                    break;
+                case CompareKind.Lt:
+                    WriteLine("    clt");
+                    break;
+                case CompareKind.Le:
+                    WriteLine("    cgt");
+                    WriteLine("    ldc.i4.0");
+                    WriteLine("    ceq"); // <= is !(a > b)
+                    break;
+                case CompareKind.Gt:
+                    WriteLine("    cgt");
+                    break;
+                case CompareKind.Ge:
+                    WriteLine("    clt");
+                    WriteLine("    ldc.i4.0");
+                    WriteLine("    ceq"); // >= is !(a < b)
+                    break;
+            }
         }
 
         public override void Visit(IRPhi phi)
@@ -1714,27 +3527,32 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
         }
 
+        /// <summary>
+        /// The array behind an array LITERAL (<c>Dim a() As Integer = {10, 20, 30}</c>).
+        ///
+        /// <para>⛔ This emitted <c>stloc {arrayAlloc.Name}</c> — the IR value's NAME where IL
+        /// wants a slot index, so the file carried <c>stloc t0</c> and ilasm refused it with
+        /// "Undeclared identifier t0". <c>newarr</c> also took <c>MapType</c>, the IL keyword
+        /// form; an operand position needs the type TOKEN.</para>
+        /// </summary>
         public override void Visit(IRArrayAlloc arrayAlloc)
         {
-            var elementType = MapType(arrayAlloc.ElementType);
-            WriteLine($"    ldc.i4 {arrayAlloc.Size}");
-            WriteLine($"    newarr {elementType}");
-            WriteLine($"    stloc {arrayAlloc.Name}");
+            EmitLdcI4(arrayAlloc.Size);
+            _currentStack++;
+            WriteLine($"    newarr {IlTypeToken(arrayAlloc.ElementType)}");
+            EmitStloc(GetTempIndex(arrayAlloc));
         }
 
+        /// <inheritdoc cref="Visit(IRArrayAlloc)"/>
         public override void Visit(IRArrayStore arrayStore)
         {
-            var elementType = MapType(arrayStore.Array.Type?.ElementType ?? new TypeInfo("object", TypeKind.Class));
-            WriteLine($"    ldloc {arrayStore.Array.Name}");
-            if (arrayStore.Index is IRConstant c)
-                WriteLine($"    ldc.i4 {c.Value}");
-            else
-                WriteLine($"    ldloc {arrayStore.Index.Name}");
-            if (arrayStore.Value is IRConstant vc)
-                EmitLoadConstant(vc);
-            else
-                WriteLine($"    ldloc {arrayStore.Value.Name}");
-            WriteLine($"    stelem {elementType}");
+            var elementType = arrayStore.Array.Type?.ElementType ?? new TypeInfo("Object", TypeKind.Class);
+
+            EmitLoadValue(arrayStore.Array);
+            EmitLoadValue(arrayStore.Index);
+            EmitLoadValue(arrayStore.Value);
+            WriteLine($"    stelem {IlTypeToken(elementType)}");
+            _currentStack -= 3;
         }
 
         public override void Visit(IRAwait awaitInst)
@@ -1752,10 +3570,49 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 WriteLine($"    // WARNING: yield return not fully implemented in MSIL backend - iterator will not function correctly");
         }
 
+        /// <summary>
+        /// ⛔ <b><c>Throw</c> used to emit NOTHING on this backend.</b>
+        /// <see cref="ICodeGenerator"/> declares <c>Visit(IRThrow)</c> as an empty virtual so a
+        /// backend can ignore nodes it does not handle, and MSIL never overrode it. The exception
+        /// object was therefore constructed, stored, and dropped, and execution continued straight
+        /// past the <c>Throw</c> into the statements below it. Every <c>Try</c>/<c>Catch</c> on
+        /// MSIL was consequently untestable: nothing could ever reach a handler.
+        /// </summary>
+        public override void Visit(IRThrow throwInst)
+        {
+            if (throwInst.Exception == null)
+            {
+                // A bare `Throw` re-raises the exception the handler is running for, preserving
+                // its original stack trace. `rethrow` is only defined inside a catch handler.
+                if (!_regionIsCatch)
+                {
+                    throw new ForeignFeatureException(
+                        "MSIL: a bare 'Throw' (rethrow) outside a Catch block has no IL lowering — "
+                        + "the rethrow opcode is only valid inside a catch handler, and emitting it "
+                        + "elsewhere produces a method the CLR rejects. Throw a specific exception "
+                        + "instead.");
+                }
+
+                WriteLine("    rethrow");
+                return;
+            }
+
+            EmitLoadValue(throwInst.Exception);
+            WriteLine("    throw");
+            _currentStack--;
+        }
+
         public override void Visit(IRNewObject newObj)
         {
-            // Generate newobj instruction
-            var className = SanitizeName(newObj.ClassName);
+            // Generate newobj instruction. A collection construction needs its BCL generic
+            // token — `newobj instance void List::.ctor()` names nothing. Everything else goes
+            // through IlTypeToken rather than SanitizeName so a BCL type keeps its assembly:
+            // `Throw New Exception(m)` emitted `newobj instance void Exception::.ctor(string)`,
+            // and ilasm refused the file with "Reference to undefined class 'Exception'". A user
+            // class still resolves to its bare sanitized name, as before.
+            var className = TryCollectionToken(newObj.Type, out var collectionToken)
+                ? "class " + collectionToken
+                : IlTypeToken(newObj.ClassName);
 
             // Load arguments first
             foreach (var arg in newObj.Arguments)
@@ -1800,11 +3657,23 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
 
             // Build method signature
-            var returnType = MapType(methodCall.Type);
-            var paramTypes = string.Join(", ", methodCall.Arguments.Select(a => MapType(a.Type)));
-            var className = methodCall.Object?.Type?.Name != null ? SanitizeName(methodCall.Object.Type.Name) : "object";
-            var methodName = SanitizeName(methodCall.MethodName);
-
+            string returnType, paramTypes, className, methodName;
+            if (TryCollectionMember(
+                    methodCall.Object?.Type, methodCall.MethodName, out var collToken, out var collSig))
+            {
+                // Generic definition signature, per the table — not the substituted types.
+                className = "class " + collToken;
+                methodName = collSig.Il;
+                returnType = collSig.Ret;
+                paramTypes = collSig.Params;
+            }
+            else
+            {
+                returnType = IlTypeSpec(methodCall.Type);
+                paramTypes = string.Join(", ", methodCall.Arguments.Select(a => IlTypeSpec(a.Type)));
+                className = IlReceiverToken(methodCall.Object?.Type);
+                methodName = SanitizeName(methodCall.MethodName);
+            }
             // Use callvirt for virtual dispatch (polymorphic behavior)
             // For non-virtual calls, the backend should use 'call instance' instead, but callvirt is safer as default
             var callInstruction = methodCall.IsVirtual || !methodCall.IsVirtual ? "callvirt" : "call";
@@ -1891,28 +3760,72 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Load object reference
             EmitLoadValue(fieldAccess.Object);
 
+            // ⛔ A collection's Count reaches here as a FIELD access, and it is not a field —
+            // `ldfld int32 List::Count` names a bare class and a member that does not exist.
+            // It is a property, so it has to become its accessor call.
+            if (TryCollectionMember(
+                    fieldAccess.Object?.Type, fieldAccess.FieldName, out var collToken, out var collSig))
+            {
+                WriteLine($"    callvirt instance {collSig.Ret} class {collToken}::{collSig.Il}({collSig.Params})");
+                _currentStack--;
+                _currentStack++;
+                EmitFieldAccessResult(fieldAccess);
+                return;
+            }
+
+            // ⛔ An ARRAY's Length is neither a field nor a property — IL has a dedicated opcode
+            // for it. `a.Length` emitted `ldfld int32 Integer[]::Length`, which names a class that
+            // does not exist and fails to assemble. `For i = 0 To a.Length - 1` is the ordinary
+            // way to walk an array, so this is needed for the allocation fix to be usable.
+            if (fieldAccess.Object?.Type?.Kind == TypeKind.Array
+                && string.Equals(fieldAccess.FieldName, "Length", StringComparison.OrdinalIgnoreCase))
+            {
+                WriteLine("    ldlen");
+                WriteLine("    conv.i4");   // ldlen yields a native uint; BasicLang's Length is Integer
+                EmitFieldAccessResult(fieldAccess);
+                return;
+            }
+
+            // ⛔ Same shape as the collection arm above: an EXCEPTION's members reach here as field
+            // accesses and none of them are fields. `ex.Message` emitted
+            // `ldfld string [mscorlib]System.Exception::Message`, which assembles — ilasm does not
+            // resolve member references — and dies at run time with MissingFieldException. Reading
+            // the exception is the main thing a Catch block does, so the accessor call is required
+            // for Try/Catch to be usable at all.
+            if (TryExceptionMember(fieldAccess.Object?.Type, fieldAccess.FieldName, out var exToken, out var exAccessor))
+            {
+                WriteLine($"    callvirt instance string {exToken}::{exAccessor}()");
+                _currentStack--;
+                _currentStack++;
+                EmitFieldAccessResult(fieldAccess);
+                return;
+            }
+
             // Load field value from object
-            var fieldType = MapType(fieldAccess.Type);
-            var className = fieldAccess.Object?.Type?.Name != null ? SanitizeName(fieldAccess.Object.Type.Name) : "object";
+            var fieldType = IlTypeSpec(fieldAccess.Type);
+            var className = IlReceiverToken(fieldAccess.Object?.Type);
             var fieldName = SanitizeName(fieldAccess.FieldName);
 
             WriteLine($"    ldfld {fieldType} {className}::{fieldName}");
             _currentStack--; // Pop object reference
             _currentStack++; // Push field value
 
-            // Store result if needed
-            if (!string.IsNullOrEmpty(fieldAccess.Name))
-            {
-                if (_declaredIdentifiers.Contains(fieldAccess.Name))
-                {
-                    EmitStoreLocal(fieldAccess.Name);
-                }
-                else
-                {
-                    var tempIdx = GetTempIndex(fieldAccess);
-                    EmitStloc(tempIdx);
-                }
-            }
+            EmitFieldAccessResult(fieldAccess);
+        }
+
+        /// <summary>
+        /// Parks the value a field access (or the property call that stands in for one) left on
+        /// the stack. Shared so the collection-property arm cannot drift from the field arm —
+        /// both push exactly one value and both have to store it the same way.
+        /// </summary>
+        private void EmitFieldAccessResult(IRFieldAccess fieldAccess)
+        {
+            if (string.IsNullOrEmpty(fieldAccess.Name)) return;
+
+            if (_declaredIdentifiers.Contains(fieldAccess.Name))
+                EmitStoreLocal(fieldAccess.Name);
+            else
+                EmitStloc(GetTempIndex(fieldAccess));
         }
 
         public override void Visit(IRFieldStore fieldStore)
@@ -1956,53 +3869,273 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine($"    stloc {_localIndices[varName]}");
         }
 
+        /// <summary>
+        /// Emits a <c>Try</c> as real IL exception-handling regions.
+        ///
+        /// <para>⛔ <b>The previous emitter looked right and protected nothing.</b> It inlined the
+        /// try block's non-branch instructions into <c>.try { }</c> and hard-coded
+        /// <c>leave EndTry</c>. But a Try body is a graph of BLOCKS, not one block's instruction
+        /// list, so only the first block's straight-line instructions ever landed inside the
+        /// region — and those same blocks were then emitted AGAIN by
+        /// <see cref="GenerateBasicBlock"/> as ordinary labelled blocks, because nothing marked
+        /// them handled. The real work therefore ran OUTSIDE the protected region, after a
+        /// truncated copy of it had already run inside. A Try around an If printed the right
+        /// answer while protecting nothing, which is why it looked like it worked.</para>
+        ///
+        /// <para>Three further faults are fixed here rather than separately, because they are the
+        /// same mistake at different points: <c>FinallyBlock</c> was ignored entirely (leaving
+        /// <c>.try { }</c> with NO handler, which ilasm rejects outright); the <c>EndTry</c> label
+        /// was a fixed string, so two Try statements in one method emitted it twice; and a catch
+        /// type was spelled <c>[mscorlib]System.</c> + the clause's name, which turns a
+        /// user-defined exception class into a reference to a BCL type that does not exist.</para>
+        ///
+        /// <para><b>Shape.</b> IL does not allow <c>catch</c> and <c>finally</c> on one region, so
+        /// a Try with both nests: the inner region carries the catches, the outer carries the
+        /// finally. That is also what gives the right semantics — a <c>leave</c> out of the inner
+        /// region runs the outer finally on its way past.</para>
+        /// </summary>
         public override void Visit(IRTryCatch tryCatch)
         {
-            // MSIL exception handling with .try/.catch directives
+            if (tryCatch.TryBlock == null || tryCatch.EndBlock == null)
+            {
+                throw new ForeignFeatureException(
+                    "MSIL: a Try with no body block or no continuation block cannot be lowered. "
+                    + "IRBuilder always creates both, so this is an emitter invariant failure.");
+            }
+
+            var endLabel = SanitizeLabel(tryCatch.EndBlock.Name);
+
+            // A region stops at the blocks that belong to the OTHER arms of the same Try. Without
+            // these bounds the walk from the try body would wander into the catch and finally
+            // blocks and emit them inside the protected region.
+            var boundaries = new HashSet<BasicBlock> { tryCatch.EndBlock };
+            foreach (var clause in tryCatch.CatchClauses)
+            {
+                if (clause.Block != null) boundaries.Add(clause.Block);
+            }
+            if (tryCatch.FinallyBlock != null) boundaries.Add(tryCatch.FinallyBlock);
+
+            var hasCatch = tryCatch.CatchClauses.Count > 0;
+            var hasFinally = tryCatch.FinallyBlock != null;
+
+            if (!hasCatch && !hasFinally)
+            {
+                // A Try with neither arm protects nothing; emit the body as ordinary blocks rather
+                // than an empty region, which would not assemble.
+                EmitRegionBody(tryCatch.TryBlock, boundaries, endLabel, inRegion: false, isFinally: false);
+                return;
+            }
+
+            if (hasFinally && hasCatch)
+            {
+                WriteLine("    .try");
+                WriteLine("    {");
+                EmitTryAndCatches(tryCatch, boundaries, endLabel);
+                // Unreachable in practice — every arm above ends in `leave` — but a protected
+                // block may not fall out of its own end, so give it an explicit exit.
+                WriteLine($"    leave {endLabel}");
+                WriteLine("    }");
+                EmitFinallyHandler(tryCatch, boundaries, endLabel);
+                return;
+            }
+
+            if (hasFinally)
+            {
+                WriteLine("    .try");
+                WriteLine("    {");
+                EmitRegionBody(tryCatch.TryBlock, boundaries, endLabel, inRegion: true, isFinally: false);
+                WriteLine("    }");
+                EmitFinallyHandler(tryCatch, boundaries, endLabel);
+                return;
+            }
+
+            EmitTryAndCatches(tryCatch, boundaries, endLabel);
+        }
+
+        /// <summary>The <c>.try { } catch { }</c> pair, used alone or nested inside a finally's try.</summary>
+        private void EmitTryAndCatches(IRTryCatch tryCatch, HashSet<BasicBlock> boundaries, string endLabel)
+        {
             WriteLine("    .try");
             WriteLine("    {");
-            foreach (var inst in tryCatch.TryBlock.Instructions)
-            {
-                if (inst is IRBranch or IRConditionalBranch) continue;
-                inst.Accept(this);
-            }
-            WriteLine("        leave EndTry");
+            EmitRegionBody(tryCatch.TryBlock, boundaries, endLabel, inRegion: true, isFinally: false);
             WriteLine("    }");
 
-            foreach (var catchClause in tryCatch.CatchClauses)
+            foreach (var clause in tryCatch.CatchClauses)
             {
-                var exType = catchClause.ExceptionType?.Name ?? "[mscorlib]System.Exception";
-                if (!exType.StartsWith("["))
-                    exType = $"[mscorlib]System.{exType}";
-                WriteLine($"    catch {exType}");
+                WriteLine($"    catch {CatchTypeToken(clause)}");
                 WriteLine("    {");
-
-                // Store exception to local if variable name is provided
-                if (!string.IsNullOrEmpty(catchClause.VariableName))
-                {
-                    var varName = SanitizeName(catchClause.VariableName);
-                    if (!_localIndices.ContainsKey(varName))
-                    {
-                        var localIndex = _localCounter++;
-                        _localIndices[varName] = localIndex;
-                    }
-                    WriteLine($"        stloc {_localIndices[varName]}");
-                }
-                else
-                {
-                    WriteLine("        pop"); // Pop exception if not used
-                }
-
-                foreach (var inst in catchClause.Block.Instructions)
-                {
-                    if (inst is IRBranch or IRConditionalBranch) continue;
-                    inst.Accept(this);
-                }
-                WriteLine("        leave EndTry");
+                EmitCatchBinding(clause);
+                EmitRegionBody(clause.Block, boundaries, endLabel, inRegion: true, isFinally: false, isCatch: true);
                 WriteLine("    }");
             }
+        }
 
-            WriteLine("EndTry:");
+        private void EmitFinallyHandler(IRTryCatch tryCatch, HashSet<BasicBlock> boundaries, string endLabel)
+        {
+            WriteLine("    finally");
+            WriteLine("    {");
+            EmitRegionBody(tryCatch.FinallyBlock, boundaries, endLabel, inRegion: true, isFinally: true);
+            WriteLine("    }");
+        }
+
+        /// <summary>
+        /// A catch handler is entered with the exception already on the stack. Bind it to the
+        /// clause's variable, or drop it — leaving it would unbalance every instruction after.
+        /// </summary>
+        private void EmitCatchBinding(IRCatchClause clause)
+        {
+            if (string.IsNullOrEmpty(clause.VariableName))
+            {
+                WriteLine("    pop");
+                return;
+            }
+
+            var name = SanitizeName(clause.VariableName);
+            if (!_localIndices.TryGetValue(name, out var index))
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: the catch variable '{clause.VariableName}' has no local slot. "
+                    + "AllocateExceptionHandlingLocals reserves one for every catch clause before "
+                    + ".locals init is written; emitting a store to an unreserved slot is what "
+                    + "produced InvalidProgramException here before.");
+            }
+
+            _currentStack++;   // the runtime pushed the exception
+            EmitStloc(index);
+        }
+
+        /// <summary>
+        /// Emits every block of one region, in walk order, marking them handled so
+        /// <see cref="GenerateBasicBlock"/> does not write them a second time.
+        ///
+        /// <para>The region's own branches are rewritten by the control-flow visitors, which read
+        /// the state set here — see <see cref="EmitRegionAwareBranch"/>. State is saved and
+        /// restored rather than assigned, so a Try nested inside a Try classifies its edges
+        /// against the INNER region while it is being emitted and the outer one afterwards.</para>
+        /// </summary>
+        private void EmitRegionBody(
+            BasicBlock entry, HashSet<BasicBlock> boundaries, string leaveTarget, bool inRegion,
+            bool isFinally, bool isCatch = false)
+        {
+            var blocks = CollectRegionBlocks(entry, boundaries);
+
+            var previousBlocks = _regionBlocks;
+            var previousIsFinally = _regionIsFinally;
+            var previousIsCatch = _regionIsCatch;
+            var previousLeaveTarget = _regionLeaveTarget;
+
+            _regionBlocks = inRegion ? new HashSet<BasicBlock>(blocks) : null;
+            _regionIsFinally = isFinally;
+            _regionIsCatch = isCatch;
+            _regionLeaveTarget = leaveTarget;
+
+            foreach (var block in blocks)
+            {
+                _visitedBlocks?.Add(block);
+                WriteLine($"  {SanitizeLabel(block.Name)}:");
+
+                foreach (var instruction in block.Instructions)
+                {
+                    instruction.Accept(this);
+                }
+
+                // An IR block with no terminator falls through to the next block in source order.
+                // Inside a region that is not expressible, so make the exit explicit.
+                if (!block.IsTerminated())
+                {
+                    if (isFinally) WriteLine("    endfinally");
+                    else if (inRegion) WriteLine($"    leave {leaveTarget}");
+                    else WriteLine($"    br {leaveTarget}");
+                }
+            }
+
+            _regionBlocks = previousBlocks;
+            _regionIsFinally = previousIsFinally;
+            _regionIsCatch = previousIsCatch;
+            _regionLeaveTarget = previousLeaveTarget;
+        }
+
+        /// <summary>
+        /// The blocks reachable from <paramref name="entry"/> without passing through a boundary —
+        /// that is, one arm of a Try. Depth-first from the entry so the emitted order matches the
+        /// order <see cref="GenerateBasicBlock"/> would have used.
+        /// </summary>
+        private List<BasicBlock> CollectRegionBlocks(BasicBlock entry, HashSet<BasicBlock> boundaries)
+        {
+            var ordered = new List<BasicBlock>();
+            var seen = new HashSet<BasicBlock>();
+
+            // The ENTRY is exempt from the boundary test. Every arm's own entry block is in the
+            // boundary set — that is what stops the try body walking into the catch — so testing
+            // it would make each handler collect zero blocks and emit an empty region, leaving its
+            // real body to be written outside the handler by GenerateBasicBlock.
+            void Walk(BasicBlock block, bool isEntry)
+            {
+                if (block == null) return;
+                if (!isEntry && boundaries.Contains(block)) return;
+                if (!seen.Add(block)) return;
+                ordered.Add(block);
+
+                // A NESTED Try owns its own arms: its Visit(IRTryCatch) emits them inside its own
+                // region when this block's instructions are walked. They are reachable from here
+                // as ordinary CFG successors, so without this they would also be collected into
+                // the enclosing region and written a second time — ilasm rejects the file with
+                // "Duplicate label". Its continuation block is NOT skipped: that is where the
+                // enclosing region resumes.
+                var nestedArms = new HashSet<BasicBlock>();
+                foreach (var nested in block.Instructions.OfType<IRTryCatch>())
+                {
+                    if (nested.TryBlock != null) nestedArms.Add(nested.TryBlock);
+                    foreach (var clause in nested.CatchClauses)
+                    {
+                        if (clause.Block != null) nestedArms.Add(clause.Block);
+                    }
+                    if (nested.FinallyBlock != null) nestedArms.Add(nested.FinallyBlock);
+                }
+
+                foreach (var successor in block.Successors)
+                {
+                    if (nestedArms.Contains(successor)) continue;
+                    Walk(successor, isEntry: false);
+                }
+            }
+
+            Walk(entry, isEntry: true);
+            return ordered;
+        }
+
+        /// <summary>
+        /// The IL type token naming what a <c>Catch</c> clause catches.
+        ///
+        /// <para>⛔ Not <c>"[mscorlib]System." + name</c>, which is what this used to be. That is
+        /// right only by coincidence for the BCL names and turns <c>Catch e As MyError</c> into a
+        /// reference to <c>[mscorlib]System.MyError</c> — a type that does not exist, so the
+        /// assembly fails to build or fails at load. The recognized .NET names come from
+        /// <see cref="CppExceptionTypes"/>, the single place this repo records them, so MSIL and
+        /// C++ cannot disagree about which names are .NET exceptions.</para>
+        /// </summary>
+        private string CatchTypeToken(IRCatchClause clause)
+        {
+            var name = clause.ExceptionType?.Name;
+            if (string.IsNullOrEmpty(name)) return "[mscorlib]System.Exception";
+
+            // The analyzer resolved a .NET exception outside the known set (e.g. System.IO.*).
+            if (!string.IsNullOrEmpty(clause.NetExceptionFullName))
+                return "[mscorlib]" + clause.NetExceptionFullName;
+
+            if (CppExceptionTypes.TryGetNetFullName(name, out var fullName))
+                return "[mscorlib]" + fullName;
+
+            // A user-defined exception class compiled into this same assembly.
+            if (_module?.Classes != null && _module.Classes.ContainsKey(name))
+                return SanitizeName(name);
+
+            throw new ForeignFeatureException(
+                $"MSIL: the Catch type '{name}' is neither one of the recognized .NET exception "
+                + "names nor a class defined in this compilation, so there is no type token to "
+                + "emit for it. Emitting a guessed '[mscorlib]System." + name + "' produces a "
+                + "reference to a type that does not exist, which fails at assembly or load time "
+                + "rather than saying so here.");
         }
 
         public override void Visit(IRInlineCode inlineCode)
@@ -2102,20 +4235,35 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 EmitLoadValue(index);
             }
 
-            // Call indexer (get_Item method)
-            var indexTypes = string.Join(", ", indexer.Indices.Select(i => MapType(i.Type)));
-            WriteLine($"    callvirt instance {resultType} class [mscorlib]System.Collections.Generic.IList`1<{resultType}>::get_Item({indexTypes})");
+            // Call the indexer on the RECEIVER's own type. This used to be hard-coded to
+            // IList`1<resultType>, which is wrong for a Dictionary in both positions: it named
+            // the VALUE type as the list's element and passed the KEY as an integer index.
+            if (TryCollectionMember(indexer.Collection?.Type, "get_Item", out var collToken, out var collSig))
+            {
+                WriteLine($"    callvirt instance {collSig.Ret} class {collToken}::get_Item({collSig.Params})");
+            }
+            else
+            {
+                var indexTypes = string.Join(", ", indexer.Indices.Select(i => IlTypeSpec(i.Type)));
+                WriteLine($"    callvirt instance {resultType} class [mscorlib]System.Collections.Generic.IList`1<{resultType}>::get_Item({indexTypes})");
+            }
 
             // Update stack
             _currentStack -= indexer.Indices.Count; // Pop indices
             // Collection was already on stack, now replaced with result
 
-            // Store result name
+            // ⛔ Store the result the way EVERY other visit does. This used to hand itself a
+            // fresh slot with `_localCounter++` and register it in _localIndices — allocating a
+            // local that GenerateLocalsDeclaration had already handed to something else. The
+            // result was a silent miscompile: `PrintLine(l(1))` stored the element over the
+            // LIST's own slot and then printed a different, uninitialized local, so the program
+            // ran, printed garbage, and corrupted the collection for every later use.
             if (!string.IsNullOrEmpty(indexer.Name))
             {
-                var resultLocal = _localCounter++;
-                _localIndices[indexer.Name] = resultLocal;
-                WriteLine($"    stloc.s {resultLocal}");
+                if (_declaredIdentifiers.Contains(indexer.Name))
+                    EmitStoreLocal(indexer.Name);
+                else
+                    EmitStloc(GetTempIndex(indexer));
                 _currentStack--;
             }
         }
