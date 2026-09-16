@@ -208,6 +208,27 @@ public class FormCanvasControl : Control
         // first would make every handle on a control's outer edge unusable.
         var handle = HandleUnder(document, point);
 
+        // ⚠ AFTER the control's handles, before selection. A control sitting against the form's
+        // right edge puts its own grips on top of the form's; the control's win, because that is
+        // what the user was looking at when they selected it. Pixel forms only — a web page has no
+        // client size to drag.
+        if (handle == FormResizeHandle.None && document.Target == FormTarget.WinForms)
+        {
+            var grip = FormGripAt(SurfaceCanvasRect(document), point);
+            if (grip != FormResizeHandle.None)
+            {
+                _formGrip = grip;
+                _dragOrigin = point;
+                _formStart = (
+                    (int)FormCanvasTransform.SurfaceSize(document).Width,
+                    (int)FormCanvasTransform.SurfaceSize(document).Height);
+                _dragChanged = false;
+                e.Pointer.Capture(this);
+                e.Handled = true;
+                return;
+            }
+        }
+
         if (handle == FormResizeHandle.None)
         {
             // The SAME transform the last Render used, so selection cannot disagree with the picture.
@@ -261,6 +282,42 @@ public class FormCanvasControl : Control
         var document = Document;
         if (document == null)
         {
+            return;
+        }
+
+        // ⚠ BEFORE the SelectedControl guard below. A form resize has no selected control, so
+        // checking it first would drop the gesture on its first move.
+        if (_formGrip != FormResizeHandle.None && _dragOrigin != null)
+        {
+            if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+            {
+                _formGrip = FormResizeHandle.None;
+                _dragOrigin = null;
+                _dragChanged = false;
+                return;
+            }
+
+            var moved = _transform.ToForm(e.GetPosition(this)) - _transform.ToForm(_dragOrigin.Value);
+
+            // Re-derived from the START size and the TOTAL delta, never nudged by the last frame —
+            // the same rule the control drag follows, and for the same reason: clamping at the
+            // minimum would otherwise compound and the edge would creep away from the pointer.
+            var width = _formGrip == FormResizeHandle.Bottom
+                ? _formStart.Width
+                : Math.Max(MinimumFormSide, _formStart.Width + (int)Math.Round(moved.X));
+            var height = _formGrip == FormResizeHandle.Right
+                ? _formStart.Height
+                : Math.Max(MinimumFormSide, _formStart.Height + (int)Math.Round(moved.Y));
+
+            if (width != document.Width || height != document.Height)
+            {
+                document.Width = width;
+                document.Height = height;
+                _dragChanged = true;
+                InvalidateVisual();
+            }
+
+            e.Handled = true;
             return;
         }
 
@@ -334,6 +391,7 @@ public class FormCanvasControl : Control
         var wasDragging = _dragOrigin != null;
         _dragOrigin = null;
         _dragHandle = FormResizeHandle.None;
+        _formGrip = FormResizeHandle.None;
         e.Pointer.Capture(null);
 
         if (!wasDragging || !_dragChanged)
@@ -401,6 +459,45 @@ public class FormCanvasControl : Control
         return FormCanvasTransform.HandleAt(bounds, point);
     }
 
+    /// <summary>The form's client rectangle in CANVAS space.</summary>
+    private Rect SurfaceCanvasRect(FormDocument document)
+    {
+        var size = FormCanvasTransform.SurfaceSize(document);
+        return _transform.ToCanvas(new Rect(0, 0, size.Width, size.Height));
+    }
+
+    /// <summary>Centre of one form grip, in canvas space.</summary>
+    private static Point FormGripCentre(Rect surface, FormResizeHandle grip) => grip switch
+    {
+        FormResizeHandle.Right => new Point(surface.Right, surface.Center.Y),
+        FormResizeHandle.Bottom => new Point(surface.Center.X, surface.Bottom),
+        _ => surface.BottomRight
+    };
+
+    /// <summary>
+    /// Which form grip the pointer is over, or None.
+    ///
+    /// <para>⚠ The corner is tested FIRST. It overlaps both edge grips, and a corner drag is the one
+    /// the user meant if they aimed at the corner — losing it to the edge underneath would make the
+    /// only two-axis resize unreachable.</para>
+    /// </summary>
+    private static FormResizeHandle FormGripAt(Rect surface, Point point)
+    {
+        var reach = FormCanvasTransform.HandleReach;
+
+        foreach (var grip in new[]
+                 { FormResizeHandle.BottomRight, FormResizeHandle.Right, FormResizeHandle.Bottom })
+        {
+            var centre = FormGripCentre(surface, grip);
+            if (Math.Abs(point.X - centre.X) <= reach && Math.Abs(point.Y - centre.Y) <= reach)
+            {
+                return grip;
+            }
+        }
+
+        return FormResizeHandle.None;
+    }
+
     /// <summary>A control's rectangle in CANVAS space, or null when it has no pixel geometry.</summary>
     private Rect? CanvasBoundsOf(FormDocument document, FormControl control) =>
         FormBoundsOf(document, control) is { } bounds ? _transform.ToCanvas(bounds) : null;
@@ -428,6 +525,28 @@ public class FormCanvasControl : Control
     private FormResizeHandle _dragHandle;
     private (int X, int Y, int Width, int Height) _dragStart;
     private bool _dragChanged;
+
+    /// <summary>
+    /// Which edge of the FORM is being dragged, or None. Separate from <see cref="_dragHandle"/>,
+    /// which is a control's.
+    /// </summary>
+    private FormResizeHandle _formGrip;
+
+    private (int Width, int Height) _formStart;
+
+    /// <summary>
+    /// ⛔ A form is anchored at its top-left, so only the three grips that grow it are drawn — east,
+    /// south, south-east. VB6 does the same, and for the same reason: dragging the top edge would
+    /// have to move the form's origin, which does not exist. Grips that cannot do anything are worse
+    /// than no grips (see the title-bar buttons, which are decoration and say so).
+    /// </summary>
+    private static readonly FormResizeHandle[] FormGrips =
+    {
+        FormResizeHandle.Right, FormResizeHandle.Bottom, FormResizeHandle.BottomRight
+    };
+
+    /// <summary>Smallest form the grips will produce. Below this the title bar has nowhere to go.</summary>
+    private const int MinimumFormSide = 48;
 
     /// <summary>
     /// Shows the "you can drop here" cursor only where a drop would actually do something.
@@ -518,6 +637,20 @@ public class FormCanvasControl : Control
             CanvasBoundsOf(document, SelectedControl) is { } selection)
         {
             DrawHandles(context, selection);
+        }
+
+        // The form's own grips, last of all. Unlike the title-bar buttons these are REAL: they
+        // resize the form, so drawing them is a promise the canvas keeps.
+        if (document.Target == FormTarget.WinForms)
+        {
+            var surface = SurfaceCanvasRect(document);
+            var reach = FormCanvasTransform.HandleReach;
+            foreach (var grip in FormGrips)
+            {
+                var centre = FormGripCentre(surface, grip);
+                context.DrawRectangle(HandleBrush, HandlePen, new Rect(
+                    centre.X - reach, centre.Y - reach, reach * 2, reach * 2));
+            }
         }
     }
 
@@ -870,7 +1003,13 @@ public class FormCanvasControl : Control
             {
                 context.FillRectangle(WindowBrush, bounds);
                 Bevel(context, bounds, raised: false);
-                for (var y = bounds.Y + 18; y < bounds.Bottom - 4; y += 14)
+
+                // ⚠ Rows start ONE row down from the top edge, not 18px down. The old offset was
+                // taller than a short ListBox, so the rules vanished entirely on exactly the
+                // controls that most needed the hint — a 26px-high list drew as a blank white box
+                // indistinguishable from a TextBox.
+                const double rowHeight = 13;
+                for (var y = bounds.Y + 2 + rowHeight; y < bounds.Bottom - 2; y += rowHeight)
                 {
                     context.DrawLine(RowPen, new Point(bounds.X + 3, y), new Point(bounds.Right - 3, y));
                 }
@@ -973,7 +1112,14 @@ public class FormCanvasControl : Control
     private static readonly IPen GridPen = new Pen(
         new SolidColorBrush(Color.FromRgb(0x90, 0x90, 0x90)), dashStyle: DashStyle.Dash);
 
-    private static readonly IPen RowPen = new Pen(new SolidColorBrush(Color.FromRgb(0xC0, 0xC0, 0xC0)));
+    /// <summary>
+    /// The item rules inside a ListBox and the cross inside a PictureBox.
+    ///
+    /// <para>⚠ Mid grey, not light grey. These sit on WHITE, and at #C0C0C0 they were technically
+    /// drawn and effectively invisible — a short ListBox read as a blank box indistinguishable from
+    /// a TextBox, which is the thing the rules exist to prevent.</para>
+    /// </summary>
+    private static readonly IPen RowPen = new Pen(new SolidColorBrush(Color.FromRgb(0xA0, 0xA0, 0xA0)));
 
     // ⚠ VB6 marks a selection with HANDLES ALONE — no outline. Solid navy squares, which read
     // against the form face and a white control interior alike.
