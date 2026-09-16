@@ -63,7 +63,7 @@ public class RaylibModelsShapesDrawTests
     public void All_basic_3d_shape_draws_marshal_and_execute_under_a_window()
     {
         try { Framework_InitWindow(320, 240, "vgs_models_shapes_test"); }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return; }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return; }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates the models-shapes exports; refresh IDE\\ first."); return; }
 
         if (!Framework_IsWindowReady())

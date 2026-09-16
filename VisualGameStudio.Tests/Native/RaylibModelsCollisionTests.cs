@@ -51,7 +51,7 @@ public class RaylibModelsCollisionTests
     private static bool EnsureAvailable()
     {
         try { Framework_CheckCollisionSpheres(new Vector3(0, 0, 0), 1f, new Vector3(0, 0, 0), 1f); return true; }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return false; }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return false; }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates the collision exports; refresh IDE\\ first."); return false; }
     }
 

@@ -87,7 +87,7 @@ public class RaylibModelsAnimationsTests
         var anim = EmptyAnim(); anim.boneCount = 2;         // bones = IntPtr.Zero
         bool valid;
         try { valid = Framework_IsModelAnimationValid(model, anim); }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return; }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return; }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates the animation exports; refresh IDE\\ first."); return; }
         Assert.That(valid, Is.False, "a bone-count mismatch is invalid (no bone dereference)");
     }
@@ -110,7 +110,7 @@ public class RaylibModelsAnimationsTests
 
             bool matched;
             try { matched = Framework_IsModelAnimationValid(model, anim); }
-            catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return; }
+            catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return; }
             catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates the animation exports; refresh IDE\\ first."); return; }
             Assert.That(matched, Is.True, "equal bone parents -> the skeletons match");
 
@@ -129,7 +129,7 @@ public class RaylibModelsAnimationsTests
     {
         // frameCount 0 -> the framePoses-free loop never runs; RL_FREE(NULL bones) / RL_FREE(NULL framePoses) are no-ops.
         try { Framework_UnloadModelAnimation(EmptyAnim()); }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return; }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return; }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates the animation exports; refresh IDE\\ first."); return; }
         Assert.Pass("UnloadModelAnimation on a zeroed animation did not crash");
     }
@@ -139,7 +139,7 @@ public class RaylibModelsAnimationsTests
     {
         // animCount 0 -> the per-element loop never runs; RL_FREE(NULL) is a no-op.
         try { Framework_UnloadModelAnimations(IntPtr.Zero, 0); }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return; }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return; }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates the animation exports; refresh IDE\\ first."); return; }
         Assert.Pass("UnloadModelAnimations on a null/empty array did not crash");
     }
@@ -154,7 +154,7 @@ public class RaylibModelsAnimationsTests
         int count = 0;
         IntPtr p;
         try { p = Framework_LoadModelAnimations("this_file_does_not_exist_vgs_anim.iqm", ref count); }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return; }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return; }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates the animation exports; refresh IDE\\ first."); return; }
         Assert.That(p, Is.EqualTo(IntPtr.Zero), "a missing animation file yields a null ModelAnimation* array");
         if (p != IntPtr.Zero) Framework_UnloadModelAnimations(p, count);  // defensive; the assert above should hold
@@ -168,7 +168,7 @@ public class RaylibModelsAnimationsTests
         var model = new Model();      // meshCount 0, boneCount 0, all pointers null
         var anim = EmptyAnim();       // frameCount 0
         try { Framework_UpdateModelAnimationBones(model, anim, 0); }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return; }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return; }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates the animation exports; refresh IDE\\ first."); return; }
         Framework_UpdateModelAnimation(model, anim, 0);
         Assert.Pass("Update* on an empty model + empty animation did not crash");

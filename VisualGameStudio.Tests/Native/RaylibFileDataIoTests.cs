@@ -38,7 +38,7 @@ public class RaylibFileDataIoTests
     public void ProbeEngine()
     {
         try { Framework_LoadFileText(Path.Combine(Path.GetTempPath(), "__vgs_c7_probe_nonexistent__")); }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates rcore Batch core-C7 exports; refresh IDE\\ first."); }
     }
 

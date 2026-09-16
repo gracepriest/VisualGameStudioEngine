@@ -45,7 +45,7 @@ public class RaylibCoreC11AutomationTests
     {
         AutomationEventList list;
         try { list = Framework_LoadAutomationEventList(null); }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return; }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return; }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates rcore Batch core-C11 exports; refresh IDE\\ first."); return; }
 
         var export = Path.Combine(Path.GetTempPath(), $"vgs_c11_{Guid.NewGuid():N}.rae");

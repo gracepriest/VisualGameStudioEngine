@@ -75,7 +75,7 @@ public class RaylibCoreC3DrawModeTests
     public void Vr_config_values_and_draw_modes_marshal_under_a_window()
     {
         try { Framework_InitWindow(320, 240, "vgs_c3_drawmode_test"); }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return; }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return; }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates rcore Batch core-C3 exports; refresh IDE\\ first."); return; }
 
         if (!Framework_IsWindowReady())

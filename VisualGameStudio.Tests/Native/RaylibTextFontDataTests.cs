@@ -45,7 +45,7 @@ public class RaylibTextFontDataTests
     {
         // glyphCount 0 -> the per-glyph UnloadImage loop never runs; RL_FREE(NULL) is a no-op.
         try { Framework_UnloadFontData(IntPtr.Zero, 0); }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return; }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return; }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates the font-data exports; refresh IDE\\ first."); return; }
         Assert.Pass("UnloadFontData on a null/empty array did not crash");
     }
@@ -67,7 +67,7 @@ public class RaylibTextFontDataTests
         try
         {
             try { glyphs = Framework_LoadFontData(fontBytes, fontBytes.Length, 32, null, 0, FONT_DEFAULT); }
-            catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return; }
+            catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return; }
             catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates the font-data exports; refresh IDE\\ first."); return; }
             haveGlyphs = glyphs != IntPtr.Zero;
             Assert.That(glyphs, Is.Not.EqualTo(IntPtr.Zero), "LoadFontData must return a glyph array for a real TTF");

@@ -39,16 +39,26 @@ public class RaylibCoreC6RandomMiscTests
     // spins forever (1 core, unkillable). It is exercised under a live window in RaylibCoreC6FrameControlTests instead.
 
     // Probe that also validates the DLL is staged and carries the C6 exports.
-    private static bool C6Available()
+    /// <summary>
+    /// Null when the C6 exports are callable; otherwise the reason to skip for.
+    ///
+    /// <para>⛔ This used to return a bare <c>bool</c>, which collapsed
+    /// <c>DllNotFoundException</c> and <c>EntryPointNotFoundException</c> into one answer — so the
+    /// skip had to name BOTH causes, and led with "not staged". On any non-Windows host the
+    /// library cannot load at all, making the first half of that sentence wrong and the advice
+    /// ("refresh IDE\") useless. Keeping which exception fired lets each one say its own truth.</para>
+    /// </summary>
+    private static string C6Unavailable()
     {
-        try { Framework_SetRandomSeed(1u); return true; }
-        catch (DllNotFoundException) { return false; }
-        catch (EntryPointNotFoundException) { return false; }
+        try { Framework_SetRandomSeed(1u); return null; }
+        catch (DllNotFoundException) { return NativeEngineSkip.DllNotFound(DLL); }
+        catch (EntryPointNotFoundException) { return $"{DLL} predates rcore C6 exports; refresh IDE\\ first."; }
     }
 
     private static void SkipIfUnavailable()
     {
-        if (!C6Available()) Assert.Ignore($"{DLL} not staged next to the test binary or predates rcore C6 exports; refresh IDE\\ first.");
+        var reason = C6Unavailable();
+        if (reason != null) Assert.Ignore(reason);
     }
 
     [Test]

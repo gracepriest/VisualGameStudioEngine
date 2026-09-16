@@ -76,7 +76,7 @@ public class RaylibScreenSpaceMathTests
     {
         // Cheapest pure-math export; its absence means the DLL predates C5 (or isn't staged) -> skip the whole fixture.
         try { Framework_GetCameraMatrix2D(Cam2D(0, 0, 1f)); }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates rcore Batch core-C5 exports; refresh IDE\\ first."); }
     }
 

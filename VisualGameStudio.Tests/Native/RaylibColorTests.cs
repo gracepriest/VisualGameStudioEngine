@@ -46,7 +46,7 @@ public class RaylibColorTests
     private static T Guard<T>(Func<T> call)
     {
         try { return call(); }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); throw; }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); throw; }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates color Batch 3a exports; refresh IDE\\ first."); throw; }
     }
 

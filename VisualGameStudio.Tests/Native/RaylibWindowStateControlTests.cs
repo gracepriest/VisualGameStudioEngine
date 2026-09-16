@@ -59,7 +59,7 @@ public class RaylibWindowStateControlTests
     public void Raw_window_lifecycle_state_and_control_roundtrip()
     {
         try { Framework_InitWindow(320, 240, "vgs_c1_window_test"); }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return; }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return; }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates rcore Batch core-C1 exports; refresh IDE\\ first."); return; }
 
         if (!Framework_IsWindowReady())

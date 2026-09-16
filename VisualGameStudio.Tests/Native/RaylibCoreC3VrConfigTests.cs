@@ -69,7 +69,7 @@ public class RaylibCoreC3VrConfigTests
 
         VrStereoConfig config = default;
         try { config = Framework_LoadVrStereoConfig(device); }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return; }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return; }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates rcore Batch core-C3 exports; refresh IDE\\ first."); return; }
 
         // Reaching here already proves the non-blittable VrStereoConfig by-value RETURN (Matrix[2] + Matrix[2] + 6x float[2])

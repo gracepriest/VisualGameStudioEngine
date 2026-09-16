@@ -43,7 +43,7 @@ public class RaylibCoreC11RecordingTests
     public void Automation_recording_cycle_marshals_under_a_window()
     {
         try { Framework_InitWindow(320, 240, "vgs_c11_record_test"); }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return; }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return; }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates rcore Batch core-C11 exports; refresh IDE\\ first."); return; }
 
         if (!Framework_IsWindowReady())

@@ -81,7 +81,7 @@ public class RaylibCoreC4ShaderTests
     public void Shader_load_locations_and_uniform_setters_marshal_under_a_window()
     {
         try { Framework_InitWindow(320, 240, "vgs_c4_shader_test"); }
-        catch (DllNotFoundException) { Assert.Ignore($"{DLL} not staged next to the test binary; refresh IDE\\ first."); return; }
+        catch (DllNotFoundException) { Assert.Ignore(NativeEngineSkip.DllNotFound(DLL)); return; }
         catch (EntryPointNotFoundException) { Assert.Ignore($"{DLL} predates rcore Batch core-C4 exports; refresh IDE\\ first."); return; }
 
         if (!Framework_IsWindowReady())
