@@ -144,9 +144,14 @@ a second document type.
   never ran, so a scaffolded form's `InitializeComponent` was never generated; `DispatchSource`
   never ran, so every page's `data-form` was read by nothing; `JavaScriptEmitter.Emit(forms:)` was
   optional and only tests passed it, so no page was ever written; the default project shape emitted
-  no pages at all; and `AddNewFormAsync` had no `[RelayCommand]` and no menu item, so **the IDE had
-  no way to create a form** — the entry point to the entire designer, found by the owner opening the
-  IDE and asking where it was. When you add one, the question is **who calls it in a shipping
+  no pages at all; and `AddNewFormAsync` reached no menu, so **the IDE had no way to create a form**
+  — the entry point to the entire designer, found by the owner opening the IDE and asking where it
+  was. ⚠ Its `[RelayCommand]` was PRESENT but bound to the wrong method: a doc comment for
+  `SaveProjectOrReportAsync` had been inserted between the attribute and the method it was written
+  for, and **an attribute binds to the next DECLARATION — an intervening doc comment is trivia**. The
+  toolkit generated a `SaveProjectOrReportCommand` nothing binds and no `AddNewFormCommand` at all,
+  it compiles either way, and the only symptom is a menu item that cannot exist. Keep the attribute
+  adjacent to its method. When you add one, the question is **who calls it in a shipping
   build** — and the answer must be a test that drives the real entry point (`SaveAsync`, the CLI,
   the generated command), not one that constructs the thing. For UI, that test must also read the
   AXAML for the binding: a `[RelayCommand]` no menu binds is as unreachable as an un-attributed
