@@ -55,6 +55,22 @@ public partial class CodeEditorDocumentView : UserControl
         InitializeComponent();
         DataContextChanged += OnDataContextChanged;
         KeyDown += OnViewKeyDown;
+
+        // ⛔⛔ PointerPressed on the toolbox CANNOT be wired as a XAML attribute. ListBox marks the
+        // press HANDLED while updating selection, and `PointerPressed="..."` subscribes without
+        // handledEventsToo — so the handler never ran, _toolboxDragKind stayed null, and every
+        // OnToolboxPointerMoved returned at its first line. The row highlighted and nothing could
+        // ever be dragged onto the canvas.
+        //
+        // MEASURED (Avalonia 11.3.13, headless): pressing a ListBox row fires the XAML-style
+        // handler False / a handledEventsToo handler True with e.Handled ALREADY true.
+        // PointerMoved and PointerReleased are NOT handled — they stay as XAML attributes, and
+        // moving this one alone is the whole fix.
+        ToolboxList.AddHandler(
+            InputElement.PointerPressedEvent,
+            OnToolboxPointerPressed,
+            RoutingStrategies.Bubble,
+            handledEventsToo: true);
     }
 
     private void UnsubscribeFromViewModel(CodeEditorDocumentViewModel vm)

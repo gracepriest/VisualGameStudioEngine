@@ -177,7 +177,6 @@
             <ListBox x:Name="ToolboxList"
                      ItemsSource="{Binding Toolbox.Items}"
                      Background="Transparent"
-                     PointerPressed="OnToolboxPointerPressed"
                      PointerMoved="OnToolboxPointerMoved"
                      PointerReleased="OnToolboxPointerReleased">
               <ListBox.ItemTemplate>
