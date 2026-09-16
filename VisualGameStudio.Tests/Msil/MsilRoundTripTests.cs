@@ -682,20 +682,25 @@ public class MsilRoundTripTests
         });
     }
 
-    /// <summary>
-    /// ⛔ <b>An array local is declared but never ALLOCATED.</b> The type spec is right now
-    /// (<c>string[]</c> assembles), so this moved from an ilasm rejection to a runtime
-    /// <c>NullReferenceException</c> — the next cause in the same shape, and a more useful
-    /// failure than the one it replaced.
-    ///
-    /// <para>Measured: the generated method contains ZERO <c>newarr</c> instructions.
-    /// <c>Dim a(2) As String</c> must emit <c>ldc.i4.3 / newarr [mscorlib]System.String /
-    /// stloc</c>, and element writes need <c>stelem</c>.</para>
-    /// </summary>
+    // ---- Arrays, fixed 2026-09-16 ------------------------------------------------------
+    //
+    // `Dim a(2) As String` declared `[0] string[] a` and stopped. `.locals init` zeroes a slot;
+    // it does not construct anything, so every access dereferenced null. Allocating exposed three
+    // more defects on the same path, each of which had been unreachable behind the first:
+    //
+    //  - an IRGetElementPtr temp was typed as the ELEMENT, but `ldelema` pushes a managed pointer.
+    //    The address was stored as if it were a value and `stind` then treated an integer as an
+    //    address — AccessViolationException. The reference-typed half of this looked like it
+    //    WORKED (a `string&` in a `string` slot printed the right answer), which makes it the
+    //    more dangerous one: unverifiable IL that passes its test by luck.
+    //  - `.field public Integer[] Cells` used the BasicLang type name, which ilasm rejects.
+    //  - the array-literal emitter wrote `stloc t0` — an IR value NAME where IL wants a slot
+    //    index — and an alloca store went through the indirect path, storing THROUGH a null slot.
+
     [Test]
-    public void AnArrayLocal_IsNeverAllocated_PinnedDivergence()
+    public void AnArrayLocal_IsAllocated_AndHoldsItsElements()
     {
-        var run = Run("""
+        Assert.That(RunExpectingSuccess("""
             Module M
              Sub Main()
               Dim a(2) As String
@@ -703,16 +708,180 @@ public class MsilRoundTripTests
               PrintLine(a(0))
              End Sub
             End Module
+            """), Is.EqualTo("ZERO\n"),
+            "a NullReferenceException here means the array was declared but never created.");
+    }
+
+    /// <summary>
+    /// ⚠ <b>The declared number is an element COUNT, not a VB-style upper bound.</b>
+    /// <c>Dim a(3)</c> holds 3 elements at indices 0..2, so <c>a(3)</c> is out of range. That is
+    /// this language's decision, not an off-by-one: the analyzer validates the number as a size
+    /// ("Array size cannot be negative"), and the C# and C++ backends both allocate exactly
+    /// <c>n</c> from the same <c>TypeInfo.ArrayDimensionSizes</c>. Verified against the C#
+    /// backend on this source — it prints <c>1,3</c> too.
+    /// </summary>
+    [Test]
+    public void AnArraysDeclaredSize_IsAnElementCount_NotAnUpperBound()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              Dim a(3) As Integer
+              a(0) = 1
+              a(2) = 3
+              PrintLine(CStr(a(0)) & "," & CStr(a(2)) & ",len=" & CStr(a.Length))
+             End Sub
+            End Module
+            """), Is.EqualTo("1,3,len=3\n"),
+            "len=4 would mean this backend read the number as an upper bound and drifted from "
+            + "C#/C++; an IndexOutOfRange on a(2) would mean it allocated one element too few.");
+    }
+
+    [Test]
+    public void AnArrayOfIntegers_ReadsAndWritesAcrossALoop()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              Dim a(4) As Integer
+              Dim i As Integer
+              For i = 0 To a.Length - 1
+               a(i) = i * i
+              Next
+              For i = 0 To a.Length - 1
+               PrintLine(CStr(a(i)))
+              Next
+             End Sub
+            End Module
+            """), Is.EqualTo("0\n1\n4\n9\n"),
+            "an int element is written through a managed pointer; if that pointer's slot is typed "
+            + "as int32 rather than int32&, stind treats the value as an address and the process "
+            + "dies with AccessViolationException.");
+    }
+
+    /// <summary>
+    /// <c>a.Length</c> is neither a field nor a property in IL — it is the <c>ldlen</c> opcode.
+    /// Emitting it as a field named it on a class that does not exist and failed to assemble.
+    /// </summary>
+    [Test]
+    public void AnArrayLength_IsReadable()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              Dim a(3) As Integer
+              PrintLine(CStr(a.Length))
+             End Sub
+            End Module
+            """), Is.EqualTo("3\n"));
+    }
+
+    /// <summary>
+    /// Array FIELDS are the second allocation site and are not optional — the C++ backend's own
+    /// note records that its first version of this fix did locals only, which turned "does not
+    /// build" into "builds and access-violates".
+    /// </summary>
+    [Test]
+    public void AnArrayField_IsAllocatedByTheConstructor()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Class Board
+             Public Cells(3) As Integer
+            End Class
+
+            Module M
+             Sub Main()
+              Dim b As New Board()
+              b.Cells(1) = 9
+              PrintLine(CStr(b.Cells(1)))
+             End Sub
+            End Module
+            """), Is.EqualTo("9\n"),
+            "the field must also be DECLARED with an IL type spec — `.field public Integer[] "
+            + "Cells` carries the BasicLang name and ilasm refuses the file.");
+    }
+
+    [Test]
+    public void AnArrayOfObjects_HoldsReferences()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Class P
+             Public N As Integer
+            End Class
+
+            Module M
+             Sub Main()
+              Dim a(2) As P
+              a(0) = New P()
+              a(0).N = 5
+              PrintLine(CStr(a(0).N))
+             End Sub
+            End Module
+            """), Is.EqualTo("5\n"));
+    }
+
+    [Test]
+    public void AnArrayLiteral_BuildsAndIndexes()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Module M
+             Sub Main()
+              Dim a() As Integer = {10, 20, 30}
+              PrintLine(CStr(a(1)))
+             End Sub
+            End Module
+            """), Is.EqualTo("20\n"),
+            "the literal emitter wrote `stloc t0` — an IR value name where IL wants a slot index "
+            + "— and the assignment stored THROUGH the destination slot rather than into it.");
+    }
+
+    [Test]
+    public void AnUnsizedArrayDeclaration_AllocatesNothing()
+    {
+        var run = Run("""
+            Module M
+             Sub Main()
+              Dim a() As String
+              PrintLine("DECLARED")
+             End Sub
+            End Module
             """);
 
         Assert.Multiple(() =>
         {
-            Assert.That(run.Outcome, Is.EqualTo(MsilOutcome.RunFailed), run.Report);
-            Assert.That(run.Output, Does.Contain("NullReferenceException"),
-                "still the un-allocated array: " + run.Detail);
+            Assert.That(run.Output, Is.EqualTo("DECLARED\n"), run.Report);
             Assert.That(run.Il, Does.Not.Contain("newarr"),
-                "and the cause is still that no array is created. When newarr appears, this "
-                + "test has done its job — assert the value instead.");
+                "`Dim a() As String` declares a variable whose storage an assignment supplies "
+                + "later; inventing a size for it would be wrong: " + run.Il);
+        });
+    }
+
+    /// <summary>
+    /// Refused rather than allocated, on purpose. A rank-2 declaration currently collapses to a
+    /// rank-1 IL type and indexing emits <c>ldelema</c> with <c>Indices[0]</c> alone, so
+    /// <c>g(1, 2)</c> reads and writes <c>g(1)</c>. Allocating it would upgrade a loud
+    /// NullReferenceException into a quiet wrong answer.
+    /// </summary>
+    [Test]
+    public void AMultiDimensionalArray_IsRefusedNotSilentlyFlattened()
+    {
+        var run = Run("""
+            Module M
+             Sub Main()
+              Dim g(2, 3) As Integer
+              g(1, 2) = 42
+              PrintLine(CStr(g(1, 2)))
+             End Sub
+            End Module
+            """);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(run.Outcome, Is.EqualTo(MsilOutcome.GenerateFailed),
+                "refusal must come BEFORE any IL exists: " + run.Report);
+            Assert.That(run.Detail,
+                Does.Contain("2-dimensional").And.Contain("silently reads and writes"),
+                "and it must name the rank and the wrong answer it prevents: " + run.Detail);
         });
     }
 

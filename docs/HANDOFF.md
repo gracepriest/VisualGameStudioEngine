@@ -226,6 +226,22 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   region (lowered to a result slot plus `leave` to one exit, which is also what runs the finally),
   nested and sibling `Try`s, rethrow, user-defined exception types, and `ex.Message`/`StackTrace`/
   `Source` through a narrow recorded table — anything outside it is refused, not guessed.
+  ⚠ **Arrays allocate as of 2026-09-16.** `Dim a(2) As String` declared the local and stopped —
+  `.locals init` zeroes a slot, it does not construct anything, so every access dereferenced null.
+  Allocation now happens at both declaration sites (locals in the method prologue, fields in every
+  constructor — doing locals only is the trap the C++ backend's own note records). ⛔ **The
+  declared number is an element COUNT, not a VB upper bound**: `Dim a(3)` holds 3 elements at
+  0..2, matching what C#/C++ read from the same `TypeInfo.ArrayDimensionSizes`; `a(3)` is out of
+  range and that is the language's decision, not an off-by-one. **Multi-dimensional arrays are
+  REFUSED**, not allocated: a rank-2 declaration collapses to a rank-1 IL type and indexing emits
+  `ldelema` with `Indices[0]` alone, so `g(i, j)` would silently read and write `g(i)` — allocating
+  it would trade a loud NullReferenceException for a quiet wrong answer.
+  ⛔ **Allocating arrays exposed three defects that had been unreachable behind the null**, which
+  is the pattern to expect when unblocking any path here: an `IRGetElementPtr` temp was typed as
+  the ELEMENT while `ldelema` pushes a managed pointer (`stind` then treated an integer as an
+  address — and the reference-typed half of this *looked like it worked*, printing right answers
+  from unverifiable IL); `.field public Integer[] Cells` carried the BasicLang type name; and the
+  array-literal emitter wrote `stloc t0`, an IR value NAME where IL wants a slot index.
   ⛔ **A variable-less `Catch` still needs its `pop` even though the obvious test cannot see it**:
   `leave` empties the evaluation stack, so a straight-line handler runs correctly with the
   exception left underneath. It only becomes an invalid program when a branch join inside the
