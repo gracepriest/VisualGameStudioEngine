@@ -651,7 +651,11 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             {
                 var access = MapAccessModifier(field.Access);
                 var staticMod = field.IsStatic ? "static " : "";
-                var fieldType = MapType(field.Type);
+                // IlTypeSpec, not MapType: a field declaration is a type SPEC position, so a class
+                // needs its `class` prefix and an array needs its element mapped. `Public Cells(3)
+                // As Integer` emitted `.field public Integer[] Cells` — the BasicLang name, which
+                // ilasm rejects outright ("syntax error at token 'Integer'").
+                var fieldType = IlTypeSpec(field.Type);
                 var fieldName = SanitizeName(field.Name);
                 WriteLine($"  .field {access} {staticMod}{fieldType} {fieldName}");
             }
@@ -852,6 +856,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine("    ldarg.0");
             WriteLine($"    call instance void {baseClass}::.ctor()");
 
+            EmitArrayFieldAllocations(irClass);
+
             // Generate constructor body
             if (ctor.Implementation?.EntryBlock != null)
             {
@@ -879,6 +885,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine("    .maxstack 8");
             WriteLine("    ldarg.0");
             WriteLine($"    call instance void {baseClass}::.ctor()");
+            EmitArrayFieldAllocations(irClass);
             WriteLine("    ret");
             WriteLine("  } // end of method .ctor");
             WriteLine();
@@ -1121,6 +1128,9 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             WriteLine();
 
+            // Storage for sized array locals, before any statement can index one.
+            EmitArrayLocalAllocations(function);
+
             // Generate method body
             if (function.EntryBlock != null)
             {
@@ -1201,6 +1211,132 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
         /// <summary>The implicit <c>Catch</c> type when a clause names none.</summary>
         private static readonly TypeInfo ExceptionTypeInfo = new TypeInfo("Exception", TypeKind.Class);
+
+        /// <summary>
+        /// Allocates every sized array LOCAL at the top of the method.
+        ///
+        /// <para>⛔ <c>Dim a(2) As String</c> declared <c>[0] string[] a</c> and stopped there. A
+        /// local of reference type starts null, so the very next <c>ldelema</c> dereferenced null
+        /// and the program died with NullReferenceException — the array was never created at all.
+        /// <c>.locals init</c> zeroes a slot; it does not construct anything.</para>
+        ///
+        /// <para>The element count comes from <see cref="TypeInfo.ArrayDimensionSizes"/>, the same
+        /// carrier the C# and C++ backends read, so the three cannot drift on how big
+        /// <c>Dim a(n)</c> is. Note that in BasicLang <c>n</c> is the element COUNT, not a VB-style
+        /// upper bound: the analyzer validates it as a size ("Array size cannot be negative") and
+        /// both other backends allocate exactly <c>n</c>. <c>a(n)</c> is therefore out of range,
+        /// which is the language's decision and not an off-by-one here.</para>
+        /// </summary>
+        private void EmitArrayLocalAllocations(IRFunction function)
+        {
+            foreach (var local in function.LocalVariables)
+            {
+                if (!TryArrayAllocation(local.Type, out var elementToken, out var length)) continue;
+                if (!_localIndices.TryGetValue(SanitizeName(local.Name), out var index)) continue;
+
+                EmitLdcI4(length);
+                _currentStack++;
+                WriteLine($"    newarr {elementToken}");
+                EmitStloc(index);
+            }
+        }
+
+        /// <summary>
+        /// The IL type of a temporary's slot.
+        ///
+        /// <para>⛔ An <see cref="IRGetElementPtr"/> temp holds an ADDRESS, not a value.
+        /// <c>ldelema int32</c> pushes an <c>int32&amp;</c> (a managed pointer), and the old
+        /// declaration typed that slot from the node's own type — <c>int32</c> — so the address
+        /// was stored as if it were the element. The following <c>stind.i4</c> then treated that
+        /// integer as a pointer and the program died with AccessViolationException.</para>
+        ///
+        /// <para>This was invisible until arrays started being allocated: every access previously
+        /// dereferenced a null array and raised NullReferenceException first. The reference-typed
+        /// case looked like it WORKED — a <c>string&amp;</c> in a <c>string</c> slot printed the
+        /// right answer — which makes it the more dangerous half: unverifiable IL that the GC may
+        /// see as an object reference, passing its test by luck.</para>
+        /// </summary>
+        private string TempSlotSpec(IRValue temp) =>
+            temp is IRGetElementPtr ? IlTypeSpec(temp.Type) + "&" : IlTypeSpec(temp.Type);
+
+        /// <summary>
+        /// Allocates every sized array FIELD in a constructor, after the base call and before any
+        /// constructor body can touch one.
+        ///
+        /// <para>Fields are the second site, and they are not optional. The C++ backend's own
+        /// note records that its first version of this fix lived inline in the locals loop and
+        /// left array fields unsized, which turned "does not build" into "builds and
+        /// access-violates". One helper, both constructor paths — the explicit one and the
+        /// generated default — because a class with a declared constructor never reaches the
+        /// other.</para>
+        /// </summary>
+        private void EmitArrayFieldAllocations(IRClass irClass)
+        {
+            if (irClass?.Fields == null) return;
+
+            foreach (var field in irClass.Fields)
+            {
+                if (field.IsStatic) continue;   // a static field is not this instance's to create
+                if (!TryArrayAllocation(field.Type, out var elementToken, out var length)) continue;
+
+                WriteLine("    ldarg.0");
+                EmitLdcI4(length);
+                WriteLine($"    newarr {elementToken}");
+                WriteLine($"    stfld {IlTypeSpec(field.Type)} {SanitizeName(irClass.Name)}::{SanitizeName(field.Name)}");
+            }
+        }
+
+        /// <summary>
+        /// Decides whether a type needs array storage created for it, and with what
+        /// <c>newarr</c> operand and length. False for anything that is not a sized array —
+        /// including <c>Dim a() As String</c>, whose storage an assignment supplies later.
+        ///
+        /// <para>⛔ <b>Rank &gt; 1 is REFUSED, not allocated.</b> A multi-dimensional declaration
+        /// currently collapses to a rank-1 IL type, and <c>Visit(IRGetElementPtr)</c> emits
+        /// <c>ldelema</c> with <c>Indices[0]</c> alone — so <c>g(1, 2)</c> silently reads and
+        /// writes <c>g[1]</c>, dropping the second index entirely. Allocating that array would
+        /// turn a loud NullReferenceException into a quiet wrong answer, which is strictly worse.
+        /// A real rank-2 lowering needs the rectangular form (<c>newobj int32[,]::.ctor</c> plus
+        /// <c>Get</c>/<c>Set</c> calls) on BOTH the declaration and the indexing side.</para>
+        ///
+        /// <para>The operand goes through <see cref="IlTypeToken(string)"/>, so it reads
+        /// <c>newarr [mscorlib]System.String</c>. ⚠ Unlike <c>box</c>, <c>newarr</c> ALSO accepts
+        /// the IL keyword form — <c>newarr int32</c> and <c>newarr string</c> both assemble and
+        /// run, measured directly against ilasm, and a mutation replacing the token with the
+        /// keyword kills no test. The token form is kept for consistency with every other operand
+        /// position in this file, not because the alternative is invalid; don't cite this line as
+        /// evidence that it is.</para>
+        /// </summary>
+        private bool TryArrayAllocation(TypeInfo type, out string elementToken, out int length)
+        {
+            elementToken = null;
+            length = 0;
+
+            if (type?.Kind != TypeKind.Array || type.ElementType == null) return false;
+
+            var sizes = type.ArrayDimensionSizes;
+            if (sizes == null || sizes.Count == 0) return false;
+
+            if (sizes.Count > 1)
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: a {sizes.Count}-dimensional array has no IL lowering. The declaration "
+                    + "collapses to a one-dimensional type and indexing emits ldelema with only "
+                    + "the FIRST index, so g(i, j) silently reads and writes g(i) — allocating it "
+                    + "would replace a NullReferenceException with a wrong answer. A rank-2 array "
+                    + "needs the rectangular IL form (newobj T[,]::.ctor plus Get/Set) on the "
+                    + "declaration and the indexing side together. Use nested rank-1 arrays, or "
+                    + "target C#/C++ which lower this correctly.");
+            }
+
+            // An unsized dimension (`Dim a() As String`) is a declaration without storage: some
+            // later assignment supplies the array. Nothing to create here.
+            if (sizes[0] <= 0) return false;
+
+            elementToken = IlTypeToken(type.ElementType);
+            length = sizes[0];
+            return true;
+        }
 
         /// <summary>
         /// The <c>System.Exception</c> members this backend can name, and the accessor each one
@@ -1299,7 +1435,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Temporary variables
             foreach (var (temp, index) in _tempIndices)
             {
-                slots.Add((index, $"      [{index}] {IlTypeSpec(temp.Type)} V_{index}"));
+                slots.Add((index, $"      [{index}] {TempSlotSpec(temp)} V_{index}"));
             }
 
             var locals = slots.OrderBy(s => s.Index).Select(s => s.Text).ToList();
@@ -1742,6 +1878,17 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             {
                 EmitLoadValue(store.Value);
                 EmitStoreLocal(variable.Name);
+            }
+            else if (store.Address is IRAlloca alloca)
+            {
+                // ⛔ An alloca is a LOCAL SLOT on this backend, not a pointer — Visit(IRAlloca)
+                // emits nothing precisely because `.locals init` already reserved it. Falling
+                // through to the indirect path below emitted `ldloc N; ldloc M; stind.ref`, which
+                // stores THROUGH the slot's contents; the slot is null, so `Dim a() As Integer =
+                // {10, 20, 30}` died with NullReferenceException after building the array
+                // correctly. Store to the slot instead.
+                EmitLoadValue(store.Value);
+                EmitStloc(GetTempIndex(alloca));
             }
             else
             {
@@ -2668,27 +2815,32 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
         }
 
+        /// <summary>
+        /// The array behind an array LITERAL (<c>Dim a() As Integer = {10, 20, 30}</c>).
+        ///
+        /// <para>⛔ This emitted <c>stloc {arrayAlloc.Name}</c> — the IR value's NAME where IL
+        /// wants a slot index, so the file carried <c>stloc t0</c> and ilasm refused it with
+        /// "Undeclared identifier t0". <c>newarr</c> also took <c>MapType</c>, the IL keyword
+        /// form; an operand position needs the type TOKEN.</para>
+        /// </summary>
         public override void Visit(IRArrayAlloc arrayAlloc)
         {
-            var elementType = MapType(arrayAlloc.ElementType);
-            WriteLine($"    ldc.i4 {arrayAlloc.Size}");
-            WriteLine($"    newarr {elementType}");
-            WriteLine($"    stloc {arrayAlloc.Name}");
+            EmitLdcI4(arrayAlloc.Size);
+            _currentStack++;
+            WriteLine($"    newarr {IlTypeToken(arrayAlloc.ElementType)}");
+            EmitStloc(GetTempIndex(arrayAlloc));
         }
 
+        /// <inheritdoc cref="Visit(IRArrayAlloc)"/>
         public override void Visit(IRArrayStore arrayStore)
         {
-            var elementType = MapType(arrayStore.Array.Type?.ElementType ?? new TypeInfo("object", TypeKind.Class));
-            WriteLine($"    ldloc {arrayStore.Array.Name}");
-            if (arrayStore.Index is IRConstant c)
-                WriteLine($"    ldc.i4 {c.Value}");
-            else
-                WriteLine($"    ldloc {arrayStore.Index.Name}");
-            if (arrayStore.Value is IRConstant vc)
-                EmitLoadConstant(vc);
-            else
-                WriteLine($"    ldloc {arrayStore.Value.Name}");
-            WriteLine($"    stelem {elementType}");
+            var elementType = arrayStore.Array.Type?.ElementType ?? new TypeInfo("Object", TypeKind.Class);
+
+            EmitLoadValue(arrayStore.Array);
+            EmitLoadValue(arrayStore.Index);
+            EmitLoadValue(arrayStore.Value);
+            WriteLine($"    stelem {IlTypeToken(elementType)}");
+            _currentStack -= 3;
         }
 
         public override void Visit(IRAwait awaitInst)
@@ -2905,6 +3057,19 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 WriteLine($"    callvirt instance {collSig.Ret} class {collToken}::{collSig.Il}({collSig.Params})");
                 _currentStack--;
                 _currentStack++;
+                EmitFieldAccessResult(fieldAccess);
+                return;
+            }
+
+            // ⛔ An ARRAY's Length is neither a field nor a property — IL has a dedicated opcode
+            // for it. `a.Length` emitted `ldfld int32 Integer[]::Length`, which names a class that
+            // does not exist and fails to assemble. `For i = 0 To a.Length - 1` is the ordinary
+            // way to walk an array, so this is needed for the allocation fix to be usable.
+            if (fieldAccess.Object?.Type?.Kind == TypeKind.Array
+                && string.Equals(fieldAccess.FieldName, "Length", StringComparison.OrdinalIgnoreCase))
+            {
+                WriteLine("    ldlen");
+                WriteLine("    conv.i4");   // ldlen yields a native uint; BasicLang's Length is Integer
                 EmitFieldAccessResult(fieldAccess);
                 return;
             }
