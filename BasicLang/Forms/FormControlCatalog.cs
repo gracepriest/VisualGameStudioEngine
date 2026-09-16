@@ -234,6 +234,53 @@ public sealed record FormPropertyDef(
 /// <param name="Properties">Editable properties, in the order a property grid should show them.</param>
 /// <param name="DefaultWidth">Width in form pixels given to one dropped from the toolbox.</param>
 /// <param name="DefaultHeight">Height in form pixels given to one dropped from the toolbox.</param>
+/// <summary>
+/// How the designer canvas DRAWS a control kind.
+///
+/// <para>⛔ Still a schematic, never a preview (D-WYSIWYG): the IDE has no browser and no WinForms
+/// surface, so none of these shapes claims to be what the running program looks like. What they do
+/// is tell the kinds APART. Drawing every control as the same rectangle made a form of ten controls
+/// unreadable — the user could only identify one by reading its label, and a Button, a CheckBox and
+/// a TextBox were pixel-identical.</para>
+///
+/// <para>⛔ Declared HERE rather than switched on in the canvas, for the reason the whole catalog
+/// exists: a <c>switch</c> over kinds inside <c>FormCanvasControl</c> is a second list of controls,
+/// and it silently falls to its default the day someone adds a row. A new row picks its shape or
+/// gets <see cref="Input"/>; it can never go missing.</para>
+/// </summary>
+public enum FormSchematic
+{
+    /// <summary>A plain bordered box. The fallback, and right for anything text-entry shaped.</summary>
+    Input,
+
+    /// <summary>Text with no box at all — a Label is not a widget, it is words on the form.</summary>
+    Text,
+
+    /// <summary>A rounded box with a centred caption.</summary>
+    Button,
+
+    /// <summary>A small square to the left, label beside it. No box around the whole bounds.</summary>
+    Check,
+
+    /// <summary>A small circle to the left, label beside it.</summary>
+    Radio,
+
+    /// <summary>A box with a chevron at the right edge.</summary>
+    Dropdown,
+
+    /// <summary>A box with horizontal rules, suggesting rows.</summary>
+    List,
+
+    /// <summary>A dashed border — it holds other controls and has no face of its own.</summary>
+    Container,
+
+    /// <summary>A border broken at the top left by its caption.</summary>
+    Group,
+
+    /// <summary>A box crossed corner to corner, the universal "picture goes here".</summary>
+    Image
+}
+
 public sealed record FormControlDef(
     string Kind,
     string? WinFormsType,
@@ -242,7 +289,8 @@ public sealed record FormControlDef(
     bool IsContainer,
     IReadOnlyList<FormPropertyDef> Properties,
     int DefaultWidth = 100,
-    int DefaultHeight = 24)
+    int DefaultHeight = 24,
+    FormSchematic Schematic = FormSchematic.Input)
 {
     public bool SupportsTarget(FormTarget target) => target switch
     {
@@ -310,7 +358,7 @@ public static class FormControlCatalog
     public static readonly IReadOnlyList<FormControlDef> All = new List<FormControlDef>
     {
         new("Label",       "Label",       "label",    null,       false, Common(Text, TextAlign),
-            DefaultWidth: 100, DefaultHeight: 23),
+            DefaultWidth: 100, DefaultHeight: 23, Schematic: FormSchematic.Text),
         new("TextBox",     "TextBox",     "input",    "text",     false, Common(
             Text,
             new FormPropertyDef("Multiline", FormPropertyType.Bool, "false"),
@@ -321,9 +369,9 @@ public static class FormControlCatalog
                 WinFormsFactory: "Convert.ToChar")),
             DefaultWidth: 100, DefaultHeight: 23),
         new("Button",      "Button",      "button",   null,       false, Common(Text, TextAlign),
-            DefaultWidth: 75, DefaultHeight: 23),
+            DefaultWidth: 75, DefaultHeight: 23, Schematic: FormSchematic.Button),
         new("CheckBox",    "CheckBox",    "input",    "checkbox", false, Common(Text, Checked),
-            DefaultWidth: 104, DefaultHeight: 24),
+            DefaultWidth: 104, DefaultHeight: 24, Schematic: FormSchematic.Check),
         new("RadioButton", "RadioButton", "input",    "radio",    false, Common(
             Text,
             Checked,
@@ -331,13 +379,13 @@ public static class FormControlCatalog
             // has no GroupName property at all — csc says CS1061, BasicLang says nothing.
             new FormPropertyDef("GroupName", FormPropertyType.String,
                 Targets: new[] { FormTarget.Web })),
-            DefaultWidth: 104, DefaultHeight: 24),
+            DefaultWidth: 104, DefaultHeight: 24, Schematic: FormSchematic.Radio),
         new("ComboBox",    "ComboBox",    "select",   null,       false, Common(
             Text,
             // Items is a get-only collection on WinForms — assigning it is CS0200.
             new FormPropertyDef("Items", FormPropertyType.String, IsItemCollection: true),
             new FormPropertyDef("SelectedIndex", FormPropertyType.Int, "-1")),
-            DefaultWidth: 121, DefaultHeight: 23),
+            DefaultWidth: 121, DefaultHeight: 23, Schematic: FormSchematic.Dropdown),
         new("ListBox",     "ListBox",     "select",   null,       false, Common(
             new FormPropertyDef("Items", FormPropertyType.String, IsItemCollection: true),
             new FormPropertyDef("SelectedIndex", FormPropertyType.Int, "-1"),
@@ -346,14 +394,14 @@ public static class FormControlCatalog
             // web-only rather than being silently approximated.
             new FormPropertyDef("MultiSelect", FormPropertyType.Bool, "false",
                 Targets: new[] { FormTarget.Web })),
-            DefaultWidth: 120, DefaultHeight: 95),
+            DefaultWidth: 120, DefaultHeight: 95, Schematic: FormSchematic.List),
         new("Panel",       "Panel",       "div",      null,       true,  Common(
             new FormPropertyDef("BorderStyle", FormPropertyType.Enum, "None",
                 new[] { "None", "FixedSingle", "Fixed3D" },
                 WinFormsEnumType: "BorderStyle")),
-            DefaultWidth: 200, DefaultHeight: 100),
+            DefaultWidth: 200, DefaultHeight: 100, Schematic: FormSchematic.Container),
         new("GroupBox",    "GroupBox",    "fieldset", null,       true,  Common(Text),
-            DefaultWidth: 200, DefaultHeight: 100),
+            DefaultWidth: 200, DefaultHeight: 100, Schematic: FormSchematic.Group),
         new("PictureBox",  "PictureBox",  "img",      null,       false, Common(
             // WinForms Image is a System.Drawing.Image, not a path string (CS0029).
             new FormPropertyDef("Image", FormPropertyType.String,
@@ -361,7 +409,7 @@ public static class FormControlCatalog
             new FormPropertyDef("SizeMode", FormPropertyType.Enum, "Normal",
                 new[] { "Normal", "StretchImage", "AutoSize", "CenterImage", "Zoom" },
                 WinFormsEnumType: "PictureBoxSizeMode")),
-            DefaultWidth: 100, DefaultHeight: 50),
+            DefaultWidth: 100, DefaultHeight: 50, Schematic: FormSchematic.Image),
     };
 
     public static FormControlDef? Find(string kind) =>

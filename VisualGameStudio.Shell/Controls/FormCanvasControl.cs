@@ -600,10 +600,24 @@ public class FormCanvasControl : Control
         }
     }
 
+    /// <summary>
+    /// Draws one control as the shape its CATALOG ROW asks for.
+    ///
+    /// <para>⛔ Still a schematic (D-WYSIWYG) — flat, obviously diagrammatic, and not a claim about
+    /// what the running program looks like. The point is only that the kinds are TELLABLE APART: one
+    /// rectangle for all ten made a populated form unreadable, because a Button, a CheckBox and a
+    /// TextBox were pixel-identical and only the label text differed.</para>
+    ///
+    /// <para>⛔ The shape comes from <see cref="FormSchematic"/> on the catalog row, never from a
+    /// switch over <c>control.Kind</c> here. A switch keyed on kind is a SECOND list of controls,
+    /// and this repo has been bitten by exactly that: it falls to its default the day a row is
+    /// added, and the symptom is a new control that silently draws as a plain box.</para>
+    /// </summary>
     private void DrawControl(DrawingContext context, FormControl control, Rect bounds)
     {
         var selected = ReferenceEquals(control, SelectedControl);
-        context.DrawRectangle(ControlBrush, selected ? SelectionPen : ControlPen, bounds);
+        var pen = selected ? SelectionPen : ControlPen;
+        var schematic = FormControlCatalog.Find(control.Kind)?.Schematic ?? FormSchematic.Input;
 
         // The control's own Text if it has one, else its id — a box with no label is unidentifiable
         // on a schematic, which is the one thing the canvas has to get right.
@@ -611,14 +625,110 @@ public class FormCanvasControl : Control
             ? text
             : control.Id;
 
-        if (string.IsNullOrEmpty(label) || bounds.Width < 12 || bounds.Height < 10)
+        // Where the label goes once the shape has had its say: indented past a tick or a bullet,
+        // centred in a button, at the top-left of everything else.
+        var labelOrigin = new Point(bounds.X + 4, bounds.Y + 2);
+        var tooSmallForText = bounds.Width < 12 || bounds.Height < 10;
+
+        switch (schematic)
+        {
+            case FormSchematic.Text:
+                // No box: a Label is words on the form, not a widget with a face.
+                break;
+
+            case FormSchematic.Button:
+                context.DrawRectangle(ButtonBrush, pen, bounds, 3, 3);
+                if (!tooSmallForText && !string.IsNullOrEmpty(label))
+                {
+                    var caption = Text(label, LabelBrush);
+                    labelOrigin = new Point(
+                        bounds.X + Math.Max(4, (bounds.Width - caption.Width) / 2),
+                        bounds.Y + Math.Max(2, (bounds.Height - caption.Height) / 2));
+                }
+
+                break;
+
+            case FormSchematic.Check:
+            case FormSchematic.Radio:
+            {
+                // The glyph is vertically centred and sized to the box, so a tall CheckBox does not
+                // get a tick floating at its top edge.
+                var side = Math.Min(GlyphSide, Math.Min(bounds.Width, bounds.Height) - 2);
+                if (side > 2)
+                {
+                    var glyph = new Rect(
+                        bounds.X + 2, bounds.Y + ((bounds.Height - side) / 2), side, side);
+
+                    if (schematic == FormSchematic.Radio)
+                    {
+                        context.DrawEllipse(
+                            ControlBrush, pen, glyph.Center, glyph.Width / 2, glyph.Height / 2);
+                    }
+                    else
+                    {
+                        context.DrawRectangle(ControlBrush, pen, glyph);
+                    }
+
+                    labelOrigin = new Point(glyph.Right + 4, bounds.Y + 2);
+                }
+
+                break;
+            }
+
+            case FormSchematic.Dropdown:
+            {
+                context.DrawRectangle(ControlBrush, pen, bounds);
+                var cx = bounds.Right - 9;
+                var cy = bounds.Center.Y;
+                if (bounds.Width > 24)
+                {
+                    context.DrawLine(pen, new Point(cx - 3, cy - 2), new Point(cx, cy + 2));
+                    context.DrawLine(pen, new Point(cx, cy + 2), new Point(cx + 3, cy - 2));
+                }
+
+                break;
+            }
+
+            case FormSchematic.List:
+            {
+                context.DrawRectangle(ControlBrush, pen, bounds);
+                for (var y = bounds.Y + 18; y < bounds.Bottom - 4; y += 14)
+                {
+                    context.DrawLine(RowPen, new Point(bounds.X + 4, y), new Point(bounds.Right - 4, y));
+                }
+
+                break;
+            }
+
+            case FormSchematic.Container:
+                // Dashed: it holds other controls, and a solid fill would bury them.
+                context.DrawRectangle(null, selected ? SelectionPen : ContainerPen, bounds);
+                break;
+
+            case FormSchematic.Group:
+                context.DrawRectangle(null, pen, new Rect(
+                    bounds.X, bounds.Y + 7, bounds.Width, Math.Max(1, bounds.Height - 7)));
+                break;
+
+            case FormSchematic.Image:
+                context.DrawRectangle(ControlBrush, pen, bounds);
+                context.DrawLine(RowPen, bounds.TopLeft, bounds.BottomRight);
+                context.DrawLine(RowPen, bounds.TopRight, bounds.BottomLeft);
+                break;
+
+            default:
+                context.DrawRectangle(ControlBrush, pen, bounds);
+                break;
+        }
+
+        if (string.IsNullOrEmpty(label) || tooSmallForText)
         {
             return;
         }
 
         using (context.PushClip(bounds))
         {
-            context.DrawText(Text(label, LabelBrush), new Point(bounds.X + 4, bounds.Y + 2));
+            context.DrawText(Text(label, LabelBrush), labelOrigin);
         }
     }
 
@@ -637,6 +747,16 @@ public class FormCanvasControl : Control
     private static readonly IPen ControlPen = new Pen(new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x8F)));
     private static readonly IPen SelectionPen = new Pen(new SolidColorBrush(Color.FromRgb(0x00, 0x7A, 0xCC)), 2);
     private static readonly IBrush LabelBrush = new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0));
+
+    // Per-schematic additions. A Button reads as raised, a Panel as a dashed hull that does not bury
+    // its children, and the faint rules inside a ListBox/PictureBox stay quieter than the border.
+    private static readonly IBrush ButtonBrush = new SolidColorBrush(Color.FromRgb(0x4A, 0x4A, 0x50));
+    private static readonly IPen ContainerPen = new Pen(
+        new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x8F)), dashStyle: DashStyle.Dash);
+    private static readonly IPen RowPen = new Pen(new SolidColorBrush(Color.FromRgb(0x5A, 0x5A, 0x62)));
+
+    /// <summary>Side of a CheckBox tick or RadioButton bullet, before it is clamped to the bounds.</summary>
+    private const double GlyphSide = 12;
     private static readonly IBrush CaptionBrush = new SolidColorBrush(Color.FromRgb(0xB0, 0xB0, 0xB8));
     private static readonly IPen GridPen = new Pen(
         new SolidColorBrush(Color.FromRgb(0x50, 0x50, 0x58)), dashStyle: DashStyle.Dash);
