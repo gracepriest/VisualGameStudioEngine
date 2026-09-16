@@ -22,6 +22,27 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         private readonly Dictionary<string, int> _tempNameIndices;
         private readonly HashSet<string> _declaredIdentifiers;
         private readonly List<string> _stringConstants;
+
+        /// <summary>
+        /// Module-level variables, keyed by name, emitted as STATIC FIELDS on the module class.
+        ///
+        /// <para>⛔ This backend used to ignore <see cref="IRModule.GlobalVariables"/> entirely —
+        /// the string "GlobalVariables" did not appear in this file. A module-level
+        /// <c>Dim n As Integer = 7</c> therefore had no storage anywhere: reading it emitted
+        /// <c>// WARNING: Unknown local 'n'</c> and pushed NOTHING, so the next instruction ran an
+        /// operand short and the CLR rejected the method with InvalidProgramException. Writing it
+        /// emitted <c>// WARNING: Cannot store to 'n'</c> and left the value on the stack, which
+        /// is the more dangerous half: in <c>s = "SET" : Console.WriteLine(s)</c> the abandoned
+        /// <c>ldstr</c> was consumed by the WriteLine that followed and the program printed "SET"
+        /// — the right answer, reached by a stack accident that the next statement would
+        /// destroy.</para>
+        ///
+        /// <para>Case-insensitive to match BasicLang name resolution, and populated before ANY
+        /// type is emitted because a method on a user class can read a module global too.</para>
+        /// </summary>
+        private readonly Dictionary<string, IRVariable> _moduleGlobals =
+            new Dictionary<string, IRVariable>(StringComparer.OrdinalIgnoreCase);
+
         private string _moduleName;
         private int _localCounter;
         private int _labelCounter;
@@ -166,6 +187,12 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _output.Clear();
             _stringConstants.Clear();
             _labelCounter = 0;
+
+            // ⛔ Both of these must be set BEFORE the first type is emitted, not inside
+            // GenerateClass where the module class is built LAST. A method on a user class can
+            // read a module-level variable, and resolving one needs the owning class's name.
+            _moduleName = SanitizeName(module.Name);
+            CollectModuleGlobals(module);
 
             // Generate assembly header
             GenerateHeader(module);
@@ -1096,6 +1123,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 _localIndices[local.Name] = _localIndices.Count;
             }
 
+            RegisterModuleGlobals();
+
             AllocateExceptionHandlingLocals(function);
             AllocateFieldStoreScratch(function);
             AllocateTemporaries(function);
@@ -1172,9 +1201,20 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         {
             _moduleName = SanitizeName(module.Name);
 
-            WriteLine($".class public auto ansi beforefieldinit {_moduleName}");
+            var needsInitializer = _moduleGlobals.Values.Any(NeedsStaticInitialization);
+
+            // ⚠ `beforefieldinit` is DROPPED when there is a type initializer, exactly as the C#
+            // compiler drops it for a class with a static constructor. With the flag set the CLR
+            // may run .cctor at any point at or before the first static-field access; without it
+            // the first access is the guaranteed trigger. The relaxed form is not wrong for the
+            // code we emit, but the strict form is the one whose ordering is observable and
+            // testable, and it costs nothing here.
+            var flags = needsInitializer ? "" : " beforefieldinit";
+            WriteLine($".class public auto ansi{flags} {_moduleName}");
             WriteLine("       extends [mscorlib]System.Object");
             WriteLine("{");
+
+            GenerateGlobalFields();
 
             // Generate methods
             foreach (var function in module.Functions)
@@ -1186,10 +1226,152 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 }
             }
 
+            if (needsInitializer)
+            {
+                GenerateStaticConstructor();
+                WriteLine();
+            }
+
             // Generate default constructor
             GenerateDefaultConstructor();
 
             WriteLine("} // end of class " + _moduleName);
+        }
+
+        /// <summary>
+        /// Records the module's global variables so every later emission — fields, the type
+        /// initializer, and every read and write in every method body — reads one table.
+        /// </summary>
+        private void CollectModuleGlobals(IRModule module)
+        {
+            _moduleGlobals.Clear();
+            if (module.GlobalVariables == null) return;
+
+            foreach (var global in module.GlobalVariables.Values)
+            {
+                if (string.IsNullOrEmpty(global?.Name)) continue;
+                _moduleGlobals[global.Name] = global;
+            }
+        }
+
+        /// <summary>
+        /// One static field per module-level variable.
+        ///
+        /// <para>⛔ The access modifier is NOT a direct translation of the BasicLang one. A
+        /// <c>Private</c> global becomes <c>assembly</c>, not <c>private</c>: IL's <c>private</c>
+        /// means "the declaring type only", so a method on a user class reading a module-level
+        /// variable — which BasicLang allows, they are in the same file — would be refused by the
+        /// CLR with FieldAccessException at the first read. Everything this backend emits lands in
+        /// one assembly, so <c>assembly</c> is the narrowest modifier that still admits every
+        /// reference the language permits.</para>
+        /// </summary>
+        private void GenerateGlobalFields()
+        {
+            if (_moduleGlobals.Count == 0) return;
+
+            WriteLine("  // Module-level variables");
+            foreach (var global in _moduleGlobals.Values)
+            {
+                var access = global.Access == AccessModifier.Public ? "public" : "assembly";
+                WriteLine($"  .field {access} static {IlTypeSpec(global.Type)} {SanitizeName(global.Name)}");
+            }
+            WriteLine();
+        }
+
+        /// <summary>
+        /// True when a global needs the type initializer to run for it: it has a declared
+        /// initializer, or it is a sized array whose storage nothing else creates.
+        ///
+        /// <para>A global with neither is already correct — the CLR zeroes every static field, and
+        /// zero/null/false is exactly what an uninitialized BasicLang variable holds. Emitting a
+        /// <c>.cctor</c> for those alone would be dead IL.</para>
+        /// </summary>
+        private bool NeedsStaticInitialization(IRVariable global) =>
+            global.InitialValue != null || TryArrayAllocation(global.Type, out _, out _);
+
+        /// <summary>
+        /// The module class's type initializer: declared initializers and sized-array storage for
+        /// module-level variables, run once before the first access to any of them.
+        ///
+        /// <para>⛔ This is where a module-level <c>Dim n As Integer = 7</c>'s initializer has to
+        /// go, because it is NOWHERE in the function IR — <c>Main</c>'s instruction list for that
+        /// declaration is just <c>t0 = call CStr(@n)</c>. Nothing in a method body ever assigns
+        /// the 7. Leaving this out does not produce a build error, it produces a program that
+        /// prints 0.</para>
+        ///
+        /// <para>A sized array global is the same case as a sized array local or field: left bare
+        /// it is a null reference and the first <c>g(0) = …</c> throws. <see cref="TryArrayAllocation"/>
+        /// is shared with those two sites so all three agree on the length and refuse rank &gt; 1
+        /// identically.</para>
+        /// </summary>
+        private void GenerateStaticConstructor()
+        {
+            // The initializer is a method: it gets its own stack accounting, and no locals,
+            // parameters or temporaries from whatever was generated before it.
+            _localIndices.Clear();
+            _paramIndices.Clear();
+            _tempIndices.Clear();
+            _tempNameIndices.Clear();
+            _declaredIdentifiers.Clear();
+            _maxStack = 8;
+            _currentStack = 0;
+
+            WriteLine("  .method private hidebysig specialname rtspecialname");
+            WriteLine("          static void .cctor() cil managed");
+            WriteLine("  {");
+            WriteLine("    .maxstack 8");
+
+            foreach (var global in _moduleGlobals.Values)
+            {
+                if (global.InitialValue != null)
+                {
+                    EmitInlineValue(global.InitialValue);
+                    EmitNumericCoercion(global.InitialValue, global.Type);
+                }
+                else if (TryArrayAllocation(global.Type, out var elementToken, out var length))
+                {
+                    EmitLdcI4(length);
+                    _currentStack++;
+                    WriteLine($"    newarr {elementToken}");
+                }
+                else
+                {
+                    continue;
+                }
+
+                WriteLine($"    stsfld {IlTypeSpec(global.Type)} {_moduleName}::{SanitizeName(global.Name)}");
+                _currentStack--;
+            }
+
+            WriteLine("    ret");
+            WriteLine("  } // end of method .cctor");
+        }
+
+        /// <summary>
+        /// Widens an integer literal that is initializing a floating-point or 64-bit global.
+        ///
+        /// <para>⛔ <c>Dim d As Double = 7</c> carries an <c>IRConstant</c> holding a CLR
+        /// <c>int</c>, so the initializer emits <c>ldc.i4.7</c> while the field is
+        /// <c>float64</c>. IL does NOT coerce on <c>stsfld</c>, and — measured, do not assume
+        /// otherwise — nothing rejects the mismatch: ilasm assembles it without a diagnostic and
+        /// the JIT runs it. The int32's BIT PATTERN lands in the low half of the float64 slot, so
+        /// <c>d</c> holds 3.5E-323 and <c>d + 1.5</c> prints <c>1.5</c>. A missing conversion here
+        /// is a silent wrong answer with no crash and no warning comment to find it by, which is
+        /// why it is emitted from the field's declared type rather than trusted to the verifier.
+        /// Only the literal case is handled because only there is the stack type known for
+        /// certain; a computed initializer already carries its operands' type.</para>
+        /// </summary>
+        private void EmitNumericCoercion(IRValue value, TypeInfo target)
+        {
+            if (!(value is IRConstant constant)) return;
+            if (!(constant.Value is int || constant.Value is long)) return;
+
+            switch (IlTypeSpec(target))
+            {
+                case "float64": WriteLine("    conv.r8"); break;
+                case "float32": WriteLine("    conv.r4"); break;
+                case "int64" when constant.Value is int: WriteLine("    conv.i8"); break;
+            }
         }
 
         private void GenerateDefaultConstructor()
@@ -1239,6 +1421,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 _declaredIdentifiers.Add(local.Name);
                 _localIndices[local.Name] = _localIndices.Count;
             }
+
+            RegisterModuleGlobals();
 
             // Slots for the things a Try needs that IRFunction.LocalVariables does not carry.
             // MUST run before AllocateTemporaries: temp indices continue from _localIndices.Count,
@@ -1725,7 +1909,33 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 return;
             }
 
+            // A module-level variable, LAST so that anything nearer in scope — a local, a
+            // parameter, or a field of the enclosing instance — still shadows it by name.
+            if (_moduleGlobals.TryGetValue(name, out var global))
+            {
+                WriteLine($"    ldsfld {IlTypeSpec(global.Type)} {_moduleName}::{SanitizeName(global.Name)}");
+                _currentStack++;
+                return;
+            }
+
             WriteLine($"    // WARNING: Unknown local '{name}'");
+        }
+
+        /// <summary>
+        /// Makes every module-level variable a name the current method body can resolve.
+        ///
+        /// <para>⛔ Registering the FIELD is not enough on its own. <c>_declaredIdentifiers</c> is
+        /// what decides, at every assignment site, whether a computed value is stored to a NAME or
+        /// dropped into an anonymous temporary. A global missing from this set means
+        /// <c>Total = Total + 1</c> computes the sum, parks it in a temp nothing ever reads, and
+        /// leaves the global untouched — a wrong answer with no warning comment to find it by.
+        /// Called AFTER locals and parameters, but the set is unordered: shadowing is decided in
+        /// <see cref="EmitLoadLocal"/>, which consults the slot tables first.</para>
+        /// </summary>
+        private void RegisterModuleGlobals()
+        {
+            foreach (var global in _moduleGlobals.Values)
+                _declaredIdentifiers.Add(global.Name);
         }
 
         /// <summary>The spellings of the receiver a BasicLang instance method can name.</summary>
@@ -1755,6 +1965,15 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 EmitLdloc(scratch);
                 WriteLine($"    stfld {IlTypeSpec(fieldType)} {_currentClassToken}::{SanitizeName(name)}");
                 _currentStack -= 2;
+                return;
+            }
+
+            // A module-level variable. Unlike `stfld` this needs NO scratch slot: `stsfld` takes
+            // the value alone, with no object reference under it.
+            if (_moduleGlobals.TryGetValue(name, out var global))
+            {
+                WriteLine($"    stsfld {IlTypeSpec(global.Type)} {_moduleName}::{SanitizeName(global.Name)}");
+                _currentStack--;
                 return;
             }
 
