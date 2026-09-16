@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using BasicLang.Compiler.IR;
 using BasicLang.Compiler.SemanticAnalysis;
+using BasicLang.Compiler.CodeGen.CPlusPlus;
 
 namespace BasicLang.Compiler.CodeGen.MSIL
 {
@@ -28,6 +29,50 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         private int _currentStack;
         private IRModule _module;
         private IRClass _currentClass;
+
+        // ---- Exception-handling region state ------------------------------------------
+        //
+        // IL's protected regions are not blocks you can branch into or out of freely: leaving
+        // one needs `leave`, a `finally` ends with `endfinally`, and `ret` is illegal inside
+        // either. The emitter therefore needs to know, at every branch and return, whether it is
+        // currently writing inside a region — so the three visitors that emit control flow
+        // (IRBranch, IRConditionalBranch, IRReturn) consult this state rather than each
+        // re-deriving it. Null/false means "not in a region", and everything behaves as before.
+
+        /// <summary>
+        /// The block set <see cref="GenerateBasicBlock"/> is walking, held as a field so
+        /// <see cref="Visit(IRTryCatch)"/> can mark a region's blocks emitted. Without that the
+        /// same blocks are written twice — once inside the region and once as ordinary labelled
+        /// blocks — which is the defect this rewrite replaced.
+        /// </summary>
+        private HashSet<BasicBlock> _visitedBlocks;
+
+        /// <summary>Blocks of the protected region currently being emitted; null when outside one.</summary>
+        private HashSet<BasicBlock> _regionBlocks;
+
+        /// <summary>True while emitting a <c>finally</c> handler, whose only exit is <c>endfinally</c>.</summary>
+        private bool _regionIsFinally;
+
+        /// <summary>True while emitting a <c>catch</c> handler — the only place <c>rethrow</c> is legal.</summary>
+        private bool _regionIsCatch;
+
+        /// <summary>Label a region block falls out to when its IR block has no terminator.</summary>
+        private string _regionLeaveTarget;
+
+        /// <summary>Synthetic common exit for a <c>Return</c> lowered out of a protected region.</summary>
+        private string _methodExitLabel;
+
+        /// <summary>Slot holding a lowered <c>Return</c>'s value; -1 for a void method.</summary>
+        private int _methodExitResultLocal;
+
+        /// <summary>Whether any <c>Return</c> was actually lowered, so the exit block is needed.</summary>
+        private bool _methodExitUsed;
+
+        /// <summary>
+        /// Locals this backend declares that <c>IRFunction.LocalVariables</c> does not carry:
+        /// catch-clause exception variables and the lowered-return result slot.
+        /// </summary>
+        private readonly List<(int Index, string Spec, string Name)> _syntheticLocals = new();
 
         public override string BackendName => "MSIL";
         public override TargetPlatform Target => TargetPlatform.MSIL;
@@ -484,20 +529,31 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         private string MapTypeName(string typeName)
         {
             if (string.IsNullOrEmpty(typeName)) return "object";
-            return typeName.ToLowerInvariant() switch
+            switch (typeName.ToLowerInvariant())
             {
-                "integer" => "int32",
-                "long" => "int64",
-                "single" => "float32",
-                "double" => "float64",
-                "string" => "string",
-                "boolean" => "bool",
-                "byte" => "uint8",
-                "short" => "int16",
-                "object" => "object",
-                "void" => "void",
-                _ => SanitizeName(typeName)
-            };
+                case "integer": return "int32";
+                case "long": return "int64";
+                case "single": return "float32";
+                case "double": return "float64";
+                case "string": return "string";
+                case "boolean": return "bool";
+                case "byte": return "uint8";
+                case "short": return "int16";
+                case "object": return "object";
+                case "void": return "void";
+            }
+
+            // A recognized .NET exception is a BCL type and must be spelled with its assembly, in
+            // EVERY position — the local that holds it, the `newobj` that builds it, a parameter
+            // that carries it. Resolving it here rather than at each site is what keeps those in
+            // agreement: `Catch ex As Exception` used to declare `[0] class Exception` and
+            // `Throw New Exception(m)` used to emit `newobj instance void Exception::.ctor(string)`,
+            // both naming a class in no assembly, and ilasm refused the whole file with
+            // "Reference to undefined class 'Exception'".
+            if (CppExceptionTypes.TryGetNetFullName(typeName, out var exceptionFullName))
+                return "[mscorlib]" + exceptionFullName;
+
+            return SanitizeName(typeName);
         }
 
         private void GenerateInterface(IRInterface irInterface)
@@ -570,11 +626,14 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _currentClass = irClass;
             var className = SanitizeName(irClass.Name);
 
-            // Build extends and implements
+            // Build extends and implements. The base goes through IlTypeToken, not SanitizeName:
+            // `Class MyError Inherits Exception` emitted `extends Exception`, naming a class in no
+            // assembly, and ilasm refused the file. A base class defined in this compilation still
+            // resolves to its bare sanitized name.
             var extends = "[mscorlib]System.Object";
             if (!string.IsNullOrEmpty(irClass.BaseClass))
             {
-                extends = SanitizeName(irClass.BaseClass);
+                extends = IlTypeToken(irClass.BaseClass);
             }
 
             var implements = "";
@@ -789,7 +848,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine("    .maxstack 8");
 
             // Call base constructor
-            var baseClass = string.IsNullOrEmpty(irClass.BaseClass) ? "[mscorlib]System.Object" : SanitizeName(irClass.BaseClass);
+            var baseClass = string.IsNullOrEmpty(irClass.BaseClass) ? "[mscorlib]System.Object" : IlTypeToken(irClass.BaseClass);
             WriteLine("    ldarg.0");
             WriteLine($"    call instance void {baseClass}::.ctor()");
 
@@ -812,7 +871,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
         private void GenerateDefaultCtorForClass(IRClass irClass)
         {
-            var baseClass = string.IsNullOrEmpty(irClass.BaseClass) ? "[mscorlib]System.Object" : SanitizeName(irClass.BaseClass);
+            var baseClass = string.IsNullOrEmpty(irClass.BaseClass) ? "[mscorlib]System.Object" : IlTypeToken(irClass.BaseClass);
 
             WriteLine("  .method public hidebysig specialname rtspecialname");
             WriteLine("          instance void .ctor() cil managed");
@@ -994,6 +1053,17 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _maxStack = 8; // Default, will be calculated
             _currentStack = 0;
 
+            // Exception-handling state is per METHOD: a region, its synthetic locals and its exit
+            // label never outlive the method they were emitted for.
+            _syntheticLocals.Clear();
+            _regionBlocks = null;
+            _regionIsFinally = false;
+            _regionIsCatch = false;
+            _regionLeaveTarget = null;
+            _methodExitResultLocal = -1;
+            _methodExitUsed = false;
+            _methodExitLabel = $"eh_exit_{_labelCounter++}";
+
             // Collect declared identifiers
             foreach (var param in function.Parameters)
             {
@@ -1006,6 +1076,11 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 _declaredIdentifiers.Add(local.Name);
                 _localIndices[local.Name] = _localIndices.Count;
             }
+
+            // Slots for the things a Try needs that IRFunction.LocalVariables does not carry.
+            // MUST run before AllocateTemporaries: temp indices continue from _localIndices.Count,
+            // and .locals init is written from these tables before any body instruction exists.
+            AllocateExceptionHandlingLocals(function);
 
             // Allocate indices for temporaries
             AllocateTemporaries(function);
@@ -1049,8 +1124,17 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Generate method body
             if (function.EntryBlock != null)
             {
-                var visitedBlocks = new HashSet<BasicBlock>();
-                GenerateBasicBlock(function.EntryBlock, visitedBlocks, isEntry: true);
+                _visitedBlocks = new HashSet<BasicBlock>();
+                GenerateBasicBlock(function.EntryBlock, _visitedBlocks, isEntry: true);
+            }
+
+            // The one `ret` a Return inside a protected region leaves to. Emitted only when such a
+            // Return was actually lowered, so a method without one is byte-identical to before.
+            if (_methodExitUsed)
+            {
+                WriteLine($"  {_methodExitLabel}:");
+                if (_methodExitResultLocal >= 0) EmitLdloc(_methodExitResultLocal);
+                WriteLine("    ret");
             }
 
             // Ensure method ends with ret
@@ -1060,6 +1144,104 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
 
             WriteLine($"  }} // end of method {methodName}");
+        }
+
+        /// <summary>
+        /// Reserves the locals a <c>Try</c> needs but <c>IRFunction.LocalVariables</c> never lists:
+        /// each catch clause's exception variable, and — for a non-void function containing a Try
+        /// — one result slot for a <c>Return</c> lowered out of a protected region.
+        ///
+        /// <para><b>Why here and not in IRBuilder.</b> IRBuilder pushes the catch variable onto its
+        /// version stack but never adds it to <c>LocalVariables</c>, so no backend sees it as a
+        /// declared local. Adding it there would move C#, C++, JavaScript and LLVM output too, for
+        /// a defect that is MSIL's alone; this backend declares what IL requires and leaves the
+        /// shared builder untouched.</para>
+        ///
+        /// <para><b>Why a pre-pass.</b> <c>.locals init</c> is written from these tables before the
+        /// first body instruction is emitted. The old emitter allocated the catch variable during
+        /// emission with <c>_localCounter++</c>, a counter unrelated to <c>_localIndices</c>, and
+        /// produced <c>stloc 0</c> in a method with NO locals directive at all — the
+        /// InvalidProgramException this fixes. Where a local did happen to exist at that index, the
+        /// store landed on an unrelated variable of an unrelated type instead.</para>
+        /// </summary>
+        private void AllocateExceptionHandlingLocals(IRFunction function)
+        {
+            var tries = function.Blocks
+                .SelectMany(b => b.Instructions)
+                .OfType<IRTryCatch>()
+                .ToList();
+            if (tries.Count == 0) return;
+
+            foreach (var clause in tries.SelectMany(t => t.CatchClauses))
+            {
+                if (string.IsNullOrEmpty(clause.VariableName)) continue;
+
+                var name = SanitizeName(clause.VariableName);
+                if (_localIndices.ContainsKey(name)) continue;
+
+                var index = _localIndices.Count;
+                _localIndices[name] = index;
+                _declaredIdentifiers.Add(clause.VariableName);
+                _syntheticLocals.Add((index, IlTypeSpec(clause.ExceptionType ?? ExceptionTypeInfo), name));
+            }
+
+            // A Return inside a protected region cannot be a `ret`; it becomes a store plus a
+            // `leave` to one exit that owns the real `ret`. Reserve the slot unconditionally for a
+            // non-void function with a Try — an unused local costs a word and nothing else, while
+            // discovering mid-emission that one is needed is exactly what cannot be fixed then.
+            _methodExitResultLocal = -1;
+            if (MapType(function.ReturnType) != "void")
+            {
+                _methodExitResultLocal = _localIndices.Count;
+                var name = $"eh_result_{_methodExitResultLocal}";
+                _localIndices[name] = _methodExitResultLocal;
+                _syntheticLocals.Add((_methodExitResultLocal, IlTypeSpec(function.ReturnType), name));
+            }
+        }
+
+        /// <summary>The implicit <c>Catch</c> type when a clause names none.</summary>
+        private static readonly TypeInfo ExceptionTypeInfo = new TypeInfo("Exception", TypeKind.Class);
+
+        /// <summary>
+        /// The <c>System.Exception</c> members this backend can name, and the accessor each one
+        /// really is. All are <c>string</c>-valued properties declared on <c>Exception</c> itself,
+        /// so a derived exception type inherits them and <c>callvirt</c> on the base is correct.
+        ///
+        /// <para>Deliberately narrow, on the same principle as <c>CollectionMembers</c>: a member
+        /// with no recorded signature is REFUSED rather than guessed, because a guessed member
+        /// reference assembles cleanly and fails at run time.</para>
+        /// </summary>
+        private static readonly Dictionary<string, string> ExceptionMembers =
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Message"] = "get_Message",
+                ["StackTrace"] = "get_StackTrace",
+                ["Source"] = "get_Source",
+            };
+
+        /// <summary>
+        /// Resolves a member read on a recognized .NET exception to its property accessor.
+        /// Returns false for any other receiver, so nothing outside exception types is affected;
+        /// throws for an exception member outside <see cref="ExceptionMembers"/>.
+        /// </summary>
+        private bool TryExceptionMember(TypeInfo receiver, string member, out string token, out string accessor)
+        {
+            token = null;
+            accessor = null;
+
+            var name = receiver?.Name;
+            if (name == null || !CppExceptionTypes.TryGetNetFullName(name, out var fullName)) return false;
+
+            token = "[mscorlib]" + fullName;
+            if (ExceptionMembers.TryGetValue(member ?? "", out accessor)) return true;
+
+            throw new ForeignFeatureException(
+                $"MSIL: '{name}.{member}' is outside the supported exception surface. MSIL carries "
+                + "Message, StackTrace and Source, the string properties whose IL accessor names "
+                + "are recorded. Emitting a guessed member produces a reference that assembles and "
+                + "then fails with MissingFieldException or MissingMethodException at run time, so "
+                + "it is refused here instead. Add a row to MSILCodeGenerator.ExceptionMembers plus "
+                + "a round-trip test to widen the set.");
         }
 
         private void AllocateTemporaries(IRFunction function)
@@ -1095,21 +1277,32 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
         private void GenerateLocalsDeclaration(IRFunction function)
         {
-            var locals = new List<string>();
+            // Collected with their indices and SORTED, not appended in source order: the three
+            // sources interleave (a catch variable is allocated between the declared locals and
+            // the temporaries), and ilasm reads `[n]` as the slot number, so an out-of-order list
+            // silently declares the wrong type for a slot.
+            var slots = new List<(int Index, string Text)>();
 
             // Declared local variables
             foreach (var local in function.LocalVariables)
             {
-                var localType = IlTypeSpec(local.Type);
-                locals.Add($"      [{_localIndices[local.Name]}] {localType} {SanitizeName(local.Name)}");
+                var index = _localIndices[local.Name];
+                slots.Add((index, $"      [{index}] {IlTypeSpec(local.Type)} {SanitizeName(local.Name)}"));
+            }
+
+            // Catch-clause exception variables and the lowered-return result slot
+            foreach (var (index, spec, name) in _syntheticLocals)
+            {
+                slots.Add((index, $"      [{index}] {spec} {name}"));
             }
 
             // Temporary variables
             foreach (var (temp, index) in _tempIndices)
             {
-                var tempType = IlTypeSpec(temp.Type);
-                locals.Add($"      [{index}] {tempType} V_{index}");
+                slots.Add((index, $"      [{index}] {IlTypeSpec(temp.Type)} V_{index}"));
             }
+
+            var locals = slots.OrderBy(s => s.Index).Select(s => s.Text).ToList();
 
             if (locals.Count > 0)
             {
@@ -1910,29 +2103,99 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
         public override void Visit(IRReturn ret)
         {
+            if (_regionBlocks == null)
+            {
+                if (ret.Value != null)
+                {
+                    EmitLoadValue(ret.Value);
+                }
+                WriteLine("    ret");
+                return;
+            }
+
+            // `ret` is ILLEGAL inside a protected region — the CLR rejects the whole method, which
+            // is what `Return` inside a Try used to produce. Lower it the way a real compiler does:
+            // park the value in a slot and `leave` to the one exit that owns the `ret`. Going out
+            // through `leave` is also what runs an enclosing `finally`, so this is not merely legal
+            // but the only spelling with the right semantics.
+            if (_regionIsFinally)
+            {
+                throw new ForeignFeatureException(
+                    "MSIL: 'Return' inside a Finally block has no IL lowering. A finally handler "
+                    + "may only be left by endfinally — it cannot return, and it cannot swallow the "
+                    + "exception in flight by returning a value. Move the Return after the End Try.");
+            }
+
             if (ret.Value != null)
             {
+                if (_methodExitResultLocal < 0)
+                {
+                    throw new ForeignFeatureException(
+                        "MSIL: a value-returning 'Return' inside a Try appeared in a method with no "
+                        + "result slot reserved. This is an emitter invariant failure, not a source "
+                        + "problem — AllocateExceptionHandlingLocals reserves the slot for every "
+                        + "non-void function containing a Try.");
+                }
                 EmitLoadValue(ret.Value);
+                EmitStloc(_methodExitResultLocal);
             }
-            WriteLine("    ret");
+
+            _methodExitUsed = true;
+            WriteLine($"    leave {_methodExitLabel}");
         }
 
         public override void Visit(IRBranch branch)
         {
-            var target = SanitizeLabel(branch.Target.Name);
-            WriteLine($"    br {target}");
+            EmitRegionAwareBranch(branch.Target);
         }
 
         public override void Visit(IRConditionalBranch condBranch)
         {
             EmitLoadValue(condBranch.Condition);
-
-            var trueTarget = SanitizeLabel(condBranch.TrueTarget.Name);
-            var falseTarget = SanitizeLabel(condBranch.FalseTarget.Name);
-
-            WriteLine($"    brtrue {trueTarget}");
-            WriteLine($"    br {falseTarget}");
             _currentStack--;
+
+            var trueTarget = condBranch.TrueTarget;
+            var falseTarget = condBranch.FalseTarget;
+
+            if (!LeavesRegion(trueTarget))
+            {
+                WriteLine($"    brtrue {SanitizeLabel(trueTarget.Name)}");
+                EmitRegionAwareBranch(falseTarget);
+                return;
+            }
+
+            // `brtrue` cannot cross a protected region's edge — only `leave`/`endfinally` may. Bounce
+            // the taken edge through a trampoline INSIDE the region, which then leaves properly.
+            var trampoline = $"eh_edge_{_labelCounter++}";
+            WriteLine($"    brtrue {trampoline}");
+            EmitRegionAwareBranch(falseTarget);
+            WriteLine($"  {trampoline}:");
+            EmitRegionAwareBranch(trueTarget);
+        }
+
+        /// <summary>
+        /// True when branching to <paramref name="target"/> would cross out of the region being
+        /// emitted. False everywhere outside a region, which is why ordinary code is unaffected.
+        /// </summary>
+        private bool LeavesRegion(BasicBlock target) =>
+            _regionBlocks != null && target != null && !_regionBlocks.Contains(target);
+
+        /// <summary>
+        /// An unconditional transfer to <paramref name="target"/>, spelled the way the CURRENT
+        /// region allows: <c>br</c> within the region (or outside any), <c>leave</c> out of a
+        /// try/catch, and <c>endfinally</c> out of a finally — where the target is implicit,
+        /// because a finally resumes whatever unwinding or <c>leave</c> entered it and cannot
+        /// choose its own destination.
+        /// </summary>
+        private void EmitRegionAwareBranch(BasicBlock target)
+        {
+            if (!LeavesRegion(target))
+            {
+                WriteLine($"    br {SanitizeLabel(target.Name)}");
+                return;
+            }
+
+            WriteLine(_regionIsFinally ? "    endfinally" : $"    leave {SanitizeLabel(target.Name)}");
         }
 
         /// <summary>
@@ -2443,13 +2706,49 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 WriteLine($"    // WARNING: yield return not fully implemented in MSIL backend - iterator will not function correctly");
         }
 
+        /// <summary>
+        /// ⛔ <b><c>Throw</c> used to emit NOTHING on this backend.</b>
+        /// <see cref="ICodeGenerator"/> declares <c>Visit(IRThrow)</c> as an empty virtual so a
+        /// backend can ignore nodes it does not handle, and MSIL never overrode it. The exception
+        /// object was therefore constructed, stored, and dropped, and execution continued straight
+        /// past the <c>Throw</c> into the statements below it. Every <c>Try</c>/<c>Catch</c> on
+        /// MSIL was consequently untestable: nothing could ever reach a handler.
+        /// </summary>
+        public override void Visit(IRThrow throwInst)
+        {
+            if (throwInst.Exception == null)
+            {
+                // A bare `Throw` re-raises the exception the handler is running for, preserving
+                // its original stack trace. `rethrow` is only defined inside a catch handler.
+                if (!_regionIsCatch)
+                {
+                    throw new ForeignFeatureException(
+                        "MSIL: a bare 'Throw' (rethrow) outside a Catch block has no IL lowering — "
+                        + "the rethrow opcode is only valid inside a catch handler, and emitting it "
+                        + "elsewhere produces a method the CLR rejects. Throw a specific exception "
+                        + "instead.");
+                }
+
+                WriteLine("    rethrow");
+                return;
+            }
+
+            EmitLoadValue(throwInst.Exception);
+            WriteLine("    throw");
+            _currentStack--;
+        }
+
         public override void Visit(IRNewObject newObj)
         {
             // Generate newobj instruction. A collection construction needs its BCL generic
-            // token — `newobj instance void List::.ctor()` names nothing.
+            // token — `newobj instance void List::.ctor()` names nothing. Everything else goes
+            // through IlTypeToken rather than SanitizeName so a BCL type keeps its assembly:
+            // `Throw New Exception(m)` emitted `newobj instance void Exception::.ctor(string)`,
+            // and ilasm refused the file with "Reference to undefined class 'Exception'". A user
+            // class still resolves to its bare sanitized name, as before.
             var className = TryCollectionToken(newObj.Type, out var collectionToken)
                 ? "class " + collectionToken
-                : SanitizeName(newObj.ClassName);
+                : IlTypeToken(newObj.ClassName);
 
             // Load arguments first
             foreach (var arg in newObj.Arguments)
@@ -2610,6 +2909,21 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 return;
             }
 
+            // ⛔ Same shape as the collection arm above: an EXCEPTION's members reach here as field
+            // accesses and none of them are fields. `ex.Message` emitted
+            // `ldfld string [mscorlib]System.Exception::Message`, which assembles — ilasm does not
+            // resolve member references — and dies at run time with MissingFieldException. Reading
+            // the exception is the main thing a Catch block does, so the accessor call is required
+            // for Try/Catch to be usable at all.
+            if (TryExceptionMember(fieldAccess.Object?.Type, fieldAccess.FieldName, out var exToken, out var exAccessor))
+            {
+                WriteLine($"    callvirt instance string {exToken}::{exAccessor}()");
+                _currentStack--;
+                _currentStack++;
+                EmitFieldAccessResult(fieldAccess);
+                return;
+            }
+
             // Load field value from object
             var fieldType = IlTypeSpec(fieldAccess.Type);
             var className = IlReceiverToken(fieldAccess.Object?.Type);
@@ -2678,53 +2992,273 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine($"    stloc {_localIndices[varName]}");
         }
 
+        /// <summary>
+        /// Emits a <c>Try</c> as real IL exception-handling regions.
+        ///
+        /// <para>⛔ <b>The previous emitter looked right and protected nothing.</b> It inlined the
+        /// try block's non-branch instructions into <c>.try { }</c> and hard-coded
+        /// <c>leave EndTry</c>. But a Try body is a graph of BLOCKS, not one block's instruction
+        /// list, so only the first block's straight-line instructions ever landed inside the
+        /// region — and those same blocks were then emitted AGAIN by
+        /// <see cref="GenerateBasicBlock"/> as ordinary labelled blocks, because nothing marked
+        /// them handled. The real work therefore ran OUTSIDE the protected region, after a
+        /// truncated copy of it had already run inside. A Try around an If printed the right
+        /// answer while protecting nothing, which is why it looked like it worked.</para>
+        ///
+        /// <para>Three further faults are fixed here rather than separately, because they are the
+        /// same mistake at different points: <c>FinallyBlock</c> was ignored entirely (leaving
+        /// <c>.try { }</c> with NO handler, which ilasm rejects outright); the <c>EndTry</c> label
+        /// was a fixed string, so two Try statements in one method emitted it twice; and a catch
+        /// type was spelled <c>[mscorlib]System.</c> + the clause's name, which turns a
+        /// user-defined exception class into a reference to a BCL type that does not exist.</para>
+        ///
+        /// <para><b>Shape.</b> IL does not allow <c>catch</c> and <c>finally</c> on one region, so
+        /// a Try with both nests: the inner region carries the catches, the outer carries the
+        /// finally. That is also what gives the right semantics — a <c>leave</c> out of the inner
+        /// region runs the outer finally on its way past.</para>
+        /// </summary>
         public override void Visit(IRTryCatch tryCatch)
         {
-            // MSIL exception handling with .try/.catch directives
+            if (tryCatch.TryBlock == null || tryCatch.EndBlock == null)
+            {
+                throw new ForeignFeatureException(
+                    "MSIL: a Try with no body block or no continuation block cannot be lowered. "
+                    + "IRBuilder always creates both, so this is an emitter invariant failure.");
+            }
+
+            var endLabel = SanitizeLabel(tryCatch.EndBlock.Name);
+
+            // A region stops at the blocks that belong to the OTHER arms of the same Try. Without
+            // these bounds the walk from the try body would wander into the catch and finally
+            // blocks and emit them inside the protected region.
+            var boundaries = new HashSet<BasicBlock> { tryCatch.EndBlock };
+            foreach (var clause in tryCatch.CatchClauses)
+            {
+                if (clause.Block != null) boundaries.Add(clause.Block);
+            }
+            if (tryCatch.FinallyBlock != null) boundaries.Add(tryCatch.FinallyBlock);
+
+            var hasCatch = tryCatch.CatchClauses.Count > 0;
+            var hasFinally = tryCatch.FinallyBlock != null;
+
+            if (!hasCatch && !hasFinally)
+            {
+                // A Try with neither arm protects nothing; emit the body as ordinary blocks rather
+                // than an empty region, which would not assemble.
+                EmitRegionBody(tryCatch.TryBlock, boundaries, endLabel, inRegion: false, isFinally: false);
+                return;
+            }
+
+            if (hasFinally && hasCatch)
+            {
+                WriteLine("    .try");
+                WriteLine("    {");
+                EmitTryAndCatches(tryCatch, boundaries, endLabel);
+                // Unreachable in practice — every arm above ends in `leave` — but a protected
+                // block may not fall out of its own end, so give it an explicit exit.
+                WriteLine($"    leave {endLabel}");
+                WriteLine("    }");
+                EmitFinallyHandler(tryCatch, boundaries, endLabel);
+                return;
+            }
+
+            if (hasFinally)
+            {
+                WriteLine("    .try");
+                WriteLine("    {");
+                EmitRegionBody(tryCatch.TryBlock, boundaries, endLabel, inRegion: true, isFinally: false);
+                WriteLine("    }");
+                EmitFinallyHandler(tryCatch, boundaries, endLabel);
+                return;
+            }
+
+            EmitTryAndCatches(tryCatch, boundaries, endLabel);
+        }
+
+        /// <summary>The <c>.try { } catch { }</c> pair, used alone or nested inside a finally's try.</summary>
+        private void EmitTryAndCatches(IRTryCatch tryCatch, HashSet<BasicBlock> boundaries, string endLabel)
+        {
             WriteLine("    .try");
             WriteLine("    {");
-            foreach (var inst in tryCatch.TryBlock.Instructions)
-            {
-                if (inst is IRBranch or IRConditionalBranch) continue;
-                inst.Accept(this);
-            }
-            WriteLine("        leave EndTry");
+            EmitRegionBody(tryCatch.TryBlock, boundaries, endLabel, inRegion: true, isFinally: false);
             WriteLine("    }");
 
-            foreach (var catchClause in tryCatch.CatchClauses)
+            foreach (var clause in tryCatch.CatchClauses)
             {
-                var exType = catchClause.ExceptionType?.Name ?? "[mscorlib]System.Exception";
-                if (!exType.StartsWith("["))
-                    exType = $"[mscorlib]System.{exType}";
-                WriteLine($"    catch {exType}");
+                WriteLine($"    catch {CatchTypeToken(clause)}");
                 WriteLine("    {");
-
-                // Store exception to local if variable name is provided
-                if (!string.IsNullOrEmpty(catchClause.VariableName))
-                {
-                    var varName = SanitizeName(catchClause.VariableName);
-                    if (!_localIndices.ContainsKey(varName))
-                    {
-                        var localIndex = _localCounter++;
-                        _localIndices[varName] = localIndex;
-                    }
-                    WriteLine($"        stloc {_localIndices[varName]}");
-                }
-                else
-                {
-                    WriteLine("        pop"); // Pop exception if not used
-                }
-
-                foreach (var inst in catchClause.Block.Instructions)
-                {
-                    if (inst is IRBranch or IRConditionalBranch) continue;
-                    inst.Accept(this);
-                }
-                WriteLine("        leave EndTry");
+                EmitCatchBinding(clause);
+                EmitRegionBody(clause.Block, boundaries, endLabel, inRegion: true, isFinally: false, isCatch: true);
                 WriteLine("    }");
             }
+        }
 
-            WriteLine("EndTry:");
+        private void EmitFinallyHandler(IRTryCatch tryCatch, HashSet<BasicBlock> boundaries, string endLabel)
+        {
+            WriteLine("    finally");
+            WriteLine("    {");
+            EmitRegionBody(tryCatch.FinallyBlock, boundaries, endLabel, inRegion: true, isFinally: true);
+            WriteLine("    }");
+        }
+
+        /// <summary>
+        /// A catch handler is entered with the exception already on the stack. Bind it to the
+        /// clause's variable, or drop it — leaving it would unbalance every instruction after.
+        /// </summary>
+        private void EmitCatchBinding(IRCatchClause clause)
+        {
+            if (string.IsNullOrEmpty(clause.VariableName))
+            {
+                WriteLine("    pop");
+                return;
+            }
+
+            var name = SanitizeName(clause.VariableName);
+            if (!_localIndices.TryGetValue(name, out var index))
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: the catch variable '{clause.VariableName}' has no local slot. "
+                    + "AllocateExceptionHandlingLocals reserves one for every catch clause before "
+                    + ".locals init is written; emitting a store to an unreserved slot is what "
+                    + "produced InvalidProgramException here before.");
+            }
+
+            _currentStack++;   // the runtime pushed the exception
+            EmitStloc(index);
+        }
+
+        /// <summary>
+        /// Emits every block of one region, in walk order, marking them handled so
+        /// <see cref="GenerateBasicBlock"/> does not write them a second time.
+        ///
+        /// <para>The region's own branches are rewritten by the control-flow visitors, which read
+        /// the state set here — see <see cref="EmitRegionAwareBranch"/>. State is saved and
+        /// restored rather than assigned, so a Try nested inside a Try classifies its edges
+        /// against the INNER region while it is being emitted and the outer one afterwards.</para>
+        /// </summary>
+        private void EmitRegionBody(
+            BasicBlock entry, HashSet<BasicBlock> boundaries, string leaveTarget, bool inRegion,
+            bool isFinally, bool isCatch = false)
+        {
+            var blocks = CollectRegionBlocks(entry, boundaries);
+
+            var previousBlocks = _regionBlocks;
+            var previousIsFinally = _regionIsFinally;
+            var previousIsCatch = _regionIsCatch;
+            var previousLeaveTarget = _regionLeaveTarget;
+
+            _regionBlocks = inRegion ? new HashSet<BasicBlock>(blocks) : null;
+            _regionIsFinally = isFinally;
+            _regionIsCatch = isCatch;
+            _regionLeaveTarget = leaveTarget;
+
+            foreach (var block in blocks)
+            {
+                _visitedBlocks?.Add(block);
+                WriteLine($"  {SanitizeLabel(block.Name)}:");
+
+                foreach (var instruction in block.Instructions)
+                {
+                    instruction.Accept(this);
+                }
+
+                // An IR block with no terminator falls through to the next block in source order.
+                // Inside a region that is not expressible, so make the exit explicit.
+                if (!block.IsTerminated())
+                {
+                    if (isFinally) WriteLine("    endfinally");
+                    else if (inRegion) WriteLine($"    leave {leaveTarget}");
+                    else WriteLine($"    br {leaveTarget}");
+                }
+            }
+
+            _regionBlocks = previousBlocks;
+            _regionIsFinally = previousIsFinally;
+            _regionIsCatch = previousIsCatch;
+            _regionLeaveTarget = previousLeaveTarget;
+        }
+
+        /// <summary>
+        /// The blocks reachable from <paramref name="entry"/> without passing through a boundary —
+        /// that is, one arm of a Try. Depth-first from the entry so the emitted order matches the
+        /// order <see cref="GenerateBasicBlock"/> would have used.
+        /// </summary>
+        private List<BasicBlock> CollectRegionBlocks(BasicBlock entry, HashSet<BasicBlock> boundaries)
+        {
+            var ordered = new List<BasicBlock>();
+            var seen = new HashSet<BasicBlock>();
+
+            // The ENTRY is exempt from the boundary test. Every arm's own entry block is in the
+            // boundary set — that is what stops the try body walking into the catch — so testing
+            // it would make each handler collect zero blocks and emit an empty region, leaving its
+            // real body to be written outside the handler by GenerateBasicBlock.
+            void Walk(BasicBlock block, bool isEntry)
+            {
+                if (block == null) return;
+                if (!isEntry && boundaries.Contains(block)) return;
+                if (!seen.Add(block)) return;
+                ordered.Add(block);
+
+                // A NESTED Try owns its own arms: its Visit(IRTryCatch) emits them inside its own
+                // region when this block's instructions are walked. They are reachable from here
+                // as ordinary CFG successors, so without this they would also be collected into
+                // the enclosing region and written a second time — ilasm rejects the file with
+                // "Duplicate label". Its continuation block is NOT skipped: that is where the
+                // enclosing region resumes.
+                var nestedArms = new HashSet<BasicBlock>();
+                foreach (var nested in block.Instructions.OfType<IRTryCatch>())
+                {
+                    if (nested.TryBlock != null) nestedArms.Add(nested.TryBlock);
+                    foreach (var clause in nested.CatchClauses)
+                    {
+                        if (clause.Block != null) nestedArms.Add(clause.Block);
+                    }
+                    if (nested.FinallyBlock != null) nestedArms.Add(nested.FinallyBlock);
+                }
+
+                foreach (var successor in block.Successors)
+                {
+                    if (nestedArms.Contains(successor)) continue;
+                    Walk(successor, isEntry: false);
+                }
+            }
+
+            Walk(entry, isEntry: true);
+            return ordered;
+        }
+
+        /// <summary>
+        /// The IL type token naming what a <c>Catch</c> clause catches.
+        ///
+        /// <para>⛔ Not <c>"[mscorlib]System." + name</c>, which is what this used to be. That is
+        /// right only by coincidence for the BCL names and turns <c>Catch e As MyError</c> into a
+        /// reference to <c>[mscorlib]System.MyError</c> — a type that does not exist, so the
+        /// assembly fails to build or fails at load. The recognized .NET names come from
+        /// <see cref="CppExceptionTypes"/>, the single place this repo records them, so MSIL and
+        /// C++ cannot disagree about which names are .NET exceptions.</para>
+        /// </summary>
+        private string CatchTypeToken(IRCatchClause clause)
+        {
+            var name = clause.ExceptionType?.Name;
+            if (string.IsNullOrEmpty(name)) return "[mscorlib]System.Exception";
+
+            // The analyzer resolved a .NET exception outside the known set (e.g. System.IO.*).
+            if (!string.IsNullOrEmpty(clause.NetExceptionFullName))
+                return "[mscorlib]" + clause.NetExceptionFullName;
+
+            if (CppExceptionTypes.TryGetNetFullName(name, out var fullName))
+                return "[mscorlib]" + fullName;
+
+            // A user-defined exception class compiled into this same assembly.
+            if (_module?.Classes != null && _module.Classes.ContainsKey(name))
+                return SanitizeName(name);
+
+            throw new ForeignFeatureException(
+                $"MSIL: the Catch type '{name}' is neither one of the recognized .NET exception "
+                + "names nor a class defined in this compilation, so there is no type token to "
+                + "emit for it. Emitting a guessed '[mscorlib]System." + name + "' produces a "
+                + "reference to a type that does not exist, which fails at assembly or load time "
+                + "rather than saying so here.");
         }
 
         public override void Visit(IRInlineCode inlineCode)

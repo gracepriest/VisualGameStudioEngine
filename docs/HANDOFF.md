@@ -212,6 +212,25 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   restore `runtime.<rid>.Microsoft.NETCore.ILAsm` or set `BASICLANG_ILASM`; a machine with none
   gets `Assert.Ignore`. Known gaps are pinned as `_PinnedDivergence` tests that each name a root
   cause and go RED when fixed — read those before starting MSIL work.
+  ⚠ **`Try`/`Catch` is real EH regions as of 2026-09-16**, and the fix was FIVE defects, not one.
+  The emitter inlined only the try block's straight-line instructions into `.try { }` while
+  `GenerateBasicBlock` emitted those same blocks again as ordinary labelled blocks — so the real
+  work ran OUTSIDE the protected region and a `Try` around an `If` printed the right answer while
+  protecting nothing. On top of that: the catch variable got no `.locals` slot (`stloc 0` in a
+  method with no locals, or a store onto an unrelated variable), `FinallyBlock` was ignored
+  entirely, a catch type was spelled `[mscorlib]System.` + the clause name (so a user exception
+  named a BCL type that does not exist), and — the one that hid the rest — **`Throw` emitted
+  NOTHING**: `ICodeGenerator` declares `Visit(IRThrow)` as an empty virtual and MSIL never
+  overrode it, so nothing could ever reach a handler. Now supported: multiple typed catches,
+  `Finally` (nested region, because IL forbids catch and finally on one `.try`), `Return` inside a
+  region (lowered to a result slot plus `leave` to one exit, which is also what runs the finally),
+  nested and sibling `Try`s, rethrow, user-defined exception types, and `ex.Message`/`StackTrace`/
+  `Source` through a narrow recorded table — anything outside it is refused, not guessed.
+  ⛔ **A variable-less `Catch` still needs its `pop` even though the obvious test cannot see it**:
+  `leave` empties the evaluation stack, so a straight-line handler runs correctly with the
+  exception left underneath. It only becomes an invalid program when a branch join inside the
+  handler has to carry the leftover — which is the shape
+  `ACatchWithNoVariable_PopsTheException` pins.
   ⚠ **A `BlnetSlotDesc[]` kind that lies fails SILENTLY** (§8.4, 2026-09-15). The array is what
   `blnet_invoke_callback` reads to decide what to deep-copy when a callback is QUEUED rather than
   run inline: HANDLE addrefs at enqueue, STRING deep-copies, VALUE does neither. Label a handle
