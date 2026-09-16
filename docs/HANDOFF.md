@@ -298,7 +298,7 @@ through every one.**
 | `RegionWriter.Write` — **no production caller at all** | scaffold a form, drop a button, save, build → **the build fails on the `InitializeComponent` the scaffold itself calls**. Canvas drew, grid edited, document round-tripped byte for byte, program missing a member |
 | `FormAssetEmitter.DispatchSource` — no production caller | every page carried `<body data-form="…">` and **nothing read it** |
 | The **default project shape** (no explicit `<Compile>` items) | emitted no pages at all — the source glob cannot yield a `.blwebform` by design |
-| `SolutionExplorerViewModel.AddNewFormAsync` — **no `[RelayCommand]`, no menu item, no caller** | **the entry point to the whole designer.** There was no way to create a form in the IDE at all: no Add ▸ New Form, nothing. Found by the owner opening the IDE and asking where the designer was |
+| `SolutionExplorerViewModel.AddNewFormAsync` — **its `[RelayCommand]` bound to the wrong method, and no menu item** | **the entry point to the whole designer.** There was no way to create a form in the IDE at all: no Add ▸ New Form, nothing. Found by the owner opening the IDE and asking where the designer was. ⚠ The attribute was THERE — a doc comment for `SaveProjectOrReportAsync` had been inserted between it and the method it was written for, and an attribute binds to the next DECLARATION (a doc comment in between is trivia). So the toolkit generated a `SaveProjectOrReportCommand` nothing binds and no `AddNewFormCommand`; it compiles either way |
 
 ⚠ **`FormClipboard` is the one still standing** — complete, tested, and the canvas has no
 Copy/Cut/Paste to reach it. Follow-up 11.
