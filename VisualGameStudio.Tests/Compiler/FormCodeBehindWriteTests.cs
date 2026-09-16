@@ -85,12 +85,20 @@ public class FormCodeBehindWriteTests
     [Test]
     public void PathFor_PairsEitherDocumentWithTheSameCodeBehind()
     {
+        // ⛔ The INPUT must be built the same way as the expectation. PathFor is
+        // Path.ChangeExtension, which preserves whatever separators it was handed — so a
+        // forward-slash input compared against Path.Combine's output passes on Linux (where
+        // Combine also emits '/') and FAILS ON WINDOWS, where it emits '\'. Measured: the
+        // hardcoded "/p/LoginForm.blform" produced "/p/LoginForm.bas" against an expected
+        // "/p\LoginForm.bas". The production code was right both times; only the test was
+        // platform-dependent, and every gate on this branch had been taken on Linux.
+        var dir = Path.Combine("/p");
         Assert.Multiple(() =>
         {
-            Assert.That(FormCodeBehind.PathFor("/p/LoginForm.blform"),
-                Is.EqualTo(Path.Combine("/p", "LoginForm.bas")));
-            Assert.That(FormCodeBehind.PathFor("/p/LoginForm.blwebform"),
-                Is.EqualTo(Path.Combine("/p", "LoginForm.bas")));
+            Assert.That(FormCodeBehind.PathFor(Path.Combine(dir, "LoginForm.blform")),
+                Is.EqualTo(Path.Combine(dir, "LoginForm.bas")));
+            Assert.That(FormCodeBehind.PathFor(Path.Combine(dir, "LoginForm.blwebform")),
+                Is.EqualTo(Path.Combine(dir, "LoginForm.bas")));
         });
     }
 
