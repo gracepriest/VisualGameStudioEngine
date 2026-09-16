@@ -33,8 +33,58 @@ public partial class FormPropertyGridViewModel : ObservableObject
     /// <summary>The selected control's id, shown as the grid's header.</summary>
     public string Header => SelectedControl?.Id ?? "No selection";
 
+    /// <summary>
+    /// The control's KIND beside its id, the way VS's property window shows "button1  Button".
+    /// Empty with no selection, so the header does not read "No selection No selection".
+    /// </summary>
+    public string HeaderKind => SelectedControl?.Kind ?? string.Empty;
+
     /// <summary>True when there is nothing to show, so the view can say so rather than look broken.</summary>
     public bool IsEmpty => Rows.Count == 0;
+
+    /// <summary>
+    /// The row the description pane is describing.
+    ///
+    /// <para>⚠ Selection here is a VIEW concern only — it changes nothing in the document. It exists
+    /// because VS's property window devotes its bottom third to explaining the highlighted property,
+    /// and that pane is the single most useful thing the window does for someone who does not
+    /// already know the control's API.</para>
+    /// </summary>
+    [ObservableProperty]
+    private FormPropertyRow? _selectedRow;
+
+    /// <summary>The description pane's title: the property's name, or a prompt when nothing is picked.</summary>
+    public string DescriptionTitle => SelectedRow?.Name ?? (IsEmpty ? string.Empty : "Properties");
+
+    /// <summary>
+    /// The description pane's body — the property's type, and WHY it is read-only when it is.
+    ///
+    /// <para>⛔ A frozen row's reason belongs here rather than only under the value. D9 freezes a
+    /// property when its value did not parse, and "why can I not edit this" is exactly the question
+    /// this pane is for.</para>
+    /// </summary>
+    public string DescriptionBody
+    {
+        get
+        {
+            if (SelectedRow is not { } row)
+            {
+                return IsEmpty
+                    ? "Select a control on the canvas to see its properties."
+                    : "Select a property to see what it does.";
+            }
+
+            return row.IsFrozen && !string.IsNullOrEmpty(row.FrozenReason)
+                ? $"{row.TypeName} — read-only. {row.FrozenReason}"
+                : row.TypeName;
+        }
+    }
+
+    partial void OnSelectedRowChanged(FormPropertyRow? value)
+    {
+        OnPropertyChanged(nameof(DescriptionTitle));
+        OnPropertyChanged(nameof(DescriptionBody));
+    }
 
     /// <summary>
     /// Points the grid at a loaded document. Passing the <see cref="FormFile"/> rather than the
@@ -79,7 +129,14 @@ public partial class FormPropertyGridViewModel : ObservableObject
             }
         }
 
+        // ⚠ SelectedRow is cleared first: it points at a row of the PREVIOUS control, and leaving it
+        // would leave the description pane describing a property that is no longer on screen.
+        SelectedRow = null;
+
         OnPropertyChanged(nameof(Header));
+        OnPropertyChanged(nameof(HeaderKind));
         OnPropertyChanged(nameof(IsEmpty));
+        OnPropertyChanged(nameof(DescriptionTitle));
+        OnPropertyChanged(nameof(DescriptionBody));
     }
 }

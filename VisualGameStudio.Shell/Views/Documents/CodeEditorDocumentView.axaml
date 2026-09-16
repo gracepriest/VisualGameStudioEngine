@@ -166,25 +166,53 @@
       </Border.KeyBindings>
       <Grid ColumnDefinitions="150,*,260">
 
-        <!-- Toolbox: the control kinds this document's target actually has. -->
-        <Border Grid.Column="0" Background="{DynamicResource IdePanelBg}" Padding="6">
+        <!-- Toolbox, shaped like Visual Studio's: a panel caption, controls grouped under category
+             headers, and one compact row per control — glyph, name, and what it maps to. -->
+        <Border Grid.Column="0" Background="{DynamicResource IdePanelBg}"
+                BorderBrush="{DynamicResource IdeBorder}" BorderThickness="0,0,1,0">
           <DockPanel>
-            <TextBlock DockPanel.Dock="Top" Text="Toolbox" FontWeight="SemiBold"
-                       FontSize="11" Opacity="0.7" Margin="2,0,0,6"/>
-            <!-- Drag a row onto the canvas to place one. PointerPressed records the row;
-                 PointerMoved starts the drag once the pointer has actually travelled, so a plain
-                 click still just selects. -->
+            <Border DockPanel.Dock="Top" Padding="8,5"
+                    BorderBrush="{DynamicResource IdeBorder}" BorderThickness="0,0,0,1">
+              <TextBlock Text="Toolbox" FontWeight="SemiBold" FontSize="11"/>
+            </Border>
+
+            <!-- Drag a row onto the canvas to place one. PointerPressed is wired in the
+                 constructor, NOT here — see the note there; PointerMoved starts the drag once the
+                 pointer has actually travelled, so a plain click still just selects. -->
             <ListBox x:Name="ToolboxList"
                      ItemsSource="{Binding Toolbox.Items}"
                      Background="Transparent"
+                     BorderThickness="0"
                      PointerMoved="OnToolboxPointerMoved"
                      PointerReleased="OnToolboxPointerReleased">
+              <ListBox.Styles>
+                <!-- VS rows are one line tall and full width; the default padding makes a toolbox
+                     of ten controls scroll for no reason. -->
+                <Style Selector="ListBoxItem">
+                  <Setter Property="Padding" Value="0"/>
+                  <Setter Property="MinHeight" Value="0"/>
+                </Style>
+              </ListBox.Styles>
               <ListBox.ItemTemplate>
                 <DataTemplate x:DataType="designerVm:FormToolboxItem">
-                  <StackPanel Margin="0,1">
-                    <TextBlock Text="{Binding Kind}" FontSize="12"/>
-                    <TextBlock Text="{Binding Description}" FontSize="10" Opacity="0.5"
-                               FontFamily="Cascadia Code, Consolas, monospace"/>
+                  <StackPanel>
+                    <!-- The group header, drawn by the FIRST row of each category. -->
+                    <TextBlock Text="{Binding Category}"
+                               IsVisible="{Binding StartsCategory}"
+                               FontSize="10" FontWeight="SemiBold" Opacity="0.55"
+                               Margin="6,8,0,3"/>
+                    <Grid ColumnDefinitions="26,*" Margin="6,2,4,2" ToolTip.Tip="{Binding Description}">
+                      <Border Grid.Column="0" Width="20" Height="16"
+                              Background="{DynamicResource IdeBg}"
+                              BorderBrush="{DynamicResource IdeBorder}" BorderThickness="1"
+                              HorizontalAlignment="Left" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding Glyph}" FontSize="9"
+                                   FontFamily="Cascadia Code, Consolas, monospace"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                      </Border>
+                      <TextBlock Grid.Column="1" Text="{Binding Kind}" FontSize="12"
+                                 VerticalAlignment="Center"/>
+                    </Grid>
                   </StackPanel>
                 </DataTemplate>
               </ListBox.ItemTemplate>
@@ -199,42 +227,73 @@
                                     CommitGeometryCommand="{Binding CommitGeometryCommand}"
                                     SelectedControl="{Binding PropertyGrid.SelectedControl, Mode=TwoWay}"/>
 
-        <!-- Property grid: the catalog's properties for the selection, with D9's tiers. -->
-        <Border Grid.Column="2" Background="{DynamicResource IdePanelBg}" Padding="6">
+        <!-- Property window, shaped like Visual Studio's: "id  Kind" caption, a two-column
+             name/value grid, and a description pane at the bottom explaining the selected row.
+             That pane is the most useful thing VS's window does for anyone who does not already
+             know the control's API, which is why it is worth the third of the panel it takes. -->
+        <Border Grid.Column="2" Background="{DynamicResource IdePanelBg}"
+                BorderBrush="{DynamicResource IdeBorder}" BorderThickness="1,0,0,0">
           <DockPanel>
-            <TextBlock DockPanel.Dock="Top" Text="{Binding PropertyGrid.Header}"
-                       FontWeight="SemiBold" FontSize="11" Opacity="0.7" Margin="2,0,0,6"/>
-            <TextBlock DockPanel.Dock="Top" Text="Select a control on the canvas."
-                       FontSize="11" Opacity="0.45" TextWrapping="Wrap" Margin="2,0,0,6"
-                       IsVisible="{Binding PropertyGrid.IsEmpty}"/>
-            <ScrollViewer>
-              <ItemsControl ItemsSource="{Binding PropertyGrid.Rows}">
-                <ItemsControl.ItemTemplate>
-                  <DataTemplate x:DataType="designerVm:FormPropertyRow">
-                    <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,6">
-                      <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                        <TextBlock Text="{Binding Name}" FontSize="12"/>
-                        <TextBlock Text="{Binding TypeName}" FontSize="10" Opacity="0.45"/>
-                      </StackPanel>
+            <Border DockPanel.Dock="Top" Padding="8,5"
+                    BorderBrush="{DynamicResource IdeBorder}" BorderThickness="0,0,0,1">
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <TextBlock Text="{Binding PropertyGrid.Header}" FontWeight="SemiBold" FontSize="11"/>
+                <TextBlock Text="{Binding PropertyGrid.HeaderKind}" FontSize="11" Opacity="0.55"/>
+              </StackPanel>
+            </Border>
+
+            <!-- The description pane. Docked BOTTOM before the grid takes the rest, so it keeps its
+                 height instead of being pushed off by a long property list. -->
+            <Border DockPanel.Dock="Bottom" Padding="8,6" MinHeight="54"
+                    Background="{DynamicResource IdeBg}"
+                    BorderBrush="{DynamicResource IdeBorder}" BorderThickness="0,1,0,0">
+              <StackPanel Spacing="2">
+                <TextBlock Text="{Binding PropertyGrid.DescriptionTitle}"
+                           FontWeight="SemiBold" FontSize="11"/>
+                <TextBlock Text="{Binding PropertyGrid.DescriptionBody}"
+                           FontSize="11" Opacity="0.7" TextWrapping="Wrap"/>
+              </StackPanel>
+            </Border>
+
+            <ListBox ItemsSource="{Binding PropertyGrid.Rows}"
+                     SelectedItem="{Binding PropertyGrid.SelectedRow, Mode=TwoWay}"
+                     Background="Transparent" BorderThickness="0">
+              <ListBox.Styles>
+                <Style Selector="ListBoxItem">
+                  <Setter Property="Padding" Value="0"/>
+                  <Setter Property="MinHeight" Value="0"/>
+                </Style>
+              </ListBox.Styles>
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="designerVm:FormPropertyRow">
+                  <!-- Two columns with a rule between them and under each row — VS's grid lines.
+                       The name column is fixed so the values line up down the panel rather than
+                       stepping in and out with the length of each name. -->
+                  <Border BorderBrush="{DynamicResource IdeBorder}" BorderThickness="0,0,0,1">
+                    <Grid ColumnDefinitions="96,1,*" MinHeight="22">
+                      <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="11"
+                                 VerticalAlignment="Center" Margin="6,0,4,0"
+                                 TextTrimming="CharacterEllipsis"/>
+
+                      <Border Grid.Column="1" Background="{DynamicResource IdeBorder}"/>
 
                       <!-- Editable: the SAME four editors the Settings dialog uses. -->
-                      <controls:TypedValueEditor Grid.Column="1" VerticalAlignment="Center"
+                      <controls:TypedValueEditor Grid.Column="2" VerticalAlignment="Center"
+                                                 Margin="4,1,4,1"
                                                  IsVisible="{Binding IsEditable}"/>
 
-                      <!-- ⛔⛔ D9 Degraded. The raw value, read-only, with the reason underneath.
-                           A typed editor here would coerce the value the moment it rendered. -->
-                      <StackPanel Grid.Column="1" VerticalAlignment="Center" MaxWidth="150"
-                                  IsVisible="{Binding IsFrozen}">
-                        <TextBox Text="{Binding RawValue}" IsReadOnly="True" FontSize="11"
-                                 FontFamily="Cascadia Code, Consolas, monospace"/>
-                        <TextBlock Text="{Binding FrozenReason}" FontSize="10" TextWrapping="Wrap"
-                                   Opacity="0.7" Margin="0,2,0,0"/>
-                      </StackPanel>
+                      <!-- ⛔⛔ D9 Degraded. The raw value, read-only. A typed editor here would
+                           coerce the value the moment it rendered. The REASON now lives in the
+                           description pane, where "why can I not edit this" is actually asked. -->
+                      <TextBox Grid.Column="2" Text="{Binding RawValue}" IsReadOnly="True"
+                               FontSize="11" Margin="4,1,4,1" VerticalAlignment="Center"
+                               FontFamily="Cascadia Code, Consolas, monospace"
+                               IsVisible="{Binding IsFrozen}"/>
                     </Grid>
-                  </DataTemplate>
-                </ItemsControl.ItemTemplate>
-              </ItemsControl>
-            </ScrollViewer>
+                  </Border>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
           </DockPanel>
         </Border>
       </Grid>

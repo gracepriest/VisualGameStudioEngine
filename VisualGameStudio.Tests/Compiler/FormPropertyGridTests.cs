@@ -308,12 +308,41 @@ public class FormPropertyGridTests
         var web = new FormToolboxViewModel { Target = FormTarget.Web };
         var winForms = new FormToolboxViewModel { Target = FormTarget.WinForms };
 
+        // ⚠ Compared as SETS. This asserted sequence equality with the catalog, which tested more
+        // than its name claims: the toolbox now groups containers last so it can draw VS-style
+        // category headers, and ORDER is a presentation decision the panel owns. What must stay
+        // true is the membership — every kind the target has, and nothing it does not.
         Assert.Multiple(() =>
         {
             Assert.That(web.Items.Select(i => i.Kind),
-                Is.EqualTo(FormControlCatalog.For(FormTarget.Web).Select(c => c.Kind)));
+                Is.EquivalentTo(FormControlCatalog.For(FormTarget.Web).Select(c => c.Kind)));
             Assert.That(winForms.Items.Select(i => i.Kind),
-                Is.EqualTo(FormControlCatalog.For(FormTarget.WinForms).Select(c => c.Kind)));
+                Is.EquivalentTo(FormControlCatalog.For(FormTarget.WinForms).Select(c => c.Kind)));
+        });
+    }
+
+    /// <summary>
+    /// The grouping the panel draws its headers from. Pinned because the headers are rendered by
+    /// the FIRST row of each category — if the order interleaves, the same header appears twice and
+    /// the toolbox reads as though there are four groups.
+    /// </summary>
+    [Test]
+    public void TheToolbox_GroupsContainersAfterCommonControls()
+    {
+        var toolbox = new FormToolboxViewModel { Target = FormTarget.WinForms };
+
+        var categories = toolbox.Items.Select(i => i.Category).ToList();
+        var starts = toolbox.Items.Where(i => i.StartsCategory).Select(i => i.Category).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(categories, Is.EqualTo(categories.OrderBy(c => c == "Containers" ? 1 : 0)),
+                "categories interleave, so a header would be drawn more than once");
+            Assert.That(starts, Is.EqualTo(new[] { "Common Controls", "Containers" }),
+                "exactly one header per category, in that order");
+            Assert.That(toolbox.Items.Select(i => i.Glyph).Distinct().Count(),
+                Is.EqualTo(toolbox.Items.Count),
+                "two controls share a glyph — the mark beside a row must identify it");
         });
     }
 
