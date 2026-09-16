@@ -19,6 +19,14 @@ namespace VisualGameStudio.Tests.Msil;
 /// gap someone measured and a gap nobody knows about. Each one carries the root cause and goes
 /// RED the moment it starts working, which is the signal to promote it to a real assertion.
 /// The repo already uses this convention for the .NET boundary's divergences.</para>
+///
+/// <para><b>As of 2026-09-16 there are none left</b> — the last one,
+/// <c>ASharedMethodOnAUserClass_IsAPhantomCall_PinnedDivergence</c>, went red when Shared members
+/// started working and was replaced by the assertions below. An empty pin list is not a claim that
+/// the backend is complete: the gaps that remain are recorded in <c>docs/HANDOFF.md</c>, and the
+/// ones that live in the FRONT END (an inherited Shared field's type, a float-valued
+/// <c>Return</c> from an <c>As Integer</c> method, a module-level initializer that is not a
+/// literal) cannot be pinned here because they fail before this backend runs.</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -1051,9 +1059,9 @@ public class MsilRoundTripTests
     ///
     /// <para>The receiver used to be <c>SanitizeName(type.Name)</c> unconditionally, so this
     /// emitted a call on a class literally named <c>String</c> and ilasm refused it. The same
-    /// missing step produced <c>Console.WriteLine</c>'s phantom self-call, which is still open
-    /// because it arrives through a different path — see
-    /// <see cref="ConsoleWriteLine_IsAPhantomSelfCall_PinnedDivergence"/>.</para>
+    /// missing step produced <c>Console.WriteLine</c>'s phantom self-call; that one was closed in
+    /// <c>75c1dcc</c> ("MSIL: the .NET Console surface, in two halves") and its pin deleted, so
+    /// the cross-reference that used to sit here named a test that no longer exists.</para>
     /// </summary>
     [Test]
     public void AStringMethodCall_ResolvesToTheBclType_AndRuns()
@@ -1440,18 +1448,30 @@ public class MsilRoundTripTests
             """), Is.EqualTo("CAUGHT-Z\n"));
     }
 
-    /// <summary>
-    /// ⛔ Still broken, and NOT caused by the instance-method work — verified identical on the
-    /// base commit. A <c>Shared</c> method called as <c>Type.Member(...)</c> flattens into a
-    /// phantom <c>Combined.MathUtilTwice</c>: the same dotted-static-call family as
-    /// <see cref="TheRestOfTheDottedStaticSurface_IsStillAPhantomSelfCall_PinnedDivergence"/>,
-    /// which is a decision about how the whole static surface reaches MSIL rather than a defect
-    /// to patch here.
-    /// </summary>
+    // ====================================================================================
+    // Shared members on user classes, fixed 2026-09-16. This replaces
+    // ASharedMethodOnAUserClass_IsAPhantomCall_PinnedDivergence, which asserted
+    // MissingMethodException and went red the moment the call started working.
+    //
+    // ⛔ The pin named ONE defect and there were two, entangled:
+    //
+    //  1. `MathUtil.Twice` reached the emitter as a dotted name and SanitizeName strips dots
+    //     (it is shared across backends, in ICodeGenerator), so the call became
+    //     `call Combined::MathUtilTwice` — the module's own class, a method nothing defines.
+    //  2. IRModule.Functions holds every class member too: IRBuilder does member.Accept(this),
+    //     which appends to Functions, then stores that SAME IRFunction as
+    //     IRMethod.Implementation. The module class emitted a second static copy of every
+    //     method on every class.
+    //
+    // Fixing (1) alone leaves the duplicates; fixing (2) alone BREAKS the unqualified sibling
+    // call, which today resolves to the duplicate. Neither is safe without the other.
+    // ====================================================================================
+
+    /// <summary>The shape the pin asserted was broken. It must now print the answer.</summary>
     [Test]
-    public void ASharedMethodOnAUserClass_IsAPhantomCall_PinnedDivergence()
+    public void ASharedMethodOnAUserClass_Runs()
     {
-        var run = Run("""
+        Assert.That(RunExpectingSuccess("""
             Class MathUtil
              Public Shared Function Twice(v As Integer) As Integer
               Return v * 2
@@ -1463,15 +1483,361 @@ public class MsilRoundTripTests
               PrintLine(CStr(MathUtil.Twice(21)))
              End Sub
             End Module
+            """), Is.EqualTo("42\n"));
+    }
+
+    [Test]
+    public void ASharedSub_Runs()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Class Logger
+             Public Shared Sub Say(m As String)
+              PrintLine("LOG:" & m)
+             End Sub
+            End Class
+
+            Module M
+             Sub Main()
+              Logger.Say("hi")
+             End Sub
+            End Module
+            """), Is.EqualTo("LOG:hi\n"));
+    }
+
+    /// <summary>
+    /// ⛔ The call that makes the two fixes inseparable. Before, this bound to the DUPLICATE the
+    /// module class carried and printed the right answer for the wrong reason; remove the
+    /// duplicates without teaching the unqualified arm to resolve, and it becomes a
+    /// MissingMethodException. It is the regression test for doing only half the work.
+    /// </summary>
+    [Test]
+    public void AnUnqualifiedSiblingCallToASharedMethod_BindsToTheDeclaringClass()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Class Box
+             Public Shared Function Adjust(v As Integer) As Integer
+              Return v - 42
+             End Function
+             Public Function Use() As Integer
+              Return Adjust(84)
+             End Function
+            End Class
+
+            Module M
+             Sub Main()
+              Dim b As New Box()
+              PrintLine(CStr(b.Use()))
+             End Sub
+            End Module
+            """), Is.EqualTo("42\n"));
+    }
+
+    /// <summary>A <c>Shared</c> method naming its own class from inside that class.</summary>
+    [Test]
+    public void ASharedMethodQualifiedByItsOwnClass_Runs()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Class Box
+             Public Shared Function Adjust(v As Integer) As Integer
+              Return v - 42
+             End Function
+             Public Function Use() As Integer
+              Return Box.Adjust(84)
+             End Function
+            End Class
+
+            Module M
+             Sub Main()
+              Dim b As New Box()
+              PrintLine(CStr(b.Use()))
+             End Sub
+            End Module
+            """), Is.EqualTo("42\n"));
+    }
+
+    /// <summary>One Shared member calling another, where there is no receiver anywhere in sight.</summary>
+    [Test]
+    public void ASharedMethodCallingAnotherSharedMethod_Runs()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Class Box
+             Public Shared Function Inner() As Integer
+              Return 42
+             End Function
+             Public Shared Function Outer() As Integer
+              Return Inner()
+             End Function
+            End Class
+
+            Module M
+             Sub Main()
+              PrintLine(CStr(Box.Outer()))
+             End Sub
+            End Module
+            """), Is.EqualTo("42\n"));
+    }
+
+    /// <summary>
+    /// ⛔ BasicLang lets a <c>Shared</c> member be reached through an INSTANCE; IL does not. The
+    /// method has no <c>this</c> parameter, so <c>callvirt instance string Box::Tag()</c> with a
+    /// receiver on the stack is a method the CLR cannot find. The receiver is still evaluated and
+    /// then discarded, because the expression may have side effects.
+    /// </summary>
+    [Test]
+    public void ASharedMethodReachedThroughAnInstance_StillBindsStatically()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Class Box
+             Public Shared Function Tag() As String
+              Return "T"
+             End Function
+            End Class
+
+            Module M
+             Sub Main()
+              Dim b As New Box()
+              PrintLine(b.Tag())
+             End Sub
+            End Module
+            """), Is.EqualTo("T\n"));
+    }
+
+    /// <summary>
+    /// ⛔ The duplication defect at its loudest. Two classes each declaring <c>Go</c> both
+    /// flattened onto the module class, and ilasm refused the whole file with "Duplicate method
+    /// declaration" — the program did not build at all. Nothing about this needs <c>Shared</c>:
+    /// the instance case failed identically, which is why the filter is on class MEMBERSHIP and
+    /// not on staticness.
+    /// </summary>
+    [Test]
+    public void TwoClassesMayDeclareAMethodOfTheSameName()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(RunExpectingSuccess("""
+                Class A
+                 Public Shared Function Go() As String
+                  Return "A"
+                 End Function
+                End Class
+
+                Class B
+                 Public Shared Function Go() As String
+                  Return "B"
+                 End Function
+                End Class
+
+                Module M
+                 Sub Main()
+                  PrintLine(A.Go() & B.Go())
+                 End Sub
+                End Module
+                """), Is.EqualTo("AB\n"), "two Shared methods of the same name");
+
+            Assert.That(RunExpectingSuccess("""
+                Class A
+                 Public Function Go() As String
+                  Return "A"
+                 End Function
+                End Class
+
+                Class B
+                 Public Function Go() As String
+                  Return "B"
+                 End Function
+                End Class
+
+                Module M
+                 Sub Main()
+                  Dim a As New A()
+                  Dim b As New B()
+                  PrintLine(a.Go() & b.Go())
+                 End Sub
+                End Module
+                """), Is.EqualTo("AB\n"), "and two INSTANCE methods of the same name");
+        });
+    }
+
+    /// <summary>
+    /// ⛔ A <c>Shared</c> field read as <c>Counter.Total</c>. The receiver is a TYPE NAME, not a
+    /// value: loading it emitted <c>// WARNING: Unknown local 'Counter'</c> and pushed nothing, so
+    /// the <c>ldfld</c> that followed read a field off an empty stack and the CLR rejected the
+    /// method. The 42 also pins the initializer: <c>= 5</c> lives in the class's <c>.cctor</c>,
+    /// and dropping it gives 37 rather than a crash.
+    /// </summary>
+    [Test]
+    public void ASharedField_ReadsAndWritesThroughItsType_AndKeepsItsInitializer()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Class Counter
+             Public Shared Total As Integer = 5
+            End Class
+
+            Module M
+             Sub Main()
+              Counter.Total = Counter.Total + 37
+              PrintLine(CStr(Counter.Total))
+             End Sub
+            End Module
+            """), Is.EqualTo("42\n"));
+    }
+
+    /// <summary>
+    /// The same field by BARE name inside its own class. Registering it is what routes the
+    /// assignment through the field rather than into an anonymous temporary — without it
+    /// <c>Total = Total + 1</c> computes the sum and drops it, and this prints 0.
+    /// </summary>
+    [Test]
+    public void ASharedField_IsReachableByBareNameInsideItsClass()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Class Counter
+             Public Shared Total As Integer
+             Public Shared Sub Bump()
+              Total = Total + 1
+             End Sub
+            End Class
+
+            Module M
+             Sub Main()
+              Counter.Bump()
+              Counter.Bump()
+              PrintLine(CStr(Counter.Total))
+             End Sub
+            End Module
+            """), Is.EqualTo("2\n"));
+    }
+
+    /// <summary>
+    /// A sized <c>Shared</c> array. <c>EmitArrayFieldAllocations</c> deliberately skips static
+    /// fields ("a static field is not this instance's to create"), so the class's type
+    /// initializer is the ONLY place this gets storage — left out, the first index throws.
+    /// </summary>
+    [Test]
+    public void ASharedArrayField_HasStorage()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Class Pool
+             Public Shared Slots(3) As Integer
+            End Class
+
+            Module M
+             Sub Main()
+              Pool.Slots(1) = 7
+              PrintLine(CStr(Pool.Slots(1)))
+             End Sub
+            End Module
+            """), Is.EqualTo("7\n"));
+    }
+
+    /// <summary>
+    /// ⚠ Resolution order: a receiver name is only read as a TYPE when nothing nearer in scope
+    /// answers to it. Here <c>Counter</c> is a local of type <c>Holder</c> AND the name of a class
+    /// with a <c>Shared Total</c>, so <c>Counter.Total</c> must reach the local's instance field.
+    /// Letting the class win prints 9.
+    ///
+    /// <para>⛔ The read is deliberately NOT preceded by a write, and the first version of this
+    /// test was wrong for exactly that reason. <c>Counter.Total = 4</c> followed by a read prints
+    /// 4 either way — the mis-resolution writes and reads the SAME wrong location, so it is
+    /// self-consistent and invisible. Only a value the program did not put there (the
+    /// constructor's 4 versus the class's 9) tells the two apart.</para>
+    /// </summary>
+    [Test]
+    public void ALocalShadowsAClassOfTheSameName_WhenUsedAsAReceiver()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Class Counter
+             Public Shared Total As Integer = 9
+            End Class
+
+            Class Holder
+             Public Total As Integer
+             Public Sub New()
+              Total = 4
+             End Sub
+            End Class
+
+            Module M
+             Sub Main()
+              Dim Counter As New Holder()
+              PrintLine(CStr(Counter.Total))
+             End Sub
+            End Module
+            """), Is.EqualTo("4\n"),
+            "the local's instance field, not the like-named class's Shared field");
+    }
+
+    /// <summary>
+    /// ⛔ IL TEXT, for the same reason as the module class's copy of this: nothing a round trip can
+    /// observe distinguishes <c>beforefieldinit</c> from its absence in the IL this backend emits.
+    /// A user class gets a type initializer only when a <c>Shared</c> field needs one, and it
+    /// drops the flag when it does — matching what the C# compiler does for a class with a static
+    /// constructor, and matching the module class so the two cannot drift.
+    /// </summary>
+    [Test]
+    public void AUserClass_DropsBeforeFieldInit_OnlyWhenASharedFieldNeedsInitializing()
+    {
+        var initialized = CompileToIl("""
+            Class Counter
+             Public Shared Total As Integer = 5
+            End Class
+
+            Module M
+             Sub Main()
+              PrintLine(CStr(Counter.Total))
+             End Sub
+            End Module
+            """);
+
+        var bare = CompileToIl("""
+            Class Counter
+             Public Shared Total As Integer
+            End Class
+
+            Module M
+             Sub Main()
+              PrintLine(CStr(Counter.Total))
+             End Sub
+            End Module
             """);
 
         Assert.Multiple(() =>
         {
-            Assert.That(run.Outcome, Is.EqualTo(MsilOutcome.RunFailed), run.Report);
-            Assert.That(run.Output, Does.Contain("MissingMethodException"),
-                "PINNED WRONG ANSWER: this must print 42. When it does, the dotted static surface "
-                + "learned to resolve a user class — delete this test and assert the value.");
+            Assert.That(ClassLine(initialized, "Counter"), Does.Not.Contain("beforefieldinit"),
+                "a Shared field with an initializer needs a .cctor, so the flag goes");
+            Assert.That(ClassLine(bare, "Counter"), Does.Contain("beforefieldinit"),
+                "a zero-valued Shared field needs no .cctor — the CLR already zeroes it — so the "
+                + "relaxed flag stays and no dead type initializer is emitted");
         });
+    }
+
+    /// <summary>
+    /// ⛔ <c>Derived.Tag()</c> where <c>Tag</c> is Shared on <c>Base</c>. The call must name the
+    /// class that DECLARES the method — <c>call ... Derived::Tag()</c> leaves the CLR looking for
+    /// something Derived does not define. The call's own type is not a usable source for the
+    /// signature either: this one arrives typed <c>object</c> where the method returns
+    /// <c>string</c>, so the signature is spelled from the declaration instead.
+    /// </summary>
+    [Test]
+    public void AnInheritedSharedMethod_NamesItsDeclaringClass()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Class Base
+             Public Shared Function Tag() As String
+              Return "BASE"
+             End Function
+            End Class
+
+            Class Derived
+             Inherits Base
+            End Class
+
+            Module M
+             Sub Main()
+              PrintLine(Derived.Tag())
+             End Sub
+            End Module
+            """), Is.EqualTo("BASE\n"));
     }
 
     // ---- Try/Catch, fixed 2026-09-16 ---------------------------------------------------
@@ -2248,6 +2614,9 @@ public class MsilRoundTripTests
     }
 
     /// <summary>The <c>.class</c> line of the module class, whose flags several tests read.</summary>
-    private static string ModuleClassLine(string il) =>
-        il.Split('\n').First(line => line.StartsWith(".class") && line.Contains("MsilProbe"));
+    private static string ModuleClassLine(string il) => ClassLine(il, "MsilProbe");
+
+    /// <summary>The <c>.class</c> line declaring <paramref name="name"/>, for flag assertions.</summary>
+    private static string ClassLine(string il, string name) =>
+        il.Split('\n').First(line => line.StartsWith(".class") && line.TrimEnd().EndsWith(" " + name));
 }

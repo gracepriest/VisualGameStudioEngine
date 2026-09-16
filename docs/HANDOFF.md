@@ -211,7 +211,11 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   not required — Windows ships one in-box under `%WINDIR%\Microsoft.NET\Framework64`, elsewhere
   restore `runtime.<rid>.Microsoft.NETCore.ILAsm` or set `BASICLANG_ILASM`; a machine with none
   gets `Assert.Ignore`. Known gaps are pinned as `_PinnedDivergence` tests that each name a root
-  cause and go RED when fixed — read those before starting MSIL work.
+  cause and go RED when fixed — read those before starting MSIL work. ⚠ **As of 2026-09-16 there
+  are none left**: the last one (`ASharedMethodOnAUserClass_IsAPhantomCall_PinnedDivergence`) went
+  red when Shared members started working. That is not a claim the backend is complete — the gaps
+  below are real, and the ones living in the FRONT END cannot be pinned in this fixture at all
+  because they fail before the backend runs.
   ⚠ **`Try`/`Catch` is real EH regions as of 2026-09-16**, and the fix was FIVE defects, not one.
   The emitter inlined only the try block's straight-line instructions into `.try { }` while
   `GenerateBasicBlock` emitted those same blocks again as ordinary labelled blocks — so the real
@@ -307,6 +311,51 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   else — `Dim b As Integer = a * 3` with `a` a `Dim`, `= 2 + 3 * 4`, `= SomeFunc()` — crashes the
   FRONT END with a NullReferenceException before any backend runs, on C# as well as MSIL. That is
   a pre-existing compiler gap, not an MSIL one; don't chase it in the backend.
+  ⚠ **`Shared` members on user classes work as of 2026-09-16**, and the pin that covered this
+  (`ASharedMethodOnAUserClass_IsAPhantomCall_PinnedDivergence`, now deleted) named ONE defect where
+  there were TWO, entangled so that fixing either alone makes things worse.
+  ⛔ **(1) The dotted name was flattened.** `MathUtil.Twice` reached the emitter whole and
+  `SanitizeName` strips dots — it lives in `ICodeGenerator` and is shared by every backend, so it
+  cannot be changed here — producing `call Combined::MathUtilTwice`: the module's own class, a
+  method nothing defines.
+  ⛔ **(2) Every class member was ALSO emitted as a static on the module class.**
+  `IRModule.Functions` holds them: `IRBuilder` does `member.Accept(this)`, which appends to
+  `Functions`, then stores that SAME `IRFunction` as `IRMethod.Implementation`. Nothing to do with
+  `Shared` — instance methods too. Two consequences: two classes declaring a same-named method
+  collided on the module class and **ilasm refused the whole file** ("Duplicate method
+  declaration"), and an unqualified sibling call to a `Shared` method bound to the DUPLICATE and
+  printed the right answer for the wrong reason. Fix (1) alone and the duplicates stay; fix (2)
+  alone and the sibling call becomes MissingMethodException. `IsClassMember` filters on class
+  MEMBERSHIP by reference identity, mirroring `CSharpBackend.IsClassMethod` — the two must not
+  disagree about what a standalone function is.
+  Now supported: `Type.Method(...)`, unqualified sibling calls (from instance AND `Shared`
+  members), a `Shared` method qualified by its own class, `instance.SharedMethod()` (legal
+  BasicLang, illegal IL — the receiver is evaluated then `pop`ped, because it may have side
+  effects), `Type.SharedField` reads and writes as `ldsfld`/`stsfld`, bare `Shared` field names
+  inside the declaring class, sized `Shared` arrays, and inherited `Shared` methods.
+  ⛔ **A call must name the DECLARING class and be spelled from the DECLARATION.**
+  `Derived.Tag()` where `Tag` is Shared on `Base` needs `Base::Tag()`; and the call site is not a
+  usable source for the signature — that one arrives typed `object` where the method returns
+  `string`. `GenerateClassMethod` writes `MapType(method.ReturnType)` and `IlTypeSpec(p.Type)`, so
+  the call site must too. ilasm does not resolve member references, so a mismatch fails at RUN
+  time.
+  ⛔ **Receiver shadowing is INVISIBLE in a write-then-read program.** A local named after a class
+  (`Dim Counter As New Holder()` beside `Class Counter`) must resolve `Counter.Total` to the
+  local's field. Getting it backwards writes AND reads the same wrong location, so
+  `Counter.Total = 4` then printing it gives 4 either way. The test reads a value the program did
+  not put there (a constructor's 4 versus the class's `Shared = 9`); the first version of it
+  proved nothing.
+  ⚠ **An inherited Shared FIELD is mistyped by the FRONT END.** `Derived.Tally` (declared on
+  `Base`) comes through typed `object`: the read crashes in the boxing chain and
+  `Derived.Tally + 34` is rejected outright with "Arithmetic operator '+' requires numeric
+  operands" — identically on C#, which survives only because it re-emits the text and lets C#
+  re-resolve. MSIL's `ldsfld` names the right class. Naming the declaring class (`Base.Tally`)
+  works. Don't chase it in the backend.
+  ⚠ **`Return <float expr>` from an `As Integer` method returns GARBAGE, on every method kind.**
+  `Return v / 2` declared `As Integer` computes in `float64` and emits `ret` with no `conv.i4`, so
+  the method returns 0. Measured identical on a plain module function, an instance method and a
+  `Shared` method — it is a return-coercion gap, NOT a `Shared` defect, and it is what made an
+  early `Shared` probe look like it was still broken after it had been fixed.
   ⚠ **A `BlnetSlotDesc[]` kind that lies fails SILENTLY** (§8.4, 2026-09-15). The array is what
   `blnet_invoke_callback` reads to decide what to deep-copy when a callback is QUEUED rather than
   run inline: HANDLE addrefs at enqueue, STRING deep-copies, VALUE does neither. Label a handle
