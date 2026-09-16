@@ -1344,14 +1344,26 @@ namespace BasicLang.Compiler.IR
             _pendingBaseConstructorArgs = new List<IRValue>();
             if (node.BaseConstructorArgs.Count > 0)
             {
+                // The base constructor the analyzer bound this `MyBase.New(…)` to — the third
+                // construction site, and it needs the same coercion and the same Optional fill as
+                // the other two. Measured before: `MyBase.New(7)` against
+                // `Sub New(a As Integer, Optional b As Integer = 5)` was refused outright by the
+                // analyzer ("No constructor for base class 'Base' takes 1 argument(s)").
+                var baseCtor = _semanticAnalyzer.ConstructorBindings.TryGetValue(node, out var boundBase)
+                    ? boundBase
+                    : null;
+
                 foreach (var arg in node.BaseConstructorArgs)
                 {
                     arg.Accept(this);
                     if (_expressionResult != null)
                     {
-                        _pendingBaseConstructorArgs.Add(_expressionResult);
+                        _pendingBaseConstructorArgs.Add(CoerceToParameterType(
+                            _expressionResult, baseCtor, _pendingBaseConstructorArgs.Count));
                     }
                 }
+
+                AppendOmittedOptionalArguments(_pendingBaseConstructorArgs, null, baseCtor);
             }
 
             // Generate body
@@ -3299,56 +3311,11 @@ namespace BasicLang.Compiler.IR
                 // ⚠ Always by VALUE. A filled default is a fresh temporary, so there is nothing
                 // for a callee to write back into — and IRCall documents ByRefArguments as indexed
                 // in lockstep with Arguments, so the entry has to exist either way.
-                byRefFlags.Add(false);
+                //
+                // ⚠ NULL for a construction: IRNewObject and IRConstructor.BaseConstructorArgs
+                // carry no by-ref list at all, so there is no lockstep to keep.
+                byRefFlags?.Add(false);
             }
-        }
-
-        /// <summary>
-        /// The parameter list of the ONLY constructor of <paramref name="className"/> that takes
-        /// <paramref name="argumentCount"/> arguments, or null when that does not identify one.
-        ///
-        /// <para>⚠ This is deliberately NOT overload resolution. Where arity alone leaves a
-        /// choice — two constructors of the same length, differing only in parameter types — the
-        /// answer is null and the arguments keep exactly what they did before this coercion
-        /// existed.</para>
-        ///
-        /// <para>⛔ That ambiguity branch is UNREACHABLE today, and is kept anyway. Measured: the
-        /// analyzer does not resolve constructor overloads at all — it binds <c>New Box(3)</c> to
-        /// the LAST declared constructor and then rejects the argument, so a same-arity pair never
-        /// reaches the IR builder. It is kept because it makes this function do NOTHING in that
-        /// case: unlike a speculative arm that ACTS on an untested path, a fail-safe one cannot
-        /// produce a wrong answer if the front end ever learns constructor overloads.</para>
-        /// </summary>
-        private List<IRVariable> UnambiguousConstructorParameters(string className, int argumentCount)
-        {
-            if (string.IsNullOrEmpty(className) || _module?.Classes == null) return null;
-            if (!_module.Classes.TryGetValue(className, out var irClass) || irClass?.Constructors == null)
-                return null;
-
-            List<IRVariable> found = null;
-            foreach (var ctor in irClass.Constructors)
-            {
-                var parameters = ctor?.Implementation?.Parameters;
-                if (parameters == null || parameters.Count != argumentCount) continue;
-                if (found != null) return null;   // more than one of this arity — do not guess
-                found = parameters;
-            }
-
-            return found;
-        }
-
-        /// <summary>
-        /// Coerces one constructor argument, with the same ByRef exemption
-        /// <see cref="CoerceToParameterType"/> documents.
-        /// </summary>
-        private IRValue CoerceToConstructorParameter(IRValue value, List<IRVariable> parameters, int index)
-        {
-            if (parameters == null || index < 0 || index >= parameters.Count) return value;
-
-            var parameter = parameters[index];
-            if (parameter.IsByRef) return value;
-
-            return CoerceToDeclaredType(value, parameter.Type);
         }
 
         /// <summary>
@@ -4599,18 +4566,34 @@ namespace BasicLang.Compiler.IR
 
             // ⛔ A constructor argument needs the same coercion a method argument does —
             // `New Box(7 / 2)` was CS1503 on C#, `MissingMethodException: Box..ctor(Double)` on
-            // MSIL and 3.5 on JavaScript — but unlike a call, the analyzer records NO symbol on a
-            // NewExpressionNode (measured: GetNodeSymbol is null here). The IR class's own
-            // constructors carry the parameter types instead.
-            var ctorParameters = UnambiguousConstructorParameters(className, node.Arguments.Count);
+            // MSIL and 3.5 on JavaScript — and the parameter types come from the constructor the
+            // ANALYZER bound this site to, the same Symbol every call arm reads.
+            //
+            // ⚠ It used to re-derive them from the IR class (`UnambiguousConstructorParameters`).
+            // Reading the analyzer's binding instead means the IR can no longer coerce against a
+            // DIFFERENT constructor than the one the analyzer type-checked, and it carries
+            // IsOptional/DefaultValueExpression, which an IRVariable list does not.
+            //
+            // ⛔ It does NOT fix the declaration-ORDER gap, which is upstream of both: pass 1
+            // (`RegisterDeclarations`) does not pre-register constructors, so with the class
+            // declared AFTER the module that uses it there is no `.ctorN` key when `New Box(…)`
+            // is analyzed — no binding here, and before this change no IR class either. Measured
+            // in that order: `New Box(7 / 2)` still emits `new Box((double)(7) / (double)(2))`
+            // (CS1503) and an omitted Optional is still not filled. `OptionalConstructorTests`
+            // pins both.
+            var ctorSymbol = _semanticAnalyzer.ConstructorBindings.TryGetValue(node, out var bound)
+                ? bound
+                : null;
 
             // Evaluate arguments
             foreach (var arg in node.Arguments)
             {
                 arg.Accept(this);
-                newObj.Arguments.Add(CoerceToConstructorParameter(
-                    _expressionResult, ctorParameters, newObj.Arguments.Count));
+                newObj.Arguments.Add(CoerceToParameterType(
+                    _expressionResult, ctorSymbol, newObj.Arguments.Count));
             }
+
+            AppendOmittedOptionalArguments(newObj.Arguments, null, ctorSymbol);
 
             EmitInstruction(newObj);
             _expressionResult = newObj;

@@ -354,38 +354,9 @@ public class OptionalParameterTests
     // Two shapes this deliberately does NOT fix, pinned so they surface rather than drift.
     // ====================================================================================
 
-    /// <summary>
-    /// ⛔ A CONSTRUCTOR with an omitted Optional is refused by the analyzer, before the IR builder
-    /// ever sees the call — so filling at the call site cannot reach it. Constructors are keyed by
-    /// ARITY (<c>.ctor1</c>, <c>.ctor2</c>) in the type's member table, and <c>New Box(4)</c> looks
-    /// up <c>.ctor1</c>, which does not exist. Teaching that lookup about optionals is a change to
-    /// the member-keying scheme, and <c>UnambiguousConstructorParameters</c> in the IR builder
-    /// selects by arity too — both would have to move together.
-    ///
-    /// <para>This pins the measured refusal so the day someone does that work, this test goes red
-    /// and the constructor case gets its default filled deliberately rather than by surprise.</para>
-    /// </summary>
-    [Test]
-    public void AConstructorWithAnOmittedOptional_IsStillRefusedByTheAnalyzer()
-    {
-        var errors = Analyze("""
-            Class Box
-             Public Sub New(a As Integer, Optional b As Integer = 5)
-              PrintLine("ctor:" & CStr(a) & "," & CStr(b))
-             End Sub
-            End Class
-
-            Module M
-             Sub Main()
-              Dim x As New Box(4)
-             End Sub
-            End Module
-            """);
-
-        Assert.That(errors, Has.Some.Contains(
-            "No constructor for 'Box' takes 1 argument(s). Available constructors take: 2 argument(s)"),
-            "actual: " + string.Join(" | ", errors));
-    }
+    // ⚠ The pin that used to live here — a constructor with an omitted Optional being REFUSED by
+    // the analyzer — is gone because that gap is closed. The shape now works, and
+    // OptionalConstructorTests covers it; this fixture keeps only the call shapes.
 
     /// <summary>
     /// ⛔ <c>Optional ByRef</c> does not work on ANY backend, before or after this change, and is
@@ -422,20 +393,4 @@ public class OptionalParameterTests
             + "what the call site passes cannot make this build:\n" + string.Join("\n", errors));
     }
 
-    // ====================================================================================
-    // Helpers.
-    // ====================================================================================
-
-    /// <summary>Parse + analyze only, returning the analyzer's errors as text.</summary>
-    private static string[] Analyze(string source)
-    {
-        var parser = new Parser(new Lexer(source).Tokenize());
-        var ast = parser.Parse();
-        Assert.That(parser.Errors, Is.Empty,
-            "parse errors:\n" + string.Join("\n", parser.Errors.Select(e => e.Message)));
-
-        var analyzer = new BasicLang.Compiler.SemanticAnalysis.SemanticAnalyzer();
-        analyzer.Analyze(ast);
-        return analyzer.Errors.Select(e => e.ToString()).ToArray();
-    }
 }
