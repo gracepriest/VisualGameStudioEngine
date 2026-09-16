@@ -577,31 +577,187 @@ public class FormCanvasControl : Control
         return new FormCanvasTransform(zoom, pan);
     }
 
+    /// <summary>
+    /// The form itself, drawn the way VB6 draws it: a real window with a title bar and a raised
+    /// frame, its client area dotted with the alignment grid.
+    ///
+    /// <para>⚠ The title bar sits ABOVE the surface rectangle because the form's coordinate space is
+    /// its CLIENT area — <c>Width</c>/<c>Height</c> are the client size, exactly as WinForms'
+    /// <c>ClientSize</c> is. Drawing it inside would make every control's Y look 18px wrong.</para>
+    /// </summary>
     private void DrawSurface(DrawingContext context, FormDocument document)
     {
         var size = FormCanvasTransform.SurfaceSize(document);
         var surface = _transform.ToCanvas(new Rect(0, 0, size.Width, size.Height));
-        context.DrawRectangle(SurfaceBrush, SurfacePen, surface);
 
-        // ⛔ The grid, UNDER the controls. Without it a web page is a blank rectangle with no clue
-        // where a drop will land — the cells are the only thing on screen that says what a
-        // .blwebform's geometry even means, because its controls are placed by cell and not by
-        // pixel. Drawn faintly: they are guides, not content.
+        // ⚠ WinForms only. A .blwebform is a PAGE — it has no title bar, no window frame and no
+        // alignment grid, and dressing one up as a window would claim a shape the browser will
+        // never give it.
+        var isWindow = document.Target == FormTarget.WinForms;
+
+        if (isWindow)
+        {
+            var title = new Rect(
+                surface.X, Math.Max(0, surface.Y - TitleBarHeight), surface.Width, TitleBarHeight);
+
+            context.FillRectangle(TitleBarBrush, title);
+            Bevel(context, new Rect(
+                title.X - 2, title.Y - 2, title.Width + 4, surface.Height + title.Height + 4), raised: true);
+
+            var captionRight = DrawTitleBarButtons(context, title);
+
+            var caption = document.Text ?? document.Name;
+            if (!string.IsNullOrEmpty(caption) && captionRight > title.X + 8)
+            {
+                // ⚠ Clipped to where the BUTTONS start, not to the title bar. A long caption
+                // running under the close box is the one detail that instantly reads as "not a
+                // real window".
+                using (context.PushClip(new Rect(
+                    title.X, title.Y, captionRight - title.X, title.Height)))
+                {
+                    context.DrawText(Text(caption, CaptionBrush), new Point(title.X + 4, title.Y + 2));
+                }
+            }
+        }
+
+        context.FillRectangle(SurfaceBrush, surface);
+
+        if (isWindow)
+        {
+            DrawAlignmentGrid(context, size, surface);
+        }
+
+        // ⛔ The web cell guides, UNDER the controls. Without them a page is a blank rectangle with
+        // no clue where a drop will land — the cells are the only thing on screen that says what a
+        // .blwebform's geometry even means, because its controls are placed by cell, not by pixel.
         if (document.Target == FormTarget.Web && document.Layout?.Kind == FormLayoutKind.Grid)
         {
+            context.DrawRectangle(null, ShadowPen, surface);
             foreach (var (_, _, cell) in FormGridLayout.Cells(document.Layout, size))
             {
                 context.DrawRectangle(null, GridPen, _transform.ToCanvas(cell));
             }
+
+            var pageCaption = document.Text ?? document.Name;
+            if (!string.IsNullOrEmpty(pageCaption))
+            {
+                context.DrawText(
+                    Text(pageCaption, LabelBrush),
+                    new Point(surface.X + 4, Math.Max(0, surface.Y - 16)));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Minimise, maximise and close — three raised boxes at the right of the title bar.
+    ///
+    /// <para>⚠ Decoration, and the ONLY decoration on this canvas that depicts something the user
+    /// cannot change. They are not hit-tested and do nothing: a close box that closed the designer
+    /// would be a trap, and one that closed the form being designed means nothing at design time.
+    /// They are here because a title bar without them does not read as a window.</para>
+    ///
+    /// <para>Returns the x where the buttons begin, so the caption can be clipped short of them.</para>
+    /// </summary>
+    private static double DrawTitleBarButtons(DrawingContext context, Rect title)
+    {
+        const double side = 14;
+        const double gap = 2;
+
+        // Nothing at all rather than a smear: a narrow form gets its caption and no buttons.
+        if (title.Width < (side * 3) + (gap * 2) + 24)
+        {
+            return title.Right;
         }
 
-        var caption = document.Text ?? document.Name;
-        if (!string.IsNullOrEmpty(caption))
+        var top = title.Y + ((title.Height - side) / 2);
+        var close = new Rect(title.Right - 2 - side, top, side, side);
+        var maximise = new Rect(close.X - gap - side, top, side, side);
+        var minimise = new Rect(maximise.X - gap - side, top, side, side);
+
+        foreach (var box in new[] { minimise, maximise, close })
         {
-            context.DrawText(
-                Text(caption, CaptionBrush),
-                new Point(surface.X + 6, Math.Max(0, surface.Y - 18)));
+            context.FillRectangle(SurfaceBrush, box);
+            Bevel(context, box, raised: true);
         }
+
+        // Minimise: a bar sitting on the floor of the box.
+        context.DrawLine(GlyphPen,
+            new Point(minimise.X + 3, minimise.Bottom - 4),
+            new Point(minimise.Right - 4, minimise.Bottom - 4));
+
+        // Maximise: a rectangle with a doubled top edge, which is how Win95 drew a title bar.
+        var pane = new Rect(maximise.X + 3, maximise.Y + 3, side - 7, side - 7);
+        context.DrawRectangle(null, GlyphPen, pane);
+        context.DrawLine(GlyphPen, new Point(pane.X, pane.Y + 1), new Point(pane.Right, pane.Y + 1));
+
+        // Close: an X, inset so it does not touch the bevel.
+        context.DrawLine(GlyphPen,
+            new Point(close.X + 4, close.Y + 4), new Point(close.Right - 4, close.Bottom - 4));
+        context.DrawLine(GlyphPen,
+            new Point(close.Right - 4, close.Y + 4), new Point(close.X + 4, close.Bottom - 4));
+
+        return minimise.X - 4;
+    }
+
+    /// <summary>
+    /// VB6's alignment dots: one pixel every <see cref="GridStep"/> form units.
+    ///
+    /// <para>⚠ Skipped once the spacing falls below about 4 canvas pixels. Zoomed out, dots that
+    /// close stop reading as a grid and turn the form face into grey noise — and there are
+    /// thousands of them, so it is the one thing here that could cost a frame.</para>
+    /// </summary>
+    private void DrawAlignmentGrid(DrawingContext context, Size size, Rect surface)
+    {
+        var step = GridStep * _transform.Zoom;
+        if (step < 4)
+        {
+            return;
+        }
+
+        using (context.PushClip(surface))
+        {
+            for (var x = GridStep; x < size.Width; x += GridStep)
+            {
+                for (var y = GridStep; y < size.Height; y += GridStep)
+                {
+                    var dot = _transform.ToCanvas(new Rect(x, y, 1, 1)).TopLeft;
+                    context.FillRectangle(GridDotBrush, new Rect(dot.X, dot.Y, 1, 1));
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// A Win95 bevel: two lit edges top-left, two unlit bottom-right, swapped for sunken.
+    ///
+    /// <para>This one helper is every piece of chrome on the canvas — a raised Button, a sunken
+    /// TextBox, a form frame. Drawn as lines rather than nested rectangles so the corners meet the
+    /// way the real thing does.</para>
+    /// </summary>
+    private static void Bevel(DrawingContext context, Rect r, bool raised)
+    {
+        if (r.Width < 4 || r.Height < 4)
+        {
+            return;
+        }
+
+        var outerTopLeft = raised ? HighlightPen : ShadowPen;
+        var innerTopLeft = raised ? FacePen : DarkShadowPen;
+        var outerBottomRight = raised ? DarkShadowPen : HighlightPen;
+        var innerBottomRight = raised ? ShadowPen : FacePen;
+
+        // Outer ring.
+        context.DrawLine(outerTopLeft, r.TopLeft, new Point(r.Right - 1, r.Y));
+        context.DrawLine(outerTopLeft, r.TopLeft, new Point(r.X, r.Bottom - 1));
+        context.DrawLine(outerBottomRight, new Point(r.X, r.Bottom - 1), new Point(r.Right - 1, r.Bottom - 1));
+        context.DrawLine(outerBottomRight, new Point(r.Right - 1, r.Y), new Point(r.Right - 1, r.Bottom - 1));
+
+        // Inner ring.
+        var i = new Rect(r.X + 1, r.Y + 1, r.Width - 2, r.Height - 2);
+        context.DrawLine(innerTopLeft, i.TopLeft, new Point(i.Right - 1, i.Y));
+        context.DrawLine(innerTopLeft, i.TopLeft, new Point(i.X, i.Bottom - 1));
+        context.DrawLine(innerBottomRight, new Point(i.X, i.Bottom - 1), new Point(i.Right - 1, i.Bottom - 1));
+        context.DrawLine(innerBottomRight, new Point(i.Right - 1, i.Y), new Point(i.Right - 1, i.Bottom - 1));
     }
 
     /// <summary>
@@ -619,8 +775,9 @@ public class FormCanvasControl : Control
     /// </summary>
     private void DrawControl(DrawingContext context, FormControl control, Rect bounds)
     {
-        var selected = ReferenceEquals(control, SelectedControl);
-        var pen = selected ? SelectionPen : ControlPen;
+        // ⚠ No selected/unselected variant here, deliberately. VB6 marks a selection with its eight
+        // handles and NOTHING else — a control does not change colour or gain an outline when you
+        // click it. DrawHandles, called after every control is painted, is the whole indication.
         var schematic = FormControlCatalog.Find(control.Kind)?.Schematic ?? FormSchematic.Input;
 
         // The control's own Text if it has one, else its id — a box with no label is unidentifiable
@@ -637,16 +794,18 @@ public class FormCanvasControl : Control
         switch (schematic)
         {
             case FormSchematic.Text:
-                // No box: a Label is words on the form, not a widget with a face.
+                // No box and no fill: a Label is words ON the form face, which is why it is the one
+                // control whose background is whatever it sits on.
                 break;
 
             case FormSchematic.Button:
-                context.DrawRectangle(ButtonBrush, pen, bounds, 3, 3);
+                context.FillRectangle(SurfaceBrush, bounds);
+                Bevel(context, bounds, raised: true);
                 if (!tooSmallForText && !string.IsNullOrEmpty(label))
                 {
                     var caption = Text(label, LabelBrush);
                     labelOrigin = new Point(
-                        bounds.X + Math.Max(4, (bounds.Width - caption.Width) / 2),
+                        bounds.X + Math.Max(3, (bounds.Width - caption.Width) / 2),
                         bounds.Y + Math.Max(2, (bounds.Height - caption.Height) / 2));
                 }
 
@@ -655,22 +814,25 @@ public class FormCanvasControl : Control
             case FormSchematic.Check:
             case FormSchematic.Radio:
             {
-                // The glyph is vertically centred and sized to the box, so a tall CheckBox does not
-                // get a tick floating at its top edge.
+                // The glyph is vertically centred and clamped to the box, so a tall CheckBox does
+                // not get its tick floating at the top edge.
                 var side = Math.Min(GlyphSide, Math.Min(bounds.Width, bounds.Height) - 2);
-                if (side > 2)
+                if (side > 3)
                 {
                     var glyph = new Rect(
-                        bounds.X + 2, bounds.Y + ((bounds.Height - side) / 2), side, side);
+                        bounds.X + 1, bounds.Y + ((bounds.Height - side) / 2), side, side);
 
                     if (schematic == FormSchematic.Radio)
                     {
-                        context.DrawEllipse(
-                            ControlBrush, pen, glyph.Center, glyph.Width / 2, glyph.Height / 2);
+                        // A radio is round, so it gets a drawn ring rather than a bevel — two arcs
+                        // would be the faithful thing and are not worth the geometry here.
+                        context.DrawEllipse(WindowBrush, ShadowPen, glyph.Center,
+                            glyph.Width / 2, glyph.Height / 2);
                     }
                     else
                     {
-                        context.DrawRectangle(ControlBrush, pen, glyph);
+                        context.FillRectangle(WindowBrush, glyph);
+                        Bevel(context, glyph, raised: false);
                     }
 
                     labelOrigin = new Point(glyph.Right + 4, bounds.Y + 2);
@@ -681,13 +843,24 @@ public class FormCanvasControl : Control
 
             case FormSchematic.Dropdown:
             {
-                context.DrawRectangle(ControlBrush, pen, bounds);
-                var cx = bounds.Right - 9;
-                var cy = bounds.Center.Y;
-                if (bounds.Width > 24)
+                context.FillRectangle(WindowBrush, bounds);
+                Bevel(context, bounds, raised: false);
+
+                // The drop button: a raised square on the right with a filled triangle, the way
+                // every Win95 combo has one.
+                var buttonSide = Math.Min(bounds.Height - 4, 16);
+                if (buttonSide > 6 && bounds.Width > buttonSide + 8)
                 {
-                    context.DrawLine(pen, new Point(cx - 3, cy - 2), new Point(cx, cy + 2));
-                    context.DrawLine(pen, new Point(cx, cy + 2), new Point(cx + 3, cy - 2));
+                    var button = new Rect(
+                        bounds.Right - buttonSide - 2, bounds.Y + 2, buttonSide, buttonSide);
+                    context.FillRectangle(SurfaceBrush, button);
+                    Bevel(context, button, raised: true);
+
+                    var cx = button.Center.X;
+                    var cy = button.Center.Y;
+                    context.DrawLine(DarkShadowPen, new Point(cx - 3, cy - 1), new Point(cx + 3, cy - 1));
+                    context.DrawLine(DarkShadowPen, new Point(cx - 2, cy), new Point(cx + 2, cy));
+                    context.DrawLine(DarkShadowPen, new Point(cx - 1, cy + 1), new Point(cx + 1, cy + 1));
                 }
 
                 break;
@@ -695,33 +868,56 @@ public class FormCanvasControl : Control
 
             case FormSchematic.List:
             {
-                context.DrawRectangle(ControlBrush, pen, bounds);
+                context.FillRectangle(WindowBrush, bounds);
+                Bevel(context, bounds, raised: false);
                 for (var y = bounds.Y + 18; y < bounds.Bottom - 4; y += 14)
                 {
-                    context.DrawLine(RowPen, new Point(bounds.X + 4, y), new Point(bounds.Right - 4, y));
+                    context.DrawLine(RowPen, new Point(bounds.X + 3, y), new Point(bounds.Right - 3, y));
                 }
 
                 break;
             }
 
             case FormSchematic.Container:
-                // Dashed: it holds other controls, and a solid fill would bury them.
-                context.DrawRectangle(null, selected ? SelectionPen : ContainerPen, bounds);
+                // Face-coloured with a sunken edge, like a Win95 Panel. It holds other controls, so
+                // the fill matches the form rather than hiding them under a different tone.
+                context.FillRectangle(SurfaceBrush, bounds);
+                Bevel(context, bounds, raised: false);
                 break;
 
             case FormSchematic.Group:
-                context.DrawRectangle(null, pen, new Rect(
-                    bounds.X, bounds.Y + 7, bounds.Width, Math.Max(1, bounds.Height - 7)));
+            {
+                // An etched frame starting below the caption, with the caption sitting IN the gap —
+                // the GroupBox shape everyone recognises.
+                var frame = new Rect(
+                    bounds.X, bounds.Y + 6, bounds.Width, Math.Max(4, bounds.Height - 6));
+                context.DrawRectangle(null, ShadowPen, frame);
+                context.DrawRectangle(null, HighlightPen,
+                    new Rect(frame.X + 1, frame.Y + 1, Math.Max(1, frame.Width - 1), Math.Max(1, frame.Height - 1)));
+
+                if (!tooSmallForText && !string.IsNullOrEmpty(label))
+                {
+                    var caption = Text(label, LabelBrush);
+                    context.FillRectangle(SurfaceBrush,
+                        new Rect(bounds.X + 6, bounds.Y, caption.Width + 4, 12));
+                }
+
                 break;
+            }
 
             case FormSchematic.Image:
-                context.DrawRectangle(ControlBrush, pen, bounds);
-                context.DrawLine(RowPen, bounds.TopLeft, bounds.BottomRight);
-                context.DrawLine(RowPen, bounds.TopRight, bounds.BottomLeft);
+                context.FillRectangle(WindowBrush, bounds);
+                Bevel(context, bounds, raised: false);
+                context.DrawLine(RowPen, new Point(bounds.X + 2, bounds.Y + 2),
+                    new Point(bounds.Right - 2, bounds.Bottom - 2));
+                context.DrawLine(RowPen, new Point(bounds.Right - 2, bounds.Y + 2),
+                    new Point(bounds.X + 2, bounds.Bottom - 2));
                 break;
 
             default:
-                context.DrawRectangle(ControlBrush, pen, bounds);
+                // A TextBox and anything text-entry shaped: white client, sunken edge.
+                context.FillRectangle(WindowBrush, bounds);
+                Bevel(context, bounds, raised: false);
                 break;
         }
 
@@ -744,28 +940,58 @@ public class FormCanvasControl : Control
         12,
         brush);
 
-    // Deliberately flat and obviously diagrammatic — see the "schematic, not a preview" note above.
-    private static readonly IBrush SurfaceBrush = new SolidColorBrush(Color.FromRgb(0x2D, 0x2D, 0x30));
-    private static readonly IPen SurfacePen = new Pen(new SolidColorBrush(Color.FromRgb(0x6A, 0x6A, 0x6F)));
-    private static readonly IBrush ControlBrush = new SolidColorBrush(Color.FromRgb(0x3E, 0x3E, 0x42));
-    private static readonly IPen ControlPen = new Pen(new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x8F)));
-    private static readonly IPen SelectionPen = new Pen(new SolidColorBrush(Color.FromRgb(0x00, 0x7A, 0xCC)), 2);
-    private static readonly IBrush LabelBrush = new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0));
+    // ── The classic Win95/98 system palette, which is what a VB6 form designer IS ────────────
+    //
+    // ⚠ Deliberately NOT theme-aware, and that matches VB6: the thing being designed is a Windows
+    // window, so it keeps window colours whatever colour the IDE around it is. The canvas MARGIN
+    // follows the IDE theme; the form does not.
+    //
+    // ⛔ Still a schematic (D-WYSIWYG). Classic chrome makes the kinds recognisable at a glance — a
+    // raised Button, a sunken TextBox — but nothing here consults the user's real theme, fonts, DPI
+    // or control styles, and none of it runs. F5 to the real target is still the only renderer.
+    private static readonly IBrush SurfaceBrush = new SolidColorBrush(Color.FromRgb(0xD4, 0xD0, 0xC8));
+    private static readonly IBrush WindowBrush = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF));
+    private static readonly IBrush TitleBarBrush = new SolidColorBrush(Color.FromRgb(0x00, 0x00, 0x80));
+    private static readonly IBrush LabelBrush = new SolidColorBrush(Color.FromRgb(0x00, 0x00, 0x00));
+    private static readonly IBrush CaptionBrush = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF));
 
-    // Per-schematic additions. A Button reads as raised, a Panel as a dashed hull that does not bury
-    // its children, and the faint rules inside a ListBox/PictureBox stay quieter than the border.
-    private static readonly IBrush ButtonBrush = new SolidColorBrush(Color.FromRgb(0x4A, 0x4A, 0x50));
-    private static readonly IPen ContainerPen = new Pen(
-        new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x8F)), dashStyle: DashStyle.Dash);
-    private static readonly IPen RowPen = new Pen(new SolidColorBrush(Color.FromRgb(0x5A, 0x5A, 0x62)));
+    // The four edge tones every piece of Win95 chrome is built from: white and face on the lit
+    // edges, shadow and dark shadow on the unlit ones. Raised and sunken are the same four pens in
+    // the opposite order, which is why Bevel takes a bool rather than having two copies.
+    private static readonly IPen HighlightPen = new Pen(new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF)));
+    private static readonly IPen FacePen = new Pen(new SolidColorBrush(Color.FromRgb(0xD4, 0xD0, 0xC8)));
+    private static readonly IPen ShadowPen = new Pen(new SolidColorBrush(Color.FromRgb(0x80, 0x80, 0x80)));
+    private static readonly IPen DarkShadowPen = new Pen(new SolidColorBrush(Color.FromRgb(0x40, 0x40, 0x40)));
+
+    /// <summary>Black, for the glyphs inside title-bar buttons. Chrome tones are too pale to read at 14px.</summary>
+    private static readonly IPen GlyphPen = new Pen(new SolidColorBrush(Color.FromRgb(0x00, 0x00, 0x00)));
+
+    /// <summary>The alignment grid's dots — VB6's single most recognisable detail.</summary>
+    private static readonly IBrush GridDotBrush = new SolidColorBrush(Color.FromRgb(0x70, 0x70, 0x70));
+
+    /// <summary>Web cell guides. Not a VB6 idea, and deliberately still diagrammatic.</summary>
+    private static readonly IPen GridPen = new Pen(
+        new SolidColorBrush(Color.FromRgb(0x90, 0x90, 0x90)), dashStyle: DashStyle.Dash);
+
+    private static readonly IPen RowPen = new Pen(new SolidColorBrush(Color.FromRgb(0xC0, 0xC0, 0xC0)));
+
+    // ⚠ VB6 marks a selection with HANDLES ALONE — no outline. Solid navy squares, which read
+    // against the form face and a white control interior alike.
+    private static readonly IBrush HandleBrush = new SolidColorBrush(Color.FromRgb(0x00, 0x00, 0x80));
+    private static readonly IPen HandlePen = new Pen(new SolidColorBrush(Color.FromRgb(0x00, 0x00, 0x00)));
 
     /// <summary>Side of a CheckBox tick or RadioButton bullet, before it is clamped to the bounds.</summary>
-    private const double GlyphSide = 12;
-    private static readonly IBrush CaptionBrush = new SolidColorBrush(Color.FromRgb(0xB0, 0xB0, 0xB8));
-    private static readonly IPen GridPen = new Pen(
-        new SolidColorBrush(Color.FromRgb(0x50, 0x50, 0x58)), dashStyle: DashStyle.Dash);
-    private static readonly IBrush HandleBrush = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF));
-    private static readonly IPen HandlePen = new Pen(new SolidColorBrush(Color.FromRgb(0x00, 0x7A, 0xCC)));
+    private const double GlyphSide = 13;
+
+    /// <summary>Form units between alignment dots — VB6's default grid.</summary>
+    private const double GridStep = 8;
+
+    /// <summary>
+    /// Canvas height of the drawn title bar. FIXED, not scaled with the form: it is window chrome
+    /// rather than part of the form's own coordinate space, and a scaled one becomes an illegible
+    /// smear at low zoom.
+    /// </summary>
+    private const double TitleBarHeight = 18;
 
     // One each, for the life of the type — see UpdateCursor.
     private static readonly Cursor ArrowCursor = new(StandardCursorType.Arrow);
