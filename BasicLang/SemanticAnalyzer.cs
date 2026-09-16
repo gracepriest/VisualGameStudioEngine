@@ -4464,6 +4464,36 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
         }
 
+        /// <summary>
+        /// "Already defined" — naming WHAT it collides with, and WHERE.
+        ///
+        /// <para>⚠ The bare message cost real debugging time: a class with a field <c>tag</c> and a
+        /// function <c>Tag</c> reported only "Function 'Tag' is already defined in this scope" at the
+        /// FUNCTION's line, so the field eleven lines above — differing only in case — was invisible,
+        /// and the error read like a cross-class collision. BasicLang is case-insensitive, so those
+        /// are one identifier; when that is what happened, the message now says so outright.</para>
+        /// </summary>
+        private static string AlreadyDefinedMessage(string kindWord, string name, Symbol existing)
+        {
+            if (existing == null)
+            {
+                return $"{kindWord} '{name}' is already defined in this scope";
+            }
+
+            var where = existing.Line > 0 ? $" at line {existing.Line}" : "";
+            var collidesWith = $"the {existing.Kind} '{existing.Name}'{where}";
+
+            // Only worth saying when the spellings actually differ — otherwise it is noise on an
+            // ordinary duplicate.
+            var caseOnly = !string.Equals(existing.Name, name, StringComparison.Ordinal)
+                && string.Equals(existing.Name, name, StringComparison.OrdinalIgnoreCase);
+            var note = caseOnly
+                ? $" Names are case-insensitive, so '{existing.Name}' and '{name}' are the same identifier."
+                : string.Empty;
+
+            return $"{kindWord} '{name}' is already defined in this scope — it collides with {collidesWith}.{note}";
+        }
+
         private void RegisterFunctionSignature(FunctionNode node)
         {
             // Get return type
@@ -4928,7 +4958,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
                 else
                 {
-                    Error($"Function '{node.Name}' is already defined in this scope", node.Line, node.Column);
+                    Error(AlreadyDefinedMessage("Function", node.Name, existing), node.Line, node.Column);
                     symbol = new Symbol(node.Name, SymbolKind.Function, null, node.Line, node.Column);
                 }
             }
@@ -5017,7 +5047,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
                 else
                 {
-                    Error($"Subroutine '{node.Name}' is already defined in this scope", node.Line, node.Column);
+                    Error(AlreadyDefinedMessage("Subroutine", node.Name, existing), node.Line, node.Column);
                     symbol = new Symbol(node.Name, SymbolKind.Subroutine, _typeManager.VoidType, node.Line, node.Column);
                 }
             }
