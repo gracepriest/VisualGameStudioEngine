@@ -99,6 +99,75 @@ public partial class FormPropertyGridViewModel : ObservableObject
 
     partial void OnSelectedControlChanged(FormControl? value) => Rebuild();
 
+    /// <summary>
+    /// The rows VS shows for EVERY control, which this grid had none of: its name, where it is, how
+    /// big it is, and its tab order.
+    ///
+    /// <para>⛔ These are not catalog properties — they are fields on the control and its geometry,
+    /// so the catalog cannot supply them and adding them there would invent attributes the document
+    /// does not have. Without them the grid could style a control but not place one: there was no
+    /// way to type an exact X, and dragging is the wrong tool for "line these three up at 96".</para>
+    ///
+    /// <para>⚠ Name is READ-ONLY, deliberately and visibly. The id names the generated field, so a
+    /// rename has to rewrite the user's designer region and check the new name is unique and legal;
+    /// until that exists, a frozen row says so where an editable one would silently produce a
+    /// document that no longer compiles. The Degraded tier already renders exactly this shape.</para>
+    /// </summary>
+    private void AddIntrinsicRows(FormControl control)
+    {
+        void Changed() => Edited?.Invoke(this, EventArgs.Empty);
+
+        Rows.Add(new FormPropertyRow(
+            "Name", FormPropertyType.String,
+            () => control.Id,
+            write: null,
+            Changed,
+            "The id names the generated field. Renaming is not supported here yet."));
+
+        // ⚠ Geometry rows follow the shape the control actually HAS. A web control lives in a grid
+        // cell and has no X/Y at all; offering them would let the user set a number the emitter
+        // cannot use — the same designer/runtime divergence D9 exists to prevent.
+        switch (control.Geometry)
+        {
+            case PixelGeometry pixel:
+                Rows.Add(IntRow("X", () => pixel.X, v => pixel.X = v, Changed));
+                Rows.Add(IntRow("Y", () => pixel.Y, v => pixel.Y = v, Changed));
+                Rows.Add(IntRow("Width", () => pixel.Width, v => pixel.Width = Math.Max(1, v), Changed));
+                Rows.Add(IntRow("Height", () => pixel.Height, v => pixel.Height = Math.Max(1, v), Changed));
+                break;
+
+            case GridGeometry grid:
+                Rows.Add(IntRow("Col", () => grid.Col, v => grid.Col = Math.Max(0, v), Changed));
+                Rows.Add(IntRow("Row", () => grid.Row, v => grid.Row = Math.Max(0, v), Changed));
+                break;
+        }
+
+        Rows.Add(IntRow(
+            "TabIndex", () => control.TabIndex, v => control.TabIndex = Math.Max(0, v), Changed));
+    }
+
+    /// <summary>
+    /// An intrinsic Int row. The accessors read and write the live model, so the canvas redraws from
+    /// the same object the grid edited rather than from a copy that has to be pushed back.
+    /// </summary>
+    private static FormPropertyRow IntRow(
+        string name, Func<int> read, Action<int> write, Action changed) =>
+        new(name,
+            FormPropertyType.Int,
+            () => read().ToString(),
+            text =>
+            {
+                // ⚠ An unparseable value is IGNORED rather than coerced to zero. The numeric editor
+                // should not produce one, but a binding can push mid-edit text — and snapping a
+                // control to the origin because the user was halfway through typing "1" of "128" is
+                // the kind of thing that makes a designer feel haunted.
+                if (int.TryParse(text, out var parsed))
+                {
+                    write(parsed);
+                }
+            },
+            changed);
+
     private void Rebuild()
     {
         Rows.Clear();
@@ -109,6 +178,8 @@ public partial class FormPropertyGridViewModel : ObservableObject
         if (control != null && definition != null)
         {
             var target = _file?.Model.Target ?? FormTarget.Web;
+
+            AddIntrinsicRows(control);
 
             foreach (var property in definition.Properties)
             {

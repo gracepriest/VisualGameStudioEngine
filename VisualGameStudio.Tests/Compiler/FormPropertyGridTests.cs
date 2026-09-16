@@ -56,10 +56,143 @@ public class FormPropertyGridTests
         // already set, and no way to add one that is not.
         var grid = GridOver(WebForm, "chk");
 
-        var expected = FormControlCatalog.Find("CheckBox")!.Properties.Select(p => p.Name);
+        var expected = FormControlCatalog.Find("CheckBox")!.Properties.Select(p => p.Name).ToList();
 
-        Assert.That(grid.Rows.Select(r => r.Name), Is.EqualTo(expected),
+        // ⚠ Compared over the CATALOG rows only. The grid now also shows the intrinsic rows VS puts
+        // on every control — Name, Col/Row or X/Y/Width/Height, TabIndex — which are fields on the
+        // control and its geometry rather than catalog properties. This test is about where the
+        // CATALOG rows come from, and that is unchanged: all of them, in catalog order, whether or
+        // not the document sets them. The intrinsic rows have their own test below.
+        var catalogRows = grid.Rows.Select(r => r.Name).Where(expected.Contains);
+
+        Assert.That(catalogRows, Is.EqualTo(expected),
             "every catalog property, in catalog order — including the ones the document omits");
+    }
+
+    /// <summary>
+    /// ⛔ The rows VS shows for every control. Without them the grid can style a control but not
+    /// place one — there is no way to type an exact X, and dragging is the wrong tool for
+    /// "line these three up at 96".
+    /// </summary>
+    private const string PlacedWebForm = """
+        <WebForm Name="F" Version="1">
+          <Layout Kind="Grid" Cols="1fr,1fr" Rows="auto"/>
+          <Controls>
+            <CheckBox Id="chk" Col="1" Row="0" TabIndex="0" Text="Remember"/>
+          </Controls>
+        </WebForm>
+        """;
+
+    private const string WinFormsForm = """
+        <Form Name="F" Version="1" Width="400" Height="300" Text="F">
+          <Controls>
+            <CheckBox Id="chk" X="16" Y="24" Width="120" Height="20" TabIndex="0" Text="Remember"/>
+          </Controls>
+        </Form>
+        """;
+
+    [Test]
+    public void Rows_IncludeTheIntrinsicOnes_ShapedToTheGeometryTheControlHas()
+    {
+        var web = Read(PlacedWebForm);
+        var webGrid = new FormPropertyGridViewModel();
+        webGrid.Load(web);
+        webGrid.SelectedControl = web.Model.FindById("chk");
+        var webNames = webGrid.Rows.Select(r => r.Name).ToList();
+
+        var winForms = FormDocumentReader.Read("F.blform", WinFormsForm);
+        var winGrid = new FormPropertyGridViewModel();
+        winGrid.Load(winForms);
+        winGrid.SelectedControl = winForms.Model.FindById("chk");
+        var winNames = winGrid.Rows.Select(r => r.Name).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(webNames[0], Is.EqualTo("Name"), "identity first, the way VS orders them");
+            Assert.That(webNames, Does.Contain("TabIndex"));
+
+            // ⛔ A web control lives in a grid CELL and has no X/Y at all; a WinForms one has pixels
+            // and no cell. Offering the wrong pair would let the user set a number the emitter
+            // cannot use — the divergence D9 exists to prevent.
+            Assert.That(webNames, Does.Contain("Col").And.Contains("Row"));
+            Assert.That(webNames, Does.Not.Contain("X").And.Not.Contains("Width"));
+
+            Assert.That(winNames, Does.Contain("X").And.Contains("Y")
+                .And.Contains("Width").And.Contains("Height"));
+            Assert.That(winNames, Does.Not.Contain("Col").And.Not.Contains("Row"));
+        });
+    }
+
+    /// <summary>
+    /// ⚠ A control the document never placed has NO geometry, and the grid offers none rather than
+    /// inventing one. Showing an editable Col on it would write an attribute the user never asked
+    /// for the first time a binding pushed a value.
+    /// </summary>
+    [Test]
+    public void Rows_OfferNoGeometry_ForAControlTheDocumentNeverPlaced()
+    {
+        var grid = GridOver(WebForm, "chk");
+        var names = grid.Rows.Select(r => r.Name).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(names, Does.Contain("Name").And.Contains("TabIndex"));
+            Assert.That(names, Does.Not.Contain("Col").And.Not.Contains("X"));
+        });
+    }
+
+    [Test]
+    public void TheNameRow_IsFrozen_BecauseRenamingWouldRewriteTheGeneratedField()
+    {
+        var grid = GridOver(WebForm, "chk");
+        var name = grid.Rows.Single(r => r.Name == "Name");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(name.RawValue, Is.EqualTo("chk"), "it shows the control's id");
+            Assert.That(name.IsFrozen, Is.True,
+                "an editable Name would silently produce a document whose generated field no " +
+                "longer matches the code the user wrote against it");
+            Assert.That(name.FrozenReason, Is.Not.Null.And.Not.Empty,
+                "a frozen row must say WHY — that is the whole point of the tier");
+        });
+    }
+
+    [Test]
+    public void AnIntrinsicRow_WritesThroughToTheModel_AndReportsTheEdit()
+    {
+        var grid = GridOver(WebForm, "chk");
+        var edits = 0;
+        grid.Edited += (_, _) => edits++;
+
+        var tabIndex = grid.Rows.Single(r => r.Name == "TabIndex");
+        tabIndex.IntValue = 7;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grid.SelectedControl!.TabIndex, Is.EqualTo(7),
+                "the row writes the live model, not a copy the canvas never sees");
+            Assert.That(edits, Is.EqualTo(1), "and tells the host so the document is written");
+        });
+    }
+
+    [Test]
+    public void AnIntrinsicRow_IgnoresAnUnparseableValue_RatherThanSnappingToZero()
+    {
+        var file = FormDocumentReader.Read("F.blform", WinFormsForm);
+        var grid = new FormPropertyGridViewModel();
+        grid.Load(file);
+        grid.SelectedControl = file.Model.FindById("chk");
+
+        var x = grid.Rows.Single(r => r.Name == "X");
+        x.IntValue = 96;
+
+        // A binding can push mid-edit text; coercing it to 0 would move the control across the form
+        // while the user was still typing.
+        x.StringValue = "not a number";
+
+        Assert.That(((PixelGeometry)grid.SelectedControl!.Geometry!).X, Is.EqualTo(96),
+            "an unparseable value left the model where it was");
     }
 
     [Test]
