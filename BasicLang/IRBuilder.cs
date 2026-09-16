@@ -3216,6 +3216,89 @@ namespace BasicLang.Compiler.IR
         }
 
         /// <summary>
+        /// Coerces one ARGUMENT to the declared type of the parameter it fills.
+        ///
+        /// <para>⛔ Measured: <c>Take(7 / 2)</c> where the parameter is Integer was <b>CS1503</b>
+        /// on C# (does not build), <c>MissingMethodException: Take(Double)</c> on MSIL — the call
+        /// site spells its signature from the ARGUMENT's type — and <c>3.5</c> on JavaScript. Same
+        /// four backends, same split as the return and store cases; C++ alone was right.</para>
+        ///
+        /// <para>⚠ <b>ByRef is skipped.</b> A coerced argument is a NEW value, so a
+        /// <c>ByRef</c> parameter would write back into a temporary and the caller's variable
+        /// would never change — trading a build error for a silently dropped mutation. An index
+        /// past the parameter list (an omitted Optional) has no declared type to read at all.</para>
+        ///
+        /// <para>⛔ There is deliberately NO ParamArray clause, though one was written here first.
+        /// <c>ParamArray</c> does not parse in either spelling — <c>ParamArray xs() As Integer</c>
+        /// and <c>ParamArray xs As Integer()</c> are both syntax errors — so the clause could not
+        /// be tested; and it would be redundant even if it could, because an array-typed parameter
+        /// is already rejected by <see cref="IsFoldableNumeric"/>.</para>
+        ///
+        /// <para>The callee's parameters come from the symbol the analyzer ALREADY resolved for
+        /// this call — the same list both loops read <c>IsByRef</c> from. No overload selection is
+        /// re-done here; if the analyzer picked an overload, this coerces to that overload's
+        /// parameter, which is also what makes the emitted C# re-select the same one.</para>
+        /// </summary>
+        private IRValue CoerceToParameterType(IRValue value, Symbol callee, int index)
+        {
+            var parameters = callee?.Parameters;
+            if (parameters == null || index < 0 || index >= parameters.Count) return value;
+
+            var parameter = parameters[index];
+            if (parameter.IsByRef) return value;
+
+            return CoerceToDeclaredType(value, parameter.Type);
+        }
+
+        /// <summary>
+        /// The parameter list of the ONLY constructor of <paramref name="className"/> that takes
+        /// <paramref name="argumentCount"/> arguments, or null when that does not identify one.
+        ///
+        /// <para>⚠ This is deliberately NOT overload resolution. Where arity alone leaves a
+        /// choice — two constructors of the same length, differing only in parameter types — the
+        /// answer is null and the arguments keep exactly what they did before this coercion
+        /// existed.</para>
+        ///
+        /// <para>⛔ That ambiguity branch is UNREACHABLE today, and is kept anyway. Measured: the
+        /// analyzer does not resolve constructor overloads at all — it binds <c>New Box(3)</c> to
+        /// the LAST declared constructor and then rejects the argument, so a same-arity pair never
+        /// reaches the IR builder. It is kept because it makes this function do NOTHING in that
+        /// case: unlike a speculative arm that ACTS on an untested path, a fail-safe one cannot
+        /// produce a wrong answer if the front end ever learns constructor overloads.</para>
+        /// </summary>
+        private List<IRVariable> UnambiguousConstructorParameters(string className, int argumentCount)
+        {
+            if (string.IsNullOrEmpty(className) || _module?.Classes == null) return null;
+            if (!_module.Classes.TryGetValue(className, out var irClass) || irClass?.Constructors == null)
+                return null;
+
+            List<IRVariable> found = null;
+            foreach (var ctor in irClass.Constructors)
+            {
+                var parameters = ctor?.Implementation?.Parameters;
+                if (parameters == null || parameters.Count != argumentCount) continue;
+                if (found != null) return null;   // more than one of this arity — do not guess
+                found = parameters;
+            }
+
+            return found;
+        }
+
+        /// <summary>
+        /// Coerces one constructor argument, with the same ByRef exemption
+        /// <see cref="CoerceToParameterType"/> documents.
+        /// </summary>
+        private IRValue CoerceToConstructorParameter(IRValue value, List<IRVariable> parameters, int index)
+        {
+            if (parameters == null || index < 0 || index >= parameters.Count) return value;
+
+            var parameter = parameters[index];
+            if (parameter.IsByRef) return value;
+
+            return CoerceToDeclaredType(value, parameter.Type);
+        }
+
+        /// <summary>
         /// A numeric literal converted to <paramref name="declared"/> at COMPILE time, or null
         /// when it cannot be.
         ///
@@ -4183,10 +4266,21 @@ namespace BasicLang.Compiler.IR
                     }
 
                     call.GenericArguments.AddRange(BuildGenericArgTypes(node.GenericArguments));
+
+                    // ⛔ The STATIC member arm needs the coercion too, and it is a third site, not
+                    // a duplicate: `Box.Shr(7 / 2)` on a user `Shared` method reaches here, not
+                    // the instance arm below nor the plain-identifier arm further down. Measured
+                    // without it, MSIL pushed a float64 and called `Box::Shr(int32)` — the
+                    // signature correct (it is spelled from the declaration) and the VALUE wrong,
+                    // which the CLR rejects as an invalid program. The symbol is the one the
+                    // analyzer resolved for this member access, the same one the instance arm
+                    // reads ByRef from.
+                    var staticCalleeSymbol = _semanticAnalyzer.GetNodeSymbol(memberExpr);
                     foreach (var arg in node.Arguments)
                     {
                         arg.Accept(this);
-                        call.Arguments.Add(_expressionResult);
+                        call.Arguments.Add(CoerceToParameterType(
+                            _expressionResult, staticCalleeSymbol, call.Arguments.Count));
 
                         // P2a-2 Task 8: ByRefArguments was populated only for resolved USER
                         // functions (funcSymbol.Parameters[i].IsByRef, below). A resolved .NET
@@ -4240,7 +4334,8 @@ namespace BasicLang.Compiler.IR
                     foreach (var arg in node.Arguments)
                     {
                         arg.Accept(this);
-                        methodCall.Arguments.Add(_expressionResult);
+                        methodCall.Arguments.Add(CoerceToParameterType(
+                            _expressionResult, methodSymbol, methodCall.Arguments.Count));
 
                         var methodParams = methodSymbol?.Parameters;
                         methodCall.ByRefArguments.Add(
@@ -4345,7 +4440,7 @@ namespace BasicLang.Compiler.IR
                 for (int i = 0; i < node.Arguments.Count; i++)
                 {
                     node.Arguments[i].Accept(this);
-                    call.Arguments.Add(_expressionResult);
+                    call.Arguments.Add(CoerceToParameterType(_expressionResult, funcSymbol, i));
 
                     // Check if this parameter is ByRef
                     bool isByRef = false;
@@ -4430,11 +4525,19 @@ namespace BasicLang.Compiler.IR
                     : BoundaryTypeCategory.Unknown;
             }
 
+            // ⛔ A constructor argument needs the same coercion a method argument does —
+            // `New Box(7 / 2)` was CS1503 on C#, `MissingMethodException: Box..ctor(Double)` on
+            // MSIL and 3.5 on JavaScript — but unlike a call, the analyzer records NO symbol on a
+            // NewExpressionNode (measured: GetNodeSymbol is null here). The IR class's own
+            // constructors carry the parameter types instead.
+            var ctorParameters = UnambiguousConstructorParameters(className, node.Arguments.Count);
+
             // Evaluate arguments
             foreach (var arg in node.Arguments)
             {
                 arg.Accept(this);
-                newObj.Arguments.Add(_expressionResult);
+                newObj.Arguments.Add(CoerceToConstructorParameter(
+                    _expressionResult, ctorParameters, newObj.Arguments.Count));
             }
 
             EmitInstruction(newObj);

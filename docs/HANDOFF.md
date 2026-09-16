@@ -413,11 +413,38 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   keeps exactly what it did before the coercion existed — nothing. That leaves
   `Dim b As Byte = 7.9` unnarrowed, which is a real gap; closing it means teaching the optimizer's
   folders every numeric CLR type.
-  ⚠ **ARGUMENT passing is still not coerced**, and is a different mechanism: `Take(7 / 2)` where
-  the parameter is Integer is **CS1503** on C# and `MissingMethodException: Take(Double)` on MSIL —
-  the call site spells its signature from the ARGUMENT's type, not the parameter's. Fixing it needs
-  the resolved callee's parameter list (overload resolution), not a store conversion. Don't assume
-  the assignment fix covers it.
+  ⚠ **Argument coercion landed as of 2026-09-16**, completing the three sites (return, store,
+  argument). ⛔ **The earlier note here said it "needs overload resolution". That was wrong twice
+  over**: the analyzer ALREADY resolves the callee and records its parameter list — the same
+  `Symbol.Parameters` both argument loops were reading `IsByRef` from — and BasicLang has no
+  overloading to resolve at all (a second `Sub Show` is "already defined in this scope").
+  Measured before: **eight CS1503s** on C# (does not build), `MissingMethodException: Take(Double)`
+  on MSIL (the call site spells its signature from the ARGUMENT's type), `3.5` everywhere on JS,
+  and C++ right by narrowing implicitly.
+  ⛔ **FIVE call shapes reach THREE different arms** of `Visit(CallExpressionNode)`, plus
+  `Visit(NewExpressionNode)`. Patching the obvious two left `Box.Shr(7 / 2)` pushing a float64 at a
+  correctly-spelled `Box::Shr(int32)` — the CLR rejects that as an invalid program. A **static
+  member** call reaches neither the plain-identifier arm nor the instance arm.
+  ⛔ **A constructor has NO resolved symbol** — measured, `GetNodeSymbol` is null on a
+  `NewExpressionNode` — so its parameter types come from the IR class's own constructors, selected
+  by ARGUMENT COUNT. The same-arity ambiguity branch is UNREACHABLE (the analyzer does not resolve
+  constructor overloads: it binds to the LAST declared one and then rejects the argument) and is
+  kept anyway, because it makes the coercion do NOTHING there — a fail-safe branch cannot give a
+  wrong answer, unlike a speculative one that acts.
+  ⛔ **ByRef is skipped, and the MISMATCHED shape is the only one that shows why.** With matching
+  types the coercion is a no-op and the guard never fires. With `ByRef n As Double` and an Integer
+  argument, removing the guard turns the C++ call site from `Bump(v)` into `Bump(t0)` — and where
+  `Bump(v)` does not compile (a pre-existing ByRef type-mismatch gap), `Bump(t0)` **compiles, runs
+  and prints 41**: the write-back landing in a temporary nobody reads. A build error traded for a
+  silently dropped mutation.
+  ⚠ **`ParamArray` does not parse** in either spelling (`ParamArray xs() As Integer` and
+  `ParamArray xs As Integer()` are both syntax errors), so a guard clause for it was written and
+  then removed — untestable, and redundant anyway since an array-typed parameter is already
+  rejected by the Integer/Long/Single/Double restriction.
+  ⚠ **Still failing for unrelated reasons, all pre-existing**: an `Optional` parameter omitted at
+  the call site (`Opt(7/2)` → `MissingMethodException: Opt(Int32)` — the call supplies one argument
+  where the method declares two); a `Shared` method on a user class has no JS lowering and emits an
+  undeclared identifier on C++; MSIL fails any ByRef call with InvalidProgramException.
   ⚠ **A `BlnetSlotDesc[]` kind that lies fails SILENTLY** (§8.4, 2026-09-15). The array is what
   `blnet_invoke_callback` reads to decide what to deep-copy when a callback is QUEUED rather than
   run inline: HANDLE addrefs at enqueue, STRING deep-copies, VALUE does neither. Label a handle
