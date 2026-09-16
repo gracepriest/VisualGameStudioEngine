@@ -695,7 +695,10 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 implements = " implements " + string.Join(", ", irClass.Interfaces.Select(i => SanitizeName(i)));
             }
 
-            WriteLine($".class public auto ansi beforefieldinit {className}");
+            // Same rule as the module class: `beforefieldinit` is dropped when a type initializer
+            // exists, as the C# compiler does for a class with a static constructor.
+            var needsInitializer = irClass.Fields.Any(NeedsStaticFieldInitialization);
+            WriteLine($".class public auto ansi{(needsInitializer ? "" : " beforefieldinit")} {className}");
             WriteLine($"       extends {extends}{implements}");
             WriteLine("{");
 
@@ -744,6 +747,11 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             foreach (var method in irClass.Methods)
             {
                 GenerateClassMethod(irClass, method);
+            }
+
+            if (needsInitializer)
+            {
+                GenerateClassStaticConstructor(irClass, className);
             }
 
             WriteLine($"}} // end of class {className}");
@@ -1123,6 +1131,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 _localIndices[local.Name] = _localIndices.Count;
             }
 
+            RegisterStaticFields(owner);
             RegisterModuleGlobals();
 
             AllocateExceptionHandlingLocals(function);
@@ -1219,7 +1228,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Generate methods
             foreach (var function in module.Functions)
             {
-                if (!function.IsExternal)
+                if (!function.IsExternal && !IsClassMember(function, module))
                 {
                     GenerateMethod(function);
                     WriteLine();
@@ -1236,6 +1245,38 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             GenerateDefaultConstructor();
 
             WriteLine("} // end of class " + _moduleName);
+        }
+
+        /// <summary>
+        /// True when this <see cref="IRFunction"/> is some class's member body rather than a
+        /// standalone module procedure.
+        ///
+        /// <para>⛔ <c>IRModule.Functions</c> holds EVERY function the builder made, class members
+        /// included: <c>IRBuilder</c> does <c>member.Accept(this)</c> — which appends to
+        /// <c>Functions</c> — and then stores that SAME object as <c>IRMethod.Implementation</c>.
+        /// Without this filter the module class emitted a second, static copy of every method on
+        /// every class. Mostly dead IL, with two live consequences: two classes declaring a
+        /// same-named method flattened onto one class and ilasm refused the file outright
+        /// ("Duplicate method declaration"), and an unqualified sibling call to a <c>Shared</c>
+        /// method resolved to the DUPLICATE, so it printed the right answer for the wrong
+        /// reason.</para>
+        ///
+        /// <para>Reference identity, not name matching, and the same predicate
+        /// <c>CSharpBackend.IsClassMethod</c> uses — the two must not disagree about what a
+        /// standalone function is.</para>
+        /// </summary>
+        private static bool IsClassMember(IRFunction function, IRModule module)
+        {
+            if (module?.Classes == null) return false;
+
+            foreach (var irClass in module.Classes.Values)
+            {
+                if (irClass.Methods.Any(m => m.Implementation == function)) return true;
+                if (irClass.Constructors.Any(c => c.Implementation == function)) return true;
+                if (irClass.Properties.Any(p => p.Getter == function || p.Setter == function)) return true;
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -1340,6 +1381,73 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 }
 
                 WriteLine($"    stsfld {IlTypeSpec(global.Type)} {_moduleName}::{SanitizeName(global.Name)}");
+                _currentStack--;
+            }
+
+            WriteLine("    ret");
+            WriteLine("  } // end of method .cctor");
+        }
+
+        /// <summary>
+        /// True when a <c>Shared</c> field needs the class's type initializer to run for it.
+        ///
+        /// <para>Sized-array storage counts, for the same reason it does at module level and on an
+        /// instance: left bare the field is a null reference and the first index throws. Rank &gt; 1
+        /// is refused by the shared <see cref="TryArrayAllocation"/>, so a Shared rank-2 array is
+        /// rejected exactly as a local or module-level one is.</para>
+        /// </summary>
+        private bool NeedsStaticFieldInitialization(IRField field) =>
+            field.IsStatic
+            && (field.Initializer != null || TryArrayAllocation(field.Type, out _, out _));
+
+        /// <summary>
+        /// A user class's type initializer, for <c>Shared</c> field initializers and sized-array
+        /// storage.
+        ///
+        /// <para>⛔ Without it <c>Public Shared Total As Integer = 5</c> emitted the field and
+        /// dropped the 5 — the same shape as the module-level case, and just as silent: the
+        /// program runs and reads 0. <see cref="EmitArrayFieldAllocations"/> deliberately skips
+        /// static fields ("a static field is not this instance's to create"), so this is the only
+        /// place a Shared array gets storage.</para>
+        /// </summary>
+        private void GenerateClassStaticConstructor(IRClass irClass, string className)
+        {
+            _localIndices.Clear();
+            _paramIndices.Clear();
+            _tempIndices.Clear();
+            _tempNameIndices.Clear();
+            _declaredIdentifiers.Clear();
+            _currentMethodIsInstance = false;
+            _currentClassFields.Clear();
+            _maxStack = 8;
+            _currentStack = 0;
+
+            WriteLine("  .method private hidebysig specialname rtspecialname");
+            WriteLine("          static void .cctor() cil managed");
+            WriteLine("  {");
+            WriteLine("    .maxstack 8");
+
+            foreach (var field in irClass.Fields)
+            {
+                if (!field.IsStatic) continue;
+
+                if (field.Initializer != null)
+                {
+                    EmitInlineValue(field.Initializer);
+                    EmitNumericCoercion(field.Initializer, field.Type);
+                }
+                else if (TryArrayAllocation(field.Type, out var elementToken, out var length))
+                {
+                    EmitLdcI4(length);
+                    _currentStack++;
+                    WriteLine($"    newarr {elementToken}");
+                }
+                else
+                {
+                    continue;
+                }
+
+                WriteLine($"    stsfld {IlTypeSpec(field.Type)} {className}::{SanitizeName(field.Name)}");
                 _currentStack--;
             }
 
@@ -1909,6 +2017,15 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 return;
             }
 
+            // A `Shared` field of the enclosing class, by bare name. Nearer than a module-level
+            // variable and further than an instance field, matching the language's own scoping.
+            if (TryFindStaticField(_currentClass, name, out var ownStaticOwner, out var ownStatic))
+            {
+                WriteLine($"    ldsfld {IlTypeSpec(ownStatic.Type)} {SanitizeName(ownStaticOwner.Name)}::{SanitizeName(ownStatic.Name)}");
+                _currentStack++;
+                return;
+            }
+
             // A module-level variable, LAST so that anything nearer in scope — a local, a
             // parameter, or a field of the enclosing instance — still shadows it by name.
             if (_moduleGlobals.TryGetValue(name, out var global))
@@ -1919,6 +2036,27 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
 
             WriteLine($"    // WARNING: Unknown local '{name}'");
+        }
+
+        /// <summary>
+        /// Makes the owning class's <c>Shared</c> fields resolvable by bare name inside its own
+        /// members — <c>Total = Total + 1</c> written inside <c>Counter</c>.
+        ///
+        /// <para>⛔ Registered for STATIC members too, which is why this is not folded into the
+        /// instance-field loop above: that loop runs only when <c>isInstance</c>, and a
+        /// <c>Shared Sub</c> is exactly where a bare <c>Shared</c> field name is most likely to
+        /// appear. Without the name in <c>_declaredIdentifiers</c> the assignment lands in an
+        /// anonymous temporary and the field never changes.</para>
+        /// </summary>
+        private void RegisterStaticFields(IRClass owner)
+        {
+            if (owner?.Fields == null) return;
+
+            foreach (var field in owner.Fields)
+            {
+                if (!field.IsStatic || string.IsNullOrEmpty(field.Name)) continue;
+                _declaredIdentifiers.Add(field.Name);
+            }
         }
 
         /// <summary>
@@ -1937,6 +2075,224 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             foreach (var global in _moduleGlobals.Values)
                 _declaredIdentifiers.Add(global.Name);
         }
+
+        /// <summary>
+        /// Resolves a call name to a <c>Shared</c> method on a user class, in either spelling the
+        /// language allows: qualified (<c>MathUtil.Twice</c>) or unqualified from inside the
+        /// declaring class (<c>Twice</c>).
+        ///
+        /// <para>⛔ The unqualified arm is NOT optional bonus coverage — it is what keeps
+        /// <c>Return Half(84)</c> working once <see cref="IsClassMember"/> stops duplicating class
+        /// methods onto the module class. That call used to bind to the duplicate and print the
+        /// right answer; with the duplicate gone and nothing here, it would become a
+        /// MissingMethodException. The two changes only make sense together.</para>
+        ///
+        /// <para>Matching is by NAME only, not by argument types: a user class reached this way
+        /// has exactly the overloads this compilation declared, and picking between them is the
+        /// front end's job, not this backend's. Contrast <see cref="TryResolveNetStaticCall"/>,
+        /// which must choose among BCL overloads it did not declare.</para>
+        /// </summary>
+        private bool TryResolveUserStaticCall(string funcName, out string classToken, out IRMethod method)
+        {
+            classToken = null;
+            method = null;
+            if (string.IsNullOrEmpty(funcName) || _module?.Classes == null) return false;
+
+            var dot = funcName.LastIndexOf('.');
+            if (dot > 0)
+            {
+                var typeName = funcName.Substring(0, dot);
+                var memberName = funcName.Substring(dot + 1);
+                if (!TryFindClass(typeName, out var owner)) return false;
+                if (!TryFindStaticMethod(owner, memberName, out var declaring, out method)) return false;
+
+                classToken = SanitizeName(declaring.Name);
+                return true;
+            }
+
+            // Unqualified, inside a class body. `_currentClass` is the only scope a bare name may
+            // reach: a Shared member of some OTHER class always needs its type named.
+            if (_currentClass == null) return false;
+            if (!TryFindStaticMethod(_currentClass, funcName, out var ownDeclaring, out method)) return false;
+
+            classToken = SanitizeName(ownDeclaring.Name);
+            return true;
+        }
+
+        private bool TryFindClass(string name, out IRClass irClass)
+        {
+            irClass = null;
+            if (string.IsNullOrEmpty(name) || _module?.Classes == null) return false;
+
+            foreach (var candidate in _module.Classes.Values)
+            {
+                if (string.Equals(candidate.Name, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    irClass = candidate;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Finds a <c>Shared</c> method by name on <paramref name="irClass"/> or anywhere up its
+        /// base chain, reporting the class that actually DECLARES it.
+        ///
+        /// <para>⛔ The declaring class is what the call must name. <c>Derived.Tag()</c> where
+        /// <c>Tag</c> is Shared on <c>Base</c> is legal BasicLang — the C# backend emits it
+        /// verbatim and C# resolves it — but emitting <c>call ... Derived::Tag()</c> here left the
+        /// CLR looking for a method <c>Derived</c> does not define.</para>
+        ///
+        /// <para>The chain is walked with a visited set: <c>BaseClass</c> is an unvalidated name,
+        /// and a cycle in it would otherwise hang the compiler rather than fail.</para>
+        /// </summary>
+        private bool TryFindStaticMethod(IRClass irClass, string name, out IRClass declaring, out IRMethod method)
+        {
+            declaring = null;
+            method = null;
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (var current = irClass; current != null; )
+            {
+                if (!seen.Add(current.Name)) break;
+
+                var found = current.Methods?.FirstOrDefault(m => m.IsStatic
+                    && string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase));
+                if (found != null)
+                {
+                    declaring = current;
+                    method = found;
+                    return true;
+                }
+
+                if (string.IsNullOrEmpty(current.BaseClass)) break;
+                if (!TryFindClass(current.BaseClass, out current)) break;
+            }
+
+            return false;
+        }
+
+        private IRMethod FindStaticMethod(IRClass irClass, string name) =>
+            TryFindStaticMethod(irClass, name, out _, out var method) ? method : null;
+
+        /// <summary>
+        /// Emits a resolved <c>Shared</c> call: arguments, then <c>call</c> with NO receiver.
+        ///
+        /// <para>⚠ The signature is spelled from the CALL's own argument and return types, matching
+        /// every other call site in this file — the declaration those resolve against is emitted
+        /// from the same <see cref="IlTypeSpec"/>, so the two agree. A call whose signature
+        /// disagrees with the declaration binds to nothing and fails at run time, not at
+        /// assembly.</para>
+        /// </summary>
+        private void EmitUserStaticCall(
+            IRValue node, IReadOnlyList<IRValue> arguments, string classToken, IRMethod method, bool hasReturn)
+        {
+            foreach (var arg in arguments)
+            {
+                EmitLoadValue(arg);
+            }
+
+            // ⛔ Spelled from the DECLARATION, not from the call site. GenerateClassMethod writes
+            // the signature as MapType(method.ReturnType) and IlTypeSpec(parameter.Type); a call
+            // that spells it any other way binds to nothing and fails at RUN time, since ilasm
+            // does not resolve member references. `Derived.Tag()` reached here with a call type of
+            // `object` where the method returns `string` — the call site is not a reliable source.
+            var returnType = MapType(method.ReturnType);
+            var paramTypes = method.Implementation != null
+                ? string.Join(", ", method.Implementation.Parameters.Select(p => IlTypeSpec(p.Type)))
+                : string.Join(", ", arguments.Select(a => IlTypeSpec(a.Type)));
+            WriteLine($"    call {returnType} {classToken}::{SanitizeName(method.Name)}({paramTypes})");
+
+            _currentStack -= arguments.Count;
+            if (hasReturn) _currentStack++;
+
+            if (hasReturn && !string.IsNullOrEmpty(node.Name))
+            {
+                if (_declaredIdentifiers.Contains(node.Name)) EmitStoreLocal(node.Name);
+                else EmitStloc(GetTempIndex(node));
+            }
+            else if (hasReturn)
+            {
+                WriteLine("    pop");
+                _currentStack--;
+            }
+        }
+
+        /// <summary>
+        /// Resolves a field access to a <c>Shared</c> field on a user class, reporting whether the
+        /// receiver was the TYPE (no value to load) or an INSTANCE (a value that must still be
+        /// evaluated and discarded).
+        ///
+        /// <para>⚠ A name is only read as a type when nothing NEARER in scope answers to it. A
+        /// local, parameter, enclosing-instance field or module-level global called <c>Counter</c>
+        /// shadows a class of that name, exactly as it does in <see cref="EmitLoadLocal"/> — so
+        /// this asks those tables first rather than letting a type name win by being checked
+        /// earlier.</para>
+        /// </summary>
+        private bool TryResolveStaticField(
+            IRValue receiver, string fieldName, out IRClass owner, out IRField field, out bool viaInstance)
+        {
+            owner = null;
+            field = null;
+            viaInstance = false;
+            if (receiver == null || string.IsNullOrEmpty(fieldName)) return false;
+
+            // The receiver names a type directly: `Counter.Total`.
+            var name = receiver.Name;
+            if (!string.IsNullOrEmpty(name) && !ResolvesAsValue(name) && TryFindClass(name, out var byName))
+            {
+                return TryFindStaticField(byName, fieldName, out owner, out field);
+            }
+
+            // The receiver is a value whose TYPE declares the Shared field: `b.Total`.
+            if (TryFindClass(receiver.Type?.Name, out var byType)
+                && TryFindStaticField(byType, fieldName, out owner, out field))
+            {
+                viaInstance = true;
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>True when this name already denotes storage the current method can load.</summary>
+        private bool ResolvesAsValue(string name) =>
+            GetLocalIndex(name) >= 0
+            || GetParamIndex(name) >= 0
+            || (_currentMethodIsInstance && _currentClassFields.ContainsKey(name))
+            || _moduleGlobals.ContainsKey(name);
+
+        /// <summary>The field counterpart of <see cref="TryFindStaticMethod"/>, base chain and all.</summary>
+        private bool TryFindStaticField(IRClass irClass, string name, out IRClass declaring, out IRField field)
+        {
+            declaring = null;
+            field = null;
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (var current = irClass; current != null; )
+            {
+                if (!seen.Add(current.Name)) break;
+
+                var found = current.Fields?.FirstOrDefault(f => f.IsStatic
+                    && string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase));
+                if (found != null)
+                {
+                    declaring = current;
+                    field = found;
+                    return true;
+                }
+
+                if (string.IsNullOrEmpty(current.BaseClass)) break;
+                if (!TryFindClass(current.BaseClass, out current)) break;
+            }
+
+            return false;
+        }
+
+        private IRField FindStaticField(IRClass irClass, string name) =>
+            TryFindStaticField(irClass, name, out _, out var field) ? field : null;
 
         /// <summary>The spellings of the receiver a BasicLang instance method can name.</summary>
         private static bool IsSelfReference(string name) =>
@@ -1965,6 +2321,15 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 EmitLdloc(scratch);
                 WriteLine($"    stfld {IlTypeSpec(fieldType)} {_currentClassToken}::{SanitizeName(name)}");
                 _currentStack -= 2;
+                return;
+            }
+
+            // A `Shared` field of the enclosing class. Like the module-level case below and
+            // unlike the instance `stfld` above, `stsfld` needs no scratch slot.
+            if (TryFindStaticField(_currentClass, name, out var ownStaticOwner, out var ownStatic))
+            {
+                WriteLine($"    stsfld {IlTypeSpec(ownStatic.Type)} {SanitizeName(ownStaticOwner.Name)}::{SanitizeName(ownStatic.Name)}");
+                _currentStack--;
                 return;
             }
 
@@ -2433,6 +2798,16 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                         else EmitStloc(GetTempIndex(call));
                     }
                 }
+                return;
+            }
+
+            // A `Shared` member of a user class, reached as `MathUtil.Twice(21)` or unqualified
+            // from a sibling member. Must come before the fallback for the same reason the .NET
+            // arm does: SanitizeName strips the dot, so `MathUtil.Twice` became a call to
+            // `Combined::MathUtilTwice` — a method nothing defines, on the module's own class.
+            if (TryResolveUserStaticCall(funcName, out var userClassToken, out var userMethod))
+            {
+                EmitUserStaticCall(call, call.Arguments, userClassToken, userMethod, hasReturn);
                 return;
             }
 
@@ -3647,6 +4022,24 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         {
             var hasReturn = methodCall.Type != null && !methodCall.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
 
+            // ⛔ BasicLang lets a `Shared` member be reached through an INSTANCE — `b.Tag()` where
+            // Tag is Shared. IL does not: the method has no `this` parameter, so the `callvirt
+            // instance` below named `Box::Tag()` with a receiver and the CLR could not find it
+            // (MissingMethodException). The receiver expression is still evaluated and then
+            // discarded, because it may have side effects — `MakeBox().Tag()` must still run
+            // MakeBox.
+            if (TryFindClass(methodCall.Object?.Type?.Name, out var staticOwner)
+                && TryFindStaticMethod(staticOwner, methodCall.MethodName, out var staticDeclaring, out var staticMethod))
+            {
+                EmitLoadValue(methodCall.Object);
+                WriteLine("    pop");
+                _currentStack--;
+
+                EmitUserStaticCall(
+                    methodCall, methodCall.Arguments, SanitizeName(staticDeclaring.Name), staticMethod, hasReturn);
+                return;
+            }
+
             // Load 'this' reference (the object on which the method is called)
             EmitLoadValue(methodCall.Object);
 
@@ -3757,6 +4150,27 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
         public override void Visit(IRFieldAccess fieldAccess)
         {
+            // ⛔ A `Shared` field reached as `Counter.Total`. The receiver is a TYPE NAME, not a
+            // value: loading it emitted `// WARNING: Unknown local 'Counter'` and pushed nothing,
+            // and the `ldfld` that followed read a field off an empty stack — InvalidProgramException.
+            // `ldsfld` takes no receiver at all. Reached through an INSTANCE (`b.Total`, which
+            // BasicLang allows) the receiver IS a value, so it is evaluated and discarded.
+            if (TryResolveStaticField(fieldAccess.Object, fieldAccess.FieldName, out var readOwner,
+                    out var readField, out var readViaInstance))
+            {
+                if (readViaInstance)
+                {
+                    EmitLoadValue(fieldAccess.Object);
+                    WriteLine("    pop");
+                    _currentStack--;
+                }
+
+                WriteLine($"    ldsfld {IlTypeSpec(readField.Type)} {SanitizeName(readOwner.Name)}::{SanitizeName(readField.Name)}");
+                _currentStack++;
+                EmitFieldAccessResult(fieldAccess);
+                return;
+            }
+
             // Load object reference
             EmitLoadValue(fieldAccess.Object);
 
@@ -3830,6 +4244,25 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
         public override void Visit(IRFieldStore fieldStore)
         {
+            // The write half of the `Shared` field case — see Visit(IRFieldAccess). `stsfld` takes
+            // the value alone, with no object reference under it, so unlike the instance `stfld`
+            // path this needs no scratch slot to get the operands in the right order.
+            if (TryResolveStaticField(fieldStore.Object, fieldStore.FieldName, out var storeOwner,
+                    out var storeField, out var storeViaInstance))
+            {
+                if (storeViaInstance)
+                {
+                    EmitLoadValue(fieldStore.Object);
+                    WriteLine("    pop");
+                    _currentStack--;
+                }
+
+                EmitLoadValue(fieldStore.Value);
+                WriteLine($"    stsfld {IlTypeSpec(storeField.Type)} {SanitizeName(storeOwner.Name)}::{SanitizeName(storeField.Name)}");
+                _currentStack--;
+                return;
+            }
+
             // Load object reference
             EmitLoadValue(fieldStore.Object);
 
