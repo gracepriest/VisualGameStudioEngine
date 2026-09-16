@@ -3099,13 +3099,76 @@ namespace BasicLang.Compiler.IR
             if (node.Value != null)
             {
                 node.Value.Accept(this);
-                EmitInstruction(new IRReturn(_expressionResult));
+                EmitInstruction(new IRReturn(CoerceToDeclaredReturnType(_expressionResult)));
             }
             else
             {
                 EmitInstruction(new IRReturn());
             }
         }
+
+        /// <summary>
+        /// Narrows or widens a returned value to the function's DECLARED return type, when both
+        /// are numeric and disagree.
+        ///
+        /// <para>⛔ VB's <c>/</c> is always floating-point division, so <c>Return v / 2</c> from a
+        /// <c>Function … As Integer</c> hands back a Double where an Integer was promised. Nothing
+        /// inserted the conversion, and what each backend then did with it was measured, not
+        /// assumed:</para>
+        /// <list type="bullet">
+        /// <item>C# emitted <c>return (double)(v) / (double)(2);</c> from an <c>int</c> method —
+        /// <b>CS0266, does not compile</b>. The BasicLang build still reported success, because it
+        /// only writes the source; nothing invokes csc.</item>
+        /// <item>MSIL emitted <c>ret</c> with a float64 on the stack from an int32 method and
+        /// returned <b>0</b> — a silent wrong answer.</item>
+        /// <item>C++ and JavaScript happened to be RIGHT, and neither because the compiler did
+        /// anything: C++ narrows implicitly on return, and JavaScript has no types to disagree
+        /// about. Do not read their passing as evidence this seam was ever correct.</item>
+        /// </list>
+        ///
+        /// <para><see cref="IRCast"/> is the seam for exactly the reason
+        /// <see cref="WidenDivisionOperand"/> gives: every backend, both interpreters,
+        /// <c>IROperandWalker</c>, <c>IRPrettyPrinter</c> and <c>CppCapabilityChecker</c> already
+        /// handle it, so one insertion here moves every consumer instead of repeating the coercion
+        /// four times.</para>
+        ///
+        /// <para>⚠ The ROUNDING MODE is left to each backend's existing cast rendering, and
+        /// measured rather than assumed: <c>Return v / 2</c> from an <c>As Integer</c> function
+        /// now gives 3 for v=7 on ALL FOUR backends — C# renders the cast as <c>(int)</c>, C++ as
+        /// a narrowing conversion, JS as <c>Math.trunc</c>, MSIL as <c>conv.i4</c>. Uniform
+        /// truncation.</para>
+        ///
+        /// <para>⛔ That does NOT match VB.NET, and it does not even match this compiler's own
+        /// <c>CInt</c> everywhere. VB narrows with banker's rounding, so <c>Return 7 / 2</c>
+        /// should be 4. And C# is internally inconsistent: <c>CInt(3.5)</c> emits
+        /// <c>Convert.ToInt32</c> and gives 4 while an implicit return gives 3, where C++, JS and
+        /// MSIL give 3 for both. Reconciling the two is a decision about the whole narrowing
+        /// surface — every <c>IRCast</c> rendering on four backends — and is deliberately NOT made
+        /// here. What this fixes is that an implicit narrowing happens AT ALL; before it, the same
+        /// program did not compile on C# and returned 0 on MSIL.</para>
+        ///
+        /// <para>Restricted to numeric primitives on both sides, so a <c>Task(Of Integer)</c>, an
+        /// <c>IEnumerable(Of T)</c>, <c>Object</c>, a String or a class type is never touched —
+        /// boxing and generic returns keep whatever handling they already had.</para>
+        /// </summary>
+        private IRValue CoerceToDeclaredReturnType(IRValue value)
+        {
+            var declared = _currentFunction?.ReturnType;
+            var actual = value?.Type;
+
+            if (!IsNumericPrimitive(declared) || !IsNumericPrimitive(actual)) return value;
+            if (string.Equals(declared.Name, actual.Name, StringComparison.Ordinal)) return value;
+
+            var castName = _currentFunction.GetNextTempName();
+            var cast = new IRCast(castName, value, actual, declared,
+                                  DetermineCastKind(actual, declared));
+            EmitInstruction(cast);
+            return cast;
+        }
+
+        /// <summary>A type whose conversions <see cref="DetermineCastKind"/> can actually name.</summary>
+        private static bool IsNumericPrimitive(TypeInfo type) =>
+            type != null && (type.IsIntegral() || type.IsFloatingPoint());
 
         public void Visit(ExitStatementNode node)
         {

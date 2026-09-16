@@ -351,11 +351,34 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   operands" — identically on C#, which survives only because it re-emits the text and lets C#
   re-resolve. MSIL's `ldsfld` names the right class. Naming the declaring class (`Base.Tally`)
   works. Don't chase it in the backend.
-  ⚠ **`Return <float expr>` from an `As Integer` method returns GARBAGE, on every method kind.**
-  `Return v / 2` declared `As Integer` computes in `float64` and emits `ret` with no `conv.i4`, so
-  the method returns 0. Measured identical on a plain module function, an instance method and a
-  `Shared` method — it is a return-coercion gap, NOT a `Shared` defect, and it is what made an
-  early `Shared` probe look like it was still broken after it had been fixed.
+  ⚠ **Return coercion is inserted as of 2026-09-16** — `IRBuilder.CoerceToDeclaredReturnType`.
+  VB's `/` is ALWAYS floating-point division, so `Return v / 2` from a `Function … As Integer`
+  handed back a Double and nothing converted it. ⛔ **The claim that this broke "all five
+  backends" was an INFERENCE and it was wrong** — measured, each did something different:
+  C# emitted `return (double)(v) / (double)(2);` from an `int` method, which is **CS0266 and does
+  not compile** (the BasicLang build still said "successful", because it only writes source —
+  nothing invokes csc); MSIL emitted `ret` with a float64 from an int32 method and returned **0**;
+  JavaScript returned **3.5** from a function declared `As Integer`, looking correct only when the
+  quotient was already whole; C++ was right, and not because the compiler did anything — it
+  narrows implicitly on return.
+  The fix is one `IRCast` at the return site, the same seam and the same reasoning as
+  `WidenDivisionOperand` ("one insertion moves every consumer"), guarded to NUMERIC PRIMITIVES on
+  both sides so `Object`, String, class, `Task(Of T)` and generic returns are untouched.
+  ⛔ **The JavaScript backend had to learn narrowing casts to make this land.** It deliberately
+  threw on them ("Narrowing is not a no-op in JS either — it needs `Math.trunc`"), so inserting an
+  `IRCast` broke the whole backend until `TryNumericCast` existed. Both the statement visitor AND
+  the inline renderer need it; patching one leaves the other throwing.
+  ⚠ **All four backends now TRUNCATE, which is not VB.NET's answer and not self-consistent on C#.**
+  `Return 7 / 2 As Integer` gives 3 everywhere. VB narrows with banker's rounding (4), and this
+  compiler's own `CInt(3.5)` gives **4 on C#** (`Convert.ToInt32`) but **3 on C++/JS/MSIL** — so C#
+  disagrees with itself between an implicit return and an explicit `CInt`. Reconciling that means
+  changing every `IRCast` rendering on four backends; it is a decision about the whole narrowing
+  surface and was deliberately NOT taken here. `ReturnCoercionTests` pins the current answer so the
+  day someone takes it, the test goes red instead of the behaviour drifting.
+  ⚠ **The same gap still exists on ASSIGNMENT**, and was left alone: `Dim b As Integer = 7 / 2`
+  prints **3.5 on JS**, does not compile on C#, and on MSIL prints raw float64 bit patterns and
+  then **segfaults**. Same root (no implicit narrowing where the IR types disagree), different
+  site, and a much wider blast radius than the return case.
   ⚠ **A `BlnetSlotDesc[]` kind that lies fails SILENTLY** (§8.4, 2026-09-15). The array is what
   `blnet_invoke_callback` reads to decide what to deep-copy when a callback is QUEUED rather than
   run inline: HANDLE addrefs at enqueue, STRING deep-copies, VALUE does neither. Label a handle
