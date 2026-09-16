@@ -330,3 +330,21 @@ increasing cost:
 the same commit.** They are a mirrored pair by design: the canvas draws the grid the emitter
 produces, and a canvas that split differently would put the cells somewhere the page does not have
 them — with nothing on screen looking wrong.
+
+### 17. There is no "View Code" for a form document
+
+**Add ▸ New Form** writes the pair — `LoginForm.blform` and `LoginForm.bas` — and opens the
+DOCUMENT, because the design view is a mode on the document's own editor and opening the
+code-behind instead is how "I can't see the form designer" happened. Both files are listed in the
+project and both are visible in the tree, so nothing is lost; but the IDE has no command that
+crosses between them the way `F7` / *View Code* does in Visual Studio, and no command that goes back
+the other way from a `.bas` to its form.
+
+Raising `FileOpenRequested` twice is NOT the fix: `MainWindowViewModel.OnFileOpenRequested` is
+`async void`, so two raises race on their file reads and whichever finishes last takes the active
+tab. The designer would be the front tab only by luck.
+
+**Shape of the fix:** a command on the document tab (and the tree's context menu) that opens the
+sibling, found by swapping the extension — `.blform`/`.blwebform` ↔ `.bas` — and only offered when
+the sibling exists. Small, and it wants a caller test that drives the command and an AXAML guard
+for the binding, like every other UI seam on this branch.

@@ -1268,6 +1268,15 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// "Add ▸ New Form" — the IDE's only entry point to the form designer.
+    ///
+    /// <para>⛔⛔ The <c>[RelayCommand]</c> and the menu item that binds it are load-bearing, not
+    /// decoration: this method shipped complete, careful and completely unreachable, the fifth
+    /// piece of this feature to do so with a green suite throughout. <c>SolutionExplorerNewFormTests</c>
+    /// drives the generated command and reads the AXAML for the binding for exactly that reason.</para>
+    /// </summary>
+    [RelayCommand]
     private async Task AddNewFormAsync()
     {
         var project = _projectService.CurrentProject;
@@ -1346,8 +1355,15 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         await SaveProjectOrReportAsync();
         RefreshTree(project);
 
-        // The code-behind is what the user edits; the document is the designer's.
-        FileOpenRequested?.Invoke(this, codePath);
+        // ⛔⛔ The DOCUMENT, not the code-behind. The design view is a mode on the form document's
+        // own editor, so opening the .bas leaves a brand-new form showing Basic source with no
+        // designer anywhere — which is exactly how "I can't see the form designer" happened. The
+        // code-behind sits beside it in the tree, one double-click away.
+        //
+        // ⚠ ONE file. The open handler is `async void`, so two raises race and whichever read
+        // finishes last takes the active tab — "open both, designer last" is not something this
+        // seam can promise.
+        FileOpenRequested?.Invoke(this, documentPath);
     }
 
     [RelayCommand]

@@ -290,4 +290,81 @@ public class FormDesignModeTests
 
         Assert.That(raised, Does.Contain(nameof(CodeEditorDocumentViewModel.DesignDocument)));
     }
+
+    // ─── Opening a form document lands IN the designer ──────────────────────────────────────
+
+    [Test]
+    public void EnterDesignModeForFormDocument_PutsAFormDocumentStraightIntoTheDesigner()
+    {
+        // ⛔⛔ The user's report was "I can't see the form designer". Every piece of it existed and
+        // worked; opening a .blform showed its raw XML with a Design button somebody had to know to
+        // press. A form opens in the designer, the way a form does everywhere else.
+        var vm = NewViewModel();
+        vm.FilePath = "/tmp/LoginForm.blwebform";
+        vm.SetContent(WebForm);
+
+        Assert.That(vm.EnterDesignModeForFormDocument(), Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.IsDesignMode, Is.True);
+            // The panels must be wired on the way in, exactly as the toggle does it — a canvas
+            // whose toolbox has no target offers no controls to drop.
+            Assert.That(vm.Toolbox.Target, Is.EqualTo(FormTarget.Web));
+        });
+    }
+
+    [Test]
+    public void EnterDesignModeForFormDocument_LeavesASourceFileInCodeView()
+    {
+        var vm = NewViewModel();
+        vm.FilePath = "/tmp/Program.bas";
+        vm.SetContent("Sub Main()\nEnd Sub\n");
+
+        Assert.That(vm.EnterDesignModeForFormDocument(), Is.False);
+        Assert.That(vm.IsDesignMode, Is.False);
+    }
+
+    [Test]
+    public void EnterDesignModeForFormDocument_LeavesARefusedDocumentInCodeView()
+    {
+        // ⚠ A refused document has no model, so the canvas would be blank. Code view is where the
+        // user can see what is wrong with the file and fix it.
+        var vm = NewViewModel();
+        vm.FilePath = "/tmp/LoginForm.blform";
+        vm.SetContent(WebForm); // a <WebForm> root in a .blform file — refused by name/root mismatch
+
+        Assert.That(vm.EnterDesignModeForFormDocument(), Is.False);
+        Assert.That(vm.IsDesignMode, Is.False);
+    }
+
+    [Test]
+    public void OpenFile_CallsEnterDesignModeForFormDocument()
+    {
+        // ⛔⛔ The reachability gate. A method the open route never calls is the failure mode this
+        // feature keeps producing — five pieces of it were finished, unit-tested and unreachable
+        // with the suite green throughout. MainWindowViewModel is the only route that opens a file
+        // from the tree, so it is the only place this can be called from.
+        var path = FindRepoFile("VisualGameStudio.Shell", "ViewModels", "MainWindowViewModel.cs");
+        if (path == null)
+        {
+            Assert.Ignore("MainWindowViewModel.cs not found from the test base directory.");
+            return;
+        }
+
+        Assert.That(File.ReadAllText(path), Does.Contain("EnterDesignModeForFormDocument()"),
+            "OpenFileAsync must put a form document into the designer as it opens it — otherwise " +
+            "opening a .blform shows raw XML and the designer is one undiscoverable click away.");
+    }
+
+    private static string? FindRepoFile(params string[] relativeParts)
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir != null)
+        {
+            var candidate = Path.Combine(new[] { dir.FullName }.Concat(relativeParts).ToArray());
+            if (File.Exists(candidate)) return candidate;
+            dir = dir.Parent;
+        }
+        return null;
+    }
 }

@@ -146,6 +146,32 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         }
     }
 
+    /// <summary>
+    /// Opens this document IN the designer when it is a form document that parses. Returns whether
+    /// the mode changed. Called once, by the file-open route — not on every reload, so a user who
+    /// switched to Code view stays there.
+    ///
+    /// <para>⛔⛔ Without this, opening a <c>.blform</c> shows its raw XML with a "Design" button
+    /// the user has to know to press. Every piece of the designer existed and worked when the
+    /// report came back as "I can't see the form designer" — a form opens in its designer, the
+    /// same as it does in every other tool that has one.</para>
+    ///
+    /// <para>⚠ A REFUSED or unparseable document stays in Code view deliberately. Its model is
+    /// empty, so the canvas would be blank, and Code view is the only place the user can see what
+    /// is wrong with the file.</para>
+    /// </summary>
+    public bool EnterDesignModeForFormDocument()
+    {
+        if (IsDesignMode || !IsFormDocument || DesignDocument == null)
+        {
+            return false;
+        }
+
+        IsDesignMode = true;
+        SyncDesignerPanels();
+        return true;
+    }
+
     /// <summary>The property grid beside the canvas. Always present; empty until something is selected.</summary>
     public ViewModels.Designer.FormPropertyGridViewModel PropertyGrid { get; } = new();
 
