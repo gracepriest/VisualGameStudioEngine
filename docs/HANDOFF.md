@@ -226,6 +226,19 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   region (lowered to a result slot plus `leave` to one exit, which is also what runs the finally),
   nested and sibling `Try`s, rethrow, user-defined exception types, and `ex.Message`/`StackTrace`/
   `Source` through a narrow recorded table — anything outside it is refused, not guessed.
+  ⚠ **Instance methods know about `Me` as of 2026-09-16**, and the pin that covered this named
+  the WRONG cause — it said "a CALL-side defect", but the call was always fine (a method touching
+  nothing runs), and the stack trace pointed inside the callee. The emitter simply had no notion
+  that an instance member is handed its receiver in argument slot 0. ⛔ **The worst consequence
+  was silent**: parameters were numbered from 0, so the first one read the OBJECT REFERENCE —
+  `Add(20, 22)` returned 872452332 instead of 42, and no test was watching. Also fixed by the same
+  notion: bare field reads (pushed nothing), bare field writes (landed in a temporary and were
+  dropped — `stfld` wants the object UNDER the value, so the store goes through a scratch slot
+  because IL has no swap), `Me.X`, and sibling self-calls (emitted a static `call` on a phantom
+  `Program` class). Constructors are instance members too and never emitted a `.locals` directive
+  at all. **The class-member paths now share the module path's state** — exception-handling
+  locals, the emitted-block set, and the lowered-return exit block — so a `Try` inside a class
+  method works; keeping those per-path is what made each of them separately wrong.
   ⚠ **Arrays allocate as of 2026-09-16.** `Dim a(2) As String` declared the local and stopped —
   `.locals init` zeroes a slot, it does not construct anything, so every access dereferenced null.
   Allocation now happens at both declaration sites (locals in the method prologue, fields in every

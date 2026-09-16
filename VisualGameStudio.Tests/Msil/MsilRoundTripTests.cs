@@ -1055,15 +1055,28 @@ public class MsilRoundTripTests
         });
     }
 
-    /// <summary>
-    /// ⛔ Calling an instance method on a user class produces a method the CLR rejects. The
-    /// local and the object now exist (see <see cref="ALocalOfAUserClass_Runs"/>), so this is a
-    /// CALL-side defect, distinct from the type-spec one that was fixed.
-    /// </summary>
+    // ---- Instance methods, fixed 2026-09-16 --------------------------------------------
+    //
+    // ⚠ The pin this replaces named the wrong cause. It read "this is a CALL-side defect", but
+    // the call was never the problem — an instance method that touches nothing runs fine, and the
+    // stack trace said `at Greeter.Greet()`, inside the callee. The real cause is that the
+    // emitter had no notion of `Me`: an instance method is handed its receiver in argument slot
+    // 0, and nothing accounted for that. Five failures followed from the one omission:
+    //
+    //   1. Every parameter was off by one. `Add(a, b)` emitted `ldarg.0 / ldarg.1 / add`, adding
+    //      the OBJECT REFERENCE to `a`. That is the dangerous one — 20 + 22 returned 872452332
+    //      rather than crashing, and no pinned test was watching it.
+    //   2. A bare field READ pushed nothing, so the next instruction ran an operand short.
+    //   3. A bare field WRITE stored into a temporary and was dropped: `N = N + 1` computed the
+    //      sum and threw it away.
+    //   4. `Me` resolved to nothing, so `Me.Name` emitted `ldfld` against an empty stack.
+    //   5. A sibling self-call emitted `call int32 Program::Inner()` — a static call, on a class
+    //      that does not exist, to a method that is not static.
+
     [Test]
-    public void AUserClassInstanceMethodCall_IsAnInvalidProgram_PinnedDivergence()
+    public void AnInstanceMethod_ReadsItsOwnFields()
     {
-        var run = Run("""
+        Assert.That(RunExpectingSuccess("""
             Class Greeter
              Public Name As String
              Public Function Greet() As String
@@ -1078,12 +1091,225 @@ public class MsilRoundTripTests
               PrintLine(g.Greet())
              End Sub
             End Module
+            """), Is.EqualTo("HI-BOB\n"),
+            "a bare field name inside an instance method must become `ldarg.0` + `ldfld`; "
+            + "resolving it to nothing leaves String::Concat one operand short and the CLR "
+            + "rejects the whole method.");
+    }
+
+    /// <summary>
+    /// ⚠ <b>The most dangerous defect in this group, and the one no pin was watching.</b> It did
+    /// not crash — it returned a plausible-looking integer. <c>ldarg.0</c> is <c>Me</c> in an
+    /// instance method, so numbering parameters from 0 made the first one read the object
+    /// reference: <c>Add(20, 22)</c> returned 872452332.
+    /// </summary>
+    [Test]
+    public void AnInstanceMethodsParameters_AreOffsetPastMe()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Class Adder
+             Public Function Add(a As Integer, b As Integer) As Integer
+              Return a + b
+             End Function
+            End Class
+
+            Module M
+             Sub Main()
+              Dim x As New Adder()
+              PrintLine(CStr(x.Add(20, 22)))
+             End Sub
+            End Module
+            """), Is.EqualTo("42\n"),
+            "any answer other than 42 — especially a large one — means a parameter is reading the "
+            + "argument slot before it.");
+    }
+
+    /// <summary>
+    /// Several parameters AND a field in one expression, so an offset that is wrong by a
+    /// different amount per position cannot pass. Each parameter contributes a distinct decimal
+    /// place, so a swap or a shift changes the digits rather than the total.
+    /// </summary>
+    [Test]
+    public void AnInstanceMethod_MixesSeveralParametersWithAField()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Class Calc
+             Public Base As Integer
+             Public Function Mix(a As Integer, b As Integer, c As Integer) As Integer
+              Return Base + a * 100 + b * 10 + c
+             End Function
+            End Class
+
+            Module M
+             Sub Main()
+              Dim k As New Calc()
+              k.Base = 5000
+              PrintLine(CStr(k.Mix(1, 2, 3)))
+             End Sub
+            End Module
+            """), Is.EqualTo("5123\n"));
+    }
+
+    [Test]
+    public void AnInstanceMethod_WritesItsOwnFields()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Class Counter
+             Public N As Integer
+             Public Sub Bump()
+              N = N + 1
+             End Sub
+             Public Function Value() As Integer
+              Return N
+             End Function
+            End Class
+
+            Module M
+             Sub Main()
+              Dim c As New Counter()
+              c.Bump()
+              c.Bump()
+              PrintLine(CStr(c.Value()))
+             End Sub
+            End Module
+            """), Is.EqualTo("2\n"),
+            "`stfld` wants the object UNDER the value and this backend emits the value first, so "
+            + "the store goes through a scratch slot. 0 means the assignment was dropped into a "
+            + "temporary, which is what it used to do.");
+    }
+
+    [Test]
+    public void MeQualifiedFieldAccess_Resolves()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Class Greeter
+             Public Name As String
+             Public Function Greet() As String
+              Return "HI-" & Me.Name
+             End Function
+            End Class
+
+            Module M
+             Sub Main()
+              Dim g As New Greeter()
+              g.Name = "BOB"
+              PrintLine(g.Greet())
+             End Sub
+            End Module
+            """), Is.EqualTo("HI-BOB\n"),
+            "`Me` is the receiver in argument slot 0; resolving it to nothing left `ldfld` with "
+            + "an empty stack.");
+    }
+
+    [Test]
+    public void AnInstanceMethod_CallsASiblingOnItself()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Class Chain
+             Public Function Inner() As Integer
+              Return 7
+             End Function
+             Public Function Outer() As Integer
+              Return Inner() + 1
+             End Function
+            End Class
+
+            Module M
+             Sub Main()
+              Dim c As New Chain()
+              PrintLine(CStr(c.Outer()))
+             End Sub
+            End Module
+            """), Is.EqualTo("8\n"),
+            "an unqualified sibling call needs the receiver pushed and a `callvirt instance`; it "
+            + "used to emit a static call on a phantom `Program` class.");
+    }
+
+    [Test]
+    public void AConstructorParameter_InitializesAField()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Class P
+             Public N As Integer
+             Public Sub New(v As Integer)
+              N = v
+             End Sub
+            End Class
+
+            Module M
+             Sub Main()
+              Dim p As New P(5)
+              PrintLine(CStr(p.N))
+             End Sub
+            End Module
+            """), Is.EqualTo("5\n"),
+            "a constructor is an instance member too, and its body needs a locals declaration — "
+            + "which the constructor path never emitted at all.");
+    }
+
+    /// <summary>
+    /// A <c>Try</c> inside a class member. This was a loud refusal before ("the catch variable
+    /// has no local slot") because only the module-level path prepared exception-handling state;
+    /// the class paths now share it, along with the emitted-block set and the lowered-return exit
+    /// block that a <c>Return</c> inside a region leaves to.
+    /// </summary>
+    [Test]
+    public void ATryInsideAClassMethod_Runs()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Class Risky
+             Public Name As String
+             Public Function Run() As String
+              Try
+               Throw New Exception("x")
+              Catch ex As Exception
+               Return "CAUGHT-" & Name
+              End Try
+              Return "NONE"
+             End Function
+            End Class
+
+            Module M
+             Sub Main()
+              Dim r As New Risky()
+              r.Name = "Z"
+              PrintLine(r.Run())
+             End Sub
+            End Module
+            """), Is.EqualTo("CAUGHT-Z\n"));
+    }
+
+    /// <summary>
+    /// ⛔ Still broken, and NOT caused by the instance-method work — verified identical on the
+    /// base commit. A <c>Shared</c> method called as <c>Type.Member(...)</c> flattens into a
+    /// phantom <c>Combined.MathUtilTwice</c>: the same dotted-static-call family as
+    /// <see cref="TheRestOfTheDottedStaticSurface_IsStillAPhantomSelfCall_PinnedDivergence"/>,
+    /// which is a decision about how the whole static surface reaches MSIL rather than a defect
+    /// to patch here.
+    /// </summary>
+    [Test]
+    public void ASharedMethodOnAUserClass_IsAPhantomCall_PinnedDivergence()
+    {
+        var run = Run("""
+            Class MathUtil
+             Public Shared Function Twice(v As Integer) As Integer
+              Return v * 2
+             End Function
+            End Class
+
+            Module M
+             Sub Main()
+              PrintLine(CStr(MathUtil.Twice(21)))
+             End Sub
+            End Module
             """);
 
         Assert.Multiple(() =>
         {
             Assert.That(run.Outcome, Is.EqualTo(MsilOutcome.RunFailed), run.Report);
-            Assert.That(run.Output, Does.Contain("InvalidProgramException"), run.Detail);
+            Assert.That(run.Output, Does.Contain("MissingMethodException"),
+                "PINNED WRONG ANSWER: this must print 42. When it does, the dotted static surface "
+                + "learned to resolve a user class — delete this test and assert the value.");
         });
     }
 

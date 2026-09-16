@@ -70,9 +70,35 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
         /// <summary>
         /// Locals this backend declares that <c>IRFunction.LocalVariables</c> does not carry:
-        /// catch-clause exception variables and the lowered-return result slot.
+        /// catch-clause exception variables, the lowered-return result slot, and field-store
+        /// scratch slots.
         /// </summary>
         private readonly List<(int Index, string Spec, string Name)> _syntheticLocals = new();
+
+        // ---- Instance-method state ----------------------------------------------------
+        //
+        // An instance method is handed `Me` in argument slot 0, which shifts EVERY declared
+        // parameter up by one and gives the body a receiver it can reach fields and sibling
+        // methods through. The emitter had no notion of any of that: it numbered parameters from
+        // 0 (so `Add(a, b)` emitted `ldarg.0 / ldarg.1 / add` and added the OBJECT REFERENCE to
+        // `a` — a silent wrong answer), and a bare field name resolved to nothing at all.
+
+        /// <summary>True while emitting a method that has <c>Me</c> in argument slot 0.</summary>
+        private bool _currentMethodIsInstance;
+
+        /// <summary>
+        /// The instance fields reachable as bare names in the current method body. Empty for a
+        /// static or module method, which is what keeps their output byte-identical.
+        /// </summary>
+        private readonly Dictionary<string, TypeInfo> _currentClassFields =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Scratch slot per field that the current method ASSIGNS — see <see cref="EmitStoreLocal"/>.</summary>
+        private readonly Dictionary<string, int> _fieldStoreScratch =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>The IL name of the type whose fields <see cref="_currentClassFields"/> holds.</summary>
+        private string _currentClassToken;
 
         public override string BackendName => "MSIL";
         public override TargetPlatform Target => TargetPlatform.MSIL;
@@ -793,9 +819,15 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 if (prop.Getter.EntryBlock != null)
                 {
                     _currentFunction = prop.Getter;
-                    InitializeMethodContext(prop.Getter);
-                    var visited = new HashSet<BasicBlock>();
+                    InitializeMethodContext(prop.Getter, isInstance: !prop.IsStatic, owner: irClass);
+                    // _visitedBlocks, not a local set: Visit(IRTryCatch) marks a region's blocks THERE so
+                    // GenerateBasicBlock will not write them a second time. A local set left the two
+                    // disagreeing, and a Try inside a class member emitted every region block twice
+                    // ("Duplicate label").
+                    _visitedBlocks = new HashSet<BasicBlock>();
+                    var visited = _visitedBlocks;
                     GenerateBasicBlock(prop.Getter.EntryBlock, visited, isEntry: true);
+                    EmitLoweredReturnExit();
                     _currentFunction = null;
                 }
                 else
@@ -821,9 +853,15 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 if (prop.Setter.EntryBlock != null)
                 {
                     _currentFunction = prop.Setter;
-                    InitializeMethodContext(prop.Setter);
-                    var visited = new HashSet<BasicBlock>();
+                    InitializeMethodContext(prop.Setter, isInstance: !prop.IsStatic, owner: irClass);
+                    // _visitedBlocks, not a local set: Visit(IRTryCatch) marks a region's blocks THERE so
+                    // GenerateBasicBlock will not write them a second time. A local set left the two
+                    // disagreeing, and a Try inside a class member emitted every region block twice
+                    // ("Duplicate label").
+                    _visitedBlocks = new HashSet<BasicBlock>();
+                    var visited = _visitedBlocks;
                     GenerateBasicBlock(prop.Setter.EntryBlock, visited, isEntry: true);
+                    EmitLoweredReturnExit();
                     _currentFunction = null;
                 }
 
@@ -851,6 +889,21 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine("  {");
             WriteLine("    .maxstack 8");
 
+            // ⛔ A constructor body gets locals like any other method, and this never declared
+            // them: `Public Sub New(v As Integer) : N = v` needs a slot to park the value in
+            // before `stfld`, and emitting a store against an undeclared slot is an invalid
+            // program. The context is initialized here, ahead of the base call, so the tables the
+            // declaration is written from are populated.
+            if (ctor.Implementation != null)
+            {
+                _currentFunction = ctor.Implementation;
+                InitializeMethodContext(ctor.Implementation, isInstance: true, owner: irClass);
+                if (_localIndices.Count > 0 || _tempIndices.Count > 0)
+                {
+                    GenerateLocalsDeclaration(ctor.Implementation);
+                }
+            }
+
             // Call base constructor
             var baseClass = string.IsNullOrEmpty(irClass.BaseClass) ? "[mscorlib]System.Object" : IlTypeToken(irClass.BaseClass);
             WriteLine("    ldarg.0");
@@ -858,13 +911,19 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             EmitArrayFieldAllocations(irClass);
 
-            // Generate constructor body
+            // Generate constructor body. The context was initialized above, before the locals
+            // declaration was written from it — re-initializing here would just rebuild the same
+            // tables.
             if (ctor.Implementation?.EntryBlock != null)
             {
-                _currentFunction = ctor.Implementation;
-                InitializeMethodContext(ctor.Implementation);
-                var visited = new HashSet<BasicBlock>();
+                // _visitedBlocks, not a local set: Visit(IRTryCatch) marks a region's blocks THERE so
+                    // GenerateBasicBlock will not write them a second time. A local set left the two
+                    // disagreeing, and a Try inside a class member emitted every region block twice
+                    // ("Duplicate label").
+                    _visitedBlocks = new HashSet<BasicBlock>();
+                    var visited = _visitedBlocks;
                 GenerateBasicBlock(ctor.Implementation.EntryBlock, visited, isEntry: true);
+                EmitLoweredReturnExit();
                 _currentFunction = null;
             }
 
@@ -932,7 +991,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (method.Implementation != null && !method.IsAbstract)
             {
                 _currentFunction = method.Implementation;
-                InitializeMethodContext(method.Implementation);
+                InitializeMethodContext(method.Implementation, isInstance: !method.IsStatic, owner: irClass);
 
                 // Calculate max stack
                 _maxStack = Math.Max(8, _localIndices.Count + _tempIndices.Count + 4);
@@ -949,8 +1008,14 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 // Generate body
                 if (method.Implementation.EntryBlock != null)
                 {
-                    var visited = new HashSet<BasicBlock>();
+                    // _visitedBlocks, not a local set: Visit(IRTryCatch) marks a region's blocks THERE so
+                    // GenerateBasicBlock will not write them a second time. A local set left the two
+                    // disagreeing, and a Try inside a class member emitted every region block twice
+                    // ("Duplicate label").
+                    _visitedBlocks = new HashSet<BasicBlock>();
+                    var visited = _visitedBlocks;
                     GenerateBasicBlock(method.Implementation.EntryBlock, visited, isEntry: true);
+                    EmitLoweredReturnExit();
                 }
 
                 _currentFunction = null;
@@ -966,7 +1031,15 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine();
         }
 
-        private void InitializeMethodContext(IRFunction function)
+        /// <summary>
+        /// Per-method setup for a CLASS member (method, constructor, property accessor).
+        ///
+        /// <para><paramref name="isInstance"/> is the whole point: an instance member is handed
+        /// <c>Me</c> in argument slot 0, so its first declared parameter is <c>ldarg.1</c>. Passing
+        /// false reproduces the previous numbering exactly, which is why static members and
+        /// module-level functions are untouched by this.</para>
+        /// </summary>
+        private void InitializeMethodContext(IRFunction function, bool isInstance = false, IRClass owner = null)
         {
             _localIndices.Clear();
             _paramIndices.Clear();
@@ -977,10 +1050,44 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _maxStack = 8;
             _currentStack = 0;
 
+            // The same per-method reset GenerateMethod does. Without it a Try inside a class
+            // member would find no exception-handling state prepared for it.
+            _syntheticLocals.Clear();
+            _regionBlocks = null;
+            _regionIsFinally = false;
+            _regionIsCatch = false;
+            _regionLeaveTarget = null;
+            _methodExitResultLocal = -1;
+            _methodExitUsed = false;
+            _methodExitLabel = $"eh_exit_{_labelCounter++}";
+
+            _currentMethodIsInstance = isInstance;
+            _currentClassFields.Clear();
+            _fieldStoreScratch.Clear();
+            _currentClassToken = owner != null ? SanitizeName(owner.Name) : null;
+
+            if (isInstance && owner?.Fields != null)
+            {
+                foreach (var field in owner.Fields)
+                {
+                    if (field.IsStatic || string.IsNullOrEmpty(field.Name)) continue;
+                    _currentClassFields[field.Name] = field.Type;
+
+                    // Register the field as a name the body can resolve. This is what routes an
+                    // assignment's destination through EmitStoreLocal rather than into a temp,
+                    // where `N = N + 1` used to silently land and be dropped.
+                    _declaredIdentifiers.Add(field.Name);
+                }
+            }
+
+            // ⛔ `Me` occupies slot 0, so the first DECLARED parameter is slot 1. Numbering from 0
+            // made every parameter read the argument before it — the first one reading the object
+            // reference itself, which is an integer-shaped wrong answer, not a crash.
+            var argumentSlot = isInstance ? 1 : 0;
             foreach (var param in function.Parameters)
             {
                 _declaredIdentifiers.Add(param.Name);
-                _paramIndices[param.Name] = _paramIndices.Count;
+                _paramIndices[param.Name] = argumentSlot++;
             }
 
             foreach (var local in function.LocalVariables)
@@ -989,7 +1096,56 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 _localIndices[local.Name] = _localIndices.Count;
             }
 
+            AllocateExceptionHandlingLocals(function);
+            AllocateFieldStoreScratch(function);
             AllocateTemporaries(function);
+        }
+
+        /// <summary>
+        /// Reserves one scratch slot per field this method ASSIGNS to.
+        ///
+        /// <para><c>stfld</c> wants the object reference UNDER the value, but this backend emits a
+        /// value and then asks for it to be stored — <see cref="EmitStoreLocal"/> is called with
+        /// the value already on the stack and IL has no swap. The scratch slot is how the value
+        /// gets out of the way while <c>ldarg.0</c> goes down: park, push <c>Me</c>, re-push,
+        /// <c>stfld</c>.</para>
+        ///
+        /// <para>Only fields actually written get a slot, found by scanning for instructions whose
+        /// RESULT is named after a field — that is the shape an assignment takes here, since
+        /// <c>N = N + 1</c> lowers to a single binary op named <c>N</c>.</para>
+        /// </summary>
+        private void AllocateFieldStoreScratch(IRFunction function)
+        {
+            if (!_currentMethodIsInstance || _currentClassFields.Count == 0) return;
+
+            foreach (var block in function.Blocks)
+            {
+                foreach (var instruction in block.Instructions)
+                {
+                    // THREE shapes reach EmitStoreLocal with a field's name, and neither of the
+                    // last two is an IRValue — scanning only for named results missed both:
+                    //   `N = N + 1`  a binary op whose RESULT is named N
+                    //   `N = v`      an IRAssignment whose TARGET is the variable N
+                    //   (and IRStore, whose ADDRESS is the variable, for the same reason)
+                    var target = instruction switch
+                    {
+                        IRAssignment assignment => assignment.Target?.Name,
+                        IRStore store when store.Address is IRVariable variable => variable.Name,
+                        IRValue value => value.Name,
+                        _ => null,
+                    };
+
+                    if (string.IsNullOrEmpty(target)) continue;
+                    if (!_currentClassFields.TryGetValue(target, out var fieldType)) continue;
+                    if (_fieldStoreScratch.ContainsKey(target)) continue;
+
+                    var index = _localIndices.Count;
+                    var name = $"fld_scratch_{SanitizeName(target)}";
+                    _localIndices[name] = index;
+                    _fieldStoreScratch[target] = index;
+                    _syntheticLocals.Add((index, IlTypeSpec(fieldType), name));
+                }
+            }
         }
 
         private void GenerateHeader(IRModule module)
@@ -1138,14 +1294,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 GenerateBasicBlock(function.EntryBlock, _visitedBlocks, isEntry: true);
             }
 
-            // The one `ret` a Return inside a protected region leaves to. Emitted only when such a
-            // Return was actually lowered, so a method without one is byte-identical to before.
-            if (_methodExitUsed)
-            {
-                WriteLine($"  {_methodExitLabel}:");
-                if (_methodExitResultLocal >= 0) EmitLdloc(_methodExitResultLocal);
-                WriteLine("    ret");
-            }
+            EmitLoweredReturnExit();
 
             // Ensure method ends with ret
             if (returnType == "void" && !EndsWithRet())
@@ -1207,6 +1356,23 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 _localIndices[name] = _methodExitResultLocal;
                 _syntheticLocals.Add((_methodExitResultLocal, IlTypeSpec(function.ReturnType), name));
             }
+        }
+
+        /// <summary>
+        /// The one <c>ret</c> that a <c>Return</c> lowered out of a protected region leaves to.
+        ///
+        /// <para>Emitted only when such a Return was actually lowered, so a method without one is
+        /// byte-identical to before. Shared by every path that emits a body — a method, a class
+        /// member, a constructor, a property accessor — because a `leave` to a label nobody writes
+        /// is an unresolved forward reference and ilasm refuses the method outright.</para>
+        /// </summary>
+        private void EmitLoweredReturnExit()
+        {
+            if (!_methodExitUsed) return;
+
+            WriteLine($"  {_methodExitLabel}:");
+            if (_methodExitResultLocal >= 0) EmitLdloc(_methodExitResultLocal);
+            WriteLine("    ret");
         }
 
         /// <summary>The implicit <c>Catch</c> type when a clause names none.</summary>
@@ -1541,8 +1707,31 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 return;
             }
 
+            // `Me` is the receiver in argument slot 0. It used to resolve to nothing, so
+            // `Me.Name` emitted a WARNING comment and then `ldfld` with an EMPTY stack.
+            if (_currentMethodIsInstance && IsSelfReference(name))
+            {
+                EmitLdarg(0);
+                return;
+            }
+
+            // A bare field name inside an instance method. This pushed NOTHING, so the very next
+            // instruction ran an operand short — `Return "HI-" & Name` reached String::Concat with
+            // one argument and the CLR rejected the whole method.
+            if (_currentMethodIsInstance && _currentClassFields.TryGetValue(name, out var fieldType))
+            {
+                EmitLdarg(0);
+                WriteLine($"    ldfld {IlTypeSpec(fieldType)} {_currentClassToken}::{SanitizeName(name)}");
+                return;
+            }
+
             WriteLine($"    // WARNING: Unknown local '{name}'");
         }
+
+        /// <summary>The spellings of the receiver a BasicLang instance method can name.</summary>
+        private static bool IsSelfReference(string name) =>
+            string.Equals(name, "Me", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "this", StringComparison.OrdinalIgnoreCase);
 
         private void EmitStoreLocal(string name)
         {
@@ -1550,6 +1739,22 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (idx >= 0)
             {
                 EmitStloc(idx);
+                return;
+            }
+
+            // Assigning a field of the enclosing instance. The value is ALREADY on the stack and
+            // `stfld` needs the object under it, so park the value, push `Me`, and re-push — IL
+            // has no swap. Without this the assignment landed in a temporary and was dropped:
+            // `N = N + 1` computed the sum and threw it away.
+            if (_currentMethodIsInstance
+                && _currentClassFields.TryGetValue(name, out var fieldType)
+                && _fieldStoreScratch.TryGetValue(name, out var scratch))
+            {
+                EmitStloc(scratch);
+                EmitLdarg(0);
+                EmitLdloc(scratch);
+                WriteLine($"    stfld {IlTypeSpec(fieldType)} {_currentClassToken}::{SanitizeName(name)}");
+                _currentStack -= 2;
                 return;
             }
 
@@ -1968,6 +2173,19 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 return;
             }
 
+            // ⛔ A SIBLING call inside an instance method — `Return Inner() + 1` — needs the
+            // receiver pushed first and a `callvirt instance`. It used to fall through to the
+            // module-class arm below and emit `call int32 Program::Inner()`: a static call, on a
+            // class that does not exist, to a method that is not static. `_moduleName` is null
+            // while a class body is being emitted, which is where the phantom `Program` came from.
+            var isSelfCall = _currentMethodIsInstance
+                && _currentClassToken != null
+                && _currentClass?.Methods != null
+                && _currentClass.Methods.Any(m => !m.IsStatic
+                    && string.Equals(m.Name, funcName, StringComparison.OrdinalIgnoreCase));
+
+            if (isSelfCall) EmitLdarg(0);
+
             // Load arguments
             foreach (var arg in call.Arguments)
             {
@@ -1981,9 +2199,17 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             var paramTypes = string.Join(", ", call.Arguments.Select(a => IlTypeSpec(a.Type)));
             var sanitizedName = SanitizeName(funcName);
 
-            // Use module name for class reference
-            var className = _moduleName ?? "Program";
-            WriteLine($"    call {returnType} {className}::{sanitizedName}({paramTypes})");
+            if (isSelfCall)
+            {
+                WriteLine($"    callvirt instance {returnType} {_currentClassToken}::{sanitizedName}({paramTypes})");
+                _currentStack--;   // the receiver
+            }
+            else
+            {
+                // Use module name for class reference
+                var className = _moduleName ?? "Program";
+                WriteLine($"    call {returnType} {className}::{sanitizedName}({paramTypes})");
+            }
 
             _currentStack -= call.Arguments.Count;
             if (hasReturn) _currentStack++;
