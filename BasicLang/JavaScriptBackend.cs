@@ -673,17 +673,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case IRBaseMethodCall bc:
                     return Bound(bc) ? SanitizeName(bc.Name) : BaseCall(bc);
 
-                // The inline-renderer twin of Visit(IRCast). A numeric WIDENING cast — what
-                // IRBuilder inserts so `/` divides in floating point — is a no-op here because
-                // every JS number is already an IEEE double.
+                // The inline-renderer twin of Visit(IRCast) — see TryNumericCast for what each
+                // numeric shape renders as and why narrowing is not a no-op here.
                 //
                 // ⛔ BOTH ARMS ARE REQUIRED. The renderer rebuilds operand trees rather than
                 // looking names up, so patching only the statement form left `a / b` throwing
                 // from RenderBinary the moment the division sat inside a larger expression.
-                // Any cast that is NOT this widening still throws, on both paths.
-                case IRCast c when c.SourceType?.IsIntegral() == true
-                                   && c.Type?.IsFloatingPoint() == true:
-                    return Bound(c) ? SanitizeName(c.Name) : Expr(c.Value);
+                // Any cast that is NOT numeric still throws, on both paths.
+                case IRCast c when TryNumericCast(c, out var castRendered):
+                    return Bound(c) ? SanitizeName(c.Name) : castRendered;
 
                 default:
                     throw NotYet(value.GetType().Name + " (as an expression)");
@@ -2239,19 +2237,68 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         // already an IEEE double, so the widening is a no-op and the destination simply binds
         // the operand.
         //
-        // ⛔ ONLY that shape. CType is genuinely unimplemented on this backend, and passing an
-        // arbitrary cast through silently would convert an unsupported construct into a
-        // miscompile — the exact trade this file's NotYet() exists to refuse. Narrowing is not
-        // a no-op in JS either (it needs Math.trunc), so it keeps throwing too.
+        // ⛔ ONLY numeric shapes. CType is genuinely unimplemented on this backend, and passing
+        // an arbitrary cast through silently would convert an unsupported construct into a
+        // miscompile — the exact trade this file's NotYet() exists to refuse.
         public void Visit(IRCast cast)
         {
-            if (cast.SourceType?.IsIntegral() == true && cast.Type?.IsFloatingPoint() == true)
+            if (TryNumericCast(cast, out var rendered))
             {
-                Bind(cast.Name, Expr(cast.Value));
+                Bind(cast.Name, rendered);
                 return;
             }
 
             throw NotYet(nameof(IRCast));
+        }
+
+        /// <summary>
+        /// Renders a numeric <see cref="IRCast"/>, or reports that this is not one.
+        ///
+        /// <para>⛔ <b>Narrowing is NOT a no-op here, and the note that used to sit above
+        /// <see cref="Visit(IRCast)"/> was right to say so.</b> Every JS number is an IEEE double,
+        /// so a Double reaching an Integer slot keeps its fraction unless something removes it:
+        /// <c>Function Half(v As Integer) As Integer : Return v / 2</c> returned <c>3.5</c> for
+        /// <c>Half(7)</c> — a wrong answer from a build that succeeded. It only looked correct
+        /// for inputs whose quotient was already whole.</para>
+        ///
+        /// <para><c>Math.trunc</c>, not <c>Math.round</c>: it matches what the C++ and MSIL
+        /// backends do for the same cast (measured — all three give 3 for <c>7 / 2</c>). That
+        /// disagrees with VB.NET's banker's rounding, which is a pre-existing decision about the
+        /// whole narrowing surface and not this function's to make; what matters here is that JS
+        /// stops being the one backend that does not narrow at all.</para>
+        ///
+        /// <para>⛔ Integral→integral is NOT handled, and a <c>| 0</c> arm for it was written here
+        /// and then removed as unreachable speculation. Measured: <c>Long</c> never reaches this
+        /// backend at all (<c>JsCapabilityChecker</c> rejects it with BL7003 — a JS number is
+        /// exact only to 2^53), and <c>Function … As Short</c> returning an Integer produces NO
+        /// cast, because the analyzer already types the expression <c>Short</c>. With no shape
+        /// that reaches it, the arm could not be tested, so it keeps throwing — this file's
+        /// <c>NotYet()</c> exists to refuse exactly that trade. (A Short return not being wrapped
+        /// to 16 bits is a real defect, but it is the analyzer's, and it is not this seam's.)</para>
+        /// </summary>
+        private bool TryNumericCast(IRCast cast, out string rendered)
+        {
+            rendered = null;
+            var source = cast.SourceType;
+            var target = cast.Type;
+            if (source == null || target == null) return false;
+
+            // Widening to floating point, and Single↔Double: the double already holds it.
+            if (target.IsFloatingPoint() && (source.IsIntegral() || source.IsFloatingPoint()))
+            {
+                rendered = Expr(cast.Value);
+                return true;
+            }
+
+            if (!target.IsIntegral()) return false;
+
+            if (source.IsFloatingPoint())
+            {
+                rendered = $"Math.trunc({Expr(cast.Value)})";
+                return true;
+            }
+
+            return false;
         }
         public void Visit(IRCompare compare) => Bind(compare, CompareExpr(compare));
         public void Visit(IRSwitch switchInst) => throw NotYet(nameof(IRSwitch));
