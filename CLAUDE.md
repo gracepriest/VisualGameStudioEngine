@@ -138,7 +138,25 @@ a second document type.
 - ⚠ The handler-ordering rule (a handler must precede the region that wires it) is **web-only** —
   measured. On WinForms the same shape compiles, which is why the shipped VSIX template does it.
 - The canvas is a **schematic**, not a preview: the IDE has no browser and no WinForms surface. F5
-  to the real target is the renderer.
+  to the real target is the renderer. ⚠ "Schematic" has never meant "all kinds look alike" —
+  `DrawControl` reads `FormSchematic` off the **catalog row**, so a Button, a CheckBox and a Panel
+  draw differently. Never switch on `control.Kind` in the canvas: that is a second list of controls,
+  and it falls to its default the day a row is added — a new control silently drawing as a plain box.
+- ⛔ **The canvas IS testable, and "verified by running the IDE" is no longer true.**
+  `Avalonia.Headless` + `Avalonia.Skia` drive the real control and render real pixels;
+  `FormCanvasRenderTests` renders every catalog kind and hashes the frames, and killed the
+  one-grey-box defect on a mutation. Two of the three designer bugs the owner found in one week were
+  in view code that had no tests because this was believed impossible. When you add view behaviour
+  here, a headless test is available — use it.
+  - ⚠ **Skia is required.** `UseHeadlessDrawing = true` is the default and makes
+    `CaptureRenderedFrame` throw: a renderless platform draws nothing to compare.
+  - ⚠ **`[AvaloniaTest]`** (Avalonia.Headless.NUnit) runs the body on the dispatcher thread. Without
+    it the control constructs on a worker thread and fails in ways that look like product bugs.
+  - ⛔ **Give every fixture control the SAME id.** The canvas labels a control `Text ?? Id`, so
+    ids like `Button1`/`TextBox1` make each frame differ by its text alone and a rendering test
+    passes with the defect fully present.
+  - ⚠ A `ListBox` with `Width`/`Height` set is **centred** in its window, so a fixed press point
+    lands on empty chrome — a layout problem wearing a routing problem's error message.
 - ⛔⛔ **A thing with no caller is the failure mode here — FIVE separate pieces of this feature were
   complete, unit-tested and unreachable, with a green suite throughout.** `RegionWriter.Write`
   never ran, so a scaffolded form's `InitializeComponent` was never generated; `DispatchSource`

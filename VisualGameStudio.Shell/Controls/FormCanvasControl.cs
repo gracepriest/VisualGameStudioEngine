@@ -20,10 +20,14 @@ namespace VisualGameStudio.Shell.Controls;
 /// <para>⛔ Lives in <c>VisualGameStudio.Shell</c>, not <c>VisualGameStudio.Editor</c>, which has no
 /// reference to <c>BasicLang/Forms/</c> and so cannot see a <see cref="FormDocument"/> at all.</para>
 ///
-/// <para>⚠ <b>Not visually verified.</b> <see cref="FormCanvasTransform"/> — the mapping shared by
-/// rendering, hit-testing and selection — is covered by tests, because a drift there has no visual
-/// symptom. What the canvas LOOKS like is checked by running the IDE and nothing else; no test here
-/// claims otherwise.</para>
+/// <para>⛔ <b>This used to say "not visually verified — what the canvas LOOKS like is checked by
+/// running the IDE and nothing else". That is no longer true, and believing it cost real defects.</b>
+/// <c>Avalonia.Headless</c> + <c>Avalonia.Skia</c> drive this control and render real pixels:
+/// <c>FormCanvasRenderTests</c> renders every catalog kind and hashes the frames. It was written
+/// after the canvas was found drawing all ten kinds as one identical grey box — invisible to every
+/// existing test, because they all asked about geometry and hit-testing, never about what was
+/// DRAWN. <see cref="FormCanvasTransform"/> remains separately covered, since a drift there has no
+/// visual symptom at all.</para>
 /// </summary>
 public class FormCanvasControl : Control
 {
