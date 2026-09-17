@@ -30,14 +30,18 @@ public partial class FormPropertyGridViewModel : ObservableObject
     /// <summary>The rows for the current selection. Empty when nothing is selected.</summary>
     public ObservableCollection<FormPropertyRow> Rows { get; } = new();
 
-    /// <summary>The selected control's id, shown as the grid's header.</summary>
-    public string Header => SelectedControl?.Id ?? "No selection";
+    /// <summary>
+    /// The selected control's id — or the FORM's name when nothing is selected, because that is
+    /// what the grid is then showing.
+    /// </summary>
+    public string Header => SelectedControl?.Id ?? _file?.Model.Name ?? "No selection";
 
     /// <summary>
     /// The control's KIND beside its id, the way VS's property window shows "button1  Button".
     /// Empty with no selection, so the header does not read "No selection No selection".
     /// </summary>
-    public string HeaderKind => SelectedControl?.Kind ?? string.Empty;
+    public string HeaderKind => SelectedControl?.Kind
+        ?? (_file != null ? _file.Model.RootElementName : string.Empty);
 
     /// <summary>True when there is nothing to show, so the view can say so rather than look broken.</summary>
     public bool IsEmpty => Rows.Count == 0;
@@ -94,7 +98,12 @@ public partial class FormPropertyGridViewModel : ObservableObject
     public void Load(FormFile? file)
     {
         _file = file;
+
+        // ⛔ Rebuild EXPLICITLY. Assigning null over null raises no change, so OnSelectedControlChanged
+        // does not fire — which was harmless while an empty selection meant an empty grid, and stopped
+        // being harmless the moment a form with no selection had rows of its own to show.
         SelectedControl = null;
+        Rebuild();
     }
 
     partial void OnSelectedControlChanged(FormControl? value) => Rebuild();
@@ -168,6 +177,57 @@ public partial class FormPropertyGridViewModel : ObservableObject
             },
             changed);
 
+    /// <summary>
+    /// The FORM's own properties — what VS shows when nothing on the surface is selected.
+    ///
+    /// <para>⚠ The form is a <see cref="FormDocument"/>, not a <see cref="FormControl"/>, so it has
+    /// no catalog row and none of its values live in an attribute dictionary. Intrinsic rows are
+    /// the whole of it.</para>
+    ///
+    /// <para>⚠ Name is frozen for a stronger reason than a control's: it names the generated CLASS,
+    /// and the document's own file name has to agree with it — a mismatch is refused at load.</para>
+    /// </summary>
+    private void AddFormRows(FormDocument form)
+    {
+        void Changed() => Edited?.Invoke(this, EventArgs.Empty);
+
+        Rows.Add(new FormPropertyRow(
+            "Name", FormPropertyType.String,
+            () => form.Name,
+            write: null,
+            Changed,
+            "The form's name is its class name, and the file name must agree with it."));
+
+        Rows.Add(new FormPropertyRow(
+            "Text", FormPropertyType.String,
+            () => form.Text ?? "",
+            v => form.Text = v,
+            Changed));
+
+        if (form.Target == FormTarget.WinForms)
+        {
+            // ⚠ The CLIENT size, as WinForms' ClientSize is — the same numbers the canvas's own
+            // resize grips write, so typing 400 here and dragging to 400 produce one document.
+            Rows.Add(IntRow("Width", () => form.Width ?? 0, v => form.Width = Math.Max(1, v), Changed));
+            Rows.Add(IntRow("Height", () => form.Height ?? 0, v => form.Height = Math.Max(1, v), Changed));
+        }
+        else if (form.Layout is { } layout)
+        {
+            // ⛔ Kept verbatim as CSS track lists, because the browser is the renderer. Offering
+            // them as free text is deliberate: "auto,1fr" and "repeat(3, 1fr)" are both legal and
+            // neither is something a typed editor could enumerate.
+            Rows.Add(new FormPropertyRow(
+                "Cols", FormPropertyType.String,
+                () => layout.Cols ?? "", v => layout.Cols = v, Changed));
+            Rows.Add(new FormPropertyRow(
+                "Rows", FormPropertyType.String,
+                () => layout.Rows ?? "", v => layout.Rows = v, Changed));
+            Rows.Add(new FormPropertyRow(
+                "Gap", FormPropertyType.String,
+                () => layout.Gap ?? "", v => layout.Gap = v, Changed));
+        }
+    }
+
     private void Rebuild()
     {
         Rows.Clear();
@@ -183,6 +243,7 @@ public partial class FormPropertyGridViewModel : ObservableObject
 
             foreach (var property in definition.Properties)
             {
+
                 // ⛔ A property the target does not have is not offered. WinForms RadioButton has
                 // no GroupName and WinForms ListBox no MultiSelect — measured, by csc. Offering
                 // them would let the user set a value that silently never reaches the generated
@@ -198,6 +259,13 @@ public partial class FormPropertyGridViewModel : ObservableObject
                     _file?.DegradedReason(control.Id, property.Name),
                     () => Edited?.Invoke(this, EventArgs.Empty)));
             }
+        }
+        else if (_file?.Model is { } form)
+        {
+            // ⛔ The FORM's own properties, shown when no control is selected — which is what VS
+            // does, and what this grid did not: clicking the form said "No selection" and offered
+            // nothing, so a form's caption and size could only be changed by editing the XML.
+            AddFormRows(form);
         }
 
         // ⚠ SelectedRow is cleared first: it points at a row of the PREVIOUS control, and leaving it

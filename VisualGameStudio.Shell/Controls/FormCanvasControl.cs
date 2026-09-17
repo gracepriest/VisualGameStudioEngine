@@ -913,6 +913,14 @@ public class FormCanvasControl : Control
         // click it. DrawHandles, called after every control is painted, is the whole indication.
         var schematic = FormControlCatalog.Find(control.Kind)?.Schematic ?? FormSchematic.Input;
 
+        // The control's own colours win over the system ones. `face` is what a chrome-coloured
+        // control fills with, `client` what a white-interior one does — a BackColor overrides
+        // whichever of the two this schematic uses.
+        var back = ControlColour(control, "BackColor");
+        var face = back ?? SurfaceBrush;
+        var client = back ?? WindowBrush;
+        var ink = ControlColour(control, "ForeColor") ?? LabelBrush;
+
         // The control's own Text if it has one, else its id — a box with no label is unidentifiable
         // on a schematic, which is the one thing the canvas has to get right.
         var label = control.Properties.TryGetValue("Text", out var text) && !string.IsNullOrEmpty(text)
@@ -932,11 +940,11 @@ public class FormCanvasControl : Control
                 break;
 
             case FormSchematic.Button:
-                context.FillRectangle(SurfaceBrush, bounds);
+                context.FillRectangle(face, bounds);
                 Bevel(context, bounds, raised: true);
                 if (!tooSmallForText && !string.IsNullOrEmpty(label))
                 {
-                    var caption = Text(label, LabelBrush);
+                    var caption = Text(label, ink);
                     labelOrigin = new Point(
                         bounds.X + Math.Max(3, (bounds.Width - caption.Width) / 2),
                         bounds.Y + Math.Max(2, (bounds.Height - caption.Height) / 2));
@@ -976,7 +984,7 @@ public class FormCanvasControl : Control
 
             case FormSchematic.Dropdown:
             {
-                context.FillRectangle(WindowBrush, bounds);
+                context.FillRectangle(client, bounds);
                 Bevel(context, bounds, raised: false);
 
                 // The drop button: a raised square on the right with a filled triangle, the way
@@ -1001,7 +1009,7 @@ public class FormCanvasControl : Control
 
             case FormSchematic.List:
             {
-                context.FillRectangle(WindowBrush, bounds);
+                context.FillRectangle(client, bounds);
                 Bevel(context, bounds, raised: false);
 
                 // ⚠ Rows start ONE row down from the top edge, not 18px down. The old offset was
@@ -1020,7 +1028,7 @@ public class FormCanvasControl : Control
             case FormSchematic.Container:
                 // Face-coloured with a sunken edge, like a Win95 Panel. It holds other controls, so
                 // the fill matches the form rather than hiding them under a different tone.
-                context.FillRectangle(SurfaceBrush, bounds);
+                context.FillRectangle(face, bounds);
                 Bevel(context, bounds, raised: false);
                 break;
 
@@ -1045,7 +1053,7 @@ public class FormCanvasControl : Control
             }
 
             case FormSchematic.Image:
-                context.FillRectangle(WindowBrush, bounds);
+                context.FillRectangle(client, bounds);
                 Bevel(context, bounds, raised: false);
                 context.DrawLine(RowPen, new Point(bounds.X + 2, bounds.Y + 2),
                     new Point(bounds.Right - 2, bounds.Bottom - 2));
@@ -1055,7 +1063,7 @@ public class FormCanvasControl : Control
 
             default:
                 // A TextBox and anything text-entry shaped: white client, sunken edge.
-                context.FillRectangle(WindowBrush, bounds);
+                context.FillRectangle(client, bounds);
                 Bevel(context, bounds, raised: false);
                 break;
         }
@@ -1067,7 +1075,7 @@ public class FormCanvasControl : Control
 
         using (context.PushClip(bounds))
         {
-            context.DrawText(Text(label, LabelBrush), labelOrigin);
+            context.DrawText(Text(label, ink), labelOrigin);
         }
     }
 
@@ -1104,6 +1112,26 @@ public class FormCanvasControl : Control
 
     /// <summary>Black, for the glyphs inside title-bar buttons. Chrome tones are too pale to read at 14px.</summary>
     private static readonly IPen GlyphPen = new Pen(new SolidColorBrush(Color.FromRgb(0x00, 0x00, 0x00)));
+
+    /// <summary>
+    /// A control's own <c>BackColor</c>/<c>ForeColor</c> when it sets one, else null.
+    ///
+    /// <para>⛔ Without this the canvas drew classic chrome and IGNORED the colours the property
+    /// grid had just written: setting BackColor changed the document, the generated code and the
+    /// running program, and nothing at all on screen — which reads as "setting BackColor does not
+    /// work". The value is the document's own text, so it parses the same "#rrggbb" / "#rgb" /
+    /// bare-name vocabulary the catalog accepts.</para>
+    ///
+    /// <para>⚠ An unparseable value returns null and the control keeps its system colour, rather
+    /// than falling back to black or throwing. D9 already FREEZES such a value in the grid with its
+    /// reason; the canvas's job is to not make it worse.</para>
+    /// </summary>
+    private static IBrush? ControlColour(FormControl control, string property) =>
+        control.Properties.TryGetValue(property, out var text)
+        && !string.IsNullOrWhiteSpace(text)
+        && Color.TryParse(text, out var colour)
+            ? new SolidColorBrush(colour)
+            : null;
 
     /// <summary>The alignment grid's dots — VB6's single most recognisable detail.</summary>
     private static readonly IBrush GridDotBrush = new SolidColorBrush(Color.FromRgb(0x70, 0x70, 0x70));

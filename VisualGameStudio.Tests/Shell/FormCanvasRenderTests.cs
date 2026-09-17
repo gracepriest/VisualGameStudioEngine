@@ -117,6 +117,42 @@ public class FormCanvasRenderTests
     }
 
     /// <summary>
+    /// ⛔ Setting BackColor must CHANGE THE PICTURE. The canvas drew classic chrome and ignored the
+    /// colours the property grid had just written, so setting BackColor changed the document, the
+    /// generated code and the running program — and nothing on screen. The owner reported it as
+    /// "setting the backcolor doesn't work", which is exactly what it looked like.
+    /// </summary>
+    [AvaloniaTest]
+    public void AControlsOwnBackColourChangesWhatIsDrawn()
+    {
+        var plain = DocumentWith("Button");
+
+        var coloured = DocumentWith("Button");
+        coloured.Controls[0].Properties["BackColor"] = "#FF0000";
+
+        Assert.That(RenderHash(coloured), Is.Not.EqualTo(RenderHash(plain)),
+            "a Button with BackColor set rendered identically to one without — the canvas is " +
+            "ignoring the control's own colours again");
+    }
+
+    /// <summary>
+    /// ⚠ An unparseable colour must leave the control looking normal. D9 already freezes such a
+    /// value in the property grid with its reason; the canvas's job is to not make it worse by
+    /// falling back to black or throwing.
+    /// </summary>
+    [AvaloniaTest]
+    public void AnUnparseableBackColourIsIgnored_NotDrawnAsBlack()
+    {
+        var plain = DocumentWith("Button");
+
+        var nonsense = DocumentWith("Button");
+        nonsense.Controls[0].Properties["BackColor"] = "not a colour";
+
+        Assert.That(RenderHash(nonsense), Is.EqualTo(RenderHash(plain)),
+            "an unparseable BackColor changed the drawing, so it was coerced to something");
+    }
+
+    /// <summary>
     /// ⚠ Pins the harness itself, not the product. If Skia is ever dropped from the test project,
     /// <c>CaptureRenderedFrame</c> returns nothing and <see cref="EveryControlKindRendersDistinctly"/>
     /// would fail with a message about frames rather than about drawing — this says which it is.

@@ -137,7 +137,15 @@ public class FormDesignModeTests
         Assert.Multiple(() =>
         {
             Assert.That(vm.Toolbox.Target, Is.EqualTo(FormTarget.Web));
-            Assert.That(vm.PropertyGrid.IsEmpty, Is.True, "nothing is selected yet");
+
+            // ⚠ This asserted IsEmpty "nothing is selected yet". With no control selected the grid
+            // now shows the FORM's own properties, as VS does — so the panel being pointed at the
+            // document is what "not empty" means here, and an empty one would be the defect.
+            Assert.That(vm.PropertyGrid.IsEmpty, Is.False,
+                "with nothing selected the grid shows the form's own properties");
+            Assert.That(vm.PropertyGrid.SelectedControl, Is.Null, "and nothing is selected yet");
+            Assert.That(vm.PropertyGrid.Header, Is.EqualTo("LoginForm"),
+                "headed by the form, not by 'No selection'");
         });
     }
 

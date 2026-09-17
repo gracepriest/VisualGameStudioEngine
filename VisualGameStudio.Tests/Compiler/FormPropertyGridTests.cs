@@ -195,11 +195,80 @@ public class FormPropertyGridTests
             "an unparseable value left the model where it was");
     }
 
+    /// <summary>
+    /// ⛔ The FORM's own properties, shown when nothing on the surface is selected — which is what
+    /// VS does. Clicking the form used to say "No selection" and offer nothing, so a form's caption
+    /// and size could only be changed by editing the XML by hand.
+    /// </summary>
     [Test]
-    public void Rows_AreEmpty_WithNoSelection()
+    public void WithNoControlSelected_TheGridShowsTheFormsOwnProperties()
+    {
+        var winForms = FormDocumentReader.Read("F.blform", WinFormsForm);
+        var grid = new FormPropertyGridViewModel();
+        grid.Load(winForms);
+
+        var names = grid.Rows.Select(r => r.Name).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(names, Does.Contain("Name").And.Contains("Text")
+                .And.Contains("Width").And.Contains("Height"));
+            Assert.That(grid.Header, Is.EqualTo("F"), "the header names the form, not 'No selection'");
+            Assert.That(grid.IsEmpty, Is.False);
+
+            // ⛔ The form's name is its CLASS name and the file name must agree with it.
+            Assert.That(grid.Rows.Single(r => r.Name == "Name").IsFrozen, Is.True);
+        });
+    }
+
+    [Test]
+    public void TheFormsCaption_IsEditable_AndWritesThrough()
+    {
+        var winForms = FormDocumentReader.Read("F.blform", WinFormsForm);
+        var grid = new FormPropertyGridViewModel();
+        grid.Load(winForms);
+        var edits = 0;
+        grid.Edited += (_, _) => edits++;
+
+        grid.Rows.Single(r => r.Name == "Text").StringValue = "Sign in";
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(winForms.Model.Text, Is.EqualTo("Sign in"));
+            Assert.That(edits, Is.EqualTo(1));
+        });
+    }
+
+    /// <summary>
+    /// ⚠ A web page has a track list, not a client size. Offering Width/Height on one would let the
+    /// user set numbers the emitter has nowhere to put.
+    /// </summary>
+    [Test]
+    public void AWebPagesFormRows_AreItsGridTracks_NotAClientSize()
+    {
+        var web = Read(PlacedWebForm);
+        var grid = new FormPropertyGridViewModel();
+        grid.Load(web);
+
+        var names = grid.Rows.Select(r => r.Name).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(names, Does.Contain("Cols").And.Contains("Rows").And.Contains("Gap"));
+            Assert.That(names, Does.Not.Contain("Width").And.Not.Contains("Height"));
+        });
+    }
+
+    /// <summary>
+    /// ⚠ BEHAVIOUR CHANGED. This asserted that no selection meant an empty grid. It no longer does:
+    /// no selection now shows the FORM's properties, which is what VS does and what the owner asked
+    /// for — a form whose caption and size could only be changed by editing the XML. The empty case
+    /// is now "no document at all", which is the only state with genuinely nothing to show.
+    /// </summary>
+    [Test]
+    public void Rows_AreEmpty_WithNoDocument()
     {
         var grid = new FormPropertyGridViewModel();
-        grid.Load(Read(WebForm));
 
         Assert.Multiple(() =>
         {
@@ -207,6 +276,23 @@ public class FormPropertyGridTests
             Assert.That(grid.IsEmpty, Is.True);
             Assert.That(grid.Header, Is.EqualTo("No selection"));
         });
+    }
+
+    [Test]
+    public void SelectingAControlAndThenNothing_ReturnsToTheFormsProperties()
+    {
+        var file = FormDocumentReader.Read("F.blform", WinFormsForm);
+        var grid = new FormPropertyGridViewModel();
+        grid.Load(file);
+        grid.SelectedControl = file.Model.FindById("chk");
+
+        Assert.That(grid.Rows.Select(r => r.Name), Does.Contain("Checked"),
+            "the control's rows while it is selected");
+
+        grid.SelectedControl = null;
+
+        Assert.That(grid.Rows.Select(r => r.Name), Does.Contain("Text").And.Contains("Width"),
+            "and the form's rows again once it is deselected");
     }
 
     [Test]
