@@ -131,8 +131,9 @@ public class OptionalConstructorTests
     /// <c>IRConstructor.BaseConstructorArgs</c> rather than an <c>IRNewObject</c>, and which had
     /// its own exact-arity lookup and its own error message.
     ///
-    /// <para>⚠ MSIL is NOT asserted — see
-    /// <see cref="Msil_IgnoresBaseConstructorArgumentsEntirely_PreExisting"/>.</para>
+    /// <para>⚠ MSIL was NOT asserted here originally: it dropped base-constructor arguments
+    /// entirely, so the fill could not be observed on that backend. That is fixed, and MSIL is
+    /// asserted below — <c>MsilBaseConstructorTests</c> covers the base call itself.</para>
     /// </summary>
     [Test]
     [Category("Integration")]
@@ -166,6 +167,7 @@ public class OptionalConstructorTests
             Assert.That(JavaScriptExecutionTests.RunJs(program), Is.EqualTo("base:7,5"));
             Assert.That(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(program)),
                 Is.EqualTo("base:7,5\n"));
+            Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo("base:7,5\n"));
         });
     }
 
@@ -464,47 +466,9 @@ public class OptionalConstructorTests
             "reported at the SECOND declaration, not the first: " + string.Join(" | ", errors));
     }
 
-    /// <summary>
-    /// ⛔ MSIL ignores <c>BaseConstructorArgs</c> ENTIRELY — it emits
-    /// <c>call instance void Base::.ctor()</c> whatever the arguments, and the program dies with
-    /// <c>MissingMethodException: Void Base..ctor()</c>.
-    ///
-    /// <para>⚠ Proved independent of Optional parameters by supplying EVERY argument: the same
-    /// failure, with a base constructor that has no Optional parameter at all. So it is a
-    /// pre-existing MSIL gap and not something this change introduced or could fix — which is why
-    /// <see cref="AMyBaseNewCall_FillsAnOmittedOptional"/> asserts the other three backends and not
-    /// this one.</para>
-    /// </summary>
-    [Test]
-    [Category("Integration")]
-    public void Msil_IgnoresBaseConstructorArgumentsEntirely_PreExisting()
-    {
-        var run = Msil.MsilHarness.Run("""
-            Class Base
-             Public Sub New(a As Integer, b As Integer)
-              PrintLine("base:" & CStr(a) & "," & CStr(b))
-             End Sub
-            End Class
-
-            Class Derived
-             Inherits Base
-             Public Sub New()
-              MyBase.New(7, 9)
-             End Sub
-            End Class
-
-            Module M
-             Sub Main()
-              Dim d As New Derived()
-             End Sub
-            End Module
-            """);
-
-        Assert.That(run.Outcome, Is.EqualTo(Msil.MsilHarness.MsilOutcome.RunFailed),
-            "if this passes, MSIL has learned base constructor arguments — assert the real "
-            + "behaviour here and add MSIL back to AMyBaseNewCall_FillsAnOmittedOptional");
-        Assert.That(run.Output, Does.Contain("Void Base..ctor()"));
-    }
+    // ⚠ The pin that used to live here — MSIL dropping base-constructor arguments entirely — is
+    // gone because that gap is closed. MsilBaseConstructorTests covers the base call now, including
+    // the shapes that are still refused and why.
 
     // ====================================================================================
     // Helpers.

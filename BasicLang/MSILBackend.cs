@@ -942,7 +942,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Call base constructor
             var baseClass = string.IsNullOrEmpty(irClass.BaseClass) ? "[mscorlib]System.Object" : IlTypeToken(irClass.BaseClass);
             WriteLine("    ldarg.0");
-            WriteLine($"    call instance void {baseClass}::.ctor()");
+            EmitBaseConstructorCall(baseClass, ctor);
 
             EmitArrayFieldAllocations(irClass);
 
@@ -968,6 +968,71 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine("  } // end of method .ctor");
             WriteLine();
         }
+
+        /// <summary>
+        /// The <c>call</c> to the base constructor, with the arguments <c>MyBase.New(…)</c> gave it.
+        ///
+        /// <para>⛔ They used to be DROPPED. <c>IRConstructor.BaseConstructorArgs</c> was never read
+        /// here — the emission was a fixed <c>call instance void Base::.ctor()</c> whatever was
+        /// written — so <c>MyBase.New(7, 9)</c> against <c>Sub New(a As Integer, b As Integer)</c>
+        /// died with <c>MissingMethodException: Void Base..ctor()</c>. C#, JavaScript and C++ all
+        /// pass them; MSIL alone did not.</para>
+        ///
+        /// <para>⛔ <b>A body-computed argument is REFUSED, not emitted.</b> The base call is
+        /// written BEFORE the constructor body, because IL requires it before any field access, so
+        /// an argument whose value is produced by an instruction IN that body does not exist yet.
+        /// Measured, <c>MyBase.New(v + 1)</c> hands this an <c>IRBinaryOp</c> temp: loading it here
+        /// would read an uninitialized local and pass a silent <b>0</b>, which is worse than the
+        /// exception it replaces. The same shape does not build on C# either — it emits
+        /// <c>: base(t0)</c> naming a temp that is not in scope (CS0103) — so this is an IR-level
+        /// gap, not an MSIL one, and refusing keeps MSIL honest about it rather than inventing an
+        /// answer.</para>
+        ///
+        /// <para>⚠ The signature is spelled from the ARGUMENT types, the same way
+        /// <see cref="Visit(IRNewObject)"/> spells <c>newobj</c>. That is sound because the IR
+        /// builder coerces each base-constructor argument to its declared parameter type; the two
+        /// sites share that contract, and spelling them differently is how they would drift.</para>
+        /// </summary>
+        private void EmitBaseConstructorCall(string baseClass, IRConstructor ctor)
+        {
+            // ⚠ No special case for ZERO arguments: the loops below do nothing and the join is
+            // empty, so the general path writes exactly `::.ctor()` — the same text the dedicated
+            // early return produced. Measured: deleting that early return changed no emitted IL and
+            // killed no test, so it was redundancy rather than an untested branch, and it is gone.
+            // `BaseConstructorArgs` is created by IRConstructor's own constructor and never
+            // reassigned, so there is no null to guard either.
+            var args = ctor.BaseConstructorArgs;
+
+            foreach (var arg in args)
+            {
+                if (IsLoadableBeforeBody(arg)) continue;
+
+                throw new ForeignFeatureException(
+                    "MSIL: a MyBase.New argument that is COMPUTED (" + (arg?.Name ?? "?")
+                    + ") has no IL lowering. IL requires the base constructor call before the "
+                    + "constructor body, so a value the body computes does not exist yet — "
+                    + "emitting it would load an uninitialized local and pass 0 silently, which is "
+                    + "worse than failing. Pass a parameter or a literal (MyBase.New(v), not "
+                    + "MyBase.New(v + 1)); the computed form does not build on C# either "
+                    + "(it emits `: base(t0)`, CS0103).");
+            }
+
+            foreach (var arg in args)
+            {
+                EmitLoadValue(arg);
+            }
+
+            var paramTypes = string.Join(", ", args.Select(a => MapType(a.Type)));
+            WriteLine($"    call instance void {baseClass}::.ctor({paramTypes})");
+        }
+
+        /// <summary>
+        /// Whether <paramref name="value"/> can be pushed at the top of a constructor, before any
+        /// of its body has run: a literal, or one of the constructor's own parameters (an
+        /// <c>ldarg</c>). Anything else is a temp some instruction has yet to produce.
+        /// </summary>
+        private static bool IsLoadableBeforeBody(IRValue value) =>
+            value is IRConstant || (value is IRVariable variable && variable.IsParameter);
 
         private void GenerateDefaultCtorForClass(IRClass irClass)
         {
