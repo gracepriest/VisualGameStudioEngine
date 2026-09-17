@@ -595,21 +595,8 @@ namespace BasicLang.Compiler.IR
 
                 if (node.Initializer != null)
                 {
-                    // KNOWN GAP (pre-existing): a module-scope initializer that needs a TEMP
-                    // calls _currentFunction.GetNextTempName() while _currentFunction is null
-                    // here -> NullReferenceException. This note used to name only IRNewObject
-                    // (`Dim g As New List(...)()`); measured, it is wider than that — any
-                    // initializer that allocates a temp crashes, an arithmetic one included:
-                    // `Dim G As Integer = 40 + 2` at module scope is enough, in a file with no
-                    // class in it at all, and it reproduces on unmodified master. A literal
-                    // (`= 42`) and a declaration-only global both build fine. It should produce
-                    // a clean diagnostic rather than crash the IR builder. Fixing it is out of
-                    // scope here; MsilBaseConstructorTests
-                    // .TheSynthesizedConstructor_DoesNotLeakIntoTheNextModuleGlobal explains
-                    // why it has to use a literal initializer to test anything else.
-                    // Evaluate the initializer and store it
-                    node.Initializer.Accept(this);
-                    globalVar.InitialValue = _expressionResult;
+                    globalVar.InitialValue =
+                        BuildModuleScopeInitializer(node.Initializer, node.Name, "variable");
                 }
             }
             else
@@ -726,9 +713,16 @@ namespace BasicLang.Compiler.IR
             // Store constants as global variables with IsConst = true
             if (node.Value != null)
             {
-                // Evaluate the constant value
-                node.Value.Accept(this);
-                var value = _expressionResult;
+                // ⚠ Evaluated HERE only for the LOCAL case. A module-scope Const takes the
+                // folding path below instead: this line lowers the expression through
+                // _currentFunction, which is null at module scope, and that is the same crash
+                // the global Dim branch had.
+                IRValue value = null;
+                if (_currentFunction != null)
+                {
+                    node.Value.Accept(this);
+                    value = _expressionResult;
+                }
 
                 // Resolve the type
                 var typeName = node.Type?.Name ?? "Integer";
@@ -760,7 +754,8 @@ namespace BasicLang.Compiler.IR
                 {
                     IsGlobal = true,
                     IsConst = true,
-                    InitialValue = value,
+                    InitialValue =
+                        BuildModuleScopeInitializer(node.Value, node.Name, "constant"),
                     ModuleName = _currentModuleName ?? _module?.Name,
                     Access = MapAccessModifier(node.Access)
                 };
@@ -773,6 +768,92 @@ namespace BasicLang.Compiler.IR
                 // qualifying the key on collision.
                 _module?.AddGlobalVariable(constVar);
             }
+        }
+
+        /// <summary>
+        /// Lowers a MODULE-SCOPE initializer to the single constant that a global's
+        /// <see cref="IRVariable.InitialValue"/> is required to be.
+        ///
+        /// <para>⛔ Both module-scope call sites — a global <c>Dim</c> and a global <c>Const</c> —
+        /// used to call <c>node.Initializer.Accept(this)</c> directly, with
+        /// <c>_currentFunction</c> null by definition of the branch they sit in. Expression
+        /// lowering names its temps through <c>_currentFunction.GetNextTempName()</c>, so EVERY
+        /// initializer needing a temp dereferenced null and the compiler died with
+        /// <c>Error at line 0: Object reference not set to an instance of an object</c>.
+        /// Measured, the crashing set was wide — <c>40 + 2</c>, <c>"a" &amp; "b"</c>,
+        /// <c>7 / 2</c>, <c>1 &lt; 2</c>, <c>(1 + 2) * 3</c>, <c>Helper()</c>,
+        /// <c>New List(Of Integer)()</c> — and identical on all four backends, because it
+        /// happened in the builder before any of them ran.</para>
+        ///
+        /// <para>⚠ A scratch function gives that lowering somewhere to put its instructions, and
+        /// the optimizer's own <c>ConstantFoldingPass</c> then reduces them. Folding has to
+        /// happen HERE and not in the optimizer: a global's initializer must be a constant for
+        /// the backends to emit it at all, and the optimizer does not run on every path (the
+        /// non-optimizing test helper, <c>--O0</c>). An invariant the backends depend on cannot
+        /// be established by a pass that is sometimes skipped.</para>
+        ///
+        /// <para>⚠ The scratch function is deliberately NOT created through
+        /// <c>_module.CreateFunction</c>: that registers it, and every backend would emit a
+        /// stray function per initialized global.</para>
+        ///
+        /// <para>⛔ KNOWN GAP, measured rather than assumed: integer-literal division promoted
+        /// to Double (<c>Dim G As Double = 7 / 2</c>) is refused although it is arithmetically
+        /// constant. <c>/</c> promotes both operands, so the block is
+        /// <c>IRCast, IRCast, IRBinaryOp</c> and <c>ConstantFoldingPass</c> does not fold a cast
+        /// — the operands never become <c>IRConstant</c>, so neither does the division.
+        /// <c>7.0 / 2.0</c> and <c>8 \ 2</c> both fold. Closing it means folding a cast of a
+        /// constant, which is a NUMERIC-CONVERSION change and not a crash fix: widening is
+        /// lossless, but narrowing has to agree with what the backends emit at run time, and VB's
+        /// <c>CInt</c> rounds half-to-even where a C# cast truncates. That deserves its own
+        /// characterization across the four backends rather than a ride-along here.</para>
+        ///
+        /// <para>⛔ What does not fold is REFUSED, not guessed at. <c>Helper()</c> and
+        /// <c>New List(Of Integer)()</c> need code to run before first use, which means a module
+        /// initializer no backend has — the JavaScript backend already refuses a non-constant
+        /// global outright (<c>"a module-level initializer ... that is not a constant"</c>), and
+        /// C# and MSIL would have emitted a temp name that is not in scope. One refusal here,
+        /// where foldability is decided, is the only way the builder and the backends cannot
+        /// disagree about it.</para>
+        /// </summary>
+        /// <param name="what">"variable" or "constant" — only to word the diagnostic.</param>
+        private IRValue BuildModuleScopeInitializer(
+            ExpressionNode initializer, string name, string what)
+        {
+            var savedFunction = _currentFunction;
+            var savedBlock = _currentBlock;
+
+            var scratch = new IRFunction($"<init>{name}", new TypeInfo("Void", TypeKind.Void));
+            _currentFunction = scratch;
+            _currentBlock = scratch.CreateBlock("entry");
+
+            initializer.Accept(this);
+            var lowered = _expressionResult;
+            var emitted = _currentBlock.Instructions;
+
+            _currentFunction = savedFunction;
+            _currentBlock = savedBlock;
+
+            // Nothing emitted: the expression was already a self-contained value — a literal, or
+            // a reference to an already-constant global. This is the shape that always worked,
+            // and it must keep taking the value lowering produced rather than anything folded.
+            if (emitted.Count == 0) return lowered;
+
+            var scratchModule = new IRModule("<init>");
+            scratchModule.Functions.Add(scratch);
+            new Optimization.ConstantFoldingPass().Run(scratchModule);
+
+            // Folding rewrites each instruction in place, so a fully constant expression leaves
+            // a list of nothing but constants, and the LAST one is the result: lowering is
+            // bottom-up and the outermost operation is emitted last.
+            if (emitted.Count > 0 && emitted.All(i => i is IRConstant))
+            {
+                return (IRValue)emitted[emitted.Count - 1];
+            }
+
+            throw new Exception(
+                $"Line {_currentSourceLine}: the module-level {what} '{name}' has an initializer "
+                + "that cannot be computed at compile time. Only a constant expression is "
+                + "supported at module scope; assign it in Main (or another procedure) instead.");
         }
 
         public void Visit(TypeDefineNode node)

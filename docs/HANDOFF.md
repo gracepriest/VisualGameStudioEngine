@@ -551,14 +551,42 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   local-variable branch: no static field is emitted and the program dies with
   `InvalidProgramException`. Held by
   `MsilBaseConstructorTests.TheSynthesizedConstructor_DoesNotLeakIntoTheNextModuleGlobal`.
-  ⛔ **Pre-existing, found while writing that test and wider than the comment at the branch said:**
-  a module-scope initializer that needs a TEMP crashes the IR builder with a
-  `NullReferenceException` (`GetNextTempName()` on the null `_currentFunction`), surfacing as
-  `Error at line 0: ... Object reference not set to an instance of an object`. The note there named
-  only `New` initializers; measured, an arithmetic one is enough — `Dim G As Integer = 40 + 2` at
-  module scope, in a file with NO class in it at all, reproduces on unmodified master (checked by
-  stashing the change and rebuilding). A literal (`= 42`) and a declaration-only global build fine.
-  It wants a clean diagnostic, not a crash. Untouched here.
+  ⚠ **The module-scope initializer crash is FIXED as of 2026-09-17** —
+  `IRBuilder.BuildModuleScopeInitializer`, `ModuleScopeInitializerTests`. It crashed the compiler
+  with a `NullReferenceException` (`GetNextTempName()` on the null `_currentFunction`), surfacing
+  as `Error at line 0: ... Object reference not set to an instance of an object`, for ANY
+  initializer needing a temp — `40 + 2`, `"a" & "b"`, `7 / 2`, `1 < 2`, `(1 + 2) * 3`, `Helper()`,
+  `New List(Of Integer)()` — identically on all four backends, because it happened in the builder
+  before any of them ran. TWO call sites had it, the global `Dim` branch and the global `Const`
+  branch; both now route through the one helper.
+  ⚠ **It FOLDS rather than refuses where it can.** A scratch (deliberately unregistered)
+  `IRFunction` gives lowering somewhere to emit, then the optimizer's own `ConstantFoldingPass`
+  reduces it. Folding must happen in the BUILDER: a global's `InitialValue` has to be a constant
+  for any backend to emit it, and the optimizer does not run on every path.
+  `BinaryOpKind.Concat` was added to that pass so `"a" & "b"` folds — `FoldAdd`'s string branch
+  already was concatenation. Mixed operands (`"a" & 5`) still do not fold, so VB's coercion is
+  never guessed at.
+  ⛔ **What cannot fold is REFUSED with a diagnostic**, not guessed at: `Helper()` and
+  `New List(Of Integer)()` need code to run first, i.e. a module initializer no backend has (the
+  JS backend already refused a non-constant global outright). One refusal, where foldability is
+  decided, so the builder and the backends cannot disagree.
+  ⛔ **Known gap, pinned:** `Dim G As Double = 7 / 2` is still refused although it is
+  arithmetically constant. `/` promotes both operands, so the block is `IRCast, IRCast,
+  IRBinaryOp` (measured) and the pass does not fold a cast. `7.0 / 2.0` and `8 \ 2` both fold.
+  Closing it means folding a cast of a constant — a NUMERIC-CONVERSION change, not a crash fix:
+  widening is lossless but narrowing must agree with each backend at run time, and VB's `CInt`
+  rounds half-to-even where a C# cast truncates. Deserves its own characterization.
+  ⛔ **Separate PRE-EXISTING defect, pinned not fixed: the C++ backend drops a module-scope
+  global's initializer entirely.** `CppCodeGenerator` emits `{}` for every global that is not a
+  sized array and never consults `InitialValue`, so `Dim G As Integer = 42` becomes
+  `int32_t G = {};` and the program prints **0**. Verified on unmodified master by stashing and
+  rebuilding — a plain LITERAL printed 0 there too, so this predates the folding work and is not
+  it. Held as it actually behaves by
+  `ModuleScopeInitializerTests.ACppGlobalInitializer_IsStillDropped`, which FAILS when someone
+  fixes C++ — that is the signal to move the case into the all-backends list.
+  ⛔ **Also pre-existing and unrelated: `CStr(Boolean)` prints `true` on JavaScript** where C# and
+  MSIL print `True`. Measured on a plain local, no module scope involved. Pinned as each backend
+  actually behaves rather than normalised away.
   ⚠ **A class with TWO constructors cannot be lowered to JavaScript at all** ("SyntaxError: A class
   may only have one constructor"), measured with a pair that has no Optional anywhere — so
   constructor-overload shapes are asserted on MSIL.

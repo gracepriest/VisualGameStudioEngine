@@ -1,0 +1,319 @@
+using System;
+using NUnit.Framework;
+
+namespace VisualGameStudio.Tests.Compiler;
+
+/// <summary>
+/// A module-scope <c>Dim</c> or <c>Const</c> whose initializer is an EXPRESSION rather than a bare
+/// literal.
+///
+/// <para>⛔ Every such shape CRASHED THE COMPILER. Expression lowering names its temps through
+/// <c>_currentFunction.GetNextTempName()</c>, and at module scope <c>_currentFunction</c> is null
+/// by definition of the branch — so <c>Dim G As Integer = 40 + 2</c>, in a file with no class in it
+/// at all, died with <c>Error at line 0: ... Object reference not set to an instance of an
+/// object</c>. Identical on all four backends, because it happened in the IR builder before any of
+/// them ran. An in-code note had blamed <c>New</c> initializers specifically; measured, the
+/// crashing set was far wider.</para>
+///
+/// <para>⚠ TWO call sites, one root cause: the global <c>Dim</c> branch and the global <c>Const</c>
+/// branch each lowered the initializer the same way. Fixing one and not the other is how half a
+/// crash survives, so both go through <c>BuildModuleScopeInitializer</c>.</para>
+///
+/// <para>⚠ The fix FOLDS rather than refuses where it can, because a global's
+/// <c>InitialValue</c> is required to be a constant — the JavaScript backend already refused a
+/// non-constant one outright, and C# and MSIL would have emitted a temp name that is not in
+/// scope. What genuinely needs code to run first is refused with a diagnostic instead of a
+/// crash.</para>
+/// </summary>
+[TestFixture]
+public class ModuleScopeInitializerTests
+{
+    private static string Program(string declaration, string print) => $"""
+        Module M
+         {declaration}
+         Function Helper() As Integer
+          Return 7
+         End Function
+         Sub Main()
+          {print}
+         End Sub
+        End Module
+        """;
+
+    // ====================================================================================
+    // What now FOLDS — these all crashed the compiler before.
+    // ====================================================================================
+
+    /// <summary>
+    /// ⚠ RUN, not merely compiled. The whole point is that the constant reaches the emitted
+    /// program; a build that succeeds while the global stays 0 is exactly the failure mode the
+    /// MSIL <c>.cctor</c> comment warns about — and exactly what C++ does, see
+    /// <see cref="ACppGlobalInitializer_IsStillDropped"/>.
+    ///
+    /// <para>⛔ THREE backends, not four. C++ is excluded because it never emits a module-scope
+    /// global's initializer AT ALL — pinned separately below rather than quietly dropped from
+    /// this list.</para>
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    [TestCase("Dim G As Integer = 40 + 2", "PrintLine(CStr(G))", "42", TestName = "Fold_Arithmetic")]
+    [TestCase("Dim G As String = \"a\" & \"b\"", "PrintLine(G)", "ab", TestName = "Fold_Concat")]
+    [TestCase("Dim G As Integer = (1 + 2) * 3", "PrintLine(CStr(G))", "9", TestName = "Fold_Nested")]
+    [TestCase("Dim G As Double = 7.0 / 2.0", "PrintLine(CStr(G))", "3.5", TestName = "Fold_RealDiv")]
+    [TestCase("Dim G As Integer = 8 \\ 2", "PrintLine(CStr(G))", "4", TestName = "Fold_IntDiv")]
+    [TestCase("Const C As Integer = 40 + 2", "PrintLine(CStr(C))", "42", TestName = "Fold_ConstArith")]
+    [TestCase("Const C As String = \"a\" & \"b\"", "PrintLine(C)", "ab", TestName = "Fold_ConstConcat")]
+    public void AComputedModuleScopeInitializer_FoldsAndReaches_EveryBackend(
+        string declaration, string print, string expected)
+    {
+        var program = Program(declaration, print);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ReturnCoercionTests.CompileEmittedCSharpForTest(program), Is.Empty);
+            Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo(expected + "\n"));
+            Assert.That(JavaScriptExecutionTests.RunJs(program), Is.EqualTo(expected));
+        });
+    }
+
+    /// <summary>
+    /// ⛔ PRE-EXISTING and unrelated to the crash: the C++ backend drops a module-scope global's
+    /// initializer entirely. <c>CppCodeGenerator</c> emits <c>{}</c> for every global that is not
+    /// a sized array and never consults <c>InitialValue</c>, so <c>Dim G As Integer = 42</c>
+    /// compiles to <c>int32_t G = {};</c> and the program prints <b>0</b>.
+    ///
+    /// <para>⚠ Verified on unmodified master by stashing the change and rebuilding: a plain
+    /// LITERAL initializer printed 0 there too. So this is not the folding path — it is every
+    /// module-scope initializer on C++, and it predates this work. Folding correctly hands C++ a
+    /// constant it then ignores.</para>
+    ///
+    /// <para>⚠ Deliberately not bundled in: the crash fix is in the IR builder and is shared by
+    /// all four backends, while this is one backend's emission gap with its own blast radius
+    /// (every initialized global's C++ output changes). Asserted as it ACTUALLY BEHAVES so the
+    /// pin cannot rot — when C++ starts emitting initializers this test fails, and the case moves
+    /// up into the list above.</para>
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    public void ACppGlobalInitializer_IsStillDropped()
+    {
+        var program = Program("Dim G As Integer = 40 + 2", "PrintLine(CStr(G))");
+
+        Assert.That(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(program)), Is.EqualTo("0\n"),
+            "when this starts printing 42, C++ emits global initializers — move the case up");
+    }
+
+    /// <summary>
+    /// ⚠ A folded COMPARISON, split out from the list above because the backends disagree about
+    /// how a Boolean PRINTS: <c>CStr(True)</c> is <c>"True"</c> on C# and MSIL and <c>"true"</c>
+    /// on JavaScript.
+    ///
+    /// <para>⛔ That divergence is PRE-EXISTING and has nothing to do with module scope —
+    /// measured, a plain local <c>Dim b As Boolean = True</c> prints <c>true</c> on JavaScript
+    /// too. It is pinned as each backend ACTUALLY behaves rather than normalised away, because a
+    /// test that lowercased both sides would also pass if the fold silently produced the wrong
+    /// boolean.</para>
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    public void AFoldedComparison_ReachesEveryBackend_ModuloBooleanFormatting()
+    {
+        var program = Program("Dim G As Boolean = 1 < 2", "PrintLine(CStr(G))");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ReturnCoercionTests.CompileEmittedCSharpForTest(program), Is.Empty);
+            Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo("True\n"));
+            Assert.That(JavaScriptExecutionTests.RunJs(program), Is.EqualTo("true"),
+                "lowercase on JavaScript is pre-existing CStr(Boolean) behaviour, not the fold");
+        });
+    }
+
+    /// <summary>
+    /// ⚠ STRUCTURAL: the fold must reach the IR, not merely stop the crash. A global whose
+    /// <c>InitialValue</c> is anything other than an <c>IRConstant</c> is the exact shape the
+    /// JavaScript backend refuses and the other two miscompile, so asserting the run alone would
+    /// leave the invariant itself untested.
+    /// </summary>
+    [Test]
+    public void TheFoldedInitializer_IsAConstantInTheIR()
+    {
+        var module = JsTestSupport.BuildModule(Program("Dim G As Integer = (1 + 2) * 3", "PrintLine(CStr(G))"));
+
+        var global = module.GlobalVariables["G"];
+
+        Assert.That(global.InitialValue, Is.InstanceOf<BasicLang.Compiler.IR.IRConstant>(),
+            "a non-constant global initializer is what no backend can emit");
+        Assert.That(((BasicLang.Compiler.IR.IRConstant)global.InitialValue).Value, Is.EqualTo(9),
+            "the whole expression must fold, not just its innermost operation");
+    }
+
+    /// <summary>
+    /// ⚠ The scratch function that gives lowering somewhere to emit must NOT be registered on the
+    /// module. Building it through <c>_module.CreateFunction</c> would leave every backend
+    /// emitting a stray function per initialized global.
+    /// </summary>
+    [Test]
+    public void TheScratchFunction_IsNotEmittedAsAModuleFunction()
+    {
+        var module = JsTestSupport.BuildModule(Program("Dim G As Integer = 40 + 2", "PrintLine(CStr(G))"));
+
+        Assert.That(module.Functions, Has.None.Matches<BasicLang.Compiler.IR.IRFunction>(
+            f => f.Name != null && f.Name.Contains("<init>")),
+            "the scratch function leaked into the module's function list");
+    }
+
+    // ====================================================================================
+    // What is REFUSED — and that it is a diagnostic, not a crash.
+    // ====================================================================================
+
+    /// <summary>
+    /// ⛔ An initializer that needs code to RUN first cannot become a constant, and no backend has
+    /// a module initializer to run it in. Refused with a diagnostic naming the variable.
+    ///
+    /// <para>⚠ The assertion is that the message is the REFUSAL, not merely that something threw —
+    /// before this change these same programs threw too, with
+    /// <c>Object reference not set to an instance of an object</c>. "It throws" would have passed
+    /// on the crash.</para>
+    /// </summary>
+    [Test]
+    [TestCase("Dim G As Integer = Helper()", TestName = "Refuse_Call")]
+    [TestCase("Dim G As New List(Of Integer)()", TestName = "Refuse_New")]
+    [TestCase("Const C As Integer = Helper()", TestName = "Refuse_ConstCall")]
+    public void AnInitializerNeedingRuntimeCode_IsRefusedWithADiagnostic(string declaration)
+    {
+        var ex = Assert.Throws<Exception>(
+            () => JsTestSupport.BuildModule(Program(declaration, "PrintLine(\"ok\")")));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex.Message, Does.Contain("cannot be computed at compile time"));
+            Assert.That(ex.Message, Does.Not.Contain("Object reference not set"),
+                "the crash this replaced also threw — asserting only that it throws proves nothing");
+        });
+    }
+
+    /// <summary>
+    /// ⛔ KNOWN GAP, pinned rather than hidden: integer-literal division promoted to Double is
+    /// arithmetically constant but still refused. <c>/</c> promotes both operands, so the block is
+    /// <c>IRCast, IRCast, IRBinaryOp</c> (measured), and <c>ConstantFoldingPass</c> does not fold a
+    /// cast — the operands never become constants, so neither does the division.
+    ///
+    /// <para>⚠ Deliberately NOT bundled into the crash fix. Folding a cast is a numeric-conversion
+    /// change: widening is lossless, but narrowing has to agree with what each backend emits at run
+    /// time, and VB's <c>CInt</c> rounds half-to-even where a C# cast truncates. When this test
+    /// starts failing, casts fold — delete the pin and move the case up to the fold list.</para>
+    /// </summary>
+    [Test]
+    public void IntegerDivisionPromotedToDouble_IsStillRefused()
+    {
+        var ex = Assert.Throws<Exception>(
+            () => JsTestSupport.BuildModule(Program("Dim G As Double = 7 / 2", "PrintLine(CStr(G))")));
+
+        Assert.That(ex.Message, Does.Contain("cannot be computed at compile time"));
+    }
+
+    // ====================================================================================
+    // Regression: the shapes that already worked must keep working.
+    // ====================================================================================
+
+    /// <summary>
+    /// ⚠ Every module-scope shape that built BEFORE the change, re-asserted end to end. These take
+    /// the "nothing was emitted" path — the expression was already a self-contained value — and a
+    /// fix that routed them through folding instead would be free to change what they mean.
+    /// Measured before the change: all seven ran and printed exactly these values.
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    [TestCase("Dim G As Integer = 42", "PrintLine(CStr(G))", "42", TestName = "Unchanged_Literal")]
+    [TestCase("Dim G As Integer = -5", "PrintLine(CStr(G))", "-5", TestName = "Unchanged_Negative")]
+    [TestCase("Dim G As String = \"hi\"", "PrintLine(G)", "hi", TestName = "Unchanged_StringLiteral")]
+    [TestCase("Dim G As Boolean = True", "PrintLine(CStr(G))", "True", TestName = "Unchanged_BoolLiteral")]
+    [TestCase("Dim G As Integer = (42)", "PrintLine(CStr(G))", "42", TestName = "Unchanged_Parenthesized")]
+    [TestCase("Dim G As Integer", "PrintLine(CStr(G))", "0", TestName = "Unchanged_DeclarationOnly")]
+    [TestCase("Const C As Integer = 42", "PrintLine(CStr(C))", "42", TestName = "Unchanged_ConstLiteral")]
+    public void AShapeThatAlreadyBuilt_StillRunsTheSame(
+        string declaration, string print, string expected)
+    {
+        Assert.That(Msil.MsilHarness.RunExpectingSuccess(Program(declaration, print)),
+            Is.EqualTo(expected + "\n"));
+    }
+
+    /// <summary>
+    /// ⚠ A module-scope global initialized from ANOTHER already-constant global. It built before
+    /// the change and printed 7, so it must still — this is the shape whose value comes from
+    /// lowering directly rather than from folding, and returning the folded list's last entry for
+    /// it would be wrong.
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    public void AGlobalInitializedFromAnotherGlobal_IsUnchanged()
+    {
+        var program = """
+            Module M
+             Dim H As Integer = 7
+             Dim G As Integer = H
+             Sub Main()
+              PrintLine(CStr(G))
+             End Sub
+            End Module
+            """;
+
+        Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo("7\n"));
+    }
+
+    /// <summary>
+    /// ⚠ A module-level sized array still allocates. It has no initializer at all, so it must not
+    /// be routed anywhere near the folding path — left bare it is a null reference and the first
+    /// <c>g(0) = …</c> throws.
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    public void AModuleLevelSizedArray_StillAllocates()
+    {
+        var program = """
+            Module M
+             Dim G(5) As Integer
+             Sub Main()
+              G(0) = 3
+              PrintLine(CStr(G(0)))
+             End Sub
+            End Module
+            """;
+
+        Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo("3\n"));
+    }
+
+    /// <summary>
+    /// ⚠ <c>Concat</c> folding was added to <c>ConstantFoldingPass</c> to make
+    /// <c>Dim S As String = "a" &amp; "b"</c> foldable, and that changes the OPTIMIZER for all
+    /// code, not only module scope. This asserts the fold is CORRECT there, not that it is
+    /// present: measured by mutation, removing the <c>Concat</c> arm leaves this test passing,
+    /// because an unfolded concat is simply computed at run time and prints the same thing. What
+    /// holds the arm's presence is <c>Fold_Concat</c> / <c>Fold_ConstConcat</c> above, where an
+    /// unfolded concat is not a constant and the initializer gets refused.
+    ///
+    /// <para>⛔ The value of this test is the MIXED case. <c>"a" &amp; 5</c> must still produce
+    /// "a5": <c>FoldAdd</c> matches string+string only and returns null otherwise, so it does not
+    /// fold and is computed at run time rather than guessed at — which is what VB's coercion
+    /// requires. A <c>Concat</c> arm that tried to stringify the operands itself would break this
+    /// while leaving every module-scope test green.</para>
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    public void ConcatFolding_IsCorrectInsideAProcedureToo()
+    {
+        var program = """
+            Module M
+             Sub Main()
+              Dim a As String = "a" & "b"
+              Dim b As String = "a" & CStr(5)
+              PrintLine(a)
+              PrintLine(b)
+             End Sub
+            End Module
+            """;
+
+        Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo("ab\na5\n"));
+    }
+}
