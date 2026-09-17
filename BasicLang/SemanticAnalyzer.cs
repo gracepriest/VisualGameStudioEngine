@@ -92,6 +92,27 @@ namespace BasicLang.Compiler.SemanticAnalysis
         private readonly NetAstAnnotations _netAnnotations = new NetAstAnnotations();
 
         /// <summary>
+        /// Which CONSTRUCTOR each construction site binds to, keyed by AST node (reference
+        /// identity): a <c>NewExpressionNode</c> for <c>New Box(…)</c>, a <c>ConstructorNode</c>
+        /// for its own <c>MyBase.New(…)</c>.
+        ///
+        /// <para>⛔ A side table rather than <see cref="SetNodeSymbol"/> because "the constructor
+        /// this node CALLS" and "the symbol this node DECLARES" are different questions that a
+        /// <c>ConstructorNode</c> asks at once — it declares one constructor and calls another.
+        /// One table, so there is a single answer to the first question for both sites.</para>
+        ///
+        /// <para>⚠ <see cref="IRBuilder"/> reads it to coerce and to fill omitted <c>Optional</c>
+        /// arguments against the SAME constructor this analyzer validated against. It used to
+        /// re-derive the parameter list from the IR class instead
+        /// (<c>UnambiguousConstructorParameters</c>), which is populated in declaration order and
+        /// so disagreed with the analyzer whenever the class had not been visited yet.</para>
+        /// </summary>
+        internal IReadOnlyDictionary<ASTNode, Symbol> ConstructorBindings => _constructorBindings;
+
+        private readonly Dictionary<ASTNode, Symbol> _constructorBindings =
+            new Dictionary<ASTNode, Symbol>(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
         /// P2a-2 Task 2/7a — the .NET members the probes resolved, keyed by AST node (reference
         /// identity), each carrying the Task-7a exactness bit. <see cref="IRBuilder"/> reads
         /// this while lowering and stamps <c>ResolvedNetTarget</c>/<c>NetCategory</c>/
@@ -5724,10 +5745,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 if (classScope != null && classScope.ClassType?.BaseType != null)
                 {
                     var baseType = classScope.ClassType.BaseType;
-                    var baseCtorName = $".ctor{node.BaseConstructorArgs.Count}";
+                    var baseCtorSymbol = ResolveConstructor(baseType, node.BaseConstructorArgs.Count);
 
-                    if (baseType.Members != null && baseType.Members.TryGetValue(baseCtorName, out var baseCtorSymbol))
+                    if (baseCtorSymbol != null)
                     {
+                        _constructorBindings[node] = baseCtorSymbol;
+
                         // Validate argument types
                         if (baseCtorSymbol.Parameters != null)
                         {
@@ -8453,6 +8476,65 @@ namespace BasicLang.Compiler.SemanticAnalysis
             return type.GenericArguments[0];
         }
 
+        /// <summary>
+        /// The constructor of <paramref name="type"/> a call with <paramref name="argumentCount"/>
+        /// arguments binds to, allowing trailing <c>Optional</c> parameters to be omitted.
+        ///
+        /// <para>⛔ Constructors are keyed by ARITY in <c>TypeInfo.Members</c> — <c>.ctor1</c>,
+        /// <c>.ctor2</c> — so an exact-key lookup is why an omitted Optional was refused outright:
+        /// <c>New Box(4)</c> against <c>Sub New(a As Integer, Optional b As Integer = 5)</c> asked
+        /// for <c>.ctor1</c>, which does not exist, and got "No constructor for 'Box' takes 1
+        /// argument(s)". The same key shape refused <c>New Box()</c> against an all-Optional
+        /// constructor and <c>MyBase.New(7)</c> against an Optional base constructor.</para>
+        ///
+        /// <para>⚠ ONE rule for all three sites rather than three copies: they disagreeing about
+        /// which constructor a call binds to is exactly the bug class the arity key already
+        /// produced. An EXACT arity always wins, so nothing that resolved before resolves
+        /// differently now; only when no exact key exists does this look for the unique longer
+        /// constructor whose extra trailing parameters are ALL Optional.</para>
+        ///
+        /// <para>⚠ Ambiguity answers null and leaves the caller's existing error in place — two
+        /// candidates mean the language would have to pick, and picking silently is worse than the
+        /// diagnostic that exists today.</para>
+        ///
+        /// <para>⛔ This can only see constructors already registered, and <c>RegisterDeclarations</c>
+        /// (pass 1) does NOT pre-register them — <c>.ctorN</c> is written during pass 2's
+        /// <c>Visit(ConstructorNode)</c>. Measured: with the class declared AFTER the module that
+        /// uses it, <c>type.Members</c> holds no <c>.ctor</c> key at all when <c>New Box(…)</c> is
+        /// analyzed, so every constructor check is skipped silently. That is a PRE-EXISTING gap
+        /// this does not close, and <c>OptionalConstructorTests</c> pins it.</para>
+        /// </summary>
+        private static Symbol ResolveConstructor(TypeInfo type, int argumentCount)
+        {
+            if (type?.Members == null || argumentCount < 0) return null;
+
+            if (type.Members.TryGetValue($".ctor{argumentCount}", out var exact)) return exact;
+
+            Symbol found = null;
+            foreach (var entry in type.Members)
+            {
+                if (!entry.Key.StartsWith(".ctor")) continue;
+                if (!int.TryParse(entry.Key.Substring(5), out var arity) || arity <= argumentCount) continue;
+
+                var parameters = entry.Value?.Parameters;
+                if (parameters == null || parameters.Count != arity) continue;
+
+                var fillable = true;
+                for (var i = argumentCount; i < parameters.Count; i++)
+                {
+                    if (parameters[i].IsOptional) continue;
+                    fillable = false;
+                    break;
+                }
+                if (!fillable) continue;
+
+                if (found != null) return null;   // two candidates — do not guess
+                found = entry.Value;
+            }
+
+            return found;
+        }
+
         public void Visit(NewExpressionNode node)
         {
             var type = ResolveTypeReference(node.Type);
@@ -8487,9 +8569,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Validate constructor arguments for user-defined types
             if (type != null && type.Kind == TypeKind.Class && type.Members != null)
             {
-                var ctorName = $".ctor{node.Arguments.Count}";
-                if (type.Members.TryGetValue(ctorName, out var ctorSymbol))
+                var ctorSymbol = ResolveConstructor(type, node.Arguments.Count);
+                if (ctorSymbol != null)
                 {
+                    _constructorBindings[node] = ctorSymbol;
+
                     // Validate argument types
                     if (ctorSymbol.Parameters != null)
                     {

@@ -464,10 +464,39 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   `IRVariable.DefaultValue` carries the same fact at the declaration, but `IRModule.Functions` is
   appended as each function is visited, so a call to one defined further down the file finds
   nothing — a fix built on that lookup works for one declaration order and silently not the other.
-  ⛔ **A CONSTRUCTOR with an omitted Optional is still refused by the analyzer**, before the IR
-  builder sees it: constructors are keyed by ARITY (`.ctor1`, `.ctor2`) in the type's member table,
-  so `New Box(4)` looks up `.ctor1` and gets "No constructor for 'Box' takes 1 argument(s)".
-  `UnambiguousConstructorParameters` selects by arity too; both have to move together. Pinned.
+  ⚠ **Constructors take an omitted `Optional` too, as of 2026-09-16** —
+  `SemanticAnalyzer.ResolveConstructor`, ONE rule for all three construction sites. Constructors are
+  keyed by ARITY (`.ctor1`, `.ctor2`) in the type's member table and every site looked up an EXACT
+  key, so the analyzer refused the program before the IR builder saw it. Measured before:
+  `New Box(4)` → "No constructor for 'Box' takes 1 argument(s)"; `New Box()` against an
+  all-Optional constructor → "takes 0 argument(s)"; `MyBase.New(7)` → "No constructor for base
+  class 'Base' takes 1 argument(s)". An EXACT arity still wins, so nothing that resolved before
+  resolves differently; only when no exact key exists is the unique longer constructor with an
+  all-Optional tail accepted, and two candidates answer null and keep the existing diagnostic.
+  ⛔ **`UnambiguousConstructorParameters` is GONE** — the analyzer now RECORDS the bound constructor
+  (`ConstructorBindings`, keyed by AST node) and the IR builder reads it, so the IR can no longer
+  coerce against a different constructor than the analyzer type-checked, and it gets
+  `IsOptional`/`DefaultValueExpression` that an `IRVariable` list does not carry.
+  ⛔⛔ **A class declared AFTER the code that uses it gets NO constructor checking at all, and this
+  did NOT fix that.** `RegisterDeclarations` (pass 1) recurses into a `ClassNode`'s members but has
+  no `ConstructorNode` case, and the class `TypeInfo` does not exist until pass 2's
+  `Visit(ClassNode)` — so there is no `.ctor` key to find, the arity check is skipped entirely
+  (`hasAnyConstructor` is false, so not even an error), and nothing is recorded to coerce or fill
+  against. It is a LIVE MISCOMPILE and predates this work: measured, `New Box(7 / 2)` in that order
+  emits `new Box((double)(7) / (double)(2))` — **CS1503, does not build** — while the same program
+  with the class first emits the cast and runs. The argument coercion has been half-working since
+  it shipped and nothing noticed, because every test and sample in the repo declares classes first.
+  Closing it means pre-registering constructors in pass 1, which means creating class `TypeInfo`s in
+  pass 1 — and `TypeManager.DefineType` returns NULL for a name it already holds, so
+  duplicate-class detection and `Visit(ClassNode)` must change with it. `OptionalConstructorTests`
+  pins both halves.
+  ⛔ **MSIL ignores `BaseConstructorArgs` ENTIRELY** — it emits `call instance void Base::.ctor()`
+  whatever the arguments, and the program dies with `MissingMethodException: Void Base..ctor()`.
+  Proved pre-existing by supplying EVERY argument to a base constructor with no Optional at all:
+  same failure. Pinned.
+  ⚠ **A class with TWO constructors cannot be lowered to JavaScript at all** ("SyntaxError: A class
+  may only have one constructor"), measured with a pair that has no Optional anywhere — so
+  constructor-overload shapes are asserted on MSIL.
   ⛔ **`Optional ByRef` is broken on every backend, before and after, and there is deliberately NO
   by-ref guard in the fill** — a guard would change nothing observable anywhere and no test could
   kill it. Measured: C# emits `ref int n = 5` (CS1741), JS refuses ByRef outright (BL7002), MSIL
