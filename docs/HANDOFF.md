@@ -497,10 +497,23 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   pass-1 record (`_preRegisteredClasses.Remove`): the first declaration reuses the type, a genuine
   second `Class Box` finds nothing to consume and reports at its own line with the message it
   always had. Peeking instead of consuming silently disables duplicate detection.
-  ⛔ **MSIL ignores `BaseConstructorArgs` ENTIRELY** — it emits `call instance void Base::.ctor()`
-  whatever the arguments, and the program dies with `MissingMethodException: Void Base..ctor()`.
-  Proved pre-existing by supplying EVERY argument to a base constructor with no Optional at all:
-  same failure. Pinned.
+  ⚠ **MSIL passes `BaseConstructorArgs` as of 2026-09-17** — `EmitBaseConstructorCall`. It used to
+  emit a fixed `call instance void Base::.ctor()` whatever was written, because the generator never
+  read the list at all, so every base constructor taking arguments died with
+  `MissingMethodException: Void Base..ctor()`. MSIL-only: C#, JavaScript and C++ all passed them.
+  ⛔ **A COMPUTED base argument is REFUSED, not emitted**, and that is the whole design decision.
+  IL requires the base call before the constructor body, so a value the body produces does not
+  exist yet: measured, `MyBase.New(v + 1)` hands the generator an `IRBinaryOp` temp, and loading it
+  would read an uninitialized local and pass a silent **0** — worse than the exception it replaces.
+  ⛔ **That shape is an IR-level gap, not an MSIL one**: the same program does not build on C#
+  either, which emits `: base(t0)` naming a temp that is not in scope (**CS0103**). Whoever makes
+  `BaseConstructorArgs` self-contained (evaluate into the base call rather than the body) fixes
+  both; `MsilBaseConstructorTests.AComputedBaseArgument_IsRefused_NotSilentlyZero` pins both halves.
+  ⛔ **A derived class with NO constructor whose base requires arguments is broken on EVERY
+  backend** — MSIL `MissingMethodException`, C# CS7036, JavaScript `base:undefined` — because none
+  of them can invent the arguments. The real fix is a front-end diagnostic VB has and this compiler
+  does not: **BC30387**, "must declare a `Sub New` because its base class has no accessible
+  `Sub New` that can be called with no arguments". Pinned.
   ⚠ **A class with TWO constructors cannot be lowered to JavaScript at all** ("SyntaxError: A class
   may only have one constructor"), measured with a pair that has no Optional anywhere — so
   constructor-overload shapes are asserted on MSIL.
