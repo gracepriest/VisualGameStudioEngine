@@ -1365,6 +1365,14 @@ namespace BasicLang.Compiler.IR
 
                 AppendOmittedOptionalArguments(_pendingBaseConstructorArgs, null, baseCtor);
             }
+            else if (_semanticAnalyzer.ConstructorBindings.TryGetValue(node, out var implicitBase))
+            {
+                // ⚠ No MyBase.New written, but the base constructor the analyzer bound this to may
+                // still take OPTIONAL parameters — the implicit call has to fill them exactly as an
+                // explicit one would. The analyzer records a binding here only when the base IS
+                // callable with no arguments, so reaching this means filling is all that is left.
+                AppendOmittedOptionalArguments(_pendingBaseConstructorArgs, null, implicitBase);
+            }
 
             // Generate body
             if (node.Body != null)

@@ -4895,6 +4895,23 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Validate: abstract classes should have at least one abstract member (warning, not error)
             // This is not enforced in VB.NET, but it's a good practice
 
+            // ⛔ A class with NO constructor gets an implicit one that calls the base with no
+            // arguments. If the base cannot be called that way, the program is not buildable on ANY
+            // backend and nothing said so: measured, MSIL threw
+            // `MissingMethodException: Void Base..ctor()`, C# was CS7036 and JavaScript printed
+            // `base:undefined`. None of them can invent the arguments, so this is the front end's
+            // to catch — VB reports BC30387 here.
+            if (classType.BaseType != null && !node.Members.Any(m => m is ConstructorNode))
+            {
+                ResolveImplicitBaseConstructor(classType.BaseType, out var baseNeedsArgs);
+                if (baseNeedsArgs)
+                {
+                    Error($"Class '{node.Name}' must declare a 'Sub New' because its base class "
+                        + $"'{classType.BaseType.Name}' does not have an accessible 'Sub New' that "
+                        + "can be called with no arguments", node.Line, node.Column);
+                }
+            }
+
             ExitScope();
         }
 
@@ -5847,6 +5864,33 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 // Use ".ctor" + param count to support overloading
                 var ctorName = $".ctor{node.Parameters.Count}";
                 classScope.ClassType.Members[ctorName] = ctorSymbol;
+            }
+
+            // ⛔ NO MyBase.New means an IMPLICIT base call with no arguments, and that is the same
+            // unbuildable program as a class with no constructor at all when the base cannot be
+            // called that way — measured identically: MissingMethodException on MSIL, CS7036 on C#.
+            // The sibling of the check in Visit(ClassNode); VB reports BC30148 here.
+            if (node.BaseConstructorArgs.Count == 0 && classScope?.ClassType?.BaseType != null)
+            {
+                var implicitBase = ResolveImplicitBaseConstructor(
+                    classScope.ClassType.BaseType, out var baseNeedsArgs);
+
+                // ⚠ Recorded even with no arguments written, because the base constructor may still
+                // take OPTIONAL parameters that the implicit call has to fill. Without this,
+                // `Inherits Base` against `Sub New(Optional a As Integer = 3)` is a legal program
+                // every backend miscompiles — MissingMethodException on MSIL, CS7036 on C#.
+                if (implicitBase != null)
+                {
+                    _constructorBindings[node] = implicitBase;
+                }
+
+                if (baseNeedsArgs)
+                {
+                    Error("First statement of this 'Sub New' must be a call to 'MyBase.New' because "
+                        + $"base class '{classScope.ClassType.BaseType.Name}' of "
+                        + $"'{classScope.ClassType.Name}' does not have an accessible 'Sub New' "
+                        + "that can be called with no arguments", node.Line, node.Column);
+                }
             }
 
             // Validate base constructor call if present
@@ -8594,6 +8638,34 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             // For List<T>, Collection<T>, etc., return the element type (first generic arg)
             return type.GenericArguments[0];
+        }
+
+        /// <summary>
+        /// The base constructor an IMPLICIT base call binds to — the one a derived class gets when
+        /// it writes no <c>MyBase.New(…)</c> — or null when the base declares constructors and none
+        /// of them can be called with no arguments.
+        ///
+        /// <para>⚠ <c>null</c> means two different things, so callers must check
+        /// <paramref name="baseRequiresArguments"/>: a base with NO constructors at all is
+        /// perfectly constructible (it gets the implicit default), while a base whose every
+        /// constructor needs an argument is the error case.</para>
+        ///
+        /// <para>⚠ It reuses <see cref="ResolveConstructor"/> so that "callable with no arguments"
+        /// means exactly what it means at a <c>New</c> site — an all-<c>Optional</c> constructor
+        /// counts, because its defaults fill. Asking the question a second way here is how the two
+        /// would come to disagree about the same program.</para>
+        /// </summary>
+        private static Symbol ResolveImplicitBaseConstructor(TypeInfo baseType, out bool baseRequiresArguments)
+        {
+            baseRequiresArguments = false;
+            if (baseType?.Members == null) return null;
+
+            var declaresAny = baseType.Members.Keys.Any(k => k.StartsWith(".ctor"));
+            if (!declaresAny) return null;
+
+            var zeroArg = ResolveConstructor(baseType, 0);
+            baseRequiresArguments = zeroArg == null;
+            return zeroArg;
         }
 
         /// <summary>

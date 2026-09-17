@@ -231,41 +231,10 @@ public class MsilBaseConstructorTests
         });
     }
 
-    /// <summary>
-    /// ⛔ A derived class with NO constructor, whose base requires arguments, is still broken — and
-    /// on every backend, because none of them can invent the arguments. Measured: MSIL throws
-    /// <c>MissingMethodException: Void Base..ctor()</c>, C# is CS7036, JavaScript prints
-    /// <c>base:undefined</c>.
-    ///
-    /// <para>⚠ The real fix is a FRONT-END diagnostic that VB has and this compiler does not
-    /// (BC30387: the derived class must declare a <c>Sub New</c> because the base has no
-    /// accessible parameterless one). Emitting anything here would be guessing, so this pins the
-    /// current behaviour and names the missing check.</para>
-    /// </summary>
-    [Test]
-    public void ADerivedClassWithNoConstructor_AndABaseThatNeedsArguments_IsStillBroken()
-    {
-        var run = Run("""
-            Class Base
-             Public Sub New(a As Integer)
-              PrintLine("base:" & CStr(a))
-             End Sub
-            End Class
-
-            Class Derived
-             Inherits Base
-            End Class
-
-            Module M
-             Sub Main()
-              Dim d As New Derived()
-             End Sub
-            End Module
-            """);
-
-        Assert.That(run.Outcome, Is.EqualTo(MsilOutcome.RunFailed),
-            "if this passes, the front end learned BC30387 or the synthesized default ctor learned "
-            + "to forward arguments — assert the real behaviour here");
-        Assert.That(run.Output, Does.Contain("Void Base..ctor()"));
-    }
+    // ⚠ The pin that used to live here — a derived class with NO constructor whose base requires
+    // arguments, dying at run time with MissingMethodException — is gone because the FRONT END now
+    // rejects that program (VB's BC30387). It is no longer an MSIL shape at all:
+    // BaseConstructorDiagnosticTests owns it. It cannot even be written through MsilHarness, whose
+    // CompileToIl asserts a clean analyze, so a rejected program fails the harness's own assertion
+    // rather than returning an outcome.
 }

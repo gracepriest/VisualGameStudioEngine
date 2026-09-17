@@ -474,8 +474,12 @@ public class OptionalConstructorTests
     // Helpers.
     // ====================================================================================
 
-    /// <summary>Parse + analyze only, returning the analyzer's errors as text.</summary>
-    private static string[] Analyze(string source)
+    /// <summary>
+    /// Parse + analyze only, returning the analyzer's errors as text. Shared with
+    /// <see cref="BaseConstructorDiagnosticTests"/>, which asks the same question of the same
+    /// analyzer — two copies would drift about what counts as an error.
+    /// </summary>
+    internal static string[] Analyze(string source)
     {
         var parser = new Parser(new Lexer(source).Tokenize());
         var ast = parser.Parse();
