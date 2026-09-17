@@ -840,7 +840,28 @@ namespace BasicLang.Compiler.IR
 
             var scratchModule = new IRModule("<init>");
             scratchModule.Functions.Add(scratch);
-            new Optimization.ConstantFoldingPass().Run(scratchModule);
+
+            // ⚠ A FIXPOINT over both passes, because neither order alone is enough, measured
+            // on two shapes that need OPPOSITE orders:
+            //   `7 / 2`        -- the casts must fold first; until they do, the division's
+            //                     operands are IRCast and TryFoldBinary declines them.
+            //   `(1 + 2) / 4`  -- the addition must fold first; until it does, the promoting
+            //                     cast's operand is an IRBinaryOp rather than a constant.
+            // Alternating until nothing changes covers both without caring which it was handed.
+            // Bounded so a pass reporting a modification without making progress cannot spin.
+            //
+            // ⛔ `CInt(...)` / `CDbl(...)` are NOT casts — measured, they lower to an IRCall, so
+            // neither pass touches them and they are still refused at module scope. That is a
+            // separate gap (constant-folding the conversion FUNCTIONS) and for CInt it is a
+            // welcome one, because the backends do not agree on what it means.
+            var folding = new Optimization.ConstantFoldingPass();
+            var wideningCasts = new Optimization.WideningCastFoldingPass();
+            for (var round = 0; round < 16; round++)
+            {
+                var changed = folding.Run(scratchModule);
+                changed |= wideningCasts.Run(scratchModule);
+                if (!changed) break;
+            }
 
             // Folding rewrites each instruction in place, so a fully constant expression leaves
             // a list of nothing but constants, and the LAST one is the result: lowering is

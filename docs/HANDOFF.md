@@ -570,12 +570,38 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   `New List(Of Integer)()` need code to run first, i.e. a module initializer no backend has (the
   JS backend already refused a non-constant global outright). One refusal, where foldability is
   decided, so the builder and the backends cannot disagree.
-  ⛔ **Known gap, pinned:** `Dim G As Double = 7 / 2` is still refused although it is
-  arithmetically constant. `/` promotes both operands, so the block is `IRCast, IRCast,
-  IRBinaryOp` (measured) and the pass does not fold a cast. `7.0 / 2.0` and `8 \ 2` both fold.
-  Closing it means folding a cast of a constant — a NUMERIC-CONVERSION change, not a crash fix:
-  widening is lossless but narrowing must agree with each backend at run time, and VB's `CInt`
-  rounds half-to-even where a C# cast truncates. Deserves its own characterization.
+  ⚠ **`Dim G As Double = 7 / 2` FOLDS as of 2026-09-17** — `WideningCastFoldingPass`. `/`
+  promotes both operands, so the block is `IRCast, IRCast, IRBinaryOp` and neither operand was a
+  constant until the casts reduced. The helper now alternates that pass with `ConstantFoldingPass`
+  to a FIXPOINT, because two shapes need opposite orders: `7 / 2` needs the casts folded first,
+  `(1 + 2) / 4` needs the addition folded first.
+  ⛔ **WIDENING ONLY — Integer→Long, Integer→Double, Single→Double**, the three exact ones.
+  Integer→Single is inexact past 2^24, Long→Double past 2^53.
+  ⛔ **NARROWING IS NOT FOLDED BECAUSE THE BACKENDS DISAGREE.** Measured on `CInt(7.5)`,
+  `CInt(8.5)`, `CInt(7.9)`, `CInt(-7.5)`: **C# prints `8,8,8,-8`** (rounds — the VB answer) while
+  **MSIL, JavaScript and C++ all print `7,8,7,-7`** (truncate). One language, two answers: a real
+  pre-existing defect, pinned by
+  `ModuleScopeInitializerTests.NarrowingConversion_DisagreesAcrossBackends_Pinned`. No folder may
+  pick a side until the backends agree at run time.
+  ⚠ `CInt(...)` / `CDbl(...)` are NOT casts — they lower to an `IRCall`, so neither pass touches
+  them and they stay refused at module scope.
+  ⚠ **The widening-only restriction is currently UNREACHABLE**, measured: adding a Double→Integer
+  arm leaves every test passing, because no narrowing `IRCast` reaches the pass (assignment
+  narrowing is folded earlier by `TryConvertConstant` without a cast). Kept as a fail-safe no test
+  can hold, for the divergence above.
+  ⚠ **The pass is NOT in the default pipeline, and that is a SCOPE decision, not a safety one.**
+  The tempting rationale — that a folded Double constant renders as `7` via `Value.ToString()` and
+  would turn `(double)7 / x` into integer division — was measured and is WRONG: with the pass in
+  the pipeline C# still prints 3.5 for both `7 / 2` and `7 / x`, because the optimizer loops to a
+  fixpoint and a surviving operand keeps its own cast.
+  ⛔ **SILENT MISCOMPILE found while bounding this, pinned not fixed:** `Dim G As Byte = 7.9` at
+  module scope compiles clean and prints **154**. Verified on unmodified master. It is the sub-int
+  gap `TryConvertConstant`'s comment predicts (only Integer/Long/Single/Double are handled), and
+  closing it means teaching the optimizer's folders every numeric CLR type — handing them an
+  `sbyte` today is itself a measured miscompile. Held by
+  `ASubIntegerNarrowingInitializer_IsStillMiscompiled_Pinned`.
+  ⚠ `Dim G As Single = 7 / 2` is a FRONT-END diagnostic ("Cannot assign value of type 'Double' to
+  variable of type 'Single'"), not a folding gap.
   ⚠ **The C++ global-initializer gap is FIXED as of 2026-09-17** — `CppCodeGenerator`, globals
   loop. It emitted `{}` for every global that is not a sized array and never consulted
   `InitialValue`, so `Dim G As Integer = 42` became `int32_t G = {};` and the program printed
