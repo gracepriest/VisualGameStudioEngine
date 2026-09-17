@@ -339,6 +339,12 @@ namespace BasicLang.Compiler.IR.Optimization
                     BinaryOpKind.Xor => FoldXor(left.Value, right.Value),
                     BinaryOpKind.Shl => FoldShl(left.Value, right.Value),
                     BinaryOpKind.Shr => FoldShr(left.Value, right.Value),
+                    // `&` is VB's string concatenation, and FoldAdd's string branch already IS
+                    // concatenation. Without this a module-scope `Dim S As String = "a" & "b"`
+                    // has no constant to fold to and gets refused, because a global's initializer
+                    // must be a constant. Mixed operands (`"a" & 5`) still fold to null here —
+                    // FoldAdd matches string+string only — so the VB coercion is never guessed at.
+                    BinaryOpKind.Concat => FoldAdd(left.Value, right.Value),
                     _ => null
                 };
                 
