@@ -595,14 +595,18 @@ namespace BasicLang.Compiler.IR
 
                 if (node.Initializer != null)
                 {
-                    // KNOWN GAP (pre-existing): a module-scope initializer that lowers to
-                    // an IRNewObject (e.g. `Dim g As New List(...)()` at file scope) calls
-                    // _currentFunction.GetNextTempName() inside Visit(NewExpressionNode)
-                    // while _currentFunction is null here -> NullReferenceException. This
-                    // should produce a clean diagnostic ("module-scope New initializers are
-                    // not supported") rather than crash the IR builder. Unrelated to the
-                    // C++ stdlib work; declaration-only globals (`Dim g As List(Of Integer)`)
-                    // build fine. Fixing the crash is out of scope here.
+                    // KNOWN GAP (pre-existing): a module-scope initializer that needs a TEMP
+                    // calls _currentFunction.GetNextTempName() while _currentFunction is null
+                    // here -> NullReferenceException. This note used to name only IRNewObject
+                    // (`Dim g As New List(...)()`); measured, it is wider than that — any
+                    // initializer that allocates a temp crashes, an arithmetic one included:
+                    // `Dim G As Integer = 40 + 2` at module scope is enough, in a file with no
+                    // class in it at all, and it reproduces on unmodified master. A literal
+                    // (`= 42`) and a declaration-only global both build fine. It should produce
+                    // a clean diagnostic rather than crash the IR builder. Fixing it is out of
+                    // scope here; MsilBaseConstructorTests
+                    // .TheSynthesizedConstructor_DoesNotLeakIntoTheNextModuleGlobal explains
+                    // why it has to use a literal initializer to test anything else.
                     // Evaluate the initializer and store it
                     node.Initializer.Accept(this);
                     globalVar.InitialValue = _expressionResult;
@@ -933,7 +937,105 @@ namespace BasicLang.Compiler.IR
                 }
             }
 
+            SynthesizeImplicitConstructor(node, irClass);
+
             _currentClassName = null;
+        }
+
+        /// <summary>
+        /// Gives a class that declares NO constructor a real one, when its base constructor takes
+        /// <c>Optional</c> parameters the implicit base call has to fill.
+        ///
+        /// <para>⛔ Without it, <c>Inherits Base</c> against
+        /// <c>Sub New(Optional a As Integer = 3)</c> is a legal program — the analyzer accepts it,
+        /// correctly, because the base IS callable with no arguments — that EVERY backend
+        /// miscompiled. There was no <c>IRConstructor</c> to carry the filled arguments, so each
+        /// backend fell back to inventing a bare no-argument base call: measured, C# emitted
+        /// <c>class Derived : Base</c> with no constructor at all and got <b>CS7036</b>, and MSIL
+        /// threw <c>MissingMethodException: Void Base..ctor()</c>.</para>
+        ///
+        /// <para>⚠ The synthesized constructor is a REAL one — its own <c>IRFunction</c> with an
+        /// entry block and a return — not an <c>IRConstructor</c> with a null Implementation.
+        /// Deliberately: the shape a declared empty <c>Public Sub New()</c> produces is already
+        /// exercised by all four backends, and only MSIL has a synthesize-a-default path at all
+        /// (C#, JavaScript and C++ lean on their target language's implicit constructor). Handing
+        /// them something no declared constructor ever looks like is how one of them would break in
+        /// a way no test covers.</para>
+        ///
+        /// <para>⚠ <c>_currentFunction</c> is pointed at the synthesized function BEFORE the fill,
+        /// so that a default which is an EXPRESSION rather than a literal
+        /// (<c>Optional b As Integer = 2 + 3</c>) emits its instructions into this constructor's
+        /// body, where they run before the base call consumes them — not into whatever function
+        /// happened to be current.</para>
+        ///
+        /// <para>⚠ Does nothing unless there is something to fill: a base with no parameters, or no
+        /// base at all, leaves <c>Constructors</c> empty exactly as before and the backends keep
+        /// synthesizing their own default. That early-out is invisible at RUN time — measured, an
+        /// empty synthesized constructor and the default each backend invents behave identically —
+        /// so <c>BaseConstructorDiagnosticTests.NothingToFill_MeansNoSynthesizedConstructor</c>
+        /// asserts the IR structurally instead, and removing either early-out fails it.</para>
+        /// </summary>
+        private void SynthesizeImplicitConstructor(ClassNode node, IRClass irClass)
+        {
+            // ⚠ `Constructors.Count > 0` is REDUNDANT with the analyzer today and kept anyway:
+            // the analyzer records a class-level binding only for a class that declares no
+            // constructor, so it cannot currently fire. Depending on another component's filter to
+            // stay exactly as it is, rather than saying the condition here, is the coupling that
+            // made the old `UnambiguousConstructorParameters` silently order-dependent. No test
+            // can hold this one — it is a fail-safe that does nothing, kept with that said plainly.
+            //
+            // The parameter-count line IS held, structurally, by
+            // BaseConstructorDiagnosticTests.NothingToFill_MeansNoSynthesizedConstructor: it is the
+            // only thing stopping a class with nothing to fill from acquiring a constructor it does
+            // not need. Note it carries BOTH of that test's shapes, not just the one it is named
+            // for — a base declaring no constructor at all records no binding, so `implicitBase`
+            // arrives null and the `?.` half of this same line is what stops it. The TryGetValue
+            // line cannot be mutated away on its own (it declares `implicitBase`), so it is not
+            // separately measurable; it is the lookup, not a third guard.
+            //
+            // ⚠ There is deliberately NO fourth guard for "the fill produced nothing". Measured by
+            // mutation: with the fill emptied, every test still passed, because an empty
+            // synthesized constructor behaves exactly like the default each backend invents. A
+            // guard protecting nothing observable is a guard no test can hold.
+            if (irClass.Constructors.Count > 0) return;
+            if (!_semanticAnalyzer.ConstructorBindings.TryGetValue(node, out var implicitBase)) return;
+            if (implicitBase?.Parameters == null || implicitBase.Parameters.Count == 0) return;
+
+            _currentFunction = _module.CreateFunction(
+                $"{node.Name}__ctor", new TypeInfo("Void", TypeKind.Void));
+            _currentFunction.SourceFilePath = _sourceFilePath;
+            _currentBlock = _currentFunction.CreateBlock("entry");
+
+            var baseArgs = new List<IRValue>();
+            AppendOmittedOptionalArguments(baseArgs, null, implicitBase);
+
+            if (!_currentBlock.IsTerminated())
+            {
+                EmitInstruction(new IRReturn());
+            }
+
+            // ⚠ Cleared, not save/restored. Measured with a diagnostic: `_currentFunction` is
+            // NULL every time this runs — a class is never visited while a function is current,
+            // in a Module or a Namespace alike — so a save/restore pair would be restoring null
+            // to null. Clearing is what `Visit(ConstructorNode)` does at its own end.
+            //
+            // The clear is load-bearing, and a test holds it: `Visit(VariableDeclarationNode)`
+            // decides global-versus-local on `_currentFunction == null` alone, so leaking the
+            // synthesized function sends the next module-level `Dim` down the LOCAL branch — no
+            // static field is emitted and the program dies with InvalidProgramException. Dropping
+            // these two lines fails MsilBaseConstructorTests
+            // .TheSynthesizedConstructor_DoesNotLeakIntoTheNextModuleGlobal and nothing else.
+            var synthesized = _currentFunction;
+            _currentFunction = null;
+            _currentBlock = null;
+
+            var ctor = new IRConstructor
+            {
+                Access = AccessModifier.Public,
+                Implementation = synthesized,
+            };
+            ctor.BaseConstructorArgs.AddRange(baseArgs);
+            irClass.Constructors.Add(ctor);
         }
 
         /// <summary>

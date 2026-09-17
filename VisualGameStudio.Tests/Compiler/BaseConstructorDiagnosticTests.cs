@@ -296,20 +296,23 @@ public class BaseConstructorDiagnosticTests
     }
 
     /// <summary>
-    /// ⛔ The remaining gap, pinned: a class declaring NO constructor at all, whose base takes only
-    /// <c>Optional</c> parameters. The analyzer correctly accepts it — the base IS callable with no
-    /// arguments — but there is no <c>IRConstructor</c> to hang the filled defaults on, so every
-    /// backend synthesizes a bare no-argument base call. Measured: C# emits
-    /// <c>class Derived : Base</c> with no constructor and gets CS7036; MSIL throws
+    /// ⛔ A class declaring NO constructor at all, whose base takes only <c>Optional</c>
+    /// parameters. The analyzer accepts it — correctly, the base IS callable with no arguments —
+    /// and it used to be a legal program every backend MISCOMPILED: there was no
+    /// <c>IRConstructor</c> to hang the filled defaults on, so each backend invented a bare
+    /// no-argument base call. Measured before: C# emitted <c>class Derived : Base</c> with no
+    /// constructor and got <b>CS7036</b>; MSIL threw
     /// <c>MissingMethodException: Void Base..ctor()</c>.
     ///
-    /// <para>⚠ Closing it means SYNTHESIZING an <c>IRConstructor</c> for such a class so all four
-    /// backends receive the filled call, rather than each inventing a default. Deliberately not
-    /// bundled: the sibling shape — the same base with a declared constructor — works, and is
-    /// asserted above.</para>
+    /// <para>⚠ Fixed by SYNTHESIZING one (<c>IRBuilder.SynthesizeImplicitConstructor</c>) — a real
+    /// <c>IRFunction</c> with an entry block and a return, not an <c>IRConstructor</c> with a null
+    /// Implementation. Only MSIL has a synthesize-a-default path at all; C#, JavaScript and C++
+    /// lean on their target language's implicit constructor, so handing them a shape no declared
+    /// constructor ever produces is how one of them would break uncovered.</para>
     /// </summary>
     [Test]
-    public void AClassWithNoConstructor_AndAnAllOptionalBase_IsAcceptedButStillDoesNotBuild()
+    [Category("Integration")]
+    public void AClassWithNoConstructor_AndAnAllOptionalBase_FillsTheDefaultsToo()
     {
         const string program = """
             Class Base
@@ -331,12 +334,176 @@ public class BaseConstructorDiagnosticTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(OptionalConstructorTests.Analyze(program), Is.Empty,
-                "the analyzer is right to accept it — the base IS callable with no arguments");
-            Assert.That(ReturnCoercionTests.CompileEmittedCSharpForTest(program),
-                Has.Some.Contains("CS7036"),
-                "when this stops failing, a synthesized IRConstructor carries the filled base "
-                + "call — delete this pin and assert the run");
+            Assert.That(OptionalConstructorTests.Analyze(program), Is.Empty);
+            Assert.That(ReturnCoercionTests.CompileEmittedCSharpForTest(program), Is.Empty);
+            Assert.That(JavaScriptExecutionTests.RunJs(program), Is.EqualTo("base:3"));
+            Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo("base:3\n"));
+            Assert.That(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(program)),
+                Is.EqualTo("base:3\n"));
         });
+    }
+
+    /// <summary>
+    /// ⚠ A class with no base, or one whose base constructor takes NO parameters, must NOT acquire
+    /// a synthesized constructor — there is nothing to fill, and the backends' own default is what
+    /// every existing class in the repo relies on.
+    ///
+    /// <para>⛔ The <c>Constructors</c> assertions are STRUCTURAL on purpose. The run assertions
+    /// below them pass either way: measured by mutation, an empty synthesized constructor and the
+    /// default each backend invents behave identically, so a runtime-only test here would hold
+    /// nothing. Asserting the IR is what makes the early-out in
+    /// <c>SynthesizeImplicitConstructor</c> a claim a test can falsify.</para>
+    ///
+    /// <para>⚠ The two shapes reach the early-out by DIFFERENT routes, which is why both are here:
+    /// <c>parameterlessBase</c> has a bound base constructor with zero parameters (the
+    /// parameter-count guard stops it), while <c>noBaseCtor</c>'s base declares no constructor at
+    /// all, so the analyzer records no binding and the lookup guard stops it first.</para>
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    public void NothingToFill_MeansNoSynthesizedConstructor()
+    {
+        const string parameterlessBase = """
+            Class Base
+             Public Sub New()
+              PrintLine("base0")
+             End Sub
+            End Class
+
+            Class Derived
+             Inherits Base
+            End Class
+
+            Module M
+             Sub Main()
+              Dim d As New Derived()
+             End Sub
+            End Module
+            """;
+
+        const string noBaseCtor = """
+            Class Base
+             Public F As Integer
+            End Class
+
+            Class Derived
+             Inherits Base
+            End Class
+
+            Module M
+             Sub Main()
+              Dim d As New Derived()
+              PrintLine("ok")
+             End Sub
+            End Module
+            """;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(JsTestSupport.BuildModule(parameterlessBase).Classes["Derived"].Constructors,
+                Is.Empty,
+                "a zero-parameter base has nothing to fill — no constructor may be synthesized");
+            Assert.That(JsTestSupport.BuildModule(noBaseCtor).Classes["Derived"].Constructors,
+                Is.Empty,
+                "a base declaring no constructor records no binding — nothing to synthesize from");
+
+            Assert.That(Msil.MsilHarness.RunExpectingSuccess(parameterlessBase),
+                Is.EqualTo("base0\n"));
+            Assert.That(Msil.MsilHarness.RunExpectingSuccess(noBaseCtor), Is.EqualTo("ok\n"));
+            Assert.That(JavaScriptExecutionTests.RunJs(parameterlessBase), Is.EqualTo("base0"));
+            Assert.That(JavaScriptExecutionTests.RunJs(noBaseCtor), Is.EqualTo("ok"));
+        });
+    }
+
+    /// <summary>
+    /// ⚠ The synthesized constructor is SHAPED like a declared one, which is the whole reason it is
+    /// a real <c>IRFunction</c> rather than an <c>IRConstructor</c> with a null Implementation: an
+    /// entry block, a terminating return, no parameters, and the filled base call.
+    ///
+    /// <para>⛔ STRUCTURAL because nothing else can see it. Measured by mutation: dropping the
+    /// terminating return breaks no backend — every one of them tolerates the unterminated block —
+    /// so the only thing holding the invariant is an assertion on the IR itself. An unterminated
+    /// block is malformed IR whether or not today's four backends happen to cope, and
+    /// <c>Visit(ConstructorNode)</c> terminates every declared constructor the same way.</para>
+    /// </summary>
+    [Test]
+    public void TheSynthesizedConstructor_IsShapedLikeADeclaredOne()
+    {
+        var module = JsTestSupport.BuildModule("""
+            Class Base
+             Public Sub New(Optional a As Integer = 3)
+              PrintLine("base:" & CStr(a))
+             End Sub
+            End Class
+
+            Class Derived
+             Inherits Base
+            End Class
+
+            Module M
+             Sub Main()
+              Dim d As New Derived()
+             End Sub
+            End Module
+            """);
+
+        var derived = module.Classes["Derived"];
+
+        Assert.That(derived.Constructors, Has.Count.EqualTo(1),
+            "the class declares none, so exactly one must have been synthesized");
+
+        var ctor = derived.Constructors[0];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ctor.Implementation, Is.Not.Null,
+                "a null Implementation is a shape no declared constructor produces");
+            Assert.That(ctor.Implementation.Parameters, Is.Empty);
+            Assert.That(ctor.Implementation.EntryBlock, Is.Not.Null);
+            Assert.That(ctor.Implementation.EntryBlock.IsTerminated(), Is.True,
+                "an unterminated entry block is malformed IR even where a backend tolerates it");
+            Assert.That(ctor.BaseConstructorArgs, Has.Count.EqualTo(1),
+                "the base's one Optional default must be filled");
+        });
+    }
+
+    /// <summary>
+    /// ⛔ The remaining gap, and it is the one PR #31 already pinned rather than a new one: a base
+    /// <c>Optional</c> default that is an EXPRESSION rather than a literal
+    /// (<c>Optional a As Integer = 2 + 3</c>). The filled value is a temp the constructor BODY
+    /// computes, and a base call must precede the body — so MSIL refuses it by the same rule that
+    /// refuses <c>MyBase.New(v + 1)</c>, and C# emits <c>: base(t0)</c> naming a temp out of scope
+    /// (<b>CS0103</b>).
+    ///
+    /// <para>⚠ NOT a regression: this shape was already broken before the synthesized constructor
+    /// existed (it was CS7036 / MissingMethodException then, CS0103 / a clear refusal now). It is
+    /// the same IR-level gap — <c>BaseConstructorArgs</c> is not self-contained — and closing THAT
+    /// closes this. Pinned here so the synthesized-constructor position is named in it.</para>
+    /// </summary>
+    [Test]
+    public void ANonLiteralOptionalDefault_IsStillTheComputedArgumentGap()
+    {
+        const string program = """
+            Class Base
+             Public Sub New(Optional a As Integer = 2 + 3)
+              PrintLine("base:" & CStr(a))
+             End Sub
+            End Class
+
+            Class Derived
+             Inherits Base
+            End Class
+
+            Module M
+             Sub Main()
+              Dim d As New Derived()
+             End Sub
+            End Module
+            """;
+
+        Assert.That(ReturnCoercionTests.CompileEmittedCSharpForTest(program),
+            Has.Some.Contains("CS0103"),
+            "when this stops failing, BaseConstructorArgs has become self-contained — that closes "
+            + "MsilBaseConstructorTests.AComputedBaseArgument_IsRefused_NotSilentlyZero too");
     }
 }
