@@ -185,11 +185,34 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 {
                     var type = MapType(globalVar.Type);
                     var name = SanitizeName(globalVar.Name);
+                    // ⛔ A DECLARED initializer wins, and until 2026-09-17 it was dropped on the
+                    // floor: this emitted `{}` for every global and never looked at InitialValue,
+                    // so `Dim G As Integer = 42` became `int32_t G = {};` and the program printed
+                    // 0. A build with the right answer nowhere in it — no diagnostic, no crash,
+                    // just the wrong number. C#, MSIL and JavaScript all carried the value; only
+                    // this backend silently lost it.
+                    //
+                    // ⚠ Through ValueText, matching the STATIC FIELD path
+                    // (EmitStaticMemberInitializationsCore), which spells the same thing inline.
+                    // Stated honestly: ValueText's `is IRConstant -> EmitConstant` branch is
+                    // REDUNDANT here, because the base GetValueName (ICodeGenerator) already
+                    // routes an IRConstant to EmitConstant itself — measured, swapping this for a
+                    // bare GetValueName passes every test, so the two are equivalent and no test
+                    // can hold the choice. It is ValueText for consistency with its sibling sites,
+                    // not because it protects anything.
+                    //
+                    // ⚠ A non-constant initializer (`Dim I As Integer = H`) emits the referenced
+                    // global's NAME, which is correct C++ only because these are written in
+                    // declaration order and C++ initializes namespace-scope objects in that order
+                    // within a translation unit. Reordering this loop would break it silently.
+                    //
                     // A module-level fixed-size array allocates here for the same reason a local
                     // does; `{}` stays the default for everything else (globals have never gone
                     // through GetDefaultValue, and routing them there now would change every
                     // non-array global's initializer).
-                    var init = SizedArrayInitializer(globalVar.Type, type) ?? "{}";
+                    var init = globalVar.InitialValue != null
+                        ? ValueText(globalVar.InitialValue)
+                        : SizedArrayInitializer(globalVar.Type, type) ?? "{}";
                     WriteLine($"{type} {name} = {init};");
                 }
                 WriteLine();

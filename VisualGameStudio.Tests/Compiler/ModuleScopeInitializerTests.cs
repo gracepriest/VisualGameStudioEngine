@@ -50,9 +50,10 @@ public class ModuleScopeInitializerTests
     /// MSIL <c>.cctor</c> comment warns about — and exactly what C++ does, see
     /// <see cref="ACppGlobalInitializer_IsStillDropped"/>.
     ///
-    /// <para>⛔ THREE backends, not four. C++ is excluded because it never emits a module-scope
-    /// global's initializer AT ALL — pinned separately below rather than quietly dropped from
-    /// this list.</para>
+    /// <para>⛔ THREE backends here, not four. C++ carries these too, but it FORMATS a Double
+    /// differently (<c>3.500000</c>), so it is asserted in
+    /// <see cref="AModuleScopeInitializer_ReachesTheCppProgram"/> against its own expected text
+    /// rather than folded into this list on a shared string.</para>
     /// </summary>
     [Test]
     [Category("Integration")]
@@ -77,30 +78,94 @@ public class ModuleScopeInitializerTests
     }
 
     /// <summary>
-    /// ⛔ PRE-EXISTING and unrelated to the crash: the C++ backend drops a module-scope global's
-    /// initializer entirely. <c>CppCodeGenerator</c> emits <c>{}</c> for every global that is not
-    /// a sized array and never consults <c>InitialValue</c>, so <c>Dim G As Integer = 42</c>
-    /// compiles to <c>int32_t G = {};</c> and the program prints <b>0</b>.
+    /// ⛔ The C++ backend used to DROP a module-scope global's initializer entirely.
+    /// <c>CppCodeGenerator</c> emitted <c>{}</c> for every global that is not a sized array and
+    /// never consulted <c>InitialValue</c>, so <c>Dim G As Integer = 42</c> became
+    /// <c>int32_t G = {};</c> and the program printed <b>0</b> — a build with the right answer
+    /// nowhere in it, no diagnostic and no crash. C#, MSIL and JavaScript all carried the value.
+    /// Verified at the time on unmodified master: a plain LITERAL printed 0 there too, so this
+    /// was never the folding path.
     ///
-    /// <para>⚠ Verified on unmodified master by stashing the change and rebuilding: a plain
-    /// LITERAL initializer printed 0 there too. So this is not the folding path — it is every
-    /// module-scope initializer on C++, and it predates this work. Folding correctly hands C++ a
-    /// constant it then ignores.</para>
-    ///
-    /// <para>⚠ Deliberately not bundled in: the crash fix is in the IR builder and is shared by
-    /// all four backends, while this is one backend's emission gap with its own blast radius
-    /// (every initialized global's C++ output changes). Asserted as it ACTUALLY BEHAVES so the
-    /// pin cannot rot — when C++ starts emitting initializers this test fails, and the case moves
-    /// up into the list above.</para>
+    /// <para>⚠ Separate from the shared list above because C++ FORMATS a Double differently:
+    /// <c>CStr(3.5)</c> is <c>3.500000</c> here against <c>3.5</c> on C# and MSIL. That is
+    /// pre-existing and nothing to do with globals — measured, a plain LOCAL
+    /// <c>Dim d As Double = 3.5</c> prints <c>3.500000</c> on C++ too. Pinned as C++ actually
+    /// behaves rather than normalised away, because a test that trimmed the zeroes would also
+    /// pass if the initializer were lost and the global happened to read 0.0.</para>
     /// </summary>
     [Test]
     [Category("Integration")]
-    public void ACppGlobalInitializer_IsStillDropped()
+    [TestCase("Dim G As Integer = 42", "PrintLine(CStr(G))", "42", TestName = "Cpp_Literal")]
+    [TestCase("Dim G As Integer = 40 + 2", "PrintLine(CStr(G))", "42", TestName = "Cpp_Arithmetic")]
+    [TestCase("Dim G As String = \"a\" & \"b\"", "PrintLine(G)", "ab", TestName = "Cpp_Concat")]
+    [TestCase("Dim G As Integer = (1 + 2) * 3", "PrintLine(CStr(G))", "9", TestName = "Cpp_Nested")]
+    [TestCase("Dim G As Boolean = True", "PrintLine(CStr(G))", "True", TestName = "Cpp_Bool")]
+    [TestCase("Const C As Integer = 40 + 2", "PrintLine(CStr(C))", "42", TestName = "Cpp_Const")]
+    [TestCase("Dim G As Double = 7.0 / 2.0", "PrintLine(CStr(G))", "3.500000", TestName = "Cpp_Double_FormattingPinned")]
+    public void AModuleScopeInitializer_ReachesTheCppProgram(
+        string declaration, string print, string expected)
     {
-        var program = Program("Dim G As Integer = 40 + 2", "PrintLine(CStr(G))");
+        var program = Program(declaration, print);
 
-        Assert.That(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(program)), Is.EqualTo("0\n"),
-            "when this starts printing 42, C++ emits global initializers — move the case up");
+        Assert.That(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(program)),
+            Is.EqualTo(expected + "\n"));
+    }
+
+    /// <summary>
+    /// ⚠ A global initialized from ANOTHER global emits the referenced global's NAME on C++
+    /// (<c>int32_t I = H;</c>), not a constant. That is correct C++ only because the generator
+    /// writes globals in DECLARATION ORDER and C++ initializes namespace-scope objects in that
+    /// order within a translation unit — reordering that loop would break this silently, which is
+    /// why the shape is asserted rather than assumed.
+    ///
+    /// <para>⛔ JavaScript REFUSES this shape outright — "a module-level initializer for 'G' that
+    /// is not a constant" — so it is asserted on C++ and MSIL only. Worth stating plainly: the
+    /// backends do NOT agree here, and JS is the strict one.</para>
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    public void AGlobalInitializedFromAnotherGlobal_ReachesCpp()
+    {
+        var program = """
+            Module M
+             Dim H As Integer = 7
+             Dim I As Integer = H
+             Sub Main()
+              PrintLine(CStr(I))
+             End Sub
+            End Module
+            """;
+
+        Assert.That(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(program)), Is.EqualTo("7\n"));
+    }
+
+    /// <summary>
+    /// ⚠ Regression: a global with NO initializer must still get <c>{}</c> on C++, and a sized
+    /// array must still allocate. Only the has-an-initializer case changed; routing the others
+    /// anywhere new would change every uninitialized global's emission.
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    public void ACppGlobalWithNoInitializer_IsUnchanged()
+    {
+        var declarationOnly = Program("Dim G As Integer", "PrintLine(CStr(G))");
+        var sizedArray = """
+            Module M
+             Dim G(3) As Integer
+             Sub Main()
+              G(0) = 5
+              PrintLine(CStr(G(0)))
+             End Sub
+            End Module
+            """;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(declarationOnly)),
+                Is.EqualTo("0\n"));
+            Assert.That(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(sizedArray)),
+                Is.EqualTo("5\n"));
+        });
     }
 
     /// <summary>
