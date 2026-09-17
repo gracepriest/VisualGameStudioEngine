@@ -259,23 +259,147 @@ public class ModuleScopeInitializerTests
     }
 
     /// <summary>
-    /// ⛔ KNOWN GAP, pinned rather than hidden: integer-literal division promoted to Double is
-    /// arithmetically constant but still refused. <c>/</c> promotes both operands, so the block is
-    /// <c>IRCast, IRCast, IRBinaryOp</c> (measured), and <c>ConstantFoldingPass</c> does not fold a
-    /// cast — the operands never become constants, so neither does the division.
+    /// ⚠ Integer-literal division promoted to Double now FOLDS. <c>/</c> promotes both operands, so
+    /// the block is <c>IRCast, IRCast, IRBinaryOp</c> and neither operand was a constant until
+    /// <c>WideningCastFoldingPass</c> reduced the casts.
     ///
-    /// <para>⚠ Deliberately NOT bundled into the crash fix. Folding a cast is a numeric-conversion
-    /// change: widening is lossless, but narrowing has to agree with what each backend emits at run
-    /// time, and VB's <c>CInt</c> rounds half-to-even where a C# cast truncates. When this test
-    /// starts failing, casts fold — delete the pin and move the case up to the fold list.</para>
+    /// <para>⛔ WIDENING ONLY, and the reason is measured rather than cautious: the backends
+    /// DISAGREE about narrowing. On <c>CInt(7.5)</c>, <c>CInt(8.5)</c>, <c>CInt(7.9)</c>,
+    /// <c>CInt(-7.5)</c>, C# prints <c>8,8,8,-8</c> (rounds — the VB answer) while MSIL,
+    /// JavaScript and C++ all print <c>7,8,7,-7</c> (truncate). Any single compile-time answer
+    /// would change one of them, so a folder is not allowed an opinion until the backends agree at
+    /// run time. See <see cref="ANarrowingConversion_IsStillRefused"/>.</para>
     /// </summary>
     [Test]
-    public void IntegerDivisionPromotedToDouble_IsStillRefused()
+    [Category("Integration")]
+    [TestCase("Dim G As Double = 7 / 2", "3.5", TestName = "Widen_SevenOverTwo")]
+    [TestCase("Dim G As Double = 1 / 2", "0.5", TestName = "Widen_OneOverTwo")]
+    [TestCase("Dim G As Double = (1 + 2) / 4", "0.75", TestName = "Widen_FoldThenWiden")]
+    public void IntegerDivisionPromotedToDouble_Folds(string declaration, string expected)
+    {
+        var program = Program(declaration, "PrintLine(CStr(G))");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ReturnCoercionTests.CompileEmittedCSharpForTest(program), Is.Empty);
+            Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo(expected + "\n"));
+            Assert.That(JavaScriptExecutionTests.RunJs(program), Is.EqualTo(expected));
+        });
+    }
+
+    /// <summary>
+    /// ⚠ <c>(1 + 2) / 4</c> and <c>7 / 2</c> need OPPOSITE fold orders, which is why the helper
+    /// alternates the two passes to a fixpoint rather than running each once: <c>7 / 2</c> needs
+    /// the casts folded first (the division's operands are casts until then), while
+    /// <c>(1 + 2) / 4</c> needs the addition folded first (the promoting cast's operand is the
+    /// sum). Both are in the case list above; this note records why one ordering cannot serve.
+    /// </summary>
+    [Test]
+    public void TheWidenedDivision_IsAConstantInTheIR()
+    {
+        var module = JsTestSupport.BuildModule(Program("Dim G As Double = 7 / 2", "PrintLine(CStr(G))"));
+
+        var initial = module.GlobalVariables["G"].InitialValue;
+
+        Assert.That(initial, Is.InstanceOf<BasicLang.Compiler.IR.IRConstant>());
+        Assert.That(((BasicLang.Compiler.IR.IRConstant)initial).Value, Is.EqualTo(3.5));
+    }
+
+    /// <summary>
+    /// ⛔ A NARROWING conversion is still refused, and this is the test that keeps it that way.
+    /// <c>CInt(7.5)</c> is not even a cast — measured, <c>CInt</c>/<c>CDbl</c> lower to an
+    /// <c>IRCall</c>, so neither folding pass touches them — but the refusal matters for a second,
+    /// bigger reason: the four backends do not agree on what a narrowing conversion MEANS
+    /// (C# rounds, MSIL/JavaScript/C++ truncate), so there is no single constant a folder could
+    /// produce without changing one of them.
+    ///
+    /// <para>⚠ When someone settles that divergence at run time, this test is where to start —
+    /// folding must follow the backends, not lead them.</para>
+    /// </summary>
+    [Test]
+    [TestCase("Dim G As Integer = CInt(7.5)", TestName = "Refuse_NarrowingCInt")]
+    [TestCase("Dim G As Double = CDbl(1 + 2)", TestName = "Refuse_ConversionCall")]
+    public void ANarrowingConversion_IsStillRefused(string declaration)
     {
         var ex = Assert.Throws<Exception>(
-            () => JsTestSupport.BuildModule(Program("Dim G As Double = 7 / 2", "PrintLine(CStr(G))")));
+            () => JsTestSupport.BuildModule(Program(declaration, "PrintLine(CStr(G))")));
 
         Assert.That(ex.Message, Does.Contain("cannot be computed at compile time"));
+    }
+
+    /// <summary>
+    /// ⛔ The pre-existing cross-backend divergence itself, pinned as each backend ACTUALLY
+    /// behaves. This is a real defect — one language, four answers — and it is the reason the
+    /// widening fold stops where it does. Asserted so that whoever fixes it has the measurements,
+    /// and so that a folder cannot quietly pick a side first.
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    public void NarrowingConversion_DisagreesAcrossBackends_Pinned()
+    {
+        var program = """
+            Module M
+             Sub Main()
+              Dim a As Double = 7.5
+              Dim b As Double = 8.5
+              Dim c As Double = 7.9
+              Dim d As Double = -7.5
+              PrintLine(CStr(CInt(a)) & "," & CStr(CInt(b)) & "," & CStr(CInt(c)) & "," & CStr(CInt(d)))
+             End Sub
+            End Module
+            """;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo("7,8,7,-7\n"),
+                "MSIL truncates");
+            Assert.That(JavaScriptExecutionTests.RunJs(program), Is.EqualTo("7,8,7,-7"),
+                "JavaScript truncates");
+            Assert.That(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(program)),
+                Is.EqualTo("7,8,7,-7\n"), "C++ truncates");
+        });
+    }
+
+    /// <summary>
+    /// ⛔ PRE-EXISTING SILENT MISCOMPILE, found while bounding the widening fold and pinned as it
+    /// ACTUALLY BEHAVES: a module-scope <c>Dim G As Byte = 7.9</c> compiles clean and prints
+    /// <b>154</b>. Not 8, not 7 — garbage, with no diagnostic anywhere.
+    ///
+    /// <para>⚠ Verified on unmodified master by stashing this change and rebuilding: 154 there
+    /// too. It is the sub-int gap <c>IRBuilder.TryConvertConstant</c>'s own comment predicts —
+    /// it handles only Integer/Long/Single/Double, so a Byte target "keeps whatever it did before
+    /// this coercion existed", which turns out to be reinterpreting a Double constant as a Byte
+    /// field. This test records the CONSEQUENCE that comment describes in the abstract.</para>
+    ///
+    /// <para>⛔ Not fixed here, and not by widening this fold either: that comment explains why —
+    /// closing it means teaching the optimizer's folders every numeric CLR type, and handing them
+    /// an sbyte today is itself a measured miscompile (<c>lo &lt; hi</c> folded to <c>false</c>).
+    /// It needs its own change. When it lands, this test fails and should assert 8 (VB rounds) or
+    /// 7 (truncation) per whatever the backends are then made to agree on.</para>
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    public void ASubIntegerNarrowingInitializer_IsStillMiscompiled_Pinned()
+    {
+        var program = Program("Dim G As Byte = 7.9", "PrintLine(CStr(G))");
+
+        Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo("154\n"),
+            "when this changes, sub-integer narrowing got fixed — assert the real answer instead");
+    }
+
+    /// <summary>
+    /// ⚠ The boundary on the other side: <c>Dim G As Single = 7 / 2</c> is rejected by the
+    /// SEMANTIC ANALYZER ("Cannot assign value of type 'Double' to variable of type 'Single'")
+    /// before folding is ever consulted. Recorded so the widening fold is not later blamed for
+    /// it, and so that a Single/Double narrowing rule change is seen to belong in the front end.
+    /// </summary>
+    [Test]
+    public void ADoubleToSingleInitializer_IsAFrontEndDiagnostic_NotAFoldingGap()
+    {
+        var errors = OptionalConstructorTests.Analyze(
+            Program("Dim G As Single = 7 / 2", "PrintLine(CStr(G))"));
+
+        Assert.That(errors, Has.Some.Contains("Single"));
     }
 
     // ====================================================================================
