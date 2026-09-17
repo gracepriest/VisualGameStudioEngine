@@ -477,19 +477,26 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   (`ConstructorBindings`, keyed by AST node) and the IR builder reads it, so the IR can no longer
   coerce against a different constructor than the analyzer type-checked, and it gets
   `IsOptional`/`DefaultValueExpression` that an `IRVariable` list does not carry.
-  ⛔⛔ **A class declared AFTER the code that uses it gets NO constructor checking at all, and this
-  did NOT fix that.** `RegisterDeclarations` (pass 1) recurses into a `ClassNode`'s members but has
-  no `ConstructorNode` case, and the class `TypeInfo` does not exist until pass 2's
-  `Visit(ClassNode)` — so there is no `.ctor` key to find, the arity check is skipped entirely
-  (`hasAnyConstructor` is false, so not even an error), and nothing is recorded to coerce or fill
-  against. It is a LIVE MISCOMPILE and predates this work: measured, `New Box(7 / 2)` in that order
-  emits `new Box((double)(7) / (double)(2))` — **CS1503, does not build** — while the same program
-  with the class first emits the cast and runs. The argument coercion has been half-working since
-  it shipped and nothing noticed, because every test and sample in the repo declares classes first.
-  Closing it means pre-registering constructors in pass 1, which means creating class `TypeInfo`s in
-  pass 1 — and `TypeManager.DefineType` returns NULL for a name it already holds, so
-  duplicate-class detection and `Visit(ClassNode)` must change with it. `OptionalConstructorTests`
-  pins both halves.
+  ⛔⛔ **A class declared AFTER the code that uses it used to get NO constructor checking at all —
+  FIXED 2026-09-17.** The cause was worse than a missing key: `ResolveTypeName` fell through every
+  user channel to its **.NET fallback** and returned `new TypeInfo(name, TypeKind.Class)`, a
+  SYNTHETIC member-less type that is not the user's class. Measured, `New Box(…)` in that order saw
+  `members=0`, so the arity check was SKIPPED rather than failed (`hasAnyConstructor` is false with
+  no `.ctor` key — not even an error) and nothing was there to coerce or fill against. It was a
+  LIVE MISCOMPILE: `New Box(7 / 2)` emitted `new Box((double)(7) / (double)(2))` — **CS1503, does
+  not build** — while the same program with the class first emitted the cast and ran. The
+  constructor argument coercion had been half-working since it shipped and nothing noticed, because
+  every test and sample in the repo declares classes first.
+  ⚠ **Fixed by TWO sweeps in pass 1, and the order of the sweeps is load-bearing.**
+  `RegisterClassTypes` gives every class its real `TypeInfo` first; only then does
+  `RegisterDeclaration` record `.ctorN` via `RegisterConstructorSignature`, so a class-typed
+  constructor parameter resolves to the real class instead of degrading to Object. Collapsing them
+  into one walk reintroduces that degradation for any class declared later.
+  ⛔ **`DefineType` answering NULL *is* the duplicate-class signal**, so pass 1 pre-registering a
+  name would have made every class "already defined". `Visit(ClassNode)` therefore CONSUMES the
+  pass-1 record (`_preRegisteredClasses.Remove`): the first declaration reuses the type, a genuine
+  second `Class Box` finds nothing to consume and reports at its own line with the message it
+  always had. Peeking instead of consuming silently disables duplicate detection.
   ⛔ **MSIL ignores `BaseConstructorArgs` ENTIRELY** — it emits `call instance void Base::.ctor()`
   whatever the arguments, and the program dies with `MissingMethodException: Void Base..ctor()`.
   Proved pre-existing by supplying EVERY argument to a base constructor with no Optional at all:

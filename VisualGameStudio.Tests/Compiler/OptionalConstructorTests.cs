@@ -300,31 +300,28 @@ public class OptionalConstructorTests
     // ====================================================================================
 
     /// <summary>
-    /// ⛔ <b>A class declared AFTER the code that uses it gets NO constructor checking at all</b>,
-    /// and this change does not fix it. <c>RegisterDeclarations</c> (pass 1) recurses into a
-    /// <c>ClassNode</c>'s members but has no case for a <c>ConstructorNode</c>, and the class's
-    /// <c>TypeInfo</c> does not exist until pass 2's <c>Visit(ClassNode)</c> — so when
-    /// <c>New Box(…)</c> is analyzed there is no <c>.ctor</c> key to find, the arity check is
-    /// skipped (<c>hasAnyConstructor</c> is false, so not even an error), and nothing is recorded
-    /// for the IR builder to coerce or fill against.
+    /// ⛔ <b>A class declared AFTER the code that uses it used to get NO constructor checking at
+    /// all</b>, and the cause was worse than a missing key: <c>ResolveTypeName</c> fell through
+    /// every user channel to its .NET fallback and returned
+    /// <c>new TypeInfo(name, TypeKind.Class)</c> — a SYNTHETIC, member-less type that is not the
+    /// user's class. Measured, <c>New Box(…)</c> in that order saw <c>members=0</c>, so the arity
+    /// check was SKIPPED rather than failed (<c>hasAnyConstructor</c> is false with no
+    /// <c>.ctor</c> key, so not even an error) and nothing was there to coerce or fill against.
     ///
-    /// <para>⛔ It is PRE-EXISTING and it is a live miscompile, not a theoretical one: measured on
-    /// the previous commit, <c>New Box(7 / 2)</c> in this order emitted
+    /// <para>⛔ It was a live miscompile, not a theoretical gap: <c>New Box(7 / 2)</c> emitted
     /// <c>new Box((double)(7) / (double)(2))</c> — <b>CS1503, does not build</b> — while the same
-    /// program with the class declared first emitted the cast and ran. The argument coercion has
-    /// been half-working since it shipped, and nothing noticed because every test and sample in the
-    /// repo declares classes first.</para>
+    /// program with the class declared first emitted the cast and ran. The constructor argument
+    /// coercion had been half-working since it shipped, and nothing noticed because every test and
+    /// sample in this repo declares classes first.</para>
     ///
-    /// <para>⚠ Closing it means pre-registering constructors in pass 1, which means creating class
-    /// <c>TypeInfo</c>s in pass 1 — and <c>TypeManager.DefineType</c> returns NULL for a name it
-    /// already holds, so duplicate-class detection and <c>Visit(ClassNode)</c> both have to change
-    /// with it. That is a restructuring of type registration, deliberately not bundled here.</para>
-    ///
-    /// <para>This pins BOTH halves of the gap so the day someone does that work, this test goes red
-    /// and both are picked up together.</para>
+    /// <para>⚠ Fixed by pass 1: <c>RegisterClassTypes</c> gives every class its real
+    /// <c>TypeInfo</c> before any body is analyzed, and <c>RegisterConstructorSignature</c> records
+    /// its <c>.ctorN</c> members, so a forward <c>New</c> binds to the real constructor. This test
+    /// asserts BOTH halves — the coercion and the Optional fill — because one root cause produced
+    /// both and a fix that recovered only one would leave the other silently open.</para>
     /// </summary>
     [Test]
-    public void AClassDeclaredAfterItsUse_IsStillNotValidated()
+    public void AClassDeclaredAfterItsUse_IsValidatedLikeOneDeclaredBefore()
     {
         const string coercion = """
             Module M
@@ -357,12 +354,114 @@ public class OptionalConstructorTests
         Assert.Multiple(() =>
         {
             Assert.That(ReturnCoercionTests.EmitCSharpForTest(coercion),
-                Does.Contain("new Box((double)(7) / (double)(2))"),
-                "when this becomes new Box((int)(...)), pass 1 has learned constructors — "
-                + "delete this pin and assert the real behaviour");
-            Assert.That(ReturnCoercionTests.EmitCSharpForTest(fill), Does.Contain("new Box(4)"),
-                "and when this becomes new Box(4, 5), the fill reaches this order too");
+                Does.Contain("new Box((int)("),
+                "the argument must be narrowed; without the cast this is CS1503");
+            Assert.That(ReturnCoercionTests.CompileEmittedCSharpForTest(coercion), Is.Empty);
+
+            Assert.That(ReturnCoercionTests.EmitCSharpForTest(fill), Does.Contain("new Box(4, 5)"),
+                "the omitted Optional must be filled in this order too");
+            Assert.That(ReturnCoercionTests.CompileEmittedCSharpForTest(fill), Is.Empty);
         });
+    }
+
+    /// <summary>
+    /// ⚠ And the arity check REPORTS again in that order, rather than passing silently. Measured
+    /// before: a genuinely wrong argument count against a class declared later produced no
+    /// diagnostic at all, because there was no <c>.ctor</c> key for <c>hasAnyConstructor</c> to
+    /// find — the program simply emitted a call nobody had checked.
+    /// </summary>
+    [Test]
+    public void AWrongArityAgainstALaterClass_IsReported_InsteadOfPassingSilently()
+    {
+        var errors = Analyze("""
+            Module M
+             Sub Main()
+              Dim p As New Box()
+             End Sub
+            End Module
+
+            Class Box
+             Public Sub New(a As Integer)
+              PrintLine("one")
+             End Sub
+            End Class
+            """);
+
+        Assert.That(errors, Has.Some.Contains("No constructor for 'Box' takes 0 argument(s)"),
+            "actual: " + string.Join(" | ", errors));
+    }
+
+    /// <summary>
+    /// ⛔ Pass 1 does TWO sweeps — every class TYPE first, then the members — and the separation is
+    /// load-bearing rather than tidy. A constructor parameter typed as a class declared LATER can
+    /// only resolve if every class type already exists when the signature is recorded; in a single
+    /// merged walk it degrades to <c>Object</c>, and since everything is assignable to
+    /// <c>Object</c>, the argument TYPE CHECK silently disappears.
+    ///
+    /// <para>⛔ Measured with the sweeps merged: this program, which passes a <c>String</c> where
+    /// an <c>Item</c> is declared, reports <b>"Compilation successful"</b>. With them separate it
+    /// reports "Argument 1 of type 'String' is not compatible with parameter 'i' of type 'Item'".
+    /// A type error traded for a clean build — which is the same class of silent-skip failure the
+    /// whole declaration-order fix exists to remove, so it gets its own test rather than a comment.
+    /// </para>
+    /// </summary>
+    [Test]
+    public void AConstructorParameterTypedAsALaterClass_StillTypeChecks()
+    {
+        var errors = Analyze("""
+            Module M
+             Sub Main()
+              Dim h As New Holder("oops")
+             End Sub
+            End Module
+
+            Class Holder
+             Public Sub New(i As Item)
+              PrintLine("held")
+             End Sub
+            End Class
+
+            Class Item
+             Public Sub New()
+             End Sub
+            End Class
+            """);
+
+        Assert.That(errors, Has.Some.Contains(
+            "Argument 1 of type 'String' is not compatible with parameter 'i' of type 'Item'"),
+            "with one merged pass-1 sweep the parameter degrades to Object and this compiles "
+            + "clean; actual: " + string.Join(" | ", errors));
+    }
+
+    /// <summary>
+    /// ⚠ Pre-registering class types in pass 1 must not disturb DUPLICATE detection, which is
+    /// exactly what <c>DefineType</c> answering null used to mean. <c>Visit(ClassNode)</c> CONSUMES
+    /// the pass-1 record, so the first declaration reuses the type and a second one still reports —
+    /// at its own line, with the message it always had.
+    /// </summary>
+    [Test]
+    public void ADuplicateClass_IsStillReported_AtItsOwnLine()
+    {
+        var errors = Analyze("""
+            Class Box
+             Public F As Integer
+            End Class
+
+            Class Box
+             Public G As Integer
+            End Class
+
+            Module M
+             Sub Main()
+              PrintLine("hi")
+             End Sub
+            End Module
+            """);
+
+        Assert.That(errors, Has.Some.Contains("Class 'Box' is already defined"),
+            "actual: " + string.Join(" | ", errors));
+        Assert.That(errors, Has.Some.Contains("line 5"),
+            "reported at the SECOND declaration, not the first: " + string.Join(" | ", errors));
     }
 
     /// <summary>
