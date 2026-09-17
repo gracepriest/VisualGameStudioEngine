@@ -509,11 +509,27 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   either, which emits `: base(t0)` naming a temp that is not in scope (**CS0103**). Whoever makes
   `BaseConstructorArgs` self-contained (evaluate into the base call rather than the body) fixes
   both; `MsilBaseConstructorTests.AComputedBaseArgument_IsRefused_NotSilentlyZero` pins both halves.
-  ⛔ **A derived class with NO constructor whose base requires arguments is broken on EVERY
-  backend** — MSIL `MissingMethodException`, C# CS7036, JavaScript `base:undefined` — because none
-  of them can invent the arguments. The real fix is a front-end diagnostic VB has and this compiler
-  does not: **BC30387**, "must declare a `Sub New` because its base class has no accessible
-  `Sub New` that can be called with no arguments". Pinned.
+  ⚠ **A base that cannot be constructed with no arguments is REJECTED as of 2026-09-17** —
+  `ResolveImplicitBaseConstructor`. Such a program used to compile and then break on EVERY backend
+  (MSIL `MissingMethodException`, C# CS7036, JavaScript `base:undefined`), because none of them can
+  invent the arguments — which is what makes it the front end's to catch.
+  ⚠ **TWO shapes, ONE condition, and both are checked**: a class declaring no constructor at all
+  (VB's **BC30387**, in `Visit(ClassNode)`) and a constructor that never calls `MyBase.New` (VB's
+  **BC30148**, in `Visit(ConstructorNode)`). Both get an implicit no-argument base call, so both are
+  unbuildable for the same reason; checking one leaves half the defect.
+  ⛔ **"Callable with no arguments" is asked through `ResolveConstructor`**, the same helper a `New`
+  site uses, so an all-`Optional` base constructor COUNTS — its defaults fill. A check written
+  against "is there a `.ctor0` key" rejects that legal program, which is the mutation that proves
+  this matters.
+  ⛔ **Accepting the all-Optional base forced a second fix**: it was a legal program every backend
+  miscompiled, because the implicit base call passed nothing to a constructor declaring a parameter.
+  The implicit call now FILLS the base's optional defaults (the analyzer records the bound base
+  constructor even with no arguments written), and `base:3` runs on MSIL, C# and JavaScript.
+  ⛔ **Still open**: a class declaring NO constructor whose base is all-`Optional`. The analyzer
+  rightly accepts it, but there is no `IRConstructor` to hang the filled defaults on, so each
+  backend synthesizes a bare no-argument base call and C# is CS7036. Closing it means SYNTHESIZING
+  an `IRConstructor` for such a class so all four backends receive the filled call. The sibling
+  shape — same base, derived class with a declared constructor — works. Pinned.
   ⚠ **A class with TWO constructors cannot be lowered to JavaScript at all** ("SyntaxError: A class
   may only have one constructor"), measured with a pair that has no Optional anywhere — so
   constructor-overload shapes are asserted on MSIL.
