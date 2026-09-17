@@ -4903,7 +4903,20 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // to catch — VB reports BC30387 here.
             if (classType.BaseType != null && !node.Members.Any(m => m is ConstructorNode))
             {
-                ResolveImplicitBaseConstructor(classType.BaseType, out var baseNeedsArgs);
+                var implicitBase = ResolveImplicitBaseConstructor(
+                    classType.BaseType, out var baseNeedsArgs);
+
+                // ⚠ Recorded on the CLASS node, because there is no constructor node to key it on —
+                // this class declares none. The IR builder uses it to SYNTHESIZE one when the base
+                // constructor takes Optional parameters that an implicit call must fill; without
+                // that, `Inherits Base` against `Sub New(Optional a As Integer = 3)` is a legal
+                // program with nowhere to put the filled arguments, and every backend emits a bare
+                // no-argument base call (CS7036 on C#, MissingMethodException on MSIL).
+                if (implicitBase != null)
+                {
+                    _constructorBindings[node] = implicitBase;
+                }
+
                 if (baseNeedsArgs)
                 {
                     Error($"Class '{node.Name}' must declare a 'Sub New' because its base class "

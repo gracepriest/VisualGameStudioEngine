@@ -178,6 +178,78 @@ public class MsilBaseConstructorTests
             """), Is.EqualTo("base0\nderived\n"));
     }
 
+    /// <summary>
+    /// ⚠ The class declares NO constructor at all, and its base takes an omitted
+    /// <c>Optional</c>. Before the synthesized <c>IRConstructor</c> there was nothing in the IR
+    /// to hang the filled base call on: <c>Constructors</c> was empty, so MSIL invented a
+    /// default <c>.ctor</c> whose base call passed no arguments, and the base's own default was
+    /// never consulted — the program printed <c>base:0</c>.
+    /// </summary>
+    [Test]
+    public void ANoConstructorClass_StillReachesTheBase_WithOptionalsFilled()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Class Base
+             Public Sub New(Optional a As Integer = 3)
+              PrintLine("base:" & CStr(a))
+             End Sub
+            End Class
+
+            Class Derived
+             Inherits Base
+            End Class
+
+            Module M
+             Sub Main()
+              Dim d As New Derived()
+             End Sub
+            End Module
+            """), Is.EqualTo("base:3\n"));
+    }
+
+    /// <summary>
+    /// ⚠ What the <c>_currentFunction</c> clear at the end of
+    /// <c>IRBuilder.SynthesizeImplicitConstructor</c> is FOR, pinned end to end.
+    ///
+    /// <para><c>Visit(VariableDeclarationNode)</c> decides global-versus-local purely on
+    /// <c>_currentFunction == null</c>. The synthesized constructor points that field at its own
+    /// function in order to emit an expression-valued default into the right body, so leaving it
+    /// set sends the NEXT module-level <c>Dim</c> down the local-variable branch: <c>G</c> is
+    /// never registered as a global, no static field is emitted, and the program dies at run time
+    /// with <c>InvalidProgramException</c> rather than printing. Measured — that is exactly what
+    /// the mutation that drops the clear produces here.</para>
+    ///
+    /// <para>⚠ The initializer is a plain literal ON PURPOSE. A module-scope initializer that
+    /// needs a temp (<c>= 40 + 2</c>) calls <c>GetNextTempName()</c> on the null
+    /// <c>_currentFunction</c> and crashes the IR builder — a PRE-EXISTING gap, confirmed on
+    /// unmodified master with no class in the file at all, and wider than the "New initializers"
+    /// note at that branch claims. A computed initializer here would fail for that reason instead
+    /// of this one and prove nothing.</para>
+    /// </summary>
+    [Test]
+    public void TheSynthesizedConstructor_DoesNotLeakIntoTheNextModuleGlobal()
+    {
+        Assert.That(RunExpectingSuccess("""
+            Class Base
+             Public Sub New(Optional a As Integer = 3)
+              PrintLine("base:" & CStr(a))
+             End Sub
+            End Class
+
+            Class Derived
+             Inherits Base
+            End Class
+
+            Module M
+             Dim G As Integer = 42
+             Sub Main()
+              Dim d As New Derived()
+              PrintLine("g=" & CStr(G))
+             End Sub
+            End Module
+            """), Is.EqualTo("base:3\ng=42\n"));
+    }
+
     // ====================================================================================
     // What is REFUSED, and why refusing beats emitting.
     // ====================================================================================

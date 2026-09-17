@@ -525,11 +525,40 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   miscompiled, because the implicit base call passed nothing to a constructor declaring a parameter.
   The implicit call now FILLS the base's optional defaults (the analyzer records the bound base
   constructor even with no arguments written), and `base:3` runs on MSIL, C# and JavaScript.
-  ⛔ **Still open**: a class declaring NO constructor whose base is all-`Optional`. The analyzer
-  rightly accepts it, but there is no `IRConstructor` to hang the filled defaults on, so each
-  backend synthesizes a bare no-argument base call and C# is CS7036. Closing it means SYNTHESIZING
-  an `IRConstructor` for such a class so all four backends receive the filled call. The sibling
-  shape — same base, derived class with a declared constructor — works. Pinned.
+  ⚠ **A class declaring NO constructor whose base is all-`Optional` works as of 2026-09-17** —
+  `IRBuilder.SynthesizeImplicitConstructor`. The analyzer rightly accepted such a program, but
+  there was no `IRConstructor` to hang the filled defaults on, so each backend invented a bare
+  no-argument base call: C# emitted `class Derived : Base` with no constructor and got **CS7036**,
+  MSIL threw `MissingMethodException`. `base:3` now runs on MSIL, C#, JavaScript and C++.
+  ⚠ **The synthesized constructor is a REAL one** — its own `IRFunction` with an entry block and a
+  return — not an `IRConstructor` with a null `Implementation`. Only MSIL has a
+  synthesize-a-default path at all (`GenerateDefaultCtorForClass`); C#, JavaScript and C++ lean on
+  their target language's implicit constructor, so handing them a shape no DECLARED constructor
+  ever produces is how one of them breaks uncovered. Mutating `Implementation` to null kills a test.
+  ⚠ **`_currentFunction` is pointed at the synthesized function BEFORE the fill**, so a default
+  that is an expression emits into that constructor's body rather than whatever function happened
+  to be current.
+  ⛔ **Nothing is synthesized when there is nothing to fill** — a parameterless base, or no base —
+  and the backends' own default still applies, which is what every existing class relies on.
+  ⛔ **A base `Optional` default that is an EXPRESSION (`= 2 + 3`) is still broken**, and it is the
+  computed-argument gap above rather than a new one: the filled value is a temp the body computes
+  and the base call must precede the body, so MSIL refuses it and C# emits `: base(t0)` (CS0103).
+  NOT a regression — that shape was already broken, just with a different message. Closing
+  `BaseConstructorArgs`'s self-containment closes both. Pinned.
+  ⚠ **The `_currentFunction` clear at the end of `SynthesizeImplicitConstructor` is load-bearing.**
+  `Visit(VariableDeclarationNode)` decides global-versus-local on `_currentFunction == null` and
+  nothing else, so leaking the synthesized function sends the NEXT module-level `Dim` down the
+  local-variable branch: no static field is emitted and the program dies with
+  `InvalidProgramException`. Held by
+  `MsilBaseConstructorTests.TheSynthesizedConstructor_DoesNotLeakIntoTheNextModuleGlobal`.
+  ⛔ **Pre-existing, found while writing that test and wider than the comment at the branch said:**
+  a module-scope initializer that needs a TEMP crashes the IR builder with a
+  `NullReferenceException` (`GetNextTempName()` on the null `_currentFunction`), surfacing as
+  `Error at line 0: ... Object reference not set to an instance of an object`. The note there named
+  only `New` initializers; measured, an arithmetic one is enough — `Dim G As Integer = 40 + 2` at
+  module scope, in a file with NO class in it at all, reproduces on unmodified master (checked by
+  stashing the change and rebuilding). A literal (`= 42`) and a declaration-only global build fine.
+  It wants a clean diagnostic, not a crash. Untouched here.
   ⚠ **A class with TWO constructors cannot be lowered to JavaScript at all** ("SyntaxError: A class
   may only have one constructor"), measured with a pair that has no Optional anywhere — so
   constructor-overload shapes are asserted on MSIL.
