@@ -576,14 +576,24 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   Closing it means folding a cast of a constant — a NUMERIC-CONVERSION change, not a crash fix:
   widening is lossless but narrowing must agree with each backend at run time, and VB's `CInt`
   rounds half-to-even where a C# cast truncates. Deserves its own characterization.
-  ⛔ **Separate PRE-EXISTING defect, pinned not fixed: the C++ backend drops a module-scope
-  global's initializer entirely.** `CppCodeGenerator` emits `{}` for every global that is not a
-  sized array and never consults `InitialValue`, so `Dim G As Integer = 42` becomes
-  `int32_t G = {};` and the program prints **0**. Verified on unmodified master by stashing and
-  rebuilding — a plain LITERAL printed 0 there too, so this predates the folding work and is not
-  it. Held as it actually behaves by
-  `ModuleScopeInitializerTests.ACppGlobalInitializer_IsStillDropped`, which FAILS when someone
-  fixes C++ — that is the signal to move the case into the all-backends list.
+  ⚠ **The C++ global-initializer gap is FIXED as of 2026-09-17** — `CppCodeGenerator`, globals
+  loop. It emitted `{}` for every global that is not a sized array and never consulted
+  `InitialValue`, so `Dim G As Integer = 42` became `int32_t G = {};` and the program printed
+  **0** — a build with the right answer nowhere in it, no diagnostic and no crash, while C#, MSIL
+  and JavaScript all carried the value. Now routed through `ValueText`, the helper the static
+  field path already uses.
+  ⚠ **A non-constant initializer (`Dim I As Integer = H`) emits the referenced global's NAME**,
+  which is valid C++ only because the loop writes globals in DECLARATION ORDER and C++ initializes
+  namespace-scope objects in that order within a translation unit. Held by a mutation that
+  reverses the loop. ⛔ JavaScript REFUSES that shape outright ("a module-level initializer ...
+  that is not a constant"), so the backends do NOT agree on it and JS is the strict one.
+  ⛔ **`CStr(Double)` prints `3.500000` on C++** where C# and MSIL print `3.5` — pre-existing and
+  nothing to do with globals (measured on a plain LOCAL). Pinned as C++ actually behaves rather
+  than normalised away.
+  ⚠ **`ValueText` vs `GetValueName` at that site is a WASH**, measured: the base `GetValueName`
+  (`ICodeGenerator`) already routes an `IRConstant` to `EmitConstant`, so swapping them passes
+  every test. `ValueText` is there for consistency with its sibling sites, not protection — an
+  earlier comment claiming it guards a Decimal disagreement was wrong and has been corrected.
   ⛔ **Also pre-existing and unrelated: `CStr(Boolean)` prints `true` on JavaScript** where C# and
   MSIL print `True`. Measured on a plain local, no module scope involved. Pinned as each backend
   actually behaves rather than normalised away.
