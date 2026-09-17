@@ -4574,13 +4574,11 @@ namespace BasicLang.Compiler.IR
             // DIFFERENT constructor than the one the analyzer type-checked, and it carries
             // IsOptional/DefaultValueExpression, which an IRVariable list does not.
             //
-            // ⛔ It does NOT fix the declaration-ORDER gap, which is upstream of both: pass 1
-            // (`RegisterDeclarations`) does not pre-register constructors, so with the class
-            // declared AFTER the module that uses it there is no `.ctorN` key when `New Box(…)`
-            // is analyzed — no binding here, and before this change no IR class either. Measured
-            // in that order: `New Box(7 / 2)` still emits `new Box((double)(7) / (double)(2))`
-            // (CS1503) and an omitted Optional is still not filled. `OptionalConstructorTests`
-            // pins both.
+            // ⚠ Declaration ORDER no longer matters. Pass 1 (`RegisterClassTypes` +
+            // `RegisterConstructorSignature`) gives every class its real TypeInfo and its `.ctorN`
+            // members before any body is analyzed, so a `New` written above the class binds here
+            // too. Before that, the same program emitted `new Box((double)(7) / (double)(2))` —
+            // CS1503 — in one declaration order and the cast in the other.
             var ctorSymbol = _semanticAnalyzer.ConstructorBindings.TryGetValue(node, out var bound)
                 ? bound
                 : null;

@@ -4475,13 +4475,70 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// </summary>
         private void RegisterDeclarations(ProgramNode program)
         {
+            // ⛔ Class TYPES first, and in their own sweep. A class declared after the code that
+            // uses it did not merely lack members — `ResolveTypeName` fell through every user
+            // channel to its .NET fallback and returned `new TypeInfo(name, TypeKind.Class)`, a
+            // SYNTHETIC member-less type that is not the user's class at all. Measured:
+            // `New Box(7 / 2)` with `Class Box` below the module saw `members=0`, so the
+            // constructor arity check was skipped silently (`hasAnyConstructor` false — not even
+            // an error) and the argument coercion had no parameter list to read. It emitted
+            // `new Box((double)(7) / (double)(2))` — CS1503, a build that does not build — while
+            // the identical program with the class first emitted the cast and ran.
+            //
+            // ⚠ A SEPARATE sweep from the members below, so that when a constructor signature is
+            // registered every class type already exists and a class-typed parameter resolves to
+            // the real class rather than degrading to Object.
+            foreach (var decl in program.Declarations)
+            {
+                RegisterClassTypes(decl);
+            }
+
             foreach (var decl in program.Declarations)
             {
                 RegisterDeclaration(decl);
             }
         }
 
-        private void RegisterDeclaration(ASTNode node)
+        /// <summary>
+        /// Pass 1, sweep 1: give every class declaration its <see cref="TypeInfo"/> up front.
+        ///
+        /// <para>⚠ Duplicate detection stays where it was. <c>DefineType</c> answering null IS the
+        /// "class is already defined" signal, so a name pre-registered here is remembered and
+        /// <see cref="Visit(ClassNode)"/> CONSUMES that record: the first declaration reuses the
+        /// type, and a genuine second <c>Class Box</c> finds nothing to consume and reports at its
+        /// own line exactly as before.</para>
+        /// </summary>
+        private void RegisterClassTypes(ASTNode node)
+        {
+            switch (node)
+            {
+                case ClassNode cls:
+                    if (_typeManager.DefineType(cls.Name, TypeKind.Class) != null)
+                    {
+                        _preRegisteredClasses.Add(cls.Name);
+                    }
+                    foreach (var member in cls.Members)
+                        RegisterClassTypes(member);
+                    break;
+                case ModuleNode module:
+                    foreach (var member in module.Members)
+                        RegisterClassTypes(member);
+                    break;
+                case NamespaceNode ns:
+                    foreach (var member in ns.Members)
+                        RegisterClassTypes(member);
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Class names whose <see cref="TypeInfo"/> <see cref="RegisterClassTypes"/> created, each
+        /// consumed by that class's own <see cref="Visit(ClassNode)"/>. See there for why.
+        /// </summary>
+        private readonly HashSet<string> _preRegisteredClasses =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        private void RegisterDeclaration(ASTNode node, ClassNode owner = null)
         {
             // DEBUG: Console.WriteLine($"RegisterDeclaration: {node?.GetType()?.Name}");
             switch (node)
@@ -4494,19 +4551,70 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     // DEBUG: Console.WriteLine($"  -> Subroutine: {sub.Name}");
                     RegisterSubSignature(sub);
                     break;
+                case ConstructorNode ctor when owner != null:
+                    RegisterConstructorSignature(ctor, owner);
+                    break;
                 case ModuleNode module:
                     foreach (var member in module.Members)
                         RegisterDeclaration(member);
                     break;
                 case ClassNode cls:
                     foreach (var member in cls.Members)
-                        RegisterDeclaration(member);
+                        RegisterDeclaration(member, cls);
                     break;
                 case NamespaceNode ns:
                     foreach (var member in ns.Members)
                         RegisterDeclaration(member);
                     break;
             }
+        }
+
+        /// <summary>
+        /// Pass 1, sweep 2: record a constructor's signature on its class, so a <c>New</c> written
+        /// ABOVE the class declaration binds to the real constructor.
+        ///
+        /// <para>⛔ Without this the arity check was skipped ENTIRELY for that order — not failed,
+        /// skipped: <c>hasAnyConstructor</c> is false when no <c>.ctor</c> key exists, so there was
+        /// no error either. Nothing validated the argument count, nothing coerced the argument
+        /// types, and an omitted <c>Optional</c> was never filled.</para>
+        ///
+        /// <para>⚠ Pass 2's <c>Visit(ConstructorNode)</c> OVERWRITES this entry with the fully
+        /// resolved one, so this is a forward-reference stand-in and not a second source of truth.
+        /// It is written from the same <c>ParameterNode</c>s, carrying <c>IsOptional</c> and
+        /// <c>DefaultValueExpression</c>, so <c>ResolveConstructor</c> and the IR builder's
+        /// Optional fill behave identically whichever one they read.</para>
+        ///
+        /// <para>⚠ The FIRST declaration of an arity wins here. Two constructors of the same arity
+        /// are a shape the analyzer rejects downstream anyway, and pass 2 will replace whatever
+        /// this left; taking the first keeps this sweep from deciding something it has no business
+        /// deciding.</para>
+        /// </summary>
+        private void RegisterConstructorSignature(ConstructorNode node, ClassNode owner)
+        {
+            var classType = _typeManager.GetType(owner.Name);
+            if (classType?.Members == null) return;
+
+            var ctorName = $".ctor{node.Parameters.Count}";
+            if (classType.Members.ContainsKey(ctorName)) return;
+
+            var parameters = new List<Symbol>();
+            foreach (var param in node.Parameters)
+            {
+                var paramType = _typeManager.GetType(param.Type?.Name ?? "Object") ?? _typeManager.ObjectType;
+                parameters.Add(new Symbol(param.Name, SymbolKind.Parameter, paramType, param.Line, param.Column)
+                {
+                    IsOptional = param.IsOptional,
+                    IsByRef = param.IsByRef,
+                    IsParamArray = param.IsParamArray,
+                    DefaultValueExpression = param.DefaultValue
+                });
+            }
+
+            classType.Members[ctorName] = new Symbol(".ctor", SymbolKind.Function, classType, node.Line, node.Column)
+            {
+                Parameters = parameters,
+                ReturnType = classType
+            };
         }
 
         private void RegisterFunctionSignature(FunctionNode node)
@@ -4630,8 +4738,20 @@ namespace BasicLang.Compiler.SemanticAnalysis
             var classType = _typeManager.DefineType(node.Name, TypeKind.Class);
             if (classType == null)
             {
-                Error($"Class '{node.Name}' is already defined", node.Line, node.Column);
-                return;
+                // ⚠ Pass 1 pre-registered it — consume the record and reuse the type. Consuming
+                // rather than peeking is what keeps duplicate detection: a SECOND `Class Box`
+                // finds nothing left and falls through to the error below, at its own line, with
+                // the message it always had.
+                if (_preRegisteredClasses.Remove(node.Name))
+                {
+                    classType = _typeManager.GetType(node.Name);
+                }
+
+                if (classType == null)
+                {
+                    Error($"Class '{node.Name}' is already defined", node.Line, node.Column);
+                    return;
+                }
             }
 
             // Set abstract flag
@@ -8497,12 +8617,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// candidates mean the language would have to pick, and picking silently is worse than the
         /// diagnostic that exists today.</para>
         ///
-        /// <para>⛔ This can only see constructors already registered, and <c>RegisterDeclarations</c>
-        /// (pass 1) does NOT pre-register them — <c>.ctorN</c> is written during pass 2's
-        /// <c>Visit(ConstructorNode)</c>. Measured: with the class declared AFTER the module that
-        /// uses it, <c>type.Members</c> holds no <c>.ctor</c> key at all when <c>New Box(…)</c> is
-        /// analyzed, so every constructor check is skipped silently. That is a PRE-EXISTING gap
-        /// this does not close, and <c>OptionalConstructorTests</c> pins it.</para>
+        /// <para>⚠ This can only see constructors already registered, which is why
+        /// <see cref="RegisterConstructorSignature"/> exists: pass 1 writes <c>.ctorN</c> before any
+        /// body is analyzed. Without it, a class declared AFTER the code using it had no
+        /// <c>.ctor</c> key here and every constructor check was skipped SILENTLY —
+        /// <c>hasAnyConstructor</c> is false with no key, so not even an error.</para>
         /// </summary>
         private static Symbol ResolveConstructor(TypeInfo type, int argumentCount)
         {
