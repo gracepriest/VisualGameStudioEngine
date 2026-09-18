@@ -696,9 +696,56 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   from narrowing the OPERANDS (100 + 100 = 200), and dropping the narrowing is caught on BOTH
   backends (C# CS0266, MSIL **102**) where the old integer shape was caught only by C#, MSIL's
   `stsfld uint8` having truncated 300 to 44 by itself.
-  ⛔ **An unrelated MSIL gap surfaced while writing these**: a local named `neg` emits
-  `[2] int8 neg` and ilasm rejects it ("syntax error at token 'neg'") — the backend does not
-  escape a local whose name is an IL keyword. Worked around by renaming in the test; NOT fixed.
+  ⛔ **An unrelated MSIL gap surfaced while writing these** — a local named `neg` emits
+  `[2] int8 neg` and ilasm rejects it ("syntax error at token 'neg'"). Worked around by renaming
+  in the test at the time; **FIXED as of 2026-09-18**, see the IL-quoting entry below. The
+  `minS`/`maxS` names in `ConstantRangeTests` are left as they are — renaming them back would buy
+  a duplicate of `MsilIdentifierQuotingTests`.
+
+  ⚠ **An IL keyword as a BasicLang name is QUOTED as of 2026-09-18 — VB has no such rule, ILAsm
+  does** — `MsilIdentifierQuotingTests`, `MSILCodeGenerator.SanitizeName`. The MSIL backend writes
+  IL TEXT and never sees ilasm's verdict, so `Dim neg As Integer = 1` compiled "successfully" and
+  then would not assemble.
+  ⛔ **SCANNED, not guessed at.** Of 90 IL keyword candidates written as a plain
+  `Dim … As Integer`, 8 are not BasicLang identifiers at all and **64 of the remaining 82 made
+  ilasm reject the program**. They are not exotic: `value`, `add`, `call`, `method`, `field`,
+  `filter`, `handler`, `custom`, `break`, `switch`, `box`, `literal`, `native`, `sealed`. The 14
+  that passed — `file`, `hash`, `ldc`, `tail`, `volatile`, `constrained`, `corflags`, `culture`,
+  `exeloc`, `locale`, `pinned`, `subsystem`, `unaligned`, `ver` — are the argument against a
+  hand-written keyword list: the set is large, context-sensitive and not readable as data, so a
+  list drifts and being wrong by one word costs a program that does not assemble.
+  ⚠ **EVERY position was affected**, measured with `value`: local, parameter, method name, class
+  name, field, module-level global and property.
+  ⛔ **Quoting is PURELY LEXICAL, and that is what makes "quote everything" safe** rather than a
+  matching hazard — measured: a method DECLARED `'Twice'` and CALLED as `Twice` in the same file
+  assembles and runs. A quoted name and a bare one are the SAME identifier, so a missed site still
+  resolves and no reference has to be kept in step with its declaration. The emitted
+  `[mscorlib]System.Math::'Abs'(int32)` binding mscorlib's unquoted `Abs` is the same property in
+  the compiler's own output, and is what the test pins.
+  ⚠ **Only USER-CHOSEN names are quoted.** Compiler-generated ones are not, because they provably
+  cannot collide and quoting them is output churn no test could justify: branch LABELS (every
+  block name is `if{n}.then`, `switch{n}.default`, `for{n}.cond` … so it always carries a digit —
+  and `Visit(IRLabel)` is dead, `new IRLabel` is never constructed and the lexer has no `GoTo`),
+  `.module Combined.exe` (the module name is a driver constant), and the prefixed names
+  `get_X`/`set_X`/`add_X`/`remove_X`/`fld_scratch_X`/`eh_result_N`.
+  ⛔ **A COMPOSED name is one identifier** — `get_'Alpha'` is not one, so the quotes go around the
+  whole thing or nowhere. That is why `RawName` exists beside the override.
+  ⛔ **TWO things broke on the first attempt and the suite caught both**, which is the reason this
+  is not a one-line change: (1) `MapTypeName` is reached with names that are ALREADY IL spellings,
+  harmless only while its fallback was the identity — once it quoted, `int32` came back `'int32'`
+  and `Dim n As Integer` declared `[0] class 'int32' 'n'`, a local typed as a class that does not
+  exist; (2) `isMain` compared the PRINTED name, so `'Main'` never equalled `"Main"` and ilasm
+  refused every assembly with "No entry point declared".
+  ⚠ **`_localIndices` is keyed by the IR's name, never the printed one**, and the two lookups that
+  got this wrong fail in opposite ways: a catch variable throws at generation time ("the catch
+  variable 'ex' has no local slot"), while an array local is **SILENT** — `EmitArrayLocalAllocations`
+  just `continue`s, no `newarr` is emitted, and the program dies at run time with a
+  NullReferenceException on first use.
+  ⛔ **A property named after a keyword is STILL refused**, for a pre-existing and unrelated
+  reason: the backend writes a `.property` block whose `.get`/`.set` name accessor methods it
+  never emits, so ilasm answers "Invalid Set method of property" — verified on the parent commit
+  with the ordinary name `Alpha`. Not fixed here; the accessor-composition property is pinned on
+  the IL TEXT instead, since nothing can run it.
   ⚠ **Still NOT reported: the sub-int narrowing gap this sits next to.** `Dim b As Byte = 255.4`
   is accepted and then prints **255.4** on JavaScript and **255** on C++, because
   `TryConvertConstant` declines Byte/SByte/Short/UShort on purpose (see above). In range is not

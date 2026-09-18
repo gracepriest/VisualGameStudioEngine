@@ -582,6 +582,15 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         private string MapTypeName(string typeName)
         {
             if (string.IsNullOrEmpty(typeName)) return "object";
+
+            // ⛔ ALREADY an IL spelling — return it untouched. This path is reached: something
+            // maps a type and then feeds the result back in, which was a silent no-op only while
+            // the fallback below was the identity. Once that fallback quotes, `int32` came back as
+            // `'int32'` and `IlTypeSpec` no longer recognized it as a primitive, so
+            // `Dim n As Integer` declared `[0] class 'int32' 'n'` — a local of a class that does
+            // not exist.
+            if (IlPrimitives.Contains(typeName)) return typeName;
+
             switch (typeName.ToLowerInvariant())
             {
                 case "integer": return "int32";
@@ -641,14 +650,17 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             foreach (var prop in irInterface.Properties)
             {
                 var propType = MapType(prop.Type);
-                var propName = SanitizeName(prop.Name);
+                var propRaw = RawName(prop.Name);
+                var propName = IlName(propRaw);
+                var getter = $"get_{propRaw}";
+                var setter = $"set_{propRaw}";
 
                 WriteLine($"  .property instance {propType} {propName}()");
                 WriteLine("  {");
                 if (prop.HasGetter)
-                    WriteLine($"    .get instance {propType} {interfaceName}::get_{propName}()");
+                    WriteLine($"    .get instance {propType} {interfaceName}::{getter}()");
                 if (prop.HasSetter)
-                    WriteLine($"    .set instance void {interfaceName}::set_{propName}({propType})");
+                    WriteLine($"    .set instance void {interfaceName}::{setter}({propType})");
                 WriteLine("  }");
                 WriteLine();
 
@@ -656,7 +668,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 if (prop.HasGetter)
                 {
                     WriteLine("  .method public hidebysig newslot specialname abstract virtual");
-                    WriteLine($"          instance {propType} get_{propName}() cil managed");
+                    WriteLine($"          instance {propType} {getter}() cil managed");
                     WriteLine("  {");
                     WriteLine("  }");
                 }
@@ -665,7 +677,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 if (prop.HasSetter)
                 {
                     WriteLine("  .method public hidebysig newslot specialname abstract virtual");
-                    WriteLine($"          instance void set_{propName}({propType} 'value') cil managed");
+                    WriteLine($"          instance void {setter}({propType} 'value') cil managed");
                     WriteLine("  {");
                     WriteLine("  }");
                 }
@@ -773,7 +785,10 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         private void GenerateEvent(IRClass irClass, IREvent evt)
         {
             var delegateType = SanitizeName(evt.DelegateType);
-            var eventName = SanitizeName(evt.Name);
+            var eventRaw = RawName(evt.Name);
+            var eventName = IlName(eventRaw);
+            var adder = $"add_{eventRaw}";
+            var remover = $"remove_{eventRaw}";
             var staticMod = evt.IsStatic ? "static " : "";
 
             // Backing field
@@ -782,14 +797,14 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Event declaration
             WriteLine($"  .event class {delegateType} {eventName}");
             WriteLine("  {");
-            WriteLine($"    .addon instance void {SanitizeName(irClass.Name)}::add_{eventName}(class {delegateType})");
-            WriteLine($"    .removeon instance void {SanitizeName(irClass.Name)}::remove_{eventName}(class {delegateType})");
+            WriteLine($"    .addon instance void {SanitizeName(irClass.Name)}::{adder}(class {delegateType})");
+            WriteLine($"    .removeon instance void {SanitizeName(irClass.Name)}::{remover}(class {delegateType})");
             WriteLine("  }");
             WriteLine();
 
             // Add method
             WriteLine($"  .method public hidebysig specialname {staticMod}instance void");
-            WriteLine($"          add_{eventName}(class {delegateType} 'value') cil managed");
+            WriteLine($"          {adder}(class {delegateType} 'value') cil managed");
             WriteLine("  {");
             WriteLine("    .maxstack 8");
             if (!evt.IsStatic) WriteLine("    ldarg.0");
@@ -807,7 +822,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             // Remove method
             WriteLine($"  .method public hidebysig specialname {staticMod}instance void");
-            WriteLine($"          remove_{eventName}(class {delegateType} 'value') cil managed");
+            WriteLine($"          {remover}(class {delegateType} 'value') cil managed");
             WriteLine("  {");
             WriteLine("    .maxstack 8");
             if (!evt.IsStatic) WriteLine("    ldarg.0");
@@ -827,7 +842,13 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         private void GenerateProperty(IRClass irClass, IRProperty prop)
         {
             var propType = MapType(prop.Type);
-            var propName = SanitizeName(prop.Name);
+            // ⚠ The property NAME is quoted; the accessor names built from it are not. A composed
+            // name always begins with `get_`/`set_` and so can never be an IL keyword, and quoting
+            // has to happen around the WHOLE identifier — `get_'Alpha'` is not one.
+            var propRaw = RawName(prop.Name);
+            var propName = IlName(propRaw);
+            var getter = $"get_{propRaw}";
+            var setter = $"set_{propRaw}";
             var className = SanitizeName(irClass.Name);
             var staticMod = prop.IsStatic ? "static " : "";
             var instanceMod = prop.IsStatic ? "" : "instance ";
@@ -836,9 +857,9 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine($"  .property {instanceMod}{propType} {propName}()");
             WriteLine("  {");
             if (!prop.IsWriteOnly)
-                WriteLine($"    .get {instanceMod}{propType} {className}::get_{propName}()");
+                WriteLine($"    .get {instanceMod}{propType} {className}::{getter}()");
             if (!prop.IsReadOnly)
-                WriteLine($"    .set {instanceMod}void {className}::set_{propName}({propType})");
+                WriteLine($"    .set {instanceMod}void {className}::{setter}({propType})");
             WriteLine("  }");
             WriteLine();
 
@@ -847,7 +868,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             {
                 var virtualMod = "";  // Could add virtual if needed
                 WriteLine($"  .method public hidebysig specialname {virtualMod}{staticMod}");
-                WriteLine($"          {instanceMod}{propType} get_{propName}() cil managed");
+                WriteLine($"          {instanceMod}{propType} {getter}() cil managed");
                 WriteLine("  {");
                 WriteLine("    .maxstack 8");
 
@@ -872,7 +893,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     WriteLine("    ret");
                 }
 
-                WriteLine($"  }} // end of method get_{propName}");
+                WriteLine($"  }} // end of method {getter}");
                 WriteLine();
             }
 
@@ -881,7 +902,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             {
                 var virtualMod = "";
                 WriteLine($"  .method public hidebysig specialname {virtualMod}{staticMod}");
-                WriteLine($"          {instanceMod}void set_{propName}({propType} 'value') cil managed");
+                WriteLine($"          {instanceMod}void {setter}({propType} 'value') cil managed");
                 WriteLine("  {");
                 WriteLine("    .maxstack 8");
 
@@ -903,7 +924,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 if (!EndsWithRet())
                     WriteLine("    ret");
 
-                WriteLine($"  }} // end of method set_{propName}");
+                WriteLine($"  }} // end of method {setter}");
                 WriteLine();
             }
         }
@@ -1243,7 +1264,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     if (_fieldStoreScratch.ContainsKey(target)) continue;
 
                     var index = _localIndices.Count;
-                    var name = $"fld_scratch_{SanitizeName(target)}";
+                    var name = $"fld_scratch_{RawName(target)}";
                     _localIndices[name] = index;
                     _fieldStoreScratch[target] = index;
                     _syntheticLocals.Add((index, IlTypeSpec(fieldType), name));
@@ -1267,7 +1288,10 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine("  .ver 1:0:0:0");
             WriteLine("}");
             WriteLine();
-            WriteLine($".module {SanitizeName(module.Name)}.exe");
+            // ⚠ NOT quoted. The argument is a file name rather than an identifier, and the
+            // module name is a compiler constant ("Combined" from the driver, "MsilProbe" from the
+            // test harness) that no program can choose — so there is nothing here to collide.
+            WriteLine($".module {RawName(module.Name)}.exe");
             WriteLine();
         }
 
@@ -1608,7 +1632,10 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Generate method signature
             var returnType = MapType(function.ReturnType);
             var methodName = SanitizeName(function.Name);
-            var isMain = methodName.Equals("Main", StringComparison.OrdinalIgnoreCase);
+            // ⚠ Asked of the RAW name. `methodName` is quoted for ILAsm, so `'Main'` never equals
+            // "Main" and the method that needs `.entrypoint` would not get it — ilasm then fails
+            // the whole assembly with "No entry point declared for executable".
+            var isMain = RawName(function.Name).Equals("Main", StringComparison.OrdinalIgnoreCase);
 
             // Method attributes
             WriteLine($"  .method public hidebysig static");
@@ -1692,13 +1719,16 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             {
                 if (string.IsNullOrEmpty(clause.VariableName)) continue;
 
-                var name = SanitizeName(clause.VariableName);
+                // ⛔ KEYED BY THE RAW NAME, printed quoted. `_localIndices` is looked up by
+                // EmitLoadLocal/EmitStoreLocal with the name the IR uses, so a quoted key would
+                // never be found and the catch variable would read as unknown storage.
+                var name = clause.VariableName;
                 if (_localIndices.ContainsKey(name)) continue;
 
                 var index = _localIndices.Count;
                 _localIndices[name] = index;
                 _declaredIdentifiers.Add(clause.VariableName);
-                _syntheticLocals.Add((index, IlTypeSpec(clause.ExceptionType ?? ExceptionTypeInfo), name));
+                _syntheticLocals.Add((index, IlTypeSpec(clause.ExceptionType ?? ExceptionTypeInfo), SanitizeName(name)));
             }
 
             // A Return inside a protected region cannot be a `ret`; it becomes a store plus a
@@ -1755,7 +1785,11 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             foreach (var local in function.LocalVariables)
             {
                 if (!TryArrayAllocation(local.Type, out var elementToken, out var length)) continue;
-                if (!_localIndices.TryGetValue(SanitizeName(local.Name), out var index)) continue;
+                // ⛔ The RAW name. `_localIndices` is keyed by the IR's own name (see where the
+                // declared locals are inserted), and the `continue` below is silent, so a key that
+                // does not match does not fail the build — it skips the `newarr` and the program
+                // dies later with a NullReferenceException on first use.
+                if (!_localIndices.TryGetValue(local.Name, out var index)) continue;
 
                 EmitLdcI4(length);
                 _currentStack++;
@@ -2011,9 +2045,70 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
         }
 
+        /// <summary>
+        /// Every user-chosen name, SINGLE-QUOTED for ILAsm.
+        ///
+        /// <para>⛔ Without this an ordinary variable name that happens to be an IL keyword does
+        /// not assemble, with nothing said on the BasicLang side. Measured over 90 candidates as a
+        /// plain <c>Dim … As Integer</c>: 8 are not BasicLang identifiers at all, and of the other
+        /// 82 <b>64 make ilasm reject the program</b> — among them <c>value</c>, <c>add</c>,
+        /// <c>call</c>, <c>method</c>, <c>field</c>, <c>filter</c>, <c>handler</c>,
+        /// <c>custom</c>, <c>break</c>, <c>switch</c>, <c>box</c>, <c>literal</c>,
+        /// <c>native</c> and <c>sealed</c>. The failure is
+        /// <c>syntax error at token 'neg' in: [0] int32 neg</c>, and EVERY position is affected:
+        /// local, parameter, method name, class name, field, module-level global and
+        /// property.</para>
+        ///
+        /// <para>⛔ Quoting is PURELY LEXICAL, which is what makes quoting everything safe rather
+        /// than a matching hazard: measured, a method DECLARED <c>'Twice'</c> and CALLED as
+        /// <c>Twice</c> in the same file assembles and prints its answer. A quoted name and a bare
+        /// one are the SAME identifier, so a site this misses still resolves and no reference has
+        /// to be kept in step with its declaration.</para>
+        ///
+        /// <para>⚠ Everything is quoted rather than a keyword list, deliberately. ILAsm's keyword
+        /// set is large and context-sensitive — <c>value</c> and <c>at</c> are in it, <c>file</c>
+        /// and <c>hash</c> are not — and the compiler has no way to read it as data, so a list
+        /// here is a list that drifts, and being wrong by one word costs a program that does not
+        /// assemble. The IL reads more noisily; nothing else changes.</para>
+        ///
+        /// <para>⚠ The backend already quoted <c>'value'</c> BY HAND at the property and event
+        /// setter parameter, which is the same fix applied to the one name that had already been
+        /// hit. This generalizes it.</para>
+        /// </summary>
+        protected override string SanitizeName(string name) => IlName(RawName(name));
+
+        /// <summary>
+        /// The sanitized name WITHOUT the quotes.
+        ///
+        /// <para>⚠ Needed for two distinct reasons, and conflating them is how this breaks: the
+        /// sites that COMPOSE an identifier out of a name (<c>get_X</c>, <c>add_X</c>,
+        /// <c>fld_scratch_X</c>) would otherwise emit <c>get_'X'</c>; and <c>_localIndices</c> is
+        /// keyed by the RAW IR name, because <see cref="EmitLoadLocal"/> and
+        /// <see cref="EmitStoreLocal"/> look a local up by the name the IR uses, not by the name
+        /// the IL prints.</para>
+        /// </summary>
+        private string RawName(string name) => base.SanitizeName(name);
+
+        /// <summary>One complete identifier, quoted for ILAsm.</summary>
+        private static string IlName(string identifier) => $"'{identifier}'";
+
+        /// <summary>
+        /// A branch label — NOT quoted, unlike every user-chosen name.
+        ///
+        /// <para>⚠ A block name cannot collide with an IL keyword: every one is built as
+        /// <c>if{n}.then</c>, <c>switch{n}.default</c>, <c>for{n}.cond</c> and so on, so it always
+        /// carries a digit, and <c>entry</c> is the only bare word. Quoting here would change
+        /// every label in every method to buy a case that cannot arise, and it would cost the
+        /// readability of the one thing a person reads generated IL for.</para>
+        ///
+        /// <para>⛔ What WOULD make it needed: a user-written label. <c>Visit(IRLabel)</c> exists
+        /// but <c>new IRLabel</c> is never constructed anywhere and the lexer has no <c>GoTo</c>,
+        /// so BasicLang has no way to name one today. Give the language labels and this has to
+        /// quote.</para>
+        /// </summary>
         private string SanitizeLabel(string name)
         {
-            return SanitizeName(name).Replace(".", "_");
+            return RawName(name).Replace(".", "_");
         }
 
         private int GetLocalIndex(string name)
@@ -4561,7 +4656,10 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 return;
             }
 
-            var name = SanitizeName(clause.VariableName);
+            // ⚠ The RAW name, matching the key AllocateExceptionHandlingLocals reserves under.
+            // `_localIndices` is a lookup table for the IR's names; the quoted form is only ever
+            // printed.
+            var name = clause.VariableName;
             if (!_localIndices.TryGetValue(name, out var index))
             {
                 throw new ForeignFeatureException(

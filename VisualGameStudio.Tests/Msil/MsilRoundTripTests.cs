@@ -796,9 +796,9 @@ public class MsilRoundTripTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(il, Does.Contain("Math::Abs(int32)"),
+            Assert.That(il, Does.Contain("Math::'Abs'(int32)"),
                 "an int32 argument must bind the int32 overload:\n" + il);
-            Assert.That(il, Does.Not.Contain("Math::Abs(float64)"),
+            Assert.That(il, Does.Not.Contain("Math::'Abs'(float64)"),
                 "and must not be widened onto the float64 one, which prints the same and hides "
                 + "the mis-binding:\n" + il);
         });
@@ -2545,8 +2545,8 @@ public class MsilRoundTripTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(il, Does.Contain(".field public static int32 Exported"), il);
-            Assert.That(il, Does.Contain(".field assembly static int32 Internal"),
+            Assert.That(il, Does.Contain(".field public static int32 'Exported'"), il);
+            Assert.That(il, Does.Contain(".field assembly static int32 'Internal'"),
                 "Private must widen to assembly, not private — see "
                 + nameof(AModuleLevelVariable_IsReadableFromAUserClassMethod) + ": " + il);
         });
@@ -2617,6 +2617,10 @@ public class MsilRoundTripTests
     private static string ModuleClassLine(string il) => ClassLine(il, "MsilProbe");
 
     /// <summary>The <c>.class</c> line declaring <paramref name="name"/>, for flag assertions.</summary>
+    /// <summary>
+    /// ⚠ The class name is SINGLE-QUOTED in the emitted IL — every user-chosen name is, so that a
+    /// name which happens to be an IL keyword still assembles (<c>MSILCodeGenerator.SanitizeName</c>).
+    /// </summary>
     private static string ClassLine(string il, string name) =>
-        il.Split('\n').First(line => line.StartsWith(".class") && line.TrimEnd().EndsWith(" " + name));
+        il.Split('\n').First(line => line.StartsWith(".class") && line.TrimEnd().EndsWith(" '" + name + "'"));
 }
