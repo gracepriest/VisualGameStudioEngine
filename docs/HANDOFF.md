@@ -780,9 +780,40 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   IL has no swap — so `AllocateFieldStoreScratch` reserves one for an instance property too.
   ⛔ **TWO gaps here are PRE-EXISTING and deliberately NOT fixed or asserted**, both verified on
   the parent commit `3011ab0`:
-  (a) **Instance field initializers are never emitted.** `Public N As Integer = 5` prints **0**
-  with no property anywhere — the constructor only calls the base. The computed-getter test seeds
-  through a method for this reason; seeding with a field initializer would pin that gap instead.
+  (a) **Instance field initializers were never emitted** — `Public N As Integer = 5` printed **0**
+  with no property anywhere. **FIXED as of 2026-09-18 on MSIL**, see the next entry. The
+  computed-getter test still seeds through a method, because that is what it was written against
+  and re-pointing it at a field initializer would only duplicate `MsilFieldInitializerTests`.
+
+  ⚠ **Instance field initializers RUN on MSIL as of 2026-09-18** —
+  `MsilFieldInitializerTests`, `MSILCodeGenerator.EmitInstanceFieldInitialization` (the helper that
+  was `EmitArrayFieldAllocations`). `Public N As Integer = 5` emitted the field and threw the 5
+  away, so the program ran and read **0** — nothing failed to assemble and nothing threw.
+  ⛔ **Measured before**: implicit constructor **0** (and a `String` field came out null); explicit
+  constructor **0**; a constructor that BUILDS on the value — `N = N + 3` over `= 5` — answered
+  **3** rather than 8, because it started from the zero; two constructors **0,3** rather than
+  **5,8**. `Shared` was the ONE shape that already worked, through
+  `GenerateClassStaticConstructor`; this is the same loop on the instance side.
+  ⚠ **The hook already existed**: `EmitArrayFieldAllocations` was called from BOTH constructor
+  paths (the explicit one and the generated default), after the base call — which is exactly where
+  VB runs field initializers, so a base constructor observes its own fields already set. Only the
+  initializer half was missing.
+  ⛔ **C++ HAS THE SAME GAP and is NOT fixed** — the same program prints `0,` there. Its instance
+  field declaration uses `FieldArrayInitializer(field)`, which handles a sized array only and never
+  consults `IRField.Initializer`; three sites, one per access level, in `GenerateClass`. JavaScript
+  (`5,hi`) and C# (`public int N = 5;`) are correct.
+  ⚠ **A NON-LITERAL initializer is dropped in the IR, for every backend.**
+  `BuildConstantFieldInitializer` keeps only a literal or unary +/- on one, so
+  `Public N As Integer = 2 + 3` reads 0 on JavaScript and MSIL alike and C# emits
+  `public int N;`. A front-end gap, not a backend one — and the reason every test here uses a
+  plain literal.
+  ⚠ **An auto-property initializer does not PARSE**: `Public Property X As Integer = 5` is
+  "Unexpected token in class: '='".
+  ⚠ **The initializer-before-array-sizing precedence is UNREACHABLE, not load-bearing** — measured:
+  the analyzer refuses an initializer on an array-typed field at all ("Cannot assign value of type
+  'Integer' to variable of type 'Integer[]'"), so no field carries both and swapping the two arms
+  changes nothing. That mutation survives and is recorded as equivalent rather than papered over.
+  Both arms are live for DIFFERENT fields; only their order is arbitrary.
   (b) **Inherited members do not resolve.** `Derived.Tag` where `Tag` is on `Base` types its
   temporary `object` and boxes as `System.Object` — on master too, for a plain FIELD
   (`ldfld object 'Derived'::'Tag'`). The front end does not walk the base chain for a member's

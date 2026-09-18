@@ -1075,7 +1075,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine("    ldarg.0");
             EmitBaseConstructorCall(baseClass, ctor);
 
-            EmitArrayFieldAllocations(irClass);
+            EmitInstanceFieldInitialization(irClass);
 
             // Generate constructor body. The context was initialized above, before the locals
             // declaration was written from it — re-initializing here would just rebuild the same
@@ -1175,7 +1175,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine("    .maxstack 8");
             WriteLine("    ldarg.0");
             WriteLine($"    call instance void {baseClass}::.ctor()");
-            EmitArrayFieldAllocations(irClass);
+            EmitInstanceFieldInitialization(irClass);
             WriteLine("    ret");
             WriteLine("  } // end of method .ctor");
             WriteLine();
@@ -1639,7 +1639,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         ///
         /// <para>⛔ Without it <c>Public Shared Total As Integer = 5</c> emitted the field and
         /// dropped the 5 — the same shape as the module-level case, and just as silent: the
-        /// program runs and reads 0. <see cref="EmitArrayFieldAllocations"/> deliberately skips
+        /// program runs and reads 0. <see cref="EmitInstanceFieldInitialization"/> deliberately skips
         /// static fields ("a static field is not this instance's to create"), so this is the only
         /// place a Shared array gets storage.</para>
         /// </summary>
@@ -1961,8 +1961,28 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             temp is IRGetElementPtr ? IlTypeSpec(temp.Type) + "&" : IlTypeSpec(temp.Type);
 
         /// <summary>
-        /// Allocates every sized array FIELD in a constructor, after the base call and before any
+        /// Gives every instance FIELD its starting value in a constructor — the declared
+        /// initializer, or storage for a sized array — after the base call and before any
         /// constructor body can touch one.
+        ///
+        /// <para>⛔ The INITIALIZER half was missing entirely, and silently:
+        /// <c>Public N As Integer = 5</c> emitted the field and dropped the 5, so the program ran
+        /// and read <b>0</b>. A constructor that builds on the value inherited the same zero —
+        /// <c>N = N + 3</c> over <c>= 5</c> answered 3 rather than 8 — and a String field came out
+        /// null. Only the <c>Shared</c> case worked, because
+        /// <see cref="GenerateClassStaticConstructor"/> already did this for the type initializer;
+        /// this is the same loop on the instance side.</para>
+        ///
+        /// <para>⚠ AFTER the base call is not incidental: that is where VB runs field
+        /// initializers, and it is what lets a base constructor observe its own fields already
+        /// set while a derived one does not see the derived initializers until its turn.</para>
+        ///
+        /// <para>⚠ The initializer branch is written FIRST to match the static loop, and that
+        /// precedence is UNREACHABLE rather than load-bearing — measured: the analyzer refuses an
+        /// initializer on an array-typed field at all ("Cannot assign value of type 'Integer' to
+        /// variable of type 'Integer[]'"), so no field can carry both. Swapping the two arms
+        /// changes nothing any program can observe, and no test holds the order. Both arms ARE
+        /// live, for different fields; only their relative order is arbitrary.</para>
         ///
         /// <para>Fields are the second site, and they are not optional. The C++ backend's own
         /// note records that its first version of this fix lived inline in the locals loop and
@@ -1971,19 +1991,36 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// generated default — because a class with a declared constructor never reaches the
         /// other.</para>
         /// </summary>
-        private void EmitArrayFieldAllocations(IRClass irClass)
+        private void EmitInstanceFieldInitialization(IRClass irClass)
         {
             if (irClass?.Fields == null) return;
 
             foreach (var field in irClass.Fields)
             {
                 if (field.IsStatic) continue;   // a static field is not this instance's to create
-                if (!TryArrayAllocation(field.Type, out var elementToken, out var length)) continue;
 
-                WriteLine("    ldarg.0");
-                EmitLdcI4(length);
-                WriteLine($"    newarr {elementToken}");
+                if (field.Initializer != null)
+                {
+                    WriteLine("    ldarg.0");
+                    _currentStack++;
+                    EmitInlineValue(field.Initializer);
+                    EmitNumericCoercion(field.Initializer, field.Type);
+                }
+                else if (TryArrayAllocation(field.Type, out var elementToken, out var length))
+                {
+                    WriteLine("    ldarg.0");
+                    _currentStack++;
+                    EmitLdcI4(length);
+                    _currentStack++;
+                    WriteLine($"    newarr {elementToken}");
+                }
+                else
+                {
+                    continue;
+                }
+
                 WriteLine($"    stfld {IlTypeSpec(field.Type)} {SanitizeName(irClass.Name)}::{SanitizeName(field.Name)}");
+                _currentStack -= 2;
             }
         }
 
