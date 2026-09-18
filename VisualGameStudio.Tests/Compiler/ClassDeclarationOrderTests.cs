@@ -32,14 +32,13 @@ namespace VisualGameStudio.Tests.Compiler;
 /// with the fully resolved symbol, so pass 1 is a forward-reference stand-in, not a second source
 /// of truth.</para>
 ///
-/// <para>⛔ ONE SHAPE IS NOT FIXED and is deliberately not asserted here: a class NESTED IN A
-/// MODULE, declared after its use, still resolves its members to Object — <c>void* t1</c> and 2
-/// C++ errors, measured before AND after. Traced: the sweep does reach it and populates the right
-/// <c>TypeInfo</c>, and the local is even emitted <c>std::shared_ptr&lt;Box&gt;</c>, so the use
-/// site is holding a DIFFERENT, member-less TypeInfo for the same name. That is type RESOLUTION
-/// falling through to its synthetic fallback one layer above this change, not member
-/// registration, and it is its own fix. The same nested class declared BEFORE its use works
-/// (<c>int32_t t1</c>, runs), so the gap really is order, not nesting.</para>
+/// <para>⚠ A class NESTED IN A MODULE is fixed too, by the same sweep's recursion — see
+/// <see cref="AClassNestedInAModule_ResolvesItsMembers_WhicheverOrder"/>. This note previously
+/// claimed the nested shape was STILL BROKEN. It was not: that measurement was taken against a
+/// compiler binary still carrying the no-recursion mutation, because the mutation harness restores
+/// the SOURCE without rebuilding. What was really missing was a TEST — which is why removing the
+/// recursion passed the suite. Re-measured on a clean build, nested works in both orders, and
+/// removing the recursion now fails.</para>
 /// </summary>
 [TestFixture]
 public class ClassDeclarationOrderTests
@@ -56,6 +55,34 @@ public class ClassDeclarationOrderTests
         Class Box
          {member}
         End Class
+        """;
+
+    /// <summary>The class nested INSIDE the module, declared after the code that uses it.</summary>
+    private static string NestedAfter(string member, string main) => $"""
+        Module M
+         Sub Main()
+          Dim c As New Box()
+          {main}
+         End Sub
+
+         Class Box
+          {member}
+         End Class
+        End Module
+        """;
+
+    /// <summary>The same nested class, declared before its use.</summary>
+    private static string NestedBefore(string member, string main) => $"""
+        Module M
+         Class Box
+          {member}
+         End Class
+
+         Sub Main()
+          Dim c As New Box()
+          {main}
+         End Sub
+        End Module
         """;
 
     /// <summary>The same program with the class FIRST — the order that already worked.</summary>
@@ -129,6 +156,66 @@ public class ClassDeclarationOrderTests
                     $"C++, {order}");
             }
         });
+    }
+
+    /// <summary>
+    /// ⛔ The class NESTED IN A MODULE, declared after its use. This is what holds the sweep's
+    /// recursion into <c>ModuleNode</c> / <c>NamespaceNode</c> — without it the sweep only ever
+    /// sees TOP-LEVEL classes, and a nested one falls back to the member-less type again:
+    /// measured, removing that recursion emits <c>void* t1</c> and 2 C++ errors here while every
+    /// top-level case stays green.
+    ///
+    /// <para>⚠ This fixture originally recorded the nested shape as STILL BROKEN after the fix.
+    /// That was wrong, and the error is worth naming: the measurement was taken against a compiler
+    /// binary that still carried the no-recursion mutation, because the mutation harness restores
+    /// the SOURCE without rebuilding. Re-measured on a clean build, nested works in both orders —
+    /// what was actually missing was this test.</para>
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    [TestCase("Public N As Integer = 5", "PrintLine(CStr(c.N))", TestName = "Nested_Field")]
+    [TestCase("Public Function Get5() As Integer\n   Return 5\n  End Function", "PrintLine(CStr(c.Get5()))", TestName = "Nested_Method")]
+    public void AClassNestedInAModule_ResolvesItsMembers_WhicheverOrder(string member, string main)
+    {
+        Assert.Multiple(() =>
+        {
+            foreach (var (order, program) in new[]
+                     {
+                         ("nested, class last", NestedAfter(member, main)),
+                         ("nested, class first", NestedBefore(member, main)),
+                     })
+            {
+                Assert.That(JavaScriptExecutionTests.RunJs(program), Is.EqualTo("5"), $"JavaScript, {order}");
+                Assert.That(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(program)), Is.EqualTo("5\n"),
+                    $"C++, {order}");
+            }
+        });
+    }
+
+    /// <summary>
+    /// ⚠ The NAMESPACE arm of the same recursion. <c>RegisterClassMemberSignatures</c> walks
+    /// Module and Namespace alike; a test that only nests in a Module leaves half of it unheld.
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    public void AClassNestedInANamespacedModule_ResolvesItsMembers()
+    {
+        const string program = """
+            Namespace App
+             Module M
+              Sub Main()
+               Dim c As New Box()
+               PrintLine(CStr(c.N))
+              End Sub
+
+              Class Box
+               Public N As Integer = 5
+              End Class
+             End Module
+            End Namespace
+            """;
+
+        Assert.That(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(program)), Is.EqualTo("5\n"));
     }
 
     /// <summary>
