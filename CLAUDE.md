@@ -157,6 +157,15 @@ a second document type.
     passes with the defect fully present.
   - ⚠ A `ListBox` with `Width`/`Height` set is **centred** in its window, so a fixed press point
     lands on empty chrome — a layout problem wearing a routing problem's error message.
+- ⛔⛔ **"It compiles" was the ceiling here for the whole feature, and it hid two defects.**
+  `WinFormsCompile` says so in its own summary — *compile only, never run* — so until
+  `FormDesignerAcceptanceTests` no form this designer produced had ever been EXECUTED on either
+  target. Running them found that every web form died on load, and that the WinForms z-order was
+  inverted. Both builds were green throughout. **When you change what the designer emits, run it.**
+  - ⚠ `Button.PerformClick()` checks `CanSelect`, which needs the control and every parent **visible
+    and enabled** — so on a form that was never `Show()`n it silently does nothing and the handler
+    looks unwired when it is not.
+  - ⚠ The generated C# lands in `namespace GeneratedCode`.
 - ⛔⛔ **A thing with no caller is the failure mode here — FIVE separate pieces of this feature were
   complete, unit-tested and unreachable, with a green suite throughout.** `RegionWriter.Write`
   never ran, so a scaffolded form's `InitializeComponent` was never generated; `DispatchSource`
@@ -216,6 +225,19 @@ a second document type.
   now RUNS the emitted script under node. The dispatch is generated as `Public Class` + `Public Shared
   Sub`, which emits a real `class` with a `static` member. The backend bug itself is UNFIXED
   (`docs/form-designer-followups.md` 14) and will bite anyone calling a module across files.
+- ⛔⛔ **An UNQUALIFIED call to the enclosing class's own method is a runtime `ReferenceError` on the
+  JavaScript backend** — it emits a **bare global** where it must emit `this.M()`. Green build,
+  *"Compilation successful!"*, dead page. `Me.M()` emits `this.M()` and is correct.
+  ⚠ **This is BROADER than the spec's Measured-facts row**, which scoped it to *a lambda* calling an
+  unqualified method. Measured 2026-09-18 from an ordinary **constructor**, no lambda involved:
+  `Unqualified()` → `Unqualified();`, `Me.Qualified()` → `this.Qualified();`. Any unqualified
+  self-call in a class is affected. ⚠ The `Me.` workaround holds only OUTSIDE a lambda — inside one
+  the spec measured `Me.` hard-erroring, so the two rows are both true and neither generalises.
+  ⛔ Every scaffolded web form carried exactly this shape (`InitializeComponent()` in `Public Sub
+  New()`) and **every one of them was dead on load**; nothing caught it because no test ran a
+  generated FORM, only the dispatch. `FormScaffolder` now emits `Me.InitializeComponent()`
+  (`FormScaffolderTests.TheScaffoldQualifiesItsInitializeComponentCall`). The backend defect is
+  UNFIXED and hits hand-written user code.
 - ⚠ A bare top-level `Sub` in one `.bas` is not callable from another at all
   (*"no lowering for 'Helper.Helper'"*). Between that and the above, **a class is the only shape that
   works across files on the JavaScript backend** — both are compiler gaps, not designer ones.

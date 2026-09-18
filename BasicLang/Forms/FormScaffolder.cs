@@ -160,7 +160,15 @@ public static class FormScaffolder
         sb.Append('\n');
 
         sb.Append($"{indent}Public Sub New()\n");
-        sb.Append($"{indent}{indent}InitializeComponent()\n");
+
+        // ⛔⛔ Me., NEVER the bare call. MEASURED 2026-09-18 by building and RUNNING a probe: the
+        // JavaScript backend emits an unqualified call to an instance method of the enclosing class
+        // as a BARE GLOBAL — `InitializeComponent();` rather than `this.InitializeComponent();` —
+        // while `Me.Method()` emits correctly. The build says "Compilation successful!" either way
+        // and the page dies on load with `ReferenceError: InitializeComponent is not defined`.
+        // Every scaffolded web form had this shape, so every one of them was dead on arrival.
+        // The backend defect is unfixed and filed separately; this is not generating the trigger.
+        sb.Append($"{indent}{indent}Me.InitializeComponent()\n");
         sb.Append($"{indent}End Sub\n");
         sb.Append('\n');
 

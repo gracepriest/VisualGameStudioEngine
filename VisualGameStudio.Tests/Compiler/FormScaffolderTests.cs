@@ -14,6 +14,39 @@ namespace VisualGameStudio.Tests.Compiler;
 [TestFixture]
 public class FormScaffolderTests
 {
+    /// <summary>
+    /// ⛔⛔ <b>The scaffold must call <c>Me.InitializeComponent()</c>, never the bare form.</b>
+    ///
+    /// <para>MEASURED 2026-09-18, by building and RUNNING a two-method probe: the JavaScript backend
+    /// emits an unqualified call to an instance method of the enclosing class as a BARE GLOBAL —
+    /// <c>InitializeComponent();</c> instead of <c>this.InitializeComponent();</c> — while
+    /// <c>Me.Method()</c> emits correctly as <c>this.Method()</c>. The build reports
+    /// "Compilation successful!" either way, and the page dies on load with
+    /// <i>ReferenceError: InitializeComponent is not defined</i>.</para>
+    ///
+    /// <para>⚠ <c>CLAUDE.md</c> recorded this as affecting "a lambda calling an unqualified method of
+    /// the enclosing class". It is broader than that: ANY unqualified self-call in a class, including
+    /// one straight from the constructor, which is exactly the shape every scaffolded form had. Every
+    /// web form this designer produced was dead on arrival, and nothing caught it because no test ran
+    /// a generated form — only the dispatch.</para>
+    ///
+    /// <para>The compiler defect itself is unfixed and filed separately; this is the designer not
+    /// generating the shape that triggers it.</para>
+    /// </summary>
+    [TestCase(FormTarget.Web)]
+    [TestCase(FormTarget.WinForms)]
+    public void TheScaffoldQualifiesItsInitializeComponentCall(FormTarget target)
+    {
+        var code = FormScaffolder.Create("LoginForm", target).CodeText;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(code, Does.Contain("Me.InitializeComponent()"));
+            Assert.That(code, Does.Not.Match(@"(?m)^\s*InitializeComponent\(\)"),
+                "an unqualified self-call compiles green and dies at run time on the web");
+        });
+    }
+
     // ==================================================================
     // Naming — stricter than a filename check, for a measured reason
     // ==================================================================
