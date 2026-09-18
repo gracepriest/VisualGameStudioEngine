@@ -3462,8 +3462,32 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 return $"Convert.ToString({valueExpr})";
             }
 
+            // ⛔ A FLOATING -> INTEGRAL narrowing ROUNDS HALF-TO-EVEN, and a plain C# cast does
+            // NOT — it truncates. `Dim i As Integer = 7.5` answered 7 on all four backends while
+            // `CInt(7.5)` answers 8, so one language gave two answers depending on which syntax
+            // reached the same narrowing. VB rounds both. Convert.ToXxx is exactly
+            // Math.Round(x, MidpointRounding.ToEven), which is what CInt already lowers to here.
+            if (IsFloatingTypeName(sourceName) && targetName != null
+                && IsIntegralTypeName(targetName)
+                && ConvertMethodForType(targetName) is string narrowing)
+            {
+                return $"Convert.{narrowing}({valueExpr})";
+            }
+
             return $"({targetType})({valueExpr})";
         }
+
+        /// <summary>A BasicLang floating type, i.e. one a narrowing has something to round from.</summary>
+        private static bool IsFloatingTypeName(string typeName) =>
+            typeName == "Double" || typeName == "Single";
+
+        /// <summary>A BasicLang integral type, i.e. a narrowing target that rounds.</summary>
+        private static bool IsIntegralTypeName(string typeName) => typeName switch
+        {
+            "Integer" or "UInteger" or "Long" or "ULong" or "Short" or "UShort"
+                or "Byte" or "SByte" or "UByte" => true,
+            _ => false,
+        };
 
         /// <summary>Convert.* method name for a BasicLang primitive target type, or null.</summary>
         private static string ConvertMethodForType(string typeName) => typeName switch

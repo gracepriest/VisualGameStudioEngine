@@ -66,7 +66,7 @@ public class AssignmentCoercionTests
     public void JavaScript_NarrowsAtEveryStoreSite()
     {
         Assert.That(JavaScriptExecutionTests.RunJs(FourSitesProgram),
-            Is.EqualTo("dim=3 asn=3 arr=3 glob=3"));
+            Is.EqualTo("dim=4 asn=4 arr=4 glob=4"));
     }
 
     /// <summary>
@@ -79,7 +79,7 @@ public class AssignmentCoercionTests
     public void Msil_NarrowsAtEveryStoreSite_InsteadOfSegfaulting()
     {
         Assert.That(Msil.MsilHarness.RunExpectingSuccess(FourSitesProgram),
-            Is.EqualTo("dim=3 asn=3 arr=3 glob=3\n"));
+            Is.EqualTo("dim=4 asn=4 arr=4 glob=4\n"));
     }
 
     /// <summary>
@@ -108,7 +108,7 @@ public class AssignmentCoercionTests
         Assert.Multiple(() =>
         {
             Assert.That(ReturnCoercionTests.CompileEmittedCSharpForTest(program), Is.Empty);
-            Assert.That(JavaScriptExecutionTests.RunJs(program), Is.EqualTo("3"));
+            Assert.That(JavaScriptExecutionTests.RunJs(program), Is.EqualTo("4"));
         });
     }
 
@@ -218,15 +218,14 @@ public class AssignmentCoercionTests
 
     /// <summary>
     /// ⚠ A numeric LITERAL is re-typed at compile time rather than wrapped in a cast, and the
-    /// narrowing TRUNCATES — <c>Dim a As Integer = 7.9</c> is 7 on all three runnable backends.
+    /// narrowing ROUNDS HALF-TO-EVEN — <c>Dim a As Integer = 7.9</c> is 8 on all three runnable
+    /// backends, and <c>7.1</c> is still 7.
     ///
-    /// <para>⛔ Truncating is chosen to match what the RUN-TIME cast does. Rounding the literal
-    /// instead would make this 8 while the same value reaching the same variable through a
-    /// variable stayed 7 — the constant-folded and non-folded paths of one expression giving
-    /// different answers, which is worse than either answer on its own. (VB itself would say 8,
-    /// for the same banker's-rounding reason
-    /// <see cref="ReturnCoercionTests.TheBackendsAgreeOnTruncation_WhichIsNotYetVbsBankersRounding"/>
-    /// records; that is the one decision, taken once, across the whole narrowing surface.)</para>
+    /// <para>⛔ This note used to say the narrowing TRUNCATES, "chosen to match what the RUN-TIME
+    /// cast does", and warned that rounding here alone would split the constant-folded and
+    /// non-folded paths of one expression. That reasoning was right, and the decision it deferred
+    /// has since been taken across the whole narrowing surface: the run-time cast rounds now too,
+    /// so both paths agree on 8 — which is also what VB says.</para>
     ///
     /// <para>The widening half is load-bearing, not cosmetic: measured on the previous commit,
     /// <c>Dim c As Double = 7</c> on MSIL stored the int32 bit pattern into a float64 slot and
@@ -234,7 +233,7 @@ public class AssignmentCoercionTests
     /// </summary>
     [Test]
     [Category("Integration")]
-    public void ANumericLiteral_IsRetypedInPlace_AndNarrowsByTruncating()
+    public void ANumericLiteral_IsRetypedInPlace_AndNarrowsByRounding()
     {
         const string program = """
             Module M
@@ -249,8 +248,8 @@ public class AssignmentCoercionTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(JavaScriptExecutionTests.RunJs(program), Is.EqualTo("7,7,7.5"));
-            Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo("7,7,7.5\n"),
+            Assert.That(JavaScriptExecutionTests.RunJs(program), Is.EqualTo("8,7,7.5"));
+            Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo("8,7,7.5\n"),
                 "7.5 and not 3.5E-323 — the widened literal is a real Double");
         });
     }

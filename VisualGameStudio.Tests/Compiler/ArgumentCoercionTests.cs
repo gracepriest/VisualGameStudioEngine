@@ -73,7 +73,7 @@ public class ArgumentCoercionTests
     public void JavaScript_NarrowsAtEveryArgumentSite()
     {
         Assert.That(JavaScriptExecutionTests.RunJs(FourSitesProgram),
-            Is.EqualTo("mod=3\nctor=3\ninst=3\nfn=3"));
+            Is.EqualTo("mod=4\nctor=4\ninst=4\nfn=4"));
     }
 
     /// <summary>
@@ -85,7 +85,7 @@ public class ArgumentCoercionTests
     public void Msil_PassesTheDeclaredType_InsteadOfFailingToBind()
     {
         Assert.That(Msil.MsilHarness.RunExpectingSuccess(FourSitesProgram),
-            Is.EqualTo("mod=3\nctor=3\ninst=3\nfn=3\n"));
+            Is.EqualTo("mod=4\nctor=4\ninst=4\nfn=4\n"));
     }
 
     /// <summary>
@@ -115,7 +115,7 @@ public class ArgumentCoercionTests
               Box.Shr(7 / 2)
              End Sub
             End Module
-            """), Is.EqualTo("shr=3\n"));
+            """), Is.EqualTo("shr=4\n"));
     }
 
     /// <summary>
@@ -249,6 +249,6 @@ public class ArgumentCoercionTests
               Dim q As New Box(7 / 2, 9 / 2)
              End Sub
             End Module
-            """), Is.EqualTo("one=3\ntwo=3,4\n"));
+            """), Is.EqualTo("one=4\ntwo=4,4\n"));
     }
 }

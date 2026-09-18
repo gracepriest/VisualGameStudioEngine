@@ -328,14 +328,14 @@ public class ModuleScopeInitializerTests
     }
 
     /// <summary>
-    /// ⛔ The pre-existing cross-backend divergence itself, pinned as each backend ACTUALLY
-    /// behaves. This is a real defect — one language, four answers — and it is the reason the
-    /// widening fold stops where it does. Asserted so that whoever fixes it has the measurements,
-    /// and so that a folder cannot quietly pick a side first.
+    /// ⚠ The backends AGREE about a narrowing conversion. They did not: this test used to pin
+    /// MSIL, JavaScript and C++ at <c>7,8,7,-7</c> (truncation) against C#'s <c>8,8,8,-8</c>
+    /// (rounding), one language with two answers. The three were fixed to agree with C#, which
+    /// was the VB-correct one.
     /// </summary>
     [Test]
     [Category("Integration")]
-    public void NarrowingConversion_DisagreesAcrossBackends_Pinned()
+    public void NarrowingConversion_AgreesAcrossBackends()
     {
         var program = """
             Module M
@@ -351,12 +351,12 @@ public class ModuleScopeInitializerTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo("7,8,7,-7\n"),
-                "MSIL truncates");
-            Assert.That(JavaScriptExecutionTests.RunJs(program), Is.EqualTo("7,8,7,-7"),
-                "JavaScript truncates");
+            Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo("8,8,8,-8\n"),
+                "MSIL rounds half-to-even");
+            Assert.That(JavaScriptExecutionTests.RunJs(program), Is.EqualTo("8,8,8,-8"),
+                "JavaScript rounds half-to-even");
             Assert.That(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(program)),
-                Is.EqualTo("7,8,7,-7\n"), "C++ truncates");
+                Is.EqualTo("8,8,8,-8\n"), "C++ rounds half-to-even");
         });
     }
 
@@ -387,7 +387,7 @@ public class ModuleScopeInitializerTests
     {
         var program = Program($"Dim G As {declaredType} = 7.9", "PrintLine(CStr(G))");
 
-        Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo("7\n"));
+        Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo("8\n"));
     }
 
     /// <summary>
@@ -411,10 +411,10 @@ public class ModuleScopeInitializerTests
         Assert.Multiple(() =>
         {
             Assert.That(ReturnCoercionTests.CompileEmittedCSharpForTest(program), Is.Empty);
-            Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo("7\n"));
-            Assert.That(JavaScriptExecutionTests.RunJs(program), Is.EqualTo("7"));
+            Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo("8\n"));
+            Assert.That(JavaScriptExecutionTests.RunJs(program), Is.EqualTo("8"));
             Assert.That(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(program)),
-                Is.EqualTo("7\n"));
+                Is.EqualTo("8\n"));
         });
     }
 
@@ -531,7 +531,7 @@ public class ModuleScopeInitializerTests
         Assert.Multiple(() =>
         {
             Assert.That(constant.Value, Is.TypeOf<int>(), "a byte would miscompile in CompareLt");
-            Assert.That(constant.Value, Is.EqualTo(7));
+            Assert.That(constant.Value, Is.EqualTo(8), "7.9 ROUNDS to 8; it used to truncate to 7");
             Assert.That(constant.Type.Name, Is.EqualTo("Byte"), "the declared width is carried");
             Assert.That(
                 ((BasicLang.Compiler.IR.IRConstant)unsigned.GlobalVariables["G"].InitialValue).Value,

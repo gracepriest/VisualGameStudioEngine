@@ -3589,7 +3589,7 @@ namespace BasicLang.Compiler.IR
                 default: return value;
             }
 
-            var truncated = (long)Math.Truncate(asDouble);
+            var truncated = (long)Math.Round(asDouble, MidpointRounding.ToEven);
             object narrowed;
             switch (declared.Name)
             {
@@ -3622,11 +3622,12 @@ namespace BasicLang.Compiler.IR
         /// A numeric literal converted to <paramref name="declared"/> at COMPILE time, or null
         /// when it cannot be.
         ///
-        /// <para>⚠ Narrowing TRUNCATES, to match what the run-time cast does on all four backends.
-        /// Rounding here instead would make <c>Dim d As Integer = 7.9</c> answer 8 while the same
-        /// value reaching the same variable through a variable answered 7 — the constant-folded
-        /// and non-folded paths of one expression disagreeing, which is worse than either
-        /// answer.</para>
+        /// <para>⚠ Narrowing ROUNDS HALF-TO-EVEN, which is what VB does. This note used to say it
+        /// TRUNCATES "to match what the run-time cast does on all four backends" — that reasoning
+        /// was right and its premise has changed: the run-time cast now rounds on all four too, so
+        /// truncating here would recreate exactly the split it was avoiding. The constant-folded
+        /// and non-folded paths of one expression must agree, and they now agree on 8 for
+        /// <c>Dim d As Integer = 7.9</c>.</para>
         /// </summary>
         private static object TryConvertConstant(object value, TypeInfo declared)
         {
@@ -3656,7 +3657,7 @@ namespace BasicLang.Compiler.IR
             // existed — nothing. That leaves `Dim b As Byte = 7.9` unnarrowed, which is a real
             // gap; closing it means teaching the optimizer's folders every numeric CLR type,
             // which is its own change with its own blast radius.
-            var truncated = Math.Truncate(asDouble);
+            var truncated = Math.Round(asDouble, MidpointRounding.ToEven);
             switch (declared.Name)
             {
                 case "Double": return asDouble;

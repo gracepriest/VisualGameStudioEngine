@@ -2965,6 +2965,34 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// emitter and <see cref="IsVoidStdLibArm"/> so the two cannot disagree about which arm
         /// ran — a disagreement there is exactly the stack underflow described above.
         /// </summary>
+        /// <summary>A floating source, i.e. one a narrowing has something to round from.</summary>
+        private static bool IsFloatingType(TypeInfo type) => type?.Name switch
+        {
+            "Double" or "Single" => true,
+            _ => false,
+        };
+
+        /// <summary>
+        /// A narrowing target that rounds. Single/Double are absent because widening to them is
+        /// not a narrowing, and Boolean because it is a zero test rather than a numeric conversion.
+        /// </summary>
+        private static bool IsRoundingTarget(string loweredTargetName) => loweredTargetName switch
+        {
+            "integer" or "long" or "byte" or "short" or "char" => true,
+            _ => false,
+        };
+
+        /// <summary>
+        /// True when a conversion intrinsic's argument is a floating type, i.e. when there is
+        /// something to round. Single is widened to float64 by the caller before the call, because
+        /// <c>Convert::ToInt32</c> is overloaded per CLR type and IL names one exact overload.
+        /// </summary>
+        private static bool IsFloatingArgument(IRValue value) => value?.Type?.Name switch
+        {
+            "Double" or "Single" => true,
+            _ => false,
+        };
+
         private static string ResolveStdLibArm(string funcName)
         {
             var lower = funcName?.ToLower() ?? "";
@@ -3357,14 +3385,48 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     WriteLine("    callvirt instance int32 [mscorlib]System.String::get_Length()");
                     return true;
 
+                // ⛔ ROUNDS HALF-TO-EVEN, and `conv.i4` alone does NOT — it truncates, which is
+                // not what CInt means. Measured across the backends on
+                // CInt(7.5)/CInt(8.5)/CInt(7.9)/CInt(-7.5): C# emits Convert.ToInt32 and printed
+                // 8,8,8,-8 (the VB answer), while MSIL, JavaScript and C++ all printed 7,8,7,-7.
+                // One language, two answers. Convert.ToInt32 is exactly
+                // Math.Round(x, MidpointRounding.ToEven) — verified on ten values including the
+                // midpoints 8.5 -> 8 and 2.5 -> 2 that separate it from AwayFromZero.
+                //
+                // ⚠ Only for a FLOATING argument, and the reason differs per arm — measured,
+                // because the tempting reason is wrong. Routing an integral through the float64
+                // overload DOES verify (a `conv.r8` in front makes it legal IL), and for CInt it
+                // is even equivalent: a 32-bit Integer is exact in a double, so a mutation that
+                // rounds the integral case too passes every test. The guard stays on `cint` as an
+                // early-out, not a correctness claim.
+                //
+                // ⛔ On `clng` it IS correctness. A Long above 2^53 does not survive a double
+                // round trip: measured, CLng(9007199254740993) answers itself today and would
+                // answer 9007199254740992 through float64.
                 case "cint":
                     EmitLoadValue(args[0]);
-                    WriteLine("    conv.i4");
+                    if (IsFloatingArgument(args[0]))
+                    {
+                        WriteLine("    conv.r8");
+                        WriteLine("    call int32 [mscorlib]System.Convert::ToInt32(float64)");
+                    }
+                    else
+                    {
+                        WriteLine("    conv.i4");
+                    }
                     return true;
 
                 case "clng":
                     EmitLoadValue(args[0]);
-                    WriteLine("    conv.i8");
+                    if (IsFloatingArgument(args[0]))
+                    {
+                        WriteLine("    conv.r8");
+                        WriteLine("    call int64 [mscorlib]System.Convert::ToInt64(float64)");
+                    }
+                    else
+                    {
+                        WriteLine("    conv.i8");
+                    }
                     return true;
 
                 case "cdbl":
@@ -3908,6 +3970,17 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             EmitLoadValue(cast.Value);
 
             var targetType = cast.Type?.Name?.ToLower() ?? "";
+
+            // ⛔ A FLOATING -> INTEGRAL narrowing ROUNDS HALF-TO-EVEN before the conv, because
+            // `conv.i4` alone TRUNCATES. `Dim i As Integer = 7.5` answered 7 on all four backends
+            // while `CInt(7.5)` answers 8 — one language, two answers depending on which syntax
+            // reached the same narrowing. VB rounds both. Math::Round(float64) is ToEven by
+            // default, and the conv that follows then has nothing left to truncate.
+            if (IsFloatingType(cast.SourceType) && IsRoundingTarget(targetType))
+            {
+                WriteLine("    conv.r8");
+                WriteLine("    call float64 [mscorlib]System.Math::Round(float64)");
+            }
 
             switch (targetType)
             {

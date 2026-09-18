@@ -182,6 +182,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // The exception hierarchy this program needs, BEFORE any user class: a user
             // `class MyError extends Exception` hits the temporal dead zone otherwise.
             EmitExceptionPrelude(module);
+            EmitConversionPrelude(module);
 
             // Module-level Dims, also before classes — a static field initialiser may read one.
             EmitGlobals(module);
@@ -249,6 +250,66 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// which the catch-all arm uses so a NATIVE JS error (a TypeError from a null
         /// dereference) bound to <c>Catch e As Exception</c> still answers <c>e.Message</c>.</para>
         /// </summary>
+        /// <summary>
+        /// True when the module needs the rounding helper: it calls <c>CInt</c>, or it narrows a
+        /// floating value to an integral one anywhere. BOTH lower to the helper, so missing either
+        /// would emit call sites with no definition.
+        /// </summary>
+        private static bool UsesRoundingHelper(IRModule module)
+        {
+            foreach (var function in module?.Functions ?? Enumerable.Empty<IRFunction>())
+                foreach (var block in function.Blocks ?? Enumerable.Empty<BasicBlock>())
+                    foreach (var instruction in block.Instructions ?? Enumerable.Empty<IRInstruction>())
+                        switch (instruction)
+                        {
+                            case IRCall call when string.Equals(
+                                call.FunctionName, "CInt", StringComparison.OrdinalIgnoreCase):
+                                return true;
+                            case IRCast cast when cast.SourceType?.IsFloatingPoint() == true
+                                && cast.Type?.IsIntegral() == true:
+                                return true;
+                        }
+
+            return false;
+        }
+
+        /// <summary>The emitted name of the half-to-even rounding helper CInt lowers to.</summary>
+        private const string CIntHelperName = "__blCInt";
+
+
+        /// <summary>
+        /// The half-to-even rounding CInt means, which JavaScript has no built-in for.
+        ///
+        /// <para>⚠ Written out longhand rather than as <c>Math.round</c> plus a correction:
+        /// <c>Math.round</c> is half-up TOWARD +INFINITY, so it answers -7 for -7.5 where CInt
+        /// answers -8, and the sign correction needed to patch that is easier to get wrong than
+        /// the floor-and-compare below. Checked against <c>Convert.ToInt32</c> on the same ten
+        /// values as the other backends, midpoints included.</para>
+        /// </summary>
+        /// <param name="module">
+        /// ⛔ SCANNED, not a flag set during lowering. The prelude is emitted BEFORE any function
+        /// body, so a flag would still be false here and the helper would never appear —
+        /// measured: the call sites emitted and the program died in Node with
+        /// "__blCInt is not defined". Same shape as <c>JsExceptionTypes.CollectRequired</c>.
+        /// </param>
+        private void EmitConversionPrelude(IRModule module)
+        {
+            if (!UsesRoundingHelper(module)) return;
+
+            Line($"function {CIntHelperName}(x) {{");
+            _indentLevel++;
+            Line("const n = Number(x);");
+            Line("if (!Number.isFinite(n)) return n;");
+            Line("const f = Math.floor(n);");
+            Line("const d = n - f;");
+            Line("if (d > 0.5) return f + 1;");
+            Line("if (d < 0.5) return f;");
+            Line("return (f % 2 === 0) ? f : f + 1;");
+            _indentLevel--;
+            Line("}");
+            Line();
+        }
+
         private void EmitExceptionPrelude(IRModule module)
         {
             var required = JsExceptionTypes.CollectRequired(module);
@@ -1255,9 +1316,19 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // function named CInt that exists nowhere.
             switch (functionName)
             {
-                // Truncates TOWARD ZERO, matching .NET. Math.round would give 4 for 3.7 and
-                // Math.floor would give -4 for -3.7; only trunc agrees with CInt.
-                case "CInt": return "Math.trunc";
+                // ⛔ Math.trunc WAS WRONG HERE, and the comment that used to sit on this line
+                // ("truncates toward zero, matching .NET ... only trunc agrees with CInt") had it
+                // backwards — its own example gives the game away, because .NET's CInt(3.7) IS 4.
+                // Measured across the backends on CInt(7.5)/CInt(8.5)/CInt(7.9)/CInt(-7.5): C#
+                // emits Convert.ToInt32 and printed 8,8,8,-8 (the VB answer), while MSIL,
+                // JavaScript and C++ all printed 7,8,7,-7.
+                //
+                // CInt rounds HALF-TO-EVEN. Convert.ToInt32 is exactly
+                // Math.Round(x, MidpointRounding.ToEven) — verified on ten values, and the
+                // midpoints are what separate it from both trunc and AwayFromZero (8.5 -> 8, not
+                // 9; 2.5 -> 2, not 3). JavaScript has no built-in for it: Math.round is
+                // half-up-toward-+Infinity, so it answers -7 for -7.5. Hence the emitted helper.
+                case "CInt": return CIntHelperName;
 
                 // Identity under erasure — Integer/Single/Double are all one JS number.
                 // Number() is the identity rename rather than a no-op, so the call shape
@@ -2261,11 +2332,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <c>Half(7)</c> — a wrong answer from a build that succeeded. It only looked correct
         /// for inputs whose quotient was already whole.</para>
         ///
-        /// <para><c>Math.trunc</c>, not <c>Math.round</c>: it matches what the C++ and MSIL
-        /// backends do for the same cast (measured — all three give 3 for <c>7 / 2</c>). That
+        /// <para>⚠ It ROUNDS HALF-TO-EVEN, via the same helper <c>CInt</c> lowers to. This note
+        /// used to say <c>Math.trunc</c> "matches what the C++ and MSIL backends do ... that
         /// disagrees with VB.NET's banker's rounding, which is a pre-existing decision about the
-        /// whole narrowing surface and not this function's to make; what matters here is that JS
-        /// stops being the one backend that does not narrow at all.</para>
+        /// whole narrowing surface and not this function's to make" — correct at the time, and
+        /// that decision has since been made: the whole narrowing surface rounds, so
+        /// <c>7 / 2</c> into an Integer is <b>4</b> on all four backends, not 3. VB rounds it.</para>
         ///
         /// <para>⛔ Integral→integral is NOT handled, and a <c>| 0</c> arm for it was written here
         /// and then removed as unreachable speculation. Measured: <c>Long</c> never reaches this
@@ -2294,7 +2366,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             if (source.IsFloatingPoint())
             {
-                rendered = $"Math.trunc({Expr(cast.Value)})";
+                rendered = $"{CIntHelperName}({Expr(cast.Value)})";
                 return true;
             }
 

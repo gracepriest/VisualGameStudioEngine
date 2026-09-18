@@ -440,7 +440,7 @@ End Sub");
         AssertLines(
             // truncate-toward-zero (matching .NET's (int)decimal), scale-preserving
             // ToString, VarR8FromDec ToDouble, and Convert.ToBoolean's `!= 0`.
-            "19\n19\n19.99\n19\n19.99\n19.99\n-2\nnonzero\nzero\n",
+            "19\n19\n19.99\n20\n19.99\n19.99\n-2\nnonzero\nzero\n",
             CompileRun(output));
     }
 
