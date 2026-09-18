@@ -66,6 +66,27 @@ The plan builds a canvas that renders and hit-tests, a toolbox and a property gr
 specify the direct-manipulation layer, and it does not specify how one form reaches two targets. Both
 are required by the goal above. Add them as new tasks; keep the existing numbering intact.
 
+### ⛔ Canvas rendering — owner decision, amending the plan's Task 7
+
+**The spec's schematic canvas stands.** No proxy controls, no hosted browser, no hosted WinForms. The
+canvas remains `FormCanvasControl : Control` overriding `Render(DrawingContext)` as Task 7 specifies.
+
+**But it is a *property-faithful* schematic, not a wireframe.** Every visual property the user sets
+must change how the shape draws:
+
+- Draw from the **document's property values**, never from a fixed designer style. `BackColor`,
+  `ForeColor`, `Font` (family, size, style), `Text`, `TextAlign`, `BorderStyle`, `Visible` and
+  `Enabled` on `.blform`; the CSS equivalents on `.blwebform`. Set a control's background to red and
+  the box on the canvas is red.
+- Render text with Avalonia `FormattedText` using the control's **real font**, so text genuinely
+  measures. A caption that does not fit its box must visibly clip or overflow on the canvas. This is
+  the single thing a bare wireframe cannot show, and it is the reason this amendment exists.
+- Each catalog row **declares which of its properties are visual**, so the renderer switches on data,
+  not a hand-written `if` per control kind.
+- ⛔ **This is still not WYSIWYG and must not be described as such.** Avalonia's text stack is not
+  GDI+ and not the browser's; metrics will differ. Label the surface as a schematic in the UI, keep F5
+  as the renderer of record, and do not let that claim drift as fidelity improves.
+
 ### Task 20 — Direct manipulation on the canvas
 
 Everything here goes through the **one** shared transform object mandated by Task 7 (`Render`,
@@ -129,6 +150,34 @@ side their honest HTML equivalents.
   with no diagnostic. A catalog row with a misspelled property name is invisible without that gate.
 - Where the web equivalent is not honest — a `DataGridView` has no single HTML tag — say so in the
   catalog rather than faking it, and let the retarget of Task 21 report it as explicit loss.
+
+**Every catalog row carries its full property set**, because the property grid must show what the real
+control has — `Name`, `Text`, `BackColor`, `ForeColor`, `Font`, `Size`, `Location`, `Enabled`,
+`Visible`, `TabIndex`, `Anchor`, `Dock` and the rest, per control kind. Each property declares:
+
+| Field | Why |
+|---|---|
+| Name and type | Drives the editor and the emitted statement |
+| **Default value** | See the serialization rule below |
+| **Visual or not** | Feeds the property-faithful renderer above |
+| Editor kind | String, bool, enum dropdown, integer, `Color`, `Font`, `Point`/`Size`, `Anchor`/`Dock` |
+
+- ⛔ **Write only non-default values** — to the document *and* to the region. A form that emits every
+  property of every control produces an unreadable region and a bloated document. This is exactly what
+  VS does with `DefaultValue`/`ShouldSerialize`; drive it from the catalog's declared defaults.
+- ⛔ **Avalonia 11.3 ships no ColorPicker and no font dialog.** The plan already says to reuse
+  `VisualGameStudio.Editor/Controls/ColorPickerPopup.cs:15` for colour rows and to price every other
+  type editor as hand-built. With a full property set a **`Font` editor is now required, not
+  optional** — budget for it.
+- ⛔⛔ **The property list is unfalsifiable data, and this is the highest-risk part of the task.**
+  `EnableNetResolution` returns early for `UseWindowsForms` (`Compiler.cs:145`), so a misspelled
+  property name in the catalog types as `Object`, compiles green, and silently does nothing at
+  runtime. The plan's Task 17 CI gate — generate every catalog control with every property set and
+  require the real CLI to exit 0 — is the **only** thing that catches this, and it must now cover
+  **every property in the grid**, not merely every control. Drive it from the catalog via
+  `TestCaseSource`.
+- Include the **Events tab** — VS's lightning-bolt list. It is the same catalog data, it feeds Task
+  22's double-click gesture, and double-clicking a row there creates the handler the same way.
 
 ### Task 24 — Menus, toolbars and status bars
 
@@ -286,6 +335,10 @@ throws `ReferenceError` on load. stdout from a real run is the only oracle that 
 
 - [ ] Plan Tasks 1–19 complete, checkboxes ticked, each with its stated gate run and recorded.
 - [ ] Tasks 20–28 complete.
+- [ ] The canvas is property-faithful: changing `BackColor`, `Font`, `Text` or `ForeColor` in the
+      property grid visibly changes the shape on the canvas, and an oversized caption visibly clips.
+- [ ] The property grid shows the full declared property set per control, writes only non-default
+      values, and every property in it is covered by the Task 17 CLI gate.
 - [ ] Both acceptance walkthroughs performed and recorded: a web form running in a browser, a WinForms
       form running as a window, each built by dragging controls onto the designer.
 - [ ] Retarget works both directions with explicit, diagnosed loss.
