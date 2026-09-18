@@ -419,36 +419,45 @@ public class ModuleScopeInitializerTests
     }
 
     /// <summary>
-    /// ⛔ OUT OF RANGE WRAPS, and it wraps to exactly what the identical LOCAL declaration
-    /// produces. Measured on both paths: <c>Byte = 300</c> → <b>44</b>, <c>Byte = -1</c> →
-    /// <b>255</b>, <c>SByte = 200</c> → <b>-56</b>, <c>Short = 40000</c> → <b>-25536</b>,
-    /// <c>UShort = 70000</c> → <b>4464</b>.
+    /// ⚠ OUT OF RANGE is REFUSED at BOTH scopes, as of 2026-09-18 — VB's BC30439, in
+    /// <c>SemanticAnalyzer</c>. Kept in this fixture because this is where the wrap it replaces
+    /// was pinned; the rule itself is covered in <see cref="ConstantRangeTests"/>.
     ///
-    /// <para>⚠ Real VB REJECTS all of these (BC30439, "constant expression not representable").
-    /// This compiler does not, at either scope, and that divergence is pre-existing. Matching the
-    /// LOCAL path is the deliberate choice: a module declaration silently disagreeing with the
-    /// identical local one is a worse bug than the wrap, and fixing the wrap belongs in the front
-    /// end where both paths would get it at once.</para>
+    /// <para>⛔ This test used to assert the WRAP and to agree it was the right answer: "matching
+    /// the LOCAL path is the deliberate choice ... fixing the wrap belongs in the front end where
+    /// both paths would get it at once." The front end now has it, and the premise the choice
+    /// rested on was itself wrong. What module scope wrapped to —
+    /// <c>Byte = 300</c> → <b>44</b>, <c>Byte = -1</c> → <b>255</b>, <c>SByte = 200</c> →
+    /// <b>-56</b>, <c>Short = 40000</c> → <b>-25536</b>, <c>UShort = 70000</c> → <b>4464</b> —
+    /// is what the LOCAL path produced only on C++ and MSIL. Re-measured for
+    /// <c>Dim b As Byte = 300</c> as a local: <b>C#</b> CS0031, which does not build, and
+    /// <b>JavaScript</b> <b>300</b>. There was no local answer to match.</para>
+    ///
+    /// <para>⚠ No longer an Integration test: it is a diagnostic, so nothing is compiled or run.
+    /// The module-scope narrowing path it used to exercise is still covered for IN-RANGE values
+    /// by <see cref="ANarrowedInitializer_ReachesEveryBackend"/>.</para>
     /// </summary>
     [Test]
-    [Category("Integration")]
-    [TestCase("Byte", "300", "44", TestName = "Wrap_ByteOver")]
-    [TestCase("Byte", "-1", "255", TestName = "Wrap_ByteUnder")]
-    [TestCase("SByte", "200", "-56", TestName = "Wrap_SByte")]
-    [TestCase("Short", "40000", "-25536", TestName = "Wrap_Short")]
-    [TestCase("UShort", "70000", "4464", TestName = "Wrap_UShort")]
-    public void AnOutOfRangeInitializer_WrapsLikeTheLocalPath(
-        string declaredType, string literal, string expected)
+    [TestCase("Byte", "300", TestName = "Refused_ByteOver")]
+    [TestCase("Byte", "-1", TestName = "Refused_ByteUnder")]
+    [TestCase("SByte", "200", TestName = "Refused_SByte")]
+    [TestCase("Short", "40000", TestName = "Refused_Short")]
+    [TestCase("UShort", "70000", TestName = "Refused_UShort")]
+    public void AnOutOfRangeInitializer_IsRefusedAtBothScopes(string declaredType, string literal)
     {
         var moduleScope = Program($"Dim G As {declaredType} = {literal}", "PrintLine(CStr(G))");
         var local = Program("", $"Dim v As {declaredType} = {literal}\n  PrintLine(CStr(v))");
 
         Assert.Multiple(() =>
         {
-            Assert.That(Msil.MsilHarness.RunExpectingSuccess(moduleScope),
-                Is.EqualTo(expected + "\n"), "module scope");
-            Assert.That(Msil.MsilHarness.RunExpectingSuccess(local),
-                Is.EqualTo(expected + "\n"), "the local it must agree with");
+            Assert.That(OptionalConstructorTests.Analyze(moduleScope),
+                Has.Some.Contains(
+                    $"Constant expression not representable in type '{declaredType}'"),
+                "module scope");
+            Assert.That(OptionalConstructorTests.Analyze(local),
+                Has.Some.Contains(
+                    $"Constant expression not representable in type '{declaredType}'"),
+                "the local it must agree with");
         });
     }
 
@@ -456,14 +465,20 @@ public class ModuleScopeInitializerTests
     /// ⚠ A narrow initializer that is FOLDED rather than a bare literal. It leaves
     /// <c>BuildModuleScopeInitializer</c> by the OTHER return — the folded-constants one — so
     /// narrowing has to happen at both exits or this shape keeps the pre-narrowing value.
-    /// <c>500 - 200</c> also wraps, which proves the narrowing runs AFTER the fold rather than on
-    /// the operands.
     ///
-    /// <para>⛔ The C# assertion is what actually HOLDS the folded exit, and MSIL alone does not —
-    /// measured by mutation. Dropping the narrowing there leaves an <c>Integer</c>-typed 300, and
-    /// MSIL's <c>stsfld uint8</c> truncates it to 44 by itself, so the MSIL run passes either way.
-    /// C# emits <c>private static byte H = 300;</c> and refuses it (<b>CS0031</b>). A backend that
-    /// narrows implicitly cannot witness a missing narrowing.</para>
+    /// <para>⛔ BOTH assertions hold the folded exit now, measured by mutation: dropping the
+    /// narrowing leaves a <c>Double</c>-typed 200.7, C# is <b>CS0266</b> ("cannot implicitly
+    /// convert type 'double' to 'byte'") and MSIL prints <b>102</b> — the low byte of the float64
+    /// it stored. That is a change from the shape this test used to use: with
+    /// <c>500 - 200</c> the un-narrowed value was an <c>Integer</c> 300, which MSIL's
+    /// <c>stsfld uint8</c> truncated to 44 all by itself, so the MSIL run passed either way and
+    /// only C# witnessed the missing narrowing. A FRACTIONAL fold is caught on both.</para>
+    ///
+    /// <para>⚠ <c>100.5 + 100.2</c> also proves the narrowing runs AFTER the fold rather than on
+    /// the OPERANDS: rounding each operand first gives 100 + 100 = <b>200</b>, and rounding the
+    /// sum gives <b>201</b>. The two are distinguishable, which the old <c>500 - 200</c> was only
+    /// because it overflowed — that constant is refused outright now (BC30439), so the property
+    /// had to be re-expressed with a value the front end accepts.</para>
     /// </summary>
     [Test]
     [Category("Integration")]
@@ -472,7 +487,7 @@ public class ModuleScopeInitializerTests
         var program = """
             Module M
              Dim G As Byte = 4 + 4
-             Dim H As Byte = 500 - 200
+             Dim H As Byte = 100.5 + 100.2
              Sub Main()
               PrintLine(CStr(G) & "," & CStr(H))
              End Sub
@@ -482,8 +497,8 @@ public class ModuleScopeInitializerTests
         Assert.Multiple(() =>
         {
             Assert.That(ReturnCoercionTests.CompileEmittedCSharpForTest(program), Is.Empty,
-                "C# refuses an un-narrowed 300 in a byte field; MSIL would truncate it silently");
-            Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo("8,44\n"));
+                "C# refuses an un-narrowed 200.7 in a byte field (CS0266)");
+            Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo("8,201\n"));
         });
     }
 

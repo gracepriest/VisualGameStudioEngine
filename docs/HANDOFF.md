@@ -647,12 +647,62 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   `Dim G As UInteger = 7.9` into a build failure there.
   ⛔ **ULong is REFUSED**, not narrowed: its range does not fit the `long` the folders can carry.
   A clean diagnostic beats the 4620580627691444634 it printed before.
-  ⚠ **Out of range WRAPS, deliberately matching the LOCAL path** — measured on both:
-  `Byte = 300` → **44**, `Byte = -1` → **255**, `SByte = 200` → **-56**, `Short = 40000` →
-  **-25536**, `UShort = 70000` → **4464**. Real VB rejects all of these (BC30439); this compiler
-  does not, at either scope. Matching locals was chosen over matching VB: a module declaration
-  silently disagreeing with the identical local one is worse than the wrap, and fixing the wrap
-  belongs in the front end where both paths get it at once.
+  ⚠ **Out of range is REFUSED as of 2026-09-18 — VB's BC30439** — `ConstantRangeTests`,
+  `SemanticAnalyzer.CheckConstantFitsNumericTarget`. It used to WRAP at module scope
+  (`Byte = 300` → **44**, `Byte = -1` → **255**, `SByte = 200` → **-56**, `Short = 40000` →
+  **-25536**, `UShort = 70000` → **4464**), which `NarrowModuleScopeConstant` still does for any
+  value that now reaches it.
+  ⛔ **The note this replaces was WRONG about locals.** It recorded the wrap as "measured on
+  both" scopes; module scope was the only place the backends agreed. Re-measured at LOCAL scope
+  for `Dim b As Byte = 300` — four backends, THREE answers, one of them not a program:
+  **C#** CS0031, the emitted source DOES NOT BUILD; **JavaScript** **300**, since a JS number has
+  no width to overflow; **C++** **44**; **MSIL** **44** (`ldc.i4 300` into a `uint8` slot — RUN
+  through ilasm, which this container does have via the
+  `runtime.linux-x64.microsoft.netcore.ilasm` package `MsilHarness` looks for). Same split at
+  five more sites —
+  `b = 300`, `a(0) = 300`, `x.F = 300`, `Return 300`, `Take(300)` — where C# adds CS0221 and
+  CS1503. Agreeing on a wrap was never worth having; the check is in the FRONT END, ahead of all
+  four backends and both scopes.
+  ⚠ **Five call sites, one helper**: the `Dim` declaration (local AND module), `Const`,
+  assignment (which covers a variable, an array element and a field), `Return`, and an argument.
+  A language that refuses `Dim b As Byte = 300` but accepts `b = 300` has no rule at all.
+  ⚠ **It checks AFTER half-to-even rounding**, because that is what the narrowing itself does
+  (`IRBuilder.TryConvertConstant`): `Byte = 255.4` is legal, `= 255.6` is not, and `= -0.5` is
+  legal because -0.5 rounds to -0. Those last two are the mutation kills — comparing the raw
+  value refuses `255.4`, and AwayFromZero refuses `-0.5`, both legal programs.
+  ⛔ **Constant EXPRESSIONS fold, non-constants do not.** `Dim b As Byte = 100 + 200` diverged
+  exactly as the bare literal did, so `TryFoldConstantDouble` folds literals, `Const` references
+  and `+ - * /` over them. `Dim b As Byte = someInteger` is a run-time conversion and is NOT
+  reported — VB does not report BC30439 for it either — and nor is `c += 300`, whose value
+  depends on `c`.
+  ⚠ **A sibling of `TryFoldConstantInt`, not a replacement.** That one sizes array declarations
+  and must refuse anything it cannot size with, so it rejects floating values and any integer
+  outside `int` — which are exactly the cases this has to keep. The integral-only operators
+  (`\ Mod << >>`) are deliberately NOT folded here: a fold that DISAGREES with the IR produces a
+  false error, the one outcome worse than the wrap this replaces, and declining costs only a
+  diagnostic.
+  ⚠ **`Long`/`ULong` bounds are imprecise at the boundary on purpose** — `(double)long.MaxValue`
+  rounds up to 2^63 — so a constant of exactly 2^63 is accepted. A missed diagnostic, never a
+  false one.
+  ⛔ **`Single` is a RANGE check, not a precision one.** `Dim s As Single = 1.0E+40` printed
+  **Infinity** on JavaScript and made the C++ backend emit `s = Infinityf;`, which does not
+  compile. `= 0.1` loses bits and stays legal.
+  ⚠ **Two tests in `ModuleScopeInitializerTests` pinned the old behaviour and were rewritten.**
+  `AnOutOfRangeInitializer_WrapsLikeTheLocalPath` asserted the wrap AND agreed with it; it is now
+  `AnOutOfRangeInitializer_IsRefusedAtBothScopes` and is no longer an Integration test, since a
+  diagnostic compiles nothing. `AFoldedNarrowInitializer_IsNarrowedToo` used
+  `Dim H As Byte = 500 - 200`, which is refused outright now, and uses `100.5 + 100.2` (= 200.7,
+  narrowing to **201**) instead — a strictly better probe: it also separates narrowing the SUM
+  from narrowing the OPERANDS (100 + 100 = 200), and dropping the narrowing is caught on BOTH
+  backends (C# CS0266, MSIL **102**) where the old integer shape was caught only by C#, MSIL's
+  `stsfld uint8` having truncated 300 to 44 by itself.
+  ⛔ **An unrelated MSIL gap surfaced while writing these**: a local named `neg` emits
+  `[2] int8 neg` and ilasm rejects it ("syntax error at token 'neg'") — the backend does not
+  escape a local whose name is an IL keyword. Worked around by renaming in the test; NOT fixed.
+  ⚠ **Still NOT reported: the sub-int narrowing gap this sits next to.** `Dim b As Byte = 255.4`
+  is accepted and then prints **255.4** on JavaScript and **255** on C++, because
+  `TryConvertConstant` declines Byte/SByte/Short/UShort on purpose (see above). In range is not
+  the same as narrowed, and the tests assert acceptance rather than a value for that shape.
   ⚠ `Dim G As Single = 7 / 2` is a FRONT-END diagnostic ("Cannot assign value of type 'Double' to
   variable of type 'Single'"), not a folding gap.
   ⚠ **The C++ global-initializer gap is FIXED as of 2026-09-17** — `CppCodeGenerator`, globals
