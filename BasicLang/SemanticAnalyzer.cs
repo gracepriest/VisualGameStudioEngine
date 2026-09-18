@@ -4753,19 +4753,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// <para>⚠ Walks the same shapes <see cref="RegisterClassTypes"/> does, so a class nested
         /// in a Module or Namespace is reached by both or neither.</para>
         ///
-        /// <para>⛔ That recursion's mutation SURVIVES, and the reason is a gap this change does
-        /// NOT close. A class nested in a Module and declared after its use still resolves its
-        /// members to Object — measured, <c>void* t1</c> and 2 C++ errors, before and after. Traced:
-        /// this sweep DOES reach it and populates the right <c>TypeInfo</c>, and the local is even
-        /// emitted <c>std::shared_ptr&lt;Box&gt;</c>, so the use site is holding a DIFFERENT,
-        /// member-less TypeInfo for the same name — the synthetic-fallback shape
-        /// <see cref="RegisterClassTypes"/>'s own note describes, still reachable one layer up for
-        /// the nested case. Fixing that is type RESOLUTION, not member registration, and is its own
-        /// change.</para>
-        ///
-        /// <para>⚠ The recursion stays regardless: removing it passes every test today only
-        /// because nothing can read what it registers, and it would make that eventual fix
-        /// silently half-work.</para>
+        /// <para>⛔ The recursion is LOAD-BEARING, and a correction is recorded here because the
+        /// first version of this comment got it wrong. It claimed a class nested in a Module and
+        /// declared after its use was still broken, and that removing the recursion therefore
+        /// changed nothing. Both halves were false: that measurement was taken against a compiler
+        /// binary still carrying the no-recursion mutation, because the mutation harness restores
+        /// the SOURCE without rebuilding. Re-measured on a clean build, a nested class resolves its
+        /// members in either order, and removing this recursion emits <c>void* t1</c> with 2 C++
+        /// errors for the nested shape while every top-level case stays green. What was actually
+        /// missing was a test, which is why the mutation survived the suite; there is one now
+        /// (<c>ClassDeclarationOrderTests.AClassNestedInAModule_ResolvesItsMembers_WhicheverOrder</c>
+        /// and its Namespace sibling).</para>
         ///
         /// <para>⛔ Constructors are deliberately NOT written here — see
         /// <see cref="PopulateClassMemberSignatures"/> for why handing them to a second builder

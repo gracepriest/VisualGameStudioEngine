@@ -898,8 +898,8 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   re-stamping the declared type onto the result — both measured inert by diffing the emitted C#
   for fifteen literal and seven folded shapes.
   ⚠ **A CLASS DECLARED AFTER THE MODULE did not resolve its members' TYPES — FIXED as of
-  2026-09-18** for a TOP-LEVEL class, see the entry below. Still open for a class nested in a
-  Module. Fixtures order the class first out of habit from when this was broken.
+  2026-09-18**, for a top-level class AND for one nested in a Module or Namespace; see the entry
+  below. Fixtures order the class first out of habit from when this was broken.
   ⚠ **A TOP-LEVEL class declared AFTER its use resolves its members as of 2026-09-18** —
   `ClassDeclarationOrderTests`, `SemanticAnalyzer.RegisterClassMemberSignatures` + the shared
   `PopulateClassMemberSignatures` (which was `PopulateSiblingClassMembers`).
@@ -917,18 +917,23 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   ⚠ **ONE sweep, shared with the cross-file path.** Members are registered in pass 1 between the
   class-TYPE sweep and the signature sweep, through the same helper the sibling path uses, so the
   two cannot drift. Pass 2 overwrites every entry, so pass 1 is a forward-reference stand-in.
-  ⛔ **STILL OPEN: a class NESTED IN A MODULE, declared after its use.** Measured `void* t1` and 2
-  C++ errors before AND after. Traced: the sweep DOES reach it and populates the right `TypeInfo`,
-  and the local is emitted `std::shared_ptr<Box>`, so the use site holds a DIFFERENT, member-less
-  TypeInfo for the same name — type RESOLUTION falling through to its synthetic fallback one layer
-  above this change. The same nested class declared BEFORE its use works, so the gap is order, not
-  nesting. Its own fix.
-  ⚠ **Three mutations SURVIVE and are recorded rather than papered over**: dropping the
-  Module/Namespace recursion (nothing can read what it registers until the nested gap above is
-  closed — kept so that fix is not silently half-done); letting the sweep write constructors (the
-  shape that would distinguish the two parameter builders, an ARRAY constructor parameter, does not
-  parse); and exposing private members (access is not enforced on a member read at all — reading
-  `c._n` from outside compiles in BOTH orders, a separate pre-existing gap).
+  ⚠ **A class NESTED IN A MODULE is covered too**, by the same sweep's Module/Namespace recursion —
+  `ClassDeclarationOrderTests.AClassNestedInAModule_ResolvesItsMembers_WhicheverOrder` and its
+  Namespace sibling, added 2026-09-18.
+  ⛔ **CORRECTION, recorded because the first version of this entry was WRONG.** It said the nested
+  shape was STILL OPEN — `void* t1`, 2 C++ errors "before AND after" — and that dropping the
+  recursion therefore changed nothing. Both halves were false. That measurement was taken against a
+  compiler binary still carrying the no-recursion mutation, because the mutation harness restores
+  the SOURCE without rebuilding. Re-measured on a clean build at `a9bc7f8`: nested resolves its
+  members in either order and runs, and removing the recursion emits `void* t1` with 2 C++ errors
+  for the nested shape while every top-level case stays green. What was actually missing was a
+  TEST — which is the only reason that mutation survived the suite. **Lesson for the harness: a
+  probe run straight after a mutation cycle must rebuild first.**
+  ⚠ **Two mutations SURVIVE and are recorded rather than papered over**: letting the sweep write
+  constructors (the shape that would distinguish the two parameter builders, an ARRAY constructor
+  parameter, does not parse); and exposing private members (access is not enforced on a member read
+  at all — reading `c._n` from outside compiles in BOTH orders, a separate pre-existing gap). The
+  third, dropping the Module/Namespace recursion, is now KILLED by the nested tests above.
   ⚠ **Narrowing shapes are refused by the SEMANTIC ANALYZER, before any of this** —
   `Public N As Single = 1.5 + 1.0` is "Cannot assign value of type 'Double' to variable of type
   'Single'", before and after. Not a folding gap.
