@@ -292,8 +292,8 @@ public class OptionalConstructorTests
         Assert.Multiple(() =>
         {
             Assert.That(ReturnCoercionTests.CompileEmittedCSharpForTest(program), Is.Empty);
-            Assert.That(JavaScriptExecutionTests.RunJs(program), Is.EqualTo("ctor:3"));
-            Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo("ctor:3\n"));
+            Assert.That(JavaScriptExecutionTests.RunJs(program), Is.EqualTo("ctor:4"));
+            Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo("ctor:4\n"));
         });
     }
 
@@ -356,7 +356,7 @@ public class OptionalConstructorTests
         Assert.Multiple(() =>
         {
             Assert.That(ReturnCoercionTests.EmitCSharpForTest(coercion),
-                Does.Contain("new Box((int)("),
+                Does.Contain("new Box(Convert.ToInt32("),
                 "the argument must be narrowed; without the cast this is CS1503");
             Assert.That(ReturnCoercionTests.CompileEmittedCSharpForTest(coercion), Is.Empty);
 

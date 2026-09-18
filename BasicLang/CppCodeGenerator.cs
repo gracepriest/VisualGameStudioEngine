@@ -2943,6 +2943,18 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// predicate can reach it. Pinned by
         /// <c>NetClaimPredicateTests.RowCUsesTheGeneratorsOwnArmCheckAndCannotDrift</c>.</para>
         /// </summary>
+        /// <summary>
+        /// True when a conversion intrinsic's first argument is a floating type, i.e. when there
+        /// is something to round. Static, like <see cref="StdLibArm"/> itself, so the claim
+        /// predicate can reach it.
+        /// </summary>
+        private static bool Arg0IsFloating(IRCall call) =>
+            call != null && call.Arguments.Count > 0 && call.Arguments[0]?.Type?.Name switch
+            {
+                "Double" or "Single" => true,
+                _ => false,
+            };
+
         internal static string StdLibArm(string functionName, List<string> args, IRCall call)
         {
             if (functionName == null) return null;
@@ -2996,12 +3008,27 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // Use CType(x, Integer) — truncating on both backends — when parity matters.
                 // Precision note: ToDouble is exact to 15 significant digits, so a
                 // >15-digit Decimal narrows approximately.
+                // ⛔ ROUNDS HALF-TO-EVEN via nearbyint, because a bare static_cast TRUNCATES and
+                // that is not what CInt means. Measured across the backends on
+                // CInt(7.5)/CInt(8.5)/CInt(7.9)/CInt(-7.5): C# emits Convert.ToInt32 and printed
+                // 8,8,8,-8 (the VB answer), while MSIL, JavaScript and C++ all printed 7,8,7,-7.
+                // std::nearbyint under the default FE_TONEAREST mode matches Convert.ToInt32 on
+                // all ten values checked, midpoints included (8.5 -> 8, 2.5 -> 2, -8.5 -> -8),
+                // which is what separates it from round() — round() is AwayFromZero and would
+                // answer 9 for 8.5.
+                //
+                // ⚠ Only for a FLOATING argument: `CInt(someInteger)` has nothing to round, and
+                // routing a 64-bit integer through a double would lose precision above 2^53.
                 "cint" => arg0IsDecimal
-                    ? $"static_cast<int32_t>(({args[0]}).ToDouble())"
-                    : $"static_cast<int32_t>({args[0]})",
+                    ? $"static_cast<int32_t>(std::nearbyint(({args[0]}).ToDouble()))"
+                    : Arg0IsFloating(call)
+                        ? $"static_cast<int32_t>(std::nearbyint({args[0]}))"
+                        : $"static_cast<int32_t>({args[0]})",
                 "clng" => arg0IsDecimal
-                    ? $"static_cast<int64_t>(({args[0]}).ToDouble())"
-                    : $"static_cast<int64_t>({args[0]})",
+                    ? $"static_cast<int64_t>(std::nearbyint(({args[0]}).ToDouble()))"
+                    : Arg0IsFloating(call)
+                        ? $"static_cast<int64_t>(std::nearbyint({args[0]}))"
+                        : $"static_cast<int64_t>({args[0]})",
                 "cdbl" => arg0IsDecimal
                     ? $"({args[0]}).ToDouble()"
                     : $"static_cast<double>({args[0]})",
@@ -3761,9 +3788,27 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             }
 
             var targetType = MapType(cast.Type);
+
+            // ⛔ A FLOATING -> INTEGRAL narrowing ROUNDS HALF-TO-EVEN, because a bare static_cast
+            // TRUNCATES. `Dim i As Integer = 7.5` answered 7 on all four backends while
+            // `CInt(7.5)` answers 8 — one language, two answers depending on which syntax reached
+            // the same narrowing. VB rounds both. std::nearbyint under the default FE_TONEAREST
+            // mode is ToEven and matches Convert.ToInt32; std::round would NOT, it is
+            // AwayFromZero and answers 9 for 8.5.
+            if (IsFloatingTypeName(cast.Value?.Type?.Name) && IsIntegralTypeName(cast.Type?.Name))
+            {
+                WriteLine($"{result} = static_cast<{targetType}>(std::nearbyint({value}));");
+                return;
+            }
+
             WriteLine($"{result} = static_cast<{targetType}>({value});");
         }
-        
+
+        /// <summary>A floating source, i.e. one a narrowing has something to round from.</summary>
+        private static bool IsFloatingTypeName(string typeName) =>
+            string.Equals(typeName, "Double", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(typeName, "Single", StringComparison.OrdinalIgnoreCase);
+
         public override void Visit(IRLabel label)
         {
             Unindent();

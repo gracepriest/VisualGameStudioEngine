@@ -155,7 +155,7 @@ public class ReturnCoercionTests
     [Category("Integration")]
     public void JavaScript_NarrowsTheReturn_InsteadOfKeepingTheFraction()
     {
-        Assert.That(JavaScriptExecutionTests.RunJs(HalfProgram), Is.EqualTo("42,3"),
+        Assert.That(JavaScriptExecutionTests.RunJs(HalfProgram), Is.EqualTo("42,4"),
             "42 was always right; the 3 is the case JS used to print as 3.5");
     }
 
@@ -171,7 +171,7 @@ public class ReturnCoercionTests
     [Category("Integration")]
     public void Msil_ConvertsBeforeRet_InsteadOfReturningZero()
     {
-        Assert.That(Msil.MsilHarness.RunExpectingSuccess(HalfProgram), Is.EqualTo("42,3\n"));
+        Assert.That(Msil.MsilHarness.RunExpectingSuccess(HalfProgram), Is.EqualTo("42,4\n"));
     }
 
     // ====================================================================================
@@ -179,29 +179,27 @@ public class ReturnCoercionTests
     // ====================================================================================
 
     /// <summary>
-    /// ⚠ They agree on TRUNCATION, and that is not VB.NET's answer. VB narrows with banker's
-    /// rounding, so <c>Return 7 / 2</c> should be 4, and this compiler's own <c>CInt</c> gives 4
-    /// on C# (via <c>Convert.ToInt32</c>) while giving 3 on C++, JS and MSIL. So C# is internally
-    /// inconsistent between an implicit return and an explicit <c>CInt</c>.
+    /// ⚠ They agree on VB's answer: banker's rounding, so <c>Return 7 / 2</c> is <b>4</b>.
     ///
-    /// <para>That divergence is PRE-EXISTING and deliberately not addressed here: changing it
-    /// means changing every <c>IRCast</c> rendering on four backends, which is a decision about
-    /// the whole narrowing surface. This test pins what the return coercion actually does today so
-    /// that the day someone takes that decision, it goes red and gets revisited rather than
-    /// drifting.</para>
+    /// <para>⛔ This test used to pin the opposite. It read "they agree on TRUNCATION, and that is
+    /// not VB.NET's answer ... changing it means changing every <c>IRCast</c> rendering on four
+    /// backends, which is a decision about the whole narrowing surface", and asked to go red "the
+    /// day someone takes that decision ... rather than drifting". It did exactly that, and the
+    /// decision was taken: every narrowing now rounds half-to-even, on all four backends and in
+    /// the constant fold, so an implicit return and an explicit <c>CInt</c> can no longer
+    /// disagree.</para>
     /// </summary>
     [Test]
     [Category("Integration")]
-    public void TheBackendsAgreeOnTruncation_WhichIsNotYetVbsBankersRounding()
+    public void TheBackendsAgreeOnVbsBankersRounding()
     {
         var js = JavaScriptExecutionTests.RunJs(HalfProgram);
         var msil = Msil.MsilHarness.RunExpectingSuccess(HalfProgram).TrimEnd('\n');
 
         Assert.That(msil, Is.EqualTo(js),
             $"the two executable backends must not disagree: MSIL '{msil}' vs JS '{js}'");
-        Assert.That(js, Is.EqualTo("42,3"),
-            "and both truncate — 4 here would mean the narrowing surface moved to VB semantics, "
-            + "which is a real improvement but must be taken across ALL backends at once");
+        Assert.That(js, Is.EqualTo("42,4"),
+            "and both round half-to-even: 7 / 2 is 3.5, which VB narrows to 4");
     }
 
     // ====================================================================================

@@ -577,12 +577,44 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   `(1 + 2) / 4` needs the addition folded first.
   ⛔ **WIDENING ONLY — Integer→Long, Integer→Double, Single→Double**, the three exact ones.
   Integer→Single is inexact past 2^24, Long→Double past 2^53.
-  ⛔ **NARROWING IS NOT FOLDED BECAUSE THE BACKENDS DISAGREE.** Measured on `CInt(7.5)`,
-  `CInt(8.5)`, `CInt(7.9)`, `CInt(-7.5)`: **C# prints `8,8,8,-8`** (rounds — the VB answer) while
-  **MSIL, JavaScript and C++ all print `7,8,7,-7`** (truncate). One language, two answers: a real
-  pre-existing defect, pinned by
-  `ModuleScopeInitializerTests.NarrowingConversion_DisagreesAcrossBackends_Pinned`. No folder may
-  pick a side until the backends agree at run time.
+  ⚠ **The CInt divergence is FIXED as of 2026-09-18** — `ConversionRoundingTests`. It was measured
+  on `CInt(7.5)`, `CInt(8.5)`, `CInt(7.9)`, `CInt(-7.5)`: **C# printed `8,8,8,-8`** while **MSIL,
+  JavaScript and C++ all printed `7,8,7,-7`**. One language, two answers, silently wrong on three
+  backends out of four.
+  ⚠ **C# was the right one.** It emits `Convert.ToInt32`, which is exactly
+  `Math.Round(x, MidpointRounding.ToEven)` — banker's rounding, what VB's `CInt` specifies.
+  Verified against `Convert.ToInt32` on ten values BEFORE changing anything, because the fix
+  direction depended on it; the midpoints are what separate ToEven from both truncation and
+  AwayFromZero (`8.5`→8 not 9, `2.5`→2 not 3, `-8.5`→-8 not -9).
+  ⚠ The other three were changed to agree: MSIL emits `Convert::ToInt32(float64)`, C++ wraps the
+  cast in `std::nearbyint` (default FE_TONEAREST matches on all ten values — `round()` would NOT,
+  it is AwayFromZero), and JavaScript gets an emitted `__blCInt` helper because it has no built-in
+  (`Math.round` is half-up toward +Infinity and answers -7 for -7.5).
+  ⛔ **An INTEGRAL argument keeps its plain conversion.** On MSIL that is not style: `Convert::ToInt32`
+  is overloaded per CLR type and IL names one exact overload, so an int32 through the `float64`
+  signature would not verify. On C++ an Integer through a double loses precision above 2^53.
+  ⚠ The JS helper is selected by SCANNING the module, not a flag set while lowering — the prelude
+  is emitted before any function body, so a flag is still false there. Measured: the first attempt
+  emitted every call site and no definition, and Node died with "__blCInt is not defined".
+  ⚠ **ASSIGNMENT narrowing rounds too, as of the same change** — the whole narrowing surface now
+  agrees. `Dim i As Integer = 7.5` is 8, `7 / 2` into an Integer is **4**, `CInt(19.99)` is 20.
+  Four backend sites plus the constant fold: `CSharpBackend.EmitCastText` (→ `Convert.ToXxx`),
+  `MSILBackend.Visit(IRCast)` (→ `Math::Round(float64)` before the conv),
+  `CppCodeGenerator.Visit(IRCast)` (→ `std::nearbyint`), `JavaScriptBackend.TryNumericCast`
+  (→ the same `__blCInt` helper), and `IRBuilder.TryConvertConstant` (`Math.Truncate` →
+  `MidpointRounding.ToEven`).
+  ⛔ **This moved 30 existing tests**, every one of which encoded truncation. Each was checked
+  individually against VB semantics rather than bulk-updated: `7.9`→8, `3.5`→4, `CInt(-3.7)`→-4,
+  `CInt(19.99)`→20, and the C# emission `(int)(x)`→`Convert.ToInt32(x)`. Several were RENAMED,
+  because their names asserted the old behaviour —
+  `TheBackendsAgreeOnTruncation_WhichIsNotYetVbsBankersRounding` →
+  `TheBackendsAgreeOnVbsBankersRounding`, `CInt_Truncates` → `CInt_Rounds`,
+  `ANumericLiteral_..._AndNarrowsByTruncating` → `...AndNarrowsByRounding`,
+  `NarrowingConversion_DisagreesAcrossBackends_Pinned` → `NarrowingConversion_AgreesAcrossBackends`.
+  ⚠ Two of those tests had ASKED for this in their own comments — the return-coercion one said it
+  should "go red and get revisited rather than drifting" the day someone took the decision, and
+  the JS cast note called it "a pre-existing decision about the whole narrowing surface and not
+  this function's to make". Both now record that it was taken.
   ⚠ `CInt(...)` / `CDbl(...)` are NOT casts — they lower to an `IRCall`, so neither pass touches
   them and they stay refused at module scope.
   ⚠ **The widening-only restriction is currently UNREACHABLE**, measured: adding a Double→Integer
