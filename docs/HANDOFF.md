@@ -307,10 +307,13 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   program dies with TypeInitializationException. `beforefieldinit` is dropped from the module class
   whenever a `.cctor` exists, as the C# compiler does; that property is invisible at run time and
   is pinned in IL text.
-  ⚠ **A module-level initializer may only be a literal or another module-level `Const`.** Anything
-  else — `Dim b As Integer = a * 3` with `a` a `Dim`, `= 2 + 3 * 4`, `= SomeFunc()` — crashes the
-  FRONT END with a NullReferenceException before any backend runs, on C# as well as MSIL. That is
-  a pre-existing compiler gap, not an MSIL one; don't chase it in the backend.
+  ⚠ **STALE, corrected 2026-09-18.** This used to read "a module-level initializer may only be a
+  literal or another module-level `Const`", with anything else — including `= 2 + 3 * 4` —
+  "crashing the FRONT END with a NullReferenceException". The module-scope fold closed that; nothing
+  crashes any more. Re-measured: `= 2 + 3 * 4` folds and runs **14**; a bare `= K` naming a module
+  `Const` runs **9**; `= K + 1` is REFUSED with a diagnostic, because the folder substitutes no
+  named constants. So the old line was both too narrow (arithmetic folds now) and too generous (a
+  Const inside an expression does not).
   ⚠ **`Shared` members on user classes work as of 2026-09-16**, and the pin that covered this
   (`ASharedMethodOnAUserClass_IsAPhantomCall_PinnedDivergence`, now deleted) named ONE defect where
   there were TWO, entangled so that fixing either alone makes things worse.
@@ -934,6 +937,33 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   parameter, does not parse); and exposing private members (access is not enforced on a member read
   at all — reading `c._n` from outside compiles in BOTH orders, a separate pre-existing gap). The
   third, dropping the Module/Namespace recursion, is now KILLED by the nested tests above.
+  ⚠ **A `Const` inside a Class PARSES and works as of 2026-09-18** — `ClassConstantTests`,
+  `Parser.ParseClassMember` (new Const arm) + `IRBuilder`'s class-member loop (new
+  ConstantDeclarationNode arm).
+  ⛔ **Measured before**: `Private Const K As Integer = 9` inside a Class was a PARSE ERROR,
+  "Unexpected token in class: 'Const'" — while the suggestion that same error throws has always
+  listed Const among a Class's valid members. `ParseClassMember` had arms for Property, Event,
+  Operator, Function, Sub, Dim, a bare-identifier field and every nested type, and none for Const.
+  ⛔ **A PARSER-ONLY fix is WORSE than the error, measured**: with only the parser arm, the constant
+  reached `Visit(ConstantDeclarationNode)` with no current function, took its MODULE-SCOPE branch
+  and was emitted as a GLOBAL — on C++ `int32_t K = 9;` landed after the class ("use of undeclared
+  identifier 'K'"), and two classes each declaring `Const K` emitted two globals of that name
+  ("redefinition of 'K'").
+  ⚠ **Lowered to a STATIC FIELD** carrying the folded value, which is what a VB class Const is —
+  reusing the static-member path every backend already has rather than teaching each a new member
+  kind, and folding through the SAME `BuildConstantFieldInitializer` every field uses.
+  ⚠ **Kept as a ConstantDeclarationNode, NOT desugared to a Shared field in the parser**, because
+  constness is enforced: assigning to a module or local Const is already "Cannot assign to
+  constant", and a class Const that became a writable static field would be the one scope where
+  that check vanished. Asserted.
+  ⛔ **TWO shapes inherit PRE-EXISTING `Shared` defects**, each verified on a plain Shared field
+  with the change stashed: **JavaScript reads it as `undefined`** (the class emits `static K = 9;`
+  and the method reads `this.K`, undefined for a JS static — the backend's static-read lowering);
+  and **reading it from outside as `Box.K` does not compile on C++** (`t0 = Box->K;`, "'Box' does
+  not refer to a value" — the long-recorded Shared-access gap).
+  ⚠ **Referencing the named constant from another initializer (`= K + 1`) is still refused** — the
+  folder substitutes no named constants. A SHARED limit, not a class one: module scope refuses the
+  identical shape.
   ⚠ **Narrowing shapes are refused by the SEMANTIC ANALYZER, before any of this** —
   `Public N As Single = 1.5 + 1.0` is "Cannot assign value of type 'Double' to variable of type
   'Single'", before and after. Not a folding gap.

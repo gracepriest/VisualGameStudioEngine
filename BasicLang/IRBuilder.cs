@@ -1084,6 +1084,35 @@ namespace BasicLang.Compiler.IR
 
                     irClass.Properties.Add(prop);
                 }
+                else if (member is ConstantDeclarationNode constNode)
+                {
+                    // ⛔ A class Const REACHED THE else BELOW before this arm existed, and
+                    // Visit(ConstantDeclarationNode) with no _currentFunction takes its
+                    // MODULE-SCOPE branch — so the constant was emitted as a global. Measured on
+                    // C++: `int32_t K = 9;` landed after the class, so a method reading it failed
+                    // with "use of undeclared identifier 'K'", and two classes each declaring
+                    // `Const K` emitted two globals of that name — "redefinition of 'K'". A class
+                    // constant is a MEMBER, and the flat global table has no room for that.
+                    //
+                    // ⚠ Lowered to a STATIC field carrying the folded value, which is what a VB
+                    // class Const is: one per type, not per instance. That reuses the static
+                    // member path every backend already has (C++'s out-of-class definition, MSIL's
+                    // type initializer) rather than teaching each one a new member kind — and the
+                    // initializer goes through the SAME BuildConstantFieldInitializer every other
+                    // field uses, so a Const and a field agree about what a constant expression is,
+                    // including refusing the same ones.
+                    var constType = _semanticAnalyzer.GetNodeType(constNode)
+                                    ?? new TypeInfo(constNode.Type?.Name ?? "Integer", TypeKind.Primitive);
+                    irClass.Fields.Add(new IRField
+                    {
+                        Name = constNode.Name,
+                        Type = constType,
+                        Access = MapAccessModifier(constNode.Access),
+                        IsStatic = true,
+                        Initializer = BuildConstantFieldInitializer(
+                            constNode.Value, constType, constNode.Name)
+                    });
+                }
                 else
                 {
                     member.Accept(this);
@@ -1281,12 +1310,16 @@ namespace BasicLang.Compiler.IR
         /// old silent drop turned that into a field reading 0 with no diagnostic anywhere; a
         /// refusal naming the constructor is the honest answer until that lowering exists.</para>
         ///
-        /// <para>⚠ Two neighbouring shapes cannot reach this at all, both PRE-EXISTING and
-        /// measured: a <c>Const</c> inside a class does not PARSE ("Unexpected token in class:
-        /// 'Const'"), so a named constant can never be referenced from a field initializer; and a
-        /// <c>Structure</c> field initializer does not parse either ("Expected member name but
-        /// found Assignment"), which makes the structure call site unreachable for initializers.
-        /// </para>
+        /// <para>⚠ A <c>Const</c> inside a class PARSES as of 2026-09-18 and lowers to a static
+        /// field through this same helper, so a Const and a field agree about what is constant.
+        /// Referencing that named constant from another initializer (<c>= K + 1</c>) is still
+        /// refused — the folder substitutes no named constants — but that is a SHARED limit, not a
+        /// class one: measured, module scope refuses the identical shape ("the module-level
+        /// variable 'G' has an initializer that cannot be computed at compile time").</para>
+        ///
+        /// <para>⚠ A <c>Structure</c> field initializer still does not parse ("Expected member
+        /// name but found Assignment"), which keeps the structure call site unreachable for
+        /// initializers. PRE-EXISTING and measured.</para>
         /// </summary>
         private IRConstant BuildConstantFieldInitializer(
             ExpressionNode initializer, TypeInfo fieldType, string fieldName)
