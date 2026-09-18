@@ -581,6 +581,13 @@ public partial class MainWindowViewModel : ViewModelBase
         // meaningful rather than a no-op: it is how the previous save's findings are cleared.
         _eventAggregator.Subscribe<DesignerDiagnosticsEvent>(OnDesignerDiagnostics);
 
+        // ⛔⛔ WITHOUT THIS SUBSCRIPTION THE DOUBLE-CLICK GESTURE IS DECORATIVE. The designer writes
+        // the handler into the .bas and publishes "now take them there"; a document view model has
+        // no reference to the tab well, so nothing else can answer it. The symptom of forgetting is
+        // the worst kind here — double-clicking a Button silently DOES generate the handler, and the
+        // user sees absolutely nothing happen and concludes the designer is broken.
+        _eventAggregator.Subscribe<NavigateToFileEvent>(OnNavigateToFileRequested);
+
         // Subscribe to solution events
         _solutionService.SolutionLoaded += OnSolutionLoaded;
         _solutionService.SolutionClosed += OnSolutionClosed;
@@ -1919,6 +1926,27 @@ public partial class MainWindowViewModel : ViewModelBase
         catch (Exception)
         {
             // Ignore exceptions in event handler
+        }
+    }
+
+    /// <summary>
+    /// Answers a document's "open this file at this line" — today, the form designer's double-click
+    /// landing the user in the handler it just wrote.
+    ///
+    /// <para>⚠ Reuses <c>OpenFileAndNavigateAsync</c>, the same call the Error List uses, so the
+    /// file being already open, not open, or open in another group behaves identically to every
+    /// other navigation in the IDE rather than being a second, subtly different one.</para>
+    /// </summary>
+    private async void OnNavigateToFileRequested(NavigateToFileEvent request)
+    {
+        try
+        {
+            await OpenFileAndNavigateAsync(request.FilePath, request.Line, request.Column);
+        }
+        catch (Exception)
+        {
+            // An event handler must not throw into the aggregator; a failed navigation is not worth
+            // taking the IDE down for, and the handler it could not reach is still on disk.
         }
     }
 

@@ -281,6 +281,101 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         WriteDesignerEditBack();
     }
 
+    /// <summary>
+    /// The double-click gesture (Task 22): put the caret in this control's handler, creating it if
+    /// it does not exist yet.
+    ///
+    /// <para>⛔⛔ <b>This writes a file the user owns and that this document is not even open on</b> —
+    /// the <c>.bas</c> beside the form. Everything else the designer does edits the document in this
+    /// buffer; this reaches sideways, so it re-reads the code-behind from disk each time rather than
+    /// caching it. A cached copy would be stale the moment the user typed in Code view, and the stub
+    /// would be inserted into a file that no longer looked like that.</para>
+    ///
+    /// <para>⚠ The bind is ensured even when the handler already EXISTS. A user can write
+    /// <c>btnLogin_Click</c> by hand before ever double-clicking; without this the gesture would
+    /// navigate to it and still leave it unwired, which looks exactly like the designer working.</para>
+    ///
+    /// <para>⚠ The document is written back only when something actually changed, so double-clicking
+    /// a control that is already wired does not mark the form dirty.</para>
+    /// </summary>
+    [RelayCommand]
+    private async Task ActivateControlAsync(BasicLang.Forms.FormControl? control)
+    {
+        var file = DesignFile;
+        if (control == null || file == null || FilePath == null)
+        {
+            return;
+        }
+
+        var codePath = BasicLang.Forms.FormCodeBehind.PathFor(FilePath);
+
+        try
+        {
+            if (!await _fileService.FileExistsAsync(codePath))
+            {
+                ReportDesignerRefusal(
+                    codePath,
+                    BasicLang.Forms.DesignCodes.RegionAbsent,
+                    $"'{Path.GetFileName(FilePath)}' has no code-behind: expected " +
+                    $"'{Path.GetFileName(codePath)}' beside it, so there is nowhere to put the " +
+                    "handler.");
+                return;
+            }
+
+            var before = await _fileService.ReadFileAsync(codePath, CancellationToken.None);
+            var plan = BasicLang.Forms.FormHandlers.PlanDefault(file.Model, control, before);
+
+            if (plan.Outcome == BasicLang.Forms.HandlerOutcome.Refused)
+            {
+                ReportDesignerRefusal(
+                    codePath, BasicLang.Forms.DesignCodes.RegionAbsent,
+                    plan.Refusal ?? "the handler could not be created.");
+                return;
+            }
+
+            if (plan.Outcome == BasicLang.Forms.HandlerOutcome.Created)
+            {
+                await _fileService.WriteFileAsync(codePath, plan.CodeText, CancellationToken.None);
+                _eventAggregator.Publish(new FileSavedEvent(codePath));
+            }
+
+            if (BasicLang.Forms.FormHandlers.EnsureBind(control, plan.EventName, plan.Handler))
+            {
+                WriteDesignerEditBack();
+            }
+
+            PropertyGrid.SelectedControl = control;
+            _eventAggregator.Publish(new NavigateToFileEvent(codePath, plan.CaretLine));
+        }
+        catch (Exception ex)
+        {
+            ReportDesignerRefusal(
+                codePath, BasicLang.Forms.DesignCodes.RegionAbsent,
+                $"the designer could not open a handler in '{Path.GetFileName(codePath)}': {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Publishes one designer finding against the code-behind's key.
+    ///
+    /// <para>⚠ Always the CODE-BEHIND's path, never the document's. The aggregator keys findings by
+    /// (collection, file), and a finding filed against the .blform would never be cleared by the
+    /// save path — which republishes on the .bas — leaving a phantom in the Error List for the rest
+    /// of the session.</para>
+    /// </summary>
+    private void ReportDesignerRefusal(string codePath, string code, string message) =>
+        _eventAggregator.Publish(new DesignerDiagnosticsEvent(codePath, new List<DiagnosticItem>
+        {
+            new()
+            {
+                Id = code,
+                Message = message,
+                Severity = DiagnosticSeverity.Warning,
+                FilePath = codePath,
+                Source = DesignerDiagnosticSource
+            }
+        }));
+
     [RelayCommand]
     private void PlaceDroppedControl(Controls.FormControlDropRequest? request)
     {

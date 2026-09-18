@@ -143,6 +143,28 @@ public class FormCanvasControl : Control
         set => SetValue(DeleteCommandProperty, value);
     }
 
+    /// <summary>
+    /// Invoked when a control is double-clicked, with that control as the parameter — VS's "open my
+    /// handler" gesture (Task 22).
+    ///
+    /// <para>⛔ A command, for the same reason as <see cref="DeleteCommand"/>, only more so.
+    /// Answering this gesture writes a SECOND file (the user's <c>.bas</c>), opens a document and
+    /// moves a caret. None of that belongs to a drawing surface; the canvas reports the gesture and
+    /// which control it landed on, and the host decides what it means.</para>
+    ///
+    /// <para>⚠ The parameter is the control, never null-meaning-"use the selection". A double-click
+    /// on the form's background is not a gesture on a control, and passing the previous selection
+    /// would open a handler for something the user was not pointing at.</para>
+    /// </summary>
+    public static readonly StyledProperty<ICommand?> ActivateControlCommandProperty =
+        AvaloniaProperty.Register<FormCanvasControl, ICommand?>(nameof(ActivateControlCommand));
+
+    public ICommand? ActivateControlCommand
+    {
+        get => GetValue(ActivateControlCommandProperty);
+        set => SetValue(ActivateControlCommandProperty, value);
+    }
+
     public FormCanvasControl()
     {
         // ⚠ These two handlers are on THIS control's own attached routed events — they live and die
@@ -151,6 +173,10 @@ public class FormCanvasControl : Control
         DragDrop.SetAllowDrop(this, true);
         AddHandler(DragDrop.DragOverEvent, OnDragOver);
         AddHandler(DragDrop.DropEvent, OnDrop);
+
+        // ⚠ Gestures.DoubleTappedEvent rather than an OnDoubleTapped override: Control does not
+        // offer one, and the gesture is raised by the recognizer, not by the pointer events above.
+        AddHandler(Gestures.DoubleTappedEvent, OnCanvasDoubleTapped);
 
         // ⛔ Focusable so the design view's Ctrl+Z reaches it. A Control is not focusable by
         // default, so without this the keyboard focus stays on the code editor UNDERNEATH the
@@ -288,6 +314,39 @@ public class FormCanvasControl : Control
             {
                 commit.Execute(null);
             }
+        }
+
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// VS's most-used designer gesture: double-click a control, land in its handler.
+    ///
+    /// <para>⚠ Hit-tested afresh rather than trusting <see cref="SelectedControl"/>. The first click
+    /// of the pair does set the selection, but a double-click that began on the background would
+    /// otherwise open a handler for whatever was selected before — on a control the user is not even
+    /// pointing at.</para>
+    /// </summary>
+    private void OnCanvasDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        var document = Document;
+        if (document == null)
+        {
+            return;
+        }
+
+        var control = _transform.HitTest(document, e.GetPosition(this));
+        if (control == null)
+        {
+            return;
+        }
+
+        SelectedControl = control;
+
+        var command = ActivateControlCommand;
+        if (command?.CanExecute(control) == true)
+        {
+            command.Execute(control);
         }
 
         e.Handled = true;
@@ -806,8 +865,14 @@ public class FormCanvasControl : Control
     /// <para>⚠ Recomputed per render rather than stored, because it depends on
     /// <see cref="Visual.Bounds"/>, which changes on every resize and dock move. A stored fit goes
     /// stale on the first tab drag and the form drifts off the edge of the canvas.</para>
+    ///
+    /// <para>⛔ <b>Public because it is the single authority, not because a test wanted in.</b> The
+    /// form is CENTRED at a fitted zoom, so canvas coordinates are not form coordinates and anything
+    /// that needs to know where a control is on screen must ask this. The alternative — each caller
+    /// re-deriving the margin and the centring — is exactly how <c>MinimapControl</c> ended up with
+    /// three copies that drifted, where the picture looks right and the clicks land somewhere else.</para>
     /// </summary>
-    private static FormCanvasTransform Fit(FormDocument document, Size viewport)
+    public static FormCanvasTransform Fit(FormDocument document, Size viewport)
     {
         var surface = FormCanvasTransform.SurfaceSize(document);
         var width = surface.Width;

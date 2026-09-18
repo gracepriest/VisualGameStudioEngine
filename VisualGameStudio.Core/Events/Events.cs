@@ -32,6 +32,19 @@ public record DiagnosticsUpdatedEvent(string FilePath, IReadOnlyList<DiagnosticI
 /// </summary>
 public record DesignerDiagnosticsEvent(string FilePath, IReadOnlyList<DiagnosticItem> Diagnostics);
 
+/// <summary>
+/// "Open this file and put the caret here" — raised by a document, answered by the shell.
+///
+/// <para>⚠ An event rather than a service call because the raiser is a DOCUMENT view model, which
+/// has no reference to the shell that owns the tab well. The form designer's double-click gesture
+/// needs exactly this: it edits the <c>.bas</c> beside the form and then has to take the user to the
+/// handler it just wrote, in a file that is very often not open yet.</para>
+///
+/// <para><paramref name="Line"/> and <paramref name="Column"/> are 1-based, as every position in the
+/// editor and the recognizer is.</para>
+/// </summary>
+public record NavigateToFileEvent(string FilePath, int Line, int Column = 1);
+
 public record ActiveDocumentChangedEvent(string? FilePath);
 public record DocumentDirtyChangedEvent(string FilePath, bool IsDirty);
 

@@ -290,13 +290,33 @@ public sealed record FormControlDef(
     IReadOnlyList<FormPropertyDef> Properties,
     int DefaultWidth = 100,
     int DefaultHeight = 24,
-    FormSchematic Schematic = FormSchematic.Input)
+    FormSchematic Schematic = FormSchematic.Input,
+    string? WinFormsEvent = null,
+    string? WebEvent = null)
 {
     public bool SupportsTarget(FormTarget target) => target switch
     {
         FormTarget.WinForms => WinFormsType != null,
         FormTarget.Web => HtmlTag != null,
         _ => false
+    };
+
+    /// <summary>
+    /// The event a double-click on this control means, in the TARGET's vocabulary (D8) — the
+    /// WinForms <c>Click</c> against the DOM's <c>click</c>, and genuinely different events where the
+    /// two platforms disagree: a <c>TextBox</c> raises <c>TextChanged</c> and an <c>&lt;input&gt;</c>
+    /// fires <c>input</c>.
+    ///
+    /// <para>⛔ Deliberately NOT defaulted to Click. A row that forgets to declare its event returns
+    /// null here and the gesture refuses by name, which someone fixes; a silent default would give a
+    /// new control kind a Click handler that is wrong for most of the catalog and wrong invisibly —
+    /// the same "widen the default" failure this table exists to prevent.</para>
+    /// </summary>
+    public string? DefaultEvent(FormTarget target) => target switch
+    {
+        FormTarget.WinForms => WinFormsEvent,
+        FormTarget.Web => WebEvent,
+        _ => null
     };
 
     public FormPropertyDef? Property(string name) =>
@@ -358,7 +378,8 @@ public static class FormControlCatalog
     public static readonly IReadOnlyList<FormControlDef> All = new List<FormControlDef>
     {
         new("Label",       "Label",       "label",    null,       false, Common(Text, TextAlign),
-            DefaultWidth: 100, DefaultHeight: 23, Schematic: FormSchematic.Text),
+            DefaultWidth: 100, DefaultHeight: 23, Schematic: FormSchematic.Text,
+            WinFormsEvent: "Click", WebEvent: "click"),
         new("TextBox",     "TextBox",     "input",    "text",     false, Common(
             Text,
             new FormPropertyDef("Multiline", FormPropertyType.Bool, "false"),
@@ -367,11 +388,16 @@ public static class FormControlCatalog
             // WinForms PasswordChar is a char, not a string — assigning one is CS0029.
             new FormPropertyDef("PasswordChar", FormPropertyType.String,
                 WinFormsFactory: "Convert.ToChar")),
-            DefaultWidth: 100, DefaultHeight: 23),
+            DefaultWidth: 100, DefaultHeight: 23,
+            // ⚠ The DOM has no TextChanged. `input` fires per keystroke, which is what TextChanged
+            // means; `change` fires on blur and would be a different gesture wearing the same name.
+            WinFormsEvent: "TextChanged", WebEvent: "input"),
         new("Button",      "Button",      "button",   null,       false, Common(Text, TextAlign),
-            DefaultWidth: 75, DefaultHeight: 23, Schematic: FormSchematic.Button),
+            DefaultWidth: 75, DefaultHeight: 23, Schematic: FormSchematic.Button,
+            WinFormsEvent: "Click", WebEvent: "click"),
         new("CheckBox",    "CheckBox",    "input",    "checkbox", false, Common(Text, Checked),
-            DefaultWidth: 104, DefaultHeight: 24, Schematic: FormSchematic.Check),
+            DefaultWidth: 104, DefaultHeight: 24, Schematic: FormSchematic.Check,
+            WinFormsEvent: "CheckedChanged", WebEvent: "change"),
         new("RadioButton", "RadioButton", "input",    "radio",    false, Common(
             Text,
             Checked,
@@ -379,13 +405,15 @@ public static class FormControlCatalog
             // has no GroupName property at all — csc says CS1061, BasicLang says nothing.
             new FormPropertyDef("GroupName", FormPropertyType.String,
                 Targets: new[] { FormTarget.Web })),
-            DefaultWidth: 104, DefaultHeight: 24, Schematic: FormSchematic.Radio),
+            DefaultWidth: 104, DefaultHeight: 24, Schematic: FormSchematic.Radio,
+            WinFormsEvent: "CheckedChanged", WebEvent: "change"),
         new("ComboBox",    "ComboBox",    "select",   null,       false, Common(
             Text,
             // Items is a get-only collection on WinForms — assigning it is CS0200.
             new FormPropertyDef("Items", FormPropertyType.String, IsItemCollection: true),
             new FormPropertyDef("SelectedIndex", FormPropertyType.Int, "-1")),
-            DefaultWidth: 121, DefaultHeight: 23, Schematic: FormSchematic.Dropdown),
+            DefaultWidth: 121, DefaultHeight: 23, Schematic: FormSchematic.Dropdown,
+            WinFormsEvent: "SelectedIndexChanged", WebEvent: "change"),
         new("ListBox",     "ListBox",     "select",   null,       false, Common(
             new FormPropertyDef("Items", FormPropertyType.String, IsItemCollection: true),
             new FormPropertyDef("SelectedIndex", FormPropertyType.Int, "-1"),
@@ -394,14 +422,20 @@ public static class FormControlCatalog
             // web-only rather than being silently approximated.
             new FormPropertyDef("MultiSelect", FormPropertyType.Bool, "false",
                 Targets: new[] { FormTarget.Web })),
-            DefaultWidth: 120, DefaultHeight: 95, Schematic: FormSchematic.List),
+            DefaultWidth: 120, DefaultHeight: 95, Schematic: FormSchematic.List,
+            WinFormsEvent: "SelectedIndexChanged", WebEvent: "change"),
         new("Panel",       "Panel",       "div",      null,       true,  Common(
             new FormPropertyDef("BorderStyle", FormPropertyType.Enum, "None",
                 new[] { "None", "FixedSingle", "Fixed3D" },
                 WinFormsEnumType: "BorderStyle")),
-            DefaultWidth: 200, DefaultHeight: 100, Schematic: FormSchematic.Container),
+            DefaultWidth: 200, DefaultHeight: 100, Schematic: FormSchematic.Container,
+            // ⚠ VS opens a Panel on Paint. That handler takes a PaintEventArgs and is for drawing,
+            // not for a gesture — Click is the event a double-click in THIS designer can honestly
+            // stub, and the Events tab (Task 23) is where the rest will be reachable.
+            WinFormsEvent: "Click", WebEvent: "click"),
         new("GroupBox",    "GroupBox",    "fieldset", null,       true,  Common(Text),
-            DefaultWidth: 200, DefaultHeight: 100, Schematic: FormSchematic.Group),
+            DefaultWidth: 200, DefaultHeight: 100, Schematic: FormSchematic.Group,
+            WinFormsEvent: "Click", WebEvent: "click"),
         new("PictureBox",  "PictureBox",  "img",      null,       false, Common(
             // WinForms Image is a System.Drawing.Image, not a path string (CS0029).
             new FormPropertyDef("Image", FormPropertyType.String,
@@ -409,7 +443,8 @@ public static class FormControlCatalog
             new FormPropertyDef("SizeMode", FormPropertyType.Enum, "Normal",
                 new[] { "Normal", "StretchImage", "AutoSize", "CenterImage", "Zoom" },
                 WinFormsEnumType: "PictureBoxSizeMode")),
-            DefaultWidth: 100, DefaultHeight: 50, Schematic: FormSchematic.Image),
+            DefaultWidth: 100, DefaultHeight: 50, Schematic: FormSchematic.Image,
+            WinFormsEvent: "Click", WebEvent: "click"),
     };
 
     public static FormControlDef? Find(string kind) =>

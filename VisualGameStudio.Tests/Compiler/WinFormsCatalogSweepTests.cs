@@ -160,6 +160,59 @@ public class WinFormsCatalogSweepTests
             $"the designer's own output for a '{kind}' with every catalog property set must compile.");
     }
 
+    /// <summary>
+    /// Task 22's half of the same problem: an EVENT name is exactly as unfalsifiable as a property
+    /// name, and by the same mechanism.
+    ///
+    /// <para>⛔⛔ <c>AddHandler ctl.CheckedChange, AddressOf ctl_CheckedChange</c> — one letter short
+    /// — types as <c>Object</c> in BasicLang, emits without a word of complaint, and produces a
+    /// control whose handler never fires. Nothing in the designer, the document or the region writer
+    /// can tell that from the correct spelling. csc can, because the emitted C# declares the real
+    /// <c>CheckBox</c>, so this drives the WHOLE gesture — catalog event, generated stub, generated
+    /// wiring — through it.</para>
+    ///
+    /// <para>⚠ Deliberately built from <see cref="FormHandlers.PlanDefault"/> rather than a
+    /// hand-written stub. A test that wrote its own <c>Sub</c> would gate the catalog's event name
+    /// and silently stop gating the signature the designer actually generates.</para>
+    /// </summary>
+    [TestCaseSource(nameof(EveryWinFormsControl))]
+    [Category("Integration")]
+    public void TheDefaultEvent_OfEveryControl_WiresIntoCSharpThatCscAccepts(string kind)
+    {
+        var definition = FormControlCatalog.Find(kind)!;
+        var form = new FormDocument
+        {
+            Target = FormTarget.WinForms, Name = "SweepForm", Width = 800, Height = 450, Text = "Sweep"
+        };
+
+        var control = new FormControl
+        {
+            Kind = definition.Kind,
+            Id = "ctl",
+            TabIndex = 0,
+            Geometry = new PixelGeometry { X = 96, Y = 80, Width = 120, Height = 24 }
+        };
+        form.Controls.Add(control);
+
+        // The gesture's own output: the stub it writes, where it chooses to put it.
+        var plan = FormHandlers.PlanDefault(
+            form, control, FormScaffolder.Create("SweepForm", FormTarget.WinForms).CodeText);
+
+        Assert.That(plan.Outcome, Is.EqualTo(HandlerOutcome.Created),
+            $"'{kind}' could not be double-clicked: {plan.Refusal}");
+
+        FormHandlers.EnsureBind(control, plan.EventName, plan.Handler);
+
+        var written = RegionWriter.Write("SweepForm.bas", plan.CodeText, form, "SweepForm.blform");
+        Assert.That(written.Refused, Is.False,
+            "the region writer refused: " + string.Join("; ", written.Diagnostics.Select(d => d.Format())));
+
+        WinFormsCompile.AssertCompiles(
+            CompileToCSharp(written.Text),
+            $"a '{kind}' wired to its default event '{plan.EventName}' must compile — a misspelled " +
+            "event name is invisible everywhere else.");
+    }
+
     [Test]
     [Category("Integration")]
     public void AHexColour_Compiles_EvenThoughItCannotBeEmittedVerbatim()
