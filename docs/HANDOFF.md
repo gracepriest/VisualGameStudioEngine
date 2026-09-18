@@ -800,11 +800,9 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   initializer half was missing.
   ⚠ **C++ had the SAME GAP and it is FIXED too, as of 2026-09-18** — see the C++ entry below.
   JavaScript (`5,hi`) and C# (`public int N = 5;`) were correct all along.
-  ⚠ **A NON-LITERAL initializer is dropped in the IR, for every backend.**
-  `BuildConstantFieldInitializer` keeps only a literal or unary +/- on one, so
-  `Public N As Integer = 2 + 3` reads 0 on JavaScript and MSIL alike and C# emits
-  `public int N;`. A front-end gap, not a backend one — and the reason every test here uses a
-  plain literal.
+  ⚠ **A NON-LITERAL initializer was dropped in the IR, for every backend — FIXED as of
+  2026-09-18**, see the entry below. It is why every test in the two field-initializer fixtures
+  uses a plain literal.
   ⚠ **An auto-property initializer does not PARSE**: `Public Property X As Integer = 5` is
   "Unexpected token in class: '='".
   ⚠ **The initializer-before-array-sizing precedence is UNREACHABLE, not load-bearing** — measured:
@@ -872,6 +870,41 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   ⚠ **`CStr(Double)` → `2.500000` and `CStr(Boolean)` → `True` on C++** are the long-recorded
   divergences above, not this fix's; the tests assert C++'s own spelling rather than normalising
   it away.
+
+  ⚠ **A NON-LITERAL field initializer FOLDS as of 2026-09-18** — `FieldInitializerFoldTests`,
+  `IRBuilder.BuildConstantFieldInitializer` + the extracted `TryFoldInitializerToConstant`.
+  ⛔ **Measured before**: every constant EXPRESSION was dropped silently and the field read its
+  type's zero. `2 + 3`, `2 * 3 + 1`, `(1 + 2) * 3` and `8 \ 2` each emitted a bare
+  `public int N;` on C# and printed **0** on JavaScript; `"a" & "b"` gave `public string N;` and
+  an empty string; `True And False` and `1 < 2` gave `public bool N;` and False. Only a bare
+  literal and unary +/- on one ever survived.
+  ⚠ **ONE foldability decision, shared with module scope.** The scratch-function + fixpoint-fold
+  core came OUT of `BuildModuleScopeInitializer` into `TryFoldInitializerToConstant`, which both
+  call. Measured, a field and a global now agree shape for shape — including agreeing to REFUSE
+  `Long = 3000000000 + 1`. They differ only in what they do with a null answer.
+  ⛔ **A non-constant initializer is now REFUSED, not dropped** — "the field 'N' has an
+  initializer that cannot be computed at compile time … assign it in a constructor instead". This
+  is the one BEHAVIOUR CHANGE for programs that used to compile: `= Helper()` and `= CInt(2.5)`
+  built before and read **0**. Running initializer code would mean lowering it into every
+  constructor on every backend, which none of them does; the refusal is the honest answer until
+  that exists. ⚠ **The LOCAL path still accepts both** (`Dim h As Integer = Helper()` computes
+  4) — that divergence was already true of module-scope globals and is now shared by fields.
+  ⛔ **Deleting the literal fast path FIXED A SECOND, UNRELATED BUG.** It coerced a Decimal
+  field's literal to a double, so `Public M As Decimal = 1.5` emitted `public decimal M = 1.5;`
+  and the real C#-backend build failed with **CS0664** ("use an 'M' suffix"). The general
+  lowering emits `1.5m`. The shortcut was kept at first to make the change additive, then removed
+  once measurement showed no test could tell it from the fold and the one shape where they DID
+  differ was the shortcut being wrong. `CoerceConstantToType` went with it, and so did
+  re-stamping the declared type onto the result — both measured inert by diffing the emitted C#
+  for fifteen literal and seven folded shapes.
+  ⛔ **A CLASS DECLARED AFTER THE MODULE does not resolve its members' TYPES** — PRE-EXISTING,
+  measured on a plain LITERAL initializer so it is nothing to do with folding. C++ emits
+  `void* t1; t1 = c->N;` and fails to compile; MSIL throws `MissingFieldException: Field not
+  found: 'Box.N'`. The same file with the class FIRST emits `int32_t t1` and is clean. Every
+  fixture orders the class first for this reason.
+  ⚠ **Narrowing shapes are refused by the SEMANTIC ANALYZER, before any of this** —
+  `Public N As Single = 1.5 + 1.0` is "Cannot assign value of type 'Double' to variable of type
+  'Single'", before and after. Not a folding gap.
   ⛔ **Also pre-existing and unrelated: `CStr(Boolean)` prints `true` on JavaScript** where C# and
   MSIL print `True`. Measured on a plain local, no module scope involved. Pinned as each backend
   actually behaves rather than normalised away.

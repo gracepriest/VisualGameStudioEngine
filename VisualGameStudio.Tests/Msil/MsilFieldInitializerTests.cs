@@ -27,11 +27,11 @@ namespace VisualGameStudio.Tests.Msil;
 /// values are IN-CLASS member initializers, because the emitted class often has no constructor at
 /// all; here they are constructor stores, because IL has no such thing.</para>
 ///
-/// <para>⚠ NOT a backend gap, and shared by everyone: a NON-LITERAL initializer is dropped in the
-/// IR. <c>BuildConstantFieldInitializer</c> keeps only a literal or unary +/- on one, so
-/// <c>Public N As Integer = 2 + 3</c> reads 0 on JavaScript and MSIL alike and C# emits
-/// <c>public int N;</c>. A front-end fix, not this one — and the reason every case here uses a
-/// plain literal.</para>
+/// <para>⚠ NOT a backend gap, and shared by everyone: a NON-LITERAL initializer was dropped in
+/// the IR — <c>Public N As Integer = 2 + 3</c> read 0 on JavaScript and MSIL alike and C# emitted
+/// <c>public int N;</c>. A front-end fix, not this one, and made straight after in
+/// <c>FieldInitializerFoldTests</c> / <c>IRBuilder.TryFoldInitializerToConstant</c>. It is why
+/// every case in THIS fixture uses a plain literal.</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]

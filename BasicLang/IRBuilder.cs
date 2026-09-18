@@ -819,6 +819,47 @@ namespace BasicLang.Compiler.IR
         private IRValue BuildModuleScopeInitializer(
             ExpressionNode initializer, string name, string what, TypeInfo declared)
         {
+            var folded = TryFoldInitializerToConstant(initializer, name, declared);
+            if (folded != null) return NarrowModuleScopeConstant(folded, declared, name, what);
+
+            throw new Exception(
+                $"Line {_currentSourceLine}: the module-level {what} '{name}' has an initializer "
+                + "that cannot be computed at compile time. Only a constant expression is "
+                + "supported at module scope; assign it in Main (or another procedure) instead.");
+        }
+
+        /// <summary>
+        /// Lower <paramref name="initializer"/> in a throwaway function and fold it to a single
+        /// compile-time value, or null when it is not constant.
+        ///
+        /// <para>⚠ Shared by the two declaration sites that need an initializer to BE a constant
+        /// before any backend sees it: module-scope globals
+        /// (<see cref="BuildModuleScopeInitializer"/>) and class fields
+        /// (<see cref="BuildConstantFieldInitializer"/>). They differ in what they do when this
+        /// returns null, not in what counts as constant — one place to decide foldability is the
+        /// only way the two cannot drift apart.</para>
+        ///
+        /// <para>⚠ A scratch function gives expression lowering somewhere to put its
+        /// instructions. Without one, lowering names its temps through
+        /// <c>_currentFunction.GetNextTempName()</c>, so every initializer needing a temp
+        /// dereferenced null and the compiler died with <c>Error at line 0: Object reference not
+        /// set to an instance of an object</c>. It is deliberately NOT created through
+        /// <c>_module.CreateFunction</c>: that registers it, and every backend would emit a stray
+        /// function per initialized declaration.</para>
+        ///
+        /// <para>⚠ Folding has to happen HERE and not in the optimizer: the initializer must be a
+        /// constant for the backends to emit it at all, and the optimizer does not run on every
+        /// path (the non-optimizing test helper, <c>--O0</c>). An invariant the backends depend on
+        /// cannot be established by a pass that is sometimes skipped.</para>
+        ///
+        /// <para>⛔ <c>CInt(...)</c> / <c>CDbl(...)</c> are NOT casts — measured, they lower to an
+        /// IRCall, so neither pass touches them and they do not fold. That is a separate gap
+        /// (constant-folding the conversion FUNCTIONS) and for CInt it is a welcome one, because
+        /// the backends do not agree on what it means.</para>
+        /// </summary>
+        private IRValue TryFoldInitializerToConstant(
+            ExpressionNode initializer, string name, TypeInfo declared)
+        {
             var savedFunction = _currentFunction;
             var savedBlock = _currentBlock;
 
@@ -826,66 +867,65 @@ namespace BasicLang.Compiler.IR
             _currentFunction = scratch;
             _currentBlock = scratch.CreateBlock("entry");
 
-            initializer.Accept(this);
-
-            // ⛔ THE COERCION THE GLOBAL PATH NEVER HAD, and the whole reason a module-scope
-            // `Dim v As Integer = 7.9` produced GARBAGE. The LOCAL branch of
-            // Visit(VariableDeclarationNode) has always coerced to the DECLARED type; this one
-            // stored whatever the initializer happened to carry, so a Double literal went
-            // straight into an Integer global and each backend reinterpreted its bits. Measured
-            // on MSIL at module scope, `Dim v As T = 7.9` printed: Byte 154, SByte -102, Short
-            // and UShort an EMPTY STRING, Integer -1717986918, UInteger 2576980378, Long and
-            // ULong 4620580627691444634 — which is the IEEE-754 bit pattern of 7.9 read as an
-            // integer. The same declarations as LOCALS printed 7 throughout.
-            var lowered = CoerceToDeclaredType(_expressionResult, declared);
-            var emitted = _currentBlock.Instructions;
-
-            _currentFunction = savedFunction;
-            _currentBlock = savedBlock;
-
-            // Nothing emitted: the expression was already a self-contained value — a literal, or
-            // a reference to an already-constant global. This is the shape that always worked,
-            // and it must keep taking the value lowering produced rather than anything folded.
-            if (emitted.Count == 0) return NarrowModuleScopeConstant(lowered, declared, name, what);
-
-            var scratchModule = new IRModule("<init>");
-            scratchModule.Functions.Add(scratch);
-
-            // ⚠ A FIXPOINT over both passes, because neither order alone is enough, measured
-            // on two shapes that need OPPOSITE orders:
-            //   `7 / 2`        -- the casts must fold first; until they do, the division's
-            //                     operands are IRCast and TryFoldBinary declines them.
-            //   `(1 + 2) / 4`  -- the addition must fold first; until it does, the promoting
-            //                     cast's operand is an IRBinaryOp rather than a constant.
-            // Alternating until nothing changes covers both without caring which it was handed.
-            // Bounded so a pass reporting a modification without making progress cannot spin.
-            //
-            // ⛔ `CInt(...)` / `CDbl(...)` are NOT casts — measured, they lower to an IRCall, so
-            // neither pass touches them and they are still refused at module scope. That is a
-            // separate gap (constant-folding the conversion FUNCTIONS) and for CInt it is a
-            // welcome one, because the backends do not agree on what it means.
-            var folding = new Optimization.ConstantFoldingPass();
-            var wideningCasts = new Optimization.WideningCastFoldingPass();
-            for (var round = 0; round < 16; round++)
+            try
             {
-                var changed = folding.Run(scratchModule);
-                changed |= wideningCasts.Run(scratchModule);
-                if (!changed) break;
-            }
+                initializer.Accept(this);
 
-            // Folding rewrites each instruction in place, so a fully constant expression leaves
-            // a list of nothing but constants, and the LAST one is the result: lowering is
-            // bottom-up and the outermost operation is emitted last.
-            if (emitted.Count > 0 && emitted.All(i => i is IRConstant))
+                // ⛔ THE COERCION THE GLOBAL PATH NEVER HAD, and the whole reason a module-scope
+                // `Dim v As Integer = 7.9` produced GARBAGE. The LOCAL branch of
+                // Visit(VariableDeclarationNode) has always coerced to the DECLARED type; this one
+                // stored whatever the initializer happened to carry, so a Double literal went
+                // straight into an Integer global and each backend reinterpreted its bits. Measured
+                // on MSIL at module scope, `Dim v As T = 7.9` printed: Byte 154, SByte -102, Short
+                // and UShort an EMPTY STRING, Integer -1717986918, UInteger 2576980378, Long and
+                // ULong 4620580627691444634 — which is the IEEE-754 bit pattern of 7.9 read as an
+                // integer. The same declarations as LOCALS printed 7 throughout.
+                var lowered = CoerceToDeclaredType(_expressionResult, declared);
+                var emitted = _currentBlock.Instructions;
+
+                // Nothing emitted: the expression was already a self-contained value — a literal,
+                // or a reference to an already-constant global. This is the shape that always
+                // worked, and it must keep taking the value lowering produced rather than anything
+                // folded. Note this can be a NON-constant IRValue; each caller decides whether it
+                // can use one.
+                if (emitted.Count == 0) return lowered;
+
+                var scratchModule = new IRModule("<init>");
+                scratchModule.Functions.Add(scratch);
+
+                // ⚠ A FIXPOINT over both passes, because neither order alone is enough, measured
+                // on two shapes that need OPPOSITE orders:
+                //   `7 / 2`        -- the casts must fold first; until they do, the division's
+                //                     operands are IRCast and TryFoldBinary declines them.
+                //   `(1 + 2) / 4`  -- the addition must fold first; until it does, the promoting
+                //                     cast's operand is an IRBinaryOp rather than a constant.
+                // Alternating until nothing changes covers both without caring which it was handed.
+                // Bounded so a pass reporting a modification without making progress cannot spin.
+                var folding = new Optimization.ConstantFoldingPass();
+                var wideningCasts = new Optimization.WideningCastFoldingPass();
+                for (var round = 0; round < 16; round++)
+                {
+                    var changed = folding.Run(scratchModule);
+                    changed |= wideningCasts.Run(scratchModule);
+                    if (!changed) break;
+                }
+
+                // Folding rewrites each instruction in place, so a fully constant expression leaves
+                // a list of nothing but constants, and the LAST one is the result: lowering is
+                // bottom-up and the outermost operation is emitted last.
+                return emitted.All(i => i is IRConstant)
+                    ? (IRValue)emitted[emitted.Count - 1]
+                    : null;
+            }
+            finally
             {
-                return NarrowModuleScopeConstant(
-                    (IRValue)emitted[emitted.Count - 1], declared, name, what);
+                // In a finally because a caller may turn "not constant" into a thrown diagnostic,
+                // and the builder's cursor must not be left pointing at the scratch block either
+                // way. The original inline version restored before folding; folding reads the
+                // scratch MODULE, not the cursor, so restoring after it is equivalent.
+                _currentFunction = savedFunction;
+                _currentBlock = savedBlock;
             }
-
-            throw new Exception(
-                $"Line {_currentSourceLine}: the module-level {what} '{name}' has an initializer "
-                + "that cannot be computed at compile time. Only a constant expression is "
-                + "supported at module scope; assign it in Main (or another procedure) instead.");
         }
 
         public void Visit(TypeDefineNode node)
@@ -942,7 +982,7 @@ namespace BasicLang.Compiler.IR
                         Type = fieldType,
                         Access = MapAccessModifier(varDecl.Access),
                         IsStatic = varDecl.IsStatic,
-                        Initializer = BuildConstantFieldInitializer(varDecl.Initializer, fieldType)
+                        Initializer = BuildConstantFieldInitializer(varDecl.Initializer, fieldType, varDecl.Name)
                     };
                     irClass.Fields.Add(field);
                 }
@@ -1200,71 +1240,68 @@ namespace BasicLang.Compiler.IR
         }
 
         /// <summary>
-        /// Build a constant IR value for a class field initializer. Handles
-        /// literals and unary +/- on numeric literals (e.g. "= 400", "= -5",
-        /// "= 5.0"), coercing the value to the field's declared type so the
-        /// backend emits valid C# (e.g. a Single field gets a float literal).
-        /// Non-constant initializers return null and the field is emitted
-        /// without an initializer, as before.
+        /// Build a constant IR value for a class field initializer, coercing it to the field's
+        /// declared type so the backend emits a valid literal (e.g. a Single field gets a float).
+        ///
+        /// <para>⛔ A NON-LITERAL initializer used to be dropped SILENTLY, and the field read its
+        /// type's zero. Measured before, on every shape that is arithmetically constant:
+        /// <c>2 + 3</c>, <c>2 * 3 + 1</c>, <c>(1 + 2) * 3</c>, <c>8 \ 2</c>, <c>7.0 / 2.0</c> and
+        /// <c>7 / 2</c> all emitted a bare <c>public int N;</c> on C# and printed <b>0</b> on
+        /// JavaScript; <c>"a" &amp; "b"</c> gave <c>public string N;</c> and an empty string;
+        /// <c>True And False</c> and <c>1 &lt; 2</c> gave <c>public bool N;</c> and False. Only a
+        /// bare literal and unary +/- on one ever survived.</para>
+        ///
+        /// <para>⚠ ONE path, not two. A literal fast path (the old <c>LiteralExpressionNode</c> /
+        /// unary +/- match) was kept here at first so the change would be strictly additive, and
+        /// then REMOVED because it was measurably wrong: no test could tell it from the general
+        /// fold, and the one shape where the two DID differ, the fast path was the broken one.
+        /// <c>Public M As Decimal = 1.5</c> emitted <c>public decimal M = 1.5;</c> through it,
+        /// which is not valid C# — the real C#-backend build failed with <b>CS0664</b>, "Literal
+        /// of type double cannot be implicitly converted to type 'decimal'; use an 'M' suffix".
+        /// The general lowering emits <c>1.5m</c> and builds. So this also fixes a PRE-EXISTING
+        /// Decimal-field bug that had nothing to do with non-literal initializers.</para>
+        ///
+        /// <para>⚠ Everything now goes through the SAME foldability decision module-scope globals
+        /// use (<see cref="TryFoldInitializerToConstant"/>), so a field and a global cannot
+        /// disagree about what counts as a compile-time constant. Measured, they agree shape for
+        /// shape — including where they agree to REFUSE (<c>Long = 3000000000 + 1</c> is declined
+        /// by both).</para>
+        ///
+        /// <para>⚠ Which is also why this returns the folded constant AS IS. A second coercion
+        /// here (the old <c>CoerceConstantToType</c>) went with the fast path, and the helper with
+        /// it; re-stamping the field's declared type onto the result went too. The fold's own
+        /// <c>CoerceToDeclaredType</c> has already done both by the time it returns — measured by
+        /// diffing the emitted C# for fifteen literal shapes and seven folded ones across both
+        /// removals, identical in every case, and no test could tell either apart. What is left is
+        /// the whole of this method's job: ask, and refuse if the answer is no.</para>
+        ///
+        /// <para>⛔ What genuinely is not constant is REFUSED, not dropped. <c>Helper()</c> and
+        /// <c>CInt(2.5)</c> need code to run, and a field initializer that runs code would have to
+        /// be lowered into every constructor on every backend — which no backend here does. The
+        /// old silent drop turned that into a field reading 0 with no diagnostic anywhere; a
+        /// refusal naming the constructor is the honest answer until that lowering exists.</para>
+        ///
+        /// <para>⚠ Two neighbouring shapes cannot reach this at all, both PRE-EXISTING and
+        /// measured: a <c>Const</c> inside a class does not PARSE ("Unexpected token in class:
+        /// 'Const'"), so a named constant can never be referenced from a field initializer; and a
+        /// <c>Structure</c> field initializer does not parse either ("Expected member name but
+        /// found Assignment"), which makes the structure call site unreachable for initializers.
+        /// </para>
         /// </summary>
-        private IRConstant BuildConstantFieldInitializer(ExpressionNode initializer, TypeInfo fieldType)
+        private IRConstant BuildConstantFieldInitializer(
+            ExpressionNode initializer, TypeInfo fieldType, string fieldName)
         {
             if (initializer == null) return null;
 
-            object value = null;
-            if (initializer is LiteralExpressionNode literal)
+            if (TryFoldInitializerToConstant(initializer, fieldName, fieldType) is IRConstant folded)
             {
-                value = literal.Value;
-            }
-            else if (initializer is UnaryExpressionNode unary
-                     && unary.Operand is LiteralExpressionNode operand
-                     && (unary.Operator == "-" || unary.Operator == "+"))
-            {
-                value = operand.Value;
-                if (unary.Operator == "-")
-                {
-                    value = value switch
-                    {
-                        int i => -i,
-                        long l => -l,
-                        double d => -d,
-                        float f => -f,
-                        decimal m => -m,
-                        _ => value
-                    };
-                }
+                return folded;
             }
 
-            if (value == null) return null;
-
-            value = CoerceConstantToType(value, fieldType);
-            return new IRConstant(value, fieldType);
-        }
-
-        private static object CoerceConstantToType(object value, TypeInfo fieldType)
-        {
-            var typeName = fieldType?.Name?.ToLowerInvariant();
-            try
-            {
-                switch (typeName)
-                {
-                    case "single":
-                    case "float":
-                        return Convert.ToSingle(value);
-                    case "double":
-                        return Convert.ToDouble(value);
-                    case "long":
-                        return Convert.ToInt64(value);
-                    case "integer":
-                    case "int":
-                        return value is double || value is float ? value : Convert.ToInt32(value);
-                }
-            }
-            catch
-            {
-                // Leave the value unconverted; the backend renders it as-is.
-            }
-            return value;
+            throw new Exception(
+                $"Line {(initializer.Line > 0 ? initializer.Line : _currentSourceLine)}: the field "
+                + $"'{fieldName}' has an initializer that cannot be computed at compile time. Only "
+                + "a constant expression is supported here; assign it in a constructor instead.");
         }
 
         public void Visit(InterfaceNode node)
@@ -1442,7 +1479,7 @@ namespace BasicLang.Compiler.IR
                     Type = fieldType,
                     Access = MapAccessModifier(member.Access),
                     IsStatic = member.IsStatic,
-                    Initializer = BuildConstantFieldInitializer(member.Initializer, fieldType)
+                    Initializer = BuildConstantFieldInitializer(member.Initializer, fieldType, member.Name)
                 });
             }
 
