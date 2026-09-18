@@ -434,6 +434,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <summary>The events of the class being emitted, by name — what a <c>raise_X</c> call resolves against.</summary>
         private Dictionary<string, IREvent> _currentClassEvents = new Dictionary<string, IREvent>(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>
+        /// STATIC members in scope for the class being emitted, mapped to their DECLARING class's
+        /// name. Per-class state like <see cref="_currentClassEvents"/>; see
+        /// <see cref="StaticMemberOwners"/> for what it fixes.
+        /// </summary>
+        private Dictionary<string, string> _staticMemberOwners =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
         private void EmitClass(IRClass irClass, IRModule module)
         {
             _currentClassEvents = new Dictionary<string, IREvent>(StringComparer.OrdinalIgnoreCase);
@@ -463,6 +471,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             _indentLevel++;
 
             var members = MemberNames(irClass, module);
+            _staticMemberOwners = StaticMemberOwners(irClass, module);
 
             foreach (var field in irClass.Fields ?? new List<IRField>())
             {
@@ -496,6 +505,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             _currentClassEvents = new Dictionary<string, IREvent>(StringComparer.OrdinalIgnoreCase);
             _currentClassMethods = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            _staticMemberOwners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -523,6 +533,58 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             return names;
         }
+
+        /// <summary>
+        /// Every STATIC member name in scope for <paramref name="irClass"/>, mapped to the JS name
+        /// of the class that DECLARES it.
+        ///
+        /// <para>⛔ Without this a Shared member was read and written through <c>this</c>. The class
+        /// emitted <c>static K = 9;</c> and its methods emitted <c>this.K</c> — which is undefined
+        /// for a JS static, so a read answered <b>undefined</b> and a write silently created an
+        /// INSTANCE property shadowing nothing. Measured: <c>a.Bump()</c> then <c>b.Read()</c> on
+        /// two instances printed <b>undefined</b> on JavaScript where C++ printed <b>7</b>, so
+        /// Shared did not mean shared. A single-instance probe hides it — the write's own instance
+        /// property reads back fine, which is why this needs two objects to show.</para>
+        ///
+        /// <para>⚠ The DECLARING class, not the current one, because a write must land where the
+        /// field lives: JS resolves a static READ up the prototype chain, but
+        /// <c>Derived.K = 7</c> creates a NEW static on Derived and leaves Base's untouched. First
+        /// writer wins while walking up, so a nearer class shadows a farther one — the same
+        /// precedence <see cref="MemberNames"/> gives instance members.</para>
+        /// </summary>
+        private static Dictionary<string, string> StaticMemberOwners(IRClass irClass, IRModule module)
+        {
+            var owners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            var current = irClass;
+            while (current != null && seen.Add(current.Name))
+            {
+                foreach (var f in current.Fields ?? new List<IRField>())
+                    if (f?.Name != null && f.IsStatic && !owners.ContainsKey(f.Name))
+                        owners[f.Name] = current.Name;
+                foreach (var p in current.Properties ?? new List<IRProperty>())
+                    if (p?.Name != null && p.IsStatic && !owners.ContainsKey(p.Name))
+                        owners[p.Name] = current.Name;
+                foreach (var e in current.Events ?? new List<IREvent>())
+                    if (e?.Name != null && e.IsStatic && !owners.ContainsKey(e.Name))
+                        owners[e.Name] = current.Name;
+
+                if (string.IsNullOrEmpty(current.BaseClass)) break;
+                module.Classes.TryGetValue(current.BaseClass, out current);
+            }
+
+            return owners;
+        }
+
+        /// <summary>
+        /// The reference a member name lowers to inside a class body: <c>Owner.X</c> for a STATIC
+        /// member, <c>this.X</c> otherwise. One place, so a read and a write cannot disagree.
+        /// </summary>
+        private string MemberReference(string rawName, string jsName) =>
+            _staticMemberOwners.TryGetValue(rawName, out var owner)
+                ? $"{SanitizeName(owner)}.{jsName}"
+                : $"this.{jsName}";
 
         private void EmitProperty(IRProperty prop, HashSet<string> members)
         {
@@ -1525,7 +1587,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // (IRBuilder renames a result to the variable it initialises), so a `const` here
             // would declare a fresh local and the member would never change — the method
             // would silently do nothing. Checked BEFORE the globals: class scope is nearer.
-            if (allowMember && _memberNames.Contains(name)) { Line($"this.{js} = {expression};"); return; }
+            if (allowMember && _memberNames.Contains(name))
+            { Line($"{MemberReference(name, js)} = {expression};"); return; }
 
             // A module-level Dim — assign.
             if (_globalNames.Contains(name)) { Line($"{js} = {expression};"); return; }
@@ -2635,7 +2698,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (_declaredNames.Contains(v.Name)) return name;   // parameter or local shadows
             if (!_memberNames.Contains(v.Name)) return name;
 
-            return $"this.{name}";
+            return MemberReference(v.Name, name);
         }
 
         /// <summary>

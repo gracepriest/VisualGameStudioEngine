@@ -33,17 +33,19 @@ namespace VisualGameStudio.Tests.Compiler;
 /// already "Cannot assign to constant", and a class Const that quietly became a writable static
 /// field would be the one scope where that check vanished. Asserted below.</para>
 ///
-/// <para>⛔ TWO shapes inherit PRE-EXISTING <c>Shared</c> defects and are NOT this change's,
-/// each verified on a plain <c>Shared</c> field with this change stashed:</para>
+/// <para>⛔ TWO shapes inherited PRE-EXISTING <c>Shared</c> defects and were NOT this change's,
+/// each verified on a plain <c>Shared</c> field with this change stashed. <b>The first has since
+/// been FIXED</b>; the second is still open:</para>
 ///
 /// <list type="bullet">
-/// <item><b>JavaScript reads it as <c>undefined</c>.</b> The class emits <c>static K = 9;</c> and
-/// the method reads <c>this.K</c>, which is undefined for a static in JS. A plain
-/// <c>Public Shared K As Integer = 9</c> does exactly the same on the pre-change compiler, so this
-/// is the JS backend's static-read lowering, not the Const path.</item>
+/// <item><b>JavaScript read it as <c>undefined</c> — FIXED.</b> The class emitted
+/// <c>static K = 9;</c> and the method read <c>this.K</c>, which is undefined for a static in JS.
+/// It was the JS backend's static lowering rather than the Const path, exactly as recorded, and
+/// fixing that there fixed this: a class Const now emits <c>return Box.K;</c> and runs 9, so the
+/// headline test below asserts all FOUR backends. See <c>JavaScriptSharedMemberTests</c>.</item>
 /// <item><b>Reading it from OUTSIDE (<c>Box.K</c>) does not compile on C++</b> —
 /// <c>t0 = Box-&gt;K;</c>, "'Box' does not refer to a value". Identical for a plain Shared field;
-/// the long-recorded Shared-access gap.</item>
+/// the long-recorded Shared-access gap. STILL OPEN.</item>
 /// </list>
 /// </summary>
 [TestFixture]
@@ -69,10 +71,12 @@ public class ClassConstantTests
     /// ⛔ The headline: a class Const read from a method in that class. This did not parse at all
     /// before.
     ///
-    /// <para>⚠ THREE backends, not four — JavaScript is excluded for the pre-existing static-read
-    /// defect in the fixture header, not because it is untested here. Running it, rather than only
-    /// compiling, is what distinguishes a constant that reaches the program from one that is
-    /// declared and lost.</para>
+    /// <para>⚠ ALL FOUR backends. JavaScript was excluded here for the pre-existing static-read
+    /// defect recorded in the fixture header — the class Const emitted correctly and the method
+    /// then read <c>this.K</c>, so the constant reached the program and was lost on the way out.
+    /// That is fixed in the JS backend (<c>JavaScriptSharedMemberTests</c>), so the exclusion is
+    /// gone and JS is asserted with the rest. Running them, rather than only compiling, is what
+    /// distinguishes a constant that reaches the program from one that is declared and lost.</para>
     /// </summary>
     [Test]
     [Category("Integration")]
@@ -87,6 +91,7 @@ public class ClassConstantTests
             Assert.That(ReturnCoercionTests.CompileEmittedCSharpForTest(program), Is.Empty);
             Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo("9\n"));
             Assert.That(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(program)), Is.EqualTo("9\n"));
+            Assert.That(JavaScriptExecutionTests.RunJs(program), Is.EqualTo("9"));
         });
     }
 
