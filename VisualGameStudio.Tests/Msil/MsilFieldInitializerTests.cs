@@ -21,10 +21,11 @@ namespace VisualGameStudio.Tests.Msil;
 /// </list>
 ///
 /// <para>⚠ The same program is right on JavaScript (<c>5,hi</c>) and C# (which emits
-/// <c>public int N = 5;</c>). ⛔ <b>C++ has the SAME gap</b> and is NOT fixed here — its instance
-/// field declaration uses <c>FieldArrayInitializer</c>, which only handles a sized array and never
-/// consults <c>IRField.Initializer</c>, so it prints <c>0,</c> too. Three sites, one per field
-/// access level. Recorded in <c>docs/HANDOFF.md</c>.</para>
+/// <c>public int N = 5;</c>). ⛔ <b>C++ had the SAME gap</b> — it was not fixed in this change, and
+/// was fixed straight after in <c>CppFieldInitializerTests</c> /
+/// <c>CppCodeGenerator.FieldInitializer</c>. The two fixes are shaped DIFFERENTLY: there the
+/// values are IN-CLASS member initializers, because the emitted class often has no constructor at
+/// all; here they are constructor stores, because IL has no such thing.</para>
 ///
 /// <para>⚠ NOT a backend gap, and shared by everyone: a NON-LITERAL initializer is dropped in the
 /// IR. <c>BuildConstantFieldInitializer</c> keeps only a literal or unary +/- on one, so

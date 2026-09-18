@@ -42,10 +42,11 @@ namespace VisualGameStudio.Tests.Msil;
 /// parent commit:</para>
 ///
 /// <list type="bullet">
-/// <item><b>Instance field initializers are never emitted.</b> <c>Public N As Integer = 5</c>
-/// prints <b>0</b> on master with no property anywhere — the constructor only calls the base. Any
-/// test here that seeded state with a field initializer would be pinning that instead, so the
-/// computed-getter case seeds through a method.</item>
+/// <item><b>Instance field initializers were never emitted.</b> <c>Public N As Integer = 5</c>
+/// printed <b>0</b> when this fixture was written, with no property anywhere — the constructor
+/// only called the base. FIXED straight after, in <c>MsilFieldInitializerTests</c>; the
+/// computed-getter case still seeds through a method, because re-pointing it at a field
+/// initializer would only duplicate that fixture.</item>
 /// <item><b>Inherited members do not resolve.</b> <c>Derived.Tag</c> where <c>Tag</c> is on
 /// <c>Base</c> types its temporary <c>object</c> and boxes as <c>System.Object</c> — on master
 /// too, for a plain FIELD (<c>ldfld object 'Derived'::'Tag'</c>). The front end does not walk the

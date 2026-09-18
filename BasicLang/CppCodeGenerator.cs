@@ -1095,7 +1095,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     var staticMod = field.IsStatic ? "static " : "";
                     var type = MapType(field.Type);
                     var name = SanitizeName(field.Name);
-                    var init = field.IsStatic ? "" : FieldArrayInitializer(field);
+                    var init = field.IsStatic ? "" : FieldInitializer(field);
                     WriteLine($"{staticMod}{type} {name}{init};");
                 }
                 Unindent();
@@ -1113,7 +1113,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     var staticMod = field.IsStatic ? "static " : "";
                     var type = MapType(field.Type);
                     var name = SanitizeName(field.Name);
-                    var init = field.IsStatic ? "" : FieldArrayInitializer(field);
+                    var init = field.IsStatic ? "" : FieldInitializer(field);
                     WriteLine($"{staticMod}{type} {name}{init};");
                 }
                 Unindent();
@@ -1131,7 +1131,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 var staticMod = field.IsStatic ? "static " : "";
                 var type = MapType(field.Type);
                 var name = SanitizeName(field.Name);
-                var init = field.IsStatic ? "" : FieldArrayInitializer(field);
+                var init = field.IsStatic ? "" : FieldInitializer(field);
                 WriteLine($"{staticMod}{type} {name}{init};");
             }
 
@@ -1697,17 +1697,53 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         }
 
         /// <summary>
-        /// The in-class member initializer for an array FIELD (<c>= std::vector&lt;int32_t&gt;(9)</c>),
-        /// or the empty string when the field is not a sized array. Emitted at the declaration
-        /// because a C++ member has no other place to be given a size, and an empty vector member
-        /// makes every <c>b.Cells(0)</c> an out-of-bounds access.
+        /// The in-class initializer for one field declaration — its DECLARED value, or storage for
+        /// a sized array, or nothing.
         ///
-        /// <para>STATIC members take the out-of-class definition path instead
-        /// (<see cref="EmitStaticMemberInitializationsCore"/>) — an in-class initializer on a
-        /// non-const static is not legal C++, so callers pass only non-static fields here.</para>
+        /// <para>⛔ The declared value was missing entirely, and silently: every instance field
+        /// initializer was dropped. Measured on a class with five initialized public fields, C++
+        /// printed <c>0,,0.000000,0.000000,False</c> where JavaScript printed
+        /// <c>5,hi,2.5,1.5,true</c> — Integer, String, Double, Single and Boolean alike, so not
+        /// one type's problem. A constructor that built on the value inherited the zero:
+        /// <c>_n = _n + 3</c> over <c>= 5</c> answered <b>3</b> rather than 8.</para>
+        ///
+        /// <para>⚠ An IN-CLASS initializer is the right shape here rather than a constructor
+        /// member-initializer list: the emitted class often has no constructor at all (just
+        /// <c>~Box() = default;</c>), and C++ runs in-class initializers before any constructor
+        /// body, in declaration order — which is VB's rule for field initializers too.</para>
+        ///
+        /// <para>⚠ The expression comes from the same two-branch form the STATIC path uses
+        /// (<see cref="EmitStaticMemberInitializationsCore"/>), so an out-of-class static
+        /// definition and an in-class instance one can never disagree about how a constant is
+        /// spelled. Stated honestly, and matching what the module-global sibling's comment already
+        /// records: the <c>is IRConstant -&gt; EmitConstant</c> arm is REDUNDANT — the base
+        /// <c>GetValueName</c> routes an IRConstant to <c>EmitConstant</c> itself, and measured,
+        /// replacing the whole ternary with a bare <c>GetValueName</c> passes every test. It is
+        /// written this way for consistency with its two siblings, not because it protects
+        /// anything, and no test can hold the choice.</para>
+        ///
+        /// <para>⚠ The array branch was the whole of this helper before, and stays: a C++ member
+        /// has no other place to be given a size, and an empty vector member makes every
+        /// <c>b.Cells(0)</c> an out-of-bounds access. It is reached only when there is no declared
+        /// value, which is NOT a precedence decision — the analyzer refuses an initializer on an
+        /// array-typed field ("Cannot assign value of type 'Integer' to variable of type
+        /// 'Integer[]'"), so no field can carry both and swapping the two arms is an equivalent
+        /// mutant.</para>
+        ///
+        /// <para>⛔ A STATIC field must not get one — an in-class initializer on a non-const
+        /// static is not legal C++ — and its callers already guard on <c>IsStatic</c> before
+        /// asking.</para>
         /// </summary>
-        private string FieldArrayInitializer(IRField field)
+        private string FieldInitializer(IRField field)
         {
+            if (field?.Initializer != null)
+            {
+                var declared = field.Initializer is IRConstant constant
+                    ? EmitConstant(constant)
+                    : GetValueName(field.Initializer);
+                return $" = {declared}";
+            }
+
             var sized = SizedArrayInitializer(field?.Type, MapType(field?.Type));
             return sized != null ? $" = {sized}" : "";
         }

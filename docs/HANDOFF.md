@@ -798,10 +798,8 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   paths (the explicit one and the generated default), after the base call — which is exactly where
   VB runs field initializers, so a base constructor observes its own fields already set. Only the
   initializer half was missing.
-  ⛔ **C++ HAS THE SAME GAP and is NOT fixed** — the same program prints `0,` there. Its instance
-  field declaration uses `FieldArrayInitializer(field)`, which handles a sized array only and never
-  consults `IRField.Initializer`; three sites, one per access level, in `GenerateClass`. JavaScript
-  (`5,hi`) and C# (`public int N = 5;`) are correct.
+  ⚠ **C++ had the SAME GAP and it is FIXED too, as of 2026-09-18** — see the C++ entry below.
+  JavaScript (`5,hi`) and C# (`public int N = 5;`) were correct all along.
   ⚠ **A NON-LITERAL initializer is dropped in the IR, for every backend.**
   `BuildConstantFieldInitializer` keeps only a literal or unary +/- on one, so
   `Public N As Integer = 2 + 3` reads 0 on JavaScript and MSIL alike and C# emits
@@ -842,6 +840,38 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   (`ICodeGenerator`) already routes an `IRConstant` to `EmitConstant`, so swapping them passes
   every test. `ValueText` is there for consistency with its sibling sites, not protection — an
   earlier comment claiming it guards a Decimal disagreement was wrong and has been corrected.
+  ⚠ **The same wash holds at the INSTANCE field site** (`FieldInitializer`, below) — measured
+  there too, and recorded in its comment rather than dressed up as load-bearing.
+
+  ⚠ **Instance field initializers RUN on C++ as of 2026-09-18** — `CppFieldInitializerTests`,
+  `CppCodeGenerator.FieldInitializer` (the helper that was `FieldArrayInitializer`). The MSIL half
+  of this same defect is the entry above; the two fixes are shaped DIFFERENTLY on purpose.
+  ⛔ **Measured before**: every instance field initializer was dropped, at every access level and
+  for every type — a class with five initialized public fields printed `0,,0.000000,0.000000,False`
+  where JavaScript printed `5,hi,2.5,1.5,true`. A constructor that BUILDS on the value inherited
+  the zero (`_n = _n + 3` over `= 5` answered **3**, not 8); a sized array field beside an
+  initialized one gave `7,0` — the array worked, the initializer did not.
+  ⚠ **The cause was one helper with a narrower job than its callers assumed**: all three field
+  loops in `GenerateClass` (one per access level — they are separate copies) asked
+  `FieldArrayInitializer`, which only ever produced a SIZED-ARRAY form and never consulted
+  `IRField.Initializer`. The STATIC path (`EmitStaticMemberInitializationsCore`) did read it, and
+  is where the expression to emit now comes from.
+  ⚠ **IN-CLASS member initializers, not a constructor member-initializer list** — the emitted class
+  often has no constructor at all (just `~Box() = default;`), and C++ runs in-class initializers
+  before any constructor body, in declaration order, which is VB's rule too. On MSIL the same
+  values go in the CONSTRUCTOR after the base call, because IL has no such thing.
+  ⛔ **A `Shared` field must NOT get one** — an in-class initializer on a non-const static is not
+  legal C++ — so all three call sites guard on `IsStatic` and the out-of-class definition carries
+  the value.
+  ⛔ **THREE shapes cannot be run end to end on this backend, each PRE-EXISTING** and verified
+  before the change, which is why those cases are pinned on the emitted TEXT: a `Shared` field
+  ACCESS does not compile (`Box.Total` emits `t0 = Box->Total;` — "'Box' does not refer to a
+  value"); a `Protected` field is not visible from a derived class ("Undefined identifier"), as the
+  analyzer does not inherit Protected members into scope; a `Structure` field initializer does not
+  PARSE ("Expected member name but found Assignment").
+  ⚠ **`CStr(Double)` → `2.500000` and `CStr(Boolean)` → `True` on C++** are the long-recorded
+  divergences above, not this fix's; the tests assert C++'s own spelling rather than normalising
+  it away.
   ⛔ **Also pre-existing and unrelated: `CStr(Boolean)` prints `true` on JavaScript** where C# and
   MSIL print `True`. Measured on a plain local, no module scope involved. Pinned as each backend
   actually behaves rather than normalised away.
