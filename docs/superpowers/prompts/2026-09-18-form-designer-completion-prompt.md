@@ -60,7 +60,7 @@ Slices 0 through 4, Tasks 1–19. Highlights you must not skip:
 - **Slice 3** — `.blform` schema, the WinForms control catalog and its CI gate, WinForms region writing.
 - **Slice 4** — full suite, `IDE/` drop refresh, docs, and the follow-up defects filed as separate chips.
 
-## What the plan does NOT cover — add it as Tasks 20–24
+## What the plan does NOT cover — add it as Tasks 20–28
 
 The plan builds a canvas that renders and hit-tests, a toolbox and a property grid. It does **not**
 specify the direct-manipulation layer, and it does not specify how one form reaches two targets. Both
@@ -111,7 +111,78 @@ Double-clicking a control in the Visual Studio designer creates or navigates to 
 Implement it: create the stub if absent, navigate to it if present, and respect **D8's ordering rule** —
 handlers are emitted **before** the region that wires them, on **both** targets.
 
-### Task 23 — End-to-end acceptance, both targets
+### Task 23 — The control catalog, widened
+
+The plan specifies ten control kinds. Ten is a proof of concept, not a designer. Widen both catalogs
+toward the common-controls set a user expects to find in a toolbox — on the WinForms side the usual
+`Label`/`TextBox`/`Button`/`CheckBox`/`RadioButton`/`ComboBox`/`ListBox`/`GroupBox`/`Panel`/
+`PictureBox`/`NumericUpDown`/`DateTimePicker`/`ProgressBar`/`TabControl`/`TrackBar`/`ListView`/
+`TreeView`/`DataGridView`/`SplitContainer`/`FlowLayoutPanel`/`TableLayoutPanel` tier, and on the web
+side their honest HTML equivalents.
+
+- Drive it from the **one source-of-truth table** the plan already mandates (`ProjectTemplateBackendMappingTests.cs:25-33`'s
+  *"add a row, never widen the default"* shape), with a completeness guard that **fails** on a missing row.
+- The plan's Task 17 CI gate — generate every catalog control with every property set and require the
+  real CLI to exit 0 — is `TestCaseSource`-driven off that table, so it scales with the catalog for
+  free. ⛔ It is also the **only** thing standing in for a type system here: `EnableNetResolution`
+  returns early for `UseWindowsForms`, so every `Form`/`Button`/`Point` member access types `Object`
+  with no diagnostic. A catalog row with a misspelled property name is invisible without that gate.
+- Where the web equivalent is not honest — a `DataGridView` has no single HTML tag — say so in the
+  catalog rather than faking it, and let the retarget of Task 21 report it as explicit loss.
+
+### Task 24 — Menus, toolbars and status bars
+
+⛔ **This one is blocked on a compiler change. Do that first, as its own gated task.**
+
+The spec scopes menus out of v1 for a measured reason: the canonical idiom
+`menuStrip.Items.AddRange(New ToolStripItem() { … })` **is not expressible in BasicLang today**.
+`New` parses a type reference plus an optional *positional* argument list and returns, on **both**
+`New` paths (`Parser.cs:4298`; `Dim x As New T(…)` at `:2504-2524`) — so array-creation-with-initializer
+does not parse. A bare-brace array literal *does* exist (`Parser.cs:4446-4461`), so `AddRange({a, b})`
+parses, but element typing is **exact-equality with no base-class widening**
+(`SemanticAnalyzer.cs:6056-6061`), so a menu mixing `ToolStripMenuItem` and `ToolStripSeparator`
+degrades to `Object[]` plus a warning.
+
+Fix one of the two, gate it, and only then build the designer surface:
+
+- **Preferred:** give array-literal element typing a common-base-type widening rule, so
+  `{mnuFile, sep1}` types as `ToolStripItem()`. Smaller and more generally useful than new syntax.
+- **Alternative:** support `New T() { … }` array-creation-with-initializer in the parser.
+
+⛔ Either is a **`SemanticAnalyzer`/`Parser` change reaching shared compiler machinery — full suite
+required**, and element typing is used well beyond menus, so check what else moves.
+
+Then the designer work: a menu/toolbar/status-bar editor is a **nested, non-positional tree**, not a
+positioned box on the canvas, so it needs its own in-place editing surface (the VS "Type Here" strip).
+On the web side, emit honest markup — a `<nav>`/`<ul>` menu and a status bar element — not a WinForms
+menu drawn in HTML.
+
+### Task 25 — The component tray
+
+Non-visual components (`Timer`, `ToolTip`, `ErrorProvider`, `BackgroundWorker`, and their web
+equivalents) belong in a tray strip below the design surface, exactly as VS does it — they are part of
+the form but have no position on it.
+
+- The `<Components/>` slot is **already reserved and empty in both formats**, so this is a designer
+  surface plus emission, not a format break.
+- Components are selectable, appear in the property grid, and participate in undo/redo and delete.
+- Emission follows the same region rules as controls: declare field → construct → set properties →
+  wire handlers. ⛔ Same trap list applies — never `With`, never `Handles`, handlers before regions.
+
+### Task 26 — The Anchor/Dock visual picker
+
+The VS property-grid widget where you click the edges of a little box to set `Anchor`, and the
+nine-region picker for `Dock`. Small, self-contained, and it is one of the most recognisable pieces of
+the VS designer.
+
+- It is a property-grid **row editor**, so it slots into the typed-row editor the plan's Task 14
+  extracts from the Settings dialog (`SearchableSettingItem` + `SettingControlKind`) rather than being
+  a new surface.
+- ⛔ `Anchor`/`Dock` are `.blform` vocabulary (**D3**). The web side has no equivalent and must not
+  grow a fake one — the picker is hidden for `.blwebform`, and Task 21's retarget reports the loss.
+- Avalonia 11.3 ships no such control; price it as hand-built, like every other type editor here.
+
+### Task 27 — End-to-end acceptance, both targets
 
 Two scripted walkthroughs, each performed against a **real build**, not a unit-test helper:
 
@@ -123,7 +194,7 @@ Two scripted walkthroughs, each performed against a **real build**, not a unit-t
 
 Record what you actually observed. Screenshots or captured stdout, not a claim.
 
-### Task 24 — Closeout
+### Task 28 — Closeout
 
 Fold into the plan's Task 19: full suite, `IDE/` drop refresh, `docs/HANDOFF.md` and `CLAUDE.md`
 updated, follow-up defects filed as their own chips.
@@ -214,7 +285,7 @@ throws `ReferenceError` on load. stdout from a real run is the only oracle that 
 ## Definition of done
 
 - [ ] Plan Tasks 1–19 complete, checkboxes ticked, each with its stated gate run and recorded.
-- [ ] Tasks 20–24 complete.
+- [ ] Tasks 20–28 complete.
 - [ ] Both acceptance walkthroughs performed and recorded: a web form running in a browser, a WinForms
       form running as a window, each built by dragging controls onto the designer.
 - [ ] Retarget works both directions with explicit, diagnosed loss.
