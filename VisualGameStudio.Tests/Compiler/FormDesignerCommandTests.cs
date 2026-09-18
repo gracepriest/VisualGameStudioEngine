@@ -85,7 +85,11 @@ public class FormDesignerCommandTests
         {
             FilePath = Dir + scaffold.DocumentFileName
         };
-        vm.Text = files.Contents[vm.FilePath];
+
+        // ⛔ SetContent, not `Text =`. It is what a real open does: it seeds BOTH stores and clears
+        // the undo stack, so the file as loaded is never itself an undoable step. Assigning Text
+        // leaves the editor document empty, and the first Ctrl+Z rewinds the form to nothing.
+        vm.SetContent(files.Contents[vm.FilePath]);
         return vm;
     }
 
@@ -354,6 +358,82 @@ public class FormDesignerCommandTests
         });
     }
 
+    // ==================================================================
+    // Undo — every one of these commands, not just the drag that came first
+    // ==================================================================
+
+    /// <summary>
+    /// ⚠ Each command routes through the same <c>WriteDesignerEditBack</c> the drag path uses, which
+    /// writes the editor document as ONE undoable operation. That is a claim worth testing per
+    /// command rather than inheriting: a command that mutated the model without going through it
+    /// would still look correct on the canvas and be invisible to Ctrl+Z.
+    /// </summary>
+    [Test]
+    public void AnAlignIsOneUndo()
+    {
+        var vm = Open();
+        var before = vm.Text;
+        vm.Selection.Set(Control(vm, "a"));
+        vm.Selection.Add(Control(vm, "c"));
+        vm.ArrangeCommand.Execute(FormArrangeKind.AlignLeft);
+        Assume.That(vm.Text, Is.Not.EqualTo(before));
+
+        vm.UndoDesignerEditCommand.Execute(null);
+
+        Assert.That(vm.Text, Is.EqualTo(before));
+    }
+
+    [Test]
+    public void AZOrderChangeIsOneUndo()
+    {
+        var vm = Open();
+        var before = vm.Text;
+        vm.Selection.Set(Control(vm, "a"));
+        vm.BringToFrontCommand.Execute(null);
+        Assume.That(vm.Text, Is.Not.EqualTo(before));
+
+        vm.UndoDesignerEditCommand.Execute(null);
+
+        Assert.That(vm.Text, Is.EqualTo(before));
+    }
+
+    [Test]
+    public void APasteIsOneUndo()
+    {
+        var vm = Open();
+        var before = vm.Text;
+        vm.Selection.Set(Control(vm, "a"));
+        vm.CopyControlsCommand.Execute(null);
+        vm.PasteControlsCommand.Execute(null);
+        Assume.That(vm.DesignDocument!.Controls, Has.Count.EqualTo(4));
+
+        vm.UndoDesignerEditCommand.Execute(null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.Text, Is.EqualTo(before));
+            Assert.That(vm.DesignDocument!.Controls, Has.Count.EqualTo(3));
+        });
+    }
+
+    [Test]
+    public void ACutIsOneUndo()
+    {
+        var vm = Open();
+        var before = vm.Text;
+        vm.Selection.Set(Control(vm, "b"));
+        vm.CutControlsCommand.Execute(null);
+        Assume.That(Ids(vm), Is.EqualTo(new[] { "a", "c" }));
+
+        vm.UndoDesignerEditCommand.Execute(null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.Text, Is.EqualTo(before));
+            Assert.That(Ids(vm), Is.EqualTo(new[] { "a", "b", "c" }));
+        });
+    }
+
     private static CodeEditorDocumentViewModel OpenWeb()
     {
         var scaffold = FormScaffolder.Create("WebForm", FormTarget.Web);
@@ -365,7 +445,7 @@ public class FormDesignerCommandTests
         {
             FilePath = Dir + scaffold.DocumentFileName
         };
-        vm.Text = files.Contents[vm.FilePath];
+        vm.SetContent(files.Contents[vm.FilePath]);
         return vm;
     }
 
