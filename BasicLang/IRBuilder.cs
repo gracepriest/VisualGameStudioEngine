@@ -595,8 +595,8 @@ namespace BasicLang.Compiler.IR
 
                 if (node.Initializer != null)
                 {
-                    globalVar.InitialValue =
-                        BuildModuleScopeInitializer(node.Initializer, node.Name, "variable");
+                    globalVar.InitialValue = BuildModuleScopeInitializer(
+                        node.Initializer, node.Name, "variable", varType);
                 }
             }
             else
@@ -754,8 +754,8 @@ namespace BasicLang.Compiler.IR
                 {
                     IsGlobal = true,
                     IsConst = true,
-                    InitialValue =
-                        BuildModuleScopeInitializer(node.Value, node.Name, "constant"),
+                    InitialValue = BuildModuleScopeInitializer(
+                        node.Value, node.Name, "constant", typeInfo),
                     ModuleName = _currentModuleName ?? _module?.Name,
                     Access = MapAccessModifier(node.Access)
                 };
@@ -817,7 +817,7 @@ namespace BasicLang.Compiler.IR
         /// </summary>
         /// <param name="what">"variable" or "constant" — only to word the diagnostic.</param>
         private IRValue BuildModuleScopeInitializer(
-            ExpressionNode initializer, string name, string what)
+            ExpressionNode initializer, string name, string what, TypeInfo declared)
         {
             var savedFunction = _currentFunction;
             var savedBlock = _currentBlock;
@@ -827,7 +827,17 @@ namespace BasicLang.Compiler.IR
             _currentBlock = scratch.CreateBlock("entry");
 
             initializer.Accept(this);
-            var lowered = _expressionResult;
+
+            // ⛔ THE COERCION THE GLOBAL PATH NEVER HAD, and the whole reason a module-scope
+            // `Dim v As Integer = 7.9` produced GARBAGE. The LOCAL branch of
+            // Visit(VariableDeclarationNode) has always coerced to the DECLARED type; this one
+            // stored whatever the initializer happened to carry, so a Double literal went
+            // straight into an Integer global and each backend reinterpreted its bits. Measured
+            // on MSIL at module scope, `Dim v As T = 7.9` printed: Byte 154, SByte -102, Short
+            // and UShort an EMPTY STRING, Integer -1717986918, UInteger 2576980378, Long and
+            // ULong 4620580627691444634 — which is the IEEE-754 bit pattern of 7.9 read as an
+            // integer. The same declarations as LOCALS printed 7 throughout.
+            var lowered = CoerceToDeclaredType(_expressionResult, declared);
             var emitted = _currentBlock.Instructions;
 
             _currentFunction = savedFunction;
@@ -836,7 +846,7 @@ namespace BasicLang.Compiler.IR
             // Nothing emitted: the expression was already a self-contained value — a literal, or
             // a reference to an already-constant global. This is the shape that always worked,
             // and it must keep taking the value lowering produced rather than anything folded.
-            if (emitted.Count == 0) return lowered;
+            if (emitted.Count == 0) return NarrowModuleScopeConstant(lowered, declared, name, what);
 
             var scratchModule = new IRModule("<init>");
             scratchModule.Functions.Add(scratch);
@@ -868,7 +878,8 @@ namespace BasicLang.Compiler.IR
             // bottom-up and the outermost operation is emitted last.
             if (emitted.Count > 0 && emitted.All(i => i is IRConstant))
             {
-                return (IRValue)emitted[emitted.Count - 1];
+                return NarrowModuleScopeConstant(
+                    (IRValue)emitted[emitted.Count - 1], declared, name, what);
             }
 
             throw new Exception(
@@ -3528,6 +3539,83 @@ namespace BasicLang.Compiler.IR
                 // carry no by-ref list at all, so there is no lockstep to keep.
                 byRefFlags?.Add(false);
             }
+        }
+
+        /// <summary>
+        /// Narrows a module-scope constant to a NARROW numeric declared type — Byte, SByte,
+        /// Short, UShort, UInteger — that <see cref="CoerceToDeclaredType"/> deliberately leaves
+        /// alone.
+        ///
+        /// <para>⛔ Without it, `Dim v As Byte = 7.9` at module scope compiled clean and printed
+        /// <b>154</b>. <c>CoerceToDeclaredType</c> declines these types on purpose: admitting them
+        /// there would put an <c>IRCast</c> in front of LOCAL declarations that already work
+        /// (`Dim b As Byte = 65` is a plain literal today), and its <c>TryConvertConstant</c>
+        /// cannot return their CLR types at all — measured and still true,
+        /// <c>IROptimizer.CompareLt</c> answers <b>false</b> for any pair outside
+        /// int/long/float/double, so folding `lo &lt; hi` on two <c>sbyte</c>s silently drops the
+        /// branch. So the narrowing happens HERE, on the module-scope path only, where the value
+        /// must already be a constant and no local emission can change.</para>
+        ///
+        /// <para>⚠ The result keeps an <c>int</c> or <c>long</c> CLR value and carries the narrow
+        /// type in its <c>TypeInfo</c>. That is what makes it safe: the folders stay inside the
+        /// four types they handle, while the backends see the declared width.</para>
+        ///
+        /// <para>⚠ WRAPS rather than refusing out of range, because that is what the LOCAL path
+        /// already does — measured: `Dim v As Byte = 300` prints <b>44</b>, `= -1` prints
+        /// <b>255</b>, `Dim v As SByte = 200` prints <b>-56</b>. Real VB rejects those
+        /// (BC30439); this compiler does not, and a module-scope declaration disagreeing with the
+        /// identical local one would be a worse bug than either answer.</para>
+        ///
+        /// <para>⛔ ULong is NOT narrowed and is refused instead: its range does not fit the
+        /// <c>long</c> the folders can carry, and there is no representation that is both correct
+        /// and safe for them. A clean refusal beats the 4620580627691444634 it printed before.</para>
+        /// </summary>
+        private IRValue NarrowModuleScopeConstant(
+            IRValue value, TypeInfo declared, string name, string what)
+        {
+            if (!(value is IRConstant constant) || declared?.Name == null) return value;
+            if (string.Equals(declared.Name, value.Type?.Name, StringComparison.Ordinal)) return value;
+
+            double asDouble;
+            switch (constant.Value)
+            {
+                case int i: asDouble = i; break;
+                case long l: asDouble = l; break;
+                case short sh: asDouble = sh; break;
+                case byte b: asDouble = b; break;
+                case sbyte sb: asDouble = sb; break;
+                case float f: asDouble = f; break;
+                case double d: asDouble = d; break;
+                default: return value;
+            }
+
+            var truncated = (long)Math.Truncate(asDouble);
+            object narrowed;
+            switch (declared.Name)
+            {
+                case "Byte": narrowed = (int)unchecked((byte)truncated); break;
+                case "SByte": narrowed = (int)unchecked((sbyte)truncated); break;
+                case "Short": narrowed = (int)unchecked((short)truncated); break;
+                case "UShort": narrowed = (int)unchecked((ushort)truncated); break;
+                // ⚠ int WHEN IT FITS, long only when it must. UInteger's range needs a long in
+                // general, but handing the JavaScript backend a Long literal makes it refuse the
+                // whole program (BL7003: a JS number is exact only to 2^53) — measured, that
+                // turned `Dim v As UInteger = 7.9` into a build failure on JS. The narrowest
+                // folder-safe type that represents the value exactly keeps every backend able to
+                // emit the ordinary cases.
+                case "UInteger":
+                    var unsigned = unchecked((uint)truncated);
+                    narrowed = unsigned <= int.MaxValue ? (object)(int)unsigned : (long)unsigned;
+                    break;
+                case "ULong":
+                    throw new Exception(
+                        $"Line {_currentSourceLine}: the module-level {what} '{name}' is declared "
+                        + "ULong, whose range cannot be represented in a compile-time constant "
+                        + "here. Declare it Long, or assign it in Main (or another procedure).");
+                default: return value;
+            }
+
+            return new IRConstant(narrowed, declared);
         }
 
         /// <summary>

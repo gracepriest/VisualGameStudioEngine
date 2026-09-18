@@ -594,12 +594,33 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   would turn `(double)7 / x` into integer division — was measured and is WRONG: with the pass in
   the pipeline C# still prints 3.5 for both `7 / 2` and `7 / x`, because the optimizer loops to a
   fixpoint and a surviving operand keeps its own cast.
-  ⛔ **SILENT MISCOMPILE found while bounding this, pinned not fixed:** `Dim G As Byte = 7.9` at
-  module scope compiles clean and prints **154**. Verified on unmodified master. It is the sub-int
-  gap `TryConvertConstant`'s comment predicts (only Integer/Long/Single/Double are handled), and
-  closing it means teaching the optimizer's folders every numeric CLR type — handing them an
-  `sbyte` today is itself a measured miscompile. Held by
-  `ASubIntegerNarrowingInitializer_IsStillMiscompiled_Pinned`.
+  ⚠ **That miscompile is FIXED as of 2026-09-18**, and the ROOT CAUSE was not the sub-int type
+  table an earlier note blamed: **a module-scope declaration was never coerced to its DECLARED
+  type at all.** The local branch of `Visit(VariableDeclarationNode)` has always called
+  `CoerceToDeclaredType`; the global branch never did, so a Double literal went straight into a
+  narrower global and each backend reinterpreted its bits. Measured on MSIL, `Dim v As T = 7.9` at
+  module scope: Byte **154**, SByte **-102**, Short and UShort an **empty string**, Integer
+  **-1717986918**, UInteger **2576980378**, Long and ULong **4620580627691444634** (the IEEE-754
+  bits of 7.9). The SAME declarations as LOCALS printed 7 throughout — which is what identified
+  the missing coercion, since Integer and Long are types `TryConvertConstant` has always handled.
+  ⚠ **Two parts.** `CoerceToDeclaredType` in `BuildModuleScopeInitializer` fixes
+  Integer/Long/Single/Double. `NarrowModuleScopeConstant` (module-scope only) then handles
+  Byte/SByte/Short/UShort/UInteger, which `CoerceToDeclaredType` declines on purpose — admitting
+  them there would put an `IRCast` in front of LOCAL declarations that already work.
+  ⛔ **The narrowed constant keeps an `int`/`long` CLR value and carries the narrow type in its
+  `TypeInfo`.** That split is the safety argument: measured and STILL TRUE, `IROptimizer.CompareLt`
+  answers **false** for any CLR pair outside int/long/float/double, so handing the folders a real
+  `byte` silently folds `lo < hi` to false. UInteger takes an `int` when the value fits, because a
+  `long` makes the JavaScript backend refuse the program (BL7003) — measured, that turned
+  `Dim G As UInteger = 7.9` into a build failure there.
+  ⛔ **ULong is REFUSED**, not narrowed: its range does not fit the `long` the folders can carry.
+  A clean diagnostic beats the 4620580627691444634 it printed before.
+  ⚠ **Out of range WRAPS, deliberately matching the LOCAL path** — measured on both:
+  `Byte = 300` → **44**, `Byte = -1` → **255**, `SByte = 200` → **-56**, `Short = 40000` →
+  **-25536**, `UShort = 70000` → **4464**. Real VB rejects all of these (BC30439); this compiler
+  does not, at either scope. Matching locals was chosen over matching VB: a module declaration
+  silently disagreeing with the identical local one is worse than the wrap, and fixing the wrap
+  belongs in the front end where both paths get it at once.
   ⚠ `Dim G As Single = 7 / 2` is a FRONT-END diagnostic ("Cannot assign value of type 'Double' to
   variable of type 'Single'"), not a folding gap.
   ⚠ **The C++ global-initializer gap is FIXED as of 2026-09-17** — `CppCodeGenerator`, globals

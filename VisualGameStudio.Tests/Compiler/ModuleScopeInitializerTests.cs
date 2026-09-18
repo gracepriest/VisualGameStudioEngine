@@ -361,30 +361,182 @@ public class ModuleScopeInitializerTests
     }
 
     /// <summary>
-    /// ⛔ PRE-EXISTING SILENT MISCOMPILE, found while bounding the widening fold and pinned as it
-    /// ACTUALLY BEHAVES: a module-scope <c>Dim G As Byte = 7.9</c> compiles clean and prints
-    /// <b>154</b>. Not 8, not 7 — garbage, with no diagnostic anywhere.
+    /// ⛔ THE MISCOMPILE THIS FIXTURE WAS OPENED ON. A module-scope declaration was never coerced
+    /// to its DECLARED type — the local branch of <c>Visit(VariableDeclarationNode)</c> has always
+    /// called <c>CoerceToDeclaredType</c>, the global branch never did — so a Double literal went
+    /// straight into a narrower global and each backend reinterpreted its bits. It compiled clean
+    /// and printed garbage, with no diagnostic anywhere.
     ///
-    /// <para>⚠ Verified on unmodified master by stashing this change and rebuilding: 154 there
-    /// too. It is the sub-int gap <c>IRBuilder.TryConvertConstant</c>'s own comment predicts —
-    /// it handles only Integer/Long/Single/Double, so a Byte target "keeps whatever it did before
-    /// this coercion existed", which turns out to be reinterpreting a Double constant as a Byte
-    /// field. This test records the CONSEQUENCE that comment describes in the abstract.</para>
-    ///
-    /// <para>⛔ Not fixed here, and not by widening this fold either: that comment explains why —
-    /// closing it means teaching the optimizer's folders every numeric CLR type, and handing them
-    /// an sbyte today is itself a measured miscompile (<c>lo &lt; hi</c> folded to <c>false</c>).
-    /// It needs its own change. When it lands, this test fails and should assert 8 (VB rounds) or
-    /// 7 (truncation) per whatever the backends are then made to agree on.</para>
+    /// <para>⛔ Measured on MSIL before the fix, <c>Dim v As T = 7.9</c> at module scope:
+    /// Byte <b>154</b>, SByte <b>-102</b>, Short and UShort an <b>empty string</b>, Integer
+    /// <b>-1717986918</b>, UInteger <b>2576980378</b>, Long and ULong
+    /// <b>4620580627691444634</b> — the IEEE-754 bit pattern of 7.9 read as an integer. The SAME
+    /// declarations as LOCALS printed 7 throughout, which is what made the missing coercion the
+    /// root cause rather than the sub-integer type table an earlier comment blamed.</para>
     /// </summary>
     [Test]
     [Category("Integration")]
-    public void ASubIntegerNarrowingInitializer_IsStillMiscompiled_Pinned()
+    [TestCase("Byte", TestName = "Narrow_Byte")]
+    [TestCase("SByte", TestName = "Narrow_SByte")]
+    [TestCase("Short", TestName = "Narrow_Short")]
+    [TestCase("UShort", TestName = "Narrow_UShort")]
+    [TestCase("Integer", TestName = "Narrow_Integer")]
+    [TestCase("UInteger", TestName = "Narrow_UInteger")]
+    [TestCase("Long", TestName = "Narrow_Long")]
+    public void AModuleScopeInitializer_IsCoercedToItsDeclaredType(string declaredType)
     {
-        var program = Program("Dim G As Byte = 7.9", "PrintLine(CStr(G))");
+        var program = Program($"Dim G As {declaredType} = 7.9", "PrintLine(CStr(G))");
 
-        Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo("154\n"),
-            "when this changes, sub-integer narrowing got fixed — assert the real answer instead");
+        Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo("7\n"));
+    }
+
+    /// <summary>
+    /// ⚠ The narrowed constant must reach EVERY backend, not just MSIL — the bug was one of
+    /// emission, and three backends emitted the raw Double.
+    ///
+    /// <para>⛔ Byte is the case the fix was asked for. Integer is here too because it was ALSO
+    /// broken at module scope (<b>-1717986918</b>) despite being a type
+    /// <c>TryConvertConstant</c> has always handled — the clearest evidence the defect was the
+    /// missing coercion rather than the type table.</para>
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    [TestCase("Byte", TestName = "NarrowAllBackends_Byte")]
+    [TestCase("Short", TestName = "NarrowAllBackends_Short")]
+    [TestCase("Integer", TestName = "NarrowAllBackends_Integer")]
+    public void ANarrowedInitializer_ReachesEveryBackend(string declaredType)
+    {
+        var program = Program($"Dim G As {declaredType} = 7.9", "PrintLine(CStr(G))");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ReturnCoercionTests.CompileEmittedCSharpForTest(program), Is.Empty);
+            Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo("7\n"));
+            Assert.That(JavaScriptExecutionTests.RunJs(program), Is.EqualTo("7"));
+            Assert.That(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(program)),
+                Is.EqualTo("7\n"));
+        });
+    }
+
+    /// <summary>
+    /// ⛔ OUT OF RANGE WRAPS, and it wraps to exactly what the identical LOCAL declaration
+    /// produces. Measured on both paths: <c>Byte = 300</c> → <b>44</b>, <c>Byte = -1</c> →
+    /// <b>255</b>, <c>SByte = 200</c> → <b>-56</b>, <c>Short = 40000</c> → <b>-25536</b>,
+    /// <c>UShort = 70000</c> → <b>4464</b>.
+    ///
+    /// <para>⚠ Real VB REJECTS all of these (BC30439, "constant expression not representable").
+    /// This compiler does not, at either scope, and that divergence is pre-existing. Matching the
+    /// LOCAL path is the deliberate choice: a module declaration silently disagreeing with the
+    /// identical local one is a worse bug than the wrap, and fixing the wrap belongs in the front
+    /// end where both paths would get it at once.</para>
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    [TestCase("Byte", "300", "44", TestName = "Wrap_ByteOver")]
+    [TestCase("Byte", "-1", "255", TestName = "Wrap_ByteUnder")]
+    [TestCase("SByte", "200", "-56", TestName = "Wrap_SByte")]
+    [TestCase("Short", "40000", "-25536", TestName = "Wrap_Short")]
+    [TestCase("UShort", "70000", "4464", TestName = "Wrap_UShort")]
+    public void AnOutOfRangeInitializer_WrapsLikeTheLocalPath(
+        string declaredType, string literal, string expected)
+    {
+        var moduleScope = Program($"Dim G As {declaredType} = {literal}", "PrintLine(CStr(G))");
+        var local = Program("", $"Dim v As {declaredType} = {literal}\n  PrintLine(CStr(v))");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Msil.MsilHarness.RunExpectingSuccess(moduleScope),
+                Is.EqualTo(expected + "\n"), "module scope");
+            Assert.That(Msil.MsilHarness.RunExpectingSuccess(local),
+                Is.EqualTo(expected + "\n"), "the local it must agree with");
+        });
+    }
+
+    /// <summary>
+    /// ⚠ A narrow initializer that is FOLDED rather than a bare literal. It leaves
+    /// <c>BuildModuleScopeInitializer</c> by the OTHER return — the folded-constants one — so
+    /// narrowing has to happen at both exits or this shape keeps the pre-narrowing value.
+    /// <c>500 - 200</c> also wraps, which proves the narrowing runs AFTER the fold rather than on
+    /// the operands.
+    ///
+    /// <para>⛔ The C# assertion is what actually HOLDS the folded exit, and MSIL alone does not —
+    /// measured by mutation. Dropping the narrowing there leaves an <c>Integer</c>-typed 300, and
+    /// MSIL's <c>stsfld uint8</c> truncates it to 44 by itself, so the MSIL run passes either way.
+    /// C# emits <c>private static byte H = 300;</c> and refuses it (<b>CS0031</b>). A backend that
+    /// narrows implicitly cannot witness a missing narrowing.</para>
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    public void AFoldedNarrowInitializer_IsNarrowedToo()
+    {
+        var program = """
+            Module M
+             Dim G As Byte = 4 + 4
+             Dim H As Byte = 500 - 200
+             Sub Main()
+              PrintLine(CStr(G) & "," & CStr(H))
+             End Sub
+            End Module
+            """;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ReturnCoercionTests.CompileEmittedCSharpForTest(program), Is.Empty,
+                "C# refuses an un-narrowed 300 in a byte field; MSIL would truncate it silently");
+            Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo("8,44\n"));
+        });
+    }
+
+    /// <summary>
+    /// ⛔ ULong is REFUSED rather than narrowed. Its range does not fit the <c>long</c> the
+    /// optimizer's folders can carry, and there is no representation both correct for the declared
+    /// type and safe for them — measured and still true, <c>IROptimizer.CompareLt</c> answers
+    /// <b>false</b> for any CLR pair outside int/long/float/double.
+    ///
+    /// <para>⚠ A clean refusal is the improvement: before the fix this printed
+    /// <b>4620580627691444634</b>.</para>
+    /// </summary>
+    [Test]
+    public void AULongInitializer_IsRefusedRatherThanMisrepresented()
+    {
+        var ex = Assert.Throws<Exception>(() => JsTestSupport.BuildModule(
+            Program("Dim G As ULong = 7.9", "PrintLine(CStr(G))")));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex.Message, Does.Contain("ULong"));
+            Assert.That(ex.Message, Does.Not.Contain("Object reference not set"));
+        });
+    }
+
+    /// <summary>
+    /// ⚠ The narrowed constant keeps an <c>int</c>/<c>long</c> CLR value while its
+    /// <c>TypeInfo</c> carries the declared narrow type. STRUCTURAL because that split IS the
+    /// safety argument: hand the optimizer's folders a <c>byte</c> and <c>CompareLt</c> silently
+    /// answers false.
+    ///
+    /// <para>⛔ Also why UInteger takes an <c>int</c> when the value fits: a <c>long</c> makes the
+    /// JavaScript backend refuse the program outright (BL7003), which measurably turned
+    /// <c>Dim G As UInteger = 7.9</c> into a build failure there.</para>
+    /// </summary>
+    [Test]
+    public void TheNarrowedConstant_KeepsAFolderSafeClrValue()
+    {
+        var module = JsTestSupport.BuildModule(Program("Dim G As Byte = 7.9", "PrintLine(CStr(G))"));
+        var unsigned = JsTestSupport.BuildModule(
+            Program("Dim G As UInteger = 7.9", "PrintLine(CStr(G))"));
+
+        var constant = (BasicLang.Compiler.IR.IRConstant)module.GlobalVariables["G"].InitialValue;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(constant.Value, Is.TypeOf<int>(), "a byte would miscompile in CompareLt");
+            Assert.That(constant.Value, Is.EqualTo(7));
+            Assert.That(constant.Type.Name, Is.EqualTo("Byte"), "the declared width is carried");
+            Assert.That(
+                ((BasicLang.Compiler.IR.IRConstant)unsigned.GlobalVariables["G"].InitialValue).Value,
+                Is.TypeOf<int>(), "a long here makes JavaScript refuse the program");
+        });
     }
 
     /// <summary>
