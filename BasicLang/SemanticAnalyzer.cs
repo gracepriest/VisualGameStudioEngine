@@ -391,7 +391,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Pass 2: class members, now that every sibling class shell exists.
             foreach (var (classNode, classType) in pendingClasses)
             {
-                PopulateSiblingClassMembers(classNode, classType);
+                PopulateClassMemberSignatures(
+                    classNode, classType, includeConstructors: true);
             }
 
             // Pass 3: functions, subs and public module-level fields/constants.
@@ -462,19 +463,49 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
-        /// Record a pending sibling class's non-private members (methods,
-        /// constructors, fields, properties, constants) on its TypeInfo so
-        /// cross-file member access and constructor validation resolve.
+        /// Record a class's members (methods, constructors, fields, properties, constants) on its
+        /// <see cref="TypeInfo"/> from its declaration alone, before any body is analyzed.
+        ///
+        /// <para>⚠ SHARED by the two paths that need a class's members known before the class's own
+        /// <see cref="Visit(ClassNode)"/> runs: the cross-file sibling sweep
+        /// (<see cref="RegisterPendingSiblingSignatures"/>) and the in-file pass 1
+        /// (<see cref="RegisterClassMemberSignatures"/>). They want the same member SHAPES from the
+        /// same nodes, so this is one method with two axes rather than two methods that drift.</para>
+        ///
+        /// <para>⚠ PRIVATE members are left out for both, and an in-file "include them" variant was
+        /// tried and DROPPED as inert. Nothing consults them: pass 2 overwrites every entry it
+        /// visits, and a private member resolves through the CLASS SCOPE rather than through
+        /// <c>Members</c> — measured, <c>Return other._n</c> on a second instance of the class
+        /// compiles and runs the same either way. (Access is not enforced on a member read at all
+        /// here: reading <c>c._n</c> from outside compiles in BOTH declaration orders. A separate
+        /// pre-existing gap, and the reason this choice cannot tighten or loosen anything.)</para>
+        ///
+        /// <para>⛔ <paramref name="includeConstructors"/> is FALSE in-file, so
+        /// <see cref="RegisterConstructorSignature"/> stays the single owner of <c>.ctorN</c>. Its
+        /// guard returns early on an existing key, so writing one here would retire it silently
+        /// rather than visibly. ⚠ Stated honestly: that mutation SURVIVES — flipping it to true
+        /// passes every test. The two parameter builders do differ in source
+        /// (<see cref="BuildSiblingSignatureParameters"/> resolves arrays and generics through
+        /// <see cref="ResolveSiblingSignatureType"/> and treats a default value as Optional, where
+        /// the constructor path reads <c>GetType(param.Type?.Name)</c> and only <c>IsOptional</c>),
+        /// but the shape that would show it — an ARRAY constructor parameter — does not parse
+        /// (<c>Sub New(vs() As Integer)</c> is a syntax error), and a bare default value behaves
+        /// the same through both. So no reachable program can hold this, and the flag is here to
+        /// keep one owner rather than because a test demands it. Unifying the two builders onto the
+        /// more capable one is a real improvement and its own change.</para>
         /// </summary>
-        private void PopulateSiblingClassMembers(ClassNode classNode, TypeInfo classType)
+        private void PopulateClassMemberSignatures(
+            ClassNode classNode, TypeInfo classType, bool includeConstructors)
         {
-            if (classNode.Members == null) return;
+            if (classNode.Members == null || classType?.Members == null) return;
+
+            static bool Visible(AccessModifier access) => access != AccessModifier.Private;
 
             foreach (var member in classNode.Members)
             {
                 switch (member)
                 {
-                    case FunctionNode func when func.Access != AccessModifier.Private:
+                    case FunctionNode func when Visible(func.Access):
                     {
                         var returnType = ResolveSiblingSignatureType(func.ReturnType) ?? _typeManager.ObjectType;
                         classType.Members[func.Name] = new Symbol(func.Name, SymbolKind.Function, returnType, 0, 0)
@@ -486,7 +517,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         break;
                     }
 
-                    case SubroutineNode sub when sub.Access != AccessModifier.Private:
+                    case SubroutineNode sub when Visible(sub.Access):
                     {
                         classType.Members[sub.Name] = new Symbol(sub.Name, SymbolKind.Subroutine, _typeManager.VoidType, 0, 0)
                         {
@@ -497,7 +528,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         break;
                     }
 
-                    case ConstructorNode ctor:
+                    case ConstructorNode ctor when includeConstructors:
                     {
                         var ctorSymbol = new Symbol(".ctor", SymbolKind.Function, classType, 0, 0)
                         {
@@ -509,7 +540,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         break;
                     }
 
-                    case VariableDeclarationNode field when field.Access != AccessModifier.Private:
+                    case VariableDeclarationNode field when Visible(field.Access):
                     {
                         classType.Members[field.Name] = new Symbol(field.Name, SymbolKind.Variable,
                             ResolveSiblingSignatureType(field.Type) ?? _typeManager.ObjectType, 0, 0)
@@ -519,7 +550,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         break;
                     }
 
-                    case PropertyNode prop when prop.Access != AccessModifier.Private:
+                    case PropertyNode prop when Visible(prop.Access):
                     {
                         classType.Members[prop.Name] = new Symbol(prop.Name, SymbolKind.Property,
                             ResolveSiblingSignatureType(prop.PropertyType) ?? _typeManager.ObjectType, 0, 0)
@@ -529,7 +560,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         break;
                     }
 
-                    case ConstantDeclarationNode constant when constant.Access != AccessModifier.Private:
+                    case ConstantDeclarationNode constant when Visible(constant.Access):
                     {
                         classType.Members[constant.Name] = new Symbol(constant.Name, SymbolKind.Constant,
                             ResolveSiblingSignatureType(constant.Type) ?? _typeManager.ObjectType, 0, 0)
@@ -4694,9 +4725,70 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 RegisterClassTypes(decl);
             }
 
+            // ⛔ Class MEMBERS next, in their own sweep, because a class type with no members is
+            // only half a forward reference. Measured on a class declared AFTER the module that
+            // uses it, with a plain literal field: every member kind read as Object, so the temp
+            // holding it was emitted `void* t1` on C++ (2 compile errors) and MSIL threw
+            // `MissingFieldException: Field not found: 'Box.N'`. Field, method and PROPERTY all
+            // three, identically — the class type existed, its Members did not.
+            //
+            // ⚠ AFTER the type sweep so a member typed by a sibling class resolves to the real
+            // class, and BEFORE the signature sweep for the same reason a function's parameters
+            // want it. Pass 2's Visit(ClassNode) overwrites every entry with the fully resolved
+            // symbol, so this is a forward-reference stand-in and not a second source of truth.
+            foreach (var decl in program.Declarations)
+            {
+                RegisterClassMemberSignatures(decl);
+            }
+
             foreach (var decl in program.Declarations)
             {
                 RegisterDeclaration(decl);
+            }
+        }
+
+        /// <summary>
+        /// Pass 1, sweep 2: give every class its members, from the declaration alone.
+        ///
+        /// <para>⚠ Walks the same shapes <see cref="RegisterClassTypes"/> does, so a class nested
+        /// in a Module or Namespace is reached by both or neither.</para>
+        ///
+        /// <para>⛔ That recursion's mutation SURVIVES, and the reason is a gap this change does
+        /// NOT close. A class nested in a Module and declared after its use still resolves its
+        /// members to Object — measured, <c>void* t1</c> and 2 C++ errors, before and after. Traced:
+        /// this sweep DOES reach it and populates the right <c>TypeInfo</c>, and the local is even
+        /// emitted <c>std::shared_ptr&lt;Box&gt;</c>, so the use site is holding a DIFFERENT,
+        /// member-less TypeInfo for the same name — the synthetic-fallback shape
+        /// <see cref="RegisterClassTypes"/>'s own note describes, still reachable one layer up for
+        /// the nested case. Fixing that is type RESOLUTION, not member registration, and is its own
+        /// change.</para>
+        ///
+        /// <para>⚠ The recursion stays regardless: removing it passes every test today only
+        /// because nothing can read what it registers, and it would make that eventual fix
+        /// silently half-work.</para>
+        ///
+        /// <para>⛔ Constructors are deliberately NOT written here — see
+        /// <see cref="PopulateClassMemberSignatures"/> for why handing them to a second builder
+        /// would silently change constructor resolution.</para>
+        /// </summary>
+        private void RegisterClassMemberSignatures(ASTNode node)
+        {
+            switch (node)
+            {
+                case ClassNode cls:
+                    PopulateClassMemberSignatures(
+                        cls, _typeManager.GetType(cls.Name), includeConstructors: false);
+                    foreach (var member in cls.Members)
+                        RegisterClassMemberSignatures(member);
+                    break;
+                case ModuleNode module:
+                    foreach (var member in module.Members)
+                        RegisterClassMemberSignatures(member);
+                    break;
+                case NamespaceNode ns:
+                    foreach (var member in ns.Members)
+                        RegisterClassMemberSignatures(member);
+                    break;
             }
         }
 

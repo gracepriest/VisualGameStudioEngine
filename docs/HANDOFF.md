@@ -897,11 +897,38 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   differ was the shortcut being wrong. `CoerceConstantToType` went with it, and so did
   re-stamping the declared type onto the result — both measured inert by diffing the emitted C#
   for fifteen literal and seven folded shapes.
-  ⛔ **A CLASS DECLARED AFTER THE MODULE does not resolve its members' TYPES** — PRE-EXISTING,
-  measured on a plain LITERAL initializer so it is nothing to do with folding. C++ emits
-  `void* t1; t1 = c->N;` and fails to compile; MSIL throws `MissingFieldException: Field not
-  found: 'Box.N'`. The same file with the class FIRST emits `int32_t t1` and is clean. Every
-  fixture orders the class first for this reason.
+  ⚠ **A CLASS DECLARED AFTER THE MODULE did not resolve its members' TYPES — FIXED as of
+  2026-09-18** for a TOP-LEVEL class, see the entry below. Still open for a class nested in a
+  Module. Fixtures order the class first out of habit from when this was broken.
+  ⚠ **A TOP-LEVEL class declared AFTER its use resolves its members as of 2026-09-18** —
+  `ClassDeclarationOrderTests`, `SemanticAnalyzer.RegisterClassMemberSignatures` + the shared
+  `PopulateClassMemberSignatures` (which was `PopulateSiblingClassMembers`).
+  ⛔ **Measured before**: the class TYPE resolved (an earlier change gives every class its
+  `TypeInfo` in pass 1) but its `Members` stayed empty until pass 2 reached the declaration, so a
+  use site above it read every member as Object. FIELD, METHOD and PROPERTY all three: C++ emitted
+  `void* t1; t1 = c->N;` and failed with "incompatible integer to pointer conversion" plus "no
+  matching function for call to 'to_string'"; MSIL threw `MissingFieldException: Field not found:
+  'Box.N'`. A `Private` member read from the class's own method broke the same way, and a
+  class-typed member whose type is declared later failed EARLIER with
+  `BL6017: .NET type 'System.Object' has no accessible member named 'V'`.
+  ⚠ **Constructors were NOT the gap**: their signatures have been pre-registered since an earlier
+  change, so `New Box(5)` resolved its arity in either order — what broke was reading `c.N`
+  afterwards. Both constructor shapes measured 2 C++ errors before, 0 after.
+  ⚠ **ONE sweep, shared with the cross-file path.** Members are registered in pass 1 between the
+  class-TYPE sweep and the signature sweep, through the same helper the sibling path uses, so the
+  two cannot drift. Pass 2 overwrites every entry, so pass 1 is a forward-reference stand-in.
+  ⛔ **STILL OPEN: a class NESTED IN A MODULE, declared after its use.** Measured `void* t1` and 2
+  C++ errors before AND after. Traced: the sweep DOES reach it and populates the right `TypeInfo`,
+  and the local is emitted `std::shared_ptr<Box>`, so the use site holds a DIFFERENT, member-less
+  TypeInfo for the same name — type RESOLUTION falling through to its synthetic fallback one layer
+  above this change. The same nested class declared BEFORE its use works, so the gap is order, not
+  nesting. Its own fix.
+  ⚠ **Three mutations SURVIVE and are recorded rather than papered over**: dropping the
+  Module/Namespace recursion (nothing can read what it registers until the nested gap above is
+  closed — kept so that fix is not silently half-done); letting the sweep write constructors (the
+  shape that would distinguish the two parameter builders, an ARRAY constructor parameter, does not
+  parse); and exposing private members (access is not enforced on a member read at all — reading
+  `c._n` from outside compiles in BOTH orders, a separate pre-existing gap).
   ⚠ **Narrowing shapes are refused by the SEMANTIC ANALYZER, before any of this** —
   `Public N As Single = 1.5 + 1.0` is "Cannot assign value of type 'Double' to variable of type
   'Single'", before and after. Not a folding gap.

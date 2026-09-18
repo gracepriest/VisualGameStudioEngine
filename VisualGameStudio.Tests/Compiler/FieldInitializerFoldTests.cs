@@ -43,12 +43,11 @@ namespace VisualGameStudio.Tests.Compiler;
 public class FieldInitializerFoldTests
 {
     /// <summary>
-    /// ⚠ The CLASS IS DECLARED FIRST, deliberately. With the module first, a member's TYPE does
-    /// not resolve and the temp reading it decays to Object — measured on a plain LITERAL
-    /// initializer, so it is PRE-EXISTING and nothing to do with folding: C++ emits
-    /// <c>void* t1; t1 = c-&gt;N;</c> and fails to compile, and MSIL throws
-    /// <c>MissingFieldException: Field not found: 'Box.N'</c>. The same file with the class first
-    /// emits <c>int32_t t1</c> and compiles clean. Every sibling fixture orders it this way too.
+    /// ⚠ The class is declared FIRST. When this fixture was written that was REQUIRED: with the
+    /// module first, a member's TYPE did not resolve and the temp reading it decayed to Object —
+    /// measured on a plain LITERAL initializer, so never about folding. That gap is FIXED for a
+    /// top-level class (<see cref="ClassDeclarationOrderTests"/>), so the order here is now habit
+    /// rather than necessity; it stays so this fixture keeps testing folding and nothing else.
     /// </summary>
     private static string Program(string field, string print) => $"""
         Class Box
