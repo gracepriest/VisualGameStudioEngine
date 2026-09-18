@@ -33,11 +33,13 @@ namespace VisualGameStudio.Tests.Compiler;
 /// diagnostic anywhere. Measured, the behaviour CHANGES for these: <c>= Helper()</c> and
 /// <c>= CInt(2.5)</c> compiled before and read <b>0</b>, and are compile errors now.</para>
 ///
-/// <para>⚠ Two neighbouring shapes cannot reach this code at all, both PRE-EXISTING and measured:
-/// a <c>Const</c> inside a class does not PARSE ("Unexpected token in class: 'Const'"), so a named
-/// constant can never be referenced from a field initializer; and a <c>Structure</c> field
-/// initializer does not parse either ("Expected member name but found Assignment"), which makes
-/// the structure call site unreachable for initializers even though it is wired up.</para>
+/// <para>⚠ A <c>Const</c> inside a class PARSES as of 2026-09-18 (<see cref="ClassConstantTests"/>)
+/// and lowers to a static field through this same helper. Referencing that named constant from
+/// another initializer (<c>= K + 1</c>) is still refused, because the folder substitutes no named
+/// constants — a SHARED limit rather than a class one, since module scope refuses the identical
+/// shape. A <c>Structure</c> field initializer still does not parse ("Expected member name but
+/// found Assignment"), which keeps the structure call site unreachable for initializers even
+/// though it is wired up.</para>
 /// </summary>
 [TestFixture]
 public class FieldInitializerFoldTests

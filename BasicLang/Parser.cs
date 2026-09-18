@@ -1014,6 +1014,23 @@ namespace BasicLang.Compiler
                 return field;
             }
 
+            // Const declaration. ⛔ This arm did not exist, so `Private Const K As Integer = 9`
+            // inside a Class was a PARSE ERROR — "Unexpected token in class: 'Const'" — while the
+            // suggestion this method throws below has always listed Const as a valid member. The
+            // module-level member parser has had the identical arm all along; this is the same
+            // three lines, so the two cannot disagree about the shape they accept.
+            //
+            // ⚠ Kept as a ConstantDeclarationNode rather than desugared to a Shared field.
+            // Constness is REAL here and enforced elsewhere: assigning to a module or local Const
+            // is already "Cannot assign to constant 'K'", and a class Const that quietly became a
+            // writable static field would be the one scope where that check disappears.
+            if (Check(TokenType.Const))
+            {
+                var constant = ParseConstantDeclaration();
+                constant.Access = access;
+                return constant;
+            }
+
             // Field declaration without Dim (e.g., "Private _name As String" or "Private items(10) As Integer")
             // If we see an identifier (or a contextual soft keyword like First) followed
             // by As or ( or [ (array), it's a field
