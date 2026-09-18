@@ -1571,6 +1571,207 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
+        /// VB's <b>BC30439</b>, "Constant expression not representable in type 'X'": a value the
+        /// compiler can compute now, stored somewhere it does not fit.
+        ///
+        /// <para>⛔ Measured before this existed, for <c>Dim b As Byte = 300</c> at LOCAL scope —
+        /// four backends, THREE answers, one of them not a program at all:
+        /// <b>C#</b> CS0031 ("Constant value '300' cannot be converted to a 'byte'"), so the
+        /// emitted source DOES NOT BUILD; <b>JavaScript</b> printed <b>300</b>, because a JS number
+        /// has no width to overflow; <b>C++</b> printed <b>44</b>, narrowing implicitly at the
+        /// declaration; <b>MSIL</b> also 44, from <c>ldc.i4 300</c> into a <c>uint8</c> slot. The
+        /// same split appears at every other store site — <c>b = 300</c>, <c>a(0) = 300</c>,
+        /// <c>x.F = 300</c>, <c>Return 300</c> and <c>Take(300)</c> — where C# adds CS0221 and
+        /// CS1503 to the tally.</para>
+        ///
+        /// <para>⚠ MODULE scope was the one place the backends agreed, on the WRAP (44), because
+        /// <c>IRBuilder.NarrowModuleScopeConstant</c> folds it there. That agreement is what the
+        /// old note in <c>docs/HANDOFF.md</c> generalized from, and it was wrong about locals: it
+        /// recorded the wrap as measured "on both" scopes. Agreeing on a wrap was never the goal —
+        /// real VB rejects all of these — so the fix is here, in the front end, ahead of every
+        /// backend and both scopes at once.</para>
+        ///
+        /// <para>⚠ The check runs AFTER half-to-even rounding, because that is what the narrowing
+        /// itself now does (<c>IRBuilder.TryConvertConstant</c>): <c>Dim b As Byte = 255.4</c> is
+        /// 255 and legal, <c>= 255.6</c> rounds to 256 and is not.</para>
+        ///
+        /// <para>⚠ Reports only what it can FOLD. A value that does not fold is not diagnosed
+        /// here — <c>Dim b As Byte = someInteger</c> is a run-time conversion, not a constant
+        /// expression, and VB does not report BC30439 for it either.</para>
+        /// </summary>
+        private void CheckConstantFitsNumericTarget(
+            ExpressionNode value, TypeInfo target, string context, int line, int column)
+        {
+            if (value == null || target?.Name == null) return;
+            if (!TryFoldConstantDouble(value, out var folded) || double.IsNaN(folded)) return;
+
+            // ⚠ Single is a RANGE check, not a precision one. `Dim s As Single = 0.1` loses bits
+            // and is perfectly legal VB; `= 1.0E+40` has no Single to round to at all. Measured
+            // without this arm: JavaScript printed `Infinity` and the C++ backend emitted
+            // `s = Infinityf;`, which does not compile.
+            if (string.Equals(target.Name, "Single", StringComparison.Ordinal))
+            {
+                if (!double.IsInfinity(folded) && float.IsInfinity((float)folded))
+                {
+                    Error($"Constant expression not representable in type 'Single': {context} is "
+                        + $"{FormatConstant(folded)}, but 'Single' holds magnitudes up to "
+                        + $"{float.MaxValue.ToString("R", CultureInfo.InvariantCulture)}.",
+                        line, column);
+                }
+                return;
+            }
+
+            if (!TryGetIntegralRange(target.Name, out var min, out var max)) return;
+
+            var rounded = double.IsInfinity(folded)
+                ? folded
+                : Math.Round(folded, MidpointRounding.ToEven);
+            if (rounded >= min && rounded <= max) return;
+
+            Error($"Constant expression not representable in type '{target.Name}': {context} is "
+                + $"{FormatConstant(folded)}, but '{target.Name}' holds {FormatConstant(min)} "
+                + $"through {FormatConstant(max)}.", line, column);
+        }
+
+        /// <summary>
+        /// The inclusive range of each integral type, in <c>double</c> space so one comparison
+        /// serves every width.
+        ///
+        /// <para>⚠ <c>Long</c> and <c>ULong</c> are DELIBERATELY imprecise at the boundary:
+        /// <c>(double)long.MaxValue</c> rounds UP to 2^63, so a constant of exactly 2^63 is
+        /// accepted although it does not fit. That is a missed diagnostic, not a false one, which
+        /// is the direction to err in — and the shape is unreachable anyway, since a literal that
+        /// large does not lex as an integer.</para>
+        ///
+        /// <para>⚠ <c>UByte</c> is listed beside <c>Byte</c> because <c>TypeInfo.IsNumeric</c>
+        /// names both; the language's <c>Byte</c> is already the unsigned one.</para>
+        /// </summary>
+        private static bool TryGetIntegralRange(string typeName, out double min, out double max)
+        {
+            switch (typeName)
+            {
+                case "Byte":
+                case "UByte": min = byte.MinValue; max = byte.MaxValue; return true;
+                case "SByte": min = sbyte.MinValue; max = sbyte.MaxValue; return true;
+                case "Short": min = short.MinValue; max = short.MaxValue; return true;
+                case "UShort": min = ushort.MinValue; max = ushort.MaxValue; return true;
+                case "Integer": min = int.MinValue; max = int.MaxValue; return true;
+                case "UInteger": min = uint.MinValue; max = uint.MaxValue; return true;
+                case "Long": min = long.MinValue; max = long.MaxValue; return true;
+                case "ULong": min = ulong.MinValue; max = ulong.MaxValue; return true;
+                default: min = 0; max = 0; return false;
+            }
+        }
+
+        /// <summary>
+        /// Folds an expression to a compile-time <c>double</c>, or returns false when it does not
+        /// fold.
+        ///
+        /// <para>⚠ The sibling of <see cref="TryFoldConstantInt"/>, and NOT a replacement for it:
+        /// that one answers "how many elements does this array have" and must refuse anything it
+        /// cannot size a declaration with, so it rejects floating values and any integer outside
+        /// <c>int</c>. This one exists to answer "does this value FIT", which those are exactly
+        /// the cases of — <c>3000000000</c> and <c>255.6</c> both have to survive folding to be
+        /// reported.</para>
+        ///
+        /// <para>⛔ Only <c>+ - * /</c>, though <c>TryFoldConstantInt</c> also folds
+        /// <c>\ Mod &lt;&lt; &gt;&gt;</c>. Those four are exact in double space below 2^53 and
+        /// evaluate the same way the IR's folders do; the integral-only operators would have to
+        /// re-derive an integral width here to agree, and a fold that DISAGREES with the IR
+        /// produces a false error — the one outcome worse than the silent wrap this replaces.
+        /// Declining to fold them only costs a diagnostic.</para>
+        ///
+        /// <para>⚠ Every leaf must be a numeric literal or a folded <c>Const</c>, so a
+        /// user-defined operator, a string concatenation with <c>+</c>, or a variable reference
+        /// stops the fold rather than being guessed at.</para>
+        /// </summary>
+        private bool TryFoldConstantDouble(ExpressionNode expr, out double value)
+        {
+            value = 0;
+            switch (expr)
+            {
+                case LiteralExpressionNode literal:
+                    return TryConvertConstantToDouble(literal.Value, out value);
+
+                case IdentifierExpressionNode identifier:
+                {
+                    var symbol = _currentScope?.Resolve(identifier.Name);
+                    if (symbol == null || !symbol.IsConstant || symbol.ConstantValue == null)
+                        return false;
+                    return TryConvertConstantToDouble(symbol.ConstantValue, out value);
+                }
+
+                case UnaryExpressionNode unary when unary.Operator is "-" or "+":
+                {
+                    if (!TryFoldConstantDouble(unary.Operand, out var operand)) return false;
+                    value = unary.Operator == "-" ? -operand : operand;
+                    return true;
+                }
+
+                case BinaryExpressionNode binary:
+                {
+                    if (!TryFoldConstantDouble(binary.Left, out var left)) return false;
+                    if (!TryFoldConstantDouble(binary.Right, out var right)) return false;
+                    switch (binary.Operator)
+                    {
+                        case "+": value = left + right; return true;
+                        case "-": value = left - right; return true;
+                        case "*": value = left * right; return true;
+                        // ⚠ Division by a constant zero does NOT fold: VB's `/` is floating, so
+                        // the answer is an infinity, and reporting "not representable" for a
+                        // program whose real defect is the division would point at the wrong
+                        // thing.
+                        case "/": if (right == 0) return false; value = left / right; return true;
+                        default: return false;
+                    }
+                }
+
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>
+        /// Every numeric CLR constant as a <c>double</c>. Unlike
+        /// <see cref="TryConvertConstantToInt"/> nothing is refused for being too large or
+        /// fractional — those are the values this check exists to report.
+        /// </summary>
+        private static bool TryConvertConstantToDouble(object constant, out double value)
+        {
+            value = 0;
+            switch (constant)
+            {
+                case int i: value = i; return true;
+                case long l: value = l; return true;
+                case short s: value = s; return true;
+                case byte b: value = b; return true;
+                case sbyte sb: value = sb; return true;
+                case ushort us: value = us; return true;
+                case uint u: value = u; return true;
+                case ulong ul: value = ul; return true;
+                case float f: value = f; return true;
+                case double d: value = d; return true;
+                case decimal m: value = (double)m; return true;
+                default: return false;
+            }
+        }
+
+        /// <summary>
+        /// A number for a diagnostic: whole values print without a decimal point, so the message
+        /// says "300" and "255" rather than "300" and "255.0" — and a fractional one keeps enough
+        /// digits to round-trip, so <c>255.6</c> is not reported as <c>256</c>.
+        /// </summary>
+        private static string FormatConstant(double value)
+        {
+            if (!double.IsInfinity(value) && !double.IsNaN(value)
+                && value == Math.Floor(value) && Math.Abs(value) < 1e18)
+            {
+                return ((long)value).ToString(CultureInfo.InvariantCulture);
+            }
+            return value.ToString("R", CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>
         /// Spec 6.1 "Decimal literals": in a Decimal context a numeric LITERAL
         /// converts at compile time from its SOURCE TEXT — never through the
         /// double value — so 'Dim d As Decimal = 1.50' keeps its scale and
@@ -5398,6 +5599,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         errorMsg += $". {hint}";
                     Error(errorMsg, node.Line, node.Column);
                 }
+
+                // ⛔ BC30439. The check above asks whether the TYPE converts; this one asks
+                // whether the VALUE survives it. `Dim b As Byte = 300` passes the first (a
+                // numeric literal may initialize any numeric type) and then means four different
+                // things — see CheckConstantFitsNumericTarget. Covers LOCAL and MODULE scope
+                // together: the IR builder has two separate narrowing paths for them, and this is
+                // the one node both come through.
+                CheckConstantFitsNumericTarget(
+                    node.Initializer, varType, $"the initializer for variable '{node.Name}'",
+                    node.Line, node.Column);
             }
         }
 
@@ -5453,6 +5664,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     Error($"Constant value type '{valueType}' is not compatible with declared type '{constType}'",
                           node.Line, node.Column);
                 }
+
+                // A Const is a constant expression by construction, so this is the site BC30439
+                // is named for. Measured before the check: `Const KB As Byte = 300` narrowed to
+                // 44 on JavaScript, where the `Dim` spelling of the same thing kept 300 — the two
+                // did not even agree with each other.
+                CheckConstantFitsNumericTarget(
+                    node.Value, constType, $"the value of constant '{node.Name}'",
+                    node.Line, node.Column);
             }
 
             var symbol = new Symbol(node.Name, SymbolKind.Constant, constType, node.Line, node.Column);
@@ -7299,6 +7518,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 TryRetypeLiteralToDecimal(node.Value, expectedReturnType);
                 var returnType = GetNodeType(node.Value);
 
+                // BC30439 at the return: `Return 300` from a `Function … As Byte` was CS0031 on
+                // C#, 300 on JavaScript and 44 on C++.
+                CheckConstantFitsNumericTarget(
+                    node.Value, expectedReturnType, "the returned value", node.Line, node.Column);
+
                 if (expectedReturnType.Equals(_typeManager.VoidType))
                 {
                     Error("Cannot return a value from a subroutine", node.Line, node.Column);
@@ -7373,6 +7597,19 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             if (targetType == null || valueType == null)
                 return;
+
+            // BC30439 at every STORE the assignment statement covers — a plain variable, an array
+            // element and a field all arrive here, and all three were CS0221 or CS0031 on C#, 300
+            // on JavaScript and 44 on C++. Placed after the null guard above, so an unresolved
+            // target reports its own error rather than acquiring a second one.
+            //
+            // ⚠ Compound assignment is NOT range-checked: `b += 200` is not a constant
+            // expression, since its value depends on b.
+            if (node.Operator == "=")
+            {
+                CheckConstantFitsNumericTarget(
+                    node.Value, targetType, "the assigned value", node.Line, node.Column);
+            }
 
             // Check if target is assignable
             if (node.Target is IdentifierExpressionNode idExpr)
@@ -8432,6 +8669,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         {
                             continue;
                         }
+
+                        // BC30439 at the call: `Take(300)` against `v As Byte` was CS1503 on C#,
+                        // 300 on JavaScript and 44 on C++. Named by POSITION rather than by the
+                        // parameter, because a ParamArray tail has no per-argument name.
+                        CheckConstantFitsNumericTarget(
+                            node.Arguments[i], paramType, $"argument {i + 1}",
+                            node.Line, node.Column);
 
                         // Allow any type when the parameter is a type parameter (generics)
                         if (paramType?.Kind == TypeKind.TypeParameter || argType?.Kind == TypeKind.TypeParameter)
