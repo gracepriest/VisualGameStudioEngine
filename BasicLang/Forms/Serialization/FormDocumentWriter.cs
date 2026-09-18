@@ -287,6 +287,61 @@ public static class FormDocumentWriter
 
             ApplyControl(element, control);
         }
+
+        ReorderToMatchModel(container, controls);
+    }
+
+    /// <summary>
+    /// Puts the known control elements back in the model's order.
+    ///
+    /// <para>⛔⛔ <b>Without this, z-order is a lie.</b> The loop above finds each element BY ID and
+    /// edits it in place, which is what makes the writer structure-preserving — and means element
+    /// order never changes. So "Bring to Front" reordered the model, the canvas redrew correctly, the
+    /// document on disk kept the old order, and the next open — and every build — used it. The
+    /// command would appear to work until you reloaded the file.</para>
+    ///
+    /// <para>⚠ Only when the order actually differs. Detaching and re-inserting every element
+    /// rewrites their whitespace, so doing it unconditionally would produce a whole-file diff on
+    /// every save of a document nobody had reordered.</para>
+    ///
+    /// <para>⚠ Elements the catalog does not know are left where they are (D9). They belong to a
+    /// newer designer, their order is not ours to interpret, and the model has no opinion about
+    /// where they sit.</para>
+    /// </summary>
+    private static void ReorderToMatchModel(XElement container, List<FormControl> controls)
+    {
+        var known = container.Elements()
+            .Where(e => FormControlCatalog.Find(e.Name.LocalName) != null)
+            .ToList();
+
+        var current = known.Select(e => (string?)e.Attribute("Id") ?? "").ToList();
+        var wanted = controls.Select(c => c.Id).ToList();
+
+        if (current.SequenceEqual(wanted, StringComparer.Ordinal))
+        {
+            return;
+        }
+
+        // First-wins rather than ToDictionary: a malformed document can carry a duplicate id, and
+        // throwing here would fail a SAVE of a file the designer had already agreed to open.
+        var byId = new Dictionary<string, XElement>(StringComparer.Ordinal);
+        foreach (var element in known)
+        {
+            byId.TryAdd((string?)element.Attribute("Id") ?? "", element);
+        }
+
+        foreach (var element in known)
+        {
+            RemoveWithLeadingWhitespace(element);
+        }
+
+        foreach (var id in wanted)
+        {
+            if (byId.TryGetValue(id, out var element))
+            {
+                InsertPreservingIndent(container, element, before: null);
+            }
+        }
     }
 
     private static void ApplyControl(XElement element, FormControl control)

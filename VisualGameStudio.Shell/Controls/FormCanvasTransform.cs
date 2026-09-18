@@ -126,6 +126,42 @@ public sealed class FormCanvasTransform
     }
 
     /// <summary>
+    /// Every control a rubber-band selection covers. <paramref name="formRect"/> is in FORM units.
+    ///
+    /// <para>⚠ INTERSECTS rather than contains, which is what VS does: dragging a band across a row
+    /// of controls selects them without having to enclose the widest one completely.</para>
+    ///
+    /// <para>⛔⛔ <b>A container and its own descendants are never both returned.</b> A band dragged
+    /// across a Panel intersects the Panel AND everything inside it, and selecting both is actively
+    /// harmful: a group move would translate the Panel — which carries its children — and then
+    /// translate each child again, so they would travel twice as far as the container they live in.
+    /// The container wins, because that is what the user drew a band around.</para>
+    ///
+    /// <para>⚠ Reads <see cref="Layout"/>, so it inherits the one authority on where controls are
+    /// and works for both a pixel form and a web page's cells.</para>
+    /// </summary>
+    public static IReadOnlyList<FormControl> ControlsIn(FormDocument document, Rect formRect)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+
+        var hit = Layout(document)
+            .Where(entry => entry.Bounds.Intersects(formRect))
+            .Select(entry => entry.Control)
+            .ToList();
+
+        if (hit.Count < 2)
+        {
+            return hit;
+        }
+
+        // Anything whose ancestor is also in the band is dropped — the ancestor already carries it.
+        var covered = new HashSet<FormControl>(
+            hit.SelectMany(c => c.Children.SelectMany(child => child.SelfAndDescendants())));
+
+        return hit.Where(c => !covered.Contains(c)).ToList();
+    }
+
+    /// <summary>
     /// The form's drawable area in FORM units — its client size, or a default for a page that has
     /// no intrinsic one.
     ///

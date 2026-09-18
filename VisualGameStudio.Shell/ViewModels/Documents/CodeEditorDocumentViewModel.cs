@@ -282,6 +282,164 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     }
 
     /// <summary>
+    /// What is selected on the canvas (Task 20). Owned here rather than by the canvas, because the
+    /// align, size, z-order and clipboard commands below all operate on it.
+    /// </summary>
+    public ViewModels.Designer.FormSelection Selection { get; } = new();
+
+    /// <summary>
+    /// The designer's copy buffer.
+    ///
+    /// <para>⚠ Static, so copy in one open form and paste into another works — which is most of the
+    /// point. ⚠ NOT the OS clipboard: Avalonia's clipboard is async and reached through a
+    /// <c>TopLevel</c>, which a document view model does not have. The cost is that Ctrl+C here does
+    /// not put anything on the system clipboard, and pasting from another application does nothing.
+    /// Within one IDE session, which is where a form subtree is meaningful at all, it behaves.</para>
+    /// </summary>
+    private static string? _designerClipboard;
+
+    /// <summary>
+    /// Align and make-same-size over the multi-selection, against its primary.
+    ///
+    /// <para>⚠ Writes the document only when something actually moved, so pressing "align left" on
+    /// an already-aligned selection does not mark the form dirty or add an undo step.</para>
+    /// </summary>
+    [RelayCommand]
+    private void Arrange(ViewModels.Designer.FormArrangeKind kind)
+    {
+        var file = DesignFile;
+        if (file == null)
+        {
+            return;
+        }
+
+        if (ViewModels.Designer.FormArrange.Apply(
+                file.Model, kind, Selection.Controls, Selection.Primary))
+        {
+            WriteDesignerEditBack();
+        }
+    }
+
+    [RelayCommand]
+    private void BringToFront() => Reorder(toFront: true);
+
+    [RelayCommand]
+    private void SendToBack() => Reorder(toFront: false);
+
+    /// <summary>
+    /// ⚠ Every selected control, in an order that keeps the selection's own relative layering. Sent
+    /// to the back one at a time in FORWARD order, each lands at index 0 and pushes the previous one
+    /// back — which reverses them. Walking backwards for that case keeps the group's internal order.
+    /// </summary>
+    private void Reorder(bool toFront)
+    {
+        var file = DesignFile;
+        if (file == null || Selection.IsEmpty)
+        {
+            return;
+        }
+
+        var order = toFront
+            ? Selection.Controls.ToList()
+            : Selection.Controls.Reverse().ToList();
+
+        var changed = false;
+        foreach (var control in order)
+        {
+            changed |= toFront ? file.Model.BringToFront(control) : file.Model.SendToBack(control);
+        }
+
+        if (changed)
+        {
+            WriteDesignerEditBack();
+        }
+    }
+
+    [RelayCommand]
+    private void CopyControls()
+    {
+        var file = DesignFile;
+        if (file == null || Selection.IsEmpty)
+        {
+            return;
+        }
+
+        _designerClipboard = BasicLang.Forms.FormClipboard.SerializeSubtree(
+            file.Model.Target, Selection.Controls);
+    }
+
+    [RelayCommand]
+    private void CutControls()
+    {
+        var file = DesignFile;
+        if (file == null || Selection.IsEmpty)
+        {
+            return;
+        }
+
+        CopyControls();
+
+        // ⚠ A snapshot: removing mutates the document, and Selection.Clear below would otherwise be
+        // iterating the collection it is emptying.
+        foreach (var control in Selection.Controls.ToList())
+        {
+            file.Model.ListContaining(control)?.Remove(control);
+        }
+
+        Selection.Clear();
+        PropertyGrid.SelectedControl = null;
+        WriteDesignerEditBack();
+    }
+
+    /// <summary>
+    /// Pastes the copy buffer, renaming anything whose id is taken.
+    ///
+    /// <para>⛔ <c>DeserializeSubtree</c> does the renaming AND retargets the binds that named the
+    /// old id — which is why it was built alongside the model rather than when Ctrl+V was wired.
+    /// Pasting a button called <c>btnLogin</c> beside an existing one must not produce two controls
+    /// answering to one handler.</para>
+    ///
+    /// <para>⚠ Offset by a grid step so a paste is VISIBLE. Pasting exactly on top of the original
+    /// looks like nothing happened, and the user pastes again.</para>
+    /// </summary>
+    [RelayCommand]
+    private void PasteControls()
+    {
+        var file = DesignFile;
+        if (file == null || string.IsNullOrEmpty(_designerClipboard))
+        {
+            return;
+        }
+
+        var taken = new HashSet<string>(
+            file.Model.AllControls().Select(c => c.Id), StringComparer.OrdinalIgnoreCase);
+
+        var pasted = BasicLang.Forms.FormClipboard.DeserializeSubtree(
+            _designerClipboard, file.Model.Target, id => taken.Contains(id));
+
+        if (pasted.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var control in pasted)
+        {
+            if (control.Geometry is BasicLang.Forms.PixelGeometry pixel)
+            {
+                pixel.X += 8;
+                pixel.Y += 8;
+            }
+
+            file.Model.Controls.Add(control);
+        }
+
+        file.Model.RenumberTabIndexes();
+        Selection.SetRange(pasted);
+        PropertyGrid.SelectedControl = Selection.Primary;
+        WriteDesignerEditBack();
+    }
+
+    /// <summary>
     /// The double-click gesture (Task 22): put the caret in this control's handler, creating it if
     /// it does not exist yet.
     ///

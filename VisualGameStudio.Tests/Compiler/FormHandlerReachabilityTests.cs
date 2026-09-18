@@ -58,6 +58,27 @@ public class FormHandlerReachabilityTests
             "the canvas's double-click command is not bound, so the gesture reaches nothing");
     }
 
+    /// <summary>
+    /// Task 20's bindings. ⛔⛔ <c>FormClipboard</c> is the repo's longest-standing thing with no
+    /// caller — built in Task 4, covered from a dozen angles, named in <c>CLAUDE.md</c> as still
+    /// unreachable. Its commands now exist; this is what stops them quietly losing their bindings.
+    /// </summary>
+    [Test]
+    public void TheDesignViewBindsTheSelectionAndClipboardCommands()
+    {
+        var axaml = Read("VisualGameStudio.Shell", "Views", "Documents", "CodeEditorDocumentView.axaml")
+            .Replace(" ", "").Replace("\r", "").Replace("\n", "");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(axaml, Does.Contain("Selection=\"{BindingSelection}\""),
+                "without this the canvas has no multi-selection to mutate");
+            Assert.That(axaml, Does.Contain("CopyCommand=\"{BindingCopyControlsCommand}\""));
+            Assert.That(axaml, Does.Contain("CutCommand=\"{BindingCutControlsCommand}\""));
+            Assert.That(axaml, Does.Contain("PasteCommand=\"{BindingPasteControlsCommand}\""));
+        });
+    }
+
     /// <summary>Link 1 — the canvas actually listens for the gesture.</summary>
     [Test]
     public void TheCanvasHandlesDoubleTap()

@@ -165,6 +165,96 @@ public class FormCanvasControl : Control
         set => SetValue(ActivateControlCommandProperty, value);
     }
 
+    /// <summary>
+    /// The multi-selection (Task 20). <see cref="SelectedControl"/> remains its PRIMARY.
+    ///
+    /// <para>⚠ Owned by the HOST, not by the canvas, because the align, size, z-order and clipboard
+    /// commands all operate on it and they live on the view model. The canvas is what mutates it —
+    /// clicks and the rubber band are gestures — but it is not what it belongs to.</para>
+    ///
+    /// <para>⛔ This is the one external object the canvas subscribes to, so it is also the one it
+    /// has to UNSUBSCRIBE from: <see cref="OnPropertyChanged"/> detaches the old selection when the
+    /// property changes. Without that, re-docking or switching documents leaves a handler per past
+    /// selection alive and every repaint fires all of them.</para>
+    /// </summary>
+    public static readonly StyledProperty<FormSelection?> SelectionProperty =
+        AvaloniaProperty.Register<FormCanvasControl, FormSelection?>(nameof(Selection));
+
+    public FormSelection? Selection
+    {
+        get => GetValue(SelectionProperty);
+        set => SetValue(SelectionProperty, value);
+    }
+
+    /// <summary>Ctrl+C, Ctrl+X, Ctrl+V. Commands for the same reason <see cref="DeleteCommand"/> is.</summary>
+    public static readonly StyledProperty<ICommand?> CopyCommandProperty =
+        AvaloniaProperty.Register<FormCanvasControl, ICommand?>(nameof(CopyCommand));
+
+    public static readonly StyledProperty<ICommand?> CutCommandProperty =
+        AvaloniaProperty.Register<FormCanvasControl, ICommand?>(nameof(CutCommand));
+
+    public static readonly StyledProperty<ICommand?> PasteCommandProperty =
+        AvaloniaProperty.Register<FormCanvasControl, ICommand?>(nameof(PasteCommand));
+
+    public ICommand? CopyCommand
+    {
+        get => GetValue(CopyCommandProperty);
+        set => SetValue(CopyCommandProperty, value);
+    }
+
+    public ICommand? CutCommand
+    {
+        get => GetValue(CutCommandProperty);
+        set => SetValue(CutCommandProperty, value);
+    }
+
+    public ICommand? PasteCommand
+    {
+        get => GetValue(PasteCommandProperty);
+        set => SetValue(PasteCommandProperty, value);
+    }
+
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+    {
+        base.OnPropertyChanged(change);
+
+        if (change.Property != SelectionProperty)
+        {
+            return;
+        }
+
+        if (change.OldValue is FormSelection old)
+        {
+            old.Changed -= OnSelectionChanged;
+        }
+
+        if (change.NewValue is FormSelection next)
+        {
+            next.Changed += OnSelectionChanged;
+        }
+
+        InvalidateVisual();
+    }
+
+    private void OnSelectionChanged(object? sender, EventArgs e)
+    {
+        // The primary is what the property grid shows, so it follows the selection rather than being
+        // set separately at every call site.
+        SelectedControl = Selection?.Primary;
+        InvalidateVisual();
+    }
+
+    /// <summary>
+    /// Everything currently selected — the multi-selection when there is one, otherwise just the
+    /// primary, so a canvas with no host-supplied <see cref="Selection"/> still behaves.
+    /// </summary>
+    private IReadOnlyList<FormControl> SelectedSet =>
+        Selection is { IsEmpty: false } selection
+            ? selection.Controls
+            : SelectedControl is { } single
+                ? new[] { single }
+                : Array.Empty<FormControl>();
+
     public FormCanvasControl()
     {
         // ⚠ These two handlers are on THIS control's own attached routed events — they live and die
@@ -194,6 +284,31 @@ public class FormCanvasControl : Control
     /// picture looks right and the clicks land somewhere else.</para>
     /// </summary>
     private FormCanvasTransform _transform = new();
+
+    /// <summary>Where a rubber-band drag started, in CANVAS units, or null when none is running.</summary>
+    private Point? _marqueeOrigin;
+
+    private Point _marqueeCurrent;
+
+    /// <summary>
+    /// A control clicked while it was already part of a multi-selection.
+    ///
+    /// <para>⚠ The selection collapses to it on RELEASE, and only if the pointer never moved — so
+    /// clicking one control of a group and dragging moves the GROUP, while clicking and letting go
+    /// picks that one out of it. Collapsing on press instead makes a multi-selection impossible to
+    /// drag, because the press that begins the drag destroys it.</para>
+    /// </summary>
+    private FormControl? _collapseTo;
+
+    /// <summary>
+    /// Every selected control's geometry as the drag began, keyed by control.
+    ///
+    /// <para>⛔ Re-derived from these and the TOTAL delta on every move, never nudged frame by
+    /// frame — the same rule the single-control drag follows. Nudging compounds each clamp, so
+    /// dragging a group into an edge and back leaves it displaced from the pointer by however much
+    /// the edge held it.</para>
+    /// </summary>
+    private readonly Dictionary<FormControl, (int X, int Y, int Width, int Height)> _dragStarts = new();
 
     // ⛔ No _cachedBitmap / _bitmapDirty here, deliberately. MinimapControl carries both plus two
     // companions and caches NOTHING: the bitmap is never created and the dirty flag is never read.
@@ -236,7 +351,52 @@ public class FormCanvasControl : Control
         base.OnKeyDown(e);
 
         var document = Document;
-        if (document == null || SelectedControl is not { } control)
+        if (document == null)
+        {
+            return;
+        }
+
+        // ⚠ Esc clears, and is handled even with nothing selected — otherwise the key falls through
+        // to the editor underneath the design overlay, where it means something else entirely.
+        if (e.Key == Key.Escape)
+        {
+            if (_marqueeOrigin != null)
+            {
+                _marqueeOrigin = null;
+                InvalidateVisual();
+            }
+            else
+            {
+                Selection?.Clear();
+                SelectedControl = null;
+            }
+
+            e.Handled = true;
+            return;
+        }
+
+        // ⚠ Before the SelectedControl guard: PASTE is the one clipboard gesture that is meaningful
+        // with nothing selected, and guarding it behind a selection would make Ctrl+V dead on an
+        // empty form — exactly when someone is most likely to use it.
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            var clipboard = e.Key switch
+            {
+                Key.C => CopyCommand,
+                Key.X => CutCommand,
+                Key.V => PasteCommand,
+                _ => null
+            };
+
+            if (clipboard?.CanExecute(null) == true)
+            {
+                clipboard.Execute(null);
+                e.Handled = true;
+                return;
+            }
+        }
+
+        if (SelectedControl is not { } control)
         {
             return;
         }
@@ -352,6 +512,54 @@ public class FormCanvasControl : Control
         e.Handled = true;
     }
 
+    /// <summary>
+    /// What a click does to the selection.
+    ///
+    /// <para>⛔ Clicking a control that is ALREADY part of a multi-selection must not collapse the
+    /// selection to it — that is how a drag of three controls becomes a drag of one, and the user
+    /// cannot move a group at all. The selection collapses on RELEASE instead, and only if the
+    /// pointer never moved.</para>
+    /// </summary>
+    private void ApplyClickSelection(FormControl? hit, bool extend)
+    {
+        var selection = Selection;
+        if (selection == null)
+        {
+            SelectedControl = hit;
+            return;
+        }
+
+        if (hit == null)
+        {
+            selection.Clear();
+            return;
+        }
+
+        if (extend)
+        {
+            selection.Toggle(hit);
+        }
+        else if (!selection.Contains(hit))
+        {
+            selection.Set(hit);
+        }
+        else
+        {
+            // Already selected: keep the group, but make this the primary so align and size use the
+            // control the user just pointed at — which is what VS does.
+            _collapseTo = selection.Controls.Count > 1 ? hit : null;
+        }
+
+        SelectedControl = selection.Primary;
+    }
+
+    private void BeginMarquee(Point point)
+    {
+        _marqueeOrigin = point;
+        _marqueeCurrent = point;
+        Focus();
+    }
+
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         base.OnPointerPressed(e);
@@ -406,7 +614,21 @@ public class FormCanvasControl : Control
         if (handle == FormResizeHandle.None)
         {
             // The SAME transform the last Render used, so selection cannot disagree with the picture.
-            SelectedControl = _transform.HitTest(document, point);
+            var hit = _transform.HitTest(document, point);
+            var extend = e.KeyModifiers.HasFlag(KeyModifiers.Shift) ||
+                         e.KeyModifiers.HasFlag(KeyModifiers.Control);
+
+            if (hit == null && !extend)
+            {
+                // ⚠ Empty background with no modifier starts a RUBBER BAND rather than clearing
+                // immediately. Clearing happens on release if the band caught nothing, so a click
+                // that turns out to be a drag does not flash the selection away first.
+                BeginMarquee(point);
+                e.Handled = true;
+                return;
+            }
+
+            ApplyClickSelection(hit, extend);
         }
 
         if (SelectedControl?.Geometry is GridGeometry)
@@ -432,6 +654,17 @@ public class FormCanvasControl : Control
             _dragStartForm = FormBoundsOf(document, SelectedControl)?.TopLeft
                              ?? new Point(pixel.X, pixel.Y);
 
+            // Every OTHER selected control's starting geometry, so a group drag is re-derived from
+            // the start and the total delta exactly as the primary's is.
+            _dragStarts.Clear();
+            foreach (var other in SelectedSet)
+            {
+                if (other.Geometry is PixelGeometry g)
+                {
+                    _dragStarts[other] = (g.X, g.Y, g.Width, g.Height);
+                }
+            }
+
             _dragChanged = false;
             e.Pointer.Capture(this);
         }
@@ -456,6 +689,23 @@ public class FormCanvasControl : Control
         var document = Document;
         if (document == null)
         {
+            return;
+        }
+
+        // ⚠ BEFORE every other gesture. A rubber band has no selected control and no drag origin,
+        // so any guard that checks those first would drop it on its first move.
+        if (_marqueeOrigin != null)
+        {
+            if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+            {
+                _marqueeOrigin = null;
+                InvalidateVisual();
+                return;
+            }
+
+            _marqueeCurrent = e.GetPosition(this);
+            InvalidateVisual();
+            e.Handled = true;
             return;
         }
 
@@ -537,6 +787,30 @@ public class FormCanvasControl : Control
                 document, control,
                 Snap(_dragStartForm.X + dx, e.KeyModifiers),
                 Snap(_dragStartForm.Y + dy, e.KeyModifiers));
+
+            // ⛔ The REST of a multi-selection moves by the same delta, and NOT through MoveToForm.
+            // The primary re-parents when the pointer crosses a Panel boundary because the pointer
+            // is over that Panel; the others are somewhere else entirely, and re-parenting each of
+            // them to whatever happens to be under its own new position would scatter a group drag
+            // across containers the user never pointed at.
+            foreach (var other in SelectedSet)
+            {
+                if (ReferenceEquals(other, control) ||
+                    other.Geometry is not PixelGeometry geometry ||
+                    !_dragStarts.TryGetValue(other, out var from))
+                {
+                    continue;
+                }
+
+                var x = Snap(from.X + dx, e.KeyModifiers);
+                var y = Snap(from.Y + dy, e.KeyModifiers);
+                if (x == geometry.X && y == geometry.Y)
+                {
+                    continue;
+                }
+
+                changed |= FormGeometryEdit.MoveTo(document, other, x, y);
+            }
         }
         else
         {
@@ -565,11 +839,41 @@ public class FormCanvasControl : Control
     {
         base.OnPointerReleased(e);
 
+        // A rubber band selects on release rather than live, so a band dragged across the form does
+        // not thrash the property grid through every control it passes over.
+        if (_marqueeOrigin is { } origin)
+        {
+            var band = new Rect(origin, _marqueeCurrent);
+            _marqueeOrigin = null;
+
+            if (Document is { } doc)
+            {
+                Selection?.SetRange(FormCanvasTransform.ControlsIn(doc, _transform.ToForm(band)));
+                SelectedControl = Selection?.Primary;
+            }
+
+            InvalidateVisual();
+            e.Handled = true;
+            return;
+        }
+
         var wasDragging = _dragOrigin != null;
         _dragOrigin = null;
         _dragHandle = FormResizeHandle.None;
         _formGrip = FormResizeHandle.None;
         e.Pointer.Capture(null);
+
+        // Clicking one control of a multi-selection WITHOUT dragging picks it out of the group.
+        // Deferred to here precisely so the same click could have started a group drag instead.
+        if (_collapseTo is { } single)
+        {
+            _collapseTo = null;
+            if (!_dragChanged)
+            {
+                Selection?.Set(single);
+                SelectedControl = single;
+            }
+        }
 
         if (!wasDragging || !_dragChanged)
         {
@@ -813,10 +1117,31 @@ public class FormCanvasControl : Control
         // the cell's, so there is nothing to drag an edge of, and OnPointerPressed will not arm a
         // resize for it. Drawing eight grips on it would advertise a gesture that silently does
         // nothing, which is worse than drawing none.
+        // ⚠ Every SECONDARY member of a multi-selection gets an outline but no handles — VS's
+        // convention, and an honest one: only the primary can be resized by dragging, so only the
+        // primary advertises grips. Outlining them all is what tells the user a group command will
+        // affect more than the one control they can see handles on.
+        foreach (var member in SelectedSet)
+        {
+            if (!ReferenceEquals(member, SelectedControl) &&
+                CanvasBoundsOf(document, member) is { } outline)
+            {
+                context.DrawRectangle(null, SecondarySelectionPen, outline);
+            }
+        }
+
         if (SelectedControl?.Geometry is PixelGeometry &&
             CanvasBoundsOf(document, SelectedControl) is { } selection)
         {
             DrawHandles(context, selection);
+        }
+
+        // The rubber band, over everything — it is transient and must never be hidden behind a
+        // control it is being dragged across.
+        if (_marqueeOrigin is { } bandOrigin)
+        {
+            var band = new Rect(bandOrigin, _marqueeCurrent);
+            context.DrawRectangle(MarqueeBrush, MarqueePen, band);
         }
 
         // The form's own grips, last of all. Unlike the title-bar buttons these are REAL: they
@@ -1338,6 +1663,22 @@ public class FormCanvasControl : Control
     // ⚠ VB6 marks a selection with HANDLES ALONE — no outline. Solid navy squares, which read
     // against the form face and a white control interior alike.
     private static readonly IBrush HandleBrush = new SolidColorBrush(Color.FromRgb(0x00, 0x00, 0x80));
+
+    /// <summary>
+    /// The outline on a secondary member of a multi-selection: the primary's navy, dashed so the two
+    /// are distinguishable at a glance without a second colour to learn.
+    /// </summary>
+    private static readonly IPen SecondarySelectionPen = new Pen(
+        new SolidColorBrush(Color.FromRgb(0x00, 0x00, 0x80)), 1,
+        new DashStyle(new double[] { 3, 3 }, 0));
+
+    /// <summary>The rubber band: a faint wash so controls stay readable underneath it.</summary>
+    private static readonly IBrush MarqueeBrush =
+        new SolidColorBrush(Color.FromArgb(0x30, 0x00, 0x00, 0x80));
+
+    private static readonly IPen MarqueePen = new Pen(
+        new SolidColorBrush(Color.FromRgb(0x00, 0x00, 0x80)), 1,
+        new DashStyle(new double[] { 2, 2 }, 0));
     private static readonly IPen HandlePen = new Pen(new SolidColorBrush(Color.FromRgb(0x00, 0x00, 0x00)));
 
     /// <summary>Side of a CheckBox tick or RadioButton bullet, before it is clamped to the bounds.</summary>

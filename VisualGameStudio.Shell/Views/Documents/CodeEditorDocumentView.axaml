@@ -227,6 +227,10 @@
                                     CommitGeometryCommand="{Binding CommitGeometryCommand}"
                                     DeleteCommand="{Binding DeleteControlCommand}"
                                     ActivateControlCommand="{Binding ActivateControlCommand}"
+                                    Selection="{Binding Selection}"
+                                    CopyCommand="{Binding CopyControlsCommand}"
+                                    CutCommand="{Binding CutControlsCommand}"
+                                    PasteCommand="{Binding PasteControlsCommand}"
                                     SelectedControl="{Binding PropertyGrid.SelectedControl, Mode=TwoWay}"/>
 
         <!-- Property window, shaped like Visual Studio's: "id  Kind" caption, a two-column
