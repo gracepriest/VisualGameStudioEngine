@@ -741,11 +741,52 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   variable 'ex' has no local slot"), while an array local is **SILENT** — `EmitArrayLocalAllocations`
   just `continue`s, no `newarr` is emitted, and the program dies at run time with a
   NullReferenceException on first use.
-  ⛔ **A property named after a keyword is STILL refused**, for a pre-existing and unrelated
-  reason: the backend writes a `.property` block whose `.get`/`.set` name accessor methods it
-  never emits, so ilasm answers "Invalid Set method of property" — verified on the parent commit
-  with the ordinary name `Alpha`. Not fixed here; the accessor-composition property is pinned on
-  the IL TEXT instead, since nothing can run it.
+  ⛔ **A property named after a keyword was STILL refused** when that change landed, for a
+  pre-existing and unrelated reason — the `.property` block named accessor methods the backend
+  never emitted. **FIXED as of 2026-09-18**, see the next entry; the accessor-composition property
+  is still pinned on the IL TEXT rather than a run, because that is what it is about.
+
+  ⚠ **Properties WORK on MSIL as of 2026-09-18 — they did not, in ANY shape** —
+  `MsilPropertyTests`, `MSILCodeGenerator.GenerateProperty` + the field-access visitors. Measured
+  before, compile → ilasm → run: an AUTO property (`Public Property Alpha As Integer`) made ilasm
+  refuse the file ("Invalid Set method of property 'Alpha'"); an EXPLICIT one assembled and died
+  with `MissingFieldException: Field not found: 'Box.N'`; `ReadOnly` with a computed getter the
+  same; an auto property touched from inside its own class was refused; a `Shared` one was
+  refused. Every other backend ran the same program (JavaScript 7, C++ 7, C# emits a real
+  `public int Alpha { get; set; }`).
+  ⛔ **THREE independent defects, each masking the next.** (1) The `.property` block was written
+  UNCONDITIONALLY while each accessor METHOD was gated on `prop.Getter != null`; an auto property
+  carries neither in the IR, so the block named methods that did not exist — and nothing declared
+  storage for the value either. (2) Every property ACCESS lowered to `ldfld`/`stfld` on the
+  property's own name, bypassing the accessors; proved by deleting the `.property` block from the
+  emitted IL by hand, after which it assembled and died with MissingFieldException. (3) An
+  explicit accessor's body never got a `.locals init`, because `.maxstack` was written BEFORE
+  `InitializeMethodContext` and the slot tables do not exist until then — so
+  `Set(value As Integer)` emitted `stloc.0` into a method with no locals directive and the CLR
+  answered **InvalidProgramException**. Fixing (3) is a REORDERING, not an added line.
+  ⚠ **An auto property gets `'<Name>k__BackingField'`** plus two synthesized accessors over it —
+  the spelling the C# and VB compilers use, so it reads as generated and cannot collide with a
+  user field. The angle brackets are not identifier characters, which is what makes it safe and
+  also why it must be quoted.
+  ⛔ **The `.property` block and the methods are now decided by ONE pair of conditions.** The
+  shape that forces this is a property with only a `Get` block and NO `ReadOnly` keyword:
+  `IsReadOnly` is false, so asking IT whether to declare `.set` answers yes and names a `set_N`
+  that is never emitted. A `ReadOnly` property does NOT hold that — there both conditions agree —
+  which is why the mutation survived the first pass and needed its own test.
+  ⚠ **A bare property name inside its own class is a CALL, not a load**, so `_currentClassProperties`
+  sits beside `_currentClassFields` rather than in it. Without it `Alpha = Alpha + 1` emitted
+  `// WARNING: Unknown local 'Alpha'`, pushed nothing, ran the `add` an operand short and stored
+  the result into a temporary. The setter also needs the same scratch slot the `stfld` path uses —
+  IL has no swap — so `AllocateFieldStoreScratch` reserves one for an instance property too.
+  ⛔ **TWO gaps here are PRE-EXISTING and deliberately NOT fixed or asserted**, both verified on
+  the parent commit `3011ab0`:
+  (a) **Instance field initializers are never emitted.** `Public N As Integer = 5` prints **0**
+  with no property anywhere — the constructor only calls the base. The computed-getter test seeds
+  through a method for this reason; seeding with a field initializer would pin that gap instead.
+  (b) **Inherited members do not resolve.** `Derived.Tag` where `Tag` is on `Base` types its
+  temporary `object` and boxes as `System.Object` — on master too, for a plain FIELD
+  (`ldfld object 'Derived'::'Tag'`). The front end does not walk the base chain for a member's
+  type. The property variant fails the same way and this change neither fixes nor worsens it.
   ⚠ **Still NOT reported: the sub-int narrowing gap this sits next to.** `Dim b As Byte = 255.4`
   is accepted and then prints **255.4** on JavaScript and **255** on C++, because
   `TryConvertConstant` declines Byte/SByte/Short/UShort on purpose (see above). In range is not
