@@ -956,14 +956,42 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   constness is enforced: assigning to a module or local Const is already "Cannot assign to
   constant", and a class Const that became a writable static field would be the one scope where
   that check vanished. Asserted.
-  ⛔ **TWO shapes inherit PRE-EXISTING `Shared` defects**, each verified on a plain Shared field
-  with the change stashed: **JavaScript reads it as `undefined`** (the class emits `static K = 9;`
-  and the method reads `this.K`, undefined for a JS static — the backend's static-read lowering);
-  and **reading it from outside as `Box.K` does not compile on C++** (`t0 = Box->K;`, "'Box' does
-  not refer to a value" — the long-recorded Shared-access gap).
+  ⛔ **TWO shapes inherited PRE-EXISTING `Shared` defects**, each verified on a plain Shared field
+  with the change stashed. **The JavaScript one is FIXED as of 2026-09-18** (see the JS `Shared`
+  entry below): it read as `undefined` because the class emitted `static K = 9;` and the method read
+  `this.K`, and that was the backend's static lowering exactly as recorded — so a class Const now
+  emits `return Box.K;` and runs 9, and `AClassConstant_IsReadableFromAMethod` asserts all FOUR
+  backends rather than three. **STILL OPEN**: reading it from outside as `Box.K` does not compile on
+  C++ (`t0 = Box->K;`, "'Box' does not refer to a value" — the long-recorded Shared-access gap).
   ⚠ **Referencing the named constant from another initializer (`= K + 1`) is still refused** — the
   folder substitutes no named constants. A SHARED limit, not a class one: module scope refuses the
   identical shape.
+  ⚠ **`Shared` FIELDS and PROPERTIES lower to `Owner.X` on JavaScript as of 2026-09-18** —
+  `JavaScriptSharedMemberTests`, `JavaScriptBackend.StaticMemberOwners` + `MemberReference`.
+  ⛔ **Measured before**: the class emitted `static K = 9;` and every method emitted `this.K` — and
+  `this.K` is `undefined` for a JS static. A READ answered `undefined`; a WRITE silently created an
+  INSTANCE property and never touched the static. **A single-instance probe hides the write half**
+  (the object reads its own new property back and looks right), so it takes two: `a.Bump()` then
+  `b.Read()` printed `undefined` on JS where C++ printed 7. Shared did not mean shared.
+  ⛔ **The worst shape prints a PLAUSIBLE NUMBER, not an error.** `K = K + 1` emitted
+  `this.K = ((this.K + 1) | 0)`, which is `undefined + 1` = NaN and `NaN | 0` = **0** — a counter
+  that reads 0 forever. Measured 0 where every other backend gives 2.
+  ⛔ **There are TWO write sites, and `K = 7` exercises only one.** A compound assignment produces
+  an IRBinaryOp that IRBuilder renames after the variable, so it lands in `Bind`'s member arm
+  instead of the lvalue path. Found because the write mutation SURVIVED the fixture's first draft.
+  ⚠ **Both halves go through ONE helper (`MemberReference`)**, so a read and a write cannot disagree
+  about where a member lives, and it names the DECLARING class, not the current one: JS resolves a
+  static READ up the prototype chain, but `Derived.K = 7` would create a NEW static on Derived and
+  leave Base's untouched.
+  ⛔ **The declaring-class walk is UNREACHABLE from source today and its mutation SURVIVES** — a
+  recorded survivor, not an oversight. An inherited member is not nameable at all: `Return K` for a
+  Base's `Shared K` is "Symbol 'K' is undefined", *identically* to a `Protected` instance field
+  ("Symbol 'P' is undefined"), both measured. It is kept because the sibling it must agree with,
+  `MemberNames`, walks the same chain — if only that one did, the day inherited members resolve
+  `_memberNames` would hold the inherited static while the owners map did not, and the read would
+  fall back to `this.K`, silently reintroducing this exact bug for inherited statics.
+  ⚠ **A `Shared` METHOD call is a separate gap, untouched**: `Box.Read()` is still "JavaScript
+  backend: no lowering for 'Box.Read'".
   ⚠ **Narrowing shapes are refused by the SEMANTIC ANALYZER, before any of this** —
   `Public N As Single = 1.5 + 1.0` is "Cannot assign value of type 'Double' to variable of type
   'Single'", before and after. Not a folding gap.
