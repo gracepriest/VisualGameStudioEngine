@@ -118,6 +118,21 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         private readonly Dictionary<string, int> _fieldStoreScratch =
             new(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>
+        /// The enclosing class's properties, for a BARE name inside one of its own methods.
+        ///
+        /// <para>⛔ Separate from <see cref="_currentClassFields"/> because a property is not
+        /// storage: the bare name has to become an accessor CALL, not an <c>ldfld</c>. Without
+        /// this, <c>Alpha = Alpha + 1</c> inside the class emitted
+        /// <c>// WARNING: Unknown local 'Alpha'</c>, pushed nothing, ran the <c>add</c> an operand
+        /// short and stored the result into a temporary — the CLR rejected the method.</para>
+        /// </summary>
+        private readonly Dictionary<string, IRProperty> _currentClassProperties =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>The class <see cref="_currentClassProperties"/> was filled from.</summary>
+        private IRClass _currentClassOwner;
+
         /// <summary>The IL name of the type whose fields <see cref="_currentClassFields"/> holds.</summary>
         private string _currentClassToken;
 
@@ -839,6 +854,20 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine();
         }
 
+        /// <summary>
+        /// The compiler-generated field an AUTO property stores into, spelled the way the C# and
+        /// VB compilers spell it so it reads as generated and cannot collide with a user field.
+        ///
+        /// <para>⚠ The angle brackets are not an identifier character, which is exactly why the
+        /// name is safe — and why it has to be quoted, like every other name this backend
+        /// prints.</para>
+        /// </summary>
+        private static string BackingFieldName(string propRaw) => IlName($"<{propRaw}>k__BackingField");
+
+        /// <summary>True when the IR carries no accessor body, i.e. <c>Public Property X As T</c>.</summary>
+        private static bool IsAutoProperty(IRProperty prop) =>
+            prop.Getter == null && prop.Setter == null;
+
         private void GenerateProperty(IRClass irClass, IRProperty prop)
         {
             var propType = MapType(prop.Type);
@@ -853,46 +882,92 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             var staticMod = prop.IsStatic ? "static " : "";
             var instanceMod = prop.IsStatic ? "" : "instance ";
 
+            // ⛔ WHAT WILL ACTUALLY BE EMITTED, computed once and used for both the `.property`
+            // block and the methods. They used to disagree: the block was written
+            // unconditionally while each method was gated on `prop.Getter != null`, so an AUTO
+            // property — which carries neither accessor in the IR — declared `.get`/`.set`
+            // naming methods that were never emitted, and ilasm refused the whole file with
+            // "Invalid Set method of property 'Alpha'". No property assembled, in any shape.
+            var isAuto = IsAutoProperty(prop);
+            var emitGetter = !prop.IsWriteOnly && (prop.Getter != null || isAuto);
+            var emitSetter = !prop.IsReadOnly && (prop.Setter != null || isAuto);
+            var backingField = BackingFieldName(propRaw);
+
+            // ⚠ An auto property has nowhere to put the value. Nothing declared storage for it
+            // before, so even with the `.property` block removed by hand the program died with
+            // `MissingFieldException: Field not found: 'Box.Alpha'`.
+            if (isAuto)
+            {
+                WriteLine($"  .field private {staticMod}{propType} {backingField}");
+                WriteLine();
+            }
+
             // Property declaration
             WriteLine($"  .property {instanceMod}{propType} {propName}()");
             WriteLine("  {");
-            if (!prop.IsWriteOnly)
+            if (emitGetter)
                 WriteLine($"    .get {instanceMod}{propType} {className}::{getter}()");
-            if (!prop.IsReadOnly)
+            if (emitSetter)
                 WriteLine($"    .set {instanceMod}void {className}::{setter}({propType})");
             WriteLine("  }");
             WriteLine();
 
+            // Synthesized accessors over the backing field, for an auto property.
+            if (isAuto)
+            {
+                if (emitGetter)
+                {
+                    WriteLine($"  .method public hidebysig specialname {staticMod}");
+                    WriteLine($"          {instanceMod}{propType} {getter}() cil managed");
+                    WriteLine("  {");
+                    WriteLine("    .maxstack 8");
+                    if (prop.IsStatic)
+                    {
+                        WriteLine($"    ldsfld {propType} {className}::{backingField}");
+                    }
+                    else
+                    {
+                        WriteLine("    ldarg.0");
+                        WriteLine($"    ldfld {propType} {className}::{backingField}");
+                    }
+                    WriteLine("    ret");
+                    WriteLine($"  }} // end of method {getter}");
+                    WriteLine();
+                }
+
+                if (emitSetter)
+                {
+                    WriteLine($"  .method public hidebysig specialname {staticMod}");
+                    WriteLine($"          {instanceMod}void {setter}({propType} 'value') cil managed");
+                    WriteLine("  {");
+                    WriteLine("    .maxstack 8");
+                    if (prop.IsStatic)
+                    {
+                        // ⚠ ldarg.0 is the VALUE in a static setter — there is no `Me` to skip.
+                        WriteLine("    ldarg.0");
+                        WriteLine($"    stsfld {propType} {className}::{backingField}");
+                    }
+                    else
+                    {
+                        WriteLine("    ldarg.0");
+                        WriteLine("    ldarg.1");
+                        WriteLine($"    stfld {propType} {className}::{backingField}");
+                    }
+                    WriteLine("    ret");
+                    WriteLine($"  }} // end of method {setter}");
+                    WriteLine();
+                }
+
+                return;
+            }
+
             // Getter
             if (prop.Getter != null && !prop.IsWriteOnly)
             {
-                var virtualMod = "";  // Could add virtual if needed
-                WriteLine($"  .method public hidebysig specialname {virtualMod}{staticMod}");
+                WriteLine($"  .method public hidebysig specialname {staticMod}");
                 WriteLine($"          {instanceMod}{propType} {getter}() cil managed");
                 WriteLine("  {");
-                WriteLine("    .maxstack 8");
-
-                if (prop.Getter.EntryBlock != null)
-                {
-                    _currentFunction = prop.Getter;
-                    InitializeMethodContext(prop.Getter, isInstance: !prop.IsStatic, owner: irClass);
-                    // _visitedBlocks, not a local set: Visit(IRTryCatch) marks a region's blocks THERE so
-                    // GenerateBasicBlock will not write them a second time. A local set left the two
-                    // disagreeing, and a Try inside a class member emitted every region block twice
-                    // ("Duplicate label").
-                    _visitedBlocks = new HashSet<BasicBlock>();
-                    var visited = _visitedBlocks;
-                    GenerateBasicBlock(prop.Getter.EntryBlock, visited, isEntry: true);
-                    EmitLoweredReturnExit();
-                    _currentFunction = null;
-                }
-                else
-                {
-                    // Default: return default value
-                    WriteLine($"    ldnull");
-                    WriteLine("    ret");
-                }
-
+                EmitAccessorBody(prop.Getter, irClass, prop.IsStatic, closeWithRet: false);
                 WriteLine($"  }} // end of method {getter}");
                 WriteLine();
             }
@@ -900,33 +975,68 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Setter
             if (prop.Setter != null && !prop.IsReadOnly)
             {
-                var virtualMod = "";
-                WriteLine($"  .method public hidebysig specialname {virtualMod}{staticMod}");
+                WriteLine($"  .method public hidebysig specialname {staticMod}");
                 WriteLine($"          {instanceMod}void {setter}({propType} 'value') cil managed");
                 WriteLine("  {");
-                WriteLine("    .maxstack 8");
-
-                if (prop.Setter.EntryBlock != null)
-                {
-                    _currentFunction = prop.Setter;
-                    InitializeMethodContext(prop.Setter, isInstance: !prop.IsStatic, owner: irClass);
-                    // _visitedBlocks, not a local set: Visit(IRTryCatch) marks a region's blocks THERE so
-                    // GenerateBasicBlock will not write them a second time. A local set left the two
-                    // disagreeing, and a Try inside a class member emitted every region block twice
-                    // ("Duplicate label").
-                    _visitedBlocks = new HashSet<BasicBlock>();
-                    var visited = _visitedBlocks;
-                    GenerateBasicBlock(prop.Setter.EntryBlock, visited, isEntry: true);
-                    EmitLoweredReturnExit();
-                    _currentFunction = null;
-                }
-
-                if (!EndsWithRet())
-                    WriteLine("    ret");
-
+                EmitAccessorBody(prop.Setter, irClass, prop.IsStatic, closeWithRet: true);
                 WriteLine($"  }} // end of method {setter}");
                 WriteLine();
             }
+        }
+
+        /// <summary>
+        /// One explicit accessor's body, in the SAME order an ordinary method's body is written:
+        /// establish the method context first, then <c>.maxstack</c>, then <c>.locals init</c>,
+        /// then the code.
+        ///
+        /// <para>⛔ The order is the whole point. This used to write <c>.maxstack 8</c> BEFORE
+        /// <c>InitializeMethodContext</c> and never declare locals at all, so
+        /// <c>Set(value As Integer)</c> emitted <c>stloc.0</c> into a method with no locals
+        /// directive and the CLR answered <b>InvalidProgramException</b>. The slot tables do not
+        /// exist until the context is initialized, which is why the fix is a reordering rather
+        /// than an added line.</para>
+        ///
+        /// <para>⚠ <paramref name="closeWithRet"/> for the setter only: a getter's last
+        /// instruction is the <c>ret</c> that returns the value, while a setter's body can end on
+        /// a store and needs one appended.</para>
+        /// </summary>
+        private void EmitAccessorBody(IRFunction impl, IRClass irClass, bool isStatic, bool closeWithRet)
+        {
+            if (impl.EntryBlock == null)
+            {
+                // No body to lower. A getter still has to leave something on the stack.
+                WriteLine("    .maxstack 8");
+                WriteLine("    ldnull");
+                WriteLine("    ret");
+                return;
+            }
+
+            _currentFunction = impl;
+            InitializeMethodContext(impl, isInstance: !isStatic, owner: irClass);
+
+            _maxStack = Math.Max(8, _localIndices.Count + _tempIndices.Count + 4);
+            WriteLine($"    .maxstack {_maxStack}");
+
+            if (_localIndices.Count > 0 || _tempIndices.Count > 0)
+            {
+                GenerateLocalsDeclaration(impl);
+            }
+
+            WriteLine();
+
+            EmitArrayLocalAllocations(impl);
+
+            // _visitedBlocks, not a local set: Visit(IRTryCatch) marks a region's blocks THERE so
+            // GenerateBasicBlock will not write them a second time. A local set left the two
+            // disagreeing, and a Try inside a class member emitted every region block twice
+            // ("Duplicate label").
+            _visitedBlocks = new HashSet<BasicBlock>();
+            GenerateBasicBlock(impl.EntryBlock, _visitedBlocks, isEntry: true);
+            EmitLoweredReturnExit();
+            _currentFunction = null;
+
+            if (closeWithRet && !EndsWithRet())
+                WriteLine("    ret");
         }
 
         private void GenerateConstructor(IRClass irClass, IRConstructor ctor)
@@ -1184,8 +1294,23 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             _currentMethodIsInstance = isInstance;
             _currentClassFields.Clear();
+            _currentClassProperties.Clear();
             _fieldStoreScratch.Clear();
             _currentClassToken = owner != null ? SanitizeName(owner.Name) : null;
+            _currentClassOwner = owner;
+
+            if (owner?.Properties != null)
+            {
+                foreach (var ownProp in owner.Properties)
+                {
+                    if (string.IsNullOrEmpty(ownProp.Name)) continue;
+                    _currentClassProperties[ownProp.Name] = ownProp;
+
+                    // Same reason the field loop does it: this is what routes an assignment's
+                    // destination through the store path instead of into a dropped temporary.
+                    _declaredIdentifiers.Add(ownProp.Name);
+                }
+            }
 
             if (isInstance && owner?.Fields != null)
             {
@@ -1240,7 +1365,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// </summary>
         private void AllocateFieldStoreScratch(IRFunction function)
         {
-            if (!_currentMethodIsInstance || _currentClassFields.Count == 0) return;
+            if (!_currentMethodIsInstance) return;
+            if (_currentClassFields.Count == 0 && _currentClassProperties.Count == 0) return;
 
             foreach (var block in function.Blocks)
             {
@@ -1260,7 +1386,25 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     };
 
                     if (string.IsNullOrEmpty(target)) continue;
-                    if (!_currentClassFields.TryGetValue(target, out var fieldType)) continue;
+
+                    // ⚠ A PROPERTY needs the slot for the same reason a field does: its setter
+                    // wants the receiver under the value, and IL has no swap. An instance property
+                    // only — a Shared one takes the value alone.
+                    TypeInfo fieldType;
+                    if (_currentClassFields.TryGetValue(target, out var directType))
+                    {
+                        fieldType = directType;
+                    }
+                    else if (_currentClassProperties.TryGetValue(target, out var scratchProp)
+                             && !scratchProp.IsStatic)
+                    {
+                        fieldType = scratchProp.Type;
+                    }
+                    else
+                    {
+                        continue;
+                    }
+
                     if (_fieldStoreScratch.ContainsKey(target)) continue;
 
                     var index = _localIndices.Count;
@@ -2177,6 +2321,21 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 return;
             }
 
+            // The same shape for the class's own PROPERTY, which is a call rather than a load.
+            if (_currentClassOwner != null
+                && _currentClassProperties.TryGetValue(name, out var ownProperty))
+            {
+                if (!ownProperty.IsStatic)
+                {
+                    if (!_currentMethodIsInstance) return;
+                    EmitLdarg(0);
+                    _currentStack++;
+                }
+
+                EmitPropertyGet(_currentClassOwner, ownProperty);
+                return;
+            }
+
             // A `Shared` field of the enclosing class, by bare name. Nearer than a module-level
             // variable and further than an instance field, matching the language's own scoping.
             if (TryFindStaticField(_currentClass, name, out var ownStaticOwner, out var ownStatic))
@@ -2417,6 +2576,124 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             return false;
         }
 
+        /// <summary>
+        /// A property declared by <paramref name="irClass"/> or anything it inherits from.
+        ///
+        /// <para>The sibling of <see cref="TryFindStaticField"/> and
+        /// <see cref="TryFindStaticMethod"/>, walked the same way and with the same visited set —
+        /// <c>BaseClass</c> is an unvalidated name and a cycle in it would otherwise hang the
+        /// compiler rather than fail.</para>
+        /// </summary>
+        private bool TryFindProperty(IRClass irClass, string name, out IRClass declaring, out IRProperty prop)
+        {
+            declaring = null;
+            prop = null;
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (var current = irClass; current != null; )
+            {
+                if (!seen.Add(current.Name)) break;
+
+                var found = current.Properties?.FirstOrDefault(p =>
+                    string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));
+                if (found != null)
+                {
+                    declaring = current;
+                    prop = found;
+                    return true;
+                }
+
+                if (string.IsNullOrEmpty(current.BaseClass)) break;
+                if (!TryFindClass(current.BaseClass, out current)) break;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// The property a member access names, whether reached through a value (<c>b.Alpha</c>) or
+        /// through the TYPE for a Shared one (<c>Box.Total</c>).
+        ///
+        /// <para>⛔ Deliberately shaped like <see cref="TryResolveStaticField"/>, because the same
+        /// receiver ambiguity applies: a Shared property reached by type name has no receiver to
+        /// load, while one reached through an instance has a receiver that must be evaluated and
+        /// discarded.</para>
+        /// </summary>
+        private bool TryResolveProperty(
+            IRValue receiver, string memberName, out IRClass owner, out IRProperty prop, out bool viaInstance)
+        {
+            owner = null;
+            prop = null;
+            viaInstance = false;
+            if (receiver == null || string.IsNullOrEmpty(memberName)) return false;
+
+            var name = receiver.Name;
+            if (!string.IsNullOrEmpty(name) && !ResolvesAsValue(name) && TryFindClass(name, out var byName))
+            {
+                return TryFindProperty(byName, memberName, out owner, out prop);
+            }
+
+            if (TryFindClass(receiver.Type?.Name, out var byType)
+                && TryFindProperty(byType, memberName, out owner, out prop))
+            {
+                viaInstance = true;
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// A property READ as its accessor call. The receiver, if the property is an instance one,
+        /// is already on the stack.
+        ///
+        /// <para>⛔ This is what a property access has to become. <c>c.Alpha</c> lowered to
+        /// <c>ldfld int32 'Box'::'Alpha'</c> — a direct read of storage that does not exist, which
+        /// ASSEMBLES (ilasm does not resolve member references) and dies at run time with
+        /// <c>MissingFieldException: Field not found: 'Box.Alpha'</c>. For a property with a
+        /// computed getter a field read cannot be right at all, whatever it names. The
+        /// <c>ex.Message</c> and collection-<c>Count</c> arms above are the same fix for the BCL's
+        /// properties.</para>
+        /// </summary>
+        private void EmitPropertyGet(IRClass owner, IRProperty prop)
+        {
+            var propType = MapType(prop.Type);
+            var token = SanitizeName(owner.Name);
+            var getter = $"get_{RawName(prop.Name)}";
+
+            if (prop.IsStatic)
+            {
+                WriteLine($"    call {propType} {token}::{getter}()");
+                _currentStack++;
+                return;
+            }
+
+            WriteLine($"    callvirt instance {propType} {token}::{getter}()");
+            _currentStack--;   // the receiver
+            _currentStack++;   // the value
+        }
+
+        /// <summary>
+        /// A property WRITE as its accessor call. The receiver (for an instance property) and then
+        /// the value are already on the stack, which is the order <c>callvirt</c> wants.
+        /// </summary>
+        private void EmitPropertySet(IRClass owner, IRProperty prop)
+        {
+            var propType = MapType(prop.Type);
+            var token = SanitizeName(owner.Name);
+            var setter = $"set_{RawName(prop.Name)}";
+
+            if (prop.IsStatic)
+            {
+                WriteLine($"    call void {token}::{setter}({propType})");
+                _currentStack--;
+                return;
+            }
+
+            WriteLine($"    callvirt instance void {token}::{setter}({propType})");
+            _currentStack -= 2;
+        }
+
         /// <summary>True when this name already denotes storage the current method can load.</summary>
         private bool ResolvesAsValue(string name) =>
             GetLocalIndex(name) >= 0
@@ -2482,6 +2759,31 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 WriteLine($"    stfld {IlTypeSpec(fieldType)} {_currentClassToken}::{SanitizeName(name)}");
                 _currentStack -= 2;
                 return;
+            }
+
+            // The same for the class's own PROPERTY. The setter wants the receiver UNDER the
+            // value, so this needs the same park-and-re-push the `stfld` arm above does — and it
+            // borrows that arm's scratch slot, which AllocateFieldStoreScratch reserves for every
+            // assignable member name.
+            if (_currentClassOwner != null
+                && _currentClassProperties.TryGetValue(name, out var ownSetProperty))
+            {
+                if (ownSetProperty.IsStatic)
+                {
+                    EmitPropertySet(_currentClassOwner, ownSetProperty);
+                    return;
+                }
+
+                if (_currentMethodIsInstance && _fieldStoreScratch.TryGetValue(name, out var propScratch))
+                {
+                    EmitStloc(propScratch);
+                    EmitLdarg(0);
+                    _currentStack++;
+                    EmitLdloc(propScratch);
+                    _currentStack++;
+                    EmitPropertySet(_currentClassOwner, ownSetProperty);
+                    return;
+                }
             }
 
             // A `Shared` field of the enclosing class. Like the module-level case below and
@@ -4404,6 +4706,31 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 return;
             }
 
+            // ⛔ A user class's PROPERTY reached as `c.Alpha`. Checked BEFORE the receiver is
+            // pushed, because a Shared property reached by TYPE NAME (`Box.Total`) has no
+            // receiver to push at all — the same split TryResolveStaticField makes.
+            if (TryResolveProperty(fieldAccess.Object, fieldAccess.FieldName,
+                    out var readPropOwner, out var readProp, out var readPropViaInstance))
+            {
+                if (readProp.IsStatic)
+                {
+                    if (readPropViaInstance)
+                    {
+                        EmitLoadValue(fieldAccess.Object);
+                        WriteLine("    pop");
+                        _currentStack--;
+                    }
+                }
+                else
+                {
+                    EmitLoadValue(fieldAccess.Object);
+                }
+
+                EmitPropertyGet(readPropOwner, readProp);
+                EmitFieldAccessResult(fieldAccess);
+                return;
+            }
+
             // Load object reference
             EmitLoadValue(fieldAccess.Object);
 
@@ -4493,6 +4820,29 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 EmitLoadValue(fieldStore.Value);
                 WriteLine($"    stsfld {IlTypeSpec(storeField.Type)} {SanitizeName(storeOwner.Name)}::{SanitizeName(storeField.Name)}");
                 _currentStack--;
+                return;
+            }
+
+            // The write half of the property case — see Visit(IRFieldAccess).
+            if (TryResolveProperty(fieldStore.Object, fieldStore.FieldName,
+                    out var storePropOwner, out var storeProp, out var storePropViaInstance))
+            {
+                if (storeProp.IsStatic)
+                {
+                    if (storePropViaInstance)
+                    {
+                        EmitLoadValue(fieldStore.Object);
+                        WriteLine("    pop");
+                        _currentStack--;
+                    }
+                }
+                else
+                {
+                    EmitLoadValue(fieldStore.Object);
+                }
+
+                EmitLoadValue(fieldStore.Value);
+                EmitPropertySet(storePropOwner, storeProp);
                 return;
             }
 
