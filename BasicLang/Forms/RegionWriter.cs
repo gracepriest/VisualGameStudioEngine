@@ -389,13 +389,52 @@ public static class RegionWriter
             }
         }
 
-        foreach (var control in form.Controls)
-        {
-            AppendControlInit(body, form, control, parent: "Me", inner, newline, filePath, diagnostics);
-        }
+        AppendSiblings(body, form, form.Controls, parent: "Me", inner, newline, filePath, diagnostics);
 
         body.Append($"{indent}End Sub").Append(newline);
         return body.ToString();
+    }
+
+    /// <summary>
+    /// Emits a run of siblings: each control's initialization in DOCUMENT order, then — on WinForms —
+    /// their <c>Controls.Add</c> calls in REVERSE.
+    ///
+    /// <para>⛔⛔ <b>The reversal is the z-order, and it is not a stylistic choice.</b> The two
+    /// targets number z-order in opposite directions and neither can be changed:</para>
+    /// <list type="bullet">
+    ///   <item><description>the DOM paints in document order, so the LAST element is on top;</description></item>
+    ///   <item><description>WinForms' <c>Controls</c> index 0 is the TOP of the z-order — the official
+    ///     API docs for <c>GetChildIndex</c>, <c>SetChildIndex</c> and <c>BringToFront</c> each state
+    ///     it — and <c>Controls.Add</c> APPENDS, so the first control added ends up in front.</description></item>
+    /// </list>
+    /// <para>The document takes the web's meaning, because the web's cannot be negotiated, and the
+    /// canvas draws and hit-tests to match: <b>last in the document is in front</b>. Adding siblings
+    /// in reverse is what makes the WinForms program agree. Emitting them in document order instead
+    /// puts the front-most control at the highest index — the very back — so the designer's
+    /// "Bring to Front" would visibly send it behind everything, and only when controls overlap.</para>
+    ///
+    /// <para>⚠ Initialization stays in document order; only the ADD calls reverse. The properties a
+    /// control is given have nothing to do with its layering, and generating the whole region
+    /// backwards would make it needlessly hard to read against the document it came from.</para>
+    /// </summary>
+    private static void AppendSiblings(
+        StringBuilder body, FormDocument form, IReadOnlyList<FormControl> controls, string parent,
+        string inner, string newline, string filePath, List<DesignDiagnostic> diagnostics)
+    {
+        foreach (var control in controls)
+        {
+            AppendControlInit(body, form, control, parent, inner, newline, filePath, diagnostics);
+        }
+
+        if (form.Target != FormTarget.WinForms)
+        {
+            return;
+        }
+
+        for (var i = controls.Count - 1; i >= 0; i--)
+        {
+            body.Append($"{inner}{parent}.Controls.Add({controls[i].Id})").Append(newline);
+        }
     }
 
     /// <summary>
@@ -501,18 +540,10 @@ public static class RegionWriter
             }
         }
 
-        foreach (var child in control.Children)
-        {
-            AppendControlInit(body, form, child, control.Id, inner, newline, filePath, diagnostics);
-        }
-
-        if (form.Target == FormTarget.WinForms)
-        {
-            // Parented to its container — `Me` only for a top-level control. Emitted AFTER the
-            // children so a container is populated before it is added, which is the order the
-            // shipped template uses.
-            body.Append($"{inner}{parent}.Controls.Add({control.Id})").Append(newline);
-        }
+        // ⚠ The container's own children, parented to IT — and their adds happen here, so a
+        // container is fully populated before the caller adds it to its own parent, which is the
+        // order the shipped template uses.
+        AppendSiblings(body, form, control.Children, control.Id, inner, newline, filePath, diagnostics);
     }
 
     /// <summary>

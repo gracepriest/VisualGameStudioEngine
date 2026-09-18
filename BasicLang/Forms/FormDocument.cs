@@ -150,6 +150,44 @@ public sealed class FormDocument
         return stem + next;
     }
 
+    /// <summary>
+    /// Moves <paramref name="control"/> to the front of its siblings. Returns whether it moved.
+    ///
+    /// <para><b>Last in the list is in FRONT</b> — the canvas draws in list order and hit-tests
+    /// backwards, and the DOM paints in document order. See <c>FormZOrderTests</c> for why WinForms,
+    /// which numbers z-order the other way round, is the one that has to adapt.</para>
+    ///
+    /// <para>⛔ Reorders the list the control actually LIVES in. Reordering <see cref="Controls"/>
+    /// unconditionally would silently do nothing for anything inside a Panel — the same trap Delete
+    /// had, where a command looks broken for nested controls only.</para>
+    /// </summary>
+    public bool BringToFront(FormControl control) => MoveWithin(control, toFront: true);
+
+    /// <summary>Moves <paramref name="control"/> behind its siblings. Returns whether it moved.</summary>
+    public bool SendToBack(FormControl control) => MoveWithin(control, toFront: false);
+
+    private bool MoveWithin(FormControl control, bool toFront)
+    {
+        ArgumentNullException.ThrowIfNull(control);
+
+        var siblings = ListContaining(control);
+        if (siblings == null)
+        {
+            return false;
+        }
+
+        var at = siblings.IndexOf(control);
+        var target = toFront ? siblings.Count - 1 : 0;
+        if (at < 0 || at == target)
+        {
+            return false;
+        }
+
+        siblings.RemoveAt(at);
+        siblings.Insert(target, control);
+        return true;
+    }
+
     /// <summary>Assigns <see cref="FormControl.TabIndex"/> in document order, starting at 0.</summary>
     public void RenumberTabIndexes()
     {
