@@ -251,6 +251,36 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     /// What the canvas's <c>DropCommand</c> is bound to. A refusal is reported the way every other
     /// designer finding is — through the Error List — rather than being swallowed.
     /// </summary>
+    /// <summary>
+    /// Removes a control from the document — what Delete does on the canvas.
+    ///
+    /// <para>⛔ Removed from the list it actually LIVES in, which is its container's when it is
+    /// nested. Removing from <c>Document.Controls</c> unconditionally would silently do nothing for
+    /// any control inside a Panel, and Delete would look broken only for nested controls.</para>
+    ///
+    /// <para>⚠ The selection is cleared BEFORE the write. The property grid holds the control being
+    /// deleted, and rebuilding its rows against an object no longer in the document is how a
+    /// designer starts editing a ghost.</para>
+    /// </summary>
+    [RelayCommand]
+    private void DeleteControl(BasicLang.Forms.FormControl? control)
+    {
+        var file = DesignFile;
+        if (control == null || file == null)
+        {
+            return;
+        }
+
+        var siblings = file.Model.ListContaining(control);
+        if (siblings == null || !siblings.Remove(control))
+        {
+            return;
+        }
+
+        PropertyGrid.SelectedControl = null;
+        WriteDesignerEditBack();
+    }
+
     [RelayCommand]
     private void PlaceDroppedControl(Controls.FormControlDropRequest? request)
     {

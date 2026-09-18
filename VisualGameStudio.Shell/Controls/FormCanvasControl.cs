@@ -126,6 +126,23 @@ public class FormCanvasControl : Control
         set => SetValue(CommitGeometryCommandProperty, value);
     }
 
+    /// <summary>
+    /// Invoked when Delete is pressed with a control selected.
+    ///
+    /// <para>⛔ A command rather than the canvas removing the control itself. Deleting changes the
+    /// document's SHAPE, not just a geometry field: the selection has to be cleared, the designer
+    /// region regenerated and the file written. The canvas mutates geometry in place because the
+    /// host owns the same object graph; it does not get to restructure it.</para>
+    /// </summary>
+    public static readonly StyledProperty<ICommand?> DeleteCommandProperty =
+        AvaloniaProperty.Register<FormCanvasControl, ICommand?>(nameof(DeleteCommand));
+
+    public ICommand? DeleteCommand
+    {
+        get => GetValue(DeleteCommandProperty);
+        set => SetValue(DeleteCommandProperty, value);
+    }
+
     public FormCanvasControl()
     {
         // ⚠ These two handlers are on THIS control's own attached routed events — they live and die
@@ -177,6 +194,104 @@ public class FormCanvasControl : Control
     // ==================================================================
     // Input
     // ==================================================================
+
+    /// <summary>
+    /// The keyboard half of the designer, which did not exist: a control could be dragged and could
+    /// not be DELETED, and nothing could be nudged a pixel.
+    ///
+    /// <para>Visual Studio's bindings, because they are the ones in muscle memory: arrows move by
+    /// one, <b>Ctrl</b>+arrows move by a grid step, <b>Shift</b>+arrows resize, Delete removes.</para>
+    ///
+    /// <para>⚠ Web controls are moved by CELL, so a one-pixel nudge means nothing to them — arrows
+    /// step them a whole cell instead, and Shift does not resize what has no size of its own.</para>
+    /// </summary>
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+
+        var document = Document;
+        if (document == null || SelectedControl is not { } control)
+        {
+            return;
+        }
+
+        if (e.Key == Key.Delete)
+        {
+            var command = DeleteCommand;
+            if (command?.CanExecute(control) == true)
+            {
+                command.Execute(control);
+                e.Handled = true;
+            }
+
+            return;
+        }
+
+        var (dx, dy) = e.Key switch
+        {
+            Key.Left => (-1, 0),
+            Key.Right => (1, 0),
+            Key.Up => (0, -1),
+            Key.Down => (0, 1),
+            _ => (0, 0)
+        };
+
+        if (dx == 0 && dy == 0)
+        {
+            return;
+        }
+
+        var resize = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+        var coarse = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+        var step = coarse ? (int)GridStep : 1;
+
+        bool changed;
+        switch (control.Geometry)
+        {
+            // One CELL per press; Shift does nothing, because a cell has no size of its own to grow.
+            case GridGeometry grid when !resize:
+            {
+                var col = Math.Max(0, grid.Col + dx);
+                var row = Math.Max(0, grid.Row + dy);
+                changed = col != grid.Col || row != grid.Row;
+                grid.Col = col;
+                grid.Row = row;
+                break;
+            }
+
+            // ⚠ MoveTo, not MoveToForm. A nudge is parent-relative and must NOT re-parent: arrowing
+            // a control one pixel past a Panel's edge should move it one pixel, not move it into
+            // the Panel — a drag says where the pointer is, a keypress says how far.
+            case PixelGeometry pixel:
+                changed = resize
+                    ? FormGeometryEdit.Resize(
+                        document, control, FormResizeHandle.BottomRight, dx * step, dy * step)
+                    : FormGeometryEdit.MoveTo(
+                        document, control, pixel.X + (dx * step), pixel.Y + (dy * step));
+                break;
+
+            default:
+                changed = false;
+                break;
+        }
+
+        if (changed)
+        {
+            InvalidateVisual();
+
+            // ⚠ Committed per KEYPRESS, unlike a drag which commits once on release. A keypress is
+            // already a discrete edit — there is no "still holding it" state to wait for, and not
+            // committing would leave the file behind the canvas until the user happened to drag
+            // something.
+            var commit = CommitGeometryCommand;
+            if (commit?.CanExecute(null) == true)
+            {
+                commit.Execute(null);
+            }
+        }
+
+        e.Handled = true;
+    }
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
@@ -356,10 +471,13 @@ public class FormCanvasControl : Control
         else if (_dragHandle == FormResizeHandle.None)
         {
             // Absolute, so the control re-parents when the pointer crosses into or out of a Panel.
+            // ⚠ Snapped on the RESULT, not on the delta: snapping the delta would carry the
+            // control's original off-grid offset forward for ever, so a control that started at 13
+            // would land on 21 and never on 16.
             changed = FormGeometryEdit.MoveToForm(
                 document, control,
-                (int)Math.Round(_dragStartForm.X) + dx,
-                (int)Math.Round(_dragStartForm.Y) + dy);
+                Snap(_dragStartForm.X + dx, e.KeyModifiers),
+                Snap(_dragStartForm.Y + dy, e.KeyModifiers));
         }
         else
         {
@@ -575,8 +693,11 @@ public class FormCanvasControl : Control
 
         // ⛔ Through the SAME transform that rendered, so the control lands under the pointer at
         // any zoom or pan. Re-deriving the mapping here is the drift this type exists to prevent.
+        // ⚠ Snapped like a drag, so a dropped control lands on the same grid a dragged one does —
+        // otherwise every control arrives off-grid and has to be nudged before it lines up.
         var point = _transform.ToForm(e.GetPosition(this));
-        var request = new FormControlDropRequest(kind, (int)Math.Round(point.X), (int)Math.Round(point.Y));
+        var request = new FormControlDropRequest(
+            kind, Snap(point.X, e.KeyModifiers), Snap(point.Y, e.KeyModifiers));
 
         var command = DropCommand;
         if (command?.CanExecute(request) == true)
@@ -1159,6 +1280,23 @@ public class FormCanvasControl : Control
 
     /// <summary>Form units between alignment dots — VB6's default grid.</summary>
     private const double GridStep = 8;
+
+    /// <summary>
+    /// Rounds a form-space coordinate to the alignment grid.
+    ///
+    /// <para>⛔ The canvas DREW the grid and snapped to nothing, so the dots were decoration and two
+    /// controls dropped side by side were one or two pixels out of line with no way to tell. A grid
+    /// you can see and cannot feel is worse than no grid: it implies an alignment the document does
+    /// not have.</para>
+    ///
+    /// <para>⚠ <b>Alt bypasses it</b>, which is the convention in both VB6 and VS. Without an
+    /// escape the designer cannot express a deliberate odd offset at all, and "snap" becomes
+    /// "you may not".</para>
+    /// </summary>
+    private static int Snap(double value, KeyModifiers modifiers) =>
+        modifiers.HasFlag(KeyModifiers.Alt)
+            ? (int)Math.Round(value)
+            : (int)(Math.Round(value / GridStep) * GridStep);
 
     /// <summary>
     /// Canvas height of the drawn title bar. FIXED, not scaled with the form: it is window chrome

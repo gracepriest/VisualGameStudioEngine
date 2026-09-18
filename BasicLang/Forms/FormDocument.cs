@@ -87,6 +87,32 @@ public sealed class FormDocument
         AllControls().FirstOrDefault(c => string.Equals(c.Id, id, StringComparison.Ordinal));
 
     /// <summary>
+    /// The list <paramref name="control"/> lives in — this document's own, or its container's.
+    ///
+    /// <para>⚠ The list, not the parent control, because removing and re-adding are what callers
+    /// actually need and a container exposes its children as a plain list. Returns null when the
+    /// control is not in this document at all, which a caller must treat as "do nothing" rather
+    /// than as "top level".</para>
+    /// </summary>
+    public List<FormControl>? ListContaining(FormControl control)
+    {
+        if (Controls.Contains(control))
+        {
+            return Controls;
+        }
+
+        foreach (var candidate in AllControls())
+        {
+            if (candidate.Children.Contains(control))
+            {
+                return candidate.Children;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// True when <paramref name="id"/> is a legal control identifier: a BasicLang identifier, which
     /// permits underscores. Deliberately NOT the type-name rule — see <see cref="Name"/>.
     /// </summary>
