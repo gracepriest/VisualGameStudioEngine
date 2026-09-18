@@ -403,11 +403,11 @@ public class ConstantRangeTests
     /// this defect needs — the old out-of-range output was not merely wrong, it did not build, and
     /// the BasicLang build reports success either way since it only writes the source.</para>
     ///
-    /// <para>⛔ The SByte locals are not called <c>neg</c>/<c>pos</c>, and that is not style: a
-    /// local named <c>neg</c> emits <c>[2] int8 neg</c> and ilasm rejects it ("syntax error at
-    /// token 'neg'"), because <c>neg</c> is an IL instruction. A pre-existing MSIL gap — the
-    /// backend does not escape a local whose name is an IL keyword — unrelated to constant
-    /// ranges and not fixed here.</para>
+    /// <para>⚠ The SByte locals were not called <c>neg</c>/<c>pos</c> because a local named
+    /// <c>neg</c> emitted <c>[2] int8 neg</c> and ilasm rejected it ("syntax error at token
+    /// 'neg'"). That gap is FIXED — every user-chosen name is quoted for ILAsm now, see
+    /// <c>MsilIdentifierQuotingTests</c> — so the names are free again; they stay as they are
+    /// because renaming them back would duplicate that fixture's job here.</para>
     ///
     /// <para>⚠ 255.4 is deliberately NOT asserted as a VALUE here. A narrow local still carries
     /// its Double constant on JavaScript (<c>TryConvertConstant</c> declines Byte on purpose —
