@@ -19,12 +19,26 @@ public class FormDocumentTests
     // Catalog
     // ------------------------------------------------------------------
 
+    /// <summary>
+    /// ⚠ This used to assert the catalog held exactly TEN kinds. The count was never the subject —
+    /// uniqueness was — and a hard number has to be edited every time the catalog grows, which makes
+    /// it a chore rather than a check. Completeness is stated properly by
+    /// <c>FormCatalogCoverageTests</c>, which says what the toolbox must OFFER; this says the one
+    /// thing the catalog must never do.
+    /// </summary>
     [Test]
-    public void Catalog_HasTenKinds_WithUniqueNames()
+    public void Catalog_KindsAreUnique_BecauseKindIsTheOnlyDiscriminator()
     {
-        Assert.That(FormControlCatalog.All, Has.Count.EqualTo(10));
-        Assert.That(FormControlCatalog.All.Select(c => c.Kind).Distinct().Count(), Is.EqualTo(10),
-            "two catalog rows share a Kind — the element name is the document's only control discriminator");
+        var duplicates = FormControlCatalog.All
+            .GroupBy(c => c.Kind, StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Count() > 1)
+            .Select(g => g.Key)
+            .ToList();
+
+        Assert.That(duplicates, Is.Empty,
+            "these Kinds appear twice — the element name is the document's ONLY control " +
+            "discriminator, so a duplicate makes a saved form ambiguous on read-back: " +
+            string.Join(", ", duplicates));
     }
 
     [Test]

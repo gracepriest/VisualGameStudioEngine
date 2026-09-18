@@ -1572,6 +1572,305 @@ public class FormCanvasControl : Control
                     new Point(bounds.X + 2, bounds.Bottom - 2));
                 break;
 
+            // ==================================================================
+            // Task 23's widening. ⛔ Every one of these must paint DIFFERENTLY from every other
+            // shape, not merely differently in intent: EveryControlKindRendersDistinctly hashes a
+            // frame per kind over identical geometry and an identical id, so two schematics that
+            // happen to produce the same pixels collide and fail. That guard is the whole reason a
+            // new kind cannot quietly become another plain box.
+            // ==================================================================
+
+            case FormSchematic.Link:
+                // No box, like a Label — the underline is the entire difference, which is exactly
+                // what a LinkLabel is.
+                if (!tooSmallForText && !string.IsNullOrEmpty(label))
+                {
+                    var linkText = Text(label, ink);
+                    var baseline = bounds.Y + 2 + linkText.Height - 1;
+                    context.DrawLine(
+                        new Pen(ink, 1),
+                        new Point(bounds.X + 4, baseline),
+                        new Point(Math.Min(bounds.Right - 2, bounds.X + 4 + linkText.Width), baseline));
+                }
+
+                break;
+
+            case FormSchematic.CheckList:
+            {
+                context.FillRectangle(client, bounds);
+                Bevel(context, bounds, raised: false);
+
+                // Rows with a tick box at the left of each — a ListBox that can be ticked.
+                const double rowHeight = 13;
+                for (var y = bounds.Y + 3; y < bounds.Bottom - 6; y += rowHeight)
+                {
+                    var box = new Rect(bounds.X + 3, y + 2, 7, 7);
+                    if (box.Bottom < bounds.Bottom - 2)
+                    {
+                        context.DrawRectangle(WindowBrush, ShadowPen, box);
+                    }
+                }
+
+                break;
+            }
+
+            case FormSchematic.Spinner:
+            {
+                context.FillRectangle(client, bounds);
+                Bevel(context, bounds, raised: false);
+
+                // The stacked up/down pair a NumericUpDown carries at its right edge.
+                var w = Math.Min(14.0, bounds.Width / 3);
+                if (w > 5 && bounds.Height > 8)
+                {
+                    var half = (bounds.Height - 4) / 2;
+                    var up = new Rect(bounds.Right - w - 2, bounds.Y + 2, w, half);
+                    var down = new Rect(bounds.Right - w - 2, up.Bottom, w, half);
+                    context.FillRectangle(SurfaceBrush, up);
+                    Bevel(context, up, raised: true);
+                    context.FillRectangle(SurfaceBrush, down);
+                    Bevel(context, down, raised: true);
+                    Chevron(context, up.Center, pointingDown: false);
+                    Chevron(context, down.Center, pointingDown: true);
+                }
+
+                break;
+            }
+
+            case FormSchematic.DatePicker:
+            {
+                context.FillRectangle(client, bounds);
+                Bevel(context, bounds, raised: false);
+
+                // A small calendar block at the right — the glyph that tells it from a plain box.
+                var side = Math.Min(bounds.Height - 4, 16);
+                if (side > 7 && bounds.Width > side + 10)
+                {
+                    var pad = new Rect(bounds.Right - side - 2, bounds.Y + 2, side, side);
+                    context.FillRectangle(SurfaceBrush, pad);
+                    Bevel(context, pad, raised: true);
+
+                    // A header band plus two rules: unmistakably a calendar at this size.
+                    context.FillRectangle(TitleBarBrush, new Rect(pad.X + 2, pad.Y + 2, pad.Width - 4, 3));
+                    for (var i = 1; i <= 2; i++)
+                    {
+                        var y = pad.Y + 5 + (i * 3);
+                        if (y < pad.Bottom - 1)
+                        {
+                            context.DrawLine(RowPen, new Point(pad.X + 2, y), new Point(pad.Right - 2, y));
+                        }
+                    }
+                }
+
+                break;
+            }
+
+            case FormSchematic.Slider:
+            {
+                // No client box at all: a TrackBar sits ON the form face.
+                var midY = bounds.Y + (bounds.Height / 3);
+                var groove = new Rect(bounds.X + 2, midY - 2, Math.Max(4, bounds.Width - 4), 4);
+                context.FillRectangle(WindowBrush, groove);
+                Bevel(context, groove, raised: false);
+
+                // The thumb, at the left because Value defaults to Minimum.
+                var thumb = new Rect(bounds.X + 3, midY - 7, 8, 14);
+                if (thumb.Right < bounds.Right)
+                {
+                    context.FillRectangle(SurfaceBrush, thumb);
+                    Bevel(context, thumb, raised: true);
+                }
+
+                // Ticks below, which is what makes it a TrackBar rather than a scrollbar.
+                for (var x = bounds.X + 4; x < bounds.Right - 2; x += 10)
+                {
+                    context.DrawLine(ShadowPen,
+                        new Point(x, bounds.Bottom - 6), new Point(x, bounds.Bottom - 2));
+                }
+
+                break;
+            }
+
+            case FormSchematic.Progress:
+            {
+                context.FillRectangle(client, bounds);
+                Bevel(context, bounds, raised: false);
+
+                // Segmented blocks filling about a third — the classic Blocks style. Drawn at a
+                // fixed fraction rather than from Value, because the canvas is a schematic and a
+                // half-accurate bar would invite the user to read it as a preview.
+                var inner = new Rect(bounds.X + 2, bounds.Y + 2,
+                    Math.Max(0, bounds.Width - 4), Math.Max(0, bounds.Height - 4));
+                var filled = inner.Width / 3;
+                for (var x = inner.X; x < inner.X + filled; x += 8)
+                {
+                    var block = new Rect(x, inner.Y, Math.Min(6, inner.X + filled - x), inner.Height);
+                    if (block.Width > 0)
+                    {
+                        context.FillRectangle(TitleBarBrush, block);
+                    }
+                }
+
+                break;
+            }
+
+            case FormSchematic.ListDetail:
+            {
+                context.FillRectangle(client, bounds);
+                Bevel(context, bounds, raised: false);
+
+                // A raised header band with column dividers, then rows.
+                var header = new Rect(bounds.X + 2, bounds.Y + 2, Math.Max(0, bounds.Width - 4), 12);
+                if (header.Bottom < bounds.Bottom)
+                {
+                    context.FillRectangle(SurfaceBrush, header);
+                    Bevel(context, header, raised: true);
+                    for (var x = header.X + (header.Width / 3); x < header.Right; x += header.Width / 3)
+                    {
+                        context.DrawLine(ShadowPen, new Point(x, header.Y), new Point(x, header.Bottom));
+                    }
+                }
+
+                for (var y = header.Bottom + 12; y < bounds.Bottom - 2; y += 12)
+                {
+                    context.DrawLine(RowPen, new Point(bounds.X + 3, y), new Point(bounds.Right - 3, y));
+                }
+
+                break;
+            }
+
+            case FormSchematic.Tree:
+            {
+                context.FillRectangle(client, bounds);
+                Bevel(context, bounds, raised: false);
+
+                // Indented rows with expander boxes — a hierarchy, not a flat list.
+                var row = 0;
+                for (var y = bounds.Y + 4; y < bounds.Bottom - 8; y += 13, row++)
+                {
+                    var indent = (row % 3) * 10;
+                    var box = new Rect(bounds.X + 4 + indent, y, 7, 7);
+                    if (box.Right < bounds.Right - 2 && box.Bottom < bounds.Bottom - 2)
+                    {
+                        context.DrawRectangle(WindowBrush, ShadowPen, box);
+                        context.DrawLine(DarkShadowPen,
+                            new Point(box.X + 2, box.Center.Y), new Point(box.Right - 2, box.Center.Y));
+                        context.DrawLine(RowPen,
+                            new Point(box.Right + 3, box.Center.Y),
+                            new Point(Math.Min(bounds.Right - 3, box.Right + 40), box.Center.Y));
+                    }
+                }
+
+                break;
+            }
+
+            case FormSchematic.DataGrid:
+            {
+                context.FillRectangle(client, bounds);
+                Bevel(context, bounds, raised: false);
+
+                var header = new Rect(bounds.X + 2, bounds.Y + 2, Math.Max(0, bounds.Width - 4), 12);
+                if (header.Bottom < bounds.Bottom)
+                {
+                    context.FillRectangle(SurfaceBrush, header);
+                    Bevel(context, header, raised: true);
+                }
+
+                // A FULL lattice — both rules — which is what separates a grid from a list.
+                for (var y = header.Bottom + 12; y < bounds.Bottom - 2; y += 12)
+                {
+                    context.DrawLine(RowPen, new Point(bounds.X + 3, y), new Point(bounds.Right - 3, y));
+                }
+
+                for (var x = bounds.X + 18; x < bounds.Right - 3; x += 34)
+                {
+                    context.DrawLine(RowPen, new Point(x, bounds.Y + 3), new Point(x, bounds.Bottom - 3));
+                }
+
+                break;
+            }
+
+            case FormSchematic.Tabs:
+            {
+                // The body, starting below the strip.
+                var body = new Rect(bounds.X, bounds.Y + 16, bounds.Width, Math.Max(4, bounds.Height - 16));
+                context.FillRectangle(face, body);
+                Bevel(context, body, raised: true);
+
+                // Two tabs, the first raised and joined to the body.
+                var tabWidth = Math.Min(48.0, Math.Max(16, bounds.Width / 3));
+                for (var i = 0; i < 2; i++)
+                {
+                    var tab = new Rect(
+                        bounds.X + 2 + (i * (tabWidth + 2)),
+                        bounds.Y + (i == 0 ? 2 : 4),
+                        tabWidth,
+                        i == 0 ? 15 : 13);
+
+                    if (tab.Right < bounds.Right)
+                    {
+                        context.FillRectangle(SurfaceBrush, tab);
+                        Bevel(context, tab, raised: true);
+                    }
+                }
+
+                labelOrigin = new Point(bounds.X + 6, bounds.Y + 18);
+                break;
+            }
+
+            case FormSchematic.Split:
+            {
+                context.FillRectangle(face, bounds);
+                Bevel(context, bounds, raised: false);
+
+                // A splitter bar a third of the way across, with a pane either side.
+                var x = bounds.X + (bounds.Width / 3);
+                var bar = new Rect(x - 2, bounds.Y + 2, 4, Math.Max(0, bounds.Height - 4));
+                context.FillRectangle(SurfaceBrush, bar);
+                Bevel(context, bar, raised: true);
+
+                context.DrawRectangle(null, ShadowPen,
+                    new Rect(bounds.X + 2, bounds.Y + 2, Math.Max(0, x - bounds.X - 5), Math.Max(0, bounds.Height - 4)));
+                context.DrawRectangle(null, ShadowPen,
+                    new Rect(x + 3, bounds.Y + 2, Math.Max(0, bounds.Right - x - 5), Math.Max(0, bounds.Height - 4)));
+                break;
+            }
+
+            case FormSchematic.FlowContainer:
+            {
+                context.FillRectangle(face, bounds);
+                Bevel(context, bounds, raised: false);
+
+                // Chevrons along the top edge: this container ORDERS what is dropped in it, which
+                // is the one thing a user needs to know before dropping anything.
+                for (var x = bounds.X + 8; x < bounds.Right - 6; x += 12)
+                {
+                    Chevron(context, new Point(x, bounds.Y + 7), pointingDown: false, sideways: true);
+                }
+
+                break;
+            }
+
+            case FormSchematic.TableContainer:
+            {
+                context.FillRectangle(face, bounds);
+                Bevel(context, bounds, raised: false);
+
+                // Ruled into cells so the layout is visible while it is still empty — the state a
+                // TableLayoutPanel spends most of its design life in.
+                for (var x = bounds.X + (bounds.Width / 2); x < bounds.Right - 2; x += bounds.Width / 2)
+                {
+                    context.DrawLine(ShadowPen, new Point(x, bounds.Y + 2), new Point(x, bounds.Bottom - 2));
+                }
+
+                for (var y = bounds.Y + (bounds.Height / 2); y < bounds.Bottom - 2; y += bounds.Height / 2)
+                {
+                    context.DrawLine(ShadowPen, new Point(bounds.X + 2, y), new Point(bounds.Right - 2, y));
+                }
+
+                break;
+            }
+
             default:
                 // A TextBox and anything text-entry shaped: white client, sunken edge.
                 context.FillRectangle(client, bounds);
@@ -1587,6 +1886,33 @@ public class FormCanvasControl : Control
         using (context.PushClip(bounds))
         {
             context.DrawText(Text(label, ink), labelOrigin);
+        }
+    }
+
+    /// <summary>
+    /// A three-line arrowhead, the Win95 way of drawing one.
+    ///
+    /// <para>⚠ Three stacked lines rather than a filled triangle: a <c>StreamGeometry</c> per
+    /// chevron allocates on every render, and at this size the two are indistinguishable.</para>
+    /// </summary>
+    private static void Chevron(
+        DrawingContext context, Point centre, bool pointingDown, bool sideways = false)
+    {
+        for (var i = 0; i < 3; i++)
+        {
+            var spread = 3 - i;
+            if (sideways)
+            {
+                var x = centre.X - 1 + i;
+                context.DrawLine(DarkShadowPen,
+                    new Point(x, centre.Y - spread), new Point(x, centre.Y + spread));
+            }
+            else
+            {
+                var y = pointingDown ? centre.Y - 1 + i : centre.Y + 1 - i;
+                context.DrawLine(DarkShadowPen,
+                    new Point(centre.X - spread, y), new Point(centre.X + spread, y));
+            }
         }
     }
 

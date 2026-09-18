@@ -311,16 +311,22 @@ public class FormPlacementTests
     // ==================================================================
 
     [Test]
+    /// <summary>
+    /// ⚠ The example used to be <c>DataGridView</c> — a real WinForms control the catalog did not
+    /// have yet. Task 23 added it, and this test began failing for a reason that had nothing to do
+    /// with what it checks. The stand-in is now a name no control will ever have, so widening the
+    /// catalog cannot break it again.
+    /// </summary>
     public void AnUnknownKind_IsRefusedWithAReason()
     {
         var document = WinFormsDocument();
 
-        var result = FormPlacement.Place(document, "DataGridView", 10, 10);
+        var result = FormPlacement.Place(document, "NotARealControl", 10, 10);
 
         Assert.Multiple(() =>
         {
             Assert.That(result.Control, Is.Null);
-            Assert.That(result.Refusal, Does.Contain("DataGridView"));
+            Assert.That(result.Refusal, Does.Contain("NotARealControl"));
             Assert.That(document.Controls, Is.Empty);
         });
     }

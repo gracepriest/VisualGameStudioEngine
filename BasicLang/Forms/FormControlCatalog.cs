@@ -65,10 +65,26 @@ public sealed record FormPropertyDef(
     IReadOnlyDictionary<string, string>? WinFormsMemberNames = null,
     IReadOnlyList<FormTarget>? Targets = null,
     string? WinFormsFactory = null,
-    bool IsItemCollection = false)
+    bool IsItemCollection = false,
+    string? HtmlAttribute = null)
 {
     /// <summary>True when this property exists on <paramref name="target"/>.</summary>
     public bool AppliesTo(FormTarget target) => Targets == null || Targets.Contains(target);
+
+    /// <summary>
+    /// The HTML attribute this property becomes, or null when the emitter handles it specially (or
+    /// not at all).
+    ///
+    /// <para>⛔ Here rather than in the emitter because the emitter's alternative is a hand-written
+    /// <c>if</c> per property — which is a second list beside this table and goes stale the moment a
+    /// row is added. WinForms <c>Minimum</c> is HTML <c>min</c>; nothing but the catalog can know
+    /// that, and nothing else should have to.</para>
+    ///
+    /// <para>⚠ Not every web property is a plain attribute. <c>Checked</c>, <c>ReadOnly</c> and
+    /// <c>MultiSelect</c> are BOOLEAN attributes whose presence is the value, and <c>Items</c>
+    /// becomes child elements — those stay in the emitter, which is where that shape lives.</para>
+    /// </summary>
+    public string? HtmlAttributeName => HtmlAttribute;
 
     /// <summary>
     /// The value as WinForms SOURCE — what the region writer splices after the <c>=</c>.
@@ -278,7 +294,53 @@ public enum FormSchematic
     Group,
 
     /// <summary>A box crossed corner to corner, the universal "picture goes here".</summary>
-    Image
+    Image,
+
+    // ==================================================================
+    // Task 23's widening. ⛔ Each of these MUST draw differently from every other shape —
+    // FormCanvasRenderTests.EveryControlKindRendersDistinctly hashes a frame per kind over identical
+    // geometry and an identical id, so two schematics that merely differ in intent collide and fail.
+    // That guard is why adding a kind cannot quietly produce another plain box.
+    // ==================================================================
+
+    /// <summary>Underlined text, no box — a LinkLabel is a Label that looks clickable.</summary>
+    Link,
+
+    /// <summary>Rows, each with a small tick box at its left edge.</summary>
+    CheckList,
+
+    /// <summary>A box with a stacked up/down arrow pair at the right edge.</summary>
+    Spinner,
+
+    /// <summary>A box with a small calendar grid at the right edge.</summary>
+    DatePicker,
+
+    /// <summary>A horizontal groove with a raised thumb and tick marks below it.</summary>
+    Slider,
+
+    /// <summary>A sunken trough filled part-way with segmented blocks.</summary>
+    Progress,
+
+    /// <summary>A header band across the top with column dividers, and rows beneath.</summary>
+    ListDetail,
+
+    /// <summary>Indented rows, each with a small expander box at its left.</summary>
+    Tree,
+
+    /// <summary>A full lattice of cells, with a header row and a row-selector column.</summary>
+    DataGrid,
+
+    /// <summary>A tab strip along the top with one raised tab, and a body below it.</summary>
+    Tabs,
+
+    /// <summary>Two panes divided by a raised splitter bar.</summary>
+    Split,
+
+    /// <summary>A container whose contents flow — marked with chevrons along the top edge.</summary>
+    FlowContainer,
+
+    /// <summary>A container ruled into cells, so its layout is visible when it is empty.</summary>
+    TableContainer
 }
 
 public sealed record FormControlDef(
@@ -384,7 +446,7 @@ public static class FormControlCatalog
             Text,
             new FormPropertyDef("Multiline", FormPropertyType.Bool, "false"),
             new FormPropertyDef("ReadOnly", FormPropertyType.Bool, "false"),
-            new FormPropertyDef("MaxLength", FormPropertyType.Int),
+            new FormPropertyDef("MaxLength", FormPropertyType.Int, HtmlAttribute: "maxlength"),
             // WinForms PasswordChar is a char, not a string — assigning one is CS0029.
             new FormPropertyDef("PasswordChar", FormPropertyType.String,
                 WinFormsFactory: "Convert.ToChar")),
@@ -445,6 +507,158 @@ public static class FormControlCatalog
                 WinFormsEnumType: "PictureBoxSizeMode")),
             DefaultWidth: 100, DefaultHeight: 50, Schematic: FormSchematic.Image,
             WinFormsEvent: "Click", WebEvent: "click"),
+
+        // ==================================================================
+        // Task 23 — the rest of the common-controls tier.
+        //
+        // ⛔ Every property below is UNFALSIFIABLE except through csc. A misspelling types as
+        // Object and compiles green, so nothing here is trustworthy until
+        // WinFormsCatalogSweepTests has generated it and the real compiler has accepted it.
+        // ==================================================================
+
+        // ⚠ A LinkLabel IS a Label that looks clickable, and <a> is the honest tag. LinkColor and
+        // friends are deliberately omitted: they are Color properties whose WinForms defaults are
+        // system colours, and a designer that wrote them out would freeze today's theme into the
+        // form.
+        new("LinkLabel",   "LinkLabel",   "a",        null,       false, Common(Text, TextAlign),
+            DefaultWidth: 100, DefaultHeight: 23, Schematic: FormSchematic.Link,
+            WinFormsEvent: "LinkClicked", WebEvent: "click"),
+
+        new("NumericUpDown", "NumericUpDown", "input", "number",  false, Common(
+            // ⛔ These are DECIMAL on WinForms. An Int literal widens implicitly, so the catalog
+            // models them as Int and the emitted `n.Minimum = 0` compiles — but a decimal default
+            // written as "0.00" would not round-trip through Int, which is why the defaults are
+            // whole numbers.
+            new FormPropertyDef("Minimum", FormPropertyType.Int, "0", HtmlAttribute: "min"),
+            new FormPropertyDef("Maximum", FormPropertyType.Int, "100", HtmlAttribute: "max"),
+            new FormPropertyDef("Value", FormPropertyType.Int, "0", HtmlAttribute: "value"),
+            new FormPropertyDef("Increment", FormPropertyType.Int, "1", HtmlAttribute: "step"),
+            // ⛔ WinForms only: <input type="number"> has no decimal-places concept, it has step.
+            new FormPropertyDef("DecimalPlaces", FormPropertyType.Int, "0",
+                Targets: new[] { FormTarget.WinForms })),
+            DefaultWidth: 120, DefaultHeight: 23, Schematic: FormSchematic.Spinner,
+            WinFormsEvent: "ValueChanged", WebEvent: "input"),
+
+        new("DateTimePicker", "DateTimePicker", "input", "date",  false, Common(
+            // ⛔ All WinForms-only. <input type="date"> renders per the user's locale and has no
+            // format control at all, so emitting these to the web would be describing a behaviour
+            // the page cannot have.
+            new FormPropertyDef("Format", FormPropertyType.Enum, "Long",
+                new[] { "Long", "Short", "Time", "Custom" },
+                WinFormsEnumType: "DateTimePickerFormat",
+                Targets: new[] { FormTarget.WinForms }),
+            new FormPropertyDef("CustomFormat", FormPropertyType.String,
+                Targets: new[] { FormTarget.WinForms }),
+            new FormPropertyDef("ShowUpDown", FormPropertyType.Bool, "false",
+                Targets: new[] { FormTarget.WinForms })),
+            DefaultWidth: 200, DefaultHeight: 23, Schematic: FormSchematic.DatePicker,
+            WinFormsEvent: "ValueChanged", WebEvent: "change"),
+
+        new("TrackBar",    "TrackBar",    "input",    "range",    false, Common(
+            new FormPropertyDef("Minimum", FormPropertyType.Int, "0", HtmlAttribute: "min"),
+            new FormPropertyDef("Maximum", FormPropertyType.Int, "10", HtmlAttribute: "max"),
+            new FormPropertyDef("Value", FormPropertyType.Int, "0", HtmlAttribute: "value"),
+            new FormPropertyDef("TickFrequency", FormPropertyType.Int, "1",
+                Targets: new[] { FormTarget.WinForms }),
+            new FormPropertyDef("Orientation", FormPropertyType.Enum, "Horizontal",
+                new[] { "Horizontal", "Vertical" },
+                WinFormsEnumType: "Orientation",
+                Targets: new[] { FormTarget.WinForms })),
+            DefaultWidth: 150, DefaultHeight: 45, Schematic: FormSchematic.Slider,
+            WinFormsEvent: "ValueChanged", WebEvent: "input"),
+
+        new("ProgressBar", "ProgressBar", "progress", null,       false, Common(
+            new FormPropertyDef("Minimum", FormPropertyType.Int, "0",
+                Targets: new[] { FormTarget.WinForms }),
+            new FormPropertyDef("Maximum", FormPropertyType.Int, "100", HtmlAttribute: "max"),
+            new FormPropertyDef("Value", FormPropertyType.Int, "0", HtmlAttribute: "value"),
+            new FormPropertyDef("Style", FormPropertyType.Enum, "Blocks",
+                new[] { "Blocks", "Continuous", "Marquee" },
+                WinFormsEnumType: "ProgressBarStyle",
+                Targets: new[] { FormTarget.WinForms })),
+            DefaultWidth: 150, DefaultHeight: 23, Schematic: FormSchematic.Progress,
+            // ⚠ A ProgressBar reports; it does not notify. Click is what Control gives it and the
+            // only thing a double-click here can honestly stub.
+            WinFormsEvent: "Click", WebEvent: "click"),
+
+        // ==================================================================
+        // ⛔⛔ WinForms-ONLY, by decision rather than omission. None of these has a single honest
+        // HTML tag: a DataGridView is not a <table>, a TabControl needs script the designer does
+        // not write, and a SplitContainer is a CSS layout rather than an element. Emitting a
+        // <div> for them would produce a page that silently is not the control the user drew.
+        // FormCatalogCoverageTests pins this, and Task 21's retarget reports it as explicit loss.
+        // ==================================================================
+
+        new("CheckedListBox", "CheckedListBox", null, null,       false, Common(
+            new FormPropertyDef("Items", FormPropertyType.String, IsItemCollection: true),
+            new FormPropertyDef("SelectedIndex", FormPropertyType.Int, "-1"),
+            new FormPropertyDef("CheckOnClick", FormPropertyType.Bool, "false")),
+            DefaultWidth: 160, DefaultHeight: 95, Schematic: FormSchematic.CheckList,
+            WinFormsEvent: "SelectedIndexChanged"),
+
+        new("ListView",    "ListView",    null,       null,       false, Common(
+            new FormPropertyDef("View", FormPropertyType.Enum, "LargeIcon",
+                new[] { "LargeIcon", "Details", "SmallIcon", "List", "Tile" },
+                WinFormsEnumType: "View"),
+            new FormPropertyDef("FullRowSelect", FormPropertyType.Bool, "false"),
+            new FormPropertyDef("GridLines", FormPropertyType.Bool, "false"),
+            new FormPropertyDef("MultiSelect", FormPropertyType.Bool, "true")),
+            DefaultWidth: 240, DefaultHeight: 120, Schematic: FormSchematic.ListDetail,
+            WinFormsEvent: "SelectedIndexChanged"),
+
+        new("TreeView",    "TreeView",    null,       null,       false, Common(
+            new FormPropertyDef("ShowLines", FormPropertyType.Bool, "true"),
+            new FormPropertyDef("ShowRootLines", FormPropertyType.Bool, "true"),
+            new FormPropertyDef("HideSelection", FormPropertyType.Bool, "true"),
+            new FormPropertyDef("Indent", FormPropertyType.Int, "19")),
+            DefaultWidth: 180, DefaultHeight: 140, Schematic: FormSchematic.Tree,
+            WinFormsEvent: "AfterSelect"),
+
+        new("DataGridView", "DataGridView", null,     null,       false, Common(
+            new FormPropertyDef("AllowUserToAddRows", FormPropertyType.Bool, "true"),
+            new FormPropertyDef("AllowUserToDeleteRows", FormPropertyType.Bool, "true"),
+            new FormPropertyDef("ReadOnly", FormPropertyType.Bool, "false"),
+            new FormPropertyDef("RowHeadersVisible", FormPropertyType.Bool, "true"),
+            new FormPropertyDef("ColumnHeadersVisible", FormPropertyType.Bool, "true")),
+            DefaultWidth: 280, DefaultHeight: 150, Schematic: FormSchematic.DataGrid,
+            WinFormsEvent: "CellClick"),
+
+        new("TabControl",  "TabControl",  null,       null,       true,  Common(
+            new FormPropertyDef("Alignment", FormPropertyType.Enum, "Top",
+                new[] { "Top", "Bottom", "Left", "Right" },
+                WinFormsEnumType: "TabAlignment"),
+            new FormPropertyDef("Multiline", FormPropertyType.Bool, "false"),
+            new FormPropertyDef("SelectedIndex", FormPropertyType.Int, "-1")),
+            DefaultWidth: 240, DefaultHeight: 160, Schematic: FormSchematic.Tabs,
+            WinFormsEvent: "SelectedIndexChanged"),
+
+        new("SplitContainer", "SplitContainer", null, null,       true,  Common(
+            new FormPropertyDef("Orientation", FormPropertyType.Enum, "Vertical",
+                new[] { "Horizontal", "Vertical" },
+                WinFormsEnumType: "Orientation"),
+            new FormPropertyDef("SplitterDistance", FormPropertyType.Int, "80"),
+            new FormPropertyDef("SplitterWidth", FormPropertyType.Int, "4"),
+            new FormPropertyDef("IsSplitterFixed", FormPropertyType.Bool, "false")),
+            DefaultWidth: 260, DefaultHeight: 140, Schematic: FormSchematic.Split,
+            WinFormsEvent: "SplitterMoved"),
+
+        new("FlowLayoutPanel", "FlowLayoutPanel", null, null,     true,  Common(
+            new FormPropertyDef("FlowDirection", FormPropertyType.Enum, "LeftToRight",
+                new[] { "LeftToRight", "TopDown", "RightToLeft", "BottomUp" },
+                WinFormsEnumType: "FlowDirection"),
+            new FormPropertyDef("WrapContents", FormPropertyType.Bool, "true"),
+            new FormPropertyDef("AutoScroll", FormPropertyType.Bool, "false")),
+            DefaultWidth: 220, DefaultHeight: 120, Schematic: FormSchematic.FlowContainer,
+            WinFormsEvent: "Click"),
+
+        new("TableLayoutPanel", "TableLayoutPanel", null, null,   true,  Common(
+            new FormPropertyDef("ColumnCount", FormPropertyType.Int, "2"),
+            new FormPropertyDef("RowCount", FormPropertyType.Int, "2"),
+            new FormPropertyDef("CellBorderStyle", FormPropertyType.Enum, "None",
+                new[] { "None", "Single", "Inset", "Outset" },
+                WinFormsEnumType: "TableLayoutPanelCellBorderStyle")),
+            DefaultWidth: 220, DefaultHeight: 120, Schematic: FormSchematic.TableContainer,
+            WinFormsEvent: "Click"),
     };
 
     public static FormControlDef? Find(string kind) =>

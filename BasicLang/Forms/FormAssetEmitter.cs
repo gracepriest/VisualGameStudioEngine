@@ -182,9 +182,24 @@ public static class FormAssetEmitter
         if (Flag(control, "ReadOnly") == true) sb.Append(" readonly");
         if (Flag(control, "MultiSelect") == true) sb.Append(" multiple");
 
-        if (control.Properties.TryGetValue("MaxLength", out var maxLength))
+        // ⛔ Driven from the CATALOG, not from a list here. WinForms `Minimum` is HTML `min`, and an
+        // `if` per property would be a second list beside FormControlCatalog that goes stale the day
+        // a row is added — the exact failure the catalog exists to prevent. A row declares its
+        // HtmlAttribute or it does not reach the page at all.
+        //
+        // ⚠ Skipped where the property does not apply to the web (Targets), so a WinForms-only row
+        // like DecimalPlaces cannot leak an attribute <input type="number"> has never heard of.
+        foreach (var property in definition.Properties)
         {
-            sb.Append($" maxlength=\"{Attr(maxLength)}\"");
+            if (property.HtmlAttributeName is not { } attribute ||
+                !property.AppliesTo(FormTarget.Web) ||
+                !control.Properties.TryGetValue(property.Name, out var raw) ||
+                string.IsNullOrEmpty(raw))
+            {
+                continue;
+            }
+
+            sb.Append($" {attribute}=\"{Attr(raw)}\"");
         }
 
         if (control.Properties.TryGetValue("GroupName", out var group))

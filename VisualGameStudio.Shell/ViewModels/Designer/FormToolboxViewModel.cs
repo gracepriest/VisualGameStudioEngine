@@ -95,6 +95,27 @@ public partial class FormToolboxViewModel : ObservableObject
         FormSchematic.Container => "[ ]",
         FormSchematic.Group => "{ }",
         FormSchematic.Image => "/\\",
+
+        // Task 23's widening. ⚠ Each must be VISUALLY distinct from every other mark, not merely
+        // different: FormToolboxGlyphTests fails on a repeat, because two controls wearing the same
+        // mark are as unhelpful as thirteen wearing "?".
+        FormSchematic.Link => "_A_",
+        FormSchematic.CheckList => "[=]",
+        FormSchematic.Spinner => "1^",
+        FormSchematic.DatePicker => "31",
+        FormSchematic.Slider => "-O-",
+        FormSchematic.Progress => "##",
+        FormSchematic.ListDetail => "|=|",
+        FormSchematic.Tree => "+-",
+        FormSchematic.DataGrid => "###",
+        FormSchematic.Tabs => "|_|",
+        FormSchematic.Split => "|:|",
+        FormSchematic.FlowContainer => ">>",
+        FormSchematic.TableContainer => "#|#",
+
+        // ⛔ Reached only by a schematic added without a mark, which FormToolboxGlyphTests fails on.
+        // Left as a visible "?" rather than something plausible precisely so it cannot pass for a
+        // real icon if that test is ever removed.
         _ => "?"
     };
 }
