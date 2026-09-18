@@ -622,7 +622,11 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   not required — Windows ships one in-box under `%WINDIR%\Microsoft.NET\Framework64`, elsewhere
   restore `runtime.<rid>.Microsoft.NETCore.ILAsm` or set `BASICLANG_ILASM`; a machine with none
   gets `Assert.Ignore`. Known gaps are pinned as `_PinnedDivergence` tests that each name a root
-  cause and go RED when fixed — read those before starting MSIL work.
+  cause and go RED when fixed — read those before starting MSIL work. ⚠ **As of 2026-09-16 there
+  are none left**: the last one (`ASharedMethodOnAUserClass_IsAPhantomCall_PinnedDivergence`) went
+  red when Shared members started working. That is not a claim the backend is complete — the gaps
+  below are real, and the ones living in the FRONT END cannot be pinned in this fixture at all
+  because they fail before the backend runs.
   ⚠ **`Try`/`Catch` is real EH regions as of 2026-09-16**, and the fix was FIVE defects, not one.
   The emitter inlined only the try block's straight-line instructions into `.try { }` while
   `GenerateBasicBlock` emitted those same blocks again as ordinary labelled blocks — so the real
@@ -718,6 +722,655 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   else — `Dim b As Integer = a * 3` with `a` a `Dim`, `= 2 + 3 * 4`, `= SomeFunc()` — crashes the
   FRONT END with a NullReferenceException before any backend runs, on C# as well as MSIL. That is
   a pre-existing compiler gap, not an MSIL one; don't chase it in the backend.
+  ⚠ **`Shared` members on user classes work as of 2026-09-16**, and the pin that covered this
+  (`ASharedMethodOnAUserClass_IsAPhantomCall_PinnedDivergence`, now deleted) named ONE defect where
+  there were TWO, entangled so that fixing either alone makes things worse.
+  ⛔ **(1) The dotted name was flattened.** `MathUtil.Twice` reached the emitter whole and
+  `SanitizeName` strips dots — it lives in `ICodeGenerator` and is shared by every backend, so it
+  cannot be changed here — producing `call Combined::MathUtilTwice`: the module's own class, a
+  method nothing defines.
+  ⛔ **(2) Every class member was ALSO emitted as a static on the module class.**
+  `IRModule.Functions` holds them: `IRBuilder` does `member.Accept(this)`, which appends to
+  `Functions`, then stores that SAME `IRFunction` as `IRMethod.Implementation`. Nothing to do with
+  `Shared` — instance methods too. Two consequences: two classes declaring a same-named method
+  collided on the module class and **ilasm refused the whole file** ("Duplicate method
+  declaration"), and an unqualified sibling call to a `Shared` method bound to the DUPLICATE and
+  printed the right answer for the wrong reason. Fix (1) alone and the duplicates stay; fix (2)
+  alone and the sibling call becomes MissingMethodException. `IsClassMember` filters on class
+  MEMBERSHIP by reference identity, mirroring `CSharpBackend.IsClassMethod` — the two must not
+  disagree about what a standalone function is.
+  Now supported: `Type.Method(...)`, unqualified sibling calls (from instance AND `Shared`
+  members), a `Shared` method qualified by its own class, `instance.SharedMethod()` (legal
+  BasicLang, illegal IL — the receiver is evaluated then `pop`ped, because it may have side
+  effects), `Type.SharedField` reads and writes as `ldsfld`/`stsfld`, bare `Shared` field names
+  inside the declaring class, sized `Shared` arrays, and inherited `Shared` methods.
+  ⛔ **A call must name the DECLARING class and be spelled from the DECLARATION.**
+  `Derived.Tag()` where `Tag` is Shared on `Base` needs `Base::Tag()`; and the call site is not a
+  usable source for the signature — that one arrives typed `object` where the method returns
+  `string`. `GenerateClassMethod` writes `MapType(method.ReturnType)` and `IlTypeSpec(p.Type)`, so
+  the call site must too. ilasm does not resolve member references, so a mismatch fails at RUN
+  time.
+  ⛔ **Receiver shadowing is INVISIBLE in a write-then-read program.** A local named after a class
+  (`Dim Counter As New Holder()` beside `Class Counter`) must resolve `Counter.Total` to the
+  local's field. Getting it backwards writes AND reads the same wrong location, so
+  `Counter.Total = 4` then printing it gives 4 either way. The test reads a value the program did
+  not put there (a constructor's 4 versus the class's `Shared = 9`); the first version of it
+  proved nothing.
+  ⚠ **An inherited Shared FIELD is mistyped by the FRONT END.** `Derived.Tally` (declared on
+  `Base`) comes through typed `object`: the read crashes in the boxing chain and
+  `Derived.Tally + 34` is rejected outright with "Arithmetic operator '+' requires numeric
+  operands" — identically on C#, which survives only because it re-emits the text and lets C#
+  re-resolve. MSIL's `ldsfld` names the right class. Naming the declaring class (`Base.Tally`)
+  works. Don't chase it in the backend.
+  ⚠ **Return coercion is inserted as of 2026-09-16** — `IRBuilder.CoerceToDeclaredReturnType`.
+  VB's `/` is ALWAYS floating-point division, so `Return v / 2` from a `Function … As Integer`
+  handed back a Double and nothing converted it. ⛔ **The claim that this broke "all five
+  backends" was an INFERENCE and it was wrong** — measured, each did something different:
+  C# emitted `return (double)(v) / (double)(2);` from an `int` method, which is **CS0266 and does
+  not compile** (the BasicLang build still said "successful", because it only writes source —
+  nothing invokes csc); MSIL emitted `ret` with a float64 from an int32 method and returned **0**;
+  JavaScript returned **3.5** from a function declared `As Integer`, looking correct only when the
+  quotient was already whole; C++ was right, and not because the compiler did anything — it
+  narrows implicitly on return.
+  The fix is one `IRCast` at the return site, the same seam and the same reasoning as
+  `WidenDivisionOperand` ("one insertion moves every consumer"), guarded to NUMERIC PRIMITIVES on
+  both sides so `Object`, String, class, `Task(Of T)` and generic returns are untouched.
+  ⛔ **The JavaScript backend had to learn narrowing casts to make this land.** It deliberately
+  threw on them ("Narrowing is not a no-op in JS either — it needs `Math.trunc`"), so inserting an
+  `IRCast` broke the whole backend until `TryNumericCast` existed. Both the statement visitor AND
+  the inline renderer need it; patching one leaves the other throwing.
+  ⚠ **All four backends now TRUNCATE, which is not VB.NET's answer and not self-consistent on C#.**
+  `Return 7 / 2 As Integer` gives 3 everywhere. VB narrows with banker's rounding (4), and this
+  compiler's own `CInt(3.5)` gives **4 on C#** (`Convert.ToInt32`) but **3 on C++/JS/MSIL** — so C#
+  disagrees with itself between an implicit return and an explicit `CInt`. Reconciling that means
+  changing every `IRCast` rendering on four backends; it is a decision about the whole narrowing
+  surface and was deliberately NOT taken here. `ReturnCoercionTests` pins the current answer so the
+  day someone takes it, the test goes red instead of the behaviour drifting.
+  ⚠ **Assignment coercion landed too, as of 2026-09-16** — the same
+  `CoerceToDeclaredType`, now applied at the declaration site and once in
+  `Visit(AssignmentStatementNode)` ahead of all four target arms (identifier, field, array element,
+  indexer). ⛔ **It was characterized separately rather than assumed to mirror the return case, and
+  it did not mirror it.** Measured for `Dim d As Integer = 7/2`, `e = 7/2`, `a(0) = 7/2` and a
+  module-level `G = 7/2`: C# gave FIVE CS0266s, MSIL gave `dim=1074528256 asn=0 arr=0 glob=0` and
+  then **SEGFAULTED**, JS gave `3.5` at all four sites, and C++ was right at all four.
+  ⛔ **The declared type must come from the TARGET NODE**, not the target variable:
+  `GetOrCreateVariable` is handed `value.Type`, and `TryRenameToVariable` then renames the Double
+  temp to the target outright, so the local's declared Integer never enters the picture.
+  `_semanticAnalyzer.GetNodeType(node.Target)` answers for all four target kinds at once.
+  ⛔ **`n /= 4` needed a SECOND fix and the coercion alone did nothing for it.** The compound path
+  typed its `IRBinaryOp` from the TARGET, so the result claimed Integer, the coercion saw no
+  mismatch — and the optimizer then folded Integer 10 ÷ 4 to the **Double** 2.5. VB's `/=` is
+  floating division exactly as `/` is, so its operands are widened the same way
+  `WidenDivisionOperand` does for the binary form. **`/=` ONLY**: measured with the widening
+  applied to every compound operator, `a = 14;` becomes `a = (int)((double)(a) * (double)(2));` —
+  constant folding lost and an exact integer multiply turned into a run-time Double round trip.
+  ⚠ **`\=` cannot be tested**: `n \= 2` does not PARSE ("Unexpected token in expression: '\'")
+  even though `IRBuilder`'s compound switch has a `\=` → `IntDiv` case. That case is dead until the
+  parser learns the operator.
+  ⛔ **A numeric LITERAL is re-typed in place, not wrapped in a cast.** Wrapping regressed
+  `PropertySet_LowersToTheSynthesizedSetterSlot` (`st.Position = 5` into an Int64 property turned
+  the pinned proxy call `…(st, 5)` into a call on a cast temp; it is now `…(st, 5LL)`, which is the
+  more faithful emission for an int64 slot). Re-typing is also load-bearing: measured on the
+  previous commit, `Dim w As Double = 7` on MSIL stored the int32 bit pattern and printed
+  **3.5E-323**. Constant narrowing TRUNCATES, to match the run-time cast — rounding would make
+  `Dim a As Integer = 7.9` answer 8 while the same value through a variable answered 7.
+  ⛔ **The coercion is restricted to Integer/Long/Single/Double, and that restriction is
+  load-bearing.** `IROptimizer`'s constant folders are written against those four CLR types and
+  nothing else — its own comment says `CompareLt`/`CompareGt` "blindly report false for type pairs
+  outside int/long/float/double". Handing them an `sbyte` is not a missing optimization, it is a
+  MISCOMPILE: measured, re-typing `Dim lo As SByte = -3` folded `lo < hi` to `if (false)` and
+  silently dropped the branch body, breaking
+  `BytePrinting_IsNumeric_NotCharacter_OnEveryPrintSurface`. So a Byte/SByte/Short/unsigned target
+  keeps exactly what it did before the coercion existed — nothing. That leaves
+  `Dim b As Byte = 7.9` unnarrowed, which is a real gap; closing it means teaching the optimizer's
+  folders every numeric CLR type.
+  ⚠ **Argument coercion landed as of 2026-09-16**, completing the three sites (return, store,
+  argument). ⛔ **The earlier note here said it "needs overload resolution". That was wrong twice
+  over**: the analyzer ALREADY resolves the callee and records its parameter list — the same
+  `Symbol.Parameters` both argument loops were reading `IsByRef` from — and BasicLang has no
+  overloading to resolve at all (a second `Sub Show` is "already defined in this scope").
+  Measured before: **eight CS1503s** on C# (does not build), `MissingMethodException: Take(Double)`
+  on MSIL (the call site spells its signature from the ARGUMENT's type), `3.5` everywhere on JS,
+  and C++ right by narrowing implicitly.
+  ⛔ **FIVE call shapes reach THREE different arms** of `Visit(CallExpressionNode)`, plus
+  `Visit(NewExpressionNode)`. Patching the obvious two left `Box.Shr(7 / 2)` pushing a float64 at a
+  correctly-spelled `Box::Shr(int32)` — the CLR rejects that as an invalid program. A **static
+  member** call reaches neither the plain-identifier arm nor the instance arm.
+  ⛔ **A constructor has NO resolved symbol** — measured, `GetNodeSymbol` is null on a
+  `NewExpressionNode` — so its parameter types come from the IR class's own constructors, selected
+  by ARGUMENT COUNT. The same-arity ambiguity branch is UNREACHABLE (the analyzer does not resolve
+  constructor overloads: it binds to the LAST declared one and then rejects the argument) and is
+  kept anyway, because it makes the coercion do NOTHING there — a fail-safe branch cannot give a
+  wrong answer, unlike a speculative one that acts.
+  ⛔ **ByRef is skipped, and the MISMATCHED shape is the only one that shows why.** With matching
+  types the coercion is a no-op and the guard never fires. With `ByRef n As Double` and an Integer
+  argument, removing the guard turns the C++ call site from `Bump(v)` into `Bump(t0)` — and where
+  `Bump(v)` does not compile (a pre-existing ByRef type-mismatch gap), `Bump(t0)` **compiles, runs
+  and prints 41**: the write-back landing in a temporary nobody reads. A build error traded for a
+  silently dropped mutation.
+  ⚠ **`ParamArray` does not parse** in either spelling (`ParamArray xs() As Integer` and
+  `ParamArray xs As Integer()` are both syntax errors), so a guard clause for it was written and
+  then removed — untestable, and redundant anyway since an array-typed parameter is already
+  rejected by the Integer/Long/Single/Double restriction.
+  ⚠ **Still failing for unrelated reasons, all pre-existing**: a `Shared` method on a user class
+  has no JS lowering and emits an undeclared identifier on C++; MSIL fails any ByRef call with
+  InvalidProgramException.
+  ⚠ **Omitted `Optional` arguments are filled at the CALL as of 2026-09-16** —
+  `IRBuilder.AppendOmittedOptionalArguments`, at the same three arms the argument coercion uses.
+  ⛔ **One backend of four was right, and it was right by accident.** C# emits the default into the
+  SIGNATURE (`int b = 5`) and lets csc fill it, so nothing in the compiler ever produced the value.
+  Measured for `Sub One(a As Integer, Optional b As Integer = 5)` called as `One(1)`: JS printed
+  `one:1,undefined` (and a Function returning `a + b` printed **0**, because `CStr(NaN)` is 0),
+  C++ did not build ("too few arguments to function"), MSIL could not bind
+  (`MissingMethodException: Void Combined.One(Int32)`). The declaration side would have been three
+  separate per-backend mechanisms; the call site is one.
+  ⛔ **FOUR analyzer sites record `Symbol.DefaultValueExpression`, and ABLATION proved every one
+  load-bearing** — which one a call reads depends on where the callee is declared, so patching the
+  obvious one leaves the rest silently broken. `Visit(ParameterNode)` covers a callee declared
+  BEFORE the caller and every class member; `RegisterSubSignature` / `RegisterFunctionSignature`
+  cover one declared AFTER it (a forward reference binds to the PRE-PASS symbol, and the
+  declaration's own visit installs a different object — measured by identity, call site #47891719
+  vs the rebuilt #958745); `BuildSiblingSignatureParameters` covers a callee in another FILE.
+  ⛔ **The default is on the SYMBOL, not looked up from the callee's `IRFunction`.**
+  `IRVariable.DefaultValue` carries the same fact at the declaration, but `IRModule.Functions` is
+  appended as each function is visited, so a call to one defined further down the file finds
+  nothing — a fix built on that lookup works for one declaration order and silently not the other.
+  ⚠ **Constructors take an omitted `Optional` too, as of 2026-09-16** —
+  `SemanticAnalyzer.ResolveConstructor`, ONE rule for all three construction sites. Constructors are
+  keyed by ARITY (`.ctor1`, `.ctor2`) in the type's member table and every site looked up an EXACT
+  key, so the analyzer refused the program before the IR builder saw it. Measured before:
+  `New Box(4)` → "No constructor for 'Box' takes 1 argument(s)"; `New Box()` against an
+  all-Optional constructor → "takes 0 argument(s)"; `MyBase.New(7)` → "No constructor for base
+  class 'Base' takes 1 argument(s)". An EXACT arity still wins, so nothing that resolved before
+  resolves differently; only when no exact key exists is the unique longer constructor with an
+  all-Optional tail accepted, and two candidates answer null and keep the existing diagnostic.
+  ⛔ **`UnambiguousConstructorParameters` is GONE** — the analyzer now RECORDS the bound constructor
+  (`ConstructorBindings`, keyed by AST node) and the IR builder reads it, so the IR can no longer
+  coerce against a different constructor than the analyzer type-checked, and it gets
+  `IsOptional`/`DefaultValueExpression` that an `IRVariable` list does not carry.
+  ⛔⛔ **A class declared AFTER the code that uses it used to get NO constructor checking at all —
+  FIXED 2026-09-17.** The cause was worse than a missing key: `ResolveTypeName` fell through every
+  user channel to its **.NET fallback** and returned `new TypeInfo(name, TypeKind.Class)`, a
+  SYNTHETIC member-less type that is not the user's class. Measured, `New Box(…)` in that order saw
+  `members=0`, so the arity check was SKIPPED rather than failed (`hasAnyConstructor` is false with
+  no `.ctor` key — not even an error) and nothing was there to coerce or fill against. It was a
+  LIVE MISCOMPILE: `New Box(7 / 2)` emitted `new Box((double)(7) / (double)(2))` — **CS1503, does
+  not build** — while the same program with the class first emitted the cast and ran. The
+  constructor argument coercion had been half-working since it shipped and nothing noticed, because
+  every test and sample in the repo declares classes first.
+  ⚠ **Fixed by TWO sweeps in pass 1, and the order of the sweeps is load-bearing.**
+  `RegisterClassTypes` gives every class its real `TypeInfo` first; only then does
+  `RegisterDeclaration` record `.ctorN` via `RegisterConstructorSignature`, so a class-typed
+  constructor parameter resolves to the real class instead of degrading to Object. Collapsing them
+  into one walk reintroduces that degradation for any class declared later.
+  ⛔ **`DefineType` answering NULL *is* the duplicate-class signal**, so pass 1 pre-registering a
+  name would have made every class "already defined". `Visit(ClassNode)` therefore CONSUMES the
+  pass-1 record (`_preRegisteredClasses.Remove`): the first declaration reuses the type, a genuine
+  second `Class Box` finds nothing to consume and reports at its own line with the message it
+  always had. Peeking instead of consuming silently disables duplicate detection.
+  ⚠ **MSIL passes `BaseConstructorArgs` as of 2026-09-17** — `EmitBaseConstructorCall`. It used to
+  emit a fixed `call instance void Base::.ctor()` whatever was written, because the generator never
+  read the list at all, so every base constructor taking arguments died with
+  `MissingMethodException: Void Base..ctor()`. MSIL-only: C#, JavaScript and C++ all passed them.
+  ⛔ **A COMPUTED base argument is REFUSED, not emitted**, and that is the whole design decision.
+  IL requires the base call before the constructor body, so a value the body produces does not
+  exist yet: measured, `MyBase.New(v + 1)` hands the generator an `IRBinaryOp` temp, and loading it
+  would read an uninitialized local and pass a silent **0** — worse than the exception it replaces.
+  ⛔ **That shape is an IR-level gap, not an MSIL one**: the same program does not build on C#
+  either, which emits `: base(t0)` naming a temp that is not in scope (**CS0103**). Whoever makes
+  `BaseConstructorArgs` self-contained (evaluate into the base call rather than the body) fixes
+  both; `MsilBaseConstructorTests.AComputedBaseArgument_IsRefused_NotSilentlyZero` pins both halves.
+  ⚠ **A base that cannot be constructed with no arguments is REJECTED as of 2026-09-17** —
+  `ResolveImplicitBaseConstructor`. Such a program used to compile and then break on EVERY backend
+  (MSIL `MissingMethodException`, C# CS7036, JavaScript `base:undefined`), because none of them can
+  invent the arguments — which is what makes it the front end's to catch.
+  ⚠ **TWO shapes, ONE condition, and both are checked**: a class declaring no constructor at all
+  (VB's **BC30387**, in `Visit(ClassNode)`) and a constructor that never calls `MyBase.New` (VB's
+  **BC30148**, in `Visit(ConstructorNode)`). Both get an implicit no-argument base call, so both are
+  unbuildable for the same reason; checking one leaves half the defect.
+  ⛔ **"Callable with no arguments" is asked through `ResolveConstructor`**, the same helper a `New`
+  site uses, so an all-`Optional` base constructor COUNTS — its defaults fill. A check written
+  against "is there a `.ctor0` key" rejects that legal program, which is the mutation that proves
+  this matters.
+  ⛔ **Accepting the all-Optional base forced a second fix**: it was a legal program every backend
+  miscompiled, because the implicit base call passed nothing to a constructor declaring a parameter.
+  The implicit call now FILLS the base's optional defaults (the analyzer records the bound base
+  constructor even with no arguments written), and `base:3` runs on MSIL, C# and JavaScript.
+  ⚠ **A class declaring NO constructor whose base is all-`Optional` works as of 2026-09-17** —
+  `IRBuilder.SynthesizeImplicitConstructor`. The analyzer rightly accepted such a program, but
+  there was no `IRConstructor` to hang the filled defaults on, so each backend invented a bare
+  no-argument base call: C# emitted `class Derived : Base` with no constructor and got **CS7036**,
+  MSIL threw `MissingMethodException`. `base:3` now runs on MSIL, C#, JavaScript and C++.
+  ⚠ **The synthesized constructor is a REAL one** — its own `IRFunction` with an entry block and a
+  return — not an `IRConstructor` with a null `Implementation`. Only MSIL has a
+  synthesize-a-default path at all (`GenerateDefaultCtorForClass`); C#, JavaScript and C++ lean on
+  their target language's implicit constructor, so handing them a shape no DECLARED constructor
+  ever produces is how one of them breaks uncovered. Mutating `Implementation` to null kills a test.
+  ⚠ **`_currentFunction` is pointed at the synthesized function BEFORE the fill**, so a default
+  that is an expression emits into that constructor's body rather than whatever function happened
+  to be current.
+  ⛔ **Nothing is synthesized when there is nothing to fill** — a parameterless base, or no base —
+  and the backends' own default still applies, which is what every existing class relies on.
+  ⛔ **A base `Optional` default that is an EXPRESSION (`= 2 + 3`) is still broken**, and it is the
+  computed-argument gap above rather than a new one: the filled value is a temp the body computes
+  and the base call must precede the body, so MSIL refuses it and C# emits `: base(t0)` (CS0103).
+  NOT a regression — that shape was already broken, just with a different message. Closing
+  `BaseConstructorArgs`'s self-containment closes both. Pinned.
+  ⚠ **The `_currentFunction` clear at the end of `SynthesizeImplicitConstructor` is load-bearing.**
+  `Visit(VariableDeclarationNode)` decides global-versus-local on `_currentFunction == null` and
+  nothing else, so leaking the synthesized function sends the NEXT module-level `Dim` down the
+  local-variable branch: no static field is emitted and the program dies with
+  `InvalidProgramException`. Held by
+  `MsilBaseConstructorTests.TheSynthesizedConstructor_DoesNotLeakIntoTheNextModuleGlobal`.
+  ⚠ **The module-scope initializer crash is FIXED as of 2026-09-17** —
+  `IRBuilder.BuildModuleScopeInitializer`, `ModuleScopeInitializerTests`. It crashed the compiler
+  with a `NullReferenceException` (`GetNextTempName()` on the null `_currentFunction`), surfacing
+  as `Error at line 0: ... Object reference not set to an instance of an object`, for ANY
+  initializer needing a temp — `40 + 2`, `"a" & "b"`, `7 / 2`, `1 < 2`, `(1 + 2) * 3`, `Helper()`,
+  `New List(Of Integer)()` — identically on all four backends, because it happened in the builder
+  before any of them ran. TWO call sites had it, the global `Dim` branch and the global `Const`
+  branch; both now route through the one helper.
+  ⚠ **It FOLDS rather than refuses where it can.** A scratch (deliberately unregistered)
+  `IRFunction` gives lowering somewhere to emit, then the optimizer's own `ConstantFoldingPass`
+  reduces it. Folding must happen in the BUILDER: a global's `InitialValue` has to be a constant
+  for any backend to emit it, and the optimizer does not run on every path.
+  `BinaryOpKind.Concat` was added to that pass so `"a" & "b"` folds — `FoldAdd`'s string branch
+  already was concatenation. Mixed operands (`"a" & 5`) still do not fold, so VB's coercion is
+  never guessed at.
+  ⛔ **What cannot fold is REFUSED with a diagnostic**, not guessed at: `Helper()` and
+  `New List(Of Integer)()` need code to run first, i.e. a module initializer no backend has (the
+  JS backend already refused a non-constant global outright). One refusal, where foldability is
+  decided, so the builder and the backends cannot disagree.
+  ⚠ **`Dim G As Double = 7 / 2` FOLDS as of 2026-09-17** — `WideningCastFoldingPass`. `/`
+  promotes both operands, so the block is `IRCast, IRCast, IRBinaryOp` and neither operand was a
+  constant until the casts reduced. The helper now alternates that pass with `ConstantFoldingPass`
+  to a FIXPOINT, because two shapes need opposite orders: `7 / 2` needs the casts folded first,
+  `(1 + 2) / 4` needs the addition folded first.
+  ⛔ **WIDENING ONLY — Integer→Long, Integer→Double, Single→Double**, the three exact ones.
+  Integer→Single is inexact past 2^24, Long→Double past 2^53.
+  ⚠ **The CInt divergence is FIXED as of 2026-09-18** — `ConversionRoundingTests`. It was measured
+  on `CInt(7.5)`, `CInt(8.5)`, `CInt(7.9)`, `CInt(-7.5)`: **C# printed `8,8,8,-8`** while **MSIL,
+  JavaScript and C++ all printed `7,8,7,-7`**. One language, two answers, silently wrong on three
+  backends out of four.
+  ⚠ **C# was the right one.** It emits `Convert.ToInt32`, which is exactly
+  `Math.Round(x, MidpointRounding.ToEven)` — banker's rounding, what VB's `CInt` specifies.
+  Verified against `Convert.ToInt32` on ten values BEFORE changing anything, because the fix
+  direction depended on it; the midpoints are what separate ToEven from both truncation and
+  AwayFromZero (`8.5`→8 not 9, `2.5`→2 not 3, `-8.5`→-8 not -9).
+  ⚠ The other three were changed to agree: MSIL emits `Convert::ToInt32(float64)`, C++ wraps the
+  cast in `std::nearbyint` (default FE_TONEAREST matches on all ten values — `round()` would NOT,
+  it is AwayFromZero), and JavaScript gets an emitted `__blCInt` helper because it has no built-in
+  (`Math.round` is half-up toward +Infinity and answers -7 for -7.5).
+  ⛔ **An INTEGRAL argument keeps its plain conversion.** On MSIL that is not style: `Convert::ToInt32`
+  is overloaded per CLR type and IL names one exact overload, so an int32 through the `float64`
+  signature would not verify. On C++ an Integer through a double loses precision above 2^53.
+  ⚠ The JS helper is selected by SCANNING the module, not a flag set while lowering — the prelude
+  is emitted before any function body, so a flag is still false there. Measured: the first attempt
+  emitted every call site and no definition, and Node died with "__blCInt is not defined".
+  ⚠ **ASSIGNMENT narrowing rounds too, as of the same change** — the whole narrowing surface now
+  agrees. `Dim i As Integer = 7.5` is 8, `7 / 2` into an Integer is **4**, `CInt(19.99)` is 20.
+  Four backend sites plus the constant fold: `CSharpBackend.EmitCastText` (→ `Convert.ToXxx`),
+  `MSILBackend.Visit(IRCast)` (→ `Math::Round(float64)` before the conv),
+  `CppCodeGenerator.Visit(IRCast)` (→ `std::nearbyint`), `JavaScriptBackend.TryNumericCast`
+  (→ the same `__blCInt` helper), and `IRBuilder.TryConvertConstant` (`Math.Truncate` →
+  `MidpointRounding.ToEven`).
+  ⛔ **This moved 30 existing tests**, every one of which encoded truncation. Each was checked
+  individually against VB semantics rather than bulk-updated: `7.9`→8, `3.5`→4, `CInt(-3.7)`→-4,
+  `CInt(19.99)`→20, and the C# emission `(int)(x)`→`Convert.ToInt32(x)`. Several were RENAMED,
+  because their names asserted the old behaviour —
+  `TheBackendsAgreeOnTruncation_WhichIsNotYetVbsBankersRounding` →
+  `TheBackendsAgreeOnVbsBankersRounding`, `CInt_Truncates` → `CInt_Rounds`,
+  `ANumericLiteral_..._AndNarrowsByTruncating` → `...AndNarrowsByRounding`,
+  `NarrowingConversion_DisagreesAcrossBackends_Pinned` → `NarrowingConversion_AgreesAcrossBackends`.
+  ⚠ Two of those tests had ASKED for this in their own comments — the return-coercion one said it
+  should "go red and get revisited rather than drifting" the day someone took the decision, and
+  the JS cast note called it "a pre-existing decision about the whole narrowing surface and not
+  this function's to make". Both now record that it was taken.
+  ⚠ `CInt(...)` / `CDbl(...)` are NOT casts — they lower to an `IRCall`, so neither pass touches
+  them and they stay refused at module scope.
+  ⚠ **The widening-only restriction is currently UNREACHABLE**, measured: adding a Double→Integer
+  arm leaves every test passing, because no narrowing `IRCast` reaches the pass (assignment
+  narrowing is folded earlier by `TryConvertConstant` without a cast). Kept as a fail-safe no test
+  can hold, for the divergence above.
+  ⚠ **The pass is NOT in the default pipeline, and that is a SCOPE decision, not a safety one.**
+  The tempting rationale — that a folded Double constant renders as `7` via `Value.ToString()` and
+  would turn `(double)7 / x` into integer division — was measured and is WRONG: with the pass in
+  the pipeline C# still prints 3.5 for both `7 / 2` and `7 / x`, because the optimizer loops to a
+  fixpoint and a surviving operand keeps its own cast.
+  ⚠ **That miscompile is FIXED as of 2026-09-18**, and the ROOT CAUSE was not the sub-int type
+  table an earlier note blamed: **a module-scope declaration was never coerced to its DECLARED
+  type at all.** The local branch of `Visit(VariableDeclarationNode)` has always called
+  `CoerceToDeclaredType`; the global branch never did, so a Double literal went straight into a
+  narrower global and each backend reinterpreted its bits. Measured on MSIL, `Dim v As T = 7.9` at
+  module scope: Byte **154**, SByte **-102**, Short and UShort an **empty string**, Integer
+  **-1717986918**, UInteger **2576980378**, Long and ULong **4620580627691444634** (the IEEE-754
+  bits of 7.9). The SAME declarations as LOCALS printed 7 throughout — which is what identified
+  the missing coercion, since Integer and Long are types `TryConvertConstant` has always handled.
+  ⚠ **Two parts.** `CoerceToDeclaredType` in `BuildModuleScopeInitializer` fixes
+  Integer/Long/Single/Double. `NarrowModuleScopeConstant` (module-scope only) then handles
+  Byte/SByte/Short/UShort/UInteger, which `CoerceToDeclaredType` declines on purpose — admitting
+  them there would put an `IRCast` in front of LOCAL declarations that already work.
+  ⛔ **The narrowed constant keeps an `int`/`long` CLR value and carries the narrow type in its
+  `TypeInfo`.** That split is the safety argument: measured and STILL TRUE, `IROptimizer.CompareLt`
+  answers **false** for any CLR pair outside int/long/float/double, so handing the folders a real
+  `byte` silently folds `lo < hi` to false. UInteger takes an `int` when the value fits, because a
+  `long` makes the JavaScript backend refuse the program (BL7003) — measured, that turned
+  `Dim G As UInteger = 7.9` into a build failure there.
+  ⛔ **ULong is REFUSED**, not narrowed: its range does not fit the `long` the folders can carry.
+  A clean diagnostic beats the 4620580627691444634 it printed before.
+  ⚠ **Out of range is REFUSED as of 2026-09-18 — VB's BC30439** — `ConstantRangeTests`,
+  `SemanticAnalyzer.CheckConstantFitsNumericTarget`. It used to WRAP at module scope
+  (`Byte = 300` → **44**, `Byte = -1` → **255**, `SByte = 200` → **-56**, `Short = 40000` →
+  **-25536**, `UShort = 70000` → **4464**), which `NarrowModuleScopeConstant` still does for any
+  value that now reaches it.
+  ⛔ **The note this replaces was WRONG about locals.** It recorded the wrap as "measured on
+  both" scopes; module scope was the only place the backends agreed. Re-measured at LOCAL scope
+  for `Dim b As Byte = 300` — four backends, THREE answers, one of them not a program:
+  **C#** CS0031, the emitted source DOES NOT BUILD; **JavaScript** **300**, since a JS number has
+  no width to overflow; **C++** **44**; **MSIL** **44** (`ldc.i4 300` into a `uint8` slot — RUN
+  through ilasm, which this container does have via the
+  `runtime.linux-x64.microsoft.netcore.ilasm` package `MsilHarness` looks for). Same split at
+  five more sites —
+  `b = 300`, `a(0) = 300`, `x.F = 300`, `Return 300`, `Take(300)` — where C# adds CS0221 and
+  CS1503. Agreeing on a wrap was never worth having; the check is in the FRONT END, ahead of all
+  four backends and both scopes.
+  ⚠ **Five call sites, one helper**: the `Dim` declaration (local AND module), `Const`,
+  assignment (which covers a variable, an array element and a field), `Return`, and an argument.
+  A language that refuses `Dim b As Byte = 300` but accepts `b = 300` has no rule at all.
+  ⚠ **It checks AFTER half-to-even rounding**, because that is what the narrowing itself does
+  (`IRBuilder.TryConvertConstant`): `Byte = 255.4` is legal, `= 255.6` is not, and `= -0.5` is
+  legal because -0.5 rounds to -0. Those last two are the mutation kills — comparing the raw
+  value refuses `255.4`, and AwayFromZero refuses `-0.5`, both legal programs.
+  ⛔ **Constant EXPRESSIONS fold, non-constants do not.** `Dim b As Byte = 100 + 200` diverged
+  exactly as the bare literal did, so `TryFoldConstantDouble` folds literals, `Const` references
+  and `+ - * /` over them. `Dim b As Byte = someInteger` is a run-time conversion and is NOT
+  reported — VB does not report BC30439 for it either — and nor is `c += 300`, whose value
+  depends on `c`.
+  ⚠ **A sibling of `TryFoldConstantInt`, not a replacement.** That one sizes array declarations
+  and must refuse anything it cannot size with, so it rejects floating values and any integer
+  outside `int` — which are exactly the cases this has to keep. The integral-only operators
+  (`\ Mod << >>`) are deliberately NOT folded here: a fold that DISAGREES with the IR produces a
+  false error, the one outcome worse than the wrap this replaces, and declining costs only a
+  diagnostic.
+  ⚠ **`Long`/`ULong` bounds are imprecise at the boundary on purpose** — `(double)long.MaxValue`
+  rounds up to 2^63 — so a constant of exactly 2^63 is accepted. A missed diagnostic, never a
+  false one.
+  ⛔ **`Single` is a RANGE check, not a precision one.** `Dim s As Single = 1.0E+40` printed
+  **Infinity** on JavaScript and made the C++ backend emit `s = Infinityf;`, which does not
+  compile. `= 0.1` loses bits and stays legal.
+  ⚠ **Two tests in `ModuleScopeInitializerTests` pinned the old behaviour and were rewritten.**
+  `AnOutOfRangeInitializer_WrapsLikeTheLocalPath` asserted the wrap AND agreed with it; it is now
+  `AnOutOfRangeInitializer_IsRefusedAtBothScopes` and is no longer an Integration test, since a
+  diagnostic compiles nothing. `AFoldedNarrowInitializer_IsNarrowedToo` used
+  `Dim H As Byte = 500 - 200`, which is refused outright now, and uses `100.5 + 100.2` (= 200.7,
+  narrowing to **201**) instead — a strictly better probe: it also separates narrowing the SUM
+  from narrowing the OPERANDS (100 + 100 = 200), and dropping the narrowing is caught on BOTH
+  backends (C# CS0266, MSIL **102**) where the old integer shape was caught only by C#, MSIL's
+  `stsfld uint8` having truncated 300 to 44 by itself.
+  ⛔ **An unrelated MSIL gap surfaced while writing these** — a local named `neg` emits
+  `[2] int8 neg` and ilasm rejects it ("syntax error at token 'neg'"). Worked around by renaming
+  in the test at the time; **FIXED as of 2026-09-18**, see the IL-quoting entry below. The
+  `minS`/`maxS` names in `ConstantRangeTests` are left as they are — renaming them back would buy
+  a duplicate of `MsilIdentifierQuotingTests`.
+
+  ⚠ **An IL keyword as a BasicLang name is QUOTED as of 2026-09-18 — VB has no such rule, ILAsm
+  does** — `MsilIdentifierQuotingTests`, `MSILCodeGenerator.SanitizeName`. The MSIL backend writes
+  IL TEXT and never sees ilasm's verdict, so `Dim neg As Integer = 1` compiled "successfully" and
+  then would not assemble.
+  ⛔ **SCANNED, not guessed at.** Of 90 IL keyword candidates written as a plain
+  `Dim … As Integer`, 8 are not BasicLang identifiers at all and **64 of the remaining 82 made
+  ilasm reject the program**. They are not exotic: `value`, `add`, `call`, `method`, `field`,
+  `filter`, `handler`, `custom`, `break`, `switch`, `box`, `literal`, `native`, `sealed`. The 14
+  that passed — `file`, `hash`, `ldc`, `tail`, `volatile`, `constrained`, `corflags`, `culture`,
+  `exeloc`, `locale`, `pinned`, `subsystem`, `unaligned`, `ver` — are the argument against a
+  hand-written keyword list: the set is large, context-sensitive and not readable as data, so a
+  list drifts and being wrong by one word costs a program that does not assemble.
+  ⚠ **EVERY position was affected**, measured with `value`: local, parameter, method name, class
+  name, field, module-level global and property.
+  ⛔ **Quoting is PURELY LEXICAL, and that is what makes "quote everything" safe** rather than a
+  matching hazard — measured: a method DECLARED `'Twice'` and CALLED as `Twice` in the same file
+  assembles and runs. A quoted name and a bare one are the SAME identifier, so a missed site still
+  resolves and no reference has to be kept in step with its declaration. The emitted
+  `[mscorlib]System.Math::'Abs'(int32)` binding mscorlib's unquoted `Abs` is the same property in
+  the compiler's own output, and is what the test pins.
+  ⚠ **Only USER-CHOSEN names are quoted.** Compiler-generated ones are not, because they provably
+  cannot collide and quoting them is output churn no test could justify: branch LABELS (every
+  block name is `if{n}.then`, `switch{n}.default`, `for{n}.cond` … so it always carries a digit —
+  and `Visit(IRLabel)` is dead, `new IRLabel` is never constructed and the lexer has no `GoTo`),
+  `.module Combined.exe` (the module name is a driver constant), and the prefixed names
+  `get_X`/`set_X`/`add_X`/`remove_X`/`fld_scratch_X`/`eh_result_N`.
+  ⛔ **A COMPOSED name is one identifier** — `get_'Alpha'` is not one, so the quotes go around the
+  whole thing or nowhere. That is why `RawName` exists beside the override.
+  ⛔ **TWO things broke on the first attempt and the suite caught both**, which is the reason this
+  is not a one-line change: (1) `MapTypeName` is reached with names that are ALREADY IL spellings,
+  harmless only while its fallback was the identity — once it quoted, `int32` came back `'int32'`
+  and `Dim n As Integer` declared `[0] class 'int32' 'n'`, a local typed as a class that does not
+  exist; (2) `isMain` compared the PRINTED name, so `'Main'` never equalled `"Main"` and ilasm
+  refused every assembly with "No entry point declared".
+  ⚠ **`_localIndices` is keyed by the IR's name, never the printed one**, and the two lookups that
+  got this wrong fail in opposite ways: a catch variable throws at generation time ("the catch
+  variable 'ex' has no local slot"), while an array local is **SILENT** — `EmitArrayLocalAllocations`
+  just `continue`s, no `newarr` is emitted, and the program dies at run time with a
+  NullReferenceException on first use.
+  ⛔ **A property named after a keyword was STILL refused** when that change landed, for a
+  pre-existing and unrelated reason — the `.property` block named accessor methods the backend
+  never emitted. **FIXED as of 2026-09-18**, see the next entry; the accessor-composition property
+  is still pinned on the IL TEXT rather than a run, because that is what it is about.
+
+  ⚠ **Properties WORK on MSIL as of 2026-09-18 — they did not, in ANY shape** —
+  `MsilPropertyTests`, `MSILCodeGenerator.GenerateProperty` + the field-access visitors. Measured
+  before, compile → ilasm → run: an AUTO property (`Public Property Alpha As Integer`) made ilasm
+  refuse the file ("Invalid Set method of property 'Alpha'"); an EXPLICIT one assembled and died
+  with `MissingFieldException: Field not found: 'Box.N'`; `ReadOnly` with a computed getter the
+  same; an auto property touched from inside its own class was refused; a `Shared` one was
+  refused. Every other backend ran the same program (JavaScript 7, C++ 7, C# emits a real
+  `public int Alpha { get; set; }`).
+  ⛔ **THREE independent defects, each masking the next.** (1) The `.property` block was written
+  UNCONDITIONALLY while each accessor METHOD was gated on `prop.Getter != null`; an auto property
+  carries neither in the IR, so the block named methods that did not exist — and nothing declared
+  storage for the value either. (2) Every property ACCESS lowered to `ldfld`/`stfld` on the
+  property's own name, bypassing the accessors; proved by deleting the `.property` block from the
+  emitted IL by hand, after which it assembled and died with MissingFieldException. (3) An
+  explicit accessor's body never got a `.locals init`, because `.maxstack` was written BEFORE
+  `InitializeMethodContext` and the slot tables do not exist until then — so
+  `Set(value As Integer)` emitted `stloc.0` into a method with no locals directive and the CLR
+  answered **InvalidProgramException**. Fixing (3) is a REORDERING, not an added line.
+  ⚠ **An auto property gets `'<Name>k__BackingField'`** plus two synthesized accessors over it —
+  the spelling the C# and VB compilers use, so it reads as generated and cannot collide with a
+  user field. The angle brackets are not identifier characters, which is what makes it safe and
+  also why it must be quoted.
+  ⛔ **The `.property` block and the methods are now decided by ONE pair of conditions.** The
+  shape that forces this is a property with only a `Get` block and NO `ReadOnly` keyword:
+  `IsReadOnly` is false, so asking IT whether to declare `.set` answers yes and names a `set_N`
+  that is never emitted. A `ReadOnly` property does NOT hold that — there both conditions agree —
+  which is why the mutation survived the first pass and needed its own test.
+  ⚠ **A bare property name inside its own class is a CALL, not a load**, so `_currentClassProperties`
+  sits beside `_currentClassFields` rather than in it. Without it `Alpha = Alpha + 1` emitted
+  `// WARNING: Unknown local 'Alpha'`, pushed nothing, ran the `add` an operand short and stored
+  the result into a temporary. The setter also needs the same scratch slot the `stfld` path uses —
+  IL has no swap — so `AllocateFieldStoreScratch` reserves one for an instance property too.
+  ⛔ **TWO gaps here are PRE-EXISTING and deliberately NOT fixed or asserted**, both verified on
+  the parent commit `3011ab0`:
+  (a) **Instance field initializers were never emitted** — `Public N As Integer = 5` printed **0**
+  with no property anywhere. **FIXED as of 2026-09-18 on MSIL**, see the next entry. The
+  computed-getter test still seeds through a method, because that is what it was written against
+  and re-pointing it at a field initializer would only duplicate `MsilFieldInitializerTests`.
+
+  ⚠ **Instance field initializers RUN on MSIL as of 2026-09-18** —
+  `MsilFieldInitializerTests`, `MSILCodeGenerator.EmitInstanceFieldInitialization` (the helper that
+  was `EmitArrayFieldAllocations`). `Public N As Integer = 5` emitted the field and threw the 5
+  away, so the program ran and read **0** — nothing failed to assemble and nothing threw.
+  ⛔ **Measured before**: implicit constructor **0** (and a `String` field came out null); explicit
+  constructor **0**; a constructor that BUILDS on the value — `N = N + 3` over `= 5` — answered
+  **3** rather than 8, because it started from the zero; two constructors **0,3** rather than
+  **5,8**. `Shared` was the ONE shape that already worked, through
+  `GenerateClassStaticConstructor`; this is the same loop on the instance side.
+  ⚠ **The hook already existed**: `EmitArrayFieldAllocations` was called from BOTH constructor
+  paths (the explicit one and the generated default), after the base call — which is exactly where
+  VB runs field initializers, so a base constructor observes its own fields already set. Only the
+  initializer half was missing.
+  ⚠ **C++ had the SAME GAP and it is FIXED too, as of 2026-09-18** — see the C++ entry below.
+  JavaScript (`5,hi`) and C# (`public int N = 5;`) were correct all along.
+  ⚠ **A NON-LITERAL initializer was dropped in the IR, for every backend — FIXED as of
+  2026-09-18**, see the entry below. It is why every test in the two field-initializer fixtures
+  uses a plain literal.
+  ⚠ **An auto-property initializer does not PARSE**: `Public Property X As Integer = 5` is
+  "Unexpected token in class: '='".
+  ⚠ **The initializer-before-array-sizing precedence is UNREACHABLE, not load-bearing** — measured:
+  the analyzer refuses an initializer on an array-typed field at all ("Cannot assign value of type
+  'Integer' to variable of type 'Integer[]'"), so no field carries both and swapping the two arms
+  changes nothing. That mutation survives and is recorded as equivalent rather than papered over.
+  Both arms are live for DIFFERENT fields; only their order is arbitrary.
+  (b) **Inherited members do not resolve.** `Derived.Tag` where `Tag` is on `Base` types its
+  temporary `object` and boxes as `System.Object` — on master too, for a plain FIELD
+  (`ldfld object 'Derived'::'Tag'`). The front end does not walk the base chain for a member's
+  type. The property variant fails the same way and this change neither fixes nor worsens it.
+  ⚠ **Still NOT reported: the sub-int narrowing gap this sits next to.** `Dim b As Byte = 255.4`
+  is accepted and then prints **255.4** on JavaScript and **255** on C++, because
+  `TryConvertConstant` declines Byte/SByte/Short/UShort on purpose (see above). In range is not
+  the same as narrowed, and the tests assert acceptance rather than a value for that shape.
+  ⚠ `Dim G As Single = 7 / 2` is a FRONT-END diagnostic ("Cannot assign value of type 'Double' to
+  variable of type 'Single'"), not a folding gap.
+  ⚠ **The C++ global-initializer gap is FIXED as of 2026-09-17** — `CppCodeGenerator`, globals
+  loop. It emitted `{}` for every global that is not a sized array and never consulted
+  `InitialValue`, so `Dim G As Integer = 42` became `int32_t G = {};` and the program printed
+  **0** — a build with the right answer nowhere in it, no diagnostic and no crash, while C#, MSIL
+  and JavaScript all carried the value. Now routed through `ValueText`, the helper the static
+  field path already uses.
+  ⚠ **A non-constant initializer (`Dim I As Integer = H`) emits the referenced global's NAME**,
+  which is valid C++ only because the loop writes globals in DECLARATION ORDER and C++ initializes
+  namespace-scope objects in that order within a translation unit. Held by a mutation that
+  reverses the loop. ⛔ JavaScript REFUSES that shape outright ("a module-level initializer ...
+  that is not a constant"), so the backends do NOT agree on it and JS is the strict one.
+  ⛔ **`CStr(Double)` prints `3.500000` on C++** where C# and MSIL print `3.5` — pre-existing and
+  nothing to do with globals (measured on a plain LOCAL). Pinned as C++ actually behaves rather
+  than normalised away.
+  ⚠ **`ValueText` vs `GetValueName` at that site is a WASH**, measured: the base `GetValueName`
+  (`ICodeGenerator`) already routes an `IRConstant` to `EmitConstant`, so swapping them passes
+  every test. `ValueText` is there for consistency with its sibling sites, not protection — an
+  earlier comment claiming it guards a Decimal disagreement was wrong and has been corrected.
+  ⚠ **The same wash holds at the INSTANCE field site** (`FieldInitializer`, below) — measured
+  there too, and recorded in its comment rather than dressed up as load-bearing.
+
+  ⚠ **Instance field initializers RUN on C++ as of 2026-09-18** — `CppFieldInitializerTests`,
+  `CppCodeGenerator.FieldInitializer` (the helper that was `FieldArrayInitializer`). The MSIL half
+  of this same defect is the entry above; the two fixes are shaped DIFFERENTLY on purpose.
+  ⛔ **Measured before**: every instance field initializer was dropped, at every access level and
+  for every type — a class with five initialized public fields printed `0,,0.000000,0.000000,False`
+  where JavaScript printed `5,hi,2.5,1.5,true`. A constructor that BUILDS on the value inherited
+  the zero (`_n = _n + 3` over `= 5` answered **3**, not 8); a sized array field beside an
+  initialized one gave `7,0` — the array worked, the initializer did not.
+  ⚠ **The cause was one helper with a narrower job than its callers assumed**: all three field
+  loops in `GenerateClass` (one per access level — they are separate copies) asked
+  `FieldArrayInitializer`, which only ever produced a SIZED-ARRAY form and never consulted
+  `IRField.Initializer`. The STATIC path (`EmitStaticMemberInitializationsCore`) did read it, and
+  is where the expression to emit now comes from.
+  ⚠ **IN-CLASS member initializers, not a constructor member-initializer list** — the emitted class
+  often has no constructor at all (just `~Box() = default;`), and C++ runs in-class initializers
+  before any constructor body, in declaration order, which is VB's rule too. On MSIL the same
+  values go in the CONSTRUCTOR after the base call, because IL has no such thing.
+  ⛔ **A `Shared` field must NOT get one** — an in-class initializer on a non-const static is not
+  legal C++ — so all three call sites guard on `IsStatic` and the out-of-class definition carries
+  the value.
+  ⛔ **THREE shapes cannot be run end to end on this backend, each PRE-EXISTING** and verified
+  before the change, which is why those cases are pinned on the emitted TEXT: a `Shared` field
+  ACCESS does not compile (`Box.Total` emits `t0 = Box->Total;` — "'Box' does not refer to a
+  value"); a `Protected` field is not visible from a derived class ("Undefined identifier"), as the
+  analyzer does not inherit Protected members into scope; a `Structure` field initializer does not
+  PARSE ("Expected member name but found Assignment").
+  ⚠ **`CStr(Double)` → `2.500000` and `CStr(Boolean)` → `True` on C++** are the long-recorded
+  divergences above, not this fix's; the tests assert C++'s own spelling rather than normalising
+  it away.
+
+  ⚠ **A NON-LITERAL field initializer FOLDS as of 2026-09-18** — `FieldInitializerFoldTests`,
+  `IRBuilder.BuildConstantFieldInitializer` + the extracted `TryFoldInitializerToConstant`.
+  ⛔ **Measured before**: every constant EXPRESSION was dropped silently and the field read its
+  type's zero. `2 + 3`, `2 * 3 + 1`, `(1 + 2) * 3` and `8 \ 2` each emitted a bare
+  `public int N;` on C# and printed **0** on JavaScript; `"a" & "b"` gave `public string N;` and
+  an empty string; `True And False` and `1 < 2` gave `public bool N;` and False. Only a bare
+  literal and unary +/- on one ever survived.
+  ⚠ **ONE foldability decision, shared with module scope.** The scratch-function + fixpoint-fold
+  core came OUT of `BuildModuleScopeInitializer` into `TryFoldInitializerToConstant`, which both
+  call. Measured, a field and a global now agree shape for shape — including agreeing to REFUSE
+  `Long = 3000000000 + 1`. They differ only in what they do with a null answer.
+  ⛔ **A non-constant initializer is now REFUSED, not dropped** — "the field 'N' has an
+  initializer that cannot be computed at compile time … assign it in a constructor instead". This
+  is the one BEHAVIOUR CHANGE for programs that used to compile: `= Helper()` and `= CInt(2.5)`
+  built before and read **0**. Running initializer code would mean lowering it into every
+  constructor on every backend, which none of them does; the refusal is the honest answer until
+  that exists. ⚠ **The LOCAL path still accepts both** (`Dim h As Integer = Helper()` computes
+  4) — that divergence was already true of module-scope globals and is now shared by fields.
+  ⛔ **Deleting the literal fast path FIXED A SECOND, UNRELATED BUG.** It coerced a Decimal
+  field's literal to a double, so `Public M As Decimal = 1.5` emitted `public decimal M = 1.5;`
+  and the real C#-backend build failed with **CS0664** ("use an 'M' suffix"). The general
+  lowering emits `1.5m`. The shortcut was kept at first to make the change additive, then removed
+  once measurement showed no test could tell it from the fold and the one shape where they DID
+  differ was the shortcut being wrong. `CoerceConstantToType` went with it, and so did
+  re-stamping the declared type onto the result — both measured inert by diffing the emitted C#
+  for fifteen literal and seven folded shapes.
+  ⚠ **A CLASS DECLARED AFTER THE MODULE did not resolve its members' TYPES — FIXED as of
+  2026-09-18**, for a top-level class AND for one nested in a Module or Namespace; see the entry
+  below. Fixtures order the class first out of habit from when this was broken.
+  ⚠ **A TOP-LEVEL class declared AFTER its use resolves its members as of 2026-09-18** —
+  `ClassDeclarationOrderTests`, `SemanticAnalyzer.RegisterClassMemberSignatures` + the shared
+  `PopulateClassMemberSignatures` (which was `PopulateSiblingClassMembers`).
+  ⛔ **Measured before**: the class TYPE resolved (an earlier change gives every class its
+  `TypeInfo` in pass 1) but its `Members` stayed empty until pass 2 reached the declaration, so a
+  use site above it read every member as Object. FIELD, METHOD and PROPERTY all three: C++ emitted
+  `void* t1; t1 = c->N;` and failed with "incompatible integer to pointer conversion" plus "no
+  matching function for call to 'to_string'"; MSIL threw `MissingFieldException: Field not found:
+  'Box.N'`. A `Private` member read from the class's own method broke the same way, and a
+  class-typed member whose type is declared later failed EARLIER with
+  `BL6017: .NET type 'System.Object' has no accessible member named 'V'`.
+  ⚠ **Constructors were NOT the gap**: their signatures have been pre-registered since an earlier
+  change, so `New Box(5)` resolved its arity in either order — what broke was reading `c.N`
+  afterwards. Both constructor shapes measured 2 C++ errors before, 0 after.
+  ⚠ **ONE sweep, shared with the cross-file path.** Members are registered in pass 1 between the
+  class-TYPE sweep and the signature sweep, through the same helper the sibling path uses, so the
+  two cannot drift. Pass 2 overwrites every entry, so pass 1 is a forward-reference stand-in.
+  ⚠ **A class NESTED IN A MODULE is covered too**, by the same sweep's Module/Namespace recursion —
+  `ClassDeclarationOrderTests.AClassNestedInAModule_ResolvesItsMembers_WhicheverOrder` and its
+  Namespace sibling, added 2026-09-18.
+  ⛔ **CORRECTION, recorded because the first version of this entry was WRONG.** It said the nested
+  shape was STILL OPEN — `void* t1`, 2 C++ errors "before AND after" — and that dropping the
+  recursion therefore changed nothing. Both halves were false. That measurement was taken against a
+  compiler binary still carrying the no-recursion mutation, because the mutation harness restores
+  the SOURCE without rebuilding. Re-measured on a clean build at `a9bc7f8`: nested resolves its
+  members in either order and runs, and removing the recursion emits `void* t1` with 2 C++ errors
+  for the nested shape while every top-level case stays green. What was actually missing was a
+  TEST — which is the only reason that mutation survived the suite. **Lesson for the harness: a
+  probe run straight after a mutation cycle must rebuild first.**
+  ⚠ **Two mutations SURVIVE and are recorded rather than papered over**: letting the sweep write
+  constructors (the shape that would distinguish the two parameter builders, an ARRAY constructor
+  parameter, does not parse); and exposing private members (access is not enforced on a member read
+  at all — reading `c._n` from outside compiles in BOTH orders, a separate pre-existing gap). The
+  third, dropping the Module/Namespace recursion, is now KILLED by the nested tests above.
+  ⚠ **Narrowing shapes are refused by the SEMANTIC ANALYZER, before any of this** —
+  `Public N As Single = 1.5 + 1.0` is "Cannot assign value of type 'Double' to variable of type
+  'Single'", before and after. Not a folding gap.
+  ⛔ **Also pre-existing and unrelated: `CStr(Boolean)` prints `true` on JavaScript** where C# and
+  MSIL print `True`. Measured on a plain local, no module scope involved. Pinned as each backend
+  actually behaves rather than normalised away.
+  ⚠ **A class with TWO constructors cannot be lowered to JavaScript at all** ("SyntaxError: A class
+  may only have one constructor"), measured with a pair that has no Optional anywhere — so
+  constructor-overload shapes are asserted on MSIL.
+  ⛔ **`Optional ByRef` is broken on every backend, before and after, and there is deliberately NO
+  by-ref guard in the fill** — a guard would change nothing observable anywhere and no test could
+  kill it. Measured: C# emits `ref int n = 5` (CS1741), JS refuses ByRef outright (BL7002), MSIL
+  emits no `&` at all and the CLR rejects the program, and C++ trades "too few arguments" for
+  "cannot bind non-const lvalue reference … to an rvalue". The DECLARATION side has to be fixed
+  first. Pinned.
+  ⚠ **A cross-file call reaches only C# today**, so that one test is structural rather than a run:
+  JS refuses it ("no lowering for 'Helpers.Greet'") and MSIL emits
+  `call void Combined::HelpersGreet(int32, object)` against a method declared
+  `void Greet(int32 a, int32 b)` — the qualified name mangled into the method name and the
+  signature spelled from the arguments. Both pre-existing cross-file gaps, unrelated to Optionals.
+  ⚠ **Three mutations SURVIVE and the code is kept anyway, all fail-safe**: filling a non-Optional
+  parameter, `continue` instead of `return` at the first unfillable one, and filling a resolved
+  .NET target. Each is unreachable today — `DefaultValueExpression` is populated only from a
+  `ParameterNode`, and the parser marks a parameter Optional whenever it parses a default (the one
+  exception, a `ParamArray` WITH a default, does not parse at all). Each makes the fill do NOTHING
+  rather than act, which is the same rule the constructor-ambiguity branch above is kept under.
   ⚠ **A `BlnetSlotDesc[]` kind that lies fails SILENTLY** (§8.4, 2026-09-15). The array is what
   `blnet_invoke_callback` reads to decide what to deep-copy when a callback is QUEUED rather than
   run inline: HANDLE addrefs at enqueue, STRING deep-copies, VALUE does neither. Label a handle

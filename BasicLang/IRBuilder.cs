@@ -622,17 +622,8 @@ namespace BasicLang.Compiler.IR
 
                 if (node.Initializer != null)
                 {
-                    // KNOWN GAP (pre-existing): a module-scope initializer that lowers to
-                    // an IRNewObject (e.g. `Dim g As New List(...)()` at file scope) calls
-                    // _currentFunction.GetNextTempName() inside Visit(NewExpressionNode)
-                    // while _currentFunction is null here -> NullReferenceException. This
-                    // should produce a clean diagnostic ("module-scope New initializers are
-                    // not supported") rather than crash the IR builder. Unrelated to the
-                    // C++ stdlib work; declaration-only globals (`Dim g As List(Of Integer)`)
-                    // build fine. Fixing the crash is out of scope here.
-                    // Evaluate the initializer and store it
-                    node.Initializer.Accept(this);
-                    globalVar.InitialValue = _expressionResult;
+                    globalVar.InitialValue = BuildModuleScopeInitializer(
+                        node.Initializer, node.Name, "variable", varType);
                 }
             }
             else
@@ -661,7 +652,13 @@ namespace BasicLang.Compiler.IR
                 if (node.Initializer != null)
                 {
                     node.Initializer.Accept(this);
-                    var initValue = _expressionResult;
+
+                    // ⚠ `varType` and NOT `initValue.Type`: the point is the DECLARED type.
+                    // `Dim d As Integer = 7 / 2` carries a Double, and without this the rename
+                    // below makes the Double temp *be* `d`, so the Integer is never honoured.
+                    // An inferred declaration (`Dim x = expr`, node.IsAuto) has no declared type
+                    // to disagree with — varType IS the initializer's type, so this no-ops.
+                    var initValue = CoerceToDeclaredType(_expressionResult, varType);
 
                     // For memory-backed variables, emit a store
                     if (needsMemory)
@@ -743,9 +740,16 @@ namespace BasicLang.Compiler.IR
             // Store constants as global variables with IsConst = true
             if (node.Value != null)
             {
-                // Evaluate the constant value
-                node.Value.Accept(this);
-                var value = _expressionResult;
+                // ⚠ Evaluated HERE only for the LOCAL case. A module-scope Const takes the
+                // folding path below instead: this line lowers the expression through
+                // _currentFunction, which is null at module scope, and that is the same crash
+                // the global Dim branch had.
+                IRValue value = null;
+                if (_currentFunction != null)
+                {
+                    node.Value.Accept(this);
+                    value = _expressionResult;
+                }
 
                 // Resolve the type
                 var typeName = node.Type?.Name ?? "Integer";
@@ -777,7 +781,8 @@ namespace BasicLang.Compiler.IR
                 {
                     IsGlobal = true,
                     IsConst = true,
-                    InitialValue = value,
+                    InitialValue = BuildModuleScopeInitializer(
+                        node.Value, node.Name, "constant", typeInfo),
                     ModuleName = _currentModuleName ?? _module?.Name,
                     Access = MapAccessModifier(node.Access)
                 };
@@ -789,6 +794,164 @@ namespace BasicLang.Compiler.IR
                 // while the emitted code still referenced it. AddGlobalVariable keeps both by
                 // qualifying the key on collision.
                 _module?.AddGlobalVariable(constVar);
+            }
+        }
+
+        /// <summary>
+        /// Lowers a MODULE-SCOPE initializer to the single constant that a global's
+        /// <see cref="IRVariable.InitialValue"/> is required to be.
+        ///
+        /// <para>⛔ Both module-scope call sites — a global <c>Dim</c> and a global <c>Const</c> —
+        /// used to call <c>node.Initializer.Accept(this)</c> directly, with
+        /// <c>_currentFunction</c> null by definition of the branch they sit in. Expression
+        /// lowering names its temps through <c>_currentFunction.GetNextTempName()</c>, so EVERY
+        /// initializer needing a temp dereferenced null and the compiler died with
+        /// <c>Error at line 0: Object reference not set to an instance of an object</c>.
+        /// Measured, the crashing set was wide — <c>40 + 2</c>, <c>"a" &amp; "b"</c>,
+        /// <c>7 / 2</c>, <c>1 &lt; 2</c>, <c>(1 + 2) * 3</c>, <c>Helper()</c>,
+        /// <c>New List(Of Integer)()</c> — and identical on all four backends, because it
+        /// happened in the builder before any of them ran.</para>
+        ///
+        /// <para>⚠ A scratch function gives that lowering somewhere to put its instructions, and
+        /// the optimizer's own <c>ConstantFoldingPass</c> then reduces them. Folding has to
+        /// happen HERE and not in the optimizer: a global's initializer must be a constant for
+        /// the backends to emit it at all, and the optimizer does not run on every path (the
+        /// non-optimizing test helper, <c>--O0</c>). An invariant the backends depend on cannot
+        /// be established by a pass that is sometimes skipped.</para>
+        ///
+        /// <para>⚠ The scratch function is deliberately NOT created through
+        /// <c>_module.CreateFunction</c>: that registers it, and every backend would emit a
+        /// stray function per initialized global.</para>
+        ///
+        /// <para>⛔ KNOWN GAP, measured rather than assumed: integer-literal division promoted
+        /// to Double (<c>Dim G As Double = 7 / 2</c>) is refused although it is arithmetically
+        /// constant. <c>/</c> promotes both operands, so the block is
+        /// <c>IRCast, IRCast, IRBinaryOp</c> and <c>ConstantFoldingPass</c> does not fold a cast
+        /// — the operands never become <c>IRConstant</c>, so neither does the division.
+        /// <c>7.0 / 2.0</c> and <c>8 \ 2</c> both fold. Closing it means folding a cast of a
+        /// constant, which is a NUMERIC-CONVERSION change and not a crash fix: widening is
+        /// lossless, but narrowing has to agree with what the backends emit at run time, and VB's
+        /// <c>CInt</c> rounds half-to-even where a C# cast truncates. That deserves its own
+        /// characterization across the four backends rather than a ride-along here.</para>
+        ///
+        /// <para>⛔ What does not fold is REFUSED, not guessed at. <c>Helper()</c> and
+        /// <c>New List(Of Integer)()</c> need code to run before first use, which means a module
+        /// initializer no backend has — the JavaScript backend already refuses a non-constant
+        /// global outright (<c>"a module-level initializer ... that is not a constant"</c>), and
+        /// C# and MSIL would have emitted a temp name that is not in scope. One refusal here,
+        /// where foldability is decided, is the only way the builder and the backends cannot
+        /// disagree about it.</para>
+        /// </summary>
+        /// <param name="what">"variable" or "constant" — only to word the diagnostic.</param>
+        private IRValue BuildModuleScopeInitializer(
+            ExpressionNode initializer, string name, string what, TypeInfo declared)
+        {
+            var folded = TryFoldInitializerToConstant(initializer, name, declared);
+            if (folded != null) return NarrowModuleScopeConstant(folded, declared, name, what);
+
+            throw new Exception(
+                $"Line {_currentSourceLine}: the module-level {what} '{name}' has an initializer "
+                + "that cannot be computed at compile time. Only a constant expression is "
+                + "supported at module scope; assign it in Main (or another procedure) instead.");
+        }
+
+        /// <summary>
+        /// Lower <paramref name="initializer"/> in a throwaway function and fold it to a single
+        /// compile-time value, or null when it is not constant.
+        ///
+        /// <para>⚠ Shared by the two declaration sites that need an initializer to BE a constant
+        /// before any backend sees it: module-scope globals
+        /// (<see cref="BuildModuleScopeInitializer"/>) and class fields
+        /// (<see cref="BuildConstantFieldInitializer"/>). They differ in what they do when this
+        /// returns null, not in what counts as constant — one place to decide foldability is the
+        /// only way the two cannot drift apart.</para>
+        ///
+        /// <para>⚠ A scratch function gives expression lowering somewhere to put its
+        /// instructions. Without one, lowering names its temps through
+        /// <c>_currentFunction.GetNextTempName()</c>, so every initializer needing a temp
+        /// dereferenced null and the compiler died with <c>Error at line 0: Object reference not
+        /// set to an instance of an object</c>. It is deliberately NOT created through
+        /// <c>_module.CreateFunction</c>: that registers it, and every backend would emit a stray
+        /// function per initialized declaration.</para>
+        ///
+        /// <para>⚠ Folding has to happen HERE and not in the optimizer: the initializer must be a
+        /// constant for the backends to emit it at all, and the optimizer does not run on every
+        /// path (the non-optimizing test helper, <c>--O0</c>). An invariant the backends depend on
+        /// cannot be established by a pass that is sometimes skipped.</para>
+        ///
+        /// <para>⛔ <c>CInt(...)</c> / <c>CDbl(...)</c> are NOT casts — measured, they lower to an
+        /// IRCall, so neither pass touches them and they do not fold. That is a separate gap
+        /// (constant-folding the conversion FUNCTIONS) and for CInt it is a welcome one, because
+        /// the backends do not agree on what it means.</para>
+        /// </summary>
+        private IRValue TryFoldInitializerToConstant(
+            ExpressionNode initializer, string name, TypeInfo declared)
+        {
+            var savedFunction = _currentFunction;
+            var savedBlock = _currentBlock;
+
+            var scratch = new IRFunction($"<init>{name}", new TypeInfo("Void", TypeKind.Void));
+            _currentFunction = scratch;
+            _currentBlock = scratch.CreateBlock("entry");
+
+            try
+            {
+                initializer.Accept(this);
+
+                // ⛔ THE COERCION THE GLOBAL PATH NEVER HAD, and the whole reason a module-scope
+                // `Dim v As Integer = 7.9` produced GARBAGE. The LOCAL branch of
+                // Visit(VariableDeclarationNode) has always coerced to the DECLARED type; this one
+                // stored whatever the initializer happened to carry, so a Double literal went
+                // straight into an Integer global and each backend reinterpreted its bits. Measured
+                // on MSIL at module scope, `Dim v As T = 7.9` printed: Byte 154, SByte -102, Short
+                // and UShort an EMPTY STRING, Integer -1717986918, UInteger 2576980378, Long and
+                // ULong 4620580627691444634 — which is the IEEE-754 bit pattern of 7.9 read as an
+                // integer. The same declarations as LOCALS printed 7 throughout.
+                var lowered = CoerceToDeclaredType(_expressionResult, declared);
+                var emitted = _currentBlock.Instructions;
+
+                // Nothing emitted: the expression was already a self-contained value — a literal,
+                // or a reference to an already-constant global. This is the shape that always
+                // worked, and it must keep taking the value lowering produced rather than anything
+                // folded. Note this can be a NON-constant IRValue; each caller decides whether it
+                // can use one.
+                if (emitted.Count == 0) return lowered;
+
+                var scratchModule = new IRModule("<init>");
+                scratchModule.Functions.Add(scratch);
+
+                // ⚠ A FIXPOINT over both passes, because neither order alone is enough, measured
+                // on two shapes that need OPPOSITE orders:
+                //   `7 / 2`        -- the casts must fold first; until they do, the division's
+                //                     operands are IRCast and TryFoldBinary declines them.
+                //   `(1 + 2) / 4`  -- the addition must fold first; until it does, the promoting
+                //                     cast's operand is an IRBinaryOp rather than a constant.
+                // Alternating until nothing changes covers both without caring which it was handed.
+                // Bounded so a pass reporting a modification without making progress cannot spin.
+                var folding = new Optimization.ConstantFoldingPass();
+                var wideningCasts = new Optimization.WideningCastFoldingPass();
+                for (var round = 0; round < 16; round++)
+                {
+                    var changed = folding.Run(scratchModule);
+                    changed |= wideningCasts.Run(scratchModule);
+                    if (!changed) break;
+                }
+
+                // Folding rewrites each instruction in place, so a fully constant expression leaves
+                // a list of nothing but constants, and the LAST one is the result: lowering is
+                // bottom-up and the outermost operation is emitted last.
+                return emitted.All(i => i is IRConstant)
+                    ? (IRValue)emitted[emitted.Count - 1]
+                    : null;
+            }
+            finally
+            {
+                // In a finally because a caller may turn "not constant" into a thrown diagnostic,
+                // and the builder's cursor must not be left pointing at the scratch block either
+                // way. The original inline version restored before folding; folding reads the
+                // scratch MODULE, not the cursor, so restoring after it is equivalent.
+                _currentFunction = savedFunction;
+                _currentBlock = savedBlock;
             }
         }
 
@@ -864,7 +1027,7 @@ namespace BasicLang.Compiler.IR
                         Type = fieldType,
                         Access = MapAccessModifier(varDecl.Access),
                         IsStatic = varDecl.IsStatic,
-                        Initializer = BuildConstantFieldInitializer(varDecl.Initializer, fieldType)
+                        Initializer = BuildConstantFieldInitializer(varDecl.Initializer, fieldType, varDecl.Name)
                     };
                     irClass.Fields.Add(field);
                 }
@@ -972,8 +1135,106 @@ namespace BasicLang.Compiler.IR
                 }
             }
 
+            SynthesizeImplicitConstructor(node, irClass);
+
             _currentClassName = null;
             _currentClassMethodNames = null;
+        }
+
+        /// <summary>
+        /// Gives a class that declares NO constructor a real one, when its base constructor takes
+        /// <c>Optional</c> parameters the implicit base call has to fill.
+        ///
+        /// <para>⛔ Without it, <c>Inherits Base</c> against
+        /// <c>Sub New(Optional a As Integer = 3)</c> is a legal program — the analyzer accepts it,
+        /// correctly, because the base IS callable with no arguments — that EVERY backend
+        /// miscompiled. There was no <c>IRConstructor</c> to carry the filled arguments, so each
+        /// backend fell back to inventing a bare no-argument base call: measured, C# emitted
+        /// <c>class Derived : Base</c> with no constructor at all and got <b>CS7036</b>, and MSIL
+        /// threw <c>MissingMethodException: Void Base..ctor()</c>.</para>
+        ///
+        /// <para>⚠ The synthesized constructor is a REAL one — its own <c>IRFunction</c> with an
+        /// entry block and a return — not an <c>IRConstructor</c> with a null Implementation.
+        /// Deliberately: the shape a declared empty <c>Public Sub New()</c> produces is already
+        /// exercised by all four backends, and only MSIL has a synthesize-a-default path at all
+        /// (C#, JavaScript and C++ lean on their target language's implicit constructor). Handing
+        /// them something no declared constructor ever looks like is how one of them would break in
+        /// a way no test covers.</para>
+        ///
+        /// <para>⚠ <c>_currentFunction</c> is pointed at the synthesized function BEFORE the fill,
+        /// so that a default which is an EXPRESSION rather than a literal
+        /// (<c>Optional b As Integer = 2 + 3</c>) emits its instructions into this constructor's
+        /// body, where they run before the base call consumes them — not into whatever function
+        /// happened to be current.</para>
+        ///
+        /// <para>⚠ Does nothing unless there is something to fill: a base with no parameters, or no
+        /// base at all, leaves <c>Constructors</c> empty exactly as before and the backends keep
+        /// synthesizing their own default. That early-out is invisible at RUN time — measured, an
+        /// empty synthesized constructor and the default each backend invents behave identically —
+        /// so <c>BaseConstructorDiagnosticTests.NothingToFill_MeansNoSynthesizedConstructor</c>
+        /// asserts the IR structurally instead, and removing either early-out fails it.</para>
+        /// </summary>
+        private void SynthesizeImplicitConstructor(ClassNode node, IRClass irClass)
+        {
+            // ⚠ `Constructors.Count > 0` is REDUNDANT with the analyzer today and kept anyway:
+            // the analyzer records a class-level binding only for a class that declares no
+            // constructor, so it cannot currently fire. Depending on another component's filter to
+            // stay exactly as it is, rather than saying the condition here, is the coupling that
+            // made the old `UnambiguousConstructorParameters` silently order-dependent. No test
+            // can hold this one — it is a fail-safe that does nothing, kept with that said plainly.
+            //
+            // The parameter-count line IS held, structurally, by
+            // BaseConstructorDiagnosticTests.NothingToFill_MeansNoSynthesizedConstructor: it is the
+            // only thing stopping a class with nothing to fill from acquiring a constructor it does
+            // not need. Note it carries BOTH of that test's shapes, not just the one it is named
+            // for — a base declaring no constructor at all records no binding, so `implicitBase`
+            // arrives null and the `?.` half of this same line is what stops it. The TryGetValue
+            // line cannot be mutated away on its own (it declares `implicitBase`), so it is not
+            // separately measurable; it is the lookup, not a third guard.
+            //
+            // ⚠ There is deliberately NO fourth guard for "the fill produced nothing". Measured by
+            // mutation: with the fill emptied, every test still passed, because an empty
+            // synthesized constructor behaves exactly like the default each backend invents. A
+            // guard protecting nothing observable is a guard no test can hold.
+            if (irClass.Constructors.Count > 0) return;
+            if (!_semanticAnalyzer.ConstructorBindings.TryGetValue(node, out var implicitBase)) return;
+            if (implicitBase?.Parameters == null || implicitBase.Parameters.Count == 0) return;
+
+            _currentFunction = _module.CreateFunction(
+                $"{node.Name}__ctor", new TypeInfo("Void", TypeKind.Void));
+            _currentFunction.SourceFilePath = _sourceFilePath;
+            _currentBlock = _currentFunction.CreateBlock("entry");
+
+            var baseArgs = new List<IRValue>();
+            AppendOmittedOptionalArguments(baseArgs, null, implicitBase);
+
+            if (!_currentBlock.IsTerminated())
+            {
+                EmitInstruction(new IRReturn());
+            }
+
+            // ⚠ Cleared, not save/restored. Measured with a diagnostic: `_currentFunction` is
+            // NULL every time this runs — a class is never visited while a function is current,
+            // in a Module or a Namespace alike — so a save/restore pair would be restoring null
+            // to null. Clearing is what `Visit(ConstructorNode)` does at its own end.
+            //
+            // The clear is load-bearing, and a test holds it: `Visit(VariableDeclarationNode)`
+            // decides global-versus-local on `_currentFunction == null` alone, so leaking the
+            // synthesized function sends the next module-level `Dim` down the LOCAL branch — no
+            // static field is emitted and the program dies with InvalidProgramException. Dropping
+            // these two lines fails MsilBaseConstructorTests
+            // .TheSynthesizedConstructor_DoesNotLeakIntoTheNextModuleGlobal and nothing else.
+            var synthesized = _currentFunction;
+            _currentFunction = null;
+            _currentBlock = null;
+
+            var ctor = new IRConstructor
+            {
+                Access = AccessModifier.Public,
+                Implementation = synthesized,
+            };
+            ctor.BaseConstructorArgs.AddRange(baseArgs);
+            irClass.Constructors.Add(ctor);
         }
 
         /// <summary>
@@ -1025,71 +1286,68 @@ namespace BasicLang.Compiler.IR
         }
 
         /// <summary>
-        /// Build a constant IR value for a class field initializer. Handles
-        /// literals and unary +/- on numeric literals (e.g. "= 400", "= -5",
-        /// "= 5.0"), coercing the value to the field's declared type so the
-        /// backend emits valid C# (e.g. a Single field gets a float literal).
-        /// Non-constant initializers return null and the field is emitted
-        /// without an initializer, as before.
+        /// Build a constant IR value for a class field initializer, coercing it to the field's
+        /// declared type so the backend emits a valid literal (e.g. a Single field gets a float).
+        ///
+        /// <para>⛔ A NON-LITERAL initializer used to be dropped SILENTLY, and the field read its
+        /// type's zero. Measured before, on every shape that is arithmetically constant:
+        /// <c>2 + 3</c>, <c>2 * 3 + 1</c>, <c>(1 + 2) * 3</c>, <c>8 \ 2</c>, <c>7.0 / 2.0</c> and
+        /// <c>7 / 2</c> all emitted a bare <c>public int N;</c> on C# and printed <b>0</b> on
+        /// JavaScript; <c>"a" &amp; "b"</c> gave <c>public string N;</c> and an empty string;
+        /// <c>True And False</c> and <c>1 &lt; 2</c> gave <c>public bool N;</c> and False. Only a
+        /// bare literal and unary +/- on one ever survived.</para>
+        ///
+        /// <para>⚠ ONE path, not two. A literal fast path (the old <c>LiteralExpressionNode</c> /
+        /// unary +/- match) was kept here at first so the change would be strictly additive, and
+        /// then REMOVED because it was measurably wrong: no test could tell it from the general
+        /// fold, and the one shape where the two DID differ, the fast path was the broken one.
+        /// <c>Public M As Decimal = 1.5</c> emitted <c>public decimal M = 1.5;</c> through it,
+        /// which is not valid C# — the real C#-backend build failed with <b>CS0664</b>, "Literal
+        /// of type double cannot be implicitly converted to type 'decimal'; use an 'M' suffix".
+        /// The general lowering emits <c>1.5m</c> and builds. So this also fixes a PRE-EXISTING
+        /// Decimal-field bug that had nothing to do with non-literal initializers.</para>
+        ///
+        /// <para>⚠ Everything now goes through the SAME foldability decision module-scope globals
+        /// use (<see cref="TryFoldInitializerToConstant"/>), so a field and a global cannot
+        /// disagree about what counts as a compile-time constant. Measured, they agree shape for
+        /// shape — including where they agree to REFUSE (<c>Long = 3000000000 + 1</c> is declined
+        /// by both).</para>
+        ///
+        /// <para>⚠ Which is also why this returns the folded constant AS IS. A second coercion
+        /// here (the old <c>CoerceConstantToType</c>) went with the fast path, and the helper with
+        /// it; re-stamping the field's declared type onto the result went too. The fold's own
+        /// <c>CoerceToDeclaredType</c> has already done both by the time it returns — measured by
+        /// diffing the emitted C# for fifteen literal shapes and seven folded ones across both
+        /// removals, identical in every case, and no test could tell either apart. What is left is
+        /// the whole of this method's job: ask, and refuse if the answer is no.</para>
+        ///
+        /// <para>⛔ What genuinely is not constant is REFUSED, not dropped. <c>Helper()</c> and
+        /// <c>CInt(2.5)</c> need code to run, and a field initializer that runs code would have to
+        /// be lowered into every constructor on every backend — which no backend here does. The
+        /// old silent drop turned that into a field reading 0 with no diagnostic anywhere; a
+        /// refusal naming the constructor is the honest answer until that lowering exists.</para>
+        ///
+        /// <para>⚠ Two neighbouring shapes cannot reach this at all, both PRE-EXISTING and
+        /// measured: a <c>Const</c> inside a class does not PARSE ("Unexpected token in class:
+        /// 'Const'"), so a named constant can never be referenced from a field initializer; and a
+        /// <c>Structure</c> field initializer does not parse either ("Expected member name but
+        /// found Assignment"), which makes the structure call site unreachable for initializers.
+        /// </para>
         /// </summary>
-        private IRConstant BuildConstantFieldInitializer(ExpressionNode initializer, TypeInfo fieldType)
+        private IRConstant BuildConstantFieldInitializer(
+            ExpressionNode initializer, TypeInfo fieldType, string fieldName)
         {
             if (initializer == null) return null;
 
-            object value = null;
-            if (initializer is LiteralExpressionNode literal)
+            if (TryFoldInitializerToConstant(initializer, fieldName, fieldType) is IRConstant folded)
             {
-                value = literal.Value;
-            }
-            else if (initializer is UnaryExpressionNode unary
-                     && unary.Operand is LiteralExpressionNode operand
-                     && (unary.Operator == "-" || unary.Operator == "+"))
-            {
-                value = operand.Value;
-                if (unary.Operator == "-")
-                {
-                    value = value switch
-                    {
-                        int i => -i,
-                        long l => -l,
-                        double d => -d,
-                        float f => -f,
-                        decimal m => -m,
-                        _ => value
-                    };
-                }
+                return folded;
             }
 
-            if (value == null) return null;
-
-            value = CoerceConstantToType(value, fieldType);
-            return new IRConstant(value, fieldType);
-        }
-
-        private static object CoerceConstantToType(object value, TypeInfo fieldType)
-        {
-            var typeName = fieldType?.Name?.ToLowerInvariant();
-            try
-            {
-                switch (typeName)
-                {
-                    case "single":
-                    case "float":
-                        return Convert.ToSingle(value);
-                    case "double":
-                        return Convert.ToDouble(value);
-                    case "long":
-                        return Convert.ToInt64(value);
-                    case "integer":
-                    case "int":
-                        return value is double || value is float ? value : Convert.ToInt32(value);
-                }
-            }
-            catch
-            {
-                // Leave the value unconverted; the backend renders it as-is.
-            }
-            return value;
+            throw new Exception(
+                $"Line {(initializer.Line > 0 ? initializer.Line : _currentSourceLine)}: the field "
+                + $"'{fieldName}' has an initializer that cannot be computed at compile time. Only "
+                + "a constant expression is supported here; assign it in a constructor instead.");
         }
 
         public void Visit(InterfaceNode node)
@@ -1267,7 +1525,7 @@ namespace BasicLang.Compiler.IR
                     Type = fieldType,
                     Access = MapAccessModifier(member.Access),
                     IsStatic = member.IsStatic,
-                    Initializer = BuildConstantFieldInitializer(member.Initializer, fieldType)
+                    Initializer = BuildConstantFieldInitializer(member.Initializer, fieldType, member.Name)
                 });
             }
 
@@ -1384,14 +1642,34 @@ namespace BasicLang.Compiler.IR
             _pendingBaseConstructorArgs = new List<IRValue>();
             if (node.BaseConstructorArgs.Count > 0)
             {
+                // The base constructor the analyzer bound this `MyBase.New(…)` to — the third
+                // construction site, and it needs the same coercion and the same Optional fill as
+                // the other two. Measured before: `MyBase.New(7)` against
+                // `Sub New(a As Integer, Optional b As Integer = 5)` was refused outright by the
+                // analyzer ("No constructor for base class 'Base' takes 1 argument(s)").
+                var baseCtor = _semanticAnalyzer.ConstructorBindings.TryGetValue(node, out var boundBase)
+                    ? boundBase
+                    : null;
+
                 foreach (var arg in node.BaseConstructorArgs)
                 {
                     arg.Accept(this);
                     if (_expressionResult != null)
                     {
-                        _pendingBaseConstructorArgs.Add(_expressionResult);
+                        _pendingBaseConstructorArgs.Add(CoerceToParameterType(
+                            _expressionResult, baseCtor, _pendingBaseConstructorArgs.Count));
                     }
                 }
+
+                AppendOmittedOptionalArguments(_pendingBaseConstructorArgs, null, baseCtor);
+            }
+            else if (_semanticAnalyzer.ConstructorBindings.TryGetValue(node, out var implicitBase))
+            {
+                // ⚠ No MyBase.New written, but the base constructor the analyzer bound this to may
+                // still take OPTIONAL parameters — the implicit call has to fill them exactly as an
+                // explicit one would. The analyzer records a binding here only when the base IS
+                // callable with no arguments, so reaching this means filling is all that is left.
+                AppendOmittedOptionalArguments(_pendingBaseConstructorArgs, null, implicitBase);
             }
 
             // Generate body
@@ -3145,13 +3423,344 @@ namespace BasicLang.Compiler.IR
             if (node.Value != null)
             {
                 node.Value.Accept(this);
-                EmitInstruction(new IRReturn(_expressionResult));
+                EmitInstruction(new IRReturn(CoerceToDeclaredReturnType(_expressionResult)));
             }
             else
             {
                 EmitInstruction(new IRReturn());
             }
         }
+
+        /// <summary>
+        /// Narrows or widens a returned value to the function's DECLARED return type, when both
+        /// are numeric and disagree.
+        ///
+        /// <para>⛔ VB's <c>/</c> is always floating-point division, so <c>Return v / 2</c> from a
+        /// <c>Function … As Integer</c> hands back a Double where an Integer was promised. Nothing
+        /// inserted the conversion, and what each backend then did with it was measured, not
+        /// assumed:</para>
+        /// <list type="bullet">
+        /// <item>C# emitted <c>return (double)(v) / (double)(2);</c> from an <c>int</c> method —
+        /// <b>CS0266, does not compile</b>. The BasicLang build still reported success, because it
+        /// only writes the source; nothing invokes csc.</item>
+        /// <item>MSIL emitted <c>ret</c> with a float64 on the stack from an int32 method and
+        /// returned <b>0</b> — a silent wrong answer.</item>
+        /// <item>C++ and JavaScript happened to be RIGHT, and neither because the compiler did
+        /// anything: C++ narrows implicitly on return, and JavaScript has no types to disagree
+        /// about. Do not read their passing as evidence this seam was ever correct.</item>
+        /// </list>
+        ///
+        /// <para><see cref="IRCast"/> is the seam for exactly the reason
+        /// <see cref="WidenDivisionOperand"/> gives: every backend, both interpreters,
+        /// <c>IROperandWalker</c>, <c>IRPrettyPrinter</c> and <c>CppCapabilityChecker</c> already
+        /// handle it, so one insertion here moves every consumer instead of repeating the coercion
+        /// four times.</para>
+        ///
+        /// <para>⚠ The ROUNDING MODE is left to each backend's existing cast rendering, and
+        /// measured rather than assumed: <c>Return v / 2</c> from an <c>As Integer</c> function
+        /// now gives 3 for v=7 on ALL FOUR backends — C# renders the cast as <c>(int)</c>, C++ as
+        /// a narrowing conversion, JS as <c>Math.trunc</c>, MSIL as <c>conv.i4</c>. Uniform
+        /// truncation.</para>
+        ///
+        /// <para>⛔ That does NOT match VB.NET, and it does not even match this compiler's own
+        /// <c>CInt</c> everywhere. VB narrows with banker's rounding, so <c>Return 7 / 2</c>
+        /// should be 4. And C# is internally inconsistent: <c>CInt(3.5)</c> emits
+        /// <c>Convert.ToInt32</c> and gives 4 while an implicit return gives 3, where C++, JS and
+        /// MSIL give 3 for both. Reconciling the two is a decision about the whole narrowing
+        /// surface — every <c>IRCast</c> rendering on four backends — and is deliberately NOT made
+        /// here. What this fixes is that an implicit narrowing happens AT ALL; before it, the same
+        /// program did not compile on C# and returned 0 on MSIL.</para>
+        ///
+        /// <para>Restricted to numeric primitives on both sides, so a <c>Task(Of Integer)</c>, an
+        /// <c>IEnumerable(Of T)</c>, <c>Object</c>, a String or a class type is never touched —
+        /// boxing and generic returns keep whatever handling they already had.</para>
+        /// </summary>
+        private IRValue CoerceToDeclaredReturnType(IRValue value) =>
+            CoerceToDeclaredType(value, _currentFunction?.ReturnType);
+
+        /// <summary>
+        /// The shared numeric coercion: narrows or widens <paramref name="value"/> to
+        /// <paramref name="declared"/> when both are numeric and disagree, and returns it
+        /// unchanged otherwise.
+        ///
+        /// <para>⛔ Used at STORE sites as well as returns, and the store half is not a mirror of
+        /// the return half — it was measured separately. <c>Dim d As Integer = 7 / 2</c>,
+        /// <c>e = 7 / 2</c>, <c>a(0) = 7 / 2</c> and a module-level <c>G = 7 / 2</c> each failed
+        /// differently: five CS0266s on C# (it does not build), <c>3.5</c> at every site on
+        /// JavaScript, and on MSIL <c>dim=1074528256 asn=0 arr=0 glob=0</c> followed by a
+        /// SEGFAULT — raw float64 bit patterns read as int32. C++ alone was right, by narrowing
+        /// implicitly.</para>
+        ///
+        /// <para>⚠ At an assignment the declared type comes from the TARGET NODE, not from the
+        /// target variable: <c>GetOrCreateVariable</c> is handed <c>value.Type</c>, and
+        /// <see cref="TryRenameToVariable"/> then renames the Double temp to the target outright,
+        /// so the local's declared Integer never enters the picture. Coercing first is what puts
+        /// it back — and it also stops the rename, because an <c>IRCast</c> is not one of the
+        /// node kinds that helper will rename.</para>
+        /// </summary>
+        private IRValue CoerceToDeclaredType(IRValue value, TypeInfo declared)
+        {
+            var actual = value?.Type;
+
+            // ⚠ ONE guard, not two. An earlier version also tested a broad
+            // `IsNumericPrimitive` (any integral or floating type) before this; it is redundant,
+            // because every type this admits is one that would admit — and a mutation removing it
+            // killed nothing. Narrow numeric targets (Byte/SByte/Short/unsigned) fall out here and
+            // keep exactly what they did before this coercion existed: see TryConvertConstant for
+            // why the optimizer cannot be handed their CLR types, and note that an IRCast is no
+            // safer for them — it would change the emission of shapes that already work
+            // (`Dim b As Byte = 65` is a plain literal today) to buy a case nothing measured as
+            // broken. String, Object, class and generic targets fall out here too.
+            if (!IsFoldableNumeric(declared) || !IsFoldableNumeric(actual)) return value;
+            if (string.Equals(declared.Name, actual.Name, StringComparison.Ordinal)) return value;
+
+            // ⛔ A LITERAL is re-typed in place rather than wrapped. Wrapping regressed
+            // PropertySet_LowersToTheSynthesizedSetterSlot: `st.Position = 5` writes an Integer
+            // literal to a Long property — a legal widening — and the cast turned the pinned
+            // proxy call `…(st, 5)` into a call on a cast temp. Converting the constant is also
+            // strictly better code: there is no run-time conversion to perform, and on MSIL it
+            // makes `Dim w As Double = 7` emit `ldc.r8` instead of an int32 bit pattern that
+            // needs a `conv.r8` to rescue it.
+            if (value is IRConstant constant && TryConvertConstant(constant.Value, declared) is object converted)
+            {
+                return new IRConstant(converted, declared);
+            }
+
+            var castName = _currentFunction.GetNextTempName();
+            var cast = new IRCast(castName, value, actual, declared,
+                                  DetermineCastKind(actual, declared));
+            EmitInstruction(cast);
+            return cast;
+        }
+
+        /// <summary>
+        /// Coerces one ARGUMENT to the declared type of the parameter it fills.
+        ///
+        /// <para>⛔ Measured: <c>Take(7 / 2)</c> where the parameter is Integer was <b>CS1503</b>
+        /// on C# (does not build), <c>MissingMethodException: Take(Double)</c> on MSIL — the call
+        /// site spells its signature from the ARGUMENT's type — and <c>3.5</c> on JavaScript. Same
+        /// four backends, same split as the return and store cases; C++ alone was right.</para>
+        ///
+        /// <para>⚠ <b>ByRef is skipped.</b> A coerced argument is a NEW value, so a
+        /// <c>ByRef</c> parameter would write back into a temporary and the caller's variable
+        /// would never change — trading a build error for a silently dropped mutation. An index
+        /// past the parameter list (an omitted Optional) has no declared type to read at all.</para>
+        ///
+        /// <para>⛔ There is deliberately NO ParamArray clause, though one was written here first.
+        /// <c>ParamArray</c> does not parse in either spelling — <c>ParamArray xs() As Integer</c>
+        /// and <c>ParamArray xs As Integer()</c> are both syntax errors — so the clause could not
+        /// be tested; and it would be redundant even if it could, because an array-typed parameter
+        /// is already rejected by <see cref="IsFoldableNumeric"/>.</para>
+        ///
+        /// <para>The callee's parameters come from the symbol the analyzer ALREADY resolved for
+        /// this call — the same list both loops read <c>IsByRef</c> from. No overload selection is
+        /// re-done here; if the analyzer picked an overload, this coerces to that overload's
+        /// parameter, which is also what makes the emitted C# re-select the same one.</para>
+        /// </summary>
+        private IRValue CoerceToParameterType(IRValue value, Symbol callee, int index)
+        {
+            var parameters = callee?.Parameters;
+            if (parameters == null || index < 0 || index >= parameters.Count) return value;
+
+            var parameter = parameters[index];
+            if (parameter.IsByRef) return value;
+
+            return CoerceToDeclaredType(value, parameter.Type);
+        }
+
+        /// <summary>
+        /// Appends the declared defaults for any trailing <c>Optional</c> parameters the call did
+        /// not supply.
+        ///
+        /// <para>⛔ Only the C# backend handled an omitted Optional, and only because it emits the
+        /// default into the SIGNATURE (<c>int b = 5</c>) and lets csc fill it. Measured for
+        /// <c>Sub One(a As Integer, Optional b As Integer = 5)</c> called as <c>One(1)</c>:
+        /// JavaScript printed <c>one:1,undefined</c> (the function is <c>function One(a, b)</c>,
+        /// no default), C++ did not compile ("no matching function for call to 'One'"), and MSIL
+        /// could not bind — <c>MissingMethodException: One(Int32)</c>. Filling at the CALL is what
+        /// moves all three at once; the emitted C# then passes the value explicitly, which is the
+        /// same program.</para>
+        ///
+        /// <para>⚠ TRAILING only, which is all the language can express: BasicLang has no
+        /// named-argument or skipped-argument syntax, so an omitted Optional is always at the end.
+        /// The defaults are appended in declaration order and coerced like any other argument, so
+        /// <c>Optional d As Double = 7</c> arrives as a Double rather than an int32 bit
+        /// pattern.</para>
+        ///
+        /// <para>⚠ The early returns are FAIL-SAFE and none can be killed by a test today, which
+        /// is why they are returns and not <c>continue</c>s. <c>DefaultValueExpression</c> is
+        /// populated only from a <c>ParameterNode</c>, and the parser marks a parameter Optional
+        /// whenever it parses a default — the sole exception, a <c>ParamArray</c> WITH a default,
+        /// does not parse at all ("Expected 'As' but found LeftParen"). So a parameter that is not
+        /// Optional never has one recorded, and both guards are reached only if the front end
+        /// changes. Kept in that form deliberately: stopping makes this do NOTHING on a shape it
+        /// has not been taught, where skipping ahead would silently misalign the argument
+        /// list.</para>
+        /// </summary>
+        private void AppendOmittedOptionalArguments(
+            List<IRValue> arguments, List<bool> byRefFlags, Symbol callee)
+        {
+            var parameters = callee?.Parameters;
+            if (parameters == null) return;
+
+            for (var i = arguments.Count; i < parameters.Count; i++)
+            {
+                var parameter = parameters[i];
+                if (!parameter.IsOptional) return;
+                if (!(parameter.DefaultValueExpression is ExpressionNode expression)) return;
+
+                var value = BuildExpressionValue(expression);
+                if (value == null) return;
+
+                arguments.Add(CoerceToDeclaredType(value, parameter.Type));
+
+                // ⚠ Always by VALUE. A filled default is a fresh temporary, so there is nothing
+                // for a callee to write back into — and IRCall documents ByRefArguments as indexed
+                // in lockstep with Arguments, so the entry has to exist either way.
+                //
+                // ⚠ NULL for a construction: IRNewObject and IRConstructor.BaseConstructorArgs
+                // carry no by-ref list at all, so there is no lockstep to keep.
+                byRefFlags?.Add(false);
+            }
+        }
+
+        /// <summary>
+        /// Narrows a module-scope constant to a NARROW numeric declared type — Byte, SByte,
+        /// Short, UShort, UInteger — that <see cref="CoerceToDeclaredType"/> deliberately leaves
+        /// alone.
+        ///
+        /// <para>⛔ Without it, `Dim v As Byte = 7.9` at module scope compiled clean and printed
+        /// <b>154</b>. <c>CoerceToDeclaredType</c> declines these types on purpose: admitting them
+        /// there would put an <c>IRCast</c> in front of LOCAL declarations that already work
+        /// (`Dim b As Byte = 65` is a plain literal today), and its <c>TryConvertConstant</c>
+        /// cannot return their CLR types at all — measured and still true,
+        /// <c>IROptimizer.CompareLt</c> answers <b>false</b> for any pair outside
+        /// int/long/float/double, so folding `lo &lt; hi` on two <c>sbyte</c>s silently drops the
+        /// branch. So the narrowing happens HERE, on the module-scope path only, where the value
+        /// must already be a constant and no local emission can change.</para>
+        ///
+        /// <para>⚠ The result keeps an <c>int</c> or <c>long</c> CLR value and carries the narrow
+        /// type in its <c>TypeInfo</c>. That is what makes it safe: the folders stay inside the
+        /// four types they handle, while the backends see the declared width.</para>
+        ///
+        /// <para>⚠ WRAPS rather than refusing out of range, because that is what the LOCAL path
+        /// already does — measured: `Dim v As Byte = 300` prints <b>44</b>, `= -1` prints
+        /// <b>255</b>, `Dim v As SByte = 200` prints <b>-56</b>. Real VB rejects those
+        /// (BC30439); this compiler does not, and a module-scope declaration disagreeing with the
+        /// identical local one would be a worse bug than either answer.</para>
+        ///
+        /// <para>⛔ ULong is NOT narrowed and is refused instead: its range does not fit the
+        /// <c>long</c> the folders can carry, and there is no representation that is both correct
+        /// and safe for them. A clean refusal beats the 4620580627691444634 it printed before.</para>
+        /// </summary>
+        private IRValue NarrowModuleScopeConstant(
+            IRValue value, TypeInfo declared, string name, string what)
+        {
+            if (!(value is IRConstant constant) || declared?.Name == null) return value;
+            if (string.Equals(declared.Name, value.Type?.Name, StringComparison.Ordinal)) return value;
+
+            double asDouble;
+            switch (constant.Value)
+            {
+                case int i: asDouble = i; break;
+                case long l: asDouble = l; break;
+                case short sh: asDouble = sh; break;
+                case byte b: asDouble = b; break;
+                case sbyte sb: asDouble = sb; break;
+                case float f: asDouble = f; break;
+                case double d: asDouble = d; break;
+                default: return value;
+            }
+
+            var truncated = (long)Math.Round(asDouble, MidpointRounding.ToEven);
+            object narrowed;
+            switch (declared.Name)
+            {
+                case "Byte": narrowed = (int)unchecked((byte)truncated); break;
+                case "SByte": narrowed = (int)unchecked((sbyte)truncated); break;
+                case "Short": narrowed = (int)unchecked((short)truncated); break;
+                case "UShort": narrowed = (int)unchecked((ushort)truncated); break;
+                // ⚠ int WHEN IT FITS, long only when it must. UInteger's range needs a long in
+                // general, but handing the JavaScript backend a Long literal makes it refuse the
+                // whole program (BL7003: a JS number is exact only to 2^53) — measured, that
+                // turned `Dim v As UInteger = 7.9` into a build failure on JS. The narrowest
+                // folder-safe type that represents the value exactly keeps every backend able to
+                // emit the ordinary cases.
+                case "UInteger":
+                    var unsigned = unchecked((uint)truncated);
+                    narrowed = unsigned <= int.MaxValue ? (object)(int)unsigned : (long)unsigned;
+                    break;
+                case "ULong":
+                    throw new Exception(
+                        $"Line {_currentSourceLine}: the module-level {what} '{name}' is declared "
+                        + "ULong, whose range cannot be represented in a compile-time constant "
+                        + "here. Declare it Long, or assign it in Main (or another procedure).");
+                default: return value;
+            }
+
+            return new IRConstant(narrowed, declared);
+        }
+
+        /// <summary>
+        /// A numeric literal converted to <paramref name="declared"/> at COMPILE time, or null
+        /// when it cannot be.
+        ///
+        /// <para>⚠ Narrowing ROUNDS HALF-TO-EVEN, which is what VB does. This note used to say it
+        /// TRUNCATES "to match what the run-time cast does on all four backends" — that reasoning
+        /// was right and its premise has changed: the run-time cast now rounds on all four too, so
+        /// truncating here would recreate exactly the split it was avoiding. The constant-folded
+        /// and non-folded paths of one expression must agree, and they now agree on 8 for
+        /// <c>Dim d As Integer = 7.9</c>.</para>
+        /// </summary>
+        private static object TryConvertConstant(object value, TypeInfo declared)
+        {
+            if (value == null) return null;
+
+            double asDouble;
+            switch (value)
+            {
+                case int i: asDouble = i; break;
+                case long l: asDouble = l; break;
+                case short sh: asDouble = sh; break;
+                case byte b: asDouble = b; break;
+                case sbyte sb: asDouble = sb; break;
+                case float f: asDouble = f; break;
+                case double d: asDouble = d; break;
+                default: return null;
+            }
+
+            // ⛔ ONLY these four CLR types. `IROptimizer`'s folders — FoldAdd, CompareLt,
+            // CompareGt and friends — are written against int/long/float/double and nothing else,
+            // and its own comment says CompareLt/CompareGt "blindly report FALSE for type pairs
+            // outside int/long/float/double". Handing them an `sbyte` is therefore not a missing
+            // optimization, it is a MISCOMPILE: measured, retyping `Dim lo As SByte = -3` folded
+            // `lo < hi` to `if (false)` and silently dropped the branch body.
+            //
+            // A Byte/SByte/Short/unsigned target keeps whatever it did before this coercion
+            // existed — nothing. That leaves `Dim b As Byte = 7.9` unnarrowed, which is a real
+            // gap; closing it means teaching the optimizer's folders every numeric CLR type,
+            // which is its own change with its own blast radius.
+            var truncated = Math.Round(asDouble, MidpointRounding.ToEven);
+            switch (declared.Name)
+            {
+                case "Double": return asDouble;
+                case "Single": return (float)asDouble;
+                case "Long": return (long)truncated;
+                case "Integer": return (int)truncated;
+                default: return null;
+            }
+        }
+
+        /// <summary>
+        /// A numeric type whose CLR representation <c>IROptimizer</c>'s constant folders handle.
+        /// Everything narrower is left uncoerced rather than miscompiled — see
+        /// <see cref="TryConvertConstant"/>.
+        /// </summary>
+        private static bool IsFoldableNumeric(TypeInfo type) => type?.Name switch
+        {
+            "Integer" or "Long" or "Single" or "Double" => true,
+            _ => false,
+        };
 
         public void Visit(ExitStatementNode node)
         {
@@ -3218,11 +3827,33 @@ namespace BasicLang.Compiler.IR
                     _ => throw new Exception($"Unknown assignment operator: {node.Operator}")
                 };
 
+                // ⛔ `/=` is FLOATING division, exactly as binary `/` is, and typing the result
+                // from the target (`currentValue.Type`) made it Integer — so the coercion below
+                // saw no mismatch and did nothing, while the optimizer later constant-folded
+                // `n /= 4` on an Integer 10 to the Double 2.5. Measured: C# emitted `n = 2.5;`
+                // (CS0266) and JavaScript printed 2.5 from a variable declared As Integer.
+                // Widening the OPERANDS is the same fix, and the same reasoning, as
+                // WidenDivisionOperand in Visit(BinaryExpressionNode) — a Double-typed result
+                // over two Integer operands still divides as integers on the C-family backends.
+                // `\=` (IntDiv) is excluded there and is excluded here: it must keep truncating.
+                var resultType = currentValue.Type;
+                if (op == BinaryOpKind.Div)
+                {
+                    resultType = new TypeInfo("Double", TypeKind.Primitive);
+                    currentValue = WidenDivisionOperand(currentValue, resultType);
+                    value = WidenDivisionOperand(value, resultType);
+                }
+
                 var tempName = _currentFunction.GetNextTempName();
-                var result = new IRBinaryOp(tempName, op, currentValue, value, currentValue.Type);
+                var result = new IRBinaryOp(tempName, op, currentValue, value, resultType);
                 EmitInstruction(result);
                 value = result;
             }
+
+            // ⛔ AFTER the compound fold, so `n /= 2` on an Integer is narrowed too, and BEFORE
+            // every target arm, so the identifier, field, array-element and indexer stores all
+            // get it from one place. The target NODE's type is the declared one for all four.
+            value = CoerceToDeclaredType(value, _semanticAnalyzer.GetNodeType(node.Target));
 
             // Store to target
             if (node.Target is IdentifierExpressionNode idExpr && idExpr.IsForeignQualified)
@@ -4039,10 +4670,21 @@ namespace BasicLang.Compiler.IR
                     }
 
                     call.GenericArguments.AddRange(BuildGenericArgTypes(node.GenericArguments));
+
+                    // ⛔ The STATIC member arm needs the coercion too, and it is a third site, not
+                    // a duplicate: `Box.Shr(7 / 2)` on a user `Shared` method reaches here, not
+                    // the instance arm below nor the plain-identifier arm further down. Measured
+                    // without it, MSIL pushed a float64 and called `Box::Shr(int32)` — the
+                    // signature correct (it is spelled from the declaration) and the VALUE wrong,
+                    // which the CLR rejects as an invalid program. The symbol is the one the
+                    // analyzer resolved for this member access, the same one the instance arm
+                    // reads ByRef from.
+                    var staticCalleeSymbol = _semanticAnalyzer.GetNodeSymbol(memberExpr);
                     foreach (var arg in node.Arguments)
                     {
                         arg.Accept(this);
-                        call.Arguments.Add(_expressionResult);
+                        call.Arguments.Add(CoerceToParameterType(
+                            _expressionResult, staticCalleeSymbol, call.Arguments.Count));
 
                         // P2a-2 Task 8: ByRefArguments was populated only for resolved USER
                         // functions (funcSymbol.Parameters[i].IsByRef, below). A resolved .NET
@@ -4062,6 +4704,20 @@ namespace BasicLang.Compiler.IR
                         call.ByRefArguments.Add(refKind != BasicLang.Net.NetRefKind.None);
                         call.NetArgumentRefKinds.Add(refKind);
                     }
+
+                    // ⚠ USER callees only, deliberately. This arm also serves .NET targets the
+                    // analyzer resolved, whose arguments are marshalled against the descriptor
+                    // recorded in NetArgumentRefKinds — appending behind that list's back would
+                    // leave the two out of step. Filling a .NET optional is a separate job from
+                    // this one, so the guard makes this do NOTHING there rather than guess. Like
+                    // the constructor-ambiguity branch below it is fail-safe by construction: the
+                    // arguments keep exactly what they had before this existed.
+                    if (call.ResolvedNetTarget == null)
+                    {
+                        AppendOmittedOptionalArguments(
+                            call.Arguments, call.ByRefArguments, staticCalleeSymbol);
+                    }
+
                     EmitInstruction(call);
                     _expressionResult = call;
                 }
@@ -4096,13 +4752,17 @@ namespace BasicLang.Compiler.IR
                     foreach (var arg in node.Arguments)
                     {
                         arg.Accept(this);
-                        methodCall.Arguments.Add(_expressionResult);
+                        methodCall.Arguments.Add(CoerceToParameterType(
+                            _expressionResult, methodSymbol, methodCall.Arguments.Count));
 
                         var methodParams = methodSymbol?.Parameters;
                         methodCall.ByRefArguments.Add(
                             methodParams != null && methodCall.Arguments.Count - 1 < methodParams.Count
                             && methodParams[methodCall.Arguments.Count - 1].IsByRef);
                     }
+
+                    AppendOmittedOptionalArguments(
+                        methodCall.Arguments, methodCall.ByRefArguments, methodSymbol);
 
                     EmitInstruction(methodCall);
                     _expressionResult = methodCall;
@@ -4207,7 +4867,7 @@ namespace BasicLang.Compiler.IR
                 for (int i = 0; i < node.Arguments.Count; i++)
                 {
                     node.Arguments[i].Accept(this);
-                    call.Arguments.Add(_expressionResult);
+                    call.Arguments.Add(CoerceToParameterType(_expressionResult, funcSymbol, i));
 
                     // Check if this parameter is ByRef
                     bool isByRef = false;
@@ -4217,6 +4877,8 @@ namespace BasicLang.Compiler.IR
                     }
                     call.ByRefArguments.Add(isByRef);
                 }
+
+                AppendOmittedOptionalArguments(call.Arguments, call.ByRefArguments, funcSymbol);
 
                 EmitInstruction(call);
                 _expressionResult = call;
@@ -4292,12 +4954,34 @@ namespace BasicLang.Compiler.IR
                     : BoundaryTypeCategory.Unknown;
             }
 
+            // ⛔ A constructor argument needs the same coercion a method argument does —
+            // `New Box(7 / 2)` was CS1503 on C#, `MissingMethodException: Box..ctor(Double)` on
+            // MSIL and 3.5 on JavaScript — and the parameter types come from the constructor the
+            // ANALYZER bound this site to, the same Symbol every call arm reads.
+            //
+            // ⚠ It used to re-derive them from the IR class (`UnambiguousConstructorParameters`).
+            // Reading the analyzer's binding instead means the IR can no longer coerce against a
+            // DIFFERENT constructor than the one the analyzer type-checked, and it carries
+            // IsOptional/DefaultValueExpression, which an IRVariable list does not.
+            //
+            // ⚠ Declaration ORDER no longer matters. Pass 1 (`RegisterClassTypes` +
+            // `RegisterConstructorSignature`) gives every class its real TypeInfo and its `.ctorN`
+            // members before any body is analyzed, so a `New` written above the class binds here
+            // too. Before that, the same program emitted `new Box((double)(7) / (double)(2))` —
+            // CS1503 — in one declaration order and the cast in the other.
+            var ctorSymbol = _semanticAnalyzer.ConstructorBindings.TryGetValue(node, out var bound)
+                ? bound
+                : null;
+
             // Evaluate arguments
             foreach (var arg in node.Arguments)
             {
                 arg.Accept(this);
-                newObj.Arguments.Add(_expressionResult);
+                newObj.Arguments.Add(CoerceToParameterType(
+                    _expressionResult, ctorSymbol, newObj.Arguments.Count));
             }
+
+            AppendOmittedOptionalArguments(newObj.Arguments, null, ctorSymbol);
 
             EmitInstruction(newObj);
             _expressionResult = newObj;

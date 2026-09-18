@@ -94,7 +94,8 @@ End Sub";
 
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
         Assert.That(output, Is.Not.Null);
-        Assert.That(output, Does.Contain("(int)"));
+        Assert.That(output, Does.Contain("Convert.ToInt32"),
+            "a Double -> Integer narrowing rounds half-to-even; a plain (int) cast would truncate");
     }
 
     [Test]
@@ -315,6 +316,7 @@ End Sub";
 
         Assert.That(errors, Is.Empty, string.Join("; ", errors));
         Assert.That(output, Is.Not.Null);
-        Assert.That(output, Does.Contain("(int)"));
+        Assert.That(output, Does.Contain("Convert.ToInt32"),
+            "a Double -> Integer narrowing rounds half-to-even; a plain (int) cast would truncate");
     }
 }

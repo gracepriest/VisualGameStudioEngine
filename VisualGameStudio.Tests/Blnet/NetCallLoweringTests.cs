@@ -205,7 +205,14 @@ public class NetCallLoweringTests
             "set_Position", position.DeclaringTypeFullName, NetMemberCategory.Method,
             position.IsStatic, arity: 0, "System.Void",
             new[] { new NetParameterDescriptor(NetRefKind.None, position.TypeFullName) });
-        Assert.That(cpp, Does.Contain(ProxyCall(setter) + "(st, 5)"),
+        // ⚠ `5LL`, not `5`. The property is System.Int64, and IRBuilder now re-types a numeric
+        // LITERAL to the declared type of what it is stored into, so the argument is an Int64
+        // constant instead of an Int32 one that C++ widens implicitly at the call. That is the
+        // more faithful emission for an int64 slot, and it is load-bearing elsewhere: measured on
+        // the previous commit, `Dim w As Double = 7` on MSIL stored the int32 bit pattern and
+        // printed 3.5E-323. The property this test pins — the synthesized set_X slot, receiver
+        // then value — is unchanged.
+        Assert.That(cpp, Does.Contain(ProxyCall(setter) + "(st, 5LL)"),
             "a property WRITE lowers to the synthesized set_X accessor-method slot "
             + "(receiver, value):\n" + cpp);
     }

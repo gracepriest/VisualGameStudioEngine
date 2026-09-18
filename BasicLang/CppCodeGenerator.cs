@@ -185,11 +185,34 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 {
                     var type = MapType(globalVar.Type);
                     var name = SanitizeName(globalVar.Name);
+                    // ⛔ A DECLARED initializer wins, and until 2026-09-17 it was dropped on the
+                    // floor: this emitted `{}` for every global and never looked at InitialValue,
+                    // so `Dim G As Integer = 42` became `int32_t G = {};` and the program printed
+                    // 0. A build with the right answer nowhere in it — no diagnostic, no crash,
+                    // just the wrong number. C#, MSIL and JavaScript all carried the value; only
+                    // this backend silently lost it.
+                    //
+                    // ⚠ Through ValueText, matching the STATIC FIELD path
+                    // (EmitStaticMemberInitializationsCore), which spells the same thing inline.
+                    // Stated honestly: ValueText's `is IRConstant -> EmitConstant` branch is
+                    // REDUNDANT here, because the base GetValueName (ICodeGenerator) already
+                    // routes an IRConstant to EmitConstant itself — measured, swapping this for a
+                    // bare GetValueName passes every test, so the two are equivalent and no test
+                    // can hold the choice. It is ValueText for consistency with its sibling sites,
+                    // not because it protects anything.
+                    //
+                    // ⚠ A non-constant initializer (`Dim I As Integer = H`) emits the referenced
+                    // global's NAME, which is correct C++ only because these are written in
+                    // declaration order and C++ initializes namespace-scope objects in that order
+                    // within a translation unit. Reordering this loop would break it silently.
+                    //
                     // A module-level fixed-size array allocates here for the same reason a local
                     // does; `{}` stays the default for everything else (globals have never gone
                     // through GetDefaultValue, and routing them there now would change every
                     // non-array global's initializer).
-                    var init = SizedArrayInitializer(globalVar.Type, type) ?? "{}";
+                    var init = globalVar.InitialValue != null
+                        ? ValueText(globalVar.InitialValue)
+                        : SizedArrayInitializer(globalVar.Type, type) ?? "{}";
                     WriteLine($"{type} {name} = {init};");
                 }
                 WriteLine();
@@ -1072,7 +1095,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     var staticMod = field.IsStatic ? "static " : "";
                     var type = MapType(field.Type);
                     var name = SanitizeName(field.Name);
-                    var init = field.IsStatic ? "" : FieldArrayInitializer(field);
+                    var init = field.IsStatic ? "" : FieldInitializer(field);
                     WriteLine($"{staticMod}{type} {name}{init};");
                 }
                 Unindent();
@@ -1090,7 +1113,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     var staticMod = field.IsStatic ? "static " : "";
                     var type = MapType(field.Type);
                     var name = SanitizeName(field.Name);
-                    var init = field.IsStatic ? "" : FieldArrayInitializer(field);
+                    var init = field.IsStatic ? "" : FieldInitializer(field);
                     WriteLine($"{staticMod}{type} {name}{init};");
                 }
                 Unindent();
@@ -1108,7 +1131,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 var staticMod = field.IsStatic ? "static " : "";
                 var type = MapType(field.Type);
                 var name = SanitizeName(field.Name);
-                var init = field.IsStatic ? "" : FieldArrayInitializer(field);
+                var init = field.IsStatic ? "" : FieldInitializer(field);
                 WriteLine($"{staticMod}{type} {name}{init};");
             }
 
@@ -1674,17 +1697,53 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         }
 
         /// <summary>
-        /// The in-class member initializer for an array FIELD (<c>= std::vector&lt;int32_t&gt;(9)</c>),
-        /// or the empty string when the field is not a sized array. Emitted at the declaration
-        /// because a C++ member has no other place to be given a size, and an empty vector member
-        /// makes every <c>b.Cells(0)</c> an out-of-bounds access.
+        /// The in-class initializer for one field declaration — its DECLARED value, or storage for
+        /// a sized array, or nothing.
         ///
-        /// <para>STATIC members take the out-of-class definition path instead
-        /// (<see cref="EmitStaticMemberInitializationsCore"/>) — an in-class initializer on a
-        /// non-const static is not legal C++, so callers pass only non-static fields here.</para>
+        /// <para>⛔ The declared value was missing entirely, and silently: every instance field
+        /// initializer was dropped. Measured on a class with five initialized public fields, C++
+        /// printed <c>0,,0.000000,0.000000,False</c> where JavaScript printed
+        /// <c>5,hi,2.5,1.5,true</c> — Integer, String, Double, Single and Boolean alike, so not
+        /// one type's problem. A constructor that built on the value inherited the zero:
+        /// <c>_n = _n + 3</c> over <c>= 5</c> answered <b>3</b> rather than 8.</para>
+        ///
+        /// <para>⚠ An IN-CLASS initializer is the right shape here rather than a constructor
+        /// member-initializer list: the emitted class often has no constructor at all (just
+        /// <c>~Box() = default;</c>), and C++ runs in-class initializers before any constructor
+        /// body, in declaration order — which is VB's rule for field initializers too.</para>
+        ///
+        /// <para>⚠ The expression comes from the same two-branch form the STATIC path uses
+        /// (<see cref="EmitStaticMemberInitializationsCore"/>), so an out-of-class static
+        /// definition and an in-class instance one can never disagree about how a constant is
+        /// spelled. Stated honestly, and matching what the module-global sibling's comment already
+        /// records: the <c>is IRConstant -&gt; EmitConstant</c> arm is REDUNDANT — the base
+        /// <c>GetValueName</c> routes an IRConstant to <c>EmitConstant</c> itself, and measured,
+        /// replacing the whole ternary with a bare <c>GetValueName</c> passes every test. It is
+        /// written this way for consistency with its two siblings, not because it protects
+        /// anything, and no test can hold the choice.</para>
+        ///
+        /// <para>⚠ The array branch was the whole of this helper before, and stays: a C++ member
+        /// has no other place to be given a size, and an empty vector member makes every
+        /// <c>b.Cells(0)</c> an out-of-bounds access. It is reached only when there is no declared
+        /// value, which is NOT a precedence decision — the analyzer refuses an initializer on an
+        /// array-typed field ("Cannot assign value of type 'Integer' to variable of type
+        /// 'Integer[]'"), so no field can carry both and swapping the two arms is an equivalent
+        /// mutant.</para>
+        ///
+        /// <para>⛔ A STATIC field must not get one — an in-class initializer on a non-const
+        /// static is not legal C++ — and its callers already guard on <c>IsStatic</c> before
+        /// asking.</para>
         /// </summary>
-        private string FieldArrayInitializer(IRField field)
+        private string FieldInitializer(IRField field)
         {
+            if (field?.Initializer != null)
+            {
+                var declared = field.Initializer is IRConstant constant
+                    ? EmitConstant(constant)
+                    : GetValueName(field.Initializer);
+                return $" = {declared}";
+            }
+
             var sized = SizedArrayInitializer(field?.Type, MapType(field?.Type));
             return sized != null ? $" = {sized}" : "";
         }
@@ -2920,6 +2979,18 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// predicate can reach it. Pinned by
         /// <c>NetClaimPredicateTests.RowCUsesTheGeneratorsOwnArmCheckAndCannotDrift</c>.</para>
         /// </summary>
+        /// <summary>
+        /// True when a conversion intrinsic's first argument is a floating type, i.e. when there
+        /// is something to round. Static, like <see cref="StdLibArm"/> itself, so the claim
+        /// predicate can reach it.
+        /// </summary>
+        private static bool Arg0IsFloating(IRCall call) =>
+            call != null && call.Arguments.Count > 0 && call.Arguments[0]?.Type?.Name switch
+            {
+                "Double" or "Single" => true,
+                _ => false,
+            };
+
         internal static string StdLibArm(string functionName, List<string> args, IRCall call)
         {
             if (functionName == null) return null;
@@ -2973,12 +3044,27 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // Use CType(x, Integer) — truncating on both backends — when parity matters.
                 // Precision note: ToDouble is exact to 15 significant digits, so a
                 // >15-digit Decimal narrows approximately.
+                // ⛔ ROUNDS HALF-TO-EVEN via nearbyint, because a bare static_cast TRUNCATES and
+                // that is not what CInt means. Measured across the backends on
+                // CInt(7.5)/CInt(8.5)/CInt(7.9)/CInt(-7.5): C# emits Convert.ToInt32 and printed
+                // 8,8,8,-8 (the VB answer), while MSIL, JavaScript and C++ all printed 7,8,7,-7.
+                // std::nearbyint under the default FE_TONEAREST mode matches Convert.ToInt32 on
+                // all ten values checked, midpoints included (8.5 -> 8, 2.5 -> 2, -8.5 -> -8),
+                // which is what separates it from round() — round() is AwayFromZero and would
+                // answer 9 for 8.5.
+                //
+                // ⚠ Only for a FLOATING argument: `CInt(someInteger)` has nothing to round, and
+                // routing a 64-bit integer through a double would lose precision above 2^53.
                 "cint" => arg0IsDecimal
-                    ? $"static_cast<int32_t>(({args[0]}).ToDouble())"
-                    : $"static_cast<int32_t>({args[0]})",
+                    ? $"static_cast<int32_t>(std::nearbyint(({args[0]}).ToDouble()))"
+                    : Arg0IsFloating(call)
+                        ? $"static_cast<int32_t>(std::nearbyint({args[0]}))"
+                        : $"static_cast<int32_t>({args[0]})",
                 "clng" => arg0IsDecimal
-                    ? $"static_cast<int64_t>(({args[0]}).ToDouble())"
-                    : $"static_cast<int64_t>({args[0]})",
+                    ? $"static_cast<int64_t>(std::nearbyint(({args[0]}).ToDouble()))"
+                    : Arg0IsFloating(call)
+                        ? $"static_cast<int64_t>(std::nearbyint({args[0]}))"
+                        : $"static_cast<int64_t>({args[0]})",
                 "cdbl" => arg0IsDecimal
                     ? $"({args[0]}).ToDouble()"
                     : $"static_cast<double>({args[0]})",
@@ -3738,9 +3824,27 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             }
 
             var targetType = MapType(cast.Type);
+
+            // ⛔ A FLOATING -> INTEGRAL narrowing ROUNDS HALF-TO-EVEN, because a bare static_cast
+            // TRUNCATES. `Dim i As Integer = 7.5` answered 7 on all four backends while
+            // `CInt(7.5)` answers 8 — one language, two answers depending on which syntax reached
+            // the same narrowing. VB rounds both. std::nearbyint under the default FE_TONEAREST
+            // mode is ToEven and matches Convert.ToInt32; std::round would NOT, it is
+            // AwayFromZero and answers 9 for 8.5.
+            if (IsFloatingTypeName(cast.Value?.Type?.Name) && IsIntegralTypeName(cast.Type?.Name))
+            {
+                WriteLine($"{result} = static_cast<{targetType}>(std::nearbyint({value}));");
+                return;
+            }
+
             WriteLine($"{result} = static_cast<{targetType}>({value});");
         }
-        
+
+        /// <summary>A floating source, i.e. one a narrowing has something to round from.</summary>
+        private static bool IsFloatingTypeName(string typeName) =>
+            string.Equals(typeName, "Double", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(typeName, "Single", StringComparison.OrdinalIgnoreCase);
+
         public override void Visit(IRLabel label)
         {
             Unindent();

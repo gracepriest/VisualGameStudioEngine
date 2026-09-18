@@ -197,6 +197,101 @@ namespace BasicLang.Compiler.IR.Optimization
     /// <summary>
     /// Constant folding - evaluate constant expressions at compile time
     /// </summary>
+    /// <summary>
+    /// Folds an <see cref="IRCast"/> of a constant, for LOSSLESS WIDENING conversions only.
+    ///
+    /// <para>⛔ NOT IN THE DEFAULT PIPELINE. It exists for
+    /// <c>IRBuilder.BuildModuleScopeInitializer</c>, whose contract is "reduce to a single
+    /// constant or refuse", and it is not registered anywhere else because nothing else needs it:
+    /// folding <c>(double)7</c> in ordinary optimized code buys no measured benefit and changes
+    /// the IR every backend sees.</para>
+    ///
+    /// <para>⚠ Stated honestly, because the tempting rationale is WRONG. The worry was that the
+    /// base <c>EmitConstant</c> ends in <c>Value.ToString()</c>, so a Double constant of 7.0
+    /// renders as <c>7</c> and <c>(double)7 / x</c> would become an INTEGER division. It does not:
+    /// measured by adding this pass to the pipeline and running it, C# still prints 3.5 for both
+    /// <c>7 / 2</c> and <c>7 / x</c> — the optimizer loops its passes to a fixpoint, so a
+    /// constant/constant division folds away entirely, and in <c>7 / x</c> the surviving operand
+    /// keeps its own cast (<c>7 / (double)(x)</c>) which still promotes. So this pass staying out
+    /// of the pipeline is a SCOPE decision, not a safety one, and no test holds it.</para>
+    ///
+    /// <para>⛔ WIDENING ONLY, and only the three conversions that are EXACT: Integer→Long,
+    /// Integer→Double (32 bits fit a 53-bit mantissa) and Single→Double. Integer→Single is not
+    /// exact past 2^24, and Long→Double is not exact past 2^53.</para>
+    ///
+    /// <para>⚠ The widening-only restriction is, today, UNREACHABLE — measured: adding a
+    /// Double→Integer arm to <see cref="TryWiden"/> leaves every test passing, because no
+    /// narrowing IRCast reaches this pass from the one site that calls it. An assignment narrowing
+    /// is folded earlier by <c>IRBuilder.TryConvertConstant</c> without a cast, and
+    /// <c>CInt(...)</c> lowers to an IRCall. It stays as a fail-safe that no test can hold,
+    /// because what it guards is real and expensive to get wrong — see the next paragraph.</para>
+    ///
+    /// <para>⛔ NARROWING IS NOT FOLDED, and that is not caution — the backends DISAGREE about it.
+    /// Measured on <c>CInt(7.5)</c>, <c>CInt(8.5)</c>, <c>CInt(7.9)</c>, <c>CInt(-7.5)</c>:
+    /// C# prints <c>8,8,8,-8</c> (rounds, the VB answer) while MSIL, JavaScript and C++ all print
+    /// <c>7,8,7,-7</c> (truncate). Any single compile-time answer would therefore CHANGE one of
+    /// them. That divergence is a real pre-existing defect, and it has to be settled for the
+    /// backends at run time before a constant folder is allowed an opinion about it.</para>
+    /// </summary>
+    public class WideningCastFoldingPass : OptimizationPass
+    {
+        public WideningCastFoldingPass() : base("Widening Cast Folding") { }
+
+        public override bool Run(IRModule module)
+        {
+            ModificationCount = 0;
+
+            foreach (var function in module.Functions)
+            {
+                if (function.IsExternal) continue;
+                foreach (var block in function.Blocks)
+                    FoldBlock(block);
+            }
+
+            return ModificationCount > 0;
+        }
+
+        private void FoldBlock(BasicBlock block)
+        {
+            for (int i = 0; i < block.Instructions.Count; i++)
+            {
+                if (!(block.Instructions[i] is IRCast cast)) continue;
+                if (!(cast.Value is IRConstant operand)) continue;
+
+                var folded = TryWiden(operand.Value, cast.SourceType?.Name, cast.Type?.Name);
+                if (folded == null) continue;
+
+                var constant = new IRConstant(folded, cast.Type);
+                ReplaceUses(block.Instructions, cast, constant);
+                block.Instructions[i] = constant;
+                ReportModification();
+            }
+        }
+
+        /// <summary>
+        /// The widened value, or null when the pair is not one of the three exact conversions.
+        /// ⚠ The SOURCE type is checked as well as the CLR value: a constant carrying an int is
+        /// only an Integer widening if the cast says it came from one.
+        /// </summary>
+        private static object TryWiden(object value, string sourceName, string targetName)
+        {
+            if (value == null || sourceName == null || targetName == null) return null;
+
+            switch (sourceName)
+            {
+                case "Integer" when value is int i:
+                    if (targetName == "Long") return (long)i;
+                    if (targetName == "Double") return (double)i;
+                    return null;
+                case "Single" when value is float f:
+                    if (targetName == "Double") return (double)f;
+                    return null;
+                default:
+                    return null;
+            }
+        }
+    }
+
     public class ConstantFoldingPass : OptimizationPass
     {
         public ConstantFoldingPass() : base("Constant Folding") { }
@@ -339,6 +434,12 @@ namespace BasicLang.Compiler.IR.Optimization
                     BinaryOpKind.Xor => FoldXor(left.Value, right.Value),
                     BinaryOpKind.Shl => FoldShl(left.Value, right.Value),
                     BinaryOpKind.Shr => FoldShr(left.Value, right.Value),
+                    // `&` is VB's string concatenation, and FoldAdd's string branch already IS
+                    // concatenation. Without this a module-scope `Dim S As String = "a" & "b"`
+                    // has no constant to fold to and gets refused, because a global's initializer
+                    // must be a constant. Mixed operands (`"a" & 5`) still fold to null here —
+                    // FoldAdd matches string+string only — so the VB coercion is never guessed at.
+                    BinaryOpKind.Concat => FoldAdd(left.Value, right.Value),
                     _ => null
                 };
                 

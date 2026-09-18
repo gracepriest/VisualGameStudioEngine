@@ -64,9 +64,17 @@ public class JavaScriptNumericTests
 
     // ---------------------------------------------------------------- conversions
 
-    [TestCase("CInt(3.7)", "3", TestName = "CInt_TruncatesDown")]
-    [TestCase("CInt(-3.7)", "-3", TestName = "CInt_TruncatesTowardZero")]
-    public void CInt_Truncates(string expr, string expected)
+    /// <summary>
+    /// ⚠ CInt ROUNDS HALF-TO-EVEN, which is what VB means by it. These cases used to assert 3 and
+    /// -3 under the name <c>CInt_Truncates</c>; measured, .NET answers 4 and -4, and C# already
+    /// did via <c>Convert.ToInt32</c> while JavaScript, MSIL and C++ truncated.
+    ///
+    /// <para>The midpoints live in <c>ConversionRoundingTests</c>, which is where half-to-even is
+    /// separated from away-from-zero; these two only separate rounding from truncation.</para>
+    /// </summary>
+    [TestCase("CInt(3.7)", "4", TestName = "CInt_RoundsUp")]
+    [TestCase("CInt(-3.7)", "-4", TestName = "CInt_RoundsAwayFromZeroWhenNotAMidpoint")]
+    public void CInt_Rounds(string expr, string expected)
         => Assert.That(Print(expr), Is.EqualTo(expected));
 
     /// <summary>CDbl/CSng are identity under erasure — all three are one JS number.</summary>

@@ -92,6 +92,27 @@ namespace BasicLang.Compiler.SemanticAnalysis
         private readonly NetAstAnnotations _netAnnotations = new NetAstAnnotations();
 
         /// <summary>
+        /// Which CONSTRUCTOR each construction site binds to, keyed by AST node (reference
+        /// identity): a <c>NewExpressionNode</c> for <c>New Box(…)</c>, a <c>ConstructorNode</c>
+        /// for its own <c>MyBase.New(…)</c>.
+        ///
+        /// <para>⛔ A side table rather than <see cref="SetNodeSymbol"/> because "the constructor
+        /// this node CALLS" and "the symbol this node DECLARES" are different questions that a
+        /// <c>ConstructorNode</c> asks at once — it declares one constructor and calls another.
+        /// One table, so there is a single answer to the first question for both sites.</para>
+        ///
+        /// <para>⚠ <see cref="IRBuilder"/> reads it to coerce and to fill omitted <c>Optional</c>
+        /// arguments against the SAME constructor this analyzer validated against. It used to
+        /// re-derive the parameter list from the IR class instead
+        /// (<c>UnambiguousConstructorParameters</c>), which is populated in declaration order and
+        /// so disagreed with the analyzer whenever the class had not been visited yet.</para>
+        /// </summary>
+        internal IReadOnlyDictionary<ASTNode, Symbol> ConstructorBindings => _constructorBindings;
+
+        private readonly Dictionary<ASTNode, Symbol> _constructorBindings =
+            new Dictionary<ASTNode, Symbol>(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
         /// P2a-2 Task 2/7a — the .NET members the probes resolved, keyed by AST node (reference
         /// identity), each carrying the Task-7a exactness bit. <see cref="IRBuilder"/> reads
         /// this while lowering and stamps <c>ResolvedNetTarget</c>/<c>NetCategory</c>/
@@ -370,7 +391,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Pass 2: class members, now that every sibling class shell exists.
             foreach (var (classNode, classType) in pendingClasses)
             {
-                PopulateSiblingClassMembers(classNode, classType);
+                PopulateClassMemberSignatures(
+                    classNode, classType, includeConstructors: true);
             }
 
             // Pass 3: functions, subs and public module-level fields/constants.
@@ -441,19 +463,49 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
-        /// Record a pending sibling class's non-private members (methods,
-        /// constructors, fields, properties, constants) on its TypeInfo so
-        /// cross-file member access and constructor validation resolve.
+        /// Record a class's members (methods, constructors, fields, properties, constants) on its
+        /// <see cref="TypeInfo"/> from its declaration alone, before any body is analyzed.
+        ///
+        /// <para>⚠ SHARED by the two paths that need a class's members known before the class's own
+        /// <see cref="Visit(ClassNode)"/> runs: the cross-file sibling sweep
+        /// (<see cref="RegisterPendingSiblingSignatures"/>) and the in-file pass 1
+        /// (<see cref="RegisterClassMemberSignatures"/>). They want the same member SHAPES from the
+        /// same nodes, so this is one method with two axes rather than two methods that drift.</para>
+        ///
+        /// <para>⚠ PRIVATE members are left out for both, and an in-file "include them" variant was
+        /// tried and DROPPED as inert. Nothing consults them: pass 2 overwrites every entry it
+        /// visits, and a private member resolves through the CLASS SCOPE rather than through
+        /// <c>Members</c> — measured, <c>Return other._n</c> on a second instance of the class
+        /// compiles and runs the same either way. (Access is not enforced on a member read at all
+        /// here: reading <c>c._n</c> from outside compiles in BOTH declaration orders. A separate
+        /// pre-existing gap, and the reason this choice cannot tighten or loosen anything.)</para>
+        ///
+        /// <para>⛔ <paramref name="includeConstructors"/> is FALSE in-file, so
+        /// <see cref="RegisterConstructorSignature"/> stays the single owner of <c>.ctorN</c>. Its
+        /// guard returns early on an existing key, so writing one here would retire it silently
+        /// rather than visibly. ⚠ Stated honestly: that mutation SURVIVES — flipping it to true
+        /// passes every test. The two parameter builders do differ in source
+        /// (<see cref="BuildSiblingSignatureParameters"/> resolves arrays and generics through
+        /// <see cref="ResolveSiblingSignatureType"/> and treats a default value as Optional, where
+        /// the constructor path reads <c>GetType(param.Type?.Name)</c> and only <c>IsOptional</c>),
+        /// but the shape that would show it — an ARRAY constructor parameter — does not parse
+        /// (<c>Sub New(vs() As Integer)</c> is a syntax error), and a bare default value behaves
+        /// the same through both. So no reachable program can hold this, and the flag is here to
+        /// keep one owner rather than because a test demands it. Unifying the two builders onto the
+        /// more capable one is a real improvement and its own change.</para>
         /// </summary>
-        private void PopulateSiblingClassMembers(ClassNode classNode, TypeInfo classType)
+        private void PopulateClassMemberSignatures(
+            ClassNode classNode, TypeInfo classType, bool includeConstructors)
         {
-            if (classNode.Members == null) return;
+            if (classNode.Members == null || classType?.Members == null) return;
+
+            static bool Visible(AccessModifier access) => access != AccessModifier.Private;
 
             foreach (var member in classNode.Members)
             {
                 switch (member)
                 {
-                    case FunctionNode func when func.Access != AccessModifier.Private:
+                    case FunctionNode func when Visible(func.Access):
                     {
                         var returnType = ResolveSiblingSignatureType(func.ReturnType) ?? _typeManager.ObjectType;
                         classType.Members[func.Name] = new Symbol(func.Name, SymbolKind.Function, returnType, 0, 0)
@@ -465,7 +517,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         break;
                     }
 
-                    case SubroutineNode sub when sub.Access != AccessModifier.Private:
+                    case SubroutineNode sub when Visible(sub.Access):
                     {
                         classType.Members[sub.Name] = new Symbol(sub.Name, SymbolKind.Subroutine, _typeManager.VoidType, 0, 0)
                         {
@@ -476,7 +528,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         break;
                     }
 
-                    case ConstructorNode ctor:
+                    case ConstructorNode ctor when includeConstructors:
                     {
                         var ctorSymbol = new Symbol(".ctor", SymbolKind.Function, classType, 0, 0)
                         {
@@ -488,7 +540,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         break;
                     }
 
-                    case VariableDeclarationNode field when field.Access != AccessModifier.Private:
+                    case VariableDeclarationNode field when Visible(field.Access):
                     {
                         classType.Members[field.Name] = new Symbol(field.Name, SymbolKind.Variable,
                             ResolveSiblingSignatureType(field.Type) ?? _typeManager.ObjectType, 0, 0)
@@ -498,7 +550,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         break;
                     }
 
-                    case PropertyNode prop when prop.Access != AccessModifier.Private:
+                    case PropertyNode prop when Visible(prop.Access):
                     {
                         classType.Members[prop.Name] = new Symbol(prop.Name, SymbolKind.Property,
                             ResolveSiblingSignatureType(prop.PropertyType) ?? _typeManager.ObjectType, 0, 0)
@@ -508,7 +560,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         break;
                     }
 
-                    case ConstantDeclarationNode constant when constant.Access != AccessModifier.Private:
+                    case ConstantDeclarationNode constant when Visible(constant.Access):
                     {
                         classType.Members[constant.Name] = new Symbol(constant.Name, SymbolKind.Constant,
                             ResolveSiblingSignatureType(constant.Type) ?? _typeManager.ObjectType, 0, 0)
@@ -701,7 +753,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     IsOptional = param.IsOptional || param.DefaultValue != null,
                     IsByRef = param.IsByRef,
-                    IsParamArray = param.IsParamArray
+                    IsParamArray = param.IsParamArray,
+                    DefaultValueExpression = param.DefaultValue
                 });
             }
             return result;
@@ -1546,6 +1599,207 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             return expr is LiteralExpressionNode lit
                 && lit.Value is int or long or float or double or decimal or short or byte;
+        }
+
+        /// <summary>
+        /// VB's <b>BC30439</b>, "Constant expression not representable in type 'X'": a value the
+        /// compiler can compute now, stored somewhere it does not fit.
+        ///
+        /// <para>⛔ Measured before this existed, for <c>Dim b As Byte = 300</c> at LOCAL scope —
+        /// four backends, THREE answers, one of them not a program at all:
+        /// <b>C#</b> CS0031 ("Constant value '300' cannot be converted to a 'byte'"), so the
+        /// emitted source DOES NOT BUILD; <b>JavaScript</b> printed <b>300</b>, because a JS number
+        /// has no width to overflow; <b>C++</b> printed <b>44</b>, narrowing implicitly at the
+        /// declaration; <b>MSIL</b> also 44, from <c>ldc.i4 300</c> into a <c>uint8</c> slot. The
+        /// same split appears at every other store site — <c>b = 300</c>, <c>a(0) = 300</c>,
+        /// <c>x.F = 300</c>, <c>Return 300</c> and <c>Take(300)</c> — where C# adds CS0221 and
+        /// CS1503 to the tally.</para>
+        ///
+        /// <para>⚠ MODULE scope was the one place the backends agreed, on the WRAP (44), because
+        /// <c>IRBuilder.NarrowModuleScopeConstant</c> folds it there. That agreement is what the
+        /// old note in <c>docs/HANDOFF.md</c> generalized from, and it was wrong about locals: it
+        /// recorded the wrap as measured "on both" scopes. Agreeing on a wrap was never the goal —
+        /// real VB rejects all of these — so the fix is here, in the front end, ahead of every
+        /// backend and both scopes at once.</para>
+        ///
+        /// <para>⚠ The check runs AFTER half-to-even rounding, because that is what the narrowing
+        /// itself now does (<c>IRBuilder.TryConvertConstant</c>): <c>Dim b As Byte = 255.4</c> is
+        /// 255 and legal, <c>= 255.6</c> rounds to 256 and is not.</para>
+        ///
+        /// <para>⚠ Reports only what it can FOLD. A value that does not fold is not diagnosed
+        /// here — <c>Dim b As Byte = someInteger</c> is a run-time conversion, not a constant
+        /// expression, and VB does not report BC30439 for it either.</para>
+        /// </summary>
+        private void CheckConstantFitsNumericTarget(
+            ExpressionNode value, TypeInfo target, string context, int line, int column)
+        {
+            if (value == null || target?.Name == null) return;
+            if (!TryFoldConstantDouble(value, out var folded) || double.IsNaN(folded)) return;
+
+            // ⚠ Single is a RANGE check, not a precision one. `Dim s As Single = 0.1` loses bits
+            // and is perfectly legal VB; `= 1.0E+40` has no Single to round to at all. Measured
+            // without this arm: JavaScript printed `Infinity` and the C++ backend emitted
+            // `s = Infinityf;`, which does not compile.
+            if (string.Equals(target.Name, "Single", StringComparison.Ordinal))
+            {
+                if (!double.IsInfinity(folded) && float.IsInfinity((float)folded))
+                {
+                    Error($"Constant expression not representable in type 'Single': {context} is "
+                        + $"{FormatConstant(folded)}, but 'Single' holds magnitudes up to "
+                        + $"{float.MaxValue.ToString("R", CultureInfo.InvariantCulture)}.",
+                        line, column);
+                }
+                return;
+            }
+
+            if (!TryGetIntegralRange(target.Name, out var min, out var max)) return;
+
+            var rounded = double.IsInfinity(folded)
+                ? folded
+                : Math.Round(folded, MidpointRounding.ToEven);
+            if (rounded >= min && rounded <= max) return;
+
+            Error($"Constant expression not representable in type '{target.Name}': {context} is "
+                + $"{FormatConstant(folded)}, but '{target.Name}' holds {FormatConstant(min)} "
+                + $"through {FormatConstant(max)}.", line, column);
+        }
+
+        /// <summary>
+        /// The inclusive range of each integral type, in <c>double</c> space so one comparison
+        /// serves every width.
+        ///
+        /// <para>⚠ <c>Long</c> and <c>ULong</c> are DELIBERATELY imprecise at the boundary:
+        /// <c>(double)long.MaxValue</c> rounds UP to 2^63, so a constant of exactly 2^63 is
+        /// accepted although it does not fit. That is a missed diagnostic, not a false one, which
+        /// is the direction to err in — and the shape is unreachable anyway, since a literal that
+        /// large does not lex as an integer.</para>
+        ///
+        /// <para>⚠ <c>UByte</c> is listed beside <c>Byte</c> because <c>TypeInfo.IsNumeric</c>
+        /// names both; the language's <c>Byte</c> is already the unsigned one.</para>
+        /// </summary>
+        private static bool TryGetIntegralRange(string typeName, out double min, out double max)
+        {
+            switch (typeName)
+            {
+                case "Byte":
+                case "UByte": min = byte.MinValue; max = byte.MaxValue; return true;
+                case "SByte": min = sbyte.MinValue; max = sbyte.MaxValue; return true;
+                case "Short": min = short.MinValue; max = short.MaxValue; return true;
+                case "UShort": min = ushort.MinValue; max = ushort.MaxValue; return true;
+                case "Integer": min = int.MinValue; max = int.MaxValue; return true;
+                case "UInteger": min = uint.MinValue; max = uint.MaxValue; return true;
+                case "Long": min = long.MinValue; max = long.MaxValue; return true;
+                case "ULong": min = ulong.MinValue; max = ulong.MaxValue; return true;
+                default: min = 0; max = 0; return false;
+            }
+        }
+
+        /// <summary>
+        /// Folds an expression to a compile-time <c>double</c>, or returns false when it does not
+        /// fold.
+        ///
+        /// <para>⚠ The sibling of <see cref="TryFoldConstantInt"/>, and NOT a replacement for it:
+        /// that one answers "how many elements does this array have" and must refuse anything it
+        /// cannot size a declaration with, so it rejects floating values and any integer outside
+        /// <c>int</c>. This one exists to answer "does this value FIT", which those are exactly
+        /// the cases of — <c>3000000000</c> and <c>255.6</c> both have to survive folding to be
+        /// reported.</para>
+        ///
+        /// <para>⛔ Only <c>+ - * /</c>, though <c>TryFoldConstantInt</c> also folds
+        /// <c>\ Mod &lt;&lt; &gt;&gt;</c>. Those four are exact in double space below 2^53 and
+        /// evaluate the same way the IR's folders do; the integral-only operators would have to
+        /// re-derive an integral width here to agree, and a fold that DISAGREES with the IR
+        /// produces a false error — the one outcome worse than the silent wrap this replaces.
+        /// Declining to fold them only costs a diagnostic.</para>
+        ///
+        /// <para>⚠ Every leaf must be a numeric literal or a folded <c>Const</c>, so a
+        /// user-defined operator, a string concatenation with <c>+</c>, or a variable reference
+        /// stops the fold rather than being guessed at.</para>
+        /// </summary>
+        private bool TryFoldConstantDouble(ExpressionNode expr, out double value)
+        {
+            value = 0;
+            switch (expr)
+            {
+                case LiteralExpressionNode literal:
+                    return TryConvertConstantToDouble(literal.Value, out value);
+
+                case IdentifierExpressionNode identifier:
+                {
+                    var symbol = _currentScope?.Resolve(identifier.Name);
+                    if (symbol == null || !symbol.IsConstant || symbol.ConstantValue == null)
+                        return false;
+                    return TryConvertConstantToDouble(symbol.ConstantValue, out value);
+                }
+
+                case UnaryExpressionNode unary when unary.Operator is "-" or "+":
+                {
+                    if (!TryFoldConstantDouble(unary.Operand, out var operand)) return false;
+                    value = unary.Operator == "-" ? -operand : operand;
+                    return true;
+                }
+
+                case BinaryExpressionNode binary:
+                {
+                    if (!TryFoldConstantDouble(binary.Left, out var left)) return false;
+                    if (!TryFoldConstantDouble(binary.Right, out var right)) return false;
+                    switch (binary.Operator)
+                    {
+                        case "+": value = left + right; return true;
+                        case "-": value = left - right; return true;
+                        case "*": value = left * right; return true;
+                        // ⚠ Division by a constant zero does NOT fold: VB's `/` is floating, so
+                        // the answer is an infinity, and reporting "not representable" for a
+                        // program whose real defect is the division would point at the wrong
+                        // thing.
+                        case "/": if (right == 0) return false; value = left / right; return true;
+                        default: return false;
+                    }
+                }
+
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>
+        /// Every numeric CLR constant as a <c>double</c>. Unlike
+        /// <see cref="TryConvertConstantToInt"/> nothing is refused for being too large or
+        /// fractional — those are the values this check exists to report.
+        /// </summary>
+        private static bool TryConvertConstantToDouble(object constant, out double value)
+        {
+            value = 0;
+            switch (constant)
+            {
+                case int i: value = i; return true;
+                case long l: value = l; return true;
+                case short s: value = s; return true;
+                case byte b: value = b; return true;
+                case sbyte sb: value = sb; return true;
+                case ushort us: value = us; return true;
+                case uint u: value = u; return true;
+                case ulong ul: value = ul; return true;
+                case float f: value = f; return true;
+                case double d: value = d; return true;
+                case decimal m: value = (double)m; return true;
+                default: return false;
+            }
+        }
+
+        /// <summary>
+        /// A number for a diagnostic: whole values print without a decimal point, so the message
+        /// says "300" and "255" rather than "300" and "255.0" — and a fractional one keeps enough
+        /// digits to round-trip, so <c>255.6</c> is not reported as <c>256</c>.
+        /// </summary>
+        private static string FormatConstant(double value)
+        {
+            if (!double.IsInfinity(value) && !double.IsNaN(value)
+                && value == Math.Floor(value) && Math.Abs(value) < 1e18)
+            {
+                return ((long)value).ToString(CultureInfo.InvariantCulture);
+            }
+            return value.ToString("R", CultureInfo.InvariantCulture);
         }
 
         /// <summary>
@@ -4453,13 +4707,129 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// </summary>
         private void RegisterDeclarations(ProgramNode program)
         {
+            // ⛔ Class TYPES first, and in their own sweep. A class declared after the code that
+            // uses it did not merely lack members — `ResolveTypeName` fell through every user
+            // channel to its .NET fallback and returned `new TypeInfo(name, TypeKind.Class)`, a
+            // SYNTHETIC member-less type that is not the user's class at all. Measured:
+            // `New Box(7 / 2)` with `Class Box` below the module saw `members=0`, so the
+            // constructor arity check was skipped silently (`hasAnyConstructor` false — not even
+            // an error) and the argument coercion had no parameter list to read. It emitted
+            // `new Box((double)(7) / (double)(2))` — CS1503, a build that does not build — while
+            // the identical program with the class first emitted the cast and ran.
+            //
+            // ⚠ A SEPARATE sweep from the members below, so that when a constructor signature is
+            // registered every class type already exists and a class-typed parameter resolves to
+            // the real class rather than degrading to Object.
+            foreach (var decl in program.Declarations)
+            {
+                RegisterClassTypes(decl);
+            }
+
+            // ⛔ Class MEMBERS next, in their own sweep, because a class type with no members is
+            // only half a forward reference. Measured on a class declared AFTER the module that
+            // uses it, with a plain literal field: every member kind read as Object, so the temp
+            // holding it was emitted `void* t1` on C++ (2 compile errors) and MSIL threw
+            // `MissingFieldException: Field not found: 'Box.N'`. Field, method and PROPERTY all
+            // three, identically — the class type existed, its Members did not.
+            //
+            // ⚠ AFTER the type sweep so a member typed by a sibling class resolves to the real
+            // class, and BEFORE the signature sweep for the same reason a function's parameters
+            // want it. Pass 2's Visit(ClassNode) overwrites every entry with the fully resolved
+            // symbol, so this is a forward-reference stand-in and not a second source of truth.
+            foreach (var decl in program.Declarations)
+            {
+                RegisterClassMemberSignatures(decl);
+            }
+
             foreach (var decl in program.Declarations)
             {
                 RegisterDeclaration(decl);
             }
         }
 
-        private void RegisterDeclaration(ASTNode node)
+        /// <summary>
+        /// Pass 1, sweep 2: give every class its members, from the declaration alone.
+        ///
+        /// <para>⚠ Walks the same shapes <see cref="RegisterClassTypes"/> does, so a class nested
+        /// in a Module or Namespace is reached by both or neither.</para>
+        ///
+        /// <para>⛔ The recursion is LOAD-BEARING, and a correction is recorded here because the
+        /// first version of this comment got it wrong. It claimed a class nested in a Module and
+        /// declared after its use was still broken, and that removing the recursion therefore
+        /// changed nothing. Both halves were false: that measurement was taken against a compiler
+        /// binary still carrying the no-recursion mutation, because the mutation harness restores
+        /// the SOURCE without rebuilding. Re-measured on a clean build, a nested class resolves its
+        /// members in either order, and removing this recursion emits <c>void* t1</c> with 2 C++
+        /// errors for the nested shape while every top-level case stays green. What was actually
+        /// missing was a test, which is why the mutation survived the suite; there is one now
+        /// (<c>ClassDeclarationOrderTests.AClassNestedInAModule_ResolvesItsMembers_WhicheverOrder</c>
+        /// and its Namespace sibling).</para>
+        ///
+        /// <para>⛔ Constructors are deliberately NOT written here — see
+        /// <see cref="PopulateClassMemberSignatures"/> for why handing them to a second builder
+        /// would silently change constructor resolution.</para>
+        /// </summary>
+        private void RegisterClassMemberSignatures(ASTNode node)
+        {
+            switch (node)
+            {
+                case ClassNode cls:
+                    PopulateClassMemberSignatures(
+                        cls, _typeManager.GetType(cls.Name), includeConstructors: false);
+                    foreach (var member in cls.Members)
+                        RegisterClassMemberSignatures(member);
+                    break;
+                case ModuleNode module:
+                    foreach (var member in module.Members)
+                        RegisterClassMemberSignatures(member);
+                    break;
+                case NamespaceNode ns:
+                    foreach (var member in ns.Members)
+                        RegisterClassMemberSignatures(member);
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Pass 1, sweep 1: give every class declaration its <see cref="TypeInfo"/> up front.
+        ///
+        /// <para>⚠ Duplicate detection stays where it was. <c>DefineType</c> answering null IS the
+        /// "class is already defined" signal, so a name pre-registered here is remembered and
+        /// <see cref="Visit(ClassNode)"/> CONSUMES that record: the first declaration reuses the
+        /// type, and a genuine second <c>Class Box</c> finds nothing to consume and reports at its
+        /// own line exactly as before.</para>
+        /// </summary>
+        private void RegisterClassTypes(ASTNode node)
+        {
+            switch (node)
+            {
+                case ClassNode cls:
+                    if (_typeManager.DefineType(cls.Name, TypeKind.Class) != null)
+                    {
+                        _preRegisteredClasses.Add(cls.Name);
+                    }
+                    foreach (var member in cls.Members)
+                        RegisterClassTypes(member);
+                    break;
+                case ModuleNode module:
+                    foreach (var member in module.Members)
+                        RegisterClassTypes(member);
+                    break;
+                case NamespaceNode ns:
+                    foreach (var member in ns.Members)
+                        RegisterClassTypes(member);
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Class names whose <see cref="TypeInfo"/> <see cref="RegisterClassTypes"/> created, each
+        /// consumed by that class's own <see cref="Visit(ClassNode)"/>. See there for why.
+        /// </summary>
+        private readonly HashSet<string> _preRegisteredClasses =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        private void RegisterDeclaration(ASTNode node, ClassNode owner = null)
         {
             // DEBUG: Console.WriteLine($"RegisterDeclaration: {node?.GetType()?.Name}");
             switch (node)
@@ -4472,13 +4842,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     // DEBUG: Console.WriteLine($"  -> Subroutine: {sub.Name}");
                     RegisterSubSignature(sub);
                     break;
+                case ConstructorNode ctor when owner != null:
+                    RegisterConstructorSignature(ctor, owner);
+                    break;
                 case ModuleNode module:
                     foreach (var member in module.Members)
                         RegisterDeclaration(member);
                     break;
                 case ClassNode cls:
                     foreach (var member in cls.Members)
-                        RegisterDeclaration(member);
+                        RegisterDeclaration(member, cls);
                     break;
                 case NamespaceNode ns:
                     foreach (var member in ns.Members)
@@ -4517,6 +4890,54 @@ namespace BasicLang.Compiler.SemanticAnalysis
             return $"{kindWord} '{name}' is already defined in this scope — it collides with {collidesWith}.{note}";
         }
 
+        /// <summary>
+        /// Pass 1, sweep 2: record a constructor's signature on its class, so a <c>New</c> written
+        /// ABOVE the class declaration binds to the real constructor.
+        ///
+        /// <para>⛔ Without this the arity check was skipped ENTIRELY for that order — not failed,
+        /// skipped: <c>hasAnyConstructor</c> is false when no <c>.ctor</c> key exists, so there was
+        /// no error either. Nothing validated the argument count, nothing coerced the argument
+        /// types, and an omitted <c>Optional</c> was never filled.</para>
+        ///
+        /// <para>⚠ Pass 2's <c>Visit(ConstructorNode)</c> OVERWRITES this entry with the fully
+        /// resolved one, so this is a forward-reference stand-in and not a second source of truth.
+        /// It is written from the same <c>ParameterNode</c>s, carrying <c>IsOptional</c> and
+        /// <c>DefaultValueExpression</c>, so <c>ResolveConstructor</c> and the IR builder's
+        /// Optional fill behave identically whichever one they read.</para>
+        ///
+        /// <para>⚠ The FIRST declaration of an arity wins here. Two constructors of the same arity
+        /// are a shape the analyzer rejects downstream anyway, and pass 2 will replace whatever
+        /// this left; taking the first keeps this sweep from deciding something it has no business
+        /// deciding.</para>
+        /// </summary>
+        private void RegisterConstructorSignature(ConstructorNode node, ClassNode owner)
+        {
+            var classType = _typeManager.GetType(owner.Name);
+            if (classType?.Members == null) return;
+
+            var ctorName = $".ctor{node.Parameters.Count}";
+            if (classType.Members.ContainsKey(ctorName)) return;
+
+            var parameters = new List<Symbol>();
+            foreach (var param in node.Parameters)
+            {
+                var paramType = _typeManager.GetType(param.Type?.Name ?? "Object") ?? _typeManager.ObjectType;
+                parameters.Add(new Symbol(param.Name, SymbolKind.Parameter, paramType, param.Line, param.Column)
+                {
+                    IsOptional = param.IsOptional,
+                    IsByRef = param.IsByRef,
+                    IsParamArray = param.IsParamArray,
+                    DefaultValueExpression = param.DefaultValue
+                });
+            }
+
+            classType.Members[ctorName] = new Symbol(".ctor", SymbolKind.Function, classType, node.Line, node.Column)
+            {
+                Parameters = parameters,
+                ReturnType = classType
+            };
+        }
+
         private void RegisterFunctionSignature(FunctionNode node)
         {
             // Get return type
@@ -4528,7 +4949,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             foreach (var param in node.Parameters)
             {
                 var paramType = _typeManager.GetType(param.Type?.Name ?? "Object") ?? _typeManager.ObjectType;
-                parameters.Add(new Symbol(param.Name, SymbolKind.Parameter, paramType, param.Line, param.Column) { IsOptional = param.IsOptional, IsByRef = param.IsByRef, IsParamArray = param.IsParamArray });
+                parameters.Add(new Symbol(param.Name, SymbolKind.Parameter, paramType, param.Line, param.Column) { IsOptional = param.IsOptional, IsByRef = param.IsByRef, IsParamArray = param.IsParamArray, DefaultValueExpression = param.DefaultValue });
             }
 
             // Check if already defined
@@ -4548,7 +4969,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             foreach (var param in node.Parameters)
             {
                 var paramType = _typeManager.GetType(param.Type?.Name ?? "Object") ?? _typeManager.ObjectType;
-                parameters.Add(new Symbol(param.Name, SymbolKind.Parameter, paramType, param.Line, param.Column) { IsOptional = param.IsOptional, IsByRef = param.IsByRef, IsParamArray = param.IsParamArray });
+                parameters.Add(new Symbol(param.Name, SymbolKind.Parameter, paramType, param.Line, param.Column) { IsOptional = param.IsOptional, IsByRef = param.IsByRef, IsParamArray = param.IsParamArray, DefaultValueExpression = param.DefaultValue });
             }
 
             // Check if already defined
@@ -4638,8 +5059,20 @@ namespace BasicLang.Compiler.SemanticAnalysis
             var classType = _typeManager.DefineType(node.Name, TypeKind.Class);
             if (classType == null)
             {
-                Error($"Class '{node.Name}' is already defined", node.Line, node.Column);
-                return;
+                // ⚠ Pass 1 pre-registered it — consume the record and reuse the type. Consuming
+                // rather than peeking is what keeps duplicate detection: a SECOND `Class Box`
+                // finds nothing left and falls through to the error below, at its own line, with
+                // the message it always had.
+                if (_preRegisteredClasses.Remove(node.Name))
+                {
+                    classType = _typeManager.GetType(node.Name);
+                }
+
+                if (classType == null)
+                {
+                    Error($"Class '{node.Name}' is already defined", node.Line, node.Column);
+                    return;
+                }
             }
 
             // Set abstract flag
@@ -4782,6 +5215,36 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             // Validate: abstract classes should have at least one abstract member (warning, not error)
             // This is not enforced in VB.NET, but it's a good practice
+
+            // ⛔ A class with NO constructor gets an implicit one that calls the base with no
+            // arguments. If the base cannot be called that way, the program is not buildable on ANY
+            // backend and nothing said so: measured, MSIL threw
+            // `MissingMethodException: Void Base..ctor()`, C# was CS7036 and JavaScript printed
+            // `base:undefined`. None of them can invent the arguments, so this is the front end's
+            // to catch — VB reports BC30387 here.
+            if (classType.BaseType != null && !node.Members.Any(m => m is ConstructorNode))
+            {
+                var implicitBase = ResolveImplicitBaseConstructor(
+                    classType.BaseType, out var baseNeedsArgs);
+
+                // ⚠ Recorded on the CLASS node, because there is no constructor node to key it on —
+                // this class declares none. The IR builder uses it to SYNTHESIZE one when the base
+                // constructor takes Optional parameters that an implicit call must fill; without
+                // that, `Inherits Base` against `Sub New(Optional a As Integer = 3)` is a legal
+                // program with nowhere to put the filled arguments, and every backend emits a bare
+                // no-argument base call (CS7036 on C#, MissingMethodException on MSIL).
+                if (implicitBase != null)
+                {
+                    _constructorBindings[node] = implicitBase;
+                }
+
+                if (baseNeedsArgs)
+                {
+                    Error($"Class '{node.Name}' must declare a 'Sub New' because its base class "
+                        + $"'{classType.BaseType.Name}' does not have an accessible 'Sub New' that "
+                        + "can be called with no arguments", node.Line, node.Column);
+                }
+            }
 
             ExitScope();
         }
@@ -5138,7 +5601,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 IsOptional = node.IsOptional,
                 IsParamArray = node.IsParamArray,
-                IsByRef = node.IsByRef
+                IsByRef = node.IsByRef,
+                DefaultValueExpression = node.DefaultValue
             };
 
             if (!_currentScope.Define(symbol))
@@ -5255,6 +5719,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         errorMsg += $". {hint}";
                     Error(errorMsg, node.Line, node.Column);
                 }
+
+                // ⛔ BC30439. The check above asks whether the TYPE converts; this one asks
+                // whether the VALUE survives it. `Dim b As Byte = 300` passes the first (a
+                // numeric literal may initialize any numeric type) and then means four different
+                // things — see CheckConstantFitsNumericTarget. Covers LOCAL and MODULE scope
+                // together: the IR builder has two separate narrowing paths for them, and this is
+                // the one node both come through.
+                CheckConstantFitsNumericTarget(
+                    node.Initializer, varType, $"the initializer for variable '{node.Name}'",
+                    node.Line, node.Column);
             }
         }
 
@@ -5310,6 +5784,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     Error($"Constant value type '{valueType}' is not compatible with declared type '{constType}'",
                           node.Line, node.Column);
                 }
+
+                // A Const is a constant expression by construction, so this is the site BC30439
+                // is named for. Measured before the check: `Const KB As Byte = 300` narrowed to
+                // 44 on JavaScript, where the `Dim` spelling of the same thing kept 300 — the two
+                // did not even agree with each other.
+                CheckConstantFitsNumericTarget(
+                    node.Value, constType, $"the value of constant '{node.Name}'",
+                    node.Line, node.Column);
             }
 
             var symbol = new Symbol(node.Name, SymbolKind.Constant, constType, node.Line, node.Column);
@@ -5736,6 +6218,33 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 classScope.ClassType.Members[ctorName] = ctorSymbol;
             }
 
+            // ⛔ NO MyBase.New means an IMPLICIT base call with no arguments, and that is the same
+            // unbuildable program as a class with no constructor at all when the base cannot be
+            // called that way — measured identically: MissingMethodException on MSIL, CS7036 on C#.
+            // The sibling of the check in Visit(ClassNode); VB reports BC30148 here.
+            if (node.BaseConstructorArgs.Count == 0 && classScope?.ClassType?.BaseType != null)
+            {
+                var implicitBase = ResolveImplicitBaseConstructor(
+                    classScope.ClassType.BaseType, out var baseNeedsArgs);
+
+                // ⚠ Recorded even with no arguments written, because the base constructor may still
+                // take OPTIONAL parameters that the implicit call has to fill. Without this,
+                // `Inherits Base` against `Sub New(Optional a As Integer = 3)` is a legal program
+                // every backend miscompiles — MissingMethodException on MSIL, CS7036 on C#.
+                if (implicitBase != null)
+                {
+                    _constructorBindings[node] = implicitBase;
+                }
+
+                if (baseNeedsArgs)
+                {
+                    Error("First statement of this 'Sub New' must be a call to 'MyBase.New' because "
+                        + $"base class '{classScope.ClassType.BaseType.Name}' of "
+                        + $"'{classScope.ClassType.Name}' does not have an accessible 'Sub New' "
+                        + "that can be called with no arguments", node.Line, node.Column);
+                }
+            }
+
             // Validate base constructor call if present
             if (node.BaseConstructorArgs.Count > 0)
             {
@@ -5752,10 +6261,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 if (classScope != null && classScope.ClassType?.BaseType != null)
                 {
                     var baseType = classScope.ClassType.BaseType;
-                    var baseCtorName = $".ctor{node.BaseConstructorArgs.Count}";
+                    var baseCtorSymbol = ResolveConstructor(baseType, node.BaseConstructorArgs.Count);
 
-                    if (baseType.Members != null && baseType.Members.TryGetValue(baseCtorName, out var baseCtorSymbol))
+                    if (baseCtorSymbol != null)
                     {
+                        _constructorBindings[node] = baseCtorSymbol;
+
                         // Validate argument types
                         if (baseCtorSymbol.Parameters != null)
                         {
@@ -7239,6 +7750,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 TryRetypeLiteralToDecimal(node.Value, expectedReturnType);
                 var returnType = GetNodeType(node.Value);
 
+                // BC30439 at the return: `Return 300` from a `Function … As Byte` was CS0031 on
+                // C#, 300 on JavaScript and 44 on C++.
+                CheckConstantFitsNumericTarget(
+                    node.Value, expectedReturnType, "the returned value", node.Line, node.Column);
+
                 if (expectedReturnType.Equals(_typeManager.VoidType))
                 {
                     Error("Cannot return a value from a subroutine", node.Line, node.Column);
@@ -7313,6 +7829,19 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             if (targetType == null || valueType == null)
                 return;
+
+            // BC30439 at every STORE the assignment statement covers — a plain variable, an array
+            // element and a field all arrive here, and all three were CS0221 or CS0031 on C#, 300
+            // on JavaScript and 44 on C++. Placed after the null guard above, so an unresolved
+            // target reports its own error rather than acquiring a second one.
+            //
+            // ⚠ Compound assignment is NOT range-checked: `b += 200` is not a constant
+            // expression, since its value depends on b.
+            if (node.Operator == "=")
+            {
+                CheckConstantFitsNumericTarget(
+                    node.Value, targetType, "the assigned value", node.Line, node.Column);
+            }
 
             // Check if target is assignable
             if (node.Target is IdentifierExpressionNode idExpr)
@@ -8413,6 +8942,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             continue;
                         }
 
+                        // BC30439 at the call: `Take(300)` against `v As Byte` was CS1503 on C#,
+                        // 300 on JavaScript and 44 on C++. Named by POSITION rather than by the
+                        // parameter, because a ParamArray tail has no per-argument name.
+                        CheckConstantFitsNumericTarget(
+                            node.Arguments[i], paramType, $"argument {i + 1}",
+                            node.Line, node.Column);
+
                         // Allow any type when the parameter is a type parameter (generics)
                         if (paramType?.Kind == TypeKind.TypeParameter || argType?.Kind == TypeKind.TypeParameter)
                         {
@@ -8633,6 +9169,92 @@ namespace BasicLang.Compiler.SemanticAnalysis
             return type.GenericArguments[0];
         }
 
+        /// <summary>
+        /// The base constructor an IMPLICIT base call binds to — the one a derived class gets when
+        /// it writes no <c>MyBase.New(…)</c> — or null when the base declares constructors and none
+        /// of them can be called with no arguments.
+        ///
+        /// <para>⚠ <c>null</c> means two different things, so callers must check
+        /// <paramref name="baseRequiresArguments"/>: a base with NO constructors at all is
+        /// perfectly constructible (it gets the implicit default), while a base whose every
+        /// constructor needs an argument is the error case.</para>
+        ///
+        /// <para>⚠ It reuses <see cref="ResolveConstructor"/> so that "callable with no arguments"
+        /// means exactly what it means at a <c>New</c> site — an all-<c>Optional</c> constructor
+        /// counts, because its defaults fill. Asking the question a second way here is how the two
+        /// would come to disagree about the same program.</para>
+        /// </summary>
+        private static Symbol ResolveImplicitBaseConstructor(TypeInfo baseType, out bool baseRequiresArguments)
+        {
+            baseRequiresArguments = false;
+            if (baseType?.Members == null) return null;
+
+            var declaresAny = baseType.Members.Keys.Any(k => k.StartsWith(".ctor"));
+            if (!declaresAny) return null;
+
+            var zeroArg = ResolveConstructor(baseType, 0);
+            baseRequiresArguments = zeroArg == null;
+            return zeroArg;
+        }
+
+        /// <summary>
+        /// The constructor of <paramref name="type"/> a call with <paramref name="argumentCount"/>
+        /// arguments binds to, allowing trailing <c>Optional</c> parameters to be omitted.
+        ///
+        /// <para>⛔ Constructors are keyed by ARITY in <c>TypeInfo.Members</c> — <c>.ctor1</c>,
+        /// <c>.ctor2</c> — so an exact-key lookup is why an omitted Optional was refused outright:
+        /// <c>New Box(4)</c> against <c>Sub New(a As Integer, Optional b As Integer = 5)</c> asked
+        /// for <c>.ctor1</c>, which does not exist, and got "No constructor for 'Box' takes 1
+        /// argument(s)". The same key shape refused <c>New Box()</c> against an all-Optional
+        /// constructor and <c>MyBase.New(7)</c> against an Optional base constructor.</para>
+        ///
+        /// <para>⚠ ONE rule for all three sites rather than three copies: they disagreeing about
+        /// which constructor a call binds to is exactly the bug class the arity key already
+        /// produced. An EXACT arity always wins, so nothing that resolved before resolves
+        /// differently now; only when no exact key exists does this look for the unique longer
+        /// constructor whose extra trailing parameters are ALL Optional.</para>
+        ///
+        /// <para>⚠ Ambiguity answers null and leaves the caller's existing error in place — two
+        /// candidates mean the language would have to pick, and picking silently is worse than the
+        /// diagnostic that exists today.</para>
+        ///
+        /// <para>⚠ This can only see constructors already registered, which is why
+        /// <see cref="RegisterConstructorSignature"/> exists: pass 1 writes <c>.ctorN</c> before any
+        /// body is analyzed. Without it, a class declared AFTER the code using it had no
+        /// <c>.ctor</c> key here and every constructor check was skipped SILENTLY —
+        /// <c>hasAnyConstructor</c> is false with no key, so not even an error.</para>
+        /// </summary>
+        private static Symbol ResolveConstructor(TypeInfo type, int argumentCount)
+        {
+            if (type?.Members == null || argumentCount < 0) return null;
+
+            if (type.Members.TryGetValue($".ctor{argumentCount}", out var exact)) return exact;
+
+            Symbol found = null;
+            foreach (var entry in type.Members)
+            {
+                if (!entry.Key.StartsWith(".ctor")) continue;
+                if (!int.TryParse(entry.Key.Substring(5), out var arity) || arity <= argumentCount) continue;
+
+                var parameters = entry.Value?.Parameters;
+                if (parameters == null || parameters.Count != arity) continue;
+
+                var fillable = true;
+                for (var i = argumentCount; i < parameters.Count; i++)
+                {
+                    if (parameters[i].IsOptional) continue;
+                    fillable = false;
+                    break;
+                }
+                if (!fillable) continue;
+
+                if (found != null) return null;   // two candidates — do not guess
+                found = entry.Value;
+            }
+
+            return found;
+        }
+
         public void Visit(NewExpressionNode node)
         {
             var type = ResolveTypeReference(node.Type);
@@ -8667,9 +9289,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Validate constructor arguments for user-defined types
             if (type != null && type.Kind == TypeKind.Class && type.Members != null)
             {
-                var ctorName = $".ctor{node.Arguments.Count}";
-                if (type.Members.TryGetValue(ctorName, out var ctorSymbol))
+                var ctorSymbol = ResolveConstructor(type, node.Arguments.Count);
+                if (ctorSymbol != null)
                 {
+                    _constructorBindings[node] = ctorSymbol;
+
                     // Validate argument types
                     if (ctorSymbol.Parameters != null)
                     {

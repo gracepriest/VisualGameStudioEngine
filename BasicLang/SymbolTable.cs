@@ -315,6 +315,44 @@ public class TypeInfo
         public bool IsOptional { get; set; }
         public bool IsParamArray { get; set; }
         public bool IsByRef { get; set; }
+
+        /// <summary>
+        /// An <c>Optional</c> parameter's declared default, as the <c>ExpressionNode</c> it was
+        /// written as. <c>object</c> rather than <c>ExpressionNode</c> because this file is the
+        /// symbol table and does not reference the AST; the one consumer pattern-matches it.
+        ///
+        /// <para>⛔ Recorded on the SYMBOL because the call site is what needs it, and a call site
+        /// has the resolved callee <c>Symbol</c> and nothing else. <c>IRVariable.DefaultValue</c>
+        /// already carries the same fact on the parameter DECLARATION, but reaching it from a call
+        /// means finding the callee's <c>IRFunction</c> — and measured, that only exists if the
+        /// callee was declared BEFORE the caller: <c>IRModule.Functions</c> is appended as each
+        /// function is visited, so a call to one defined further down the file finds nothing. A
+        /// fix built on that lookup would work for one declaration order and silently not the
+        /// other.</para>
+        ///
+        /// <para>⚠ FOUR analyzer sites set it, and all four were proved load-bearing by ablation —
+        /// which of them a call site reads is decided by where the callee is declared:</para>
+        /// <list type="bullet">
+        /// <item><c>Visit(ParameterNode)</c> — a callee declared BEFORE the caller, and every
+        /// class member. Ablated: <c>MissingMethodException: Void Combined.Before(Int32)</c>.</item>
+        /// <item><c>RegisterSubSignature</c> — a <c>Sub</c> declared AFTER the caller. The
+        /// pre-pass symbol is what the forward reference binds to, and the declaration's own visit
+        /// installs a DIFFERENT symbol (measured by identity: the call site holds #47891719 while
+        /// <c>Visit(SubDeclarationNode)</c> rebuilt #958745), so the pre-pass list is the one the
+        /// call reads. Ablated: <c>MissingMethodException: Void Combined.After(Int32)</c>.</item>
+        /// <item><c>RegisterFunctionSignature</c> — the same, for a <c>Function</c>. Ablated:
+        /// <c>MissingMethodException: Int32 Combined.FnAfter(Int32)</c>.</item>
+        /// <item><c>BuildSiblingSignatureParameters</c> — a callee in ANOTHER FILE of the same
+        /// project. Ablated: the emitted C# call goes from <c>Helpers.Greet(1, 5)</c> back to
+        /// <c>Helpers.Greet(1)</c>.</item>
+        /// </list>
+        ///
+        /// <para>Left null wherever a parameter symbol is synthesized rather than read from a
+        /// <c>ParameterNode</c> (a property setter's <c>value</c>, an <c>Extern</c>/<c>Declare</c>
+        /// signature, a lambda parameter), which simply means no default is filled — the behaviour
+        /// before this existed.</para>
+        /// </summary>
+        public object DefaultValueExpression { get; set; }
         
         // For classes
         public List<TypeInfo> GenericParameters { get; set; }
