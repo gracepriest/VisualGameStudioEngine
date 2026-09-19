@@ -61,7 +61,7 @@ dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --no
 - Modify: `BasicLang/Forms/FormDocument.cs:75-77` (Components), `:84-113` (AllControls/FindById/ListContaining)
 - Test: `VisualGameStudio.Tests/Compiler/FormComponentDocumentTests.cs` (create)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```csharp
 using BasicLang.Forms;
@@ -92,9 +92,9 @@ public class FormComponentDocumentTests
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails** — `--filter "FullyQualifiedName~FormComponentDocumentTests"` → compile error: `Components` is `List<XElement>`, no `AllComponents`.
+- [x] **Step 2: Run to verify it fails** — `--filter "FullyQualifiedName~FormComponentDocumentTests"` → compile error: `Components` is `List<XElement>`, no `AllComponents`.
 
-- [ ] **Step 3: Implement** in `FormDocument.cs`:
+- [x] **Step 3: Implement** in `FormDocument.cs`:
 
 ```csharp
 /// <summary>
@@ -113,7 +113,7 @@ public FormControl? FindById(string id) =>
 and in `ListContaining`, before `return null;`: `if (Components.Contains(control)) return Components;`.
 Fix the two compile errors this causes: `FormDocumentReader.cs:162-164` (temporarily `break;` — Task 3 replaces it) and `FormRetarget.cs:218` (temporarily remove the AddRange — Task 9 restores it properly). `FormDocumentWriter.Create` is untouched (it never read the list).
 
-- [ ] **Step 4: Run the fixture and `FormDocumentTests`, `FormDocumentRoundTripTests`, `BlFormRoundTripTests`** → all pass (no fixture has a non-empty `<Components>` yet).
+- [x] **Step 4: Run the fixture and `FormDocumentTests`, `FormDocumentRoundTripTests`, `BlFormRoundTripTests`** → all pass (no fixture has a non-empty `<Components>` yet).
 
 ### Task 2: The catalog says what a component is, and four rows say which exist
 
@@ -123,7 +123,7 @@ Fix the two compile errors this causes: `FormDocumentReader.cs:162-164` (tempora
 - Modify: `VisualGameStudio.Tests/Shell/FormCanvasRenderTests.cs:77-79` (exclude components), `VisualGameStudio.Tests/Compiler/FormCatalogCoverageTests.cs` (add)
 - Test: `FormCatalogCoverageTests.cs`, `FormToolboxGlyphTests.cs` (existing, catalog-driven)
 
-- [ ] **Step 1: Write the failing tests** in `FormCatalogCoverageTests`:
+- [x] **Step 1: Write the failing tests** in `FormCatalogCoverageTests`:
 
 ```csharp
 /// <summary>Task 25: the four components the brief names, as component rows.</summary>
@@ -180,9 +180,9 @@ public void OnlyTheTimer_HasAWebEquivalent_AndItIsScript()
 }
 ```
 
-- [ ] **Step 2: Run** `FormCatalogCoverageTests` → compile errors (`IsComponent`, `WebScript`, `FormSchematic.Component`).
+- [x] **Step 2: Run** `FormCatalogCoverageTests` → compile errors (`IsComponent`, `WebScript`, `FormSchematic.Component`).
 
-- [ ] **Step 3: Implement the catalog.** In `FormControlCatalog.cs`:
+- [x] **Step 3: Implement the catalog.** In `FormControlCatalog.cs`:
 
 Add to `FormSchematic` (after `TableContainer`) FOUR members — `Clock` (Timer), `Hint` (ToolTip), `Alert` (ErrorProvider), `Worker` (BackgroundWorker) — documented as tray/toolbox glyph keys that are never drawn (FormCanvasRenderTests excludes IsComponent rows and pins that Layout never sees one). One per kind, as every control kind has its own: `FormPropertyGridTests.TheToolbox_GroupsContainersAfterCommonControls` requires every toolbox row to wear a distinct mark, and a tray holding a Timer and a ToolTip must not show two of the same thing. Glyphs: `(t)`, `(?)`, `(!)`, `(w)`.
 
@@ -278,7 +278,7 @@ public void AComponent_IsNeverLaidOut()
 ```
 (Adjust to the actual `Layout` API; the assertion is what matters.)
 
-- [ ] **Step 4: Run** `FormCatalogCoverageTests`, `FormToolboxGlyphTests`, `FormCanvasRenderTests`, `FormDocumentTests` → pass. ⚠ `WinFormsCatalogSweepTests` is now RED for the four rows (it forces geometry and `Controls.Add`) — Task 5 fixes that; do NOT commit before Task 5.
+- [x] **Step 4: Run** `FormCatalogCoverageTests`, `FormToolboxGlyphTests`, `FormCanvasRenderTests`, `FormDocumentTests` → pass. ⚠ `WinFormsCatalogSweepTests` is now RED for the four rows (it forces geometry and `Controls.Add`) — Task 5 fixes that; do NOT commit before Task 5.
 
 ### Task 3: The reader reads `<Components>` as components, and refuses misplacement
 
@@ -287,7 +287,7 @@ public void AComponent_IsNeverLaidOut()
 - Modify: `BasicLang/Forms/Serialization/FormDocumentReader.cs:131-175`, `:190-213`, `:290-445`
 - Test: `FormComponentDocumentTests.cs`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```csharp
 private const string WithComponents = """
@@ -383,15 +383,15 @@ public void Read_RefusesAComponentSharingAnIdWithAControl()
 }
 ```
 
-- [ ] **Step 2: Run** → fails (components empty / no BL8020 / no duplicate).
+- [x] **Step 2: Run** → fails (components empty / no BL8020 / no duplicate).
 
-- [ ] **Step 3: Implement.** `DesignDiagnostic.cs`: band comment `BL8020  a component in <Controls>, or a control in <Components> (here)`; constant with doc: a refusal, both would generate code csc rejects. Reader:
+- [x] **Step 3: Implement.** `DesignDiagnostic.cs`: band comment `BL8020  a component in <Controls>, or a control in <Components> (here)`; constant with doc: a refusal, both would generate code csc rejects. Reader:
   - `case "Components": foreach child → ReadControl(child, target, …, isComponent: true)` → `model.Components.Add`.
   - `ReadControl(..., bool isComponent = false)`: after `definition` lookup, `if (definition.IsComponent != isComponent) { diagnostics.Add(Error(DesignCodes.ComponentMisplaced, isComponent ? $"<{kind}> is a control, not a component; it cannot live under <Components> — it would be constructed with no Controls.Add and never appear." : $"<{kind}> is a component and has no position; move it under <Components>. Emitting Me.Controls.Add({id}) for it does not compile.", …Line(element)…)); return null; }` — return null so the refused element is not modelled (the document is refused anyway).
   - For `isComponent`: `Geometry = null`, `TabIndex = 0`, and the attribute loop treats EVERY name in `FormControlCatalog.StructuralAttributes` except `Id` as unknown (`IsStructural(name)` target-agnostic → `UnknownAttributes`), never as geometry/TabIndex. Children: only `<Bind>` and unknown elements; a catalog kind under a component is an unknown child (no nesting).
   - `CheckDuplicateIds`: iterate `model.AllControls().Concat(model.AllComponents())`.
 
-- [ ] **Step 4: Run** the fixture → pass; run `FormDocumentRoundTripTests` + `BlFormRoundTripTests` → still pass.
+- [x] **Step 4: Run** the fixture → pass; run `FormDocumentRoundTripTests` + `BlFormRoundTripTests` → still pass.
 
 ### Task 4: The writer patches `<Components>` in place, and `Create` writes them
 
@@ -399,7 +399,7 @@ public void Read_RefusesAComponentSharingAnIdWithAControl()
 - Modify: `BasicLang/Forms/Serialization/FormDocumentWriter.cs:105-131` (Create), `:143-179` (Apply), `:347-401` (ApplyControl), `:476-539` (ControlElement)
 - Test: `FormComponentDocumentTests.cs`
 
-- [ ] **Step 1: Write the failing tests** (the D9 algebra over a NON-EMPTY `<Components>`, which no fixture has today):
+- [x] **Step 1: Write the failing tests** (the D9 algebra over a NON-EMPTY `<Components>`, which no fixture has today):
 
 ```csharp
 [Test]
@@ -498,9 +498,9 @@ public void Algebra_ReadApply_EqualsApplyRead_ForAComponentEdit()
 }
 ```
 
-- [ ] **Step 2: Run** → the addition/removal/Create tests fail (write-never).
+- [x] **Step 2: Run** → the addition/removal/Create tests fail (write-never).
 
-- [ ] **Step 3: Implement.** In `ApplyToDocument`, after `ApplyControls`: `ApplyComponents(root, model)`:
+- [x] **Step 3: Implement.** In `ApplyToDocument`, after `ApplyControls`: `ApplyComponents(root, model)`:
 ```csharp
 private static void ApplyComponents(XElement root, FormDocument model)
 {
@@ -516,7 +516,7 @@ private static void ApplyComponents(XElement root, FormDocument model)
 ```
 `ApplyControlList(container, controls, bool isComponent = false)` passes the flag to `ApplyControl`; `ApplyControl(element, control, isComponent)`: skip the TabIndex write and the geometry switch when `isComponent`; `ControlElement(control, isComponent)`: no geometry, no `TabIndex` attribute, no children. `Create`: replace `root.Add(new XElement("Components"))` with a `<Components>` element holding `ControlElement(c, isComponent: true)` per component (an empty element when there are none, so the shape of a new document is unchanged). ⚠ Keep the unknown-element guard: `ApplyControlList` only touches elements the catalog knows — a `<Timer>` under `<Components>` is known, so it is ours.
 
-- [ ] **Step 4: Run** the fixture, both round-trip fixtures, `FormRetargetTests` → pass.
+- [x] **Step 4: Run** the fixture, both round-trip fixtures, `FormRetargetTests` → pass.
 
 ### Task 5: The region writer emits components — and the sweep gates every row through csc
 
@@ -526,7 +526,7 @@ private static void ApplyComponents(XElement root, FormDocument model)
 - Modify: `VisualGameStudio.Tests/Compiler/WinFormsCatalogSweepTests.cs:133-214` (component shape)
 - Test: `VisualGameStudio.Tests/Compiler/FormComponentEmissionTests.cs` (create)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```csharp
 [TestFixture]
@@ -665,9 +665,9 @@ public class FormComponentEmissionTests
 }
 ```
 
-- [ ] **Step 2: Run** → fail (no declaration / getElementById emitted / EventArgs stub).
+- [x] **Step 2: Run** → fail (no declaration / getElementById emitted / EventArgs stub).
 
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
   - `GenerateControls`: `foreach (var c in form.Components) body.Append($"{inner}Private {c.Id} As {DeclaredType(form, c)}")` BEFORE the controls loop. `DeclaredType`: `if (control.Definition is { IsComponent: true, WebScript: { } script } && form.Target == Web) return script.FieldType;` else existing.
   - `GenerateInit`: after caption/size (WinForms) or `Dim doc …` (web), on the web emit `Dim w As Window = ::window` iff `form.Components.Any(c => c.Definition?.WebScript != null)`; then `foreach (var c in form.Components) AppendComponentInit(body, form, c, inner, newline, filePath, diagnostics);` then `AppendSiblings(...)` as today.
   - `AppendComponentInit`: WinForms → `{Id} = New {DeclaredType}()`, then the SAME property loop as `AppendControlInit` (extract it into `AppendProperties(body, form, control, inner, newline, filePath, diagnostics)` and call it from both — DRY, no second copy of the Degraded/IsItemCollection rules), then the same bind loop (extract `AppendBinds`). Web → if `WebScript` is null, nothing; else find the default-event bind (`definition.DefaultEvent(Web)`, case-insensitive); if none, emit nothing; else `{Id} = {Expand(template)}` where `Expand` replaces `{handler}` with the bind's handler and every `{Name}` with `control.Properties[Name]` if present and `Accepts`, else the row's `Default`, else `""`. The web bind loop is NOT run for a script component: its one bind IS the constructor argument, and `tmr.addEventListener` on an Integer is a runtime TypeError.
@@ -676,11 +676,11 @@ public class FormComponentEmissionTests
   - ⚠ The qualified names in the field, the constructor and the handler parameter are MEASURED (spec M13: real CLI → csc 0 errors → ran), so no fallback is planned; if the sweep nonetheless goes red on a component row, the failure is the ROW's property or event name, and the fix is the row.
   - Sweep (`WinFormsCatalogSweepTests`): in both `EveryProperty_…` and `TheDefaultEvent_…`, build the control with `Geometry = definition.IsComponent ? null : new PixelGeometry{…}` and add it to `definition.IsComponent ? form.Components : form.Controls`. Add a comment: a component row is gated exactly as a control row; only its place differs.
 
-- [ ] **Step 4: Run** `FormComponentEmissionTests`, `FormRegionWriterTests`, `FormHandlerPlanTests` → pass. Then **the csc sweep** (Integration): `--filter "FullyQualifiedName~WinFormsCatalogSweepTests"` → every row incl. the four components passes both the property sweep and the default-event stub. ⚠ If a property name is wrong here (e.g. `ToolTipTitle`), csc says CS1061 — fix the ROW, never the gate.
+- [x] **Step 4: Run** `FormComponentEmissionTests`, `FormRegionWriterTests`, `FormHandlerPlanTests` → pass. Then **the csc sweep** (Integration): `--filter "FullyQualifiedName~WinFormsCatalogSweepTests"` → every row incl. the four components passes both the property sweep and the default-event stub. ⚠ If a property name is wrong here (e.g. `ToolTipTitle`), csc says CS1061 — fix the ROW, never the gate.
 
-- [ ] **Step 5: Mutation kills** (one build each; revert after): (a) drop the `!IsComponent` exclusion in the sweep → the four rows fail csc on `Controls.Add` (proves the gate reaches them); (b) emit `Controls.Add` for components → `WinForms_AComponent_…` fails; (c) template ignores the default → `Web_TheTemplateUsesTheCatalogDefault` fails; (d) `WinFormsEventArgs` ignored → `TheHandlerStub_…` fails and the BackgroundWorker default-event sweep row still compiles (contravariance — record that this mutant is caught by the unit test, not csc).
+- [x] **Step 5: Mutation kills** (one build each; revert after): (a) drop the `!IsComponent` exclusion in the sweep → the four rows fail csc on `Controls.Add` (proves the gate reaches them); (b) emit `Controls.Add` for components → `WinForms_AComponent_…` fails; (c) template ignores the default → `Web_TheTemplateUsesTheCatalogDefault` fails; (d) `WinFormsEventArgs` ignored → `TheHandlerStub_…` fails and the BackgroundWorker default-event sweep row still compiles (contravariance — record that this mutant is caught by the unit test, not csc).
 
-- [ ] **Step 6: Gate and commit** — fast subset + sweep + `FormCanvasRenderTests`; write the message to a scratch file; `git commit -F`. Message: `feat(designer): Task 25a — components in the model, the document and the regions` with the measured facts and gates. Trailer `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
+- [x] **Step 6: Gate and commit** — fast subset + sweep + `FormCanvasRenderTests`; write the message to a scratch file; `git commit -F`. Message: `feat(designer): Task 25a — components in the model, the document and the regions` with the measured facts and gates. Trailer `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
 
 ---
 
@@ -693,7 +693,7 @@ public class FormComponentEmissionTests
 - Modify: `VisualGameStudio.Shell/ViewModels/Designer/FormPropertyGridViewModel.cs:125-178`
 - Test: `FormPlacementTests.cs`, `FormPropertyGridTests.cs`, `FormToolboxGlyphTests.cs` (add)
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```csharp
 // FormPlacementTests
@@ -744,7 +744,7 @@ public void ComponentsSitInTheirOwnCategory_LastLikeVs()
 }
 ```
 
-- [ ] **Step 2: Run** → fail. **Step 3: Implement**: `FormPlacement.Place` — after `SupportsTarget`: `if (definition.IsComponent) { var c = new FormControl { Kind = definition.Kind, Id = NextId(document, definition.Kind) }; document.Components.Add(c); return new FormPlacementResult(c, null); }` (before the web branch: no layout needed). `AddIntrinsicRows`: wrap the TabIndex row in `if (control.Definition?.IsComponent != true)`. **Step 4: Run** → pass.
+- [x] **Step 2: Run** → fail. **Step 3: Implement**: `FormPlacement.Place` — after `SupportsTarget`: `if (definition.IsComponent) { var c = new FormControl { Kind = definition.Kind, Id = NextId(document, definition.Kind) }; document.Components.Add(c); return new FormPlacementResult(c, null); }` (before the web branch: no layout needed). `AddIntrinsicRows`: wrap the TabIndex row in `if (control.Definition?.IsComponent != true)`. **Step 4: Run** → pass.
 
 ### Task 7: The tray view model, wired to the document and the selection
 
@@ -753,7 +753,7 @@ public void ComponentsSitInTheirOwnCategory_LastLikeVs()
 - Modify: `CodeEditorDocumentViewModel.cs:176-219` (own it, sync it), add `partial void OnDesignModelRevisionChanged`
 - Test: `VisualGameStudio.Tests/Compiler/FormTrayTests.cs` (create; mirror `FormCanvasUndoTests` construction: Moq `IFileService`, `vm.SetContent(...)`, never `vm.Text =`)
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```csharp
 [Test]
@@ -792,7 +792,7 @@ public void DeletingATrayItem_RemovesIt_AndUndoBringsItBack()
 }
 ```
 
-- [ ] **Step 3: Implement** `FormTrayViewModel : ObservableObject` with `ObservableCollection<FormTrayItem> Items` (`FormTrayItem(FormControl Control, string Id, string Kind, string Glyph)` + observable `IsSelected`), `bool IsVisible => Items.Count > 0`, `Rebuild(FormDocument? doc)`, `Select(FormTrayItem)` → `selection.Set(item.Control)`; it holds the `FormSelection` given at construction and re-marks on `selection.Changed`. In the document VM: `public FormTrayViewModel Tray { get; }` — ⚠ constructed in the CONSTRUCTOR (`Tray = new(Selection)`), not as a property initializer: an initializer cannot reference the instance member `Selection` (CS0236). `SyncDesignerPanels` and `partial void OnDesignModelRevisionChanged(int value)` call `Tray.Rebuild(DesignDocument)`. ⚠ The glyph comes from the toolbox's `GlyphFor` — make it `internal static` and reuse; two glyph tables would drift.
+- [x] **Step 3: Implement** `FormTrayViewModel : ObservableObject` with `ObservableCollection<FormTrayItem> Items` (`FormTrayItem(FormControl Control, string Id, string Kind, string Glyph)` + observable `IsSelected`), `bool IsVisible => Items.Count > 0`, `Rebuild(FormDocument? doc)`, `Select(FormTrayItem)` → `selection.Set(item.Control)`; it holds the `FormSelection` given at construction and re-marks on `selection.Changed`. In the document VM: `public FormTrayViewModel Tray { get; }` — ⚠ constructed in the CONSTRUCTOR (`Tray = new(Selection)`), not as a property initializer: an initializer cannot reference the instance member `Selection` (CS0236). `SyncDesignerPanels` and `partial void OnDesignModelRevisionChanged(int value)` call `Tray.Rebuild(DesignDocument)`. ⚠ The glyph comes from the toolbox's `GlyphFor` — make it `internal static` and reuse; two glyph tables would drift.
 
 ### Task 8: The tray strip in the design view
 
@@ -800,8 +800,8 @@ public void DeletingATrayItem_RemovesIt_AndUndoBringsItBack()
 - Modify: `VisualGameStudio.Shell/Views/Documents/CodeEditorDocumentView.axaml:223-234` (column 1 → two-row grid), `.axaml.cs` (tray drop + double-tap + Delete)
 - Test: `VisualGameStudio.Tests/Shell/FormTrayViewTests.cs` (create: an AXAML reachability test like `SolutionExplorerRetargetTests.SolutionExplorerView_Binds…`, and one `[AvaloniaTest]` that puts a component as `SelectedControl` on a real `FormCanvasControl` in a shown `Window`, renders a frame, and presses Delete — mirror `FormCanvasKeyboardTests.Surface`).
 
-- [ ] **Step 1: Failing tests**: AXAML contains `Tray.Items`, a `KeyBinding Gesture="Delete"` bound to `DeleteControlCommand` INSIDE the `ComponentTray` element, `Focusable="True"` on that element (parse the AXAML with `XDocument` and assert on the element, not on a substring elsewhere), the `OnTrayItemDoubleTapped` handler name, and the drop wiring (`OnTrayDrop` in the code-behind). The headless test puts a component as `SelectedControl` on a real `FormCanvasControl` in a shown `Window` (mirror `FormCanvasKeyboardTests.Surface`), captures a frame (no exception, no handles), presses Delete and asserts the recorder command received the component — that proves the CANVAS-focus path; the AXAML assertions are what prove the TRAY-focus path exists.
-- [ ] **Step 3: Implement** AXAML: replace the `FormCanvasControl` element with
+- [x] **Step 1: Failing tests**: AXAML contains `Tray.Items`, a `KeyBinding Gesture="Delete"` bound to `DeleteControlCommand` INSIDE the `ComponentTray` element, `Focusable="True"` on that element (parse the AXAML with `XDocument` and assert on the element, not on a substring elsewhere), the `OnTrayItemDoubleTapped` handler name, and the drop wiring (`OnTrayDrop` in the code-behind). The headless test puts a component as `SelectedControl` on a real `FormCanvasControl` in a shown `Window` (mirror `FormCanvasKeyboardTests.Surface`), captures a frame (no exception, no handles), presses Delete and asserts the recorder command received the component — that proves the CANVAS-focus path; the AXAML assertions are what prove the TRAY-focus path exists.
+- [x] **Step 3: Implement** AXAML: replace the `FormCanvasControl` element with
 ```xml
 <Grid Grid.Column="1" RowDefinitions="*,Auto">
   <designer:FormCanvasControl Grid.Row="0" … (unchanged bindings) …/>
@@ -834,7 +834,7 @@ public void DeletingATrayItem_RemovesIt_AndUndoBringsItBack()
 ```
 plus a `Styles` entry for `.tray-item.selected` (accent border). Code-behind: `OnTrayItemPressed` → `vm.Tray.Select(item)` then `ComponentTray.Focus()` (the Border is `Focusable`, so this actually moves keyboard focus and the KeyBinding above becomes live); `OnTrayItemDoubleTapped` → `vm.ActivateControlCommand.Execute(item.Control)`; `AddHandler(DragDrop.DropEvent, OnTrayDrop)` on `ComponentTray` in the constructor → if `e.Data.Contains(FormCanvasControl.ControlKindFormat)` then `vm.TrayDropCommand.Execute(kind)` — the TRAY's own command, never the canvas's `PlaceDroppedControlCommand` (a `FormControlDropRequest` carries no origin, so the canvas path would place a Button at (0,0)); `DragOver` sets Copy only when `FormControlCatalog.Find(kind)?.IsComponent == true`, else None. On the VM: `[RelayCommand] private void TrayDrop(string? kind)` (⚠ the method name IS the command name minus "Command" — `TrayDrop` → `TrayDropCommand`; a mismatch here was a real defect once) publishes BL8019 ("'Button' has a position; drop it on the form, not the tray") for a non-component and otherwise calls `PlaceControl(kind, 0, 0)`; test both branches in `FormTrayTests`, and add "`TrayDropCommand` appears in the code-behind" to the `FormTrayViewTests` reachability assertions. **`dotnet clean` the Shell before building.**
 
-- [ ] **Step 5: Gate and commit** — `dotnet clean` Shell; fast subset + `FormCanvas*` + `FormTray*` fixtures. Mutation kills: tray not rebuilt on revision (→ placing test fails); TabIndex row not skipped (→ grid test); component placed into Controls (→ placement test). Commit `feat(designer): Task 25b — the tray: placement, toolbox, property grid, selection, delete, undo`.
+- [x] **Step 5: Gate and commit** — `dotnet clean` Shell; fast subset + `FormCanvas*` + `FormTray*` fixtures. Mutation kills: tray not rebuilt on revision (→ placing test fails); TabIndex row not skipped (→ grid test); component placed into Controls (→ placement test). Commit `feat(designer): Task 25b — the tray: placement, toolbox, property grid, selection, delete, undo`.
 
 ---
 
@@ -846,8 +846,8 @@ plus a `Styles` entry for `.tray-item.selected` (accent border). Code-behind: `O
 - Modify: `BasicLang/Forms/FormRetarget.cs:183-220` (ConvertRoot), `:57-84` (Convert), `:100-149` (ConvertToPair stub loop)
 - Test: `FormRetargetTests.cs` (add)
 
-- [ ] **Step 1: Failing tests**: a `.blform` with a Timer (Tick bind, Interval, Enabled) and a ToolTip → web: Timer crosses (`tick`, Interval kept, `Enabled` → BL8024), ToolTip → BL8023 naming it, no BL8025 for a component; web → WinForms: Timer crosses (`Tick`); `EveryCatalogKind_Retargets_…` sweep extended to component rows — the source control goes into `Components` when `definition.IsComponent`, and the crossed control is read from `result.Document.Components` (not `.Controls`) for those rows; the loss/crossed assertions are unchanged; the pair's code-behind for a web Timer contains `w.setInterval` and the parameterless stub; `Create` keeps components (Task 4 already).
-- [ ] **Step 3: Implement**: `ConvertControls(source.Components, Document.Components, "the tray")` (no geometry map entries; `Hoist` for a component drops it with BL8023 — it has no children); `ToCells`/`ToPixels` untouched (they only walk `Controls`); `ConvertToPair`'s stub loop iterates `AllControls().Concat(AllComponents())`. `Convert_LeavesTheSourceUntouched` and the fixed-point tests keep passing.
+- [x] **Step 1: Failing tests**: a `.blform` with a Timer (Tick bind, Interval, Enabled) and a ToolTip → web: Timer crosses (`tick`, Interval kept, `Enabled` → BL8024), ToolTip → BL8023 naming it, no BL8025 for a component; web → WinForms: Timer crosses (`Tick`); `EveryCatalogKind_Retargets_…` sweep extended to component rows — the source control goes into `Components` when `definition.IsComponent`, and the crossed control is read from `result.Document.Components` (not `.Controls`) for those rows; the loss/crossed assertions are unchanged; the pair's code-behind for a web Timer contains `w.setInterval` and the parameterless stub; `Create` keeps components (Task 4 already).
+- [x] **Step 3: Implement**: `ConvertControls(source.Components, Document.Components, "the tray")` (no geometry map entries; `Hoist` for a component drops it with BL8023 — it has no children); `ToCells`/`ToPixels` untouched (they only walk `Controls`); `ConvertToPair`'s stub loop iterates `AllControls().Concat(AllComponents())`. `Convert_LeavesTheSourceUntouched` and the fixed-point tests keep passing.
 
 ### Task 10: Copy, cut and paste route a component to the tray
 
@@ -855,7 +855,7 @@ plus a `Styles` entry for `.tray-item.selected` (accent border). Code-behind: `O
 - Modify: `BasicLang/Forms/FormDocument.cs` (`FormClipboard.ToElement`/`FromElement`: no TabIndex for a component; `DeserializeSubtree` unchanged), `CodeEditorDocumentViewModel.cs:405-440` (paste routes `IsComponent` to `Components`; taken ids from both lists; no tab renumber for components)
 - Test: `FormDesignerCommandTests.cs` (add): copy a Timer + Button, paste → `Components` has `Timer2`, `Controls` has `Button2`, the Timer's bind handler renamed by convention.
 
-- [ ] **Gate and commit** — fast subset + `FormRetargetTests` + `FormDesignerCommandTests`. Commit `feat(designer): Task 25c — components cross a retarget and a paste`.
+- [x] **Gate and commit** — fast subset + `FormRetargetTests` + `FormDesignerCommandTests`. Commit `feat(designer): Task 25c — components cross a retarget and a paste`.
 
 ---
 
@@ -866,14 +866,43 @@ plus a `Styles` entry for `.tray-item.selected` (accent border). Code-behind: `O
 **Files:**
 - Create: `VisualGameStudio.Tests/Compiler/FormComponentAcceptanceTests.cs` (`[Category("Integration")]`, `[NonParallelizable]`)
 
-- [ ] **WinForms**: scaffold a form named `LoginForm` (the node harness hard-codes `data-form="LoginForm"`; use the same name on both targets), `vm.PlaceControl("Timer", 0, 0)`, set `Interval=1`, `Enabled=true` through the property grid rows — ⚠ the acceptance fixture's `SetProperty` finds controls via `AllControls().Single(...)`; write the Timer's rows by selecting `vm.DesignDocument!.FindById("Timer1")` — `ActivateControlCommand` on the component (creates `Timer1_Tick`), insert `Console.WriteLine("TICK")` + `Timer1.Enabled = False` in the stub, `SaveAsync`, compile with the real CLI (`--target=csharp`), build a driver app exactly as `FormDesignerAcceptanceTests.WinForms_…` does but pumping `Application.DoEvents()` in a loop for up to 2 s; assert `TICK` in the run output.
-- [ ] **Web**: same through the designer on a `.blwebform`, `Main.bas` with the dispatch, `basiclang build`, then `FormDesignerAcceptanceTests.RunPageUnderNode` — extend its harness with `setInterval: (cb, ms) => { console.log("setInterval " + ms); cb(); return 7; }` and `clearInterval` on `globalThis.window`, installed BEFORE the `import` (the harness sets `globalThis.window = globalThis`, so this REPLACES node's real `setInterval` — a real one would keep the process alive until the 60 s timeout); the two stubs are inert for existing callers. The user's line in the parameterless stub is `Console.WriteLine("TICK")`; assert `TICK`. ⚠ The generated call is the TYPED `w.setInterval`, so a wrong stub signature fails the BUILD here — assert the build exit is 0 with the output attached.
-- [ ] Both must PASS, not be skipped: read the totals.
+- [x] **WinForms**: scaffold a form named `LoginForm` (the node harness hard-codes `data-form="LoginForm"`; use the same name on both targets), `vm.PlaceControl("Timer", 0, 0)`, set `Interval=1`, `Enabled=true` through the property grid rows — ⚠ the acceptance fixture's `SetProperty` finds controls via `AllControls().Single(...)`; write the Timer's rows by selecting `vm.DesignDocument!.FindById("Timer1")` — `ActivateControlCommand` on the component (creates `Timer1_Tick`), insert `Console.WriteLine("TICK")` + `Timer1.Enabled = False` in the stub, `SaveAsync`, compile with the real CLI (`--target=csharp`), build a driver app exactly as `FormDesignerAcceptanceTests.WinForms_…` does but pumping `Application.DoEvents()` in a loop for up to 2 s; assert `TICK` in the run output.
+- [x] **Web**: same through the designer on a `.blwebform`, `Main.bas` with the dispatch, `basiclang build`, then `FormDesignerAcceptanceTests.RunPageUnderNode` — extend its harness with `setInterval: (cb, ms) => { console.log("setInterval " + ms); cb(); return 7; }` and `clearInterval` on `globalThis.window`, installed BEFORE the `import` (the harness sets `globalThis.window = globalThis`, so this REPLACES node's real `setInterval` — a real one would keep the process alive until the 60 s timeout); the two stubs are inert for existing callers. The user's line in the parameterless stub is `Console.WriteLine("TICK")`; assert `TICK`. ⚠ The generated call is the TYPED `w.setInterval`, so a wrong stub signature fails the BUILD here — assert the build exit is 0 with the output attached.
+- [x] Both must PASS, not be skipped: read the totals.
 
 ### Task 12: Docs, followups, handoff, memory, IDE drop
 
-- [ ] Spec `2026-09-11-visual-form-designer-design.md:127`: replace "reserved and empty in v1" with "`<Components>` holds the tray (see 2026-09-19-component-tray-design.md); `<Resources>` is reserved and empty".
-- [ ] `docs/form-designer-followups.md`: **19** extender properties (ToolTip/ErrorProvider per-control values; web `title`, M9); **20** two compiler gaps user code will meet: `Container`→`IContainer` assignability (M5, with the `Container`-typed field that does work, M14) and a component's `GetToolTip`/`GetError` result refused into a typed variable (M15).
-- [ ] `CLAUDE.md` form-designer section: one ⛔ bullet — a component is a `FormControl` with no place; walkers pick their lists explicitly; qualified component types because of the `System.Threading` import; the sweep covers component rows in `Components`.
-- [ ] `docs/HANDOFF.md`: task table (25 done), a short section, gates. Memory file + `MEMORY.md`.
+- [x] Spec `2026-09-11-visual-form-designer-design.md:127`: replace "reserved and empty in v1" with "`<Components>` holds the tray (see 2026-09-19-component-tray-design.md); `<Resources>` is reserved and empty".
+- [x] `docs/form-designer-followups.md`: **19** extender properties (ToolTip/ErrorProvider per-control values; web `title`, M9); **20** two compiler gaps user code will meet: `Container`→`IContainer` assignability (M5, with the `Container`-typed field that does work, M14) and a component's `GetToolTip`/`GetError` result refused into a typed variable (M15).
+- [x] `CLAUDE.md` form-designer section: one ⛔ bullet — a component is a `FormControl` with no place; walkers pick their lists explicitly; qualified component types because of the `System.Threading` import; the sweep covers component rows in `Components`.
+- [x] `docs/HANDOFF.md`: task table (25 done), a short section, gates. Memory file + `MEMORY.md`.
 - [ ] Full suite on the final binaries (`--no-build` after the last build), compare the failure NAMES against the 8-row baseline; then `robocopy VisualGameStudio.Shell\bin\Release\net8.0 IDE /E` (never `/MIR`), verify `IDE\BasicLang.exe --help` exits 0 and `IDE\lib\js\dom-core.bli` exists; commit the drop separately.
+
+---
+
+## Commit 5 — what the adversarial review found (added 2026-09-19; spec §7a)
+
+Four finders over the four commits' diff, two skeptics per finding, majority to confirm: 14 raised,
+8 confirmed. Tests first, then the fix, then a mutant per test.
+
+### Task 13: One selection path
+
+- [x] `FormTrayTests`: the repro — click Timer1, drop a ToolTip, click Timer1, Delete through the grid's control → the ToolTip survives, the selection empties; a drop highlights the dropped item.
+- [x] `CodeEditorDocumentViewModel.SelectInDesigner` sets `Selection` AND the grid; the constructor makes the grid follow `Selection.Changed`; `PlaceControl`, `ActivateControl` and `DeleteControl` go through it.
+
+### Task 14: What the web cannot wire is named
+
+- [x] `FormComponentEmissionTests`: a bind on a non-default event → BL8028, never emitted, never refused by BL8013; a kind with no web row → BL8029; a Degraded template value → default + BL8009; `EmitsOnlyItsField` pins the `Window` local and the not-an-element shape.
+- [x] `RegionWriter`: `CheckComponentTargets`, `CheckComponentBinds`, `IsEmittedBind` shared by the emitter and the ordering check; `ExpandWebScript` reports.
+
+### Task 15: "Wired means running" crosses by rule
+
+- [x] `FormRetargetTests`: wired web Timer → WinForms arrives `Enabled=true` + BL8027 and the pair emits `tmr.Enabled = True`; unwired arrives as it was; WinForms wired+enabled → web is BL8027 not BL8024; wired but not enabled → BL8027 "will run"; the fixed-point round trip is byte-identical INCLUDING `Enabled`.
+- [x] `FormWebScript.Implies` (`FormImpliedProperty`), Timer row `Implies: ("Enabled", "true")`; `FormRetarget.WiredRunState` / `CrossRunState`; `ConvertProperties` treats the implied property as the wiring, not a loss.
+
+### Task 16: The tests the review found soft
+
+- [x] `FormTrayViewTests`: "draws nothing" is a frame-hash equality; the AXAML gate reads the Delete `CommandParameter`.
+- [x] `WinFormsCatalogSweepTests.EveryEnumValue_OfEveryControl_EmitsCSharpThatCscAccepts`: one control per allowed value, one csc compile per kind.
+- [x] `FormComponentDocumentTests` no-op Save asserts `IsRefused` first; the "IsSkipped" test renamed to what it can prove.
+- [x] Gate: designer fixtures 276/0, Integration 91/0, full suite 7177/8/2 of 7187 (the 8 baseline names); 12 mutants killed; commit `feat(designer): Task 25e — the review's eight`; docs (spec §7a, HANDOFF, CLAUDE.md, followups 21), memory.

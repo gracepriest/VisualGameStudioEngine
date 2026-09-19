@@ -371,3 +371,46 @@ Web:"mouseenter"), … }` — driven through the same csc / node gates as the de
 (`WinFormsCatalogSweepTests.TheDefaultEvent_…`, `FormRetargetPairTests`), because an event name is
 exactly as unfalsifiable as a property name and by the same mechanism. That table is also what an
 Events tab in the property grid would read, so the two features want the same row.
+
+### 19. Extender properties: a ToolTip's text and an ErrorProvider's error live on OTHER controls — found 2026-09-19
+
+The tray (Task 25) holds a `ToolTip` and an `ErrorProvider` with their OWN properties
+(`InitialDelay`, `BlinkStyle`, …), which is what VS gives you before you set a tooltip on anything.
+What VS gives you next — "ToolTip on toolTip1" and "Error on errorProvider1" as rows on EVERY
+control, emitted as `toolTip1.SetToolTip(btn, "…")` / `errorProvider1.SetError(btn, "…")` — has no
+shape in `FormPropertyDef`: every property is emitted as `{Id}.{Name} = value` on its own control.
+Measured 2026-09-19: `SetToolTip` before `Show()` works and `GetToolTip` returns it (spec M2), and
+on the web the honest equivalent of a tooltip is the `title` attribute, settable through
+`Element.setAttribute` (M9) — so the extender is the one place a ToolTip HAS a web form.
+
+**Shape of the fix:** a `FormPropertyDef` facet naming the component it emits AGAINST (`Extender:
+"ToolTip"`, `ExtenderMethod: "SetToolTip"`, `HtmlAttribute: "title"`), a row the property grid adds
+to every control while a matching component exists, and a csc sweep row that emits it. Until then
+the two components are present, inert, and callable from code.
+
+### 20. Two compiler gaps user code meets the moment it touches a component — measured 2026-09-19
+
+1. **`Container` is not known to implement `IContainer`.** VS's idiom `Private components As
+   System.ComponentModel.IContainer` / `components = New System.ComponentModel.Container()` is
+   refused: *Cannot assign value of type 'Container' to 'IContainer'* — qualified or with the
+   `Using`, both spellings (spec M5). A field typed `Container` compiles and runs (M14). The tray
+   emits parameterless constructors and no container, which leaks nothing observable in a form's
+   lifetime; the analyzer's assignability check for resolved .NET types is the gap.
+2. **A component's extender value cannot be read back into a typed variable.** `Dim s As String =
+   tip.GetToolTip(btn)` and `Return err.GetError(btn)` from a `Function … As String` are refused —
+   *Cannot assign value of type 'Object' to variable of type 'String'* (M15) — because the WinForms
+   member types as `Object` (the same degradation that makes a catalog row unfalsifiable without
+   csc). Declaring the variable `As Object` compiles. Neither is a designer defect, and both will be
+   blamed on the tray.
+
+### 21. `FormClipboard.FromElement` accepts a component nested in a container — latent, unreachable
+
+Raised by the 2026-09-19 review and refuted as unreachable, recorded so it is not re-found:
+`FormDocument.cs` guards only the component-as-PARENT direction, so a hand-built
+`<Panel><Timer/></Panel>` fragment fed to `DeserializeSubtree` builds a Timer into the Panel's
+children, which the writer would then emit with `TabIndex` and `p.Controls.Add(t)` and the reader
+would refuse on the next open (BL8020). No product path produces that fragment: the only writer of
+the designer clipboard is `SerializeSubtree` over `Selection.Controls`, and every writer of
+`Children` — the reader, `FormPlacement.Place`, `MoveToForm`, `Clone` — is closed to a component. If
+the clipboard ever reads the OS clipboard (spec: it does not, by design), mirror the reader's
+BL8020 check in `FromElement` first.

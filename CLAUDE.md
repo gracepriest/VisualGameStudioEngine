@@ -200,6 +200,39 @@ a second document type.
   control, `Width` on a `.blwebform` root) is dropped-and-named (`BL8024`), never carried —
   `Create()` writes unknown attributes after the modelled ones, and a stale one would overrule the
   derived position with nothing looking wrong.
+- ⛔ **A tray component is a `FormControl` with no place** — `Geometry == null`, no children, no tab
+  index, in `FormDocument.Components`, catalog row `IsComponent` — and **every walker chooses its
+  lists explicitly**: the region writer, the id namespace (`FindById`, `ListContaining`, duplicate
+  ids) and the retarget visit the tray; the canvas, the markup emitter and tab renumbering do not.
+  `AllControls()` is the visual tree and never includes components. The reader is the only place
+  the invariant is enforced (a component element never acquires geometry or TabIndex; BL8020
+  refuses a component under `<Controls>` or a control under `<Components>`). ⛔ Component types
+  are emitted FULLY QUALIFIED (`System.Windows.Forms.Timer`, `System.ComponentModel.BackgroundWorker`)
+  because a user `Using System.Threading` makes a bare `Timer` CS0104, the C# backend adds that
+  using itself whenever the body contains "Thread", and the scaffold never imports
+  `System.ComponentModel` — BasicLang silent on all three (measured). ⛔ The web Timer's handler is
+  PARAMETERLESS and the emitted call is the TYPED `w.setInterval` over `Dim w As Window = ::window`:
+  `Window.setInterval` takes an `Action` and refuses `Action(Of DomEvent)`; the untyped `::window`
+  hatch accepts it and would also accept any typo. ⚠ `WinFormsCatalogSweepTests` builds a component
+  row into `Components` with no geometry — measured before that change: csc rejects
+  `Location`/`Size`/`Anchor` and `Controls.Add` for every component and nothing else, so the gate
+  can see a component placed as a control. ⚠ It compiles only the FIRST value of an Enum row;
+  `EveryEnumValue_OfEveryControl_…` compiles every member, one control per value.
+- ⛔⛔ **The designer has ONE selection store, and every write to the property grid goes through
+  it.** `CodeEditorDocumentViewModel.SelectInDesigner` sets `Selection` and the grid together, and
+  the constructor makes the grid follow `Selection.Changed`. A drop that wrote the grid ALONE while
+  a tray click wrote `Selection` alone let the two disagree after the first click — `Set` is a no-op
+  for the control already selected — and the tray's Delete, which passes the GRID's control,
+  removed the wrong component with the other one highlighted (found by review, never by a test,
+  because the tray tests asserted one store each). Never set `PropertyGrid.SelectedControl` from
+  the view model directly.
+- ⚠ **"Wired means running" is a catalog rule, not a Timer special case.** A web script component
+  runs the moment it is wired; WinForms says that with a property (`FormWebScript.Implies` =
+  `Enabled=true`). `FormRetarget` applies it BOTH ways and names it (BL8027) — before it, a wired
+  web Timer arrived on the window with `Enabled` absent and never fired, silently. On the web a
+  component is wired ONLY through its template on its default event: any other bind is warned
+  (BL8028) and excluded from the BL8013 ordering check, and a kind with no web row is warned
+  (BL8029) — `RegionWriter.IsEmittedBind` is the one answer the emitter and both checks share.
 - ⛔⛔ **A drag that re-parents must exclude the dragged subtree from the search for a target.**
   Two failures, one fix. The pointer is over the control being dragged, so without excluding it a
   non-container swallows its own point and nothing can ever be dragged into anything. And a

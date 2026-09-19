@@ -38,9 +38,11 @@ public sealed partial class FormTrayItem : ObservableObject
 /// rebuilds on every <c>DesignModelRevision</c> bump and on every panel sync.</para>
 ///
 /// <para>⚠ Selection goes through the ONE store the canvas and every command read,
-/// <see cref="FormSelection"/>. The canvas's own <c>Changed</c> subscription is what pushes the
-/// primary into the property grid; this class marks its items from the same event, so a highlight
-/// here and a grid over there can never disagree about what is selected.</para>
+/// <see cref="FormSelection"/>. The host view model's own <c>Changed</c> subscription pushes the
+/// primary into the property grid (the canvas's TwoWay binding agrees with it); this class marks
+/// its items from the same event, so a highlight here and a grid over there can never disagree
+/// about what is selected. ⛔ A drop must select through the same store — one that wrote the grid
+/// alone left the two disagreeing after the first tray click, and Delete removed the wrong one.</para>
 /// </summary>
 public sealed class FormTrayViewModel : ObservableObject
 {

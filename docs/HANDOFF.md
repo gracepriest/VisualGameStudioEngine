@@ -19,7 +19,9 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ## ⛔ THE FORM DESIGNER, 2026-09-18 — read this before touching `BasicLang/Forms/`
 
-Branch `feat/form-designer`, at `f380186`. **89 commits ahead of master, 10 behind.**
+Branch `feat/form-designer`: 25d is `e992d8d`; 25e (the review's eight) is the commit carrying this
+line, and the IDE drop after it records both SHAs. **97 commits ahead of master after 25e, 19 behind**
+(master moved on 2026-09-19; re-measure before any merge talk).
 
 ### ⛔⛔ The plan's checkboxes are a LIE — do not start at Task 1
 
@@ -38,7 +40,8 @@ reference counts, never against the checkboxes.
 | **26** Anchor/Dock pickers | done — multi-edge, after the analyzer fix |
 | **27** acceptance | done — both targets **built and RUN**, output recorded in the commit |
 | **21** retarget | done 2026-09-19 — `FormRetarget`, `design --retarget`, "Retarget Form…"; see its section below |
-| **24** menus · **25** tray · **28** closeout | NOT STARTED |
+| **25** component tray | done 2026-09-19 — Timer/ToolTip/ErrorProvider/BackgroundWorker in `<Components>`, the strip under the canvas, a Timer RUNS on both targets; see its section below |
+| **24** menus · **28** closeout | NOT STARTED |
 
 ⚠ **24 is compiler-gated**: array-literal element typing has no base-class widening
 (`SemanticAnalyzer.cs:6056-6061`), so `{mnuFile, sep1}` degrades to `Object[]`. Measure what csc
@@ -98,6 +101,44 @@ node (handler fires); the retargeted WinForms pair goes through the real compile
 Left for later (`docs/form-designer-followups.md` 18): only a kind's DEFAULT event has a measured
 name on both sides, so a `MouseEnter` bind is dropped-and-named rather than mapped.
 
+### Task 25 — the component tray (2026-09-19): controls with no place
+
+Design and every measurement: `docs/superpowers/specs/2026-09-19-component-tray-design.md` (M1–M15,
+all run); plan: `docs/superpowers/plans/2026-09-19-component-tray.md`. Four commits, each gated:
+25a format + emission, 25b the surface, 25c retarget + clipboard, 25d acceptance + docs.
+
+- **A component is a `FormControl` with no place** in `FormDocument.Components` (was write-never
+  `List<XElement>`), row `IsComponent`. Walkers choose their lists explicitly (spec §2). The
+  reader is the one place the invariant lives; BL8020 refuses misplacement. The D9 algebra is
+  restated over a NON-EMPTY `<Components>` — no fixture had one before.
+- **Rows:** Timer (web too: a `setInterval` handle), ToolTip, ErrorProvider, BackgroundWorker —
+  no `Common()`, QUALIFIED types (M10–M13), four never-drawn schematics for the glyphs. The csc
+  sweep builds them into `Components` (66/66).
+- **Emission:** components first in both regions; `New System.Windows.Forms.Timer()`, properties,
+  `AddHandler`; no `Controls.Add`. Web: `Private tmr As Integer` and
+  `tmr = w.setInterval(AddressOf tmr_Tick, 100)` over the TYPED `Window` — parameterless stub,
+  because the typed call refuses `Action(Of DomEvent)` (M7) and the hatch would not have said so.
+- **Surface:** the tray strip under the canvas (`Focusable="True"` is load-bearing for its Delete
+  — found by the plan reviewer, pinned by a parsed-AXAML test); one selection path; own
+  `TrayDropCommand` refusing a control kind; Components category in the toolbox; no TabIndex row.
+- **Retarget/clipboard:** components cross with the same rules, never at the layout edge; a paste
+  routes by the ROW.
+- **RUN, both targets:** `FormComponentAcceptanceTests` — a Timer from the tray, Interval=1,
+  handler by double-click, saved, built by the real CLI: TICK in a real WinForms window and TICK
+  under node. 20 mutants across the four commits, each killed by its own test.
+- **Reviewed (25e):** four finders + two skeptics per finding over the diff; 8 of 14 confirmed
+  (spec §7a has the table). The one that mattered: a drop wrote the PROPERTY GRID alone while a
+  tray click wrote `Selection` alone, and the tray's Delete passes the grid's control — so "click
+  Timer1, drop a ToolTip, click Timer1, Delete" removed the ToolTip with Timer1 highlighted. Now
+  ONE path (`SelectInDesigner`, and the grid follows `Selection.Changed` in the view model). Also:
+  "wired means running" crosses a retarget by catalog rule (`FormWebScript.Implies`, BL8027) —
+  a wired web Timer used to arrive on the window `Enabled` absent and never fire, unnamed; a web
+  bind the template cannot wire is BL8028 and no longer drives the BL8013 refusal; a component
+  kind the web lacks is BL8029; the web template reports a Degraded value (BL8009) like WinForms;
+  the csc sweep now compiles EVERY Enum value; "draws nothing" is a frame-hash equality.
+- **Left:** extender properties (followup 19), two compiler gaps (followup 20), a latent clipboard
+  guard (followup 21).
+
 ### ⛔ Master is NOT healthy — 4 of this branch's failures are inherited
 
 Verified 2026-09-18 in a detached worktree at plain `origin/master`, with no designer code present:
@@ -115,6 +156,8 @@ new normal.
 
 | Gate | Result |
 |---|---|
+| Full suite (2026-09-19, Task 25e tree — the review's eight) | **7177 passed / 8 failed / 2 skipped of 7187**, 2h20m — the same 8 names; +22 = 25e's rows |
+| Full suite (2026-09-19, Task 25d tree `e992d8d`) | **7155 passed / 8 failed / 2 skipped of 7165**, 2h56m on a loaded box — the same 8 names |
 | Full suite (2026-09-19, Task 21 tree) | **7088 passed / 8 failed / 2 skipped of 7098**, 59m |
 | Fast subset + the designer's Integration fixtures | **5815 passed / 2 failed / 1 skipped of 5818** |
 | `WinFormsCatalogSweepTests` | 57/57 through real `csc` |

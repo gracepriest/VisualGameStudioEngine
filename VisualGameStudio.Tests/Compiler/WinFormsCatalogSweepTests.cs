@@ -34,6 +34,12 @@ public class WinFormsCatalogSweepTests
             .Where(c => c.SupportsTarget(FormTarget.WinForms))
             .Select(c => new TestCaseData(c.Kind).SetName("{m}(" + c.Kind + ")"));
 
+    /// <summary>The rows with at least one Enum property — the ones whose member names need every value gated.</summary>
+    private static IEnumerable<TestCaseData> EveryWinFormsControlWithAnEnum() =>
+        FormControlCatalog.All
+            .Where(c => c.SupportsTarget(FormTarget.WinForms) && c.Properties.Any(p => p.Type == FormPropertyType.Enum))
+            .Select(c => new TestCaseData(c.Kind).SetName("{m}(" + c.Kind + ")"));
+
     // ==================================================================
     // The gate itself must be able to fail
     // ==================================================================
@@ -164,6 +170,51 @@ public class WinFormsCatalogSweepTests
         var generated = GenerateCSharp(form);
         WinFormsCompile.AssertCompiles(generated,
             $"the designer's own output for a '{kind}' with every catalog property set must compile.");
+    }
+
+    /// <summary>
+    /// ⛔ The property sweep above compiles only the FIRST allowed value of each Enum row, and
+    /// <see cref="EveryEnumValue_MapsToAMemberName"/> checks only that the literal has a dot — so a
+    /// misspelled SECOND member (<c>AlwaysBlnk</c>) was gated by nothing (review, 2026-09-19). One
+    /// control per allowed value, so ONE csc compile per kind covers every member of every Enum
+    /// property it has; a kind with several Enum properties cycles through each in step.
+    /// </summary>
+    [TestCaseSource(nameof(EveryWinFormsControlWithAnEnum))]
+    [Category("Integration")]
+    public void EveryEnumValue_OfEveryControl_EmitsCSharpThatCscAccepts(string kind)
+    {
+        var definition = FormControlCatalog.Find(kind)!;
+        var enums = definition.Properties.Where(p => p.Type == FormPropertyType.Enum).ToList();
+        var width = enums.Max(p => p.AllowedValues!.Count);
+
+        var form = new FormDocument
+        {
+            Target = FormTarget.WinForms, Name = "SweepForm", Width = 800, Height = 450, Text = "Sweep"
+        };
+
+        for (var i = 0; i < width; i++)
+        {
+            var control = new FormControl
+            {
+                Kind = definition.Kind,
+                Id = $"ctl{i}",
+                TabIndex = i,
+                Geometry = definition.IsComponent
+                    ? null
+                    : new PixelGeometry { X = 8, Y = 8 + 30 * i, Width = 120, Height = 24 }
+            };
+
+            foreach (var property in enums)
+            {
+                control.Properties[property.Name] = property.AllowedValues![i % property.AllowedValues.Count];
+            }
+
+            (definition.IsComponent ? form.Components : form.Controls).Add(control);
+        }
+
+        WinFormsCompile.AssertCompiles(GenerateCSharp(form),
+            $"every allowed value of every Enum property on '{kind}' must be a member csc knows: " +
+            string.Join("; ", enums.Select(p => $"{p.Name} = {string.Join("|", p.AllowedValues!)}")));
     }
 
     /// <summary>

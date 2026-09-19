@@ -384,7 +384,16 @@ public enum FormSchematic
 /// and a component with no handler does nothing visible on either target. The field is declared
 /// regardless.</para>
 /// </param>
-public sealed record FormWebScript(string FieldType, string Construct);
+/// <param name="Implies">
+/// What constructing this script MEANS in WinForms' vocabulary — a web Timer runs the moment it is
+/// wired, and WinForms says that with <c>Enabled=True</c>. Stated on the row so the retarget can
+/// cross "wired means running" by rule in both directions and name it (BL8027), rather than switch
+/// on the kind or let a Timer silently stop on the window or silently start on the page.
+/// </param>
+public sealed record FormWebScript(string FieldType, string Construct, FormImpliedProperty? Implies = null);
+
+/// <summary>A property and the value the other target's construct implies for it — see <see cref="FormWebScript.Implies"/>.</summary>
+public sealed record FormImpliedProperty(string Name, string Value);
 
 /// <param name="IsComponent">
 /// A tray component (Task 25): no geometry, no children, no tab index, no <c>Controls.Add</c>; it
@@ -749,7 +758,10 @@ public static class FormControlCatalog
             // ⛔ The TYPED call over the Window the init region declares, and a parameterless
             // callback: Window.setInterval takes an Action and refuses Action(Of DomEvent) (M7).
             WebHandlerTakesEvent: false,
-            WebScript: new FormWebScript("Integer", "w.setInterval(AddressOf {handler}, {Interval})")),
+            // ⚠ Wired means running here, and Enabled=True is how WinForms says the same thing: the
+            // retarget crosses that by this rule (BL8027) rather than losing it in either direction.
+            WebScript: new FormWebScript("Integer", "w.setInterval(AddressOf {handler}, {Interval})",
+                Implies: new FormImpliedProperty("Enabled", "true"))),
 
         // ⚠ A ToolTip's per-control text (SetToolTip / the web's title attribute) is an EXTENDER
         // property the catalog cannot express yet — docs/form-designer-followups.md 19. Present,

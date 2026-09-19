@@ -168,7 +168,96 @@ public class FormComponentEmissionTests
         // still declared — it is keyed on "a script component exists", not on "one is wired".
         var code = Emit(WebWith(Timer("tmr")));
 
-        Assert.That(code, Does.Contain("Private tmr As Integer").And.Not.Contain("setInterval"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(code, Does.Contain("Private tmr As Integer"));
+            Assert.That(code, Does.Contain("Dim w As Window = ::window"), "keyed on a script component EXISTING, not on one being wired");
+            Assert.That(code, Does.Not.Contain("setInterval"), "no callback, no construct line");
+            Assert.That(code, Does.Not.Contain("getElementById(\"tmr\")"), "an unwired component is still not an element");
+            Assert.That(code, Does.Not.Contain("tmr.addEventListener"));
+        });
+    }
+
+    /// <summary>
+    /// A web component's ONLY wiring is its construct template, on its default event. A bind on any
+    /// other event — reachable by hand-editing the document, since the reader accepts any event name
+    /// — cannot be emitted. It used to vanish silently while STILL driving the ordering refusal, so
+    /// the user was told to move a handler above a region that never wired it (review, 2026-09-19).
+    /// </summary>
+    [Test]
+    public void Web_AComponentBindOnAnotherEvent_IsWarned_NeverEmitted_AndNeverDrivesTheOrderingRefusal()
+    {
+        var tmr = Timer("tmr");
+        tmr.Binds.Add(new FormBind { Event = "click", Handler = "tmr_Click" });
+        var doc = WebWith(tmr);
+
+        // The handler BELOW the init region: a wiring that were emitted would refuse this (BL8013).
+        var scaffold = FormScaffolder.Create("F", FormTarget.Web).CodeText;
+        var below = scaffold.Replace("End Class", "    Private Sub tmr_Click()\n    End Sub\nEnd Class");
+
+        var written = RegionWriter.Write("F.bas", below, doc, "F.blwebform");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(written.Refused, Is.False, string.Join("; ", written.Diagnostics.Select(d => d.Format())));
+            Assert.That(written.Text, Does.Not.Contain("AddressOf tmr_Click"), "nothing wires it, so nothing may name it (the stub itself stays)");
+            var warning = written.Diagnostics.Single(d => d.Code == DesignCodes.BindNotOnTarget);
+            Assert.That(warning.IsWarning, Is.True);
+            Assert.That(warning.Message, Does.Contain("'tmr'").And.Contain("click").And.Contain("tick"));
+        });
+    }
+
+    /// <summary>
+    /// The toolbox never offers a ToolTip on the web, but a hand-edited <c>.blwebform</c> can carry
+    /// one — and it was modelled, declared as an <c>Element</c>, constructed by nothing and reported
+    /// by nothing (review, 2026-09-19). The retarget names the same kind as BL8023; the writer now
+    /// names it too.
+    /// </summary>
+    [Test]
+    public void Web_AComponentWithNoWebRow_IsWarned_NotSilentlyDeclaredAndForgotten()
+    {
+        var tip = new FormControl { Kind = "ToolTip", Id = "tip" };
+        tip.Binds.Add(new FormBind { Event = "Popup", Handler = "tip_Popup" });
+        var doc = WebWith(tip);
+
+        var scaffold = FormScaffolder.Create("F", FormTarget.Web).CodeText;
+        var below = scaffold.Replace("End Class", "    Private Sub tip_Popup()\n    End Sub\nEnd Class");
+
+        var written = RegionWriter.Write("F.bas", below, doc, "F.blwebform");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(written.Refused, Is.False, "a bind nothing emits must not drive the ordering rule");
+            var warning = written.Diagnostics.Single(d => d.Code == DesignCodes.KindNotOnTarget);
+            Assert.That(warning.IsWarning, Is.True);
+            Assert.That(warning.Message, Does.Contain("'tip'").And.Contain("ToolTip"));
+            Assert.That(written.Text, Does.Not.Contain("AddressOf tip_Popup").And.Not.Contain("getElementById(\"tip\")"),
+                "nothing wires or constructs it; only the stub the test wrote remains");
+        });
+    }
+
+    /// <summary>
+    /// The same document as a <c>.blform</c> reports BL8009 through <c>AppendProperties</c>; the web
+    /// template substituted the catalog default with no finding. The number was right and the
+    /// silence was not — the Error List differed by target for one document (review, 2026-09-19).
+    /// </summary>
+    [Test]
+    public void Web_ADegradedTemplateValue_FallsBackToTheCatalogDefault_AndSaysSo()
+    {
+        var tmr = Timer("tmr", null, ("Interval", "fast"));
+        tmr.Binds.Add(new FormBind { Event = "tick", Handler = "tmr_Tick" });
+        var doc = WebWith(tmr);
+
+        var written = RegionWriter.Write("F.bas", FormScaffolder.Create("F", FormTarget.Web).CodeText, doc, "F.blwebform");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(written.Refused, Is.False);
+            Assert.That(written.Text, Does.Contain("w.setInterval(AddressOf tmr_Tick, 100)"), "the default, as the spec says");
+            var degraded = written.Diagnostics.Single(d => d.Code == DesignCodes.DegradedProperty);
+            Assert.That(degraded.IsWarning, Is.True);
+            Assert.That(degraded.Message, Does.Contain("'tmr.Interval'").And.Contain("fast"));
+        });
     }
 
     [Test]
@@ -199,8 +288,13 @@ public class FormComponentEmissionTests
             "the typed Window.setInterval refuses Action(Of DomEvent) — spec M7");
     }
 
+    /// <summary>
+    /// ⚠ Only the WARNING is asserted, on purpose. On the web a component's properties never reach
+    /// the region except through its template, so "Enabled is skipped" is structural there and no
+    /// assertion could fail on it — a test that claimed to pin the skip would be pinning nothing.
+    /// </summary>
     [Test]
-    public void AComponentPropertyTheTargetLacks_IsSkippedAndWarned_LikeAControls()
+    public void AComponentPropertyTheTargetLacks_IsWarned_LikeAControls()
     {
         var doc = WebWith(Timer("tmr", null, ("Enabled", "true")));
 

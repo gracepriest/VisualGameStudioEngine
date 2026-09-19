@@ -65,7 +65,9 @@ public static class DesignCodes
     //   BL8020          a component under <Controls>, or a control under <Components> (here)
     //   BL8021, BL8022  document-level refusals in a form document (here)
     //   BL8023..BL8026  retarget findings — what could not cross between the two formats (here)
-    //   BL8027..BL8030  free
+    //   BL8027          retarget: "wired means running" crossed by rule (here)
+    //   BL8028, BL8029  region-writer findings for a component the target cannot wire / does not have (here)
+    //   BL8030          free
     //   BL8031          reserved — the spec and plan both name it for ONE thing: the --check
     //                   collision between a user's own top-level name and the dispatch helper.
     //                   BL8018 below is a different finding and takes a different number.
@@ -198,6 +200,34 @@ public static class DesignCodes
     /// fires.
     /// </summary>
     public const string RetargetBindLost = "BL8026";
+
+    /// <summary>
+    /// "Wired means running" crossed by RULE (Task 25 review). A web script component runs the
+    /// moment it is wired; WinForms says the same thing with a property — a Timer's
+    /// <c>Enabled=True</c>. The catalog row states the equivalence (<c>FormWebScript.Implies</c>),
+    /// and the retarget applies it in both directions and names what it did. The loss this replaces
+    /// was silent either way: a wired web Timer arriving on the window with <c>Enabled</c> absent
+    /// (default False) never fired, and a disabled WinForms Timer arriving on the page ran from load.
+    /// </summary>
+    public const string RetargetRunStateCrossed = "BL8027";
+
+    /// <summary>
+    /// A <c>&lt;Bind&gt;</c> the target being generated cannot wire — a web component's bind on
+    /// anything but its default event, when its only wiring is its construct template. A WARNING:
+    /// the document keeps it and WinForms wires it, but it is not written here. It used to vanish
+    /// silently while STILL driving the BL8013 ordering refusal, so the user was told to move a
+    /// handler above a region that never wired it (review, 2026-09-19).
+    /// </summary>
+    public const string BindNotOnTarget = "BL8028";
+
+    /// <summary>
+    /// A component whose kind has no row on the target being generated — a ToolTip in a
+    /// <c>.blwebform</c>, which the toolbox never offers but a hand edit can carry. A WARNING: its
+    /// field is declared so code naming it still builds, but nothing constructs or wires it and it
+    /// does nothing on the page. The retarget names the same kind as BL8023; the design route used
+    /// to name it nowhere (review, 2026-09-19).
+    /// </summary>
+    public const string KindNotOnTarget = "BL8029";
 
     /// <summary>
     /// A component kind under <c>&lt;Controls&gt;</c>, or a control kind under

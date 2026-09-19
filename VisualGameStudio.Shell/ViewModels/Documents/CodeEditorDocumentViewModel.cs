@@ -279,8 +279,29 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
             return;
         }
 
-        PropertyGrid.SelectedControl = null;
+        // ⚠ Both stores, not only the grid: a deleted control left in Selection is a ghost the
+        // next tray click could not displace (Set() is a no-op for the control already selected).
+        SelectInDesigner(null);
         WriteDesignerEditBack();
+    }
+
+    /// <summary>
+    /// Selects a control everywhere at once — the shared <see cref="Selection"/> that the canvas,
+    /// the tray and every command read, and the property grid.
+    ///
+    /// <para>⛔⛔ ONE selection path (Task 25 review). A drop used to write the grid ALONE, and a
+    /// tray click wrote the selection alone; after "click Timer1, drop a ToolTip, click Timer1,
+    /// Delete" the two disagreed, the tray highlighted Timer1, and the tray's Delete — which passes
+    /// the grid's control — removed the ToolTip. Every write to the grid from this class goes
+    /// through here or through <see cref="Selection"/>, whose <c>Changed</c> the constructor
+    /// subscribes to. The grid write below is redundant when the selection actually changes and
+    /// load-bearing when it does not: <c>Set</c> is a no-op for a control that is already the whole
+    /// selection, and the grid must still show it.</para>
+    /// </summary>
+    private void SelectInDesigner(BasicLang.Forms.FormControl? control)
+    {
+        Selection.Set(control);
+        PropertyGrid.SelectedControl = control;
     }
 
     /// <summary>
@@ -509,7 +530,7 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
                 WriteDesignerEditBack();
             }
 
-            PropertyGrid.SelectedControl = control;
+            SelectInDesigner(control);
             _eventAggregator.Publish(new NavigateToFileEvent(codePath, plan.CaretLine));
         }
         catch (Exception ex)
@@ -637,8 +658,9 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         WriteDesignerEditBack();
 
         // A designer drops a control and puts its properties in front of you. Selecting it also
-        // draws the selection outline, which is how the user sees WHERE it landed.
-        PropertyGrid.SelectedControl = result.Control;
+        // draws the selection outline (or the tray highlight), which is how the user sees WHERE it
+        // landed — through the one selection store, so the tray, the canvas and the grid agree.
+        SelectInDesigner(result.Control);
         return null;
     }
 
@@ -834,6 +856,12 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         // ⚠ In the constructor, not a property initializer: an initializer cannot reference the
         // instance member Selection (CS0236), and the tray marks its items from that selection.
         Tray = new ViewModels.Designer.FormTrayViewModel(Selection);
+
+        // ⛔ The grid FOLLOWS the selection here, in the view model — not only through the canvas's
+        // TwoWay binding, which a tray click never touches and a headless test never has. The tray's
+        // Delete passes the grid's control, so the grid must never lag the selection (see
+        // SelectInDesigner for the sequence that deleted the wrong component).
+        Selection.Changed += (_, _) => PropertyGrid.SelectedControl = Selection.Primary;
     }
 
     /// <summary>The component tray under the canvas (Task 25): a view of <c>DesignDocument.Components</c>.</summary>

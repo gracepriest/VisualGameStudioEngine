@@ -113,6 +113,8 @@ public static class RegionWriter
 
         CheckAnchors(filePath, form, diagnostics);
         CheckTargetProperties(filePath, form, diagnostics);
+        CheckComponentTargets(filePath, form, diagnostics);
+        CheckComponentBinds(filePath, form, diagnostics);
         CheckHandlerOrdering(filePath, index, form, init, diagnostics);
         if (diagnostics.Any(d => !d.IsWarning))
         {
@@ -245,6 +247,98 @@ public static class RegionWriter
     }
 
     /// <summary>
+    /// Warns about a component whose kind the target does not have — a ToolTip in a
+    /// <c>.blwebform</c>. The toolbox never offers one, but a hand edit can carry one, and it used to
+    /// be modelled, declared as an <c>Element</c>, then constructed by nothing and reported by
+    /// nothing (review, 2026-09-19). The field stays declared so code naming it still builds.
+    /// </summary>
+    private static void CheckComponentTargets(
+        string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
+    {
+        foreach (var component in form.AllComponents())
+        {
+            var definition = component.Definition;
+            if (definition == null || definition.SupportsTarget(form.Target))
+            {
+                continue;
+            }
+
+            diagnostics.Add(new DesignDiagnostic(
+                DesignCodes.KindNotOnTarget,
+                $"{DesignCodes.KindNotOnTarget}: '{component.Id}' is a {definition.Kind}, which has no " +
+                $"{form.Target} form. Its field is declared so code naming it still builds, but " +
+                "nothing constructs or wires it here. Retarget the form to see what crosses, or " +
+                "remove it.",
+                filePath, 0, 0, IsWarning: true));
+        }
+    }
+
+    /// <summary>
+    /// Warns about a bind <see cref="AppendComponentInit"/> will not emit: on the web a component's
+    /// only wiring is its construct template, on its default event, so a bind on any other event has
+    /// no form here. It used to vanish silently while STILL driving the ordering refusal (review,
+    /// 2026-09-19); now it is named, and <see cref="CheckHandlerOrdering"/> ignores it.
+    /// </summary>
+    private static void CheckComponentBinds(
+        string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
+    {
+        if (form.Target != FormTarget.Web)
+        {
+            return;
+        }
+
+        foreach (var component in form.AllComponents())
+        {
+            var definition = component.Definition;
+            if (definition == null || !definition.SupportsTarget(form.Target))
+            {
+                // The KIND is the finding (BL8029), not each of its binds.
+                continue;
+            }
+
+            foreach (var bind in component.Binds)
+            {
+                if (bind.UsesReservedDataBinding || string.IsNullOrEmpty(bind.Handler) ||
+                    IsEmittedBind(form, component, bind))
+                {
+                    continue;
+                }
+
+                diagnostics.Add(new DesignDiagnostic(
+                    DesignCodes.BindNotOnTarget,
+                    $"{DesignCodes.BindNotOnTarget}: '{component.Id}' wires its '{bind.Event}' event to " +
+                    $"{bind.Handler}, but a web {definition.Kind} is wired only through its " +
+                    $"'{definition.DefaultEvent(FormTarget.Web)}' event, so the wiring is not written " +
+                    "into the generated code. The document keeps it, and WinForms wires it.",
+                    filePath, 0, 0, IsWarning: true));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether the init region will actually wire this bind — the ONE answer the emitter, the
+    /// ordering check and the bind warning share, so a bind cannot be refused over in one place and
+    /// never emitted in another. A control's binds all reach <c>addEventListener</c> or
+    /// <c>AddHandler</c>; a component's do on WinForms; on the web a component is wired only through
+    /// its template, on its default event.
+    /// </summary>
+    private static bool IsEmittedBind(FormDocument form, FormControl control, FormBind bind)
+    {
+        if (string.IsNullOrEmpty(bind.Handler))
+        {
+            return false;
+        }
+
+        if (form.Target != FormTarget.Web || control.Definition is not { IsComponent: true } definition)
+        {
+            return true;
+        }
+
+        return definition.WebScript != null &&
+               string.Equals(bind.Event, definition.DefaultEvent(FormTarget.Web), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Refuses a handler declared AFTER the region that wires it — <b>on the web only</b>.
     ///
     /// <para>⛔⛔ MEASURED 2026-09-13, because applying it to both targets refuses the very shape
@@ -279,10 +373,11 @@ public static class RegionWriter
 
         // Components too (Task 25). A Timer's parameterless callback is not bitten by the erasure
         // (measured), so for it this check is stricter than the compiler — the safe side.
+        // ⛔ Only binds the region EMITS: refusing over a wiring that is never written told the user
+        // to move a handler above a region that did not reference it (review, 2026-09-19).
         var handlers = form.AllControls().Concat(form.AllComponents())
-            .SelectMany(c => c.Binds)
+            .SelectMany(c => c.Binds.Where(b => IsEmittedBind(form, c, b)))
             .Select(b => b.Handler)
-            .Where(h => !string.IsNullOrEmpty(h))
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
@@ -536,21 +631,18 @@ public static class RegionWriter
 
         if (form.Target == FormTarget.Web)
         {
+            // The same predicate the ordering check and the bind warning use — one definition of
+            // "this bind is wired", so the three cannot disagree about a document.
             var script = definition?.WebScript;
-            var eventName = definition?.DefaultEvent(FormTarget.Web);
-            var bind = eventName == null
-                ? null
-                : component.Binds.FirstOrDefault(b =>
-                    !string.IsNullOrEmpty(b.Handler) &&
-                    string.Equals(b.Event, eventName, StringComparison.OrdinalIgnoreCase));
+            var bind = component.Binds.FirstOrDefault(b => IsEmittedBind(form, component, b));
 
             if (script == null || bind == null)
             {
                 return;
             }
 
-            body.Append($"{inner}{component.Id} = {ExpandWebScript(script.Construct, definition!, component, bind.Handler)}")
-                .Append(newline);
+            var construct = ExpandWebScript(script.Construct, definition!, component, bind.Handler, filePath, diagnostics);
+            body.Append($"{inner}{component.Id} = {construct}").Append(newline);
             return;
         }
 
@@ -564,8 +656,14 @@ public static class RegionWriter
     /// and <c>{Name}</c> is that catalog property's document value when set and valid, else the
     /// row's default. A placeholder the row does not declare is left in place, visibly — a catalog
     /// typo must not become a silently empty argument.
+    ///
+    /// <para>⚠ A Degraded value falls back to the default AND is reported (BL8009), as
+    /// <see cref="AppendProperties"/> reports the same document on WinForms. The number was always
+    /// right; the silence meant one document's Error List differed by target (review, 2026-09-19).</para>
     /// </summary>
-    private static string ExpandWebScript(string template, FormControlDef definition, FormControl component, string handler)
+    private static string ExpandWebScript(
+        string template, FormControlDef definition, FormControl component, string handler,
+        string filePath, List<DesignDiagnostic> diagnostics)
     {
         return System.Text.RegularExpressions.Regex.Replace(template, @"\{(\w+)\}", match =>
         {
@@ -581,9 +679,19 @@ public static class RegionWriter
                 return match.Value;
             }
 
-            if (component.Properties.TryGetValue(property.Name, out var value) && property.Accepts(value))
+            if (component.Properties.TryGetValue(property.Name, out var value))
             {
-                return value;
+                if (property.Accepts(value))
+                {
+                    return value;
+                }
+
+                diagnostics.Add(new DesignDiagnostic(
+                    DesignCodes.DegradedProperty,
+                    $"{DesignCodes.DegradedProperty}: '{component.Id}.{property.Name}' is '{value}', " +
+                    $"which is not a valid {property.Type}, so the catalog default '{property.Default}' " +
+                    "is written in its place. The value is preserved in the document.",
+                    filePath, 0, 0, IsWarning: true));
             }
 
             return property.Default ?? "";

@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Xml.Linq;
 using Avalonia.Controls;
 using Avalonia.Headless;
@@ -54,14 +55,20 @@ public class FormTrayViewTests
         doc.Components.Add(tmr);
 
         var delete = new Recorder();
-        var canvas = new FormCanvasControl { Document = doc, SelectedControl = tmr, DeleteCommand = delete };
+        var canvas = new FormCanvasControl { Document = doc, DeleteCommand = delete };
         var window = new Window { Width = 600, Height = 500, Content = canvas };
         window.Show();
         canvas.Focus();
 
-        // Rendering with a geometry-less selection: no handles to draw, and no exception.
-        using var frame = window.CaptureRenderedFrame();
-        Assert.That(frame, Is.Not.Null, "no rendered frame — Skia is required to render pixels");
+        // ⛔ "Draws nothing" is a PIXEL claim: the frame with the component selected must be the
+        // frame with nothing selected. Asserting only that a frame exists let a canvas that drew
+        // handles at (0,0) for a component pass (review, 2026-09-19).
+        var unselected = Hash(window);
+        canvas.SelectedControl = tmr;
+        var selected = Hash(window);
+
+        Assert.That(selected, Is.EqualTo(unselected),
+            "selecting a component changed the pixels — the canvas drew handles or an outline for a thing with no place");
 
         window.KeyPress(Key.Delete, RawInputModifiers.None);
 
@@ -103,6 +110,10 @@ public class FormTrayViewTests
                     (string?)k.Attribute("Gesture") == "Delete" &&
                     ((string?)k.Attribute("Command") ?? "").Contains("DeleteControlCommand")),
                 Is.True, "the tray's own Delete must reach DeleteControlCommand");
+            Assert.That(keyBindings.Any(k =>
+                    (string?)k.Attribute("Gesture") == "Delete" &&
+                    ((string?)k.Attribute("CommandParameter") ?? "").Contains("PropertyGrid.SelectedControl")),
+                Is.True, "…WITH the grid's control: DeleteControl(null) is a silent no-op, and the grid is what follows the selection");
 
             Assert.That(text, Does.Contain("Tray.Items"), "the tray is bound to the view model's items");
             Assert.That(text, Does.Contain("OnTrayItemPressed").And.Contain("OnTrayItemDoubleTapped"),
@@ -114,6 +125,15 @@ public class FormTrayViewTests
             Assert.That(codeBehind, Does.Contain("ComponentTray.Focus()"),
                 "clicking a tray item must move keyboard focus into the tray, or its Delete never fires");
         });
+    }
+
+    private static string Hash(Window window)
+    {
+        using var frame = window.CaptureRenderedFrame()
+            ?? throw new InvalidOperationException("No rendered frame — Skia is required to render pixels.");
+        using var stream = new MemoryStream();
+        frame.Save(stream);
+        return Convert.ToHexString(SHA256.HashData(stream.ToArray()));
     }
 
     private static string? FindRepoFile(params string[] relativeParts)

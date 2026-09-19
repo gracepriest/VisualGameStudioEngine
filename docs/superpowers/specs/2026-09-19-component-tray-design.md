@@ -84,12 +84,12 @@ walks "all elements" implicitly.
 | `FormDocumentReader` `<Components>` | **read as components** | §3 |
 | `FormDocumentWriter.Apply` | **yes — `ApplyComponents`** | today `<Components>` is write-never; without this nothing in the tray persists and undo (which is text) cannot see it |
 | `FormDocumentWriter.Create` | **yes** | today it writes an empty `<Components/>` and drops `model.Components` — the retarget pair loses them |
-| `RegionWriter` fields / init / `CheckTargetProperties` / `CheckHandlerOrdering` | **yes, first** | VS constructs components before controls; the `Controls.Add` run never sees them |
+| `RegionWriter` fields / init / `CheckTargetProperties` / `CheckHandlerOrdering` | **yes, first** | VS constructs components before controls; the `Controls.Add` run never sees them. Plus two checks of its own (review): `CheckComponentTargets` (BL8029, a kind the target lacks) and `CheckComponentBinds` (BL8028, a web bind the template cannot wire); `IsEmittedBind` is the one predicate the emitter, the ordering check and the warning share |
 | Reader `CheckDuplicateIds`, `FindById`, `ListContaining` | **yes** | one class, one field namespace; Delete/Cut go through `ListContaining` |
 | `RenumberTabIndexes`, `FormPlacement.NextTabIndex` | no | a component has no tab order |
 | Canvas `Layout` / `HitTest` / `ContainerAt` / render | no | nothing to draw; a selected component draws no handles (measured by reading the guards; §7 adds the headless test) |
 | `FormAssetEmitter` markup / CSS | no | a component has no element; the web Timer is script (§4) |
-| `FormRetarget` | **yes** | same kind/property/bind rules; no geometry pass; WinForms-only components become BL8023 |
+| `FormRetarget` | **yes** | same kind/property/bind rules; no geometry pass; WinForms-only components become BL8023. Plus one rule of its own (review): "wired means running" crosses by `FormWebScript.Implies` in both directions and is named BL8027 — a wired web Timer arrives on the window `Enabled=true`; a wired WinForms Timer that is not enabled is reported as one the page WILL run |
 | `FormClipboard` | **yes** | copy/cut/paste route a component kind to `Components`, never to `Controls` |
 
 ## 3. The document
@@ -211,16 +211,37 @@ erasure (M8), so the check is stricter than the compiler there, which is the saf
 timer is the user's `w.clearInterval(tmrPoll)` — `::window.clearInterval(tmrPoll)` in a handler.
 
 `WebScript.Construct` is a template with two placeholder kinds — `{handler}` and a property name in
-braces — filled from the bind and the properties (falling back to the catalog default), and it may
-name `w`, the typed `Window` the region declares once whenever any script component exists. The
-writer never switches on `Kind`.
+braces — filled from the bind and the properties (falling back to the catalog default, and
+REPORTING a Degraded value as BL8009 the way `AppendProperties` does on WinForms, so one document's
+Error List does not differ by target), and it may name `w`, the typed `Window` the region declares
+once whenever any script component exists. The writer never switches on `Kind`.
+
+**What the web cannot wire is named, never dropped (review, 2026-09-19).** A web component is wired
+ONLY through its template on its default event, so a `<Bind>` on any other event — the reader
+accepts any event name — is warned as BL8028 and is NOT collected by the BL8013 ordering check,
+which used to refuse the write over a wiring the region never contained. A component whose kind has
+no web row (a hand-edited `<ToolTip>` in a `.blwebform`) is warned as BL8029: its field stays
+declared so code naming it builds, and nothing constructs it. `RegionWriter.IsEmittedBind` is the
+one predicate all three — the emitter, the ordering check, the warning — share.
+
+**"Wired means running" is a row-stated rule, and the retarget crosses it.** `FormWebScript.Implies`
+names the property the other target uses to say what the construct says on the web — for the Timer,
+`Enabled=true`. `FormRetarget` applies it both ways and names it (BL8027): web → WinForms sets the
+property so the window's Timer runs as the page's did; WinForms → web with the property held and a
+bind crossing reports the property as *the wiring itself* rather than a loss (no BL8024); WinForms →
+web wired but NOT enabled reports that the page's Timer will run from load. Unwired, nothing runs on
+either side and the property is a plain BL8024 loss, as before. The fixed-point round trip is now
+byte-identical INCLUDING `Enabled`.
 
 ## 6. The surface
 
 - **Tray.** Column 1 of the design view becomes a two-row grid: canvas above, a tray `Border`
   below, visible when the document has components. Items: glyph + id, laid out horizontally, the
-  selected one highlighted. Click → `Selection.Set(component)`; the canvas's existing `Changed`
-  subscription pushes it into `PropertyGrid.SelectedControl` (one selection path, not two).
+  selected one highlighted. Click → `Selection.Set(component)`; the HOST view model's own `Changed`
+  subscription pushes the primary into `PropertyGrid.SelectedControl` (one selection path, not two —
+  and a DROP selects through the same store, `SelectInDesigner`: the review found a drop that wrote
+  the grid alone, after which the tray's Delete, which passes the grid's control, removed the wrong
+  component while the other was highlighted).
   Double-click → `ActivateControlCommand` (the default handler, Task 22). `Delete` on the tray →
   `DeleteControlCommand`. The tray is a drop target for COMPONENT kinds only, through its OWN
   command, `TrayDropCommand(kind)` — `FormControlDropRequest` carries no origin and
@@ -257,12 +278,37 @@ writer never switches on `Kind`.
   `Layout` never yields bounds for one; `FormRetargetTests.EveryCatalogKind_Retargets_…` builds a
   component row into `Components` and reads the crossed control from the list the row's
   `IsComponent` selects. The assertions themselves — what was lost, what crossed — are unchanged.
-- Headless: a component selected on the canvas draws nothing and throws nothing; Delete from the
-  tray removes it; the tray shows the document's components; the AXAML binds every tray command.
+- Headless: a component selected on the canvas draws nothing — a PIXEL claim, the frame with it
+  selected hashes equal to the frame with nothing selected — and throws nothing; Delete from the
+  tray removes it; the tray shows the document's components; the AXAML binds every tray command
+  WITH the grid's control as the Delete parameter.
+- The review's repro, as a test: click a tray item, drop another component, click the first again,
+  Delete through the grid's control — the clicked one goes, the selection empties. Every allowed
+  value of every Enum row through csc, one control per value.
 - **Acceptance, executed:** a WinForms form with a Timer (`Interval=1`, `Enabled`, a Tick handler
   that prints) through the real CLI, csc and a running window, asserting the tick; a web form with a
   Timer built by the real CLI and run under node with a `setInterval` stub, asserting the tick.
 - Mutation kills for every new test, as on Tasks 21–26.
+
+## 7a. Adversarial review after the four commits (2026-09-19) — what it found and what changed
+
+Four finders over the diff, two skeptics per finding, majority to confirm: 14 raised, 8 confirmed.
+
+| Finding | Disposition |
+|---|---|
+| A drop wrote only the property grid; a tray click wrote only `Selection`; `Set` is a no-op for the control already selected; the tray's Delete passes the grid's control → deleted the wrong component (HIGH) | `SelectInDesigner` + the host's `Changed` subscription (§6); Delete empties both stores |
+| A freshly dropped component was never highlighted in the tray | same fix |
+| Web component bind on a non-default event dropped silently yet drove BL8013 | BL8028 + `IsEmittedBind` (§5) |
+| Web → WinForms: a wired Timer arrived `Enabled` absent and never fired, unnamed | `FormWebScript.Implies` + BL8027 (§5) |
+| WinForms-only component in a `.blwebform` read with no finding | BL8029 (§5) |
+| "DrawsNothing" never asserted (frame existence only) | frame-hash equality (§7) |
+| `EmitsOnlyItsField` asserted neither "only" nor the `Window` local | pinned |
+| csc sweep compiled only the first Enum value | every value, one control per value (§7) |
+
+Refuted and left: a nested component through `FormClipboard.FromElement` (unreachable —
+followups 21); the retarget sweep not asserting the other list empty (the sibling pins cover it);
+the no-op Save test, the AXAML `CommandParameter` and the web Degraded template each split 1–1 and
+were tidied anyway because each was one line.
 
 ## 8. Deliberately out of scope, and where it goes
 

@@ -256,8 +256,14 @@ public static class FormRetarget
                 var control = new FormControl { Kind = source.Kind, Id = source.Id, TabIndex = source.TabIndex };
                 _sourceGeometry[control] = Translate(source.Geometry, offset);
 
-                ConvertProperties(source, control, definition);
+                // "Wired means running" (Task 25 review): a script component's construct on the web
+                // is what WinForms says with a property. Decided BEFORE the properties cross, because
+                // it is what makes that property the wiring itself (BL8027) rather than a loss (BL8024).
+                var implied = WiredRunState(source, definition);
+
+                ConvertProperties(source, control, definition, implied);
                 ConvertBinds(source, control, definition);
+                CrossRunState(source, control, definition, implied);
 
                 foreach (var unknown in source.UnknownChildren)
                 {
@@ -297,7 +303,12 @@ public static class FormRetarget
             Warn(DesignCodes.RetargetControlLost, message.ToString());
         }
 
-        private void ConvertProperties(FormControl source, FormControl control, FormControlDef definition)
+        /// <param name="implied">
+        /// The row's implied property when the source is wired on the event that crosses — the one
+        /// property whose absence on the destination is the wiring itself, not a loss.
+        /// </param>
+        private void ConvertProperties(
+            FormControl source, FormControl control, FormControlDef definition, FormImpliedProperty? implied)
         {
             foreach (var (name, value) in source.Properties)
             {
@@ -307,6 +318,15 @@ public static class FormRetarget
                 // reader routes those to UnknownAttributes. Not ours to judge — carry it.
                 if (property != null && !property.AppliesTo(_to))
                 {
+                    if (implied != null &&
+                        string.Equals(name, implied.Name, StringComparison.OrdinalIgnoreCase) &&
+                        SameValue(property, value, implied.Value))
+                    {
+                        // Not a loss: CrossRunState names it as the wiring itself (BL8027). Reporting
+                        // it as BL8024 told the user to "re-express it on the other side" — of nothing.
+                        continue;
+                    }
+
                     Warn(DesignCodes.RetargetPropertyLost,
                         $"'{source.Id}.{name}' = \"{value}\" does not exist on a {Describe(_to)} {source.Kind}, " +
                         "so it was dropped. Re-express it on the other side if the page or window needs it.");
@@ -361,6 +381,78 @@ public static class FormRetarget
                     $"('{fromEvent}' → '{toEvent}') has a measured name on both sides. The wiring was dropped; " +
                     $"wire {bind.Handler} by hand on the other side.");
             }
+        }
+
+        // ==============================================================
+        // "Wired means running" crosses by RULE, and is named (Task 25 review)
+        //
+        // A web Timer runs the moment it is wired; a WinForms one runs only with Enabled=True. Left
+        // to the property rules alone, a wired web Timer arrived on the window with Enabled absent —
+        // default False — and never fired, with no finding; and a disabled WinForms Timer arrived on
+        // the page wired, and ran from load, with no finding. The catalog row states the equivalence
+        // (FormWebScript.Implies); this is the one place that applies it, in both directions.
+        // ==============================================================
+
+        /// <summary>The row's implied property, when the source is wired on the event that crosses; else null.</summary>
+        private FormImpliedProperty? WiredRunState(FormControl source, FormControlDef definition)
+        {
+            var implied = definition.WebScript?.Implies;
+            var fromEvent = definition.DefaultEvent(_from);
+            if (implied == null || fromEvent == null)
+            {
+                return null;
+            }
+
+            var wired = source.Binds.Any(b =>
+                !b.UsesReservedDataBinding && !string.IsNullOrEmpty(b.Handler) &&
+                string.Equals(b.Event, fromEvent, StringComparison.OrdinalIgnoreCase));
+
+            return wired ? implied : null;
+        }
+
+        private void CrossRunState(
+            FormControl source, FormControl control, FormControlDef definition, FormImpliedProperty? implied)
+        {
+            if (implied == null)
+            {
+                return;
+            }
+
+            if (_to == FormTarget.WinForms)
+            {
+                // The web side ran; make the window run too, and say so. Set over anything the source
+                // carried: a stray Enabled="false" on a .blwebform never stopped the page's Timer.
+                control.Properties[implied.Name] = implied.Value;
+                Warn(DesignCodes.RetargetRunStateCrossed,
+                    $"'{source.Id}' is a wired {Describe(_from)} {source.Kind}, which runs as soon as it is " +
+                    $"wired, so '{implied.Name}=\"{implied.Value}\"' was set on the {Describe(_to)} side to keep " +
+                    "it running. Clear it if the window should start it from code instead.");
+                return;
+            }
+
+            var property = definition.Property(implied.Name);
+            var held = source.Properties.TryGetValue(implied.Name, out var value) &&
+                       SameValue(property, value, implied.Value);
+
+            Warn(DesignCodes.RetargetRunStateCrossed, held
+                ? $"'{source.Id}.{implied.Name}' = \"{value}\" crossed as the wiring itself: a {Describe(_to)} " +
+                  $"{source.Kind} runs as soon as it is wired, and this one is."
+                : $"'{source.Id}' is wired but '{implied.Name}' is not \"{implied.Value}\" on the {Describe(_from)} " +
+                  $"side, so the window's {source.Kind} would not run until code started it. A {Describe(_to)} " +
+                  $"{source.Kind} runs as soon as it is wired, so the page's will run from load. Remove the " +
+                  "bind if it should not.");
+        }
+
+        /// <summary>Equality in the property's own terms: <c>True</c> and <c>true</c> are one Bool.</summary>
+        private static bool SameValue(FormPropertyDef? property, string a, string b)
+        {
+            if (property?.Type == FormPropertyType.Bool &&
+                bool.TryParse(a, out var x) && bool.TryParse(b, out var y))
+            {
+                return x == y;
+            }
+
+            return string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
         }
 
         private static FormGeometry? Translate(FormGeometry? geometry, (int X, int Y) offset)

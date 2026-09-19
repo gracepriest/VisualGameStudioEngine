@@ -192,6 +192,8 @@ public class FormComponentDocumentTests
             File.WriteAllText(path, WithComponents);
             var file = FormDocumentReader.Read(path, WithComponents);
 
+            // Save short-circuits on a REFUSED document too, and that False would look identical.
+            Assert.That(file.IsRefused, Is.False, string.Join("; ", file.Diagnostics.Select(d => d.Format())));
             Assert.That(FormDocumentWriter.Save(file), Is.False);
         }
         finally

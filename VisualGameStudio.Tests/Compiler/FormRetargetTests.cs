@@ -776,8 +776,96 @@ public class FormRetargetTests
             Assert.That(tmr.Binds.Single().Event, Is.EqualTo("tick"), "the catalog's default event, in the web's vocabulary");
             Assert.That(tmr.Binds.Single().Handler, Is.EqualTo("tmr_Tick"));
 
-            Assert.That(Of(result, DesignCodes.RetargetPropertyLost).Single().Message, Does.Contain("'tmr.Enabled'"));
+            // Enabled="true" on a WIRED Timer is not a loss: on the web the wiring IS the enabling.
+            // Reporting it as BL8024 told the user to "re-express it on the other side" — of nothing.
+            Assert.That(Of(result, DesignCodes.RetargetPropertyLost), Is.Empty);
+            var crossed = Of(result, DesignCodes.RetargetRunStateCrossed).Single();
+            Assert.That(crossed.IsWarning, Is.True);
+            Assert.That(crossed.Message, Does.Contain("'tmr.Enabled'").And.Contain("wiring"));
             Assert.That(source.Components[0].Properties.ContainsKey("Enabled"), Is.True, "the source is untouched");
+        });
+    }
+
+    // ==================================================================
+    // "Wired means running" is a RULE, and it crosses by name (review, 2026-09-19)
+    //
+    // A web Timer runs the moment it is wired; a WinForms one runs only with Enabled=True. The
+    // catalog row states the equivalence (FormWebScript.Implies), and the retarget applies it in
+    // both directions and names what it did — never a Timer that silently stops, or silently starts.
+    // ==================================================================
+
+    private const string WebWithTimer = """
+        <WebForm Name="LoginForm" Version="1">
+          <Layout Kind="Grid"/>
+          <Controls><Button Id="btn" Col="0" Row="0" TabIndex="0"/></Controls>
+          <Components><Timer Id="tmr" Interval="50"><Bind Event="tick" Handler="tmr_Tick"/></Timer></Components>
+        </WebForm>
+        """;
+
+    [Test]
+    public void ToWeb_AWiredTimerThatIsNotEnabled_WarnsThatThePageWillRunIt()
+    {
+        var source = WinForms(WinFormsWithTray.Replace(" Enabled=\"true\"", ""));
+
+        var result = FormRetarget.Convert(source, FormTarget.Web);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Document.Components.Single(c => c.Id == "tmr").Binds.Single().Event, Is.EqualTo("tick"),
+                "the wiring still crosses — dropping the handler would be a bigger silent loss");
+            var crossed = Of(result, DesignCodes.RetargetRunStateCrossed).Single();
+            Assert.That(crossed.IsWarning, Is.True);
+            Assert.That(crossed.Message, Does.Contain("'tmr'").And.Contain("Enabled").And.Contain("run"));
+        });
+    }
+
+    [Test]
+    public void ToWeb_AnUnwiredTimer_LosesEnabledAsBefore_AndSaysNothingAboutRunning()
+    {
+        var source = WinForms(WinFormsWithTray.Replace("<Bind Event=\"Tick\" Handler=\"tmr_Tick\"/>", ""));
+
+        var result = FormRetarget.Convert(source, FormTarget.Web);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Of(result, DesignCodes.RetargetPropertyLost).Single().Message, Does.Contain("'tmr.Enabled'"),
+                "with no handler nothing runs on either side, so Enabled is simply a property the web lacks");
+            Assert.That(Of(result, DesignCodes.RetargetRunStateCrossed), Is.Empty);
+        });
+    }
+
+    [Test]
+    public void ToWinForms_AWiredWebTimer_ArrivesEnabled_AndSaysSo()
+    {
+        var source = Web(WebWithTimer);
+
+        var result = FormRetarget.Convert(source, FormTarget.WinForms);
+        var tmr = result.Document.Components.Single();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(tmr.Properties["Enabled"], Is.EqualTo("true"),
+                "a web Timer runs as soon as it is wired; the WinForms default (False) would have made it never fire");
+            var crossed = Of(result, DesignCodes.RetargetRunStateCrossed).Single();
+            Assert.That(crossed.IsWarning, Is.True);
+            Assert.That(crossed.Message, Does.Contain("'tmr'").And.Contain("Enabled"));
+        });
+
+        Assert.That(FormRetarget.ConvertToPair(source, FormTarget.WinForms).CodeText, Does.Contain("tmr.Enabled = True"),
+            "and the generated window actually starts it");
+    }
+
+    [Test]
+    public void ToWinForms_AnUnwiredWebTimer_ArrivesAsItWas()
+    {
+        var source = Web(WebWithTimer.Replace("<Bind Event=\"tick\" Handler=\"tmr_Tick\"/>", ""));
+
+        var result = FormRetarget.Convert(source, FormTarget.WinForms);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Document.Components.Single().Properties.ContainsKey("Enabled"), Is.False, "nothing was running");
+            Assert.That(Of(result, DesignCodes.RetargetRunStateCrossed), Is.Empty);
         });
     }
 
@@ -807,13 +895,7 @@ public class FormRetargetTests
     [Test]
     public void ToWinForms_AWebTimer_CrossesToTheTray_WithItsTickBind()
     {
-        var source = Web("""
-            <WebForm Name="LoginForm" Version="1">
-              <Layout Kind="Grid"/>
-              <Controls><Button Id="btn" Col="0" Row="0" TabIndex="0"/></Controls>
-              <Components><Timer Id="tmr" Interval="50"><Bind Event="tick" Handler="tmr_Tick"/></Timer></Components>
-            </WebForm>
-            """);
+        var source = Web(WebWithTimer);
 
         var doc = FormRetarget.Convert(source, FormTarget.WinForms).Document;
         var tmr = doc.Components.Single();
@@ -839,10 +921,10 @@ public class FormRetargetTests
 
         var back = RoundTrip(source);
 
-        // Enabled is WinForms-only and is LOST on the way to the web, so the round trip is
-        // byte-identical everywhere but that one attribute — which is the loss the finding names.
-        var expected = FormDocumentWriter.Create(source).Replace(" Enabled=\"true\"", "");
-        Assert.That(FormDocumentWriter.Create(back), Is.EqualTo(expected));
+        // Enabled is WinForms-only and does not exist on the web — but a WIRED web Timer runs, and the
+        // way back derives Enabled="true" from that wiring (FormWebScript.Implies), so the round trip
+        // is byte-identical INCLUDING the one attribute the web cannot hold.
+        Assert.That(FormDocumentWriter.Create(back), Is.EqualTo(FormDocumentWriter.Create(source)));
     }
 
     [Test]

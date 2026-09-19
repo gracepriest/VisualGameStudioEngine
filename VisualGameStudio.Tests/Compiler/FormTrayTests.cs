@@ -69,8 +69,49 @@ public class FormTrayTests
             Assert.That(vm.Tray.Items[0].Glyph, Is.EqualTo("(t)"), "the toolbox's own mark, not a second table");
             Assert.That(vm.Tray.IsVisible, Is.True);
             Assert.That(vm.PropertyGrid.SelectedControl?.Id, Is.EqualTo("Timer1"), "a drop puts its properties in front of you");
+            Assert.That(vm.Selection.Primary?.Id, Is.EqualTo("Timer1"), "…through the ONE selection store, not the grid alone");
+            Assert.That(vm.Tray.Items[0].IsSelected, Is.True, "so the tray highlights what the grid shows");
             Assert.That(vm.Text, Does.Contain("<Timer Id=\"Timer1\""), "it reached the document, so it is undoable");
             Assert.That(vm.TextDocument.Text, Is.EqualTo(vm.Text), "and the editor's copy agrees");
+        });
+    }
+
+    /// <summary>
+    /// The review's repro, on the tray alone. A drop that wrote only the property grid left
+    /// <c>Selection</c> holding the last CLICKED item; the tray's Delete passes the GRID's control;
+    /// so after "click Timer1, drop a ToolTip, click Timer1, Delete" the ToolTip went and the
+    /// highlighted Timer survived. One store, one path: a drop selects through <c>Selection</c>,
+    /// the grid follows it, and Delete empties it.
+    /// </summary>
+    [Test]
+    public void ATrayClick_AfterADrop_PutsTheClickedComponentInTheGrid_SoDeleteRemovesThatOne()
+    {
+        var vm = Open();
+        vm.PlaceControl("Timer", 0, 0);
+        vm.Tray.Select(vm.Tray.Items[0]);
+        vm.PlaceControl("ToolTip", 0, 0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.PropertyGrid.SelectedControl?.Id, Is.EqualTo("ToolTip1"));
+            Assert.That(vm.Tray.Items.Single(i => i.IsSelected).Id, Is.EqualTo("ToolTip1"),
+                "after a drop the highlight and the grid must agree");
+        });
+
+        vm.Tray.Select(vm.Tray.Items.Single(i => i.Id == "Timer1"));
+
+        Assert.That(vm.PropertyGrid.SelectedControl?.Id, Is.EqualTo("Timer1"), "the grid follows the click");
+
+        // Exactly what the tray's Delete KeyBinding passes: the grid's control.
+        vm.DeleteControlCommand.Execute(vm.PropertyGrid.SelectedControl);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.DesignDocument!.Components.Select(c => c.Id), Is.EqualTo(new[] { "ToolTip1" }),
+                "the clicked one went; the other stayed");
+            Assert.That(vm.Selection.IsEmpty, Is.True, "a deleted control must not linger as the selection");
+            Assert.That(vm.PropertyGrid.SelectedControl, Is.Null);
+            Assert.That(vm.Tray.Items.Any(i => i.IsSelected), Is.False);
         });
     }
 
