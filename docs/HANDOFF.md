@@ -1394,11 +1394,12 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   (`private static`; CS0122 once the call was qualified, CS0103 before). **FIXED the same day** —
   see the "NO-MODIFIER PROCEDURE IS PUBLIC" entry below: the parser's default, and procedure
   access enforced by the front end on all four.
-  ⚠ **PINNED, pre-existing and UNMASKED rather than caused**: a CLASS method calling a module
-  procedure by bare name. The front end used to refuse the whole program ("Cannot return type
-  'Object'"); it resolves now and runs on JavaScript, MSIL and C#, while C++ emits the class
-  BEFORE the free-function prototypes — `'Twice' was not declared`. An emission-order gap; the
-  call text is right. Also pre-existing and untouched: a class declared INSIDE a Module block
+  ⚠ **WAS PINNED, pre-existing and UNMASKED rather than caused — FIXED the same day, see the
+  "CLASS BODY CAN REFERENCE ANY FREE FUNCTION OR GLOBAL ON C++" entry below**: a CLASS method
+  calling a module procedure by bare name. The front end used to refuse the whole program
+  ("Cannot return type 'Object'"); once it resolved, it ran on JavaScript, MSIL and C#, while C++
+  emitted the class BEFORE the free-function prototypes — `'Twice' was not declared`. An
+  emission-order gap; the call text was right. Also pre-existing and untouched: a class declared INSIDE a Module block
   (`Helpers.Box`) is broken on all four; MSIL fails any ByRef call (InvalidProgramException) and
   JavaScript refuses ByRef by design (BL7002) — the qualified-ByRef case asserts both as they are.
   ⚠ **`FourBackends` is the shared harness now** (`Norm`, `RunsOnEveryBackend`,
@@ -1512,6 +1513,78 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   module-variable tests. Full suite in place: 195 / 6069 / 203 / 6467 against the 195 / 6015 /
   203 / 6413 baseline at `e486382` — 195 reported = 195 anchored lines, the same 170 failing
   names, nothing new and nothing newly passing; the +54 are the fixture's 54 cases.
+
+  ⚠ **A CLASS BODY CAN REFERENCE ANY FREE FUNCTION OR GLOBAL ON C++ as of 2026-09-19** —
+  `CppEmissionOrderTests` (fixture), `CppCodeGenerator.EmitDeclarationsClassBodiesNeed` (shared
+  by `Generate` and `CppCodeGenerator.Split.EmitAggregateHeader`), the KEEP-IN-SYNC section
+  order in both. The pinned ordering gap in `ModuleProcedureCallTests` is promoted to
+  `AClassMethodCallingAModuleProcedure_RunsOnEveryBackend`.
+  ⛔ **A CLASS'S METHODS ARE DEFINED INLINE IN ITS BODY, AND AN INLINE MEMBER BODY SEES ONLY THE
+  NAMESPACE-SCOPE NAMES DECLARED BEFORE THE CLASS.** The emitter wrote forward decls → enums →
+  delegates → interfaces → CLASSES → static inits → globals → externs → prototypes → bodies. So
+  every free function and every global a method touched was "use of undeclared identifier" on
+  this backend alone — measured, compiled and run on all four, before the change: a Module's
+  `Twice(4)` and `Helpers.Twice(5)`, its Sub, a file-scope function (declared before OR after
+  the class), a constructor's call, a property getter's, a Shared method's, an Optional and a
+  ByRef callee, a Module global (bare and qualified), a Const, a sized array, a string, a
+  file-scope global, a struct global, a global initialized from an earlier global — and the
+  SPLIT header identically. JavaScript, MSIL and C# ran every one of the module-scoped ones.
+  ⚠ **The fix**: prototypes of the standalone functions and `extern` declarations of the
+  globals go out after the interfaces and BEFORE any class body, from one helper both emitters
+  call; the definitions keep their places (a struct global needs its complete type; a global's
+  initializer needs the globals declared before it — `Dim I As Integer = H` is asserted to
+  still hold). Placement is measured, not assumed: a prototype naming an ENUM must follow the
+  enums, one naming an INTERFACE must follow the interfaces (interfaces are not forward-declared;
+  classes and structs are, and a forward declaration is enough for a prototype even by value).
+  `extern T g;` followed by the split header's `inline T g = …;` is one inline variable —
+  measured on g++ and clang++ across two translation units before writing it.
+  ⛔ **A SECOND, DISTINCT DEFECT, found while pairing the split declarations with their
+  definitions: the split header DROPPED A GLOBAL'S DECLARED INITIALIZER.** `Public Count As
+  Integer = 5` built through a `.blproj` was `inline int32_t Count = {};` and read 0 — the
+  wrong number from a build that reported success, on that path alone. The combined emission had
+  this exact bug fixed on 2026-09-17 ("a DECLARED initializer wins") and the split site never
+  got it; `Split_AModuleGlobalWithADeclaredInitializer_IsInitialized_CompilesAndRuns` is its
+  own test, with no class involved. Fifth declaration site of the same helper, second home of
+  the same drop.
+  ⚠ **C# HAS ITS OWN GAP HERE, PINNED, NOT FIXED**: it qualifies a call or a global only when the
+  callee's module name differs from the emitting function's, and a class body — or a MODULE
+  BLOCK — is never inside the file module's static class. So a FILE-SCOPE function or global
+  used from a class method, or from `Module M`'s `Sub Main`, is CS0103 on C# while the other
+  three run it (`AClassMethod_CallingAFileScopeFunction_RunsOnThree_AndIsPinnedOnCSharp`, the
+  global twin, and `AModule_CallingAFileScopeFunction_…`). `UserCallTarget` / `QualifyCross-
+  ModuleGlobal` need "the emitting function is not in that module's class", not "the module
+  names differ" — and a file-scope callee arrives with no `CalleeModule` at all (no
+  `OwningModule`), so the C# backend must find the declaring `IRFunction` by name. Next candidate.
+  ⛔ **FOUR C++ GAPS MEASURED AND PINNED, none this change's**: (1) a class using a LATER class's
+  member — "member access into incomplete type"; the reverse order runs on all four. Needs
+  out-of-line member definitions (or dependency-ordered classes); the prototype fix cannot
+  reach it. (2) A `ReadOnly Property … Get` is not reachable as `b->Doubled` ("no member
+  named"); the other three print 12. (3) `Me` passed to a free function taking the class —
+  `this` is a raw pointer where the prototype wants `shared_ptr<Box>`. (4) A GENERIC free
+  function is "unknown type name 'T'" even from `Main`. **And one JavaScript gap**: a
+  constructor writing a call result STRAIGHT to a field (`V = Twice(21)`) prints 0; the
+  local-first form prints 42 on all four. Each pinned with the exact compiler message.
+  ⚠ **The front end refuses these shapes on all four, so no test could use them**: an enum
+  member as a call ARGUMENT (`Code(Color.Green)` — "cannot convert from 'Object' to 'Color'";
+  the multi-file front end ACCEPTS it and C++ then fails "'Color' does not refer to a value"),
+  `New Sq()` as an interface-typed argument, `AddressOf` to a Delegate parameter, a global of
+  class type declared AFTER the class that reads it, a non-constant static field initializer.
+  The enum and interface placement tests use a typed local instead.
+  ⛔ **ELEVEN MUTATIONS, ELEVEN KILLS (94 in all) — ONE SURVIVED THE FIRST SWEEP AND TWO DID
+  NOT BUILD.** The survivor: the SPLIT header's block placed BEFORE the enums passed every test,
+  because no split test carried an enum-typed prototype (the single-file placement test did).
+  Two split tests now mirror the single-file enum and interface ones; it dies to both, and the
+  interfaces twin dies to exactly one. The two that did not build were ill-formed MUTANTS, not
+  survivors: moving the call above the enums referenced `standaloneFunctions` before its
+  declaration; corrected to compute the list inline, they die to the enum test (and the
+  interface test, which is also after the enums) and to the interface test alone. Discrimination
+  held everywhere else: "after the classes" in one emitter never touched the other's tests,
+  "no global declarations" never touched a function-only test, the `extern` keyword dropped
+  in the split header was a duplicate symbol across two translation units (the pre-existing
+  fixed-size-array split test died too), and the initializer drop died to its own class-free
+  test. Full suite in place: 195 / 6101 / 203 / 6499 against the 195 / 6069 / 203 / 6467 baseline
+  at `d2ad064` — 195 reported = 195 anchored lines, the same 170 failing names, nothing new and
+  nothing newly passing; the +32 are the fixture's 32 cases.
   ⚠ **Narrowing shapes are refused by the SEMANTIC ANALYZER, before any of this** —
   `Public N As Single = 1.5 + 1.0` is "Cannot assign value of type 'Double' to variable of type
   'Single'", before and after. Not a folding gap.

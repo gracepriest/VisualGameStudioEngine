@@ -205,7 +205,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                                          List<IRFunction> templateFunctions)
         {
             // KEEP IN SYNC with Generate() section order (CppCodeGenerator.cs): forward decls →
-            // enums → delegates → interfaces → classes → static inits → globals → externs → functions.
+            // enums → delegates → interfaces → function prototypes → global declarations →
+            // classes → static inits → global definitions → externs → template definitions.
             WriteLine("#pragma once");
             WriteLine($"#include \"{RuntimeHeaderFileName}\"");
             WriteLine();
@@ -256,6 +257,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 }
             }
 
+            // Prototypes and `extern` global declarations BEFORE the class bodies, for the same
+            // reason as the combined emission (see Generate): an inline member body sees only
+            // what precedes its class. The `inline` definitions below pair with these
+            // declarations — an `extern T g;` followed by `inline T g = …;` in the same header
+            // is one inline variable, measured on g++ and clang++ across two translation units.
+            EmitDeclarationsClassBodiesNeed(module, standaloneFunctions, globalPrefix: "extern ");
+
             if (module.Classes.Count > 0)
             {
                 WriteLine("// Classes");
@@ -289,7 +297,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     // project path emits split headers instead, so `Dim g(4, 3)` built through a
                     // project produced `inline ... g = {};` and ACCESS-VIOLATED on the first
                     // index while the identical program run through the CLI was correct.
-                    var init = SizedArrayInitializer(globalVar.Type, type) ?? "{}";
+                    //
+                    // ⛔ And the DECLARED initializer was dropped here too, in the same way the
+                    // combined emission dropped it until 2026-09-17: `Public Count As Integer = 5`
+                    // built through a project was `inline int32_t Count = {};` and read 0 — the
+                    // wrong number from a build that reported success, on this path alone.
+                    // Measured while pairing these definitions with the `extern` declarations
+                    // above. Same rule as the combined site: a declared initializer wins.
+                    var init = globalVar.InitialValue != null
+                        ? ValueText(globalVar.InitialValue)
+                        : SizedArrayInitializer(globalVar.Type, type) ?? "{}";
                     WriteLine($"inline {type} {name} = {init};");
                 }
                 WriteLine();
@@ -306,16 +323,6 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 }
                 Unindent();
                 WriteLine("}");
-                WriteLine();
-            }
-
-            if (standaloneFunctions.Count > 0)
-            {
-                WriteLine("// Function declarations");
-                foreach (var function in standaloneFunctions)
-                {
-                    GenerateFunctionDeclaration(function);
-                }
                 WriteLine();
             }
 

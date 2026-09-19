@@ -110,7 +110,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             // KEEP IN SYNC with GenerateSplit/EmitAggregateHeader (CppCodeGenerator.Split.cs):
             // the section order below (forward decls → enums → delegates → interfaces →
-            // classes → static inits → globals → externs → functions) is mirrored there.
+            // function prototypes → global declarations → classes → static inits → global
+            // definitions → externs → functions) is mirrored there.
             // Generate forward declarations for classes
             if (module.Classes.Count > 0)
             {
@@ -156,6 +157,23 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     WriteLine();
                 }
             }
+
+            // Get standalone functions (not class methods; lambdas are inlined at use sites)
+            var standaloneFunctions = module.Functions
+                .Where(f => !f.IsExternal && !f.IsLambda && !IsClassMethod(f, module))
+                .ToList();
+
+            // ⛔ A class's methods are defined INLINE in its body, and an inline member body sees
+            // only the namespace-scope names declared BEFORE the class: a prototype or an
+            // `extern` after it does not count. So every free function and every global a
+            // method touched — a Module's `Twice(4)`, its `Count`, a file-scope one — was
+            // "use of undeclared identifier" on this backend alone, while JavaScript, MSIL and
+            // C# ran the same program. The prototypes and the globals' DECLARATIONS come here,
+            // after the enums, delegates and interfaces they may name (a forward-declared class
+            // or struct is enough for a declaration, even by value) and before any class body;
+            // the definitions keep their places below, where a struct global needs its complete
+            // type and a global's initializer needs the globals declared before it.
+            EmitDeclarationsClassBodiesNeed(module, standaloneFunctions, globalPrefix: "extern ");
 
             // Generate classes
             if (module.Classes.Count > 0)
@@ -233,22 +251,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 WriteLine();
             }
 
-            // Get standalone functions (not class methods; lambdas are inlined at use sites)
-            var standaloneFunctions = module.Functions
-                .Where(f => !f.IsExternal && !f.IsLambda && !IsClassMethod(f, module))
-                .ToList();
-
-            // Generate function declarations
+            // Generate function implementations (the prototypes went out before the classes)
             if (standaloneFunctions.Count > 0)
             {
-                WriteLine("// Function declarations");
-                foreach (var function in standaloneFunctions)
-                {
-                    GenerateFunctionDeclaration(function);
-                }
-                WriteLine();
-
-                // Generate function implementations
                 WriteLine("// Function implementations");
                 foreach (var function in standaloneFunctions)
                 {
@@ -291,6 +296,37 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// count standalone BasicLang mains with the identical rule. Null-hardened so a
         /// partially-built IR unit can't NRE it.
         /// </summary>
+        /// <summary>
+        /// What a class body may reference and must therefore find declared BEFORE it: the
+        /// prototype of every standalone function and a declaration of every global. Shared
+        /// by the combined emission and the split header (KEEP IN SYNC note in
+        /// <see cref="Generate"/>): the one difference is <paramref name="globalPrefix"/> —
+        /// <c>extern </c> in both today, spelled by the caller so the definition site that
+        /// pairs with it is visible beside it.
+        /// </summary>
+        private void EmitDeclarationsClassBodiesNeed(IRModule module, List<IRFunction> standaloneFunctions, string globalPrefix)
+        {
+            if (standaloneFunctions.Count > 0)
+            {
+                WriteLine("// Function declarations");
+                foreach (var function in standaloneFunctions)
+                {
+                    GenerateFunctionDeclaration(function);
+                }
+                WriteLine();
+            }
+
+            if (module.GlobalVariables.Count > 0)
+            {
+                WriteLine("// Global variable declarations (defined after the classes)");
+                foreach (var globalVar in module.GlobalVariables.Values)
+                {
+                    WriteLine($"{globalPrefix}{MapType(globalVar.Type)} {SanitizeName(globalVar.Name)};");
+                }
+                WriteLine();
+            }
+        }
+
         internal static bool IsClassMethod(IRFunction function, IRModule module)
         {
             if (module?.Classes == null)
