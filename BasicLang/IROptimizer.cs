@@ -1548,7 +1548,36 @@ namespace BasicLang.Compiler.IR.Optimization
         {
             AddStandardPasses();
             AddPass(new LoopInvariantCodeMotionPass());
-            AddPass(new FunctionInliningPass());
+
+            // FunctionInliningPass DISABLED — it has never produced correct output for any
+            // function it actually inlines, and it MISCOMPILES SILENTLY. Same call as the
+            // ConstantPropagationPass line in AddStandardPasses above: the pass stays in the file
+            // (its CloneAndRemap is still the only clone path an IRCall can reach, which
+            // NetIrCarriageTests exercises by adding it explicitly) but nothing ships it.
+            //
+            // MEASURED on `Function F(p As Integer) As Integer : Return p * 2` called as `F(6)`,
+            // which produced this Main:
+            //     _inline_t1_0 = 12;         // undeclared, and nothing reads it
+            //     t1 = (p << 1);             // undeclared t1, and the CALLEE'S PARAMETER p leaked
+            //     const t0 = String(F(6));   // ...and the original call still happens
+            // Six of seven call shapes measured this way fail at run time (ReferenceError); the
+            // seventh only survives because IsInlineable REFUSES it for block count. All seven are
+            // correct without this pass. FIVE separate defects, not one:
+            //  1. Inlined locals are never added to the caller's LocalVariables, so every one is
+            //     emitted undeclared.
+            //  2. A definition is renamed by `tempCounter` while its USES are renamed by
+            //     `prefix + name` (RemapValue) — two schemes that can never agree, which is the
+            //     `_inline_t1_0` / `_inline_t1_x` mismatch above.
+            //  3. RemapValue only rewrites an IRVariable and returns anything else untouched, so a
+            //     nested operand tree keeps the callee's own variables and parameters.
+            //  4. InlineCallsInBlock never calls ReplaceUses, so consumers still reference the
+            //     removed IRCall and the callee is emitted and CALLED anyway — the very thing
+            //     ReplaceUses' own doc comment says a pass that swaps an instruction must do.
+            //  5. `depth` is passed 0 and never incremented, so _maxInlineDepth is dead.
+            // Repairing it is a rewrite, not a patch, and inlining buys nothing here: clang, the
+            // CLR JIT and V8 all inline far better than this pass could downstream.
+            // AddPass(new FunctionInliningPass());
+
             AddPass(new TailCallOptimizationPass());
             AddPass(new AlgebraicSimplificationPass());
             AddPass(new LoopFusionPass());  // Fuse adjacent loops before unrolling

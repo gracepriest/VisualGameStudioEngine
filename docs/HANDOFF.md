@@ -1091,17 +1091,45 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   constructor. Measured — REMOVING the assignment left all 18 tests green while CORRUPTING it failed
   11, so the tests are name-sensitive without the line being needed. It came out rather than staying
   as an assignment that acts and changes nothing.
-  ⛔ **TWO PRE-EXISTING `--optimize` DEFECTS FOUND WHILE DOING THIS, neither fixed:**
-  - **`FunctionInliningPass` emits undeclared garbage.** For `Dim x = 2 * p : Return x + x` called
-    from `Main`, the aggressive pipeline emitted `_inline_t1_0 = 12;` and
-    `_inline_t1_1 = ((_inline_t1_x + _inline_t1_x) | 0);` and `t1 = ((x + x) | 0);` into `Main` — all
-    undeclared — **and still called `F(6)` afterwards**. `ReferenceError` at run time. Aggressive
-    pipeline only (not in `AddStandardPasses`), so no default route reaches it. **`--optimize`
-    cannot be described as working** until this is fixed; it is the larger of the two.
+  ⛔ **TWO PRE-EXISTING `--optimize` DEFECTS FOUND WHILE DOING THIS:**
+  - **`FunctionInliningPass` emits undeclared garbage — DISABLED 2026-09-19**, see the entry below.
+    For `Dim x = 2 * p : Return x + x` called from `Main`, the aggressive pipeline emitted
+    `_inline_t1_0 = 12;` and `_inline_t1_1 = ((_inline_t1_x + _inline_t1_x) | 0);` and
+    `t1 = ((x + x) | 0);` into `Main` — all undeclared — **and still called `F(6)` afterwards**.
+    `ReferenceError` at run time.
   - **`AlgebraicSimplificationPass` never calls `ReplaceUses`**, which its own base-class contract
     says a pass that swaps an instruction MUST do. Consumers still holding the discarded node render
     an undeclared `t{N}`. Not triggered by the shapes measured here (the value's consumer is a field
     read), and unchanged by this fix — the flag transfer neither creates nor cures it.
+  ⚠ **`FunctionInliningPass` is DISABLED as of 2026-09-19** — `FunctionInliningDisabledTests`,
+  commented out of `AddAggressivePasses` with the measurements beside it.
+  ⛔ **It never produced correct output for any function it actually inlined**, and it miscompiled
+  SILENTLY — clean build, `ReferenceError` at run time. On
+  `Function F(p As Integer) As Integer : Return p * 2` called as `F(6)`:
+  `_inline_t1_0 = 12;` (undeclared, and nothing reads it), `t1 = (p << 1);` (undeclared, and the
+  CALLEE'S PARAMETER `p` leaked in), then `const t0 = String(F(6));` — **the original call still
+  happens**. SIX of seven call shapes failed at run time; the seventh passed only because
+  `IsInlineable` REFUSES it for block count, so there was no shape where inlining succeeded. All
+  seven are correct without the pass.
+  ⛔ **FIVE separate defects, which is why this is a rewrite and not a patch**: (1) inlined locals
+  are never added to the caller's `LocalVariables`, so each is emitted undeclared; (2) a definition
+  is renamed by `tempCounter` while its USES are renamed by `prefix + name`, two schemes that can
+  never agree; (3) `RemapValue` rewrites only an `IRVariable` and returns any nested operand tree
+  untouched, leaking the callee's variables and parameters; (4) `InlineCallsInBlock` never calls
+  `ReplaceUses`, so consumers still reference the removed `IRCall` and the callee is called anyway;
+  (5) `depth` is passed 0 and never incremented, so `_maxInlineDepth` is dead.
+  ⚠ **The PASS CLASS IS KEPT, not deleted.** `CloneAndRemap` is still the only clone path an
+  `IRCall` can reach, and four `NetIrCarriageTests` guard the .NET resolution carriage through it.
+  They now add the pass EXPLICITLY. Verified load-bearing: removing those four lines makes all four
+  fail their own "did not inline Helper … this test proves nothing" guards, so the protection is
+  intact rather than vacuous. **Deleting the class would silently delete that coverage.**
+  ⚠ **Precedent**: `ConstantPropagationPass` is already commented out of `AddStandardPasses` in the
+  same file ("incorrectly propagates across control flow merges"). Inlining buys nothing here
+  anyway — clang, the CLR JIT and V8 all inline far better downstream.
+  ⚠ **The re-enable mutation kills 7 of 9 tests**; the two survivors are the branchy callee (never
+  inlined) and the pin that runs the pass directly either way. If someone repairs the pass,
+  `RunDirectly_ThePassStillMiscompiles…` goes RED — that is the signal to re-enable it and delete
+  that test, not to weaken it.
   ⚠ **Narrowing shapes are refused by the SEMANTIC ANALYZER, before any of this** —
   `Public N As Single = 1.5 + 1.0` is "Cannot assign value of type 'Double' to variable of type
   'Single'", before and after. Not a folding gap.

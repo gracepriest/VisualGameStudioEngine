@@ -148,9 +148,10 @@ public class NetIrCarriageTests
     /// regression the carriage exists to prevent, and the mutation this file was verified
     /// against.
     ///
-    /// <para>Note <c>FunctionInliningPass</c> is in <c>AddAggressivePasses</c>, NOT
-    /// <c>AddStandardPasses</c> — so the standard-pipeline round trip above never reaches it.
-    /// That asymmetry is the whole reason this test exists separately.</para>
+    /// <para>Note <c>FunctionInliningPass</c> is in NEITHER pipeline any more — it was disabled
+    /// for miscompiling every function it inlined — so this test adds it explicitly. The clone
+    /// path it owns is still the only one an <see cref="IRCall"/> can reach, so the carriage
+    /// still needs guarding; that is the whole reason this test exists separately.</para>
     /// </summary>
     [Test]
     public void AggressivePipelinePreservesCarriageThroughTheInliningClonePath()
@@ -186,6 +187,14 @@ public class NetIrCarriageTests
 
         var pipeline = new OptimizationPipeline();
         pipeline.AddAggressivePasses();
+
+        // ⛔ ADDED EXPLICITLY because FunctionInliningPass is NO LONGER in AddAggressivePasses —
+        // it was disabled for miscompiling every function it inlined (see the comment there).
+        // This test is about the CLONE PATH, not about shipping the pass: CloneAndRemap is still
+        // the only clone path an IRCall can reach, so the carriage it protects still needs
+        // guarding. Running the pass directly keeps that protection exactly as it was while the
+        // shipping pipeline no longer runs it.
+        pipeline.AddPass(new FunctionInliningPass());
         pipeline.Run(module);
 
         // Guard: the inliner must actually have fired, or this test proves nothing about the
@@ -271,6 +280,14 @@ public class NetIrCarriageTests
 
         var pipeline = new OptimizationPipeline();
         pipeline.AddAggressivePasses();
+
+        // ⛔ ADDED EXPLICITLY because FunctionInliningPass is NO LONGER in AddAggressivePasses —
+        // it was disabled for miscompiling every function it inlined (see the comment there).
+        // This test is about the CLONE PATH, not about shipping the pass: CloneAndRemap is still
+        // the only clone path an IRCall can reach, so the carriage it protects still needs
+        // guarding. Running the pass directly keeps that protection exactly as it was while the
+        // shipping pipeline no longer runs it.
+        pipeline.AddPass(new FunctionInliningPass());
         pipeline.Run(module);
 
         var mainInstructions = module.Functions
@@ -386,6 +403,14 @@ public class NetIrCarriageTests
 
         var pipeline = new OptimizationPipeline();
         pipeline.AddAggressivePasses();
+
+        // ⛔ ADDED EXPLICITLY because FunctionInliningPass is NO LONGER in AddAggressivePasses —
+        // it was disabled for miscompiling every function it inlined (see the comment there).
+        // This test is about the CLONE PATH, not about shipping the pass: CloneAndRemap is still
+        // the only clone path an IRCall can reach, so the carriage it protects still needs
+        // guarding. Running the pass directly keeps that protection exactly as it was while the
+        // shipping pipeline no longer runs it.
+        pipeline.AddPass(new FunctionInliningPass());
         pipeline.Run(module);
 
         var mainInstructions = module.Functions
@@ -641,6 +666,14 @@ public class NetIrCarriageTests
 
         var pipeline = new OptimizationPipeline();
         pipeline.AddAggressivePasses();
+
+        // ⛔ ADDED EXPLICITLY because FunctionInliningPass is NO LONGER in AddAggressivePasses —
+        // it was disabled for miscompiling every function it inlined (see the comment there).
+        // This test is about the CLONE PATH, not about shipping the pass: CloneAndRemap is still
+        // the only clone path an IRCall can reach, so the carriage it protects still needs
+        // guarding. Running the pass directly keeps that protection exactly as it was while the
+        // shipping pipeline no longer runs it.
+        pipeline.AddPass(new FunctionInliningPass());
         pipeline.Run(module);
 
         var mainInstructions = module.Functions
