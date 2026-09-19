@@ -193,11 +193,22 @@ internal static class MsilHarness
     /// </summary>
     internal static MsilRun Run(string source, string moduleName = "MsilProbe", string stdin = null)
     {
-        var ilasm = RequireIlasm();
+        RequireIlasm();
 
         string il;
         try { il = CompileToIl(source, moduleName); }
         catch (Exception ex) { return new MsilRun(MsilOutcome.GenerateFailed, "", "", ex.Message); }
+
+        return RunIl(il, moduleName, stdin);
+    }
+
+    /// <summary>
+    /// The IL → process half on its own, for IL generated from a COMBINED multi-file module
+    /// (which <see cref="Run"/>'s single-source front half cannot produce).
+    /// </summary>
+    internal static MsilRun RunIl(string il, string moduleName = "MsilProbe", string stdin = null)
+    {
+        var ilasm = RequireIlasm();
 
         var dir = Path.Combine(Path.GetTempPath(), "blmsil-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
@@ -251,6 +262,14 @@ internal static class MsilHarness
         string source, string moduleName = "MsilProbe", string stdin = null)
     {
         var r = Run(source, moduleName, stdin);
+        Assert.That(r.Outcome, Is.EqualTo(MsilOutcome.Ran), r.Report);
+        return r.Output;
+    }
+
+    /// <summary><see cref="RunIl"/>, asserting it ran and returning what it printed.</summary>
+    internal static string RunIlExpectingSuccess(string il, string moduleName = "MsilProbe")
+    {
+        var r = RunIl(il, moduleName);
         Assert.That(r.Outcome, Is.EqualTo(MsilOutcome.Ran), r.Report);
         return r.Output;
     }
