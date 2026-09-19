@@ -34,8 +34,8 @@ namespace VisualGameStudio.Tests.Compiler;
 /// field would be the one scope where that check vanished. Asserted below.</para>
 ///
 /// <para>⛔ TWO shapes inherited PRE-EXISTING <c>Shared</c> defects and were NOT this change's,
-/// each verified on a plain <c>Shared</c> field with this change stashed. <b>The first has since
-/// been FIXED</b>; the second is still open:</para>
+/// each verified on a plain <c>Shared</c> field with this change stashed. <b>BOTH have since been
+/// FIXED</b>, each in the backend that owned the defect rather than here:</para>
 ///
 /// <list type="bullet">
 /// <item><b>JavaScript read it as <c>undefined</c> — FIXED.</b> The class emitted
@@ -43,9 +43,12 @@ namespace VisualGameStudio.Tests.Compiler;
 /// It was the JS backend's static lowering rather than the Const path, exactly as recorded, and
 /// fixing that there fixed this: a class Const now emits <c>return Box.K;</c> and runs 9, so the
 /// headline test below asserts all FOUR backends. See <c>JavaScriptSharedMemberTests</c>.</item>
-/// <item><b>Reading it from OUTSIDE (<c>Box.K</c>) does not compile on C++</b> —
-/// <c>t0 = Box-&gt;K;</c>, "'Box' does not refer to a value". Identical for a plain Shared field;
-/// the long-recorded Shared-access gap. STILL OPEN.</item>
+/// <item><b>Reading it from OUTSIDE (<c>Box.K</c>) did not compile on C++ — FIXED.</b> It emitted
+/// <c>t0 = Box-&gt;K;</c>, "'Box' does not refer to a value" — the class name treated as an object.
+/// Identical for a plain <c>Shared</c> field, which is what it always was: the long-recorded
+/// C++ Shared-access gap, not a Const one. Qualified access now lowers to <c>t0 = Box::K;</c> and
+/// runs 9; <c>CppSharedAccessTests.AClassConstant_IsReadableFromOutside</c> asserts this exact
+/// shape, so it is covered there rather than duplicated here.</item>
 /// </list>
 /// </summary>
 [TestFixture]

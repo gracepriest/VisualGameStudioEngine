@@ -444,9 +444,12 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   `ParamArray xs As Integer()` are both syntax errors), so a guard clause for it was written and
   then removed — untestable, and redundant anyway since an array-typed parameter is already
   rejected by the Integer/Long/Single/Double restriction.
-  ⚠ **Still failing for unrelated reasons, all pre-existing**: a `Shared` method on a user class
-  emits an undeclared identifier on C++ (the JS half of this was FIXED 2026-09-19, see the JS
-  Shared-method entry); MSIL fails any ByRef call with InvalidProgramException.
+  ⚠ **Still failing for unrelated reasons, all pre-existing**: MSIL fails any ByRef call with
+  InvalidProgramException. **The C++ half of this note is now STALE and is corrected here**: a
+  `Shared` method on a user class emitted an undeclared identifier on C++, and both that and the
+  JavaScript equivalent were FIXED 2026-09-19 (see the JS Shared-method entry and the C++
+  `Shared`-access entry). Fixing them did NOT move this row — it still fails, on MSIL, which is
+  why the row's name is unchanged in the by-name suite comparison.
   ⚠ **Omitted `Optional` arguments are filled at the CALL as of 2026-09-16** —
   `IRBuilder.AppendOmittedOptionalArguments`, at the same three arms the argument coercion uses.
   ⛔ **One backend of four was right, and it was right by accident.** C# emits the default into the
@@ -961,8 +964,10 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   entry below): it read as `undefined` because the class emitted `static K = 9;` and the method read
   `this.K`, and that was the backend's static lowering exactly as recorded — so a class Const now
   emits `return Box.K;` and runs 9, and `AClassConstant_IsReadableFromAMethod` asserts all FOUR
-  backends rather than three. **STILL OPEN**: reading it from outside as `Box.K` does not compile on
-  C++ (`t0 = Box->K;`, "'Box' does not refer to a value" — the long-recorded Shared-access gap).
+  backends rather than three. **The C++ one is FIXED as of 2026-09-19** (see the C++ `Shared`-access
+  entry below): reading it from outside as `Box.K` emitted `t0 = Box->K;`, "'Box' does not refer to
+  a value", and now emits `t0 = Box::K;` and runs 9. `AClassConstant_IsReadableFromOutside` asserts
+  it.
   ⚠ **Referencing the named constant from another initializer (`= K + 1`) is still refused** — the
   folder substitutes no named constants. A SHARED limit, not a class one: module scope refuses the
   identical shape.
@@ -1157,6 +1162,73 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   inlined) and the pin that runs the pass directly either way. If someone repairs the pass,
   `RunDirectly_ThePassStillMiscompiles…` goes RED — that is the signal to re-enable it and delete
   that test, not to weaken it.
+
+  ⚠ **QUALIFIED `Shared` access works on C++ as of 2026-09-19** — `CppSharedAccessTests`,
+  `CppCodeGenerator`: `StaticMemberQualifier` + `StaticCallTarget` over
+  `DeclaringClassOfStaticMember` / `DeclaringClassOfStaticMethod`, at three call sites
+  (`Visit(IRFieldAccess)`, `Visit(IRFieldStore)`, `Visit(IRCall)`).
+  ⛔ **EVERY qualified form treated the class name as an OBJECT; every unqualified and in-class
+  form already worked.** Measured before: `Box.K` → `Box->K` ("'Box' does not refer to a value");
+  `Box.K = 5` → `Box->K = 5` ("cannot use arrow operator on a type"); `Box.Read()` → `Read()`, the
+  qualifier DROPPED ("use of undeclared identifier 'Read'"). The class DECLARATION was always
+  right (`static int32_t K;`), so only the USE site was ever wrong.
+  ⛔ **The CALL had a DIFFERENT cause, and it is the sharp one.** `ResolveFlattenedFunctionName`
+  exists to align a cross-module call (`Helpers.Print`) with the flattened free function the
+  backend emits. Class member bodies ALSO live in `_module.Functions` under their bare names, so
+  `Box.Read` found a free function `Read`, concluded it was a flattened module procedure, and threw
+  the qualifier away. The helper's premise — a qualifier naming a MODULE — does not hold for a
+  class, so the fix goes at the CALL SITE and leaves that helper alone.
+  ⛔ **THE SEGMENTS MUST BE SANITIZED SEPARATELY.** `ICodeGenerator.SanitizeName` strips every
+  non-alphanumeric character, so handing it `"Box::Read"` yields **`BoxRead`** — a name that exists
+  nowhere, and a SILENT mis-emission rather than a compile error. The first draft returned the
+  qualified string from `ResolveFlattenedFunctionName` and would have hit exactly that; the
+  JavaScript backend hit the same trap with dotted names. Caught by reading `SanitizeName` before
+  shipping, and pinned by the `sanitize-whole` mutation (kills 5).
+  ⚠ **MSIL is asserted alongside throughout** — the property is "C++ now agrees with the backend
+  that has this right", not "C++ prints 9".
+  ⛔ **A SHADOW TEST CAN PASS WHILE THE GUARD IS GONE, and this one did.** `Dim Box As Integer = 3`
+  shadowing the class name is handled by `_declaredIdentifiers`; the first draft wrote through the
+  shadow and read it straight back (`Box::K = 3; t0 = Box::K;`), which agrees with itself whichever
+  location it picked. It took a read from an UNSHADOWED scope (`Function PeekBoxK() As Integer :
+  Return Box.K`, asserting `3,9`) to kill the mutation. **This is the identical weakness recorded
+  for the JS Shared-property write** — found there, then reproduced here.
+  ⛔ **INHERITED access is STILL BROKEN, for FRONT-END reasons, in TWO guises, both pinned.** The
+  lowering is correct in both — the base walk resolves to the DECLARING class.
+  - A **read**: the IR types an inherited `Shared` read as `Object`, so the temp is declared
+    `void*` and C++ rejects the assignment ("incompatible integer to pointer conversion"). Measured
+    contrast: a DIRECT read declares `int32_t t0`, an inherited one `void* t0`, identical access
+    expression.
+  - A **Sub call**: the front end does not carry the inherited signature, so it builds an
+    EXPRESSION call and the backend binds the result — `t0 = Base::Bump();`, "void value not
+    ignored as it ought to be". The direct `Box.Bump()` emits a bare `Box::Bump();` statement and
+    runs. Same root cause, second face; found only because the Sub shape was probed at all.
+  ⚠ **The base walk is NOT speculative, and is proven by EXECUTION rather than by text.** An
+  inherited **WRITE** is the one inherited shape that runs today (it has no result temp to mistype):
+  `Derived.K = 7` then reading back through `Base.K` prints 7. Dropping the walk (`no-base-walk-
+  field`) kills that test AND the read pin.
+  ⛔ **`Derived::K` versus `Base::K` is a FORM choice, not a behaviour one — stated rather than
+  dressed up.** Emitting the WRITTEN class was measured to compile and give the SAME answer, because
+  C++ resolves a qualified static through the base. The `written-class` mutation is therefore killed
+  by a FORM PIN only, and the test says so. The declaring-class form is chosen because the walk must
+  run anyway to decide whether to qualify AT ALL (that part IS behavioural) and because it is what
+  the other backends emit.
+  ⚠ **RECORDED SURVIVOR — `no-isstatic`** (drop the `IsStatic` filter on the field lookup). With
+  the shadow guard running first, it only changes WHICH compile error an INVALID program produces:
+  `Box.N` for an instance field — which the front end wrongly accepts — gives "'Box' does not refer
+  to a value" with the filter and "invalid use of non-static data member 'N'" without. Verified it
+  cannot reach a VALID program either: modules are not in `_module.Classes`, so a qualified module
+  variable is unaffected (measured identical, below). Kept with the rationale rather than deleted.
+  ⛔ **TWO measurement traps hit while proving this, both worth knowing.** (1) `written-class`
+  looked like a survivor because the grep matched the out-of-line static DEFINITION
+  (`int32_t Base::K = 4;`), which contains `Base::K` no matter what the ACCESS site emits — the pin
+  had the same hole and now matches the access STATEMENT. (2) The same mutant was first compared
+  against the METHOD fixture while it patches only the FIELD arm. **Both were "no difference"
+  readings from a probe that could not have shown one.**
+  ⛔ **A SEPARATE C++-ONLY GAP FOUND HERE, NOT FIXED — a qualified MODULE variable.**
+  `Helpers.Value` emits `Helpers.Value` (a dot, not `::`) — "'Helpers' was not declared in this
+  scope". The UNQUALIFIED `Value` runs (11), and C# and JavaScript both emit the qualified form
+  fine. The same SHAPE of defect this entry fixes for classes, one scope over; left out because it
+  is not a `Shared` member. Next obvious candidate.
   ⚠ **Narrowing shapes are refused by the SEMANTIC ANALYZER, before any of this** —
   `Public N As Single = 1.5 + 1.0` is "Cannot assign value of type 'Double' to variable of type
   'Single'", before and after. Not a folding gap.
