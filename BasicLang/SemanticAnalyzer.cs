@@ -9422,8 +9422,39 @@ namespace BasicLang.Compiler.SemanticAnalysis
             static bool IsReference(TypeInfo t) =>
                 (t.Kind == TypeKind.Class || t.Kind == TypeKind.Interface) && !IsScalar(t);
 
-            if ((IsReference(sourceType) && IsScalar(targetType)) ||
-                (IsScalar(sourceType) && IsReference(targetType)))
+            // ⛔⛔ AN UNRESOLVABLE .NET TYPE IS NOT A JUDGEMENT THIS CHECK CAN MAKE.
+            //
+            // `ResolveTypeName` falls back to the permissive .NET branch only after the type
+            // manager and the project-symbol channel have both declined the name, so a type that
+            // is absent from _typeManager AND looks like a .NET name is one the analyzer has
+            // never seen a declaration for. It registers as a Class-kind handle — which is why
+            // `AnchorStyles` is not TypeKind.Enum and does not take the enum exemption above.
+            //
+            // MEASURED 2026-09-18 against csc: `btn.Anchor = (AnchorStyles)7;` is ACCEPTED, and
+            // `btn.Anchor = 7` is rejected with CS0266. So `CType(7, AnchorStyles)` is both
+            // correct and necessary, and refusing it here is the ONLY reason the form designer
+            // could not emit a multi-edge `Anchor` — every stage downstream was already able to.
+            var targetIsUnresolvedNet =
+                _typeManager.GetType(targetType.Name) == null && IsNetType(targetType.Name);
+
+            // ⛔ The reference→scalar arm is UNTOUCHED. It is what closed chip task_0c803e75 — a
+            // GREEN build emitting `static_cast<int32_t>(NetRef)` — and its worst row is silent:
+            // any reference cast to Boolean compiles AND RUNS on the C++ backend, binding to the
+            // handle's `explicit operator bool()`. Loosening this direction would reopen that.
+            if (IsReference(sourceType) && IsScalar(targetType))
+            {
+                Error($"Cannot convert '{sourceType.Name}' to '{targetType.Name}': no such " +
+                      $"conversion exists",
+                      node.Line, node.Column);
+                return;
+            }
+
+            // ⚠ The native path stays protected without this check's help: CppCapabilityChecker
+            // refuses unmapped .NET types outright, and records that refusal as permanent until a
+            // .NET-surface design exists. So exempting this arm cannot put a .NET handle through
+            // a `static_cast` on C++ — it only stops refusing what the C# backend already emits
+            // correctly.
+            if (IsScalar(sourceType) && IsReference(targetType) && !targetIsUnresolvedNet)
             {
                 Error($"Cannot convert '{sourceType.Name}' to '{targetType.Name}': no such " +
                       $"conversion exists",

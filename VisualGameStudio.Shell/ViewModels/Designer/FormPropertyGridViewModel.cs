@@ -143,6 +143,28 @@ public partial class FormPropertyGridViewModel : ObservableObject
                 Rows.Add(IntRow("Y", () => pixel.Y, v => pixel.Y = v, Changed));
                 Rows.Add(IntRow("Width", () => pixel.Width, v => pixel.Width = Math.Max(1, v), Changed));
                 Rows.Add(IntRow("Height", () => pixel.Height, v => pixel.Height = Math.Max(1, v), Changed));
+
+                // ⛔⛔ PIXEL GEOMETRY ONLY, and that is D3 rather than an oversight. Anchor and Dock
+                // are WinForms layout vocabulary; a .blwebform control lives in a grid CELL and has
+                // no edges to anchor to. Offering them on the web would let the user set a value the
+                // emitter cannot use — the designer/runtime divergence D9 exists to prevent — and
+                // Task 21's retarget reports the loss when a form crosses formats.
+                //
+                // ⚠ Reached only through this arm, so the web grid cannot show them by accident:
+                // there is no `if (target == Web) hide` to forget.
+                Rows.Add(new FormPropertyRow(
+                    "Anchor", FormPropertyType.String,
+                    () => pixel.Anchor ?? "",
+                    v => pixel.Anchor = string.IsNullOrWhiteSpace(v) ? null : v,
+                    Changed,
+                    editor: FormRowEditor.AnchorPicker));
+
+                Rows.Add(new FormPropertyRow(
+                    "Dock", FormPropertyType.String,
+                    () => pixel.Dock ?? "",
+                    v => pixel.Dock = string.IsNullOrWhiteSpace(v) ? null : v,
+                    Changed,
+                    editor: FormRowEditor.DockPicker));
                 break;
 
             case GridGeometry grid:

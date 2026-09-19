@@ -269,15 +269,38 @@ public class WinFormsCatalogSweepTests
         });
     }
 
+    /// <summary>
+    /// ⚠ This test USED to assert the opposite — that a multi-edge anchor is REFUSED — and its
+    /// premise was true when written: BasicLang could not express a combined flags value, measured
+    /// three ways, and <c>docs/HANDOFF.md</c> carried the fix as an open decision for the owner.
+    ///
+    /// <para>Re-measured 2026-09-18: <c>Or</c> and <c>|</c> still fail, but <c>CType</c> was being
+    /// refused by <c>SemanticAnalyzer.RejectImpossibleConversion</c> rather than by the language —
+    /// and csc accepts <c>(AnchorStyles)13</c> perfectly well. That arm now exempts unresolvable
+    /// .NET types, so the designer emits what VS's own Anchor picker produces.</para>
+    ///
+    /// <para>⛔ The refusal it was protecting has NOT been dropped, only narrowed: an edge name the
+    /// enum does not have is still refused, because summing it as zero would silently anchor the
+    /// control to nothing. That case is covered here and in <c>FormAnchorEmissionTests</c>.</para>
+    /// </summary>
     [Test]
-    public void AMultiEdgeAnchor_IsRefused_RatherThanEmittedWrong()
+    [Category("Integration")]
+    public void AMultiEdgeAnchor_IsEmittedAndCompiles()
     {
-        // ⛔⛔ BasicLang cannot express a combined flags value — measured three ways: `Or` wants
-        // Boolean operands, `CType(7, AnchorStyles)` finds no conversion (the enum is an
-        // unresolvable .NET type), and `|` lexes but the parser never consumes it. Emitting one
-        // flag would put geometry on screen the running program does not reproduce; emitting all
-        // of them would not compile. Refusing says so once, at design time.
-        var form = FormWith(c => ((PixelGeometry)c.Geometry!).Anchor = "Left,Top,Right");
+        var generated = GenerateCSharp(
+            FormWith(c => ((PixelGeometry)c.Geometry!).Anchor = "Left,Top,Right"));
+
+        // Top(1) + Left(4) + Right(8) = 13
+        Assert.That(generated, Does.Contain("(AnchorStyles)(13)"));
+        WinFormsCompile.AssertCompiles(
+            generated, "a multi-edge anchor must produce C# csc accepts.");
+    }
+
+    /// <summary>⛔ The narrowed refusal: an edge AnchorStyles does not have.</summary>
+    [Test]
+    public void AnAnchorNamingAnEdgeThatDoesNotExist_IsStillRefused()
+    {
+        var form = FormWith(c => ((PixelGeometry)c.Geometry!).Anchor = "Left,Sideways");
 
         var result = RegionWriter.Write("SweepForm.bas", Scaffold(), form, "SweepForm.blform");
 
@@ -340,7 +363,11 @@ public class WinFormsCatalogSweepTests
         return CompileToCSharp(written.Text);
     }
 
-    private static string CompileToCSharp(string basicLangSource)
+    /// <summary>
+    /// ⚠ <c>internal</c> so <c>FormAnchorEmissionTests</c> drives the SAME real CLI rather than
+    /// standing up a second spawn harness that could drift from this one.
+    /// </summary>
+    internal static string CompileToCSharp(string basicLangSource)
     {
         var dir = Path.Combine(Path.GetTempPath(), "bl-wfsweep-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);

@@ -126,11 +126,17 @@ public static class DesignCodes
     public const string RegionAbsent = "BL8014";
 
     /// <summary>
-    /// A control anchored to more than one edge. MEASURED 2026-09-13: BasicLang cannot express a
-    /// combined flags value at all — <c>AnchorStyles.Left Or AnchorStyles.Top</c> is rejected
-    /// ("Logical operator 'Or' requires Boolean operands"), <c>CType(7, AnchorStyles)</c> is
-    /// rejected ("no such conversion exists") because the enum is an unresolvable .NET type, and
-    /// <c>|</c> lexes but the parser never consumes it ("Unexpected token in expression").
+    /// An <c>Anchor</c> naming an edge <c>AnchorStyles</c> does not have.
+    ///
+    /// <para>⚠ This USED to mean "anchored to more than one edge", which BasicLang could not express
+    /// at all. MEASURED 2026-09-13 and again 2026-09-18: <c>AnchorStyles.Left Or AnchorStyles.Top</c>
+    /// is still rejected ("Logical operator 'Or' requires Boolean operands") and <c>|</c> still lexes
+    /// without parsing — but <c>CType(7, AnchorStyles)</c> now works, because
+    /// <c>SemanticAnalyzer.RejectImpossibleConversion</c> exempts unresolvable .NET types. csc
+    /// accepts <c>(AnchorStyles)7</c>; it was the front end refusing, not the language lacking a
+    /// form. Multi-edge anchors are therefore EMITTED, and this code is left for the one case that
+    /// is still wrong: a misspelled edge, which would sum to zero and silently anchor the control
+    /// to nothing.</para>
     /// </summary>
     public const string AnchorNotExpressible = "BL8015";
 

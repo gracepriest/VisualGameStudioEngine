@@ -283,10 +283,73 @@
 
                       <Border Grid.Column="1" Background="{DynamicResource IdeBorder}"/>
 
-                      <!-- Editable: the SAME four editors the Settings dialog uses. -->
+                      <!-- Editable: the SAME four editors the Settings dialog uses.
+                           ⛔ Bound to UsesTypedEditor, NOT IsEditable. An Anchor row is editable
+                           and typed String, so IsEditable would render a text box underneath the
+                           picker — two editors for one value, each able to contradict the other. -->
                       <controls:TypedValueEditor Grid.Column="2" VerticalAlignment="Center"
                                                  Margin="4,1,4,1"
-                                                 IsVisible="{Binding IsEditable}"/>
+                                                 IsVisible="{Binding UsesTypedEditor}"/>
+
+                      <!-- ⛔ Task 26: the Anchor box. Four edge bars around a centre — click an
+                           edge to anchor to it. Avalonia 11.3 ships nothing like this, so it is
+                           hand-built, as every type editor here has to be.
+                           ⚠ Shown ONLY for pixel geometry: the grid never builds this row for a
+                           .blwebform control, so there is no `hide on web` rule here to forget. -->
+                      <Border Grid.Column="2" IsVisible="{Binding IsAnchorPicker}"
+                              Margin="4,2,4,2" HorizontalAlignment="Left"
+                              Width="46" Height="46"
+                              Background="{DynamicResource IdeBg}"
+                              BorderBrush="{DynamicResource IdeBorder}" BorderThickness="1">
+                        <Grid RowDefinitions="12,*,12" ColumnDefinitions="12,*,12" Margin="2">
+                          <ToggleButton Grid.Row="0" Grid.Column="1" Padding="0" MinWidth="0" MinHeight="0"
+                                        IsChecked="{Binding AnchorTop, Mode=TwoWay}" ToolTip.Tip="Anchor to the top edge"/>
+                          <ToggleButton Grid.Row="2" Grid.Column="1" Padding="0" MinWidth="0" MinHeight="0"
+                                        IsChecked="{Binding AnchorBottom, Mode=TwoWay}" ToolTip.Tip="Anchor to the bottom edge"/>
+                          <ToggleButton Grid.Row="1" Grid.Column="0" Padding="0" MinWidth="0" MinHeight="0"
+                                        IsChecked="{Binding AnchorLeft, Mode=TwoWay}" ToolTip.Tip="Anchor to the left edge"/>
+                          <ToggleButton Grid.Row="1" Grid.Column="2" Padding="0" MinWidth="0" MinHeight="0"
+                                        IsChecked="{Binding AnchorRight, Mode=TwoWay}" ToolTip.Tip="Anchor to the right edge"/>
+                          <Border Grid.Row="1" Grid.Column="1" Margin="1"
+                                  Background="{DynamicResource IdeBorder}" Opacity="0.5"/>
+                        </Grid>
+                      </Border>
+
+                      <!-- ⛔ Task 26: the Dock box. DockStyle is NOT flags — exactly one region at
+                           a time — so these are commands rather than toggles, and "None" is its own
+                           button because un-docking is a thing the user has to be able to say. -->
+                      <StackPanel Grid.Column="2" IsVisible="{Binding IsDockPicker}"
+                                  Orientation="Horizontal" Spacing="6" Margin="4,2,4,2">
+                        <Border Width="46" Height="46"
+                                Background="{DynamicResource IdeBg}"
+                                BorderBrush="{DynamicResource IdeBorder}" BorderThickness="1">
+                          <Grid RowDefinitions="12,*,12" ColumnDefinitions="12,*,12" Margin="2">
+                            <ToggleButton Grid.Row="0" Grid.Column="1" Padding="0" MinWidth="0" MinHeight="0"
+                                          IsChecked="{Binding IsDockedTop, Mode=OneWay}"
+                                          Command="{Binding SetDockRegionCommand}" CommandParameter="Top"
+                                          ToolTip.Tip="Dock to the top"/>
+                            <ToggleButton Grid.Row="2" Grid.Column="1" Padding="0" MinWidth="0" MinHeight="0"
+                                          IsChecked="{Binding IsDockedBottom, Mode=OneWay}"
+                                          Command="{Binding SetDockRegionCommand}" CommandParameter="Bottom"
+                                          ToolTip.Tip="Dock to the bottom"/>
+                            <ToggleButton Grid.Row="1" Grid.Column="0" Padding="0" MinWidth="0" MinHeight="0"
+                                          IsChecked="{Binding IsDockedLeft, Mode=OneWay}"
+                                          Command="{Binding SetDockRegionCommand}" CommandParameter="Left"
+                                          ToolTip.Tip="Dock to the left"/>
+                            <ToggleButton Grid.Row="1" Grid.Column="2" Padding="0" MinWidth="0" MinHeight="0"
+                                          IsChecked="{Binding IsDockedRight, Mode=OneWay}"
+                                          Command="{Binding SetDockRegionCommand}" CommandParameter="Right"
+                                          ToolTip.Tip="Dock to the right"/>
+                            <ToggleButton Grid.Row="1" Grid.Column="1" Padding="0" MinWidth="0" MinHeight="0" Margin="1"
+                                          IsChecked="{Binding IsDockedFill, Mode=OneWay}"
+                                          Command="{Binding SetDockRegionCommand}" CommandParameter="Fill"
+                                          ToolTip.Tip="Fill the container"/>
+                          </Grid>
+                        </Border>
+                        <Button Content="None" FontSize="10" Padding="6,2" VerticalAlignment="Center"
+                                Command="{Binding SetDockRegionCommand}" CommandParameter="None"
+                                ToolTip.Tip="Not docked"/>
+                      </StackPanel>
 
                       <!-- ⛔⛔ D9 Degraded. The raw value, read-only. A typed editor here would
                            coerce the value the moment it rendered. The REASON now lives in the

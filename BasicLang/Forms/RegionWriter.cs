@@ -147,20 +147,36 @@ public static class RegionWriter
     /// target. This check turns that into a diagnostic instead of a confusing compile error.</para>
     /// </summary>
     /// <summary>
-    /// Refuses a control anchored to more than one edge.
+    /// The <c>AnchorStyles</c> flag values, verified against the official enum documentation.
     ///
-    /// <para>⛔⛔ Not a style rule — BasicLang has NO WAY to write a combined flags value, measured
-    /// three ways (see <see cref="DesignCodes.AnchorNotExpressible"/>). The alternatives to
-    /// refusing are both worse: emitting the first flag alone puts geometry on screen that the
-    /// running program will not reproduce, which is exactly the designer/runtime divergence D9
-    /// exists to prevent; emitting all of them produces a file that does not compile, and the
-    /// error surfaces in the user's own <c>.bas</c> at a line the designer wrote. Refusing says
-    /// so once, at design time, and leaves the file untouched.</para>
+    /// <para>⛔ <c>DockStyle</c> numbers DIFFERENTLY — its <c>Left</c> is 3, not 4 — and is not a
+    /// flags enum at all. The two must never share a conversion; Dock keeps its named member.</para>
+    /// </summary>
+    private static readonly Dictionary<string, int> AnchorFlags =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["None"] = 0, ["Top"] = 1, ["Bottom"] = 2, ["Left"] = 4, ["Right"] = 8
+        };
+
+    /// <summary>
+    /// Checks that every named anchor edge exists. Multi-edge anchors are EMITTABLE.
     ///
-    /// <para>⚠ Reachable today only from a hand-authored <c>.blform</c> — the canvas that would
-    /// offer multiple anchors is Task 14 and does not exist yet. Whether the right long-term fix
-    /// is to teach the parser a bitwise <c>Or</c> is an open decision, not this writer's to make.
+    /// <para>⛔⛔ <b>This used to refuse anything with more than one edge</b>, and
+    /// <c>docs/HANDOFF.md</c> carried that as an open decision: BasicLang had no way to write a
+    /// combined flags value, measured three ways — <c>Or</c> demands Boolean operands,
+    /// <c>CType</c> was refused because <c>AnchorStyles</c> is unresolvable, and <c>|</c> lexes but
+    /// does not parse. The choice on the table was a parser change or single-edge-only.</para>
+    ///
+    /// <para>⚠ Re-measured 2026-09-18: all three still fail, but a fourth route had never been
+    /// tried. <c>btn.Anchor = 7</c> COMPILES in BasicLang and csc rejects it with CS0266, while
+    /// <c>(AnchorStyles)7</c> is ACCEPTED — so the cast was the entire gap, and it was refused by
+    /// one arm of <c>SemanticAnalyzer.RejectImpossibleConversion</c> rather than by the parser.
+    /// That arm now exempts unresolvable .NET types, and this emits <c>CType(n, AnchorStyles)</c>.
     /// </para>
+    ///
+    /// <para>⛔ An UNKNOWN edge name is still refused. Summing it as zero would silently anchor the
+    /// control to nothing — the designer/runtime divergence D9 exists to prevent — and the whole
+    /// reason this check survives rather than being deleted.</para>
     /// </summary>
     private static void CheckAnchors(
         string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
@@ -178,18 +194,21 @@ public static class RegionWriter
                 continue;
             }
 
-            var edges = anchor.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            if (edges.Length > 1)
+            var unknown = SplitAnchor(anchor).Where(e => !AnchorFlags.ContainsKey(e)).ToList();
+            if (unknown.Count > 0)
             {
                 diagnostics.Add(Error(DesignCodes.AnchorNotExpressible,
-                    $"'{control.Id}' is anchored to {edges.Length} edges ('{anchor}'), which " +
-                    "BasicLang cannot express: it has no usable bitwise Or, and AnchorStyles is a " +
-                    ".NET type the compiler cannot resolve, so neither Or, CType nor | works. Use " +
-                    "a single anchor edge, or Dock, until the language can combine flags.",
+                    $"'{control.Id}' is anchored to '{anchor}', which names an edge AnchorStyles " +
+                    $"does not have: {string.Join(", ", unknown)}. The edges are None, Top, " +
+                    "Bottom, Left and Right. Emitting it anyway would anchor the control to " +
+                    "nothing, with the designer and the running program disagreeing silently.",
                     filePath, 0));
             }
         }
     }
+
+    private static string[] SplitAnchor(string anchor) =>
+        anchor.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     /// <summary>
     /// Warns about properties the document carries that the target does not have, which
@@ -580,12 +599,40 @@ public static class RegionWriter
             body.Append($"{inner}{control.Id}.Dock = DockStyle.{pixel.Dock.Trim()}").Append(newline);
         }
 
-        // A single anchor only. The multi-flag case is REFUSED before we get here (see
-        // CheckAnchors) because BasicLang cannot express it at all.
         if (!string.IsNullOrWhiteSpace(pixel.Anchor))
         {
-            body.Append($"{inner}{control.Id}.Anchor = AnchorStyles.{pixel.Anchor.Trim()}").Append(newline);
+            body.Append($"{inner}{control.Id}.Anchor = {AnchorExpression(pixel.Anchor)}").Append(newline);
         }
+    }
+
+    /// <summary>
+    /// A control's <c>Anchor</c> as BasicLang source.
+    ///
+    /// <para>⚠ A SINGLE edge keeps the readable named member — <c>AnchorStyles.Top</c>. Emitting
+    /// <c>CType(1, AnchorStyles)</c> for it would be a readability regression for the common case,
+    /// to no benefit.</para>
+    ///
+    /// <para>⛔ MULTIPLE edges become <c>CType(n, AnchorStyles)</c>, because BasicLang still has no
+    /// bitwise <c>Or</c>: <c>AnchorStyles.Left Or AnchorStyles.Top</c> is rejected ("requires
+    /// Boolean operands") and <c>|</c> lexes but does not parse. The cast is the only expressible
+    /// form, and it is only expressible at all because
+    /// <c>SemanticAnalyzer.RejectImpossibleConversion</c> now exempts unresolvable .NET types.</para>
+    ///
+    /// <para>⚠ The edge names ride along as a trailing comment. <c>CType(13, AnchorStyles)</c> tells
+    /// a reader nothing on its own, and this region is code the user will read in their own file.</para>
+    /// </summary>
+    private static string AnchorExpression(string anchor)
+    {
+        var edges = SplitAnchor(anchor);
+        if (edges.Length == 1)
+        {
+            return $"AnchorStyles.{edges[0]}";
+        }
+
+        // Unknown names are refused by CheckAnchors before this runs, so a miss here would be a
+        // bug in that check rather than bad input — sum defensively rather than throwing mid-write.
+        var value = edges.Sum(e => AnchorFlags.TryGetValue(e, out var flag) ? flag : 0);
+        return $"CType({value}, AnchorStyles)   ' {string.Join(", ", edges)}";
     }
 
     /// <summary>
