@@ -52,8 +52,12 @@ public class FormDesignerAcceptanceTests
         try { Directory.Delete(_dir, true); } catch { }
     }
 
-    /// <summary>A file service over the real disk — this walkthrough must leave real files behind.</summary>
-    private sealed class DiskFiles : IFileService
+    /// <summary>
+    /// A file service over the real disk — this walkthrough must leave real files behind.
+    /// ⚠ <c>internal</c> so <c>FormComponentAcceptanceTests</c> drives the same designer over the
+    /// same disk rather than a second stand-in.
+    /// </summary>
+    internal sealed class DiskFiles : IFileService
     {
         public Task<string> ReadFileAsync(string path, CancellationToken cancellationToken = default) =>
             Task.FromResult(File.ReadAllText(path));
@@ -305,6 +309,12 @@ public class FormDesignerAcceptanceTests
               body
             };
             globalThis.window = globalThis;
+            // Task 25: a Timer is a setInterval handle. These REPLACE node's real timers for this
+            // process (window IS globalThis), which is deliberate — a real interval would keep the
+            // process alive until the harness timeout. The stub fires the callback once, so a tick
+            // handler that prints proves the wiring reached it.
+            globalThis.setInterval = (cb, ms) => { console.log("setInterval " + ms); cb(); return 7; };
+            globalThis.clearInterval = (id) => { console.log("clearInterval " + id); };
             try {
               await import('./{{Path.GetFileName(script!)}}');
             } catch (e) {
