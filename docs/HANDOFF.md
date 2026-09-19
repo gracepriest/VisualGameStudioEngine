@@ -1,4 +1,4 @@
-# Handoff snapshot — 2026-09-11, updated 2026-09-14
+# Handoff snapshot — 2026-09-11, updated 2026-09-18
 
 **Why this file exists.** Working state for this repo normally lives in a per-machine
 auto-memory directory (`~/.claude/projects/…/memory/`) that is **outside the repo and does not
@@ -17,6 +17,77 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⛔ THE FORM DESIGNER, 2026-09-18 — read this before touching `BasicLang/Forms/`
+
+Branch `feat/form-designer`, at `f380186`. **89 commits ahead of master, 10 behind.**
+
+### ⛔⛔ The plan's checkboxes are a LIE — do not start at Task 1
+
+`docs/superpowers/plans/2026-09-11-visual-form-designer.md` reads **0 ticked / 98 open**. Tasks 1–19
+are *done*; the file was simply never written to again after it was authored. A session briefed from
+those checkboxes was told "zero code is written, start at Task 1" — which, followed literally, would
+have re-implemented 111 commits over the top of themselves. Verify against `git log` and the
+reference counts, never against the checkboxes.
+
+| Task | State |
+|---|---|
+| 1–19 | done before 2026-09-18 |
+| **20** direct manipulation | done — multi-select, rubber band, group drag, align/size, z-order, clipboard, undo |
+| **22** double-click → handler | done |
+| **23** catalog | done — **10 → 23 kinds**; 8 are WinForms-only by decision |
+| **26** Anchor/Dock pickers | done — multi-edge, after the analyzer fix |
+| **27** acceptance | done — both targets **built and RUN**, output recorded in the commit |
+| **21** retarget · **24** menus · **25** tray · **28** closeout | NOT STARTED |
+
+⚠ **24 is compiler-gated**: array-literal element typing has no base-class widening
+(`SemanticAnalyzer.cs:6056-6061`), so `{mnuFile, sep1}` degrades to `Object[]`. Measure what csc
+accepts before designing the fix — that is how the `Anchor` blocker turned out to be one line.
+
+### ⛔ Two defects that only running the thing could find
+
+`WinFormsCompile` says it in its own summary — *compile only, never run* — so until
+`FormDesignerAcceptanceTests` **no form this designer produced had ever been executed** on either
+target. Running them found both of these, with a green build throughout:
+
+1. **Every web form was dead on load.** The JS backend emits an unqualified call to the enclosing
+   class's own method as a bare global, so `InitializeComponent()` in `Public Sub New()` became a
+   `ReferenceError`. `FormScaffolder` now emits `Me.InitializeComponent()`. **The backend defect is
+   UNFIXED** and still hits hand-written user code.
+2. **WinForms z-order was inverted.** `Controls` index 0 is the TOP of the z-order and
+   `Controls.Add` appends, so the document's front-most control was reaching the very back. The
+   region writer now emits sibling adds in REVERSE. Confirmed at run time.
+
+Also found and fixed: the structure-preserving writer **never reordered elements**, so a z-order
+change never reached the file — the command looked right until you reloaded.
+
+### ⛔ Master is NOT healthy — 4 of this branch's failures are inherited
+
+Verified 2026-09-18 in a detached worktree at plain `origin/master`, with no designer code present:
+every game template fails to build with `CS1503: cannot convert from 'float' to 'int'`
+(`Build_GameAppTemplate_*`, `CliTemplate("game")`, `Template("game-app")`, plus two `cpp-game`
+siblings). The likely cause is master's own *"Round every narrowing conversion half-to-even"* /
+*"Fold lossless widening casts"* work. It escaped because those tests are all
+`[Category("Integration")]`, which the fast subset skips.
+
+⛔ **Task 28 cannot honestly claim a clean baseline until this is fixed** — the alternative is
+quietly re-baselining around someone else's regression, which is how a known-bad build becomes the
+new normal.
+
+### Current gates on this branch
+
+| Gate | Result |
+|---|---|
+| Full suite | **7023 passed / 9 failed / 2 skipped of 7034**, 1h06m |
+| Fast subset | **5757 passed / 2 failed / 1 skipped of 5760** |
+| `WinFormsCatalogSweepTests` | 57/57 through real `csc` |
+
+The 9: 2 standing `SearchSnippets` · 1 pre-existing `Cli_Build_CppProject` · **4 inherited from
+master** · 1 `RaylibScreenSpaceMath` NaN row that is display-dependent · 1 Anchor test since
+rewritten. ⚠ This branch has no clean full-suite baseline of its own, and the old "5826 / 4 known
+failures" number was measured on a *different branch* 100+ commits ago. Do not quote it.
+
+---
+
 ### → START HERE
 
 | If you want | Go to |
@@ -25,7 +96,9 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 | Can this machine build and gate? | *READ FIRST — a cloud container CAN build and test* (next section) |
 | How to run a trustworthy baseline | *Gates and expected numbers* — including three ways a baseline run LIES |
 | Why a green suite proved nothing here | *FOUR REVIEW PASSES* — read before trusting one |
-| Decisions waiting on a human | *AN OPEN DECISION: multi-edge `Anchor`*, and items 3–4 of the next-session list |
+| **Form designer: what is done and what is left** | *THE FORM DESIGNER, 2026-09-18* — read before touching `BasicLang/Forms/` |
+| **Is master healthy right now?** | *No* — see the game-template regression in that section |
+| Decisions waiting on a human | items 3–4 of the next-session list. ⚠ Multi-edge `Anchor` is **RESOLVED**, see its section |
 
 ---
 
@@ -227,7 +300,39 @@ enum type, an allowed value that maps to no member, and a WinForms control with 
 verbatim and C# has no such function (CS0103). The same is true of anything VB-shaped: that backend
 is a passthrough for names it does not know, so "it compiled" means nothing on its own.
 
-### ⛔ AN OPEN DECISION: multi-edge `Anchor` is not expressible in BasicLang
+### ✅ RESOLVED 2026-09-18: multi-edge `Anchor` now works — the premise below was incomplete
+
+**Do not act on this section as an open decision.** It is kept because the measurements are correct
+and the reasoning is worth reading; only the conclusion was wrong.
+
+The two options offered at the bottom — "teach the parser a bitwise `Or`" or "ship single-edge only"
+— both rested on *BasicLang cannot express a combined flags value*. Re-measured 2026-09-18: all
+three spellings below still fail, **but csc was never asked what it would accept**, and a fourth
+route was never tried:
+
+| BasicLang source | BasicLang | csc |
+|---|---|---|
+| `btn.Anchor = 7` | **compiles** | `CS0266` — needs a cast |
+| `CType(7, AnchorStyles)` | was refused | **accepted** as `(AnchorStyles)7` |
+
+So the cast was the entire gap, and it was refused by the **semantic analyzer**, not the parser:
+`AnchorStyles` registers as a Class-kind handle (the resolver cannot reach `System.Windows.Forms`),
+so it never reached the `TypeKind.Enum` exemption sitting three lines above it in
+`RejectImpossibleConversion`.
+
+**What shipped** (`b7c6699`): that check now exempts scalar → an *unresolvable* .NET type — **one arm
+only**. ⛔ The reference→scalar arm is untouched; it is what closed chip `task_0c803e75`, whose worst
+row is silent (a reference cast to `Boolean` compiles *and runs* on C++, binding to the handle's
+`explicit operator bool()`). The exemption cannot reach a type the analyzer can see, so
+`CType(7, Widget)` is still refused. Both pinned by tests in `CastLegalityTests`.
+
+`RegionWriter` emits multi-edge as `CType(13, AnchorStyles)   ' Left, Top, Right`, and `BL8015` now
+means only *an edge name `AnchorStyles` does not have* — still refused, because summing it as zero
+would silently anchor the control to nothing. The Anchor/Dock pickers (Task 26) use it.
+
+---
+
+*The original section follows, for its measurements.*
 
 `Anchor="Left,Top,Right"` — an ordinary WinForms thing — cannot be generated. Measured three ways
 on 2026-09-13:
