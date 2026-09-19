@@ -1524,6 +1524,22 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             foreach (var global in module.GlobalVariables.Values)
             {
                 if (string.IsNullOrEmpty(global?.Name)) continue;
+
+                // ⛔ This table is keyed by bare name, and a second global with the same name used
+                // to OVERWRITE the first: one `.field`, and every module's code reading the
+                // survivor — `A.GetA()` printed B's value, from a build that reported success.
+                // Within one unit the IR builder now names such globals apart (Alpha_Scale /
+                // Beta_Scale) so this never fires; two FILES each declaring the name still
+                // arrive bare, and that is refused here rather than silently mis-bound.
+                if (_moduleGlobals.TryGetValue(global.Name, out var earlier)
+                    && !ReferenceEquals(earlier, global))
+                {
+                    throw new ForeignFeatureException(
+                        $"MSIL: module-level variable '{global.Name}' is declared by more than one "
+                        + $"module ('{earlier.ModuleName}' and '{global.ModuleName}') across files. "
+                        + "This backend keeps one static field per bare name, so the second would "
+                        + "silently replace the first; rename one of them.");
+                }
                 _moduleGlobals[global.Name] = global;
             }
         }

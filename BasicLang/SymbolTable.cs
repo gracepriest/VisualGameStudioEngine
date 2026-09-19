@@ -368,6 +368,29 @@ public class TypeInfo
         public bool IsImported { get; set; }
         public string SourceModule { get; set; }
 
+        /// <summary>
+        /// The <c>Module</c> block that DECLARES this module-level variable or constant, or null
+        /// for anything else (a local, a parameter, a class member, a file-scope declaration).
+        ///
+        /// <para>⛔ This is what lets a reference lower to the REAL global. Before it existed, a
+        /// qualified <c>Helpers.Value</c> fell through every resolution channel to the permissive
+        /// "any PascalCase name could be a .NET type" fallback and was typed Object, so the IR
+        /// builder emitted a field read on a phantom variable named <c>Helpers</c>: C++ said
+        /// "'Helpers' was not declared", JavaScript threw ReferenceError, MSIL threw
+        /// MissingFieldException on <c>System.Object.Value</c>, and only C# survived — by
+        /// re-emitting the text and letting csc resolve it. The UNQUALIFIED cross-module form
+        /// took the same fallback: it "worked" on C++ and JavaScript only because the emitted
+        /// bare global happened to share the name, and <c>Value + 1</c> was refused as
+        /// "requires numeric operands".</para>
+        ///
+        /// <para>⚠ Distinct from <see cref="IsImported"/>/<see cref="SourceModule"/>, which mean
+        /// "from ANOTHER compilation unit". A same-file module member is not imported, but it
+        /// lowers the same way — a global carrying its owning module — so the IR builder checks
+        /// either. <see cref="SourceModule"/> is set alongside this so the one consumer that
+        /// reads only that (the C# backend's cross-module qualification) sees the owner too.</para>
+        /// </summary>
+        public string OwningModule { get; set; }
+
         // Signature-level symbol registered from a parsed-but-not-yet-compiled
         // sibling's AST (order-independent cross-file resolution scaffolding).
         // Never re-exported: the declaring unit exports the real symbol itself.

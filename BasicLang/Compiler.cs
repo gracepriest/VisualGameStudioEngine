@@ -831,6 +831,29 @@ namespace BasicLang.Compiler
                     unit.ExportedSymbols.Add(symbol);
                 }
             }
+
+            // ⛔ A Module block's variables and constants live in the Module's OWN scope, a child
+            // of the global one, so the loop above never saw them: a sibling file's
+            // `Helpers.Value` was refused with "Module 'Helpers' does not have a public member
+            // 'Value'" while `Helpers.Twice()` resolved, because pass 1 flattens procedure
+            // signatures into the global scope and nothing flattened these. Exported with their
+            // owning Module stamped, so the importing unit lowers them to the real global.
+            if (!unit.IsClassFile)
+            {
+                foreach (var moduleScope in scope.Children.Where(c => c.Kind == ScopeKind.Module))
+                {
+                    foreach (var symbol in moduleScope.Symbols.Values)
+                    {
+                        if (symbol.IsSiblingSignature) continue;
+                        if (symbol.Kind != SymbolKind.Variable && symbol.Kind != SymbolKind.Constant) continue;
+                        if (symbol.Access != AST.AccessModifier.Public && symbol.Access != AST.AccessModifier.Friend) continue;
+
+                        symbol.OwningModule ??= moduleScope.Name;
+                        symbol.SourceModule ??= moduleScope.Name;
+                        unit.ExportedSymbols.Add(symbol);
+                    }
+                }
+            }
         }
 
         /// <summary>
