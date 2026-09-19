@@ -1097,10 +1097,37 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
     `_inline_t1_0 = 12;` and `_inline_t1_1 = ((_inline_t1_x + _inline_t1_x) | 0);` and
     `t1 = ((x + x) | 0);` into `Main` — all undeclared — **and still called `F(6)` afterwards**.
     `ReferenceError` at run time.
-  - **`AlgebraicSimplificationPass` never calls `ReplaceUses`**, which its own base-class contract
-    says a pass that swaps an instruction MUST do. Consumers still holding the discarded node render
-    an undeclared `t{N}`. Not triggered by the shapes measured here (the value's consumer is a field
-    read), and unchanged by this fix — the flag transfer neither creates nor cures it.
+  - **`AlgebraicSimplificationPass` never calls `ReplaceUses` — FIXED 2026-09-19**, see the entry
+    below. Its own base-class contract says a pass that swaps an instruction MUST do so. Not
+    triggered by the shapes measured here (the value's consumer is a field read).
+  ⚠ **`AlgebraicSimplificationPass` calls `ReplaceUses`, and its three UNSOUND arms are GONE, as of
+  2026-09-19** — `AlgebraicSimplificationTests`.
+  ⛔ **Measured before**: `Return (a + b) - b` under `--optimize` was a `ReferenceError`.
+  `const t0 = ((a + b) | 0); t1 = a; return ((((a + b) | 0) - b) | 0);` — an undeclared `t1`, and a
+  consumer that RE-MATERIALISED THE WHOLE ORIGINAL EXPRESSION because it still held the discarded
+  node.
+  ⛔ **ADDING `ReplaceUses` ALONE DOES NOT FIX THE CRASH — measured, not assumed.** With the arm
+  restored and `ReplaceUses` working, the consumer IS correctly re-pointed (`return t1;` rather than
+  the re-materialised expression), but the emission is still `t1 = a;` with `t1` UNDECLARED: those
+  arms introduce a brand-new `IRVariable` target that nothing adds to the function's
+  `LocalVariables`. The same defect that sank `FunctionInliningPass`. So the crash is fixed by
+  DELETING the arms, and `ReplaceUses` is the separate contract fix.
+  ⛔ **The three arms were UNSOUND, and the missing `ReplaceUses` was the only reason nobody saw a
+  wrong answer** — the same story recorded for the Div and Mod arms removed from
+  `StrengthReductionPass`. Correct answer first: `(a+b)-b` with a=1e-19, b=1e18 is **0**, the arm
+  gives `a` (catastrophic cancellation); `(a*b)/b` with b=0 is **NaN**, the arm gives `a` — its own
+  comment claimed "when b != 0" and **the code never checked it**; `(a*b)/b` with a=0.1, b=3 is
+  **0.10000000000000002**, the arm gives 0.1.
+  ⚠ **`2 * x -> x + x` is KEPT** — sound on both fronts (`x + x` is exactly `2 * x` in IEEE 754, and
+  wraps identically on integer overflow), and it is the only arm that ever worked, because its
+  replacement is a VALUE carrying the same name so the orphaned consumer resolved by NAME
+  COINCIDENCE. The base-class doc warns that carrying the name is not enough; this pass was the
+  demonstration.
+  ⚠ **With the arms gone, `ReplaceUses` is OBSERVABLY INERT in emitted text** — measured, every
+  end-to-end shape passes with the call removed. It is kept because the contract requires it and
+  because the surviving arm's escape is a coincidence, and it is made TESTABLE by an IR-level test
+  asserting the consumer holds the REPLACEMENT INSTANCE (reference identity). That test is what
+  kills the drop-the-call mutation; without it the call would have been an untestable survivor.
   ⚠ **`FunctionInliningPass` is DISABLED as of 2026-09-19** — `FunctionInliningDisabledTests`,
   commented out of `AddAggressivePasses` with the measurements beside it.
   ⛔ **It never produced correct output for any function it actually inlined**, and it miscompiled
