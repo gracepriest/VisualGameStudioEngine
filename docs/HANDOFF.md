@@ -1044,7 +1044,8 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   `NullReferenceException`, so that case asserts JavaScript alone). **C++ is not asserted at all**:
   it does not emit an explicit property as a member — `no member named 'P' in 'Box'` — a
   pre-existing gap, so it cannot serve as an oracle.
-  ⛔ **A SEPARATE AND MORE SEVERE DEFECT FOUND HERE, NOT FIXED — and it is the OPTIMIZER'S.**
+  ⛔ **A SEPARATE AND MORE SEVERE DEFECT FOUND HERE — FIXED 2026-09-19**, see the
+  strength-reduction identity entry below. It was the OPTIMIZER'S.
   An assignment whose RHS computes something and does not mention the target field is SILENTLY
   DISCARDED: `_v = value * 2` emits `const _v = (value << 1);`, a fresh local, so the write goes
   nowhere and the field keeps its old value. Nothing fails; a plausible number is printed.
@@ -1059,7 +1060,48 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
     computed RHS that survives folding and does not name the target is lost.
   - **Not JavaScript-only**: C++ (14) and MSIL (14) are both correct; JavaScript discards the write
     under the optimizer, and **C# emits an EMPTY METHOD BODY** — the statement vanishes on both
-    paths. Two backends right, two wrong in different ways. **This is the next fix.**
+    paths. Two backends right, two wrong in different ways.
+  ⚠ **A REWRITTEN VALUE KEEPS ITS IDENTITY as of 2026-09-19** —
+  `StrengthReductionIdentityTests`, `IROptimizer.OptimizationPass.InheritIdentity` applied at the
+  two value-replacement sites.
+  ⛔ **The mechanism**: `StrengthReductionPass` rewrites `x * 2` to `x << 1` by constructing a NEW
+  IRValue. It carried the old `Name` and `SourceLine` but NOT `NamedAfterVariable` — the flag that
+  tells a backend "this result IS the assignment to K" rather than "a temp sharing K's name". With
+  it false, **JavaScript emitted `const K = (p << 1);`** (a fresh local, write thrown away) and
+  **C# emitted an EMPTY METHOD BODY**. The field silently kept its old value; nothing failed to
+  compile.
+  ⛔ **ONLY THE OPTIMIZED PATH WAS WRONG**, which is why the suite never saw it: the non-optimizing
+  helper lowers the same source correctly, so every test written against it passed. The pass is in
+  `AddStandardPasses`, so every shipping route hit the broken path. Textbook CLAUDE.md hazard — the
+  fixture asserts the optimized pipeline throughout.
+  ⛔ **TWO BACKENDS RIGHT, TWO SILENTLY WRONG.** C++ and MSIL never consult the flag and always
+  emitted the store, so this is ONE omission in the IR rather than two backend bugs — the fix
+  belongs in the pass, not in either backend.
+  ⚠ **Trigger, measured and narrow**: multiplication by a POWER OF TWO. `p * 3` (`Math.imul`),
+  `p * p`, `p + 1`, `p - 1`, `p \ 2`, `p Mod 4` and `-p` were all correct before and after; the Div
+  and Mod strength-reduction arms were removed long ago as unsound, and Peephole's rewrites build an
+  `IRAssignment` with an explicit target, which never depended on the flag. Only CLASS MEMBERS were
+  affected — a module global and a local resolve through their own arms first.
+  ⛔ **A SECOND SITE with the identical omission** is fixed too: `AlgebraicSimplificationPass`
+  (`2 * x -> x + x`), which is AGGRESSIVE-only. Strength reduction does not fire for `2 * p` (its
+  arm matches a constant on the RIGHT), so that shape reached the algebraic pass and broke through a
+  different rewrite — measured at 1 under `--optimize`. Fixing only the standard site would have
+  left it broken by the same missing line.
+  ⚠ **The NAME is deliberately not copied** by the helper: every call site already passes it to the
+  constructor. Measured — REMOVING the assignment left all 18 tests green while CORRUPTING it failed
+  11, so the tests are name-sensitive without the line being needed. It came out rather than staying
+  as an assignment that acts and changes nothing.
+  ⛔ **TWO PRE-EXISTING `--optimize` DEFECTS FOUND WHILE DOING THIS, neither fixed:**
+  - **`FunctionInliningPass` emits undeclared garbage.** For `Dim x = 2 * p : Return x + x` called
+    from `Main`, the aggressive pipeline emitted `_inline_t1_0 = 12;` and
+    `_inline_t1_1 = ((_inline_t1_x + _inline_t1_x) | 0);` and `t1 = ((x + x) | 0);` into `Main` — all
+    undeclared — **and still called `F(6)` afterwards**. `ReferenceError` at run time. Aggressive
+    pipeline only (not in `AddStandardPasses`), so no default route reaches it. **`--optimize`
+    cannot be described as working** until this is fixed; it is the larger of the two.
+  - **`AlgebraicSimplificationPass` never calls `ReplaceUses`**, which its own base-class contract
+    says a pass that swaps an instruction MUST do. Consumers still holding the discarded node render
+    an undeclared `t{N}`. Not triggered by the shapes measured here (the value's consumer is a field
+    read), and unchanged by this fix — the flag transfer neither creates nor cures it.
   ⚠ **Narrowing shapes are refused by the SEMANTIC ANALYZER, before any of this** —
   `Public N As Single = 1.5 + 1.0` is "Cannot assign value of type 'Double' to variable of type
   'Single'", before and after. Not a folding gap.
