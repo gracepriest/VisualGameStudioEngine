@@ -894,6 +894,84 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             }
         }
 
+        /// <summary>
+        /// The <c>Owner::</c> qualifier when <paramref name="receiver"/> NAMES A USER CLASS rather
+        /// than holding an instance of one, else null — the C++ spelling of a <c>Shared</c> access.
+        ///
+        /// <para>⛔ Without this, every qualified access treated the class name as an object.
+        /// <c>Box.K</c> emitted <c>Box-&gt;K</c> ("'Box' does not refer to a value"),
+        /// <c>Box.K = 5</c> emitted <c>Box-&gt;K = 5</c> ("cannot use arrow operator on a type"),
+        /// and the file did not compile. The class DECLARATION was already correct —
+        /// <c>static int32_t K;</c> — so only the use site was ever wrong.</para>
+        ///
+        /// <para>⚠ It resolves to the DECLARING class, walking bases, for the same reason the
+        /// JavaScript backend's <c>MemberReference</c> does: that is the class the member actually
+        /// belongs to. C++ would accept the written name for a read through inheritance, but not
+        /// for a member the derived class does not declare.</para>
+        ///
+        /// <para>⚠ A DECLARED LOCAL SHADOWING THE TYPE NAME WINS, matching the
+        /// <c>IsNativeOwnedBclType</c> arm in <see cref="Visit(IRFieldAccess)"/>: <c>Dim Box As
+        /// Integer</c> beside <c>Class Box</c> must read the local.</para>
+        /// </summary>
+        private string StaticMemberQualifier(IRValue receiver, string memberName)
+        {
+            if (receiver is not IRVariable v || string.IsNullOrEmpty(v.Name)) return null;
+            if (_declaredIdentifiers.Contains(v.Name)) return null;
+
+            var owner = DeclaringClassOfStaticMember(v.Name, memberName);
+            return owner == null ? null : $"{SanitizeName(owner)}::";
+        }
+
+        /// <summary>
+        /// The class that DECLARES a STATIC field, property or event <paramref name="member"/>
+        /// reachable from <paramref name="typeName"/> (walking bases), else null.
+        /// </summary>
+        private string DeclaringClassOfStaticMember(string typeName, string member)
+        {
+            if (string.IsNullOrEmpty(typeName) || string.IsNullOrEmpty(member)
+                || _module?.Classes == null) return null;
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            while (!string.IsNullOrEmpty(typeName) && seen.Add(typeName)
+                   && _module.Classes.TryGetValue(typeName, out var cls) && cls != null)
+            {
+                foreach (var f in cls.Fields ?? new List<IRField>())
+                    if (f?.Name != null && f.IsStatic
+                        && string.Equals(f.Name, member, StringComparison.OrdinalIgnoreCase))
+                        return cls.Name;
+                foreach (var p in cls.Properties ?? new List<IRProperty>())
+                    if (p?.Name != null && p.IsStatic
+                        && string.Equals(p.Name, member, StringComparison.OrdinalIgnoreCase))
+                        return cls.Name;
+
+                typeName = cls.BaseClass;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// The class that DECLARES a STATIC method <paramref name="method"/> reachable from
+        /// <paramref name="typeName"/> (walking bases), else null.
+        /// </summary>
+        private string DeclaringClassOfStaticMethod(string typeName, string method)
+        {
+            if (string.IsNullOrEmpty(typeName) || string.IsNullOrEmpty(method)
+                || _module?.Classes == null) return null;
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            while (!string.IsNullOrEmpty(typeName) && seen.Add(typeName)
+                   && _module.Classes.TryGetValue(typeName, out var cls) && cls != null)
+            {
+                foreach (var m in cls.Methods ?? new List<IRMethod>())
+                    if (m?.Name != null && m.IsStatic
+                        && string.Equals(m.Name, method, StringComparison.OrdinalIgnoreCase))
+                        return cls.Name;
+
+                typeName = cls.BaseClass;
+            }
+            return null;
+        }
+
         /// <summary>Member access operator for an object value: -> for shared_ptr objects and
         /// the raw `this` pointer, . for everything else (structures, std::string, ...).</summary>
         private string MemberAccessOp(IRValue obj)
@@ -2556,7 +2634,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             }
 
             // Regular function call
-            var sanitizedName = SanitizeName(ResolveFlattenedFunctionName(functionName));
+            var sanitizedName = StaticCallTarget(functionName)
+                                ?? SanitizeName(ResolveFlattenedFunctionName(functionName));
             var argsStr = string.Join(", ", args);
             EmitCallStatement($"{sanitizedName}({argsStr})");
         }
@@ -2743,6 +2822,38 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// <c>Owner::Method</c> for a CLASS-qualified <c>Shared</c> call, else null.
+        ///
+        /// <para>⛔ Such a call was SWALLOWED by <see cref="ResolveFlattenedFunctionName"/>. Class
+        /// member bodies live in <c>_module.Functions</c> under their BARE names, so
+        /// <c>Box.Read()</c> found a free function called <c>Read</c>, decided it was the flattened
+        /// form of a module procedure, and emitted <c>Read()</c> — "use of undeclared identifier
+        /// 'Read'". That helper's premise is a qualifier naming a MODULE, which does not hold here,
+        /// so this is checked first.</para>
+        ///
+        /// <para>⛔ Each SEGMENT is sanitized SEPARATELY and the <c>::</c> is added afterwards.
+        /// <see cref="ICodeGenerator.SanitizeName"/> strips every non-alphanumeric character, so
+        /// sanitizing <c>"Box::Read"</c> as one string yields <c>BoxRead</c> — a name that exists
+        /// nowhere. The same trap the JavaScript backend hit with dotted names.</para>
+        /// </summary>
+        private string StaticCallTarget(string functionName)
+        {
+            if (string.IsNullOrEmpty(functionName)) return null;
+
+            var lastDot = functionName.LastIndexOf('.');
+            if (lastDot <= 0 || lastDot == functionName.Length - 1) return null;
+
+            var qualifier = functionName.Substring(0, lastDot);
+            var method = functionName.Substring(lastDot + 1);
+
+            // A local shadowing the type name means this is an instance call, not a Shared one.
+            if (_declaredIdentifiers.Contains(qualifier)) return null;
+
+            var owner = DeclaringClassOfStaticMethod(qualifier, method);
+            return owner == null ? null : $"{SanitizeName(owner)}::{SanitizeName(method)}";
         }
 
         /// <summary>
@@ -4336,9 +4447,17 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return;
             }
 
+            var fieldName = SanitizeName(fieldAccess.FieldName);
+
+            // A `Shared` READ through the class name: `Box.K` is `Box::K`, not `Box->K`.
+            if (StaticMemberQualifier(fieldAccess.Object, fieldAccess.FieldName) is string readQualifier)
+            {
+                WriteLine($"{result} = {readQualifier}{fieldName};");
+                return;
+            }
+
             var obj = GetValueName(fieldAccess.Object);
             var op = MemberAccessOp(fieldAccess.Object);
-            var fieldName = SanitizeName(fieldAccess.FieldName);
             WriteLine($"{result} = {obj}{op}{fieldName};");
         }
 
@@ -4357,11 +4476,20 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // Scoped to the RECEIVER of a field store on purpose: aliasing every element read
             // would be wrong the moment an index variable changes between the read and its use.
             // Classes are unaffected either way — a shared_ptr copy still aliases one object.
+            var fieldName = SanitizeName(fieldStore.FieldName);
+            var value = GetValueName(fieldStore.Value);
+
+            // A `Shared` WRITE through the class name — the same qualifier the read takes, so the
+            // two cannot disagree about where the member lives.
+            if (StaticMemberQualifier(fieldStore.Object, fieldStore.FieldName) is string writeQualifier)
+            {
+                WriteLine($"{writeQualifier}{fieldName} = {value};");
+                return;
+            }
+
             var obj = ElementLValueOfArrayRead(fieldStore.Object)
                       ?? GetValueName(fieldStore.Object);
             var op = MemberAccessOp(fieldStore.Object);
-            var fieldName = SanitizeName(fieldStore.FieldName);
-            var value = GetValueName(fieldStore.Value);
             WriteLine($"{obj}{op}{fieldName} = {value};");
         }
 
