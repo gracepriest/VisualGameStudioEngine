@@ -1229,6 +1229,125 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   scope". The UNQUALIFIED `Value` runs (11), and C# and JavaScript both emit the qualified form
   fine. The same SHAPE of defect this entry fixes for classes, one scope over; left out because it
   is not a `Shared` member. Next obvious candidate.
+  ⛔ **THE PARAGRAPH ABOVE IS WRONG IN TWO PLACES — see the next entry.** It is not C++-only, and
+  "emit the qualified form fine" was checked by emission, not by running: JavaScript and MSIL
+  both failed at run time, and the cause is the front end. Kept verbatim as the record of what a
+  compile-only probe reports.
+  ⚠ **QUALIFIED and CROSS-MODULE `Module` VARIABLE ACCESS resolves on every backend as of
+  2026-09-19** — `ModuleMemberAccessTests` (24 cases, all four backends run in process),
+  `SemanticAnalyzer._moduleMembers` + `TryResolveModuleMember` + `TryResolveUnqualifiedModuleMember`,
+  `Symbol.OwningModule`, `IRBuilder.GlobalReference` + `CollectSharedModuleGlobalNames`,
+  `Compiler.CollectExportedSymbols` (module scopes), `CSharpBackend.QualifyCrossModuleGlobal`,
+  `MSILBackend.CollectModuleGlobals` (refusal).
+  ⛔ **THIS ENTRY CORRECTS THE ONE ABOVE IT.** The C++ Shared-access entry closed with "a qualified
+  MODULE variable ... C# and JavaScript both emit the qualified form fine" and called it a
+  C++-only gap. That was measured by EMISSION, not by RUNNING, and it was wrong on both counts:
+  JavaScript died with `ReferenceError: Helpers is not defined`, MSIL with
+  `MissingFieldException: Field not found: 'System.Object.Value'`, and C# alone ran — by
+  re-emitting the text and letting csc resolve it. "Emitted OK" is not an oracle. Recorded here
+  rather than edited away.
+  ⛔ **THE CAUSE WAS THE FRONT END, not any backend.** A `Module`'s `Dim`/`Const` live in the
+  Module's OWN scope, which a sibling Module's lexical chain never reaches, and pass 1 registered
+  only procedure signatures. So `Helpers.Value` fell through every channel to the permissive "any
+  PascalCase identifier could be a .NET type" fallback (`IsNetType`) and was typed **Object**; the
+  IR builder then lowered it to an `IRFieldAccess` on a phantom variable named `Helpers`.
+  Three symptoms, one cause: `Helpers.Value + 1` refused as "requires numeric operands",
+  `Return Helpers.Value` refused as "Cannot return type 'Object'", and each backend's own failure
+  on the untyped read.
+  ⛔ **THE UNQUALIFIED CROSS-MODULE FORM WAS WORKING BY TWO COINCIDENCES.** A bare `Value` from
+  another module took the same fallback — typed as a phantom class named `Value`, NO error — and
+  the IR builder minted a fresh LOCAL of that name (`GetOrCreateVariable`, which finds a global
+  only if its declaration was already visited). It printed 11 on C++ and JavaScript only because
+  the emitted bare global shared the name; `Value + 1` was refused; and C# failed with CS0103
+  whenever the using module came FIRST. Measured, all of it.
+  ⛔ **TWO MODULES WITH THE SAME VARIABLE NAME WERE A SILENT WRONG ANSWER ON MSIL.** `A.GetA()`
+  printed B's 2: `_moduleGlobals` was keyed by bare name and kept the last one. C++ said
+  "redefinition of 'int32_t Value'", JavaScript refused; only MSIL was quiet. The prior
+  collision fix (`ModuleGlobalCollisionTests`) had qualified only the dictionary KEY — enough for
+  C#, which groups by `ModuleName`, and for nobody else, because the other three spell a global
+  by its bare `Name`.
+  ⚠ **The fix, in four layers, one mechanism each:**
+  - **Analyzer**: pass-1 sweep 3 registers every Module's `Dim`/`Const` (typed from the
+    declaration; an inferred one is Object until pass 2 swaps in the real symbol). A qualified
+    `Module.Member` on a same-unit Module resolves there FIRST, before the cross-unit channels.
+    A bare name that scope cannot resolve is looked up across the OTHER modules' Public/Friend
+    members BEFORE the .NET-type fallback: one match binds; two is "ambiguous between modules
+    'A', 'B'. Qualify it"; a Private match is "'Hidden' is Private to module 'Helpers'". All
+    three are errors now where before the first was a phantom and the other two were silent
+    reads of the wrong or private global.
+  - **Compiler**: `CollectExportedSymbols` also exports Public/Friend `Dim`/`Const` from Module
+    child scopes, stamped with their owner. This is the MULTI-FILE half: it used to say
+    "Module 'Helpers' does not have a public member 'Value'. Did you mean 'Val'?" — a clean
+    diagnostic and a wrong one — while `Helpers.Twice()` resolved, and a Const was unreachable
+    even unqualified ("Undefined identifier 'K'"). (The LSP's own collector already had them; only
+    the compiler's export lacked them.)
+  - **IR builder**: a resolved module member — qualified read, qualified write, or bare
+    cross-module reference — lowers to `GlobalReference(name, owner)`: the declared global when
+    its declaration has been visited, else a forward reference carrying the same IR name, owner and
+    `IsGlobal`, which is all any backend spells it by. Never an `IRFieldAccess`/`IRFieldStore` on
+    a phantom receiver. Module Consts are registered like Dims so a reference binds to the
+    instance rather than a look-alike local.
+  - **Same-name globals get an IR NAME qualified by owner** — `A_Value`, `B_Value` — decided from
+    the AST before any declaration is lowered (`CollectSharedModuleGlobalNames`). So every
+    backend, every by-name table, and every value the builder RENAMES after its target
+    (`Value = Value + 10` inside A) stay distinct BY CONSTRUCTION; no backend needed a collision
+    special case, which would also have had to thread the owner through the renamed-value path
+    or lose the write. An uncontested name stays bare. `ModuleGlobalCollisionTests` re-pins the
+    representation: its six `Name == "Scale"` asserts were pinning the very spelling that let MSIL
+    merge them.
+  ⛔ **C# THEN FAILED ALONE on the compound form, and it was new.** `Helpers.Value = Helpers.Value
+  + 1` renames the result after its target, and a renamed destination carries only the NAME —
+  the cross-module qualification an `IRVariable` gets in `EmitExpression` never reached it, so
+  the write was spelled bare inside a class with no `Value`: CS0103. Reachable only once the
+  front end accepted the shape. `GetValueName` now qualifies a named destination that IS another
+  module's global, cached per instance so the IRVariable arm cannot qualify it twice.
+  ⚠ **The C# oracle in the new fixture runs IN PROCESS** (Roslyn: emit a console assembly to
+  memory, load, invoke the entry point, capture Console.Out). `CliTestHarness.CompileRunCSharp`
+  spawns `BasicLang.exe`, a Windows apphost that is not deployed on Linux — which is why the 18
+  `_CSharp` rows that use it sit in this machine's 195-row baseline failure set. Measured, not
+  assumed: the first draft used it and all 13 running cases failed with Win32Exception.
+  ⚠ **RECORDED LIMITATIONS, each pinned or measured:**
+  - **Inferred module types do not flow across declaration order**: `Public Value = 5` used
+    before its Module is Object at the use (refused "requires numeric operands"); with the
+    declaring module first it is Integer and runs (6). A declared `As Integer` has no such
+    dependence. Pinned both ways.
+  - **A qualified module Const as an ARRAY SIZE is refused** ("must be a compile-time
+    constant") — the size folder consults `ConstantValue` through lexical resolution only. The
+    same Const in an expression is fine (14). Not chased here.
+  - **Cross-FILE same-name globals** meet only in `CombineIRModules`, after each unit's IR is
+    built, so their names stay bare. C# is fine (per-module classes), C++ and JavaScript were
+    already loud, and MSIL now REFUSES ("declared by more than one module ... across files")
+    instead of keeping the last one. Pinned with a two-file compile.
+  - **A qualified module CALL in a single file is STILL a phantom-receiver call** —
+    `t0 = Helpers.Twice(4);` on C++ ("'Helpers' was not declared"), ReferenceError on JavaScript,
+    MissingMethodException on MSIL, while C# runs it (8). Same family, separate mechanism (the
+    call visitor, not member access); pinned, and it is why the fixture's write read-backs use
+    file-scope functions rather than a `Peek()` inside the module. **Next obvious candidate.**
+  - **And its mirror on C#**: a BARE cross-module call (`BumpA()` from outside `A`) is CS0103
+    there — C# qualifies cross-module VARIABLES but not calls — while the other three run it and
+    refuse the qualified spelling. No single call form runs on all four today; the fixture's
+    one case that needs a call uses two program texts and says so.
+  - Module = file is still the multi-file resolver's assumption (`FindModuleByName` matches
+    unit names, i.e. file stems). Unchanged.
+  ⛔ **TWO MUTATIONS SURVIVED THE FIRST SWEEP, and both exposed an uncovered shape.** "Prefer the
+  current module's copy in `GetOrCreateVariable`" and "register a Const where it looks" were both
+  unreachable from every fixture case, because every MODULE-member reference is intercepted
+  before `GetOrCreateVariable` runs. They ARE reachable from a FILE-SCOPE global whose name a
+  Module also declares — no owner is stamped at file scope, so that reference still takes the
+  bare-keyed table, which holds whichever declaration came LAST: `Scale = Scale + 10` in `Main`
+  would silently bump `Beta.Scale` (12 / 12 instead of 11 / 2). Two tests for that shape kill
+  both. The Const twin also pins something older: a file-scope Const was never registered where
+  `GetOrCreateVariable` looks, so a reference minted a fresh LOCAL of the same name — fine only
+  while both were spelled identically, broken the moment the colliding Const is renamed.
+  Sixteen mutations, sixteen kills after that.
+  ⛔ **THE FIRST FULL-SUITE RUN CAUGHT A REGRESSION THE FIXTURE COULD NOT** — two green C++ tests
+  (`Cpp_ModuleLevelConstSizedArray_Allocates…`, `…TwoDimensionalArray_ConstSized…`) went red with
+  "Array size must be a compile-time constant". A FILE-SCOPE `Const K` with `Dim g(K)` inside a
+  Module: the pass-1 sweep typed the Dim through `ResolveTypeReference`, which FOLDS the declared
+  array size — in pass 1, before any Const exists in scope. It now types through
+  `ResolveSiblingSignatureType` (`report: false` on dimensions), the resolver the sibling pre-pass
+  already uses for this reason. Same lesson as every entry in this file: the fixture proves the
+  change, only the full suite proves what it broke — compared BY NAME.
   ⚠ **Narrowing shapes are refused by the SEMANTIC ANALYZER, before any of this** —
   `Public N As Single = 1.5 + 1.0` is "Cannot assign value of type 'Double' to variable of type
   'Single'", before and after. Not a folding gap.

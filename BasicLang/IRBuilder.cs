@@ -21,6 +21,33 @@ namespace BasicLang.Compiler.IR
         private readonly Stack<LoopContext> _loopStack;
         private readonly Dictionary<string, Stack<IRVariable>> _variableVersions;
         private readonly Dictionary<string, IRVariable> _globalVariables;
+
+        /// <summary>
+        /// Module-level globals by OWNING MODULE and bare name, beside <see cref="_globalVariables"/>
+        /// which keys by bare name alone and so can hold only one of two Modules' same-named
+        /// globals. This is what a resolved module member reference binds through.
+        /// </summary>
+        private readonly Dictionary<string, IRVariable> _moduleGlobals;
+
+        /// <summary>
+        /// Bare names that more than one Module (the file scope counts as one) declares at
+        /// module level, collected up front from the AST. Such a global gets an IR NAME
+        /// qualified by its owner — <c>Alpha_Scale</c>, <c>Beta_Scale</c> — so that every backend,
+        /// every by-name table in them, and every value the builder renames after its
+        /// assignment target (<c>Scale = Scale + 1</c>) stay distinct BY CONSTRUCTION.
+        ///
+        /// <para>⛔ Measured before, with both declared bare: C++ "redefinition of 'int32_t Value'",
+        /// JavaScript refused outright, and MSIL keyed its field table by bare name and SILENTLY
+        /// kept the last one — <c>A.GetA()</c> printed B's 2. Renaming in the IR fixes all three
+        /// at once and needs no per-backend collision special case, which would also have had to
+        /// thread the owner through the renamed-value path or lose writes.</para>
+        ///
+        /// <para>⚠ Single-unit only: two FILES each declaring <c>Scale</c> meet only in
+        /// CombineIRModules, after each unit's IR is built. That case keeps today's behaviour
+        /// (the key is qualified, the names are not), except that MSIL now refuses it loudly
+        /// instead of overwriting.</para>
+        /// </summary>
+        private readonly HashSet<string> _sharedGlobalNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, IRAlloca> _locals;
         private string _currentClassName;
         private string _currentNamespace;
@@ -54,6 +81,7 @@ namespace BasicLang.Compiler.IR
             _loopStack = new Stack<LoopContext>();
             _variableVersions = new Dictionary<string, Stack<IRVariable>>();
             _globalVariables = new Dictionary<string, IRVariable>();
+            _moduleGlobals = new Dictionary<string, IRVariable>(StringComparer.OrdinalIgnoreCase);
             _locals = new Dictionary<string, IRAlloca>();
         }
 
@@ -67,11 +95,81 @@ namespace BasicLang.Compiler.IR
             _currentFunction = null;
             _currentBlock = null;
 
+            CollectSharedModuleGlobalNames(program);
+
             program.Accept(this);
 
             CanonicaliseMemberNames();
 
             return _module;
+        }
+
+        /// <summary>See <see cref="_sharedGlobalNames"/>.</summary>
+        private void CollectSharedModuleGlobalNames(ProgramNode program)
+        {
+            _sharedGlobalNames.Clear();
+            var owners = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+            void Record(string name, string owner)
+            {
+                if (string.IsNullOrEmpty(name)) return;
+                if (!owners.TryGetValue(name, out var set))
+                    owners[name] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                set.Add(owner ?? _module?.Name ?? "");
+            }
+
+            void Walk(ASTNode node, string owner)
+            {
+                switch (node)
+                {
+                    case ModuleNode module:
+                        foreach (var m in module.Members) Walk(m, module.Name);
+                        break;
+                    case NamespaceNode ns:
+                        foreach (var m in ns.Members) Walk(m, owner);
+                        break;
+                    case VariableDeclarationNode v: Record(v.Name, owner); break;
+                    case ConstantDeclarationNode c: Record(c.Name, owner); break;
+                }
+            }
+
+            foreach (var decl in program?.Declarations ?? new List<ASTNode>())
+                Walk(decl, null);
+
+            foreach (var kv in owners)
+                if (kv.Value.Count > 1) _sharedGlobalNames.Add(kv.Key);
+        }
+
+        /// <summary>The IR name of module-level <paramref name="name"/> owned by <paramref name="module"/>.</summary>
+        private string GlobalIrName(string module, string name) =>
+            _sharedGlobalNames.Contains(name) && !string.IsNullOrEmpty(module) ? $"{module}_{name}" : name;
+
+        private static string ModuleGlobalKey(string module, string name) => $"{module}\0{name}";
+
+        /// <summary>
+        /// The global that a resolved module member reference binds to: the declared one when
+        /// its declaration has been visited, else a forward reference carrying the same IR name
+        /// and owner — which is all any backend spells it by.
+        /// </summary>
+        private IRVariable GlobalReference(string name, string module, TypeInfo type)
+        {
+            if (_moduleGlobals.TryGetValue(ModuleGlobalKey(module, name), out var declared))
+                return declared;
+
+            return new IRVariable(GlobalIrName(module, name), type)
+            {
+                IsGlobal = true,
+                ModuleName = module
+            };
+        }
+
+        /// <summary>The module member a node resolved to, or null for anything else.</summary>
+        private Symbol ModuleMemberSymbolOf(ASTNode node)
+        {
+            var symbol = _semanticAnalyzer?.GetNodeSymbol(node);
+            return symbol != null && !string.IsNullOrEmpty(symbol.OwningModule)
+                && (symbol.Kind == SymbolKind.Variable || symbol.Kind == SymbolKind.Constant)
+                ? symbol : null;
         }
 
         /// <summary>
@@ -280,9 +378,15 @@ namespace BasicLang.Compiler.IR
             // Check global — unless the name is a member of the class being built: found by
             // review, `Total = Total + n` inside Counter.Add resolved to a module-level `Total`
             // and mutated the global while the field stayed 0.
-            if (_globalVariables.ContainsKey(name) && !IsCurrentClassMember(name))
+            //
+            // The CURRENT Module's copy first: _globalVariables is bare-keyed and holds whichever
+            // same-named global was declared last, which is the wrong one from inside the other.
+            if (!IsCurrentClassMember(name))
             {
-                return _globalVariables[name];
+                if (_moduleGlobals.TryGetValue(ModuleGlobalKey(_currentModuleName ?? _module?.Name, name), out var own))
+                    return own;
+                if (_globalVariables.ContainsKey(name))
+                    return _globalVariables[name];
             }
 
             // Create new version
@@ -587,11 +691,13 @@ namespace BasicLang.Compiler.IR
                 // AddGlobalVariable keys on ModuleName when the bare name collides, so the
                 // owning module has to be set BEFORE it is registered or two Modules' globals
                 // are attributed to the same key and one is lost.
-                var globalVar = new IRVariable(node.Name, varType) { IsGlobal = true };
-                globalVar.ModuleName = _currentModuleName ?? _module?.Name;
+                var owningModule = _currentModuleName ?? _module?.Name;
+                var globalVar = new IRVariable(GlobalIrName(owningModule, node.Name), varType) { IsGlobal = true };
+                globalVar.ModuleName = owningModule;
                 globalVar.Access = MapAccessModifier(node.Access);
                 _module.AddGlobalVariable(globalVar);
                 _globalVariables[node.Name] = globalVar;
+                _moduleGlobals[ModuleGlobalKey(owningModule, node.Name)] = globalVar;
 
                 if (node.Initializer != null)
                 {
@@ -750,15 +856,20 @@ namespace BasicLang.Compiler.IR
                 }
 
                 // Create the constant as a global variable
-                var constVar = new IRVariable(node.Name, typeInfo)
+                var owningModule = _currentModuleName ?? _module?.Name;
+                var constVar = new IRVariable(GlobalIrName(owningModule, node.Name), typeInfo)
                 {
                     IsGlobal = true,
                     IsConst = true,
                     InitialValue = BuildModuleScopeInitializer(
                         node.Value, node.Name, "constant", typeInfo),
-                    ModuleName = _currentModuleName ?? _module?.Name,
+                    ModuleName = owningModule,
                     Access = MapAccessModifier(node.Access)
                 };
+                // Registered like a Dim so a reference binds to THIS instance rather than
+                // minting a fresh local that merely shares the name.
+                _globalVariables[node.Name] = constVar;
+                _moduleGlobals[ModuleGlobalKey(owningModule, node.Name)] = constVar;
 
                 // Add to the module's globals. This used to be first-wins, on the reasoning
                 // that "at module scope a repeated name is a genuine redeclaration" — WRONG.
@@ -3860,7 +3971,12 @@ namespace BasicLang.Compiler.IR
                 var symbol = _semanticAnalyzer.GetNodeSymbol(idExpr2);
 
                 IRVariable targetVar;
-                if (symbol != null && symbol.IsImported && !string.IsNullOrEmpty(symbol.SourceModule))
+                if (ModuleMemberSymbolOf(idExpr2) is Symbol moduleMember)
+                {
+                    // A Module's variable, its own or another's — the same global the read binds.
+                    targetVar = GlobalReference(moduleMember.Name, moduleMember.OwningModule, value.Type);
+                }
+                else if (symbol != null && symbol.IsImported && !string.IsNullOrEmpty(symbol.SourceModule))
                 {
                     // This is an imported variable from another module
                     targetVar = new IRVariable(idExpr2.Name, value.Type);
@@ -3877,6 +3993,19 @@ namespace BasicLang.Compiler.IR
                 if (!TryRenameToVariable(value, targetVar))
                 {
                     // For constants, variables, or other values, emit an assignment
+                    EmitInstruction(new IRAssignment(targetVar, value));
+                }
+            }
+            else if (node.Target is MemberAccessExpressionNode moduleMemberExpr
+                     && ModuleMemberSymbolOf(moduleMemberExpr) is Symbol moduleMemberTarget)
+            {
+                // `Helpers.Value = 13`: a write to a Module's variable is an assignment to that
+                // global — the SAME one the read binds, so the two cannot disagree about where it
+                // lives. Never an IRFieldStore on a phantom receiver ("cannot use arrow operator
+                // on a type" was the C++ reading of that).
+                var targetVar = GlobalReference(moduleMemberTarget.Name, moduleMemberTarget.OwningModule, value.Type);
+                if (!TryRenameToVariable(value, targetVar))
+                {
                     EmitInstruction(new IRAssignment(targetVar, value));
                 }
             }
@@ -4361,6 +4490,16 @@ namespace BasicLang.Compiler.IR
                 return;
             }
 
+            // A variable or constant of a Module in this unit, resolved by the analyzer (its own
+            // module's by lexical scope, another module's by the cross-module fallback). Bound
+            // to the real global, whatever the declaration order.
+            if (ModuleMemberSymbolOf(node) is Symbol moduleMember)
+            {
+                _expressionResult = GlobalReference(moduleMember.Name, moduleMember.OwningModule,
+                    _semanticAnalyzer.GetNodeType(node));
+                return;
+            }
+
             // Check if this identifier was resolved as an imported symbol
             var symbol = _semanticAnalyzer.GetNodeSymbol(node);
             if (symbol != null && symbol.IsImported && !string.IsNullOrEmpty(symbol.SourceModule))
@@ -4395,6 +4534,18 @@ namespace BasicLang.Compiler.IR
                 && _semanticAnalyzer.NetEnumConstants.TryGetValue(node, out var enumConstant))
             {
                 _expressionResult = new IRConstant(enumConstant.Value, enumConstant.Type);
+                return;
+            }
+
+            // `Helpers.Value`: the analyzer resolved this to a Module's variable or constant, so
+            // it IS that global — not a field read on a receiver. ⛔ Before the receiver visit,
+            // which would materialize a phantom variable named after the module. Measured before:
+            // `t0 = Helpers.Value;` on C++ ("'Helpers' was not declared"), ReferenceError on
+            // JavaScript, MissingFieldException 'System.Object.Value' on MSIL.
+            if (ModuleMemberSymbolOf(node) is Symbol moduleMember)
+            {
+                _expressionResult = GlobalReference(moduleMember.Name, moduleMember.OwningModule,
+                    _semanticAnalyzer.GetNodeType(node));
                 return;
             }
 

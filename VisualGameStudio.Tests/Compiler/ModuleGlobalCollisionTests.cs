@@ -22,6 +22,18 @@ namespace VisualGameStudio.Tests.Compiler;
 /// <c>.Values</c>, and the C# backend already groups those by <c>ModuleName</c> into per-module
 /// static classes — so once both survive, a bare reference inside <c>Beta</c> resolves to
 /// <c>Beta</c>'s copy by ordinary lexical scoping.</para>
+///
+/// <para>⚠ SUPERSEDED IN ONE RESPECT as of 2026-09-19: "only the key" was true for C#, and only
+/// for C#. The other three backends spell a global by its bare <c>Name</c>, so two surviving
+/// entries still emitted two <c>int32_t Scale</c> on C++ (redefinition), a refusal on
+/// JavaScript, and on MSIL a by-name field table that kept the LAST one — <c>Alpha.Report()</c>
+/// read Beta's value from a build that reported success. So a same-named module global now gets
+/// an IR NAME qualified by its owner, <c>Alpha_Scale</c> / <c>Beta_Scale</c>, decided from the AST
+/// before any declaration is lowered (<c>IRBuilder.CollectSharedModuleGlobalNames</c>). The
+/// asserts below pin THAT representation; the one thing they never pinned — that the two are
+/// distinct and attributed to their own Modules — is unchanged. A single, uncontested name stays
+/// bare, and so does the cross-FILE case, which meets only in CombineIRModules.
+/// <see cref="ModuleMemberAccessTests"/> proves the behaviour end to end on every backend.</para>
 /// </summary>
 [TestFixture]
 public class ModuleGlobalCollisionTests
@@ -40,8 +52,14 @@ public class ModuleGlobalCollisionTests
         return new IRBuilder(analyzer).Build(ast, "T");
     }
 
-    private static int CountGlobalsNamed(IRModule m, string name) =>
-        m.GlobalVariables.Values.Count(v => v.Name == name);
+    /// <summary>
+    /// The globals declared as <paramref name="bareName"/> in SOME Module: a contested name is
+    /// spelled <c>Owner_Name</c> in the IR, an uncontested one stays bare.
+    /// </summary>
+    private static List<IRVariable> GlobalsDeclaredAs(IRModule m, string bareName) =>
+        m.GlobalVariables.Values
+            .Where(v => v.Name == bareName || v.Name == $"{v.ModuleName}_{bareName}")
+            .ToList();
 
     [Test]
     public void TwoModules_EachWithTheSameConstName_BothSurvive()
@@ -51,11 +69,14 @@ public class ModuleGlobalCollisionTests
             "Module Beta\nConst Scale As Integer = 2\nEnd Module\n" +
             "Sub Main()\nEnd Sub");
 
-        Assert.That(CountGlobalsNamed(m, "Scale"), Is.EqualTo(2),
+        var scales = GlobalsDeclaredAs(m, "Scale");
+        Assert.That(scales, Has.Count.EqualTo(2),
             "each Module owns its own constant; one was being dropped");
-        Assert.That(m.GlobalVariables.Values.Where(v => v.Name == "Scale")
-            .Select(v => v.ModuleName).Distinct().Count(), Is.EqualTo(2),
+        Assert.That(scales.Select(v => v.ModuleName).Distinct().Count(), Is.EqualTo(2),
             "and they must be attributed to different Modules");
+        Assert.That(scales.Select(v => v.Name).OrderBy(n => n), Is.EqualTo(new[] { "Alpha_Scale", "Beta_Scale" }),
+            "a CONTESTED name is spelled by owner in the IR, so no backend's by-name table can "
+            + "merge the two — the bare spelling is what let MSIL keep only the last one");
     }
 
     /// <summary>
@@ -70,7 +91,7 @@ public class ModuleGlobalCollisionTests
             "Module Beta\nConst Scale As Long = 2\nEnd Module\n" +
             "Sub Main()\nEnd Sub");
 
-        var types = m.GlobalVariables.Values.Where(v => v.Name == "Scale")
+        var types = GlobalsDeclaredAs(m, "Scale")
             .Select(v => v.Type?.Name).OrderBy(x => x).ToList();
 
         Assert.That(types, Is.EqualTo(new[] { "Integer", "Long" }));
@@ -88,7 +109,7 @@ public class ModuleGlobalCollisionTests
         TestName = "FileScopeThenModule")]
     public void MixedModuleGlobals_WithTheSameName_BothSurvive(string source)
     {
-        Assert.That(CountGlobalsNamed(Build(source), "Scale"), Is.EqualTo(2));
+        Assert.That(GlobalsDeclaredAs(Build(source), "Scale"), Has.Count.EqualTo(2));
     }
 
     [Test]
@@ -100,7 +121,7 @@ public class ModuleGlobalCollisionTests
             "Module Gamma\nConst Scale As Integer = 3\nEnd Module\n" +
             "Sub Main()\nEnd Sub");
 
-        Assert.That(CountGlobalsNamed(m, "Scale"), Is.EqualTo(3));
+        Assert.That(GlobalsDeclaredAs(m, "Scale"), Has.Count.EqualTo(3));
     }
 
     /// <summary>

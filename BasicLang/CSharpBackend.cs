@@ -2728,6 +2728,42 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             return value.NamedAfterVariable && _currentClassMemberNames.Contains(value.Name);
         }
 
+        /// <summary>
+        /// <c>Module.Name</c> for a global that lives in a DIFFERENT module from the function being
+        /// emitted, else the bare spelling. Each module is its own static class here, so a bare
+        /// name resolves only inside its owner. "Main" is spelled "Program", as the class is.
+        /// </summary>
+        private string QualifyCrossModuleGlobal(IRVariable global, string spelled)
+        {
+            if (global == null || string.IsNullOrEmpty(global.ModuleName) || _currentFunction == null)
+                return spelled;
+            if (string.Equals(global.ModuleName, _currentFunction.ModuleName, StringComparison.OrdinalIgnoreCase))
+                return spelled;
+
+            var qualifyingModule = global.ModuleName;
+            if (qualifyingModule.Equals("Main", StringComparison.OrdinalIgnoreCase))
+                qualifyingModule = "Program";
+            return $"{qualifyingModule}.{spelled}";
+        }
+
+        /// <summary>
+        /// The global a NAMED DESTINATION refers to — a value IRBuilder renamed after its
+        /// assignment target (<c>Helpers.Value = Helpers.Value + 1</c> is an IRBinaryOp named
+        /// after the global) — or null when the name is not a global's.
+        ///
+        /// <para>⛔ Such a destination carries only the NAME, not the IRVariable, so the
+        /// cross-module qualification in EmitExpression's IRVariable arm never saw it: the write
+        /// was spelled bare, <c>Value = Value + 1</c>, inside a class that has no <c>Value</c> —
+        /// CS0103 from a build the front end had accepted. Reachable only since a qualified
+        /// module member resolves at all; before that the front end refused the shape.</para>
+        /// </summary>
+        private IRVariable GlobalNamedBy(string irName)
+        {
+            if (string.IsNullOrEmpty(irName) || _currentModule?.GlobalVariables == null) return null;
+            return _currentModule.GlobalVariables.Values.FirstOrDefault(g =>
+                g?.IsGlobal == true && string.Equals(g.Name, irName, StringComparison.OrdinalIgnoreCase));
+        }
+
         private string GetValueName(IRValue value)
         {
             if (value is IRConstant constant)
@@ -2735,6 +2771,21 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             if (_valueNames.TryGetValue(value, out var name))
                 return name;
+
+            // A renamed destination that IS a global of another module: spelled qualified, and
+            // cached on THIS instance only — never in _variableNameMap, which the IRVariable arm
+            // below shares and which EmitExpression qualifies itself (a shared entry would be
+            // qualified twice).
+            if (value is not IRVariable && value.NamedAfterVariable && !string.IsNullOrEmpty(value.Name)
+                && GlobalNamedBy(value.Name) is IRVariable destinationGlobal)
+            {
+                var qualified = QualifyCrossModuleGlobal(destinationGlobal, SanitizeName(value.Name));
+                if (!string.Equals(qualified, SanitizeName(value.Name), StringComparison.Ordinal))
+                {
+                    _valueNames[value] = qualified;
+                    return qualified;
+                }
+            }
 
             if (value is IRVariable variable)
             {
@@ -2812,23 +2863,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
                             // Check if this global is from a different module and needs qualification
                             if (v.IsGlobal)
-                            {
-                                if (!string.IsNullOrEmpty(v.ModuleName) && _currentFunction != null)
-                                {
-                                    var currentModuleName = _currentFunction.ModuleName;
-                                    if (!string.Equals(v.ModuleName, currentModuleName, StringComparison.OrdinalIgnoreCase))
-                                    {
-                                        // Qualify with module name
-                                        // Note: "Main" module gets renamed to "Program" in C# output
-                                        var qualifyingModule = v.ModuleName;
-                                        if (qualifyingModule.Equals("Main", StringComparison.OrdinalIgnoreCase))
-                                        {
-                                            qualifyingModule = "Program";
-                                        }
-                                        return $"{qualifyingModule}.{varName}";
-                                    }
-                                }
-                            }
+                                return QualifyCrossModuleGlobal(v, varName);
                             return varName;
                         }
 

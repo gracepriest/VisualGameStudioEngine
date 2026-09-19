@@ -48,6 +48,21 @@ namespace BasicLang.Compiler.SemanticAnalysis
         // Imported modules for shorthand access (no prefix needed)
         private readonly HashSet<string> _importedModules = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>
+        /// Every module-level variable and constant declared inside a <c>Module</c> block of THIS
+        /// unit, by module name then member name — registered in pass 1 so that a reference is
+        /// resolvable whatever the declaration order, and upgraded to the full-fidelity symbol
+        /// when pass 2 reaches the declaration.
+        ///
+        /// <para>⛔ Pass 1 registered only procedure signatures, and a Module's <c>Dim</c>/<c>Const</c>
+        /// live in the Module's OWN scope, which a sibling Module's lexical chain never reaches.
+        /// So <c>Helpers.Value</c> and a cross-module bare <c>Value</c> both fell through every
+        /// channel — see <see cref="Symbol.OwningModule"/> for what that produced on each
+        /// backend.</para>
+        /// </summary>
+        private readonly Dictionary<string, Dictionary<string, Symbol>> _moduleMembers =
+            new Dictionary<string, Dictionary<string, Symbol>>(StringComparer.OrdinalIgnoreCase);
+
         // .NET namespace tracking
         private readonly HashSet<string> _netNamespaces = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -1043,6 +1058,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             _nodeTypes.Clear();
             _nodeSymbols.Clear();
             _netNamespaces.Clear();
+            _moduleMembers.Clear();
 
             GlobalScope = new Scope("Global", ScopeKind.Global, null);
             _currentScope = GlobalScope;
@@ -4741,10 +4757,165 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 RegisterClassMemberSignatures(decl);
             }
 
+            // Module-level variables and constants inside Module blocks, AFTER the class sweeps
+            // so a class-typed one resolves to the real class. See _moduleMembers.
+            foreach (var decl in program.Declarations)
+            {
+                RegisterModuleMemberDeclarations(decl, moduleName: null);
+            }
+
             foreach (var decl in program.Declarations)
             {
                 RegisterDeclaration(decl);
             }
+        }
+
+        /// <summary>
+        /// Pass 1, sweep 3: record every <c>Dim</c>/<c>Const</c> declared directly inside a
+        /// <c>Module</c> block, typed from its declaration. A file-scope declaration (no enclosing
+        /// Module) is not recorded — it already lives in the global scope and resolves lexically.
+        ///
+        /// <para>⛔ Typed through <see cref="ResolveSiblingSignatureType"/>, NOT
+        /// <see cref="ResolveTypeReference"/>. The first draft used the latter, and it FOLDS an
+        /// array's declared size — in pass 1, before any <c>Const</c> exists in scope — so
+        /// <c>Dim g(K) As Integer</c> inside a Module, with <c>K</c> a file-scope Const, reported
+        /// "Array size must be a compile-time constant" and failed two previously-green C++
+        /// array tests. The sibling resolver exists for exactly this: it resolves the element type
+        /// and passes <c>report: false</c> for the dimensions. Pass 2 replaces this stand-in with
+        /// the real, fully typed symbol regardless.</para>
+        /// </summary>
+        private void RegisterModuleMemberDeclarations(ASTNode node, string moduleName)
+        {
+            switch (node)
+            {
+                case ModuleNode module:
+                    foreach (var member in module.Members)
+                        RegisterModuleMemberDeclarations(member, module.Name);
+                    break;
+                case NamespaceNode ns:
+                    foreach (var member in ns.Members)
+                        RegisterModuleMemberDeclarations(member, moduleName);
+                    break;
+                case VariableDeclarationNode field when moduleName != null:
+                    RecordModuleMember(new Symbol(field.Name, SymbolKind.Variable,
+                        (field.IsAuto ? null : ResolveSiblingSignatureType(field.Type)) ?? _typeManager.ObjectType,
+                        field.Line, field.Column)
+                    {
+                        Access = field.Access,
+                        OwningModule = moduleName,
+                        SourceModule = moduleName
+                    });
+                    break;
+                case ConstantDeclarationNode constant when moduleName != null:
+                    RecordModuleMember(new Symbol(constant.Name, SymbolKind.Constant,
+                        ResolveSiblingSignatureType(constant.Type) ?? _typeManager.ObjectType,
+                        constant.Line, constant.Column)
+                    {
+                        Access = constant.Access,
+                        IsConstant = true,
+                        OwningModule = moduleName,
+                        SourceModule = moduleName
+                    });
+                    break;
+            }
+        }
+
+        /// <summary>Last writer wins: pass 2's real symbol replaces pass 1's stand-in.</summary>
+        private void RecordModuleMember(Symbol symbol)
+        {
+            if (symbol?.Name == null || string.IsNullOrEmpty(symbol.OwningModule)) return;
+            if (!_moduleMembers.TryGetValue(symbol.OwningModule, out var members))
+            {
+                members = new Dictionary<string, Symbol>(StringComparer.OrdinalIgnoreCase);
+                _moduleMembers[symbol.OwningModule] = members;
+            }
+            members[symbol.Name] = symbol;
+        }
+
+        /// <summary>
+        /// Pass 2's half of the registration: a variable or constant declared directly in a
+        /// Module scope is stamped with its owner and replaces the pass-1 stand-in.
+        /// </summary>
+        private void AttachOwningModule(Symbol symbol)
+        {
+            if (_currentScope?.Kind != ScopeKind.Module || string.IsNullOrEmpty(_currentScope.Name)) return;
+            symbol.OwningModule = _currentScope.Name;
+            symbol.SourceModule ??= _currentScope.Name;
+            RecordModuleMember(symbol);
+        }
+
+        /// <summary>The <c>Module</c> block the current scope is inside, or null.</summary>
+        private string EnclosingModuleName()
+        {
+            for (var s = _currentScope; s != null; s = s.Parent)
+                if (s.Kind == ScopeKind.Module) return s.Name;
+            return null;
+        }
+
+        private static bool IsVisibleOutsideItsModule(Symbol symbol) =>
+            symbol.Access == AccessModifier.Public || symbol.Access == AccessModifier.Friend;
+
+        /// <summary>
+        /// <c>Module.Member</c> for a Module declared in THIS unit. Returns false when the module
+        /// is not one of this unit's or has no such variable/constant, so the caller can go on to
+        /// the cross-unit channels. A member that exists but is Private to another module is an
+        /// error here rather than a fall-through: falling through is what typed it Object.
+        /// </summary>
+        private bool TryResolveModuleMember(string moduleName, string memberName, int line, int column, out Symbol symbol)
+        {
+            symbol = null;
+            if (!_moduleMembers.TryGetValue(moduleName, out var members)
+                || !members.TryGetValue(memberName, out var found)) return false;
+
+            var sameModule = string.Equals(EnclosingModuleName(), found.OwningModule, StringComparison.OrdinalIgnoreCase);
+            if (!sameModule && !IsVisibleOutsideItsModule(found))
+            {
+                Error($"'{found.Name}' is Private to module '{found.OwningModule}' and cannot be accessed from here", line, column);
+            }
+            symbol = found;
+            return true;
+        }
+
+        /// <summary>
+        /// A bare name that resolved to nothing in scope: is it a Public/Friend variable or
+        /// constant of ANOTHER Module in this unit? Exactly one such module means the reference
+        /// is that member; more than one is ambiguous and must be qualified; a match that is
+        /// Private is reported as such. All three are stated rather than left to the permissive
+        /// .NET-type fallback, which is how a bare cross-module name used to be typed Object.
+        /// </summary>
+        private bool TryResolveUnqualifiedModuleMember(string name, int line, int column, out Symbol symbol)
+        {
+            symbol = null;
+            var current = EnclosingModuleName();
+            var visible = new List<Symbol>();
+            Symbol hidden = null;
+            foreach (var members in _moduleMembers.Values)
+            {
+                if (!members.TryGetValue(name, out var candidate)) continue;
+                if (string.Equals(candidate.OwningModule, current, StringComparison.OrdinalIgnoreCase)) continue;
+                if (IsVisibleOutsideItsModule(candidate)) visible.Add(candidate);
+                else hidden ??= candidate;
+            }
+
+            if (visible.Count == 1)
+            {
+                symbol = visible[0];
+                return true;
+            }
+            if (visible.Count > 1)
+            {
+                var owners = string.Join("', '", visible.Select(v => v.OwningModule).OrderBy(o => o, StringComparer.OrdinalIgnoreCase));
+                Error($"'{name}' is ambiguous between modules '{owners}'. Qualify it with the module name", line, column);
+                symbol = visible[0];
+                return true;
+            }
+            if (hidden != null)
+            {
+                Error($"'{name}' is Private to module '{hidden.OwningModule}' and cannot be accessed from here", line, column);
+                symbol = hidden;
+                return true;
+            }
+            return false;
         }
 
         /// <summary>
@@ -5660,6 +5831,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 Error($"Variable '{node.Name}' is already defined in this scope", node.Line, node.Column);
             }
+            AttachOwningModule(symbol);
 
             SetNodeSymbol(node, symbol);
             SetNodeType(node, varType);
@@ -5777,6 +5949,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 Error($"Constant '{node.Name}' is already defined in this scope", node.Line, node.Column);
             }
+            AttachOwningModule(symbol);
 
             SetNodeSymbol(node, symbol);
             SetNodeType(node, constType);
@@ -8293,6 +8466,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 symbol = ResolveQualifiedName(node.Name);
             }
 
+            // A Public/Friend variable or constant of another Module in this unit, by bare name.
+            // ⛔ BEFORE the .NET-type arm below, which is deliberately permissive ("any PascalCase
+            // identifier could be a .NET type") and used to swallow exactly this reference: it
+            // typed `Value` as a phantom class named Value, no error, and the IR builder then
+            // minted a fresh local of that name. See Symbol.OwningModule.
+            if (symbol == null && TryResolveUnqualifiedModuleMember(node.Name, node.Line, node.Column, out var crossModule))
+            {
+                symbol = crossModule;
+            }
+
             if (symbol == null)
             {
                 // Check if this could be a .NET static class (e.g., Console, Math, File)
@@ -8334,6 +8517,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (node.Object is IdentifierExpressionNode objId && !ResolvesToValueSymbol(objId.Name))
             {
                 var moduleName = objId.Name;
+
+                // A Module declared in THIS unit, before any cross-unit channel: its variables and
+                // constants are in _moduleMembers whatever the declaration order. Not found here
+                // means "not one of this unit's module variables" — a procedure, or another unit's
+                // module — and the channels below still get their turn.
+                if (TryResolveModuleMember(moduleName, node.MemberName, node.Line, node.Column, out var moduleMember))
+                {
+                    SetNodeSymbol(node, moduleMember);
+                    SetNodeType(node, moduleMember.Type);
+                    return;
+                }
 
                 // Check ProjectSymbolTable (used by IDE)
                 if (_projectSymbols != null && _projectSymbols.HasModule(moduleName))
