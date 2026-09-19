@@ -27,11 +27,14 @@ namespace VisualGameStudio.Tests.Compiler;
 /// <para>⚠ The INHERITED case asserts JavaScript alone, deliberately — it is still broken on MSIL
 /// (<c>NullReferenceException</c>), so asserting MSIL there would pin a defect as the contract.</para>
 ///
-/// <para>⛔ A SEPARATE AND MORE SEVERE DEFECT IS PINNED AT THE BOTTOM, not fixed: an assignment
-/// whose right-hand side COMPUTES something and does not mention the target field is silently
-/// discarded. It is not a property bug — it hits ordinary methods, instance fields included — and
-/// it is why the setters in these tests are written as a plain copy plus a self-referencing
-/// increment, both of which lower correctly. See that test for the measurements.</para>
+/// <para>⚠ A SEPARATE AND MORE SEVERE DEFECT WAS FOUND HERE AND IS NOW FIXED SEPARATELY: an
+/// assignment whose right-hand side COMPUTES something and does not mention the target field was
+/// silently discarded by the optimizer. It was never a property bug — it hit ordinary methods,
+/// instance fields included — and it is why the setters in these tests are written as a plain copy
+/// plus a self-referencing increment, both of which lowered correctly even then. That shaping is
+/// left as it is: it keeps these tests about ACCESSORS rather than about the optimizer. See
+/// <c>StrengthReductionIdentityTests</c>, and the last test here, whose expectation was changed
+/// from the pinned <c>0|0</c> to <c>14|14</c> rather than deleted.</para>
 /// </summary>
 [TestFixture]
 public class JavaScriptSharedPropertyTests
@@ -394,13 +397,15 @@ public class JavaScriptSharedPropertyTests
     // ------------------------------------------------------- pin on a SEPARATE, unfixed defect
 
     /// <summary>
-    /// ⛔ PINNED AS BROKEN — a DIFFERENT defect, more severe than the one this fixture fixes, and
-    /// deliberately NOT fixed here.
+    /// ⚠ WAS PINNED AS BROKEN, NOW FIXED — a DIFFERENT defect from the accessor fix this fixture
+    /// covers, closed separately by carrying a rewritten value's identity through the optimizer
+    /// (<c>StrengthReductionIdentityTests</c>). The expectation was CHANGED rather than the test
+    /// deleted, exactly as the pin instructed.
     ///
     /// <para>An assignment whose right-hand side COMPUTES something and does not mention the
-    /// target field is SILENTLY DISCARDED. <c>_v = value * 2</c> emits
-    /// <c>const _v = (value &lt;&lt; 1);</c> — a fresh local — so the write goes nowhere and the
-    /// field keeps its old value. Nothing fails; the program prints a plausible number.</para>
+    /// target field WAS SILENTLY DISCARDED. <c>_v = value * 2</c> emitted
+    /// <c>const _v = (value &lt;&lt; 1);</c> — a fresh local — so the write went nowhere and the
+    /// field kept its old value. Nothing failed; the program printed a plausible number.</para>
     ///
     /// <para>⛔ IT IS NOT A PROPERTY BUG. Measured in an ordinary method, on an INSTANCE field as
     /// well as a Shared one: <c>K = p * 2</c> emits <c>const K = (p &lt;&lt; 1)</c> and prints the
@@ -430,7 +435,7 @@ public class JavaScriptSharedPropertyTests
     /// </summary>
     [Test]
     [Category("Integration")]
-    public void ASetterWithAComputedBody_IsDiscardedByTheOptimizer_SeparateDefect()
+    public void ASetterWithAComputedBody_IsWritten_SeparateDefectNowFixed()
     {
         const string program = """
             Class Box
@@ -459,14 +464,11 @@ public class JavaScriptSharedPropertyTests
         Assert.Multiple(() =>
         {
             Assert.That(JavaScriptExecutionTests.RunJs(program), Is.EqualTo("14|14"),
-                "the NON-OPTIMIZING path is CORRECT — which is why a green suite missed this");
-            Assert.That(JavaScriptOptimizedExecutionTests.RunOptimized(program), Is.EqualTo("0|0"),
-                "PINNED DEFECT: under the standard passes every shipping route runs, the "
-                + "strength-reduced write is discarded. Correct is 14|14 — see the doc comment. "
-                + "If this now reads 14|14 the defect is fixed: change this expectation rather "
-                + "than deleting the test.");
+                "the non-optimizing path was always correct");
+            Assert.That(JavaScriptOptimizedExecutionTests.RunOptimized(program), Is.EqualTo("14|14"),
+                "and the OPTIMIZED path now agrees — this was the pinned 0|0");
             Assert.That(Msil.MsilHarness.RunExpectingSuccess(program), Is.EqualTo("14|14\n"),
-                "MSIL gets this right on both paths, which is what makes it a JS/C# defect");
+                "MSIL was right on both paths throughout");
         });
     }
 }

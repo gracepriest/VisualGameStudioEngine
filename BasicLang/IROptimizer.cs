@@ -43,6 +43,46 @@ namespace BasicLang.Compiler.IR.Optimization
         /// <para>Uses reference equality throughout: two structurally identical operands are
         /// distinct values here, and only the one being replaced may be rewritten.</para>
         /// </summary>
+        /// <summary>
+        /// Carries the IDENTITY of a replaced value onto the value standing in for it, and returns
+        /// the replacement so it can be used inline.
+        ///
+        /// <para><b>Why a pass that rewrites a value MUST call this.</b> Passing the old
+        /// <c>Name</c> to the replacement's constructor is NOT enough — a value's identity is the
+        /// name PLUS <see cref="IRValue.NamedAfterVariable"/>, which is what tells a backend that
+        /// the result IS an assignment to that variable rather than a temp that shares its name.
+        /// A replacement built without it defaults to false, so the C# and JavaScript backends
+        /// stop recognising the store: the write to a CLASS MEMBER is emitted as a fresh local
+        /// (<c>const K = ...</c>) on JavaScript and DROPPED ENTIRELY on C#, and the field silently
+        /// keeps its old value. Nothing fails to compile and a plausible number is printed.</para>
+        ///
+        /// <para>MEASURED: <c>K = p * 2</c> on a Shared field printed the field's initial value,
+        /// because strength reduction rewrote the multiply to a shift and the new node carried the
+        /// name but not the flag. C++ and MSIL were unaffected — they do not consult it — so two
+        /// backends were right and two were silently wrong.</para>
+        ///
+        /// <para><see cref="IRInstruction.SourceLine"/> rides along for the reason strength
+        /// reduction already carried it by hand: the replacement stands in for the user's own
+        /// statement, and dropping the line leaves <c>SourceLine 0</c> ("synthesized"), which makes
+        /// a debug build emit a <c>#line</c> reset onto generated glue for a line the user wrote,
+        /// so stepping lands in the wrong place.</para>
+        ///
+        /// <para>⚠ The NAME is deliberately NOT copied here: every call site already passes it to
+        /// the replacement's constructor, so an assignment would act and change nothing. MEASURED —
+        /// removing it left all 18 tests green, while corrupting it failed 11, so the tests are
+        /// sensitive to the name without the line being needed. This helper carries only what was
+        /// being LOST. A future caller that does not name its replacement wants a different
+        /// signature, not a silent re-assignment here.</para>
+        /// </summary>
+        protected static T InheritIdentity<T>(T replacement, IRValue original) where T : IRValue
+        {
+            if (replacement == null || original == null) return replacement;
+
+            replacement.NamedAfterVariable = original.NamedAfterVariable;
+            replacement.SourceLine = original.SourceLine;
+            return replacement;
+        }
+
         protected static void ReplaceUses(IEnumerable<IRInstruction> instructions, IRValue oldValue, IRValue newValue)
         {
             if (instructions == null) return;
@@ -1400,13 +1440,13 @@ namespace BasicLang.Compiler.IR.Optimization
                     var reduced = TryReduceBinary(binaryOp);
                     if (reduced != null)
                     {
-                        // The replacement stands in for the user's own statement, so it
-                        // must keep the original's source location. Dropping it leaves
-                        // SourceLine 0 ("synthesized"), which makes debug builds emit a
-                        // #line reset onto the generated file for a line the user wrote —
-                        // stepping in a debugger then lands in generated glue instead of
-                        // the next source statement (found by the Phase 4 Step-0 gate).
-                        reduced.SourceLine = binaryOp.SourceLine;
+                        // The replacement stands in for the user's own statement, so it must keep
+                        // the original's IDENTITY — its source location AND the flag saying it is
+                        // named after a variable. Carrying only the line (which this used to do)
+                        // left NamedAfterVariable false, and the write to a class member was then
+                        // emitted as a fresh local on JavaScript and dropped on C#. See
+                        // InheritIdentity for the measurements.
+                        InheritIdentity(reduced, binaryOp);
 
                         // The rewrite produces a NEW IRValue object, so every consumer still
                         // pointing at the discarded multiply/divide/modulo has to be re-pointed
@@ -2319,6 +2359,15 @@ namespace BasicLang.Compiler.IR.Optimization
                     var simplified = SimplifyBinaryOp(binOp);
                     if (simplified != binOp)
                     {
+                        // Same identity transfer strength reduction needs, for the same reason: the
+                        // `2 * x -> x + x` arm builds a NEW value carrying the old name, and without
+                        // the flag a write to a class member was emitted as a fresh local on
+                        // JavaScript and dropped on C#. MEASURED on `K = 2 * p` under --optimize,
+                        // which is the only pipeline this pass runs in. An arm returning an
+                        // IRAssignment instead is unaffected — its target is an explicit variable —
+                        // and is left alone.
+                        if (simplified is IRValue replacement) InheritIdentity(replacement, binOp);
+
                         block.Instructions[i] = simplified;
                         ReportModification();
                     }
