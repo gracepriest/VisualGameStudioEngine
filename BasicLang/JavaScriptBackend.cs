@@ -615,13 +615,28 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 return;
             }
 
+            // ⛔ `static` WAS MISSING HERE, though the auto-property arm above has always had it.
+            // A `Shared` property emitted INSTANCE accessors, so nothing reached them: reading
+            // `Box.P` answered `undefined` (the getter lives on the prototype, not the class), and
+            // `Box.P = 7` did not call the setter at all — it quietly created a plain own-property
+            // on the class. The backing field was never touched.
+            //
+            // ⛔ A READ-WRITE Shared property therefore LOOKED CORRECT while doing nothing: the
+            // write created `Box.P` and the read handed the same value back. Measured with a setter
+            // that doubles — `Box.P = 7` then reading both the property and the backing field gave
+            // `7|0` where every other backend gives `14|14`. Only a setter with an observable
+            // effect can tell the two apart, which is why the tests use one.
+            var modifier = prop.IsStatic ? "static " : "";
+
             if (prop.Getter != null && !prop.IsWriteOnly)
-                EmitMemberBody($"get {SanitizeName(prop.Name)}()", prop.Getter, members);
+                EmitMemberBody($"{modifier}get {SanitizeName(prop.Name)}()", prop.Getter, members,
+                    isStatic: prop.IsStatic);
 
             // The setter's implementation already has a parameter named `value`, so the JS
             // accessor's parameter name matches for free.
             if (prop.Setter != null && !prop.IsReadOnly)
-                EmitMemberBody($"set {SanitizeName(prop.Name)}(value)", prop.Setter, members);
+                EmitMemberBody($"{modifier}set {SanitizeName(prop.Name)}(value)", prop.Setter, members,
+                    isStatic: prop.IsStatic);
         }
 
         private void EmitConstructor(IRClass irClass, IRConstructor ctor, HashSet<string> members)
