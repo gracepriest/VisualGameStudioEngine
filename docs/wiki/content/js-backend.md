@@ -15,9 +15,11 @@ IDE/BasicLang.exe program.bas --target=javascript
 
 > [note] The output uses ES modules, so a browser will not load it from a `file://` page.
 > Serve the directory over HTTP — or press `F5` in the IDE, which starts `WebPreviewServer`
-> for you. The CLI prints this reminder after a successful build.
+> for you. `basiclang build` prints only `Site written to: <dir>`; the reminder itself comes
+> from `basiclang run`, which reports that a web project has nothing to launch and points at
+> the emitted `index.html`.
 
-Implementation: `JavaScriptBackend.cs` (~3,100 lines) with `JavaScriptEmitter.cs`,
+Implementation: `JavaScriptBackend.cs` (~3,400 lines) with `JavaScriptEmitter.cs`,
 `JavaScriptTypeMapper.cs`, `JavaScriptSourceMap.cs` (source maps, so the browser debugger
 shows BasicLang), and `JsExceptionTypes.cs`.
 
@@ -73,7 +75,9 @@ wrong code.**
 | `BL7005` | Value `Structure` — JavaScript has no value semantics for objects |
 | `BL7006` | Operator overloads |
 | `BL7007` | BCL types the backend does not provide (e.g. `System.IO.Stream`) |
-| `BL7010` | A `#JsImport` that cannot be lowered |
+| `BL7008` | A LINQ operator with no faithful `Array` lowering — `First`/`Last`/`Single` (+`OrDefault`), `Min`, `Max`, `Average`, `Aggregate`, `ElementAt`, `GroupBy`, `Join`, `SelectMany`, `Zip`, `Except`, `Intersect`, `Union`, `ThenBy`/`ThenByDescending` |
+| `BL7009` | A `::` name with an *interior* namespace (`mathlib::freeAdd`) — only a **leading** `::` is a JavaScript passthrough; `::` alone names nothing |
+| `BL7010` | A `#JsImport` binding whose name collides with a program declaration or with another import |
 | `BL7011` | A declared type colliding with a provided global (e.g. `console`) |
 | `BL7012` | A non-provided exception type |
 

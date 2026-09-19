@@ -35,17 +35,27 @@
     var out = esc(code);
     if (lang === 'text' || lang === 'output' || lang === '') return out;
     var parts = [];
+    // In shell dialects '#' opens a comment; in BasicLang it opens a directive.
+    var hashIsComment = /^(powershell|pwsh|ps1|bash|sh|shell|yaml|toml|ini)$/.test(lang);
+    var TOKENS = hashIsComment
+      ? /#[^\n]*|&quot;[^&\n]*&quot;|"[^"\n]*"|'[^'\n]*'/g
+      : /'[^\n]*|\/\/[^\n]*|&quot;[^&\n]*&quot;|"[^"\n]*"|#[A-Za-z]+/g;
     // Pull comments and strings out first so keywords inside them stay plain.
-    out = out.replace(/'[^\n]*|\/\/[^\n]*|&quot;[^&\n]*&quot;|"[^"\n]*"|#[A-Za-z]+/g, function (m) {
+    out = out.replace(TOKENS, function (m) {
       var cls = 'tok-com';
       if (m.charAt(0) === '"' || m.indexOf('&quot;') === 0) cls = 'tok-str';
-      else if (m.charAt(0) === '#') cls = 'tok-kw';
+      else if (m.charAt(0) === "'") cls = hashIsComment ? 'tok-str' : 'tok-com';
+      else if (m.charAt(0) === '#') cls = hashIsComment ? 'tok-com' : 'tok-kw';
       parts.push('<span class="' + cls + '">' + m + '</span>');
-      return SENT + (parts.length - 1) + SENT;
+      // The placeholder carries an 's' prefix so the numeric-literal pass below cannot
+      // match its index digits. Without it, the number rule wrapped them in a <span>,
+      // the restore regex stopped matching, and every string and comment on the site
+      // was replaced by a bare number.
+      return SENT + 's' + (parts.length - 1) + SENT;
     });
     out = out.replace(KW_RE, '<span class="tok-kw">$1</span>');
     out = out.replace(/\b(\d+(?:\.\d+)?)\b/g, '<span class="tok-num">$1</span>');
-    out = out.replace(new RegExp(SENT + '(\\d+)' + SENT, 'g'), function (_, i) { return parts[+i]; });
+    out = out.replace(new RegExp(SENT + 's(\\d+)' + SENT, 'g'), function (_, i) { return parts[+i]; });
     return out;
   }
 
@@ -68,14 +78,33 @@
       var ext = /^https?:/.test(href) ? ' target="_blank" rel="noopener"' : '';
       return '<a href="' + href + '"' + ext + '>' + t + '</a>';
     });
-    s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    // Bold first, allowing a nested italic inside it (`**a *b* c**`), then any
+    // remaining standalone italic. The old [^*]+ body stopped at the inner star
+    // and printed four literal asterisks.
+    s = s.replace(/\*\*([\s\S]+?)\*\*/g, function (_, body) {
+      return '<strong>' + body.replace(/\*([^*\n]+)\*/g, '<em>$1</em>') + '</strong>';
+    });
     s = s.replace(/(^|[\s(])\*([^*\n]+)\*/g, '$1<em>$2</em>');
     s = s.replace(new RegExp(SENT + '(\\d+)' + SENT, 'g'), function (_, i) { return stash[+i]; });
     return s;
   }
 
   function slug(s) {
-    return s.toLowerCase().replace(/[`*_]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    return s.toLowerCase()
+      .replace(/[`*_]/g, '')
+      .replace(/\+\+/g, 'pp')          // C++ -> cpp, so it cannot collide with C#
+      .replace(/#/g, 's')              // C# -> cs
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '') || 'section';
+  }
+
+  // Headings that still collide after slugging get -2, -3, … so every id is unique
+  // and each on-this-page link reaches its own section.
+  function uniqueSlug(base, used) {
+    var id = base, n = 2;
+    while (used[id]) id = base + '-' + n++;
+    used[id] = true;
+    return id;
   }
 
   function render(md, headings) {
@@ -83,6 +112,12 @@
     var html = [];
     var i = 0;
     var listStack = [];
+    var usedIds = {};
+
+    // A line that opens a new block, so a paragraph or list item must not swallow it.
+    function startsBlock(l) {
+      return /^(#{2,4}\s|```|\||>|---+$|<)/.test(l) || /^\s*([-*]|\d+\.)\s/.test(l);
+    }
 
     function closeList() {
       while (listStack.length) html.push('</' + listStack.pop() + '>');
@@ -115,7 +150,7 @@
         i++;
         while (i < lines.length && lines[i].indexOf('```') !== 0) { code.push(lines[i]); i++; }
         i++;
-        html.push('<pre' + (lang ? ' data-lang="' + esc(lang) + '"' : '') + '><code>' +
+        html.push('<pre tabindex="0"' + (lang ? ' data-lang="' + esc(lang) + '"' : '') + '><code>' +
           highlight(code.join('\n'), lang) + '</code></pre>');
         continue;
       }
@@ -130,7 +165,9 @@
         i += 2;
         var body = [];
         while (i < lines.length && lines[i].indexOf('|') === 0) { body.push(cells(lines[i])); i++; }
-        var t = ['<div class="table-scroll"><table><thead><tr>'];
+        var caption = (head[0] || 'Table').replace(/[`*]/g, '');
+        var t = ['<div class="table-scroll" tabindex="0" role="region" aria-label="' +
+                 esc(caption) + ' table"><table><thead><tr>'];
         head.forEach(function (h) { t.push('<th>' + inline(h) + '</th>'); });
         t.push('</tr></thead><tbody>');
         body.forEach(function (r) {
@@ -149,7 +186,7 @@
         closeList();
         var lvl = h[1].length;
         var text = h[2];
-        var id = slug(text);
+        var id = uniqueSlug(slug(text), usedIds);
         if (lvl <= 3 && headings) headings.push({ id: id, text: text.replace(/[`*]/g, ''), lvl: lvl });
         html.push('<h' + lvl + ' id="' + id + '">' + inline(text) + '</h' + lvl + '>');
         i++;
@@ -168,8 +205,13 @@
           q.push(qline);
           i++;
         }
-        html.push('<blockquote' + (cls ? ' class="' + cls + '"' : '') + '><p>' +
-          q.join('\n').split('\n\n').map(inline).join('</p><p>') + '</p></blockquote>');
+        // A quote may carry its own fenced block; render the inner markdown rather
+        // than printing the fence and its contents as literal text.
+        var inner = q.join('\n');
+        var quoteBody = inner.indexOf('```') !== -1
+          ? render(inner, null)
+          : '<p>' + inner.split('\n\n').map(inline).join('</p><p>') + '</p>';
+        html.push('<blockquote' + (cls ? ' class="' + cls + '"' : '') + '>' + quoteBody + '</blockquote>');
         continue;
       }
 
@@ -183,8 +225,16 @@
         var want = Math.floor(li[1].length / 2) + 1;
         while (listStack.length > want) html.push('</' + listStack.pop() + '>');
         while (listStack.length < want) { html.push('<' + tag + '>'); listStack.push(tag); }
-        html.push('<li>' + inline(li[3]) + '</li>');
+        // Lazy continuation: a bullet whose text wraps onto following lines stays one
+        // item. Without this the continuation was ejected from the list and rendered
+        // as a full-width unbulleted paragraph, tearing the sentence in half.
+        var itemText = [li[3]];
         i++;
+        while (i < lines.length && lines[i].trim() !== '' && !startsBlock(lines[i])) {
+          itemText.push(lines[i].trim());
+          i++;
+        }
+        html.push('<li>' + inline(itemText.join(' ')) + '</li>');
         continue;
       }
 
@@ -193,11 +243,18 @@
       // paragraph
       closeList();
       var para = [];
-      while (i < lines.length && lines[i].trim() !== '' &&
-             !/^(#{2,4}\s|```|\||>|---+$|\s*([-*]|\d+\.)\s|<)/.test(lines[i])) {
+      while (i < lines.length && lines[i].trim() !== '' && !startsBlock(lines[i])) {
         para.push(lines[i]); i++;
       }
-      if (para.length) html.push('<p>' + inline(para.join(' ')) + '</p>');
+      if (para.length) {
+        html.push('<p>' + inline(para.join(' ')) + '</p>');
+      } else {
+        // Forward progress is mandatory. A line that opens no known block (an HTML tag
+        // other than div/section/nav, say) used to satisfy neither branch, so `i` never
+        // advanced and the whole site hung on a blank page.
+        html.push(lines[i]);
+        i++;
+      }
     }
     closeList();
     return html.join('\n');
@@ -276,20 +333,49 @@
       else a.removeAttribute('aria-current');
     });
 
+    var first = tocEl.querySelector('a');
+    if (first) first.classList.add('active');
+
     if (anchor) {
       var target = document.getElementById(anchor);
       if (target) { target.scrollIntoView(); return; }
     }
     window.scrollTo(0, 0);
+    // Announce the new page to assistive tech and put the caret at its start, so a
+    // keyboard user is not left in the nav list after every navigation.
+    var h1 = articleEl.querySelector('h1');
+    if (h1) { h1.setAttribute('tabindex', '-1'); h1.focus({ preventScroll: true }); }
   }
 
   function route() {
     var hash = location.hash.replace(/^#\/?/, '');
     var parts = hash.split('#');
-    show(parts[0] || ORDER[0], parts[1]);
+    var id = parts[0] || ORDER[0];
+    if (!BY_ID[id]) {
+      // Don't render Overview while the address bar still shows a page that does not
+      // exist — correct the URL so what is shown and what is linked agree.
+      location.replace('#/' + ORDER[0]);
+      return;
+    }
+    show(id, parts[1]);
     closeDrawer();
   }
   window.addEventListener('hashchange', route);
+
+  // Same-hash activation fires no hashchange, so re-clicking the current page (or an
+  // anchor you already jumped to) did nothing at all. Handle those clicks directly.
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest && e.target.closest('a[href^="#/"]');
+    if (!a) return;
+    if (a.getAttribute('href') === location.hash) {
+      e.preventDefault();
+      var anchor = location.hash.split('#')[2];
+      var el = anchor && document.getElementById(anchor);
+      if (el) el.scrollIntoView();
+      else window.scrollTo(0, 0);
+      closeDrawer();
+    }
+  });
 
   /* ---------- on-this-page highlight ----------------------------------- */
 
@@ -344,34 +430,66 @@
     }).filter(Boolean).sort(function (a, b) { return b.score - a.score; }).slice(0, 9);
 
     resultsEl.innerHTML = hits.length
-      ? hits.map(function (h) {
-          return '<a class="result" href="#/' + h.e.id + '"><span class="result-t">' + esc(h.e.title) +
-            '</span><span class="result-s">' + esc(h.e.lede.slice(0, 92)) + '</span></a>';
+      ? hits.map(function (h, n) {
+          return '<a class="result" role="option" id="result-' + n + '" aria-selected="false" href="#/' +
+            h.e.id + '"><span class="result-t">' + esc(h.e.title) +
+            '</span><span class="result-s">' + esc(summarize(h.e.lede)) + '</span></a>';
         }).join('')
-      : '<div class="result-empty">No page matches that. Try a symbol name, a file name, or a subsystem.</div>';
+      : '<div class="result-empty" role="status">No page matches that. Try a symbol name, a file name, or a subsystem.</div>';
     resultsEl.classList.add('open');
+    searchEl.setAttribute('aria-expanded', 'true');
+    searchEl.removeAttribute('aria-activedescendant');
     sel = -1;
+  }
+
+  // Strip markdown from a lede and cut on a word boundary rather than mid-word.
+  function summarize(lede) {
+    var s = lede.replace(/`/g, '').replace(/\*\*?/g, '');
+    if (s.length <= 92) return s;
+    var cut = s.slice(0, 92);
+    var sp = cut.lastIndexOf(' ');
+    return (sp > 40 ? cut.slice(0, sp) : cut) + '…';
+  }
+
+  function closeResults() {
+    resultsEl.classList.remove('open');
+    searchEl.setAttribute('aria-expanded', 'false');
+    searchEl.removeAttribute('aria-activedescendant');
+    sel = -1;
+  }
+
+  function markSelected(items) {
+    Array.prototype.forEach.call(items, function (it, n) {
+      var on = n === sel;
+      it.classList.toggle('sel', on);
+      it.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    if (sel >= 0) searchEl.setAttribute('aria-activedescendant', items[sel].id);
+    else searchEl.removeAttribute('aria-activedescendant');
   }
 
   searchEl.addEventListener('input', runSearch);
   searchEl.addEventListener('keydown', function (e) {
     var items = resultsEl.querySelectorAll('.result');
-    if (e.key === 'Escape') { searchEl.value = ''; resultsEl.classList.remove('open'); searchEl.blur(); return; }
+    if (e.key === 'Escape') { searchEl.value = ''; closeResults(); return; }
     if (!items.length) return;
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
-      sel = (sel + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length;
-      Array.prototype.forEach.call(items, function (it, n) { it.classList.toggle('sel', n === sel); });
+      if (sel === -1) sel = e.key === 'ArrowDown' ? 0 : items.length - 1;
+      else sel = (sel + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length;
+      markSelected(items);
       items[sel].scrollIntoView({ block: 'nearest' });
     } else if (e.key === 'Enter') {
       e.preventDefault();
       items[sel >= 0 ? sel : 0].click();
-      searchEl.blur();
-      resultsEl.classList.remove('open');
+      closeResults();
     }
   });
+  resultsEl.addEventListener('click', function (e) {
+    if (e.target.closest('.result')) { searchEl.value = ''; closeResults(); }
+  });
   document.addEventListener('click', function (e) {
-    if (!e.target.closest('.search-wrap')) resultsEl.classList.remove('open');
+    if (!e.target.closest('.search-wrap')) closeResults();
   });
   document.addEventListener('keydown', function (e) {
     var tag = document.activeElement ? document.activeElement.tagName : '';
@@ -410,17 +528,45 @@
   var sidebar = document.getElementById('sidebar');
   var menuBtn = document.getElementById('menu');
   var scrim = null;
+
   function closeDrawer() {
+    var wasOpen = sidebar.classList.contains('open');
     sidebar.classList.remove('open');
+    document.body.classList.remove('drawer-open');
+    menuBtn.setAttribute('aria-expanded', 'false');
     if (scrim) { scrim.remove(); scrim = null; }
+    if (wasOpen) menuBtn.focus();
   }
-  menuBtn.addEventListener('click', function () {
-    if (sidebar.classList.contains('open')) { closeDrawer(); return; }
+
+  function openDrawer() {
     sidebar.classList.add('open');
+    // The drawer covers the page, so stop the article scrolling underneath it.
+    document.body.classList.add('drawer-open');
+    menuBtn.setAttribute('aria-expanded', 'true');
     scrim = document.createElement('div');
     scrim.className = 'scrim';
     scrim.addEventListener('click', closeDrawer);
     document.body.appendChild(scrim);
+    var firstLink = sidebar.querySelector('#search, .nav a');
+    if (firstLink) firstLink.focus();
+  }
+
+  menuBtn.addEventListener('click', function () {
+    if (sidebar.classList.contains('open')) closeDrawer();
+    else openDrawer();
+  });
+
+  // A modal that traps you is worse than no modal: Escape always gets you out, and
+  // Tab cycles within the drawer instead of walking the page behind it.
+  document.addEventListener('keydown', function (e) {
+    if (!sidebar.classList.contains('open')) return;
+    if (e.key === 'Escape') { e.preventDefault(); closeDrawer(); return; }
+    if (e.key !== 'Tab') return;
+    var f = sidebar.querySelectorAll('a[href], button, input:not([disabled])');
+    if (!f.length) return;
+    var first = f[0], last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
   });
 
   route();

@@ -25,6 +25,9 @@ IDE/BasicLang.exe list packages
 ## On the C++ backend
 
 This is the harder problem, and the repo's largest recent workstream (tracked as **P2a**).
+**P2a-2 (.NET classes in native projects) has <span class="pill ok">shipped</span>** — merged at
+`77e415b`, with the `blnet` C++ facade landing on top of it (all five tasks done, Windows-gated at
+`ee3c086`).
 A native executable has no CLR, so reaching a .NET type means discovering its surface at
 compile time, generating a shim, and marshalling across the boundary.
 
@@ -41,14 +44,20 @@ compile time, generating a shim, and marshalling across the boundary.
 | `NetAccessorSynthesis.cs` | Property and field accessor synthesis |
 | `NetNameMangler.cs` | Stable native symbol names |
 | `NetAmbientNamespaces.cs` | Implicit namespace seeding |
+| `NetReferenceResolver.cs` | Resolves the project's assembly closure — `<Reference>`, `<PackageReference>` and the always-present framework set (~490 lines); raises `BL6021` |
 | `NetArrayCopy.cs`, `NetClaimPredicate.cs`, `NetAstAnnotations.cs` | Supporting passes |
 
 ### The emission side — `BasicLang/Compiler/CodeGen/Net/`
 
-- **`NetShimGenerator.cs`** (~1,550 lines) generates the managed shim assembly.
-- **`NetProxyEmitter.cs`** (~1,200 lines) emits the native-side proxies.
-- **`CppCodeGenerator.NetCalls.cs`** (~1,280 lines) emits the call sites.
-- **`BoundaryTypeRegistry.cs`** and **`NativeBclSurface.cs`** hold the agreed contract of
+- **`Compiler/CodeGen/Net/NetShimGenerator.cs`** (~1,690 lines) generates the managed shim assembly.
+- **`Compiler/CodeGen/Net/NetProxyEmitter.cs`** (~1,220 lines) emits the native-side proxies, and its
+  partial **`NetProxyEmitter.Facade.cs`** (~780 lines) renders those same mangled slots as the
+  ergonomic `blnet_facade.g.hpp`, under the `BasicLang::netfx` namespace. It is also where `BL6027`
+  is raised.
+- **`BasicLang/CppCodeGenerator.NetCalls.cs`** (~1,380 lines — in `BasicLang/`, not the `Net/` folder)
+  emits the call sites.
+- **`BasicLang/BoundaryTypeRegistry.cs`** (126 lines) and **`BasicLang/NativeBclSurface.cs`** (443
+  lines) — beside the compiler rather than under `CodeGen/Net/` — hold the agreed contract of
   what may cross.
 
 The boundary contract itself is specified in
@@ -68,12 +77,15 @@ omitting it. That choice is deliberate: an omission would compile and then behav
 ### Which BCL types work from C++
 
 `<NetProxy Include="System.Console" />` declares a **type**; you get its members as callable
-C++ functions through `blnet_facade.g.hpp`. What you get is a *subset* of the .NET member set —
+C++ functions through `blnet_facade.g.hpp`. Every facade name sits under `BasicLang::netfx` — a bare
+`namespace System` at global scope would collide with any user type of that name — and the header is
+emitted unconditionally but included by nobody, so `using namespace BasicLang::netfx;` is the one
+opt-in line. What you get is a *subset* of the .NET member set —
 §7.2's rule — and every omission is named in the build output as `BL6026` rather than silently
 dropped.
 
 The list below is **measured, not exhaustive.** 42 well-known types across the 17 ambient
-namespaces were probed on .NET 8; 37 were admitted — 31 originally, plus the six that §8.3's
+namespaces were probed on .NET 8; 38 were admitted — the 32 tabulated below, plus the six that §8.3's
 *ByRef handle ownership* resolution (2026-09-15) unblocked. Plenty of untested BCL types will work too —
 try the one you want. What the list *is* good for is the failure column, because the blockers
 share very few root causes.
@@ -92,6 +104,12 @@ share very few root causes.
 Declaring all 32 at once emits an 8,781-line / 439 KB facade. Nothing is included by default —
 a project with no `<NetProxy>` emits no proxy artifacts at all.
 
+> [trap] A `<NetProxy>` declared type draws only property **read** slots. A `set_X` descriptor is
+> synthesized only where a BasicLang program actually *writes* the member
+> (`BasicLang/Net/NetAccessorSynthesis.cs`), so a declared-only surface carries none — measured as
+> zero `set_` slots over `System.Console` and `Regex`. C++ can read such a property but not write
+> it, and the facade cannot fix it: it can only render slots that exist.
+
 **Six more became usable on 2026-09-15**, when §8.3 specified ByRef handle ownership. Each had
 been failing the whole build on a `ref`/`out`/`in` parameter whose wire form is a handle; all six
 now emit with zero `BL6019`. Counted as **proxy slots in a single-type project**, which is a
@@ -109,7 +127,14 @@ what it can render ergonomically:
 
 Declaring all 38 together emits a 10,329-line / 509 KB facade — 420 `BL6026` and 63 `BL6027`.
 
-#### The five that are refused, and why
+> [trap] Those counts were measured at `dfbfcee` (2026-09-15, 02:59). `46b289d` landed the same
+> day and closed §8.4's dispatcher gap, admitting handle- and string-shaped **delegate** slots
+> across these same 38 types — `Action<Task>`, `Func<Task>` and `MatchEvaluator` in both
+> directions, which is what the `BL6006` on a 32-type project actually was.
+> `ParameterizedThreadStart`'s `Object` parameter stays refused permanently (`Object` has no
+> marshal row, and "no row" *is* the handle rule). Re-measure before quoting these numbers.
+
+#### The four that are refused, and why
 
 These raise **`BL6019` and fail the build** — a hard refusal, not a silent omission:
 
@@ -119,7 +144,7 @@ These raise **`BL6019` and fail the build** — a hard refusal, not a silent omi
 | `System.Runtime.InteropServices.Marshal` | a ByRef **by-value-pointer** (§6.4) |
 | `System.Guid`, `System.Text.StringBuilder` | a §6.4 by-value-pointer **result** |
 
-This list used to have eleven entries, and six of them shared one cause: a `ref`/`out`/`in`
+This list used to have ten entries, and six of them shared one cause: a `ref`/`out`/`in`
 parameter whose wire form is a handle. That was refused because §8.3 left the ownership
 undefined — writing a new handle over the caller's looked like it could release one the callee
 had returned unchanged, a double release.
@@ -143,7 +168,9 @@ widening contract; a ByRef §6.4 row points at a buffer the managed side holds a
 
 #### Two more things the build tells you
 
-**`BL6026`, one per omitted member.** The 32-type facade produced 375: 279 where a parameter or
+**`BL6026`, one per omitted member.** The 32-type facade produced 375, of which the three buckets
+below account for 374 — an off-by-one carried from the original measurement and not re-checked
+since: 279 where a parameter or
 return type has no §8.3 wire form (`Span<T>`, `ref struct` enumerators, `System.Object`), 55
 generic methods whose type parameter cannot cross, and 40 marked `[RequiresUnreferencedCode]` or
 `[RequiresDynamicCode]`, which cannot run under Native AOT. The 38-type facade produces 420.
@@ -159,10 +186,13 @@ Ruled out. It is a settled scope decision, recorded in `docs/HANDOFF.md` — do 
 
 ## Known front-end gaps
 
-These affect every backend and are open:
+These are all open. The first three are front-end defects that affect every backend; the last two are backend-specific:
 
 - `Inherits ArgumentException` — inheriting from a BCL exception type.
 - Assigning an inherited field from a derived class.
-- Module-level non-constant initializers.
+- Module-level initializers that need code to run (`Helper()`, `New List(Of Integer)()`) — refused
+  with a diagnostic naming the variable, since no backend has a module initializer. Constant-foldable
+  ones, `7 / 2` included, now fold in the IR builder and emit on C#, C++, MSIL and JavaScript; they
+  used to crash the compiler outright.
 - C++ `raise_X()` taking no parameters.
 - `For Each … In items.Select(…)` inside a class method fails on C#.

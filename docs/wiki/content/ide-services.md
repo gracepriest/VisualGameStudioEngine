@@ -1,9 +1,13 @@
 title: Services and abstractions
-lede: 44 interfaces in Core, ~60 implementations in ProjectSystem — the IDE's whole contract surface.
+lede: 42 public interfaces in `Core/Abstractions/Services`, 63 implementation files in ProjectSystem — the IDE's whole contract surface.
 ---
 `VisualGameStudio.Core/Abstractions/Services/` declares what the IDE can do;
 `VisualGameStudio.ProjectSystem/Services/` does it. The Shell only ever sees the
-interfaces, which is why most of the IDE is testable without a window.
+interfaces for most services, which is why most of the IDE is testable without a window. Nine
+ProjectSystem types are registered by concrete class rather than behind an interface —
+`ClangdInstaller`, `LldbDapInstaller`, `WebPreviewServer`, `RegenOnSaveCoordinator`,
+`GitAutoFetchService`, `CppToolchainOverrides`, `OpenVsxClient`, `VsixInstaller`,
+`FileSearchService` — and `IDialogService` is implemented in the Shell, not ProjectSystem.
 
 ## Project and build
 
@@ -43,7 +47,7 @@ interfaces, which is why most of the IDE is testable without a window.
 |---|---|
 | `IFileService` | `FileService.cs` |
 | `IFileWatcherService` | `FileWatcherService.cs` |
-| `ISearchService` | `SearchService.cs`, `FileSearchService.cs` |
+| `ISearchService` | `SearchService.cs` — declared but unused; `FileSearchService.cs` is the live Find-in-Files engine and implements no interface |
 | `IFindReplaceService` | `FindReplaceService.cs` |
 | `INavigationService` | `NavigationService.cs` |
 | `IBookmarkService` | `BookmarkService.cs` |
@@ -59,7 +63,7 @@ interfaces, which is why most of the IDE is testable without a window.
 | `ILaunchConfigurationService` | `LaunchConfigurationService.cs` |
 | — | `DapSession.cs` — the protocol session |
 
-Protocol types are in `VisualGameStudio.Core/DAP/DapProtocol.cs`;
+Protocol types are in `VisualGameStudio.Core/Abstractions/Services/DapProtocol.cs`;
 `DebugAdapterDescriptor.cs` and `LanguageServerDescriptor.cs` describe registrable
 servers and adapters.
 
@@ -78,26 +82,42 @@ servers and adapters.
 
 | Interface | Implementation |
 |---|---|
-| `ISettingsService` | `SettingsService.cs` (+ `SettingsConsumerRegistry.cs`) |
+| `ISettingsService` | `SettingsService.cs` (+ `SettingsConsumerRegistry.cs`, which lives in Core next to the interfaces) |
 | `IKeybindingService` | `KeybindingService.cs` |
-| `ICommandService` | Command registration for the palette |
+| `ICommandService` | <span class="pill warn">no implementation</span> — declared only; injected as an optional `ICommandService?` into `ExtensionService` and `KeybindingService`, always null |
 | `IOutputService` | `OutputService.cs` |
 | `ITerminalService` | `TerminalService.cs` (+ `ShellProfileDetector.cs`) |
 | `IGitService` | `GitService.cs` (+ `GitAutoFetchService.cs`) |
-| `ITaskListService` | `TaskListService.cs` — TODO/HACK comment scanning |
-| `IDialogService` | Modal dialog hosting |
+| `ITaskListService` | `TaskListService.cs` — comment scanning for TODO / FIXME / HACK / BUG / NOTE / UNDONE / XXX, each with a type and priority |
+| `IDialogService` | `Shell/Services/DialogService.cs` — modal dialog hosting; the only Core service interface whose production implementation lives in the Shell rather than ProjectSystem |
 
 ## Extensions
 
 | Interface | Implementation |
 |---|---|
-| `IExtensionService` | `ExtensionService.cs`, `ExtensionManager.cs` |
+| `IExtensionService` | `ExtensionService.cs` (`ExtensionManager.cs` implements the separate `Core.Extensions.IExtensionManager` and is currently unreferenced) |
 | `IMarketplaceService` | `MarketplaceService.cs`, `OpenVsxClient.cs` |
-| `IContributionService` | Extension contribution points |
+| `IContributionService` | <span class="pill warn">no implementation</span> — the contribution-point contract (commands, menus, keybindings, themes, snippets, languages, configuration) is declared in Core but nothing implements or consumes it yet |
 | — | `ExtensionHost.cs` + `ExtensionHost/`, `ExtensionHostMain.js` |
 | — | `VsixInstaller.cs`, `ExtensionFileSystem.cs`, `ExtensionWorkspace.cs` |
 
 See [Extension host](#/ide-extensions).
+
+## Unlisted helpers
+
+Eight files in `ProjectSystem/Services/` back no interface of their own and appear in no
+table above.
+
+| File | Role |
+|---|---|
+| `WebPreviewServer.cs` | Loopback static-file server for previewing a built JavaScript project (`file://` is an opaque origin, so ES modules and source maps never load) |
+| `RegenOnSaveCoordinator.cs` | `FileSavedEvent` (and external `.blproj` edits) → debounce → `IIntelliSenseEmissionService.RequestEmit`, so native C++ IntelliSense refreshes on save |
+| `BlprojReferenceWriter.cs` | Idempotent in-place `<ProjectReference>` insertion into a `.blproj`; writes BOM-less UTF-8 |
+| `SolutionWizardMapper.cs` | Pure translation of New Project wizard options to solution-creation shapes; no I/O |
+| `VsCodeThemeLoader.cs` | Loads VS Code JSON colour themes (tokenColors, colors, semanticTokenColors) |
+| `TextMateRegistrar.cs` | Registers `.tmLanguage(.json)` grammars from installed extensions with `TextMateService` |
+| `LspFrameWriter.cs` | Serializes LSP frames (Content-Length + JSON body), one at a time, all waits cancellable |
+| `RestartPolicy.cs` | Bounded language-server auto-restart budget (3 attempts, `2^(n-1)`s backoff, 60s stability window before refund) |
 
 ## Adding a service
 

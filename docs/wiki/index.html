@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="wiki.css">
 </head>
 <body>
+<a class="skip-link" href="#article">Skip to content</a>
 <div class="shell">
   <aside class="sidebar" id="sidebar">
     <div class="brand">
@@ -23,7 +24,9 @@
     <div class="search-wrap">
       <div class="search-field">
         <input id="search" type="search" autocomplete="off" spellcheck="false"
-               placeholder="Search the wiki" aria-label="Search the wiki">
+               placeholder="Search the wiki" aria-label="Search the wiki"
+               role="combobox" aria-autocomplete="list" aria-controls="results"
+               aria-expanded="false">
         <span class="search-key" aria-hidden="true">/</span>
       </div>
       <div class="results" id="results" role="listbox" aria-label="Search results"></div>
@@ -33,13 +36,16 @@
 
   <main class="main">
     <div class="topbar">
-      <button class="icon-btn menu-btn" id="menu" aria-label="Toggle navigation">Menu</button>
-      <div class="crumb" id="crumb"></div>
-      <div class="topbar-spacer"></div>
-      <button class="icon-btn" id="theme">Dark</button>
+      <div class="topbar-inner">
+        <button class="icon-btn menu-btn" id="menu" aria-label="Toggle navigation"
+                aria-controls="sidebar" aria-expanded="false">Menu</button>
+        <div class="crumb" id="crumb"></div>
+        <div class="topbar-spacer"></div>
+        <button class="icon-btn" id="theme">Dark</button>
+      </div>
     </div>
     <div class="page-wrap">
-      <article id="article"></article>
+      <article id="article" tabindex="-1"></article>
       <nav class="toc" id="toc" aria-label="On this page"></nav>
     </div>
   </main>
