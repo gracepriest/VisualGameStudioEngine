@@ -2764,6 +2764,32 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 g?.IsGlobal == true && string.Equals(g.Name, irName, StringComparison.OrdinalIgnoreCase));
         }
 
+        /// <summary>The static class a Module's members are emitted into ("Main" is "Program").</summary>
+        private string ModuleClassName(string moduleName) =>
+            moduleName.Equals("Main", StringComparison.OrdinalIgnoreCase) ? "Program" : SanitizeName(moduleName);
+
+        /// <summary>
+        /// The C# spelling of a call's target: qualified by the callee's module class when the
+        /// callee lives in a DIFFERENT module from the function being emitted.
+        ///
+        /// <para>⛔ This backend qualified cross-module VARIABLES and never CALLS, so a bare
+        /// <c>Twice(4)</c> from Module M to Helpers' <c>Twice</c> was emitted bare inside
+        /// <c>static class M</c>: CS0103, on this backend alone — the three flattening backends
+        /// ran it. The owner now arrives on <see cref="IRCall.CalleeModule"/>; the dotted
+        /// spelling is still honoured for the names that still carry one (.NET statics).</para>
+        /// </summary>
+        private string UserCallTarget(IRCall call)
+        {
+            var name = call.FunctionName ?? string.Empty;
+            var spelled = name.Contains(".")
+                ? string.Join(".", name.Split('.').Select(SanitizeName))
+                : SanitizeName(name);
+
+            if (string.IsNullOrEmpty(call.CalleeModule) || _currentFunction == null) return spelled;
+            if (string.Equals(call.CalleeModule, _currentFunction.ModuleName, StringComparison.OrdinalIgnoreCase)) return spelled;
+            return $"{ModuleClassName(call.CalleeModule)}.{spelled}";
+        }
+
         private string GetValueName(IRValue value)
         {
             if (value is IRConstant constant)
@@ -2922,9 +2948,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                         }
 
                         // Handle qualified names (e.g., "ClassName.MethodName") by sanitizing each part
-                        var fn = call.FunctionName.Contains(".")
-                            ? string.Join(".", call.FunctionName.Split('.').Select(SanitizeName))
-                            : SanitizeName(call.FunctionName);
+                        var fn = UserCallTarget(call);
                         var args = string.Join(", ", argExprs);
                         return $"{fn}{FormatGenericArgs(call.GenericArguments)}({args})";
                     }
@@ -3335,9 +3359,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // Regular function call
             var args = string.Join(", ", argExprs);
             // Handle qualified names (e.g., "ClassName.MethodName") by sanitizing each part
-            var sanitizedName = functionName.Contains(".")
-                ? string.Join(".", functionName.Split('.').Select(SanitizeName))
-                : SanitizeName(functionName);
+            var sanitizedName = UserCallTarget(call);
             sanitizedName += FormatGenericArgs(call.GenericArguments);
 
             // If this call is explicitly targeted at a declared variable, emit assignment.

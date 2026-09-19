@@ -130,6 +130,10 @@ namespace BasicLang.Compiler.IR
                         break;
                     case VariableDeclarationNode v: Record(v.Name, owner); break;
                     case ConstantDeclarationNode c: Record(c.Name, owner); break;
+                    // Procedures too: `Module A / Function F` and `Module B / Function F` used
+                    // to collapse into one in CombineIRModules' bare-name dedupe.
+                    case FunctionNode f: Record(f.Name, owner); break;
+                    case SubroutineNode s: Record(s.Name, owner); break;
                 }
             }
 
@@ -145,6 +149,35 @@ namespace BasicLang.Compiler.IR
             _sharedGlobalNames.Contains(name) && !string.IsNullOrEmpty(module) ? $"{module}_{name}" : name;
 
         private static string ModuleGlobalKey(string module, string name) => $"{module}\0{name}";
+
+        /// <summary>
+        /// The IR name of a module-level or file-scope procedure being DECLARED: owner-qualified
+        /// when another Module declares the same name, bare otherwise. A class member keeps its
+        /// bare name — its identity is its class, and the member-body exemption in
+        /// <c>CombineIRModules</c> already keeps same-named methods of different classes apart.
+        /// </summary>
+        private string ProcedureIrName(string name) =>
+            _currentClassName != null ? name : GlobalIrName(_currentModuleName ?? _module?.Name, name);
+
+        /// <summary>
+        /// The (IR name, owning module) a call to <paramref name="callee"/> is emitted with.
+        ///
+        /// <para>⛔ A cross-unit import used to be spelled as the DOTTED <c>"Helpers.Twice"</c>,
+        /// and that was honoured by C++ alone (see <see cref="IRCall.CalleeModule"/>). Every
+        /// module procedure now goes out under its bare or owner-qualified IR name with the
+        /// owner carried beside it — one wire form for a same-unit call, a cross-unit call and a
+        /// qualified call alike.</para>
+        /// </summary>
+        private (string irName, string calleeModule) ProcedureCallTarget(Symbol callee, string writtenName)
+        {
+            if (callee == null) return (writtenName, null);
+            var isProcedure = callee.Kind == SymbolKind.Function || callee.Kind == SymbolKind.Subroutine;
+            if (isProcedure && !string.IsNullOrEmpty(callee.OwningModule))
+                return (GlobalIrName(callee.OwningModule, callee.Name), callee.OwningModule);
+            if (callee.IsImported && !string.IsNullOrEmpty(callee.SourceModule))
+                return (callee.Name, callee.SourceModule);
+            return (callee.Name, null);
+        }
 
         /// <summary>
         /// The global that a resolved module member reference binds to: the declared one when
@@ -524,7 +557,7 @@ namespace BasicLang.Compiler.IR
         {
             var returnType = _semanticAnalyzer.GetNodeType(node) ?? new TypeInfo("Void", TypeKind.Void);
 
-            _currentFunction = _module.CreateFunction(node.Name, returnType);
+            _currentFunction = _module.CreateFunction(ProcedureIrName(node.Name), returnType);
 
             // Set module name for multi-file compilation
             _currentFunction.ModuleName = _currentModuleName ?? _module.Name;
@@ -604,7 +637,7 @@ namespace BasicLang.Compiler.IR
         {
             var voidType = new TypeInfo("Void", TypeKind.Void);
 
-            _currentFunction = _module.CreateFunction(node.Name, voidType);
+            _currentFunction = _module.CreateFunction(ProcedureIrName(node.Name), voidType);
 
             // Set module name for multi-file compilation
             _currentFunction.ModuleName = _currentModuleName ?? _module.Name;
@@ -1678,7 +1711,7 @@ namespace BasicLang.Compiler.IR
                 node.Method.Accept(this);
 
                 // Mark the function as an extension method
-                var irFunc = _module.Functions.FirstOrDefault(f => f.Name == node.Method.Name);
+                var irFunc = _module.Functions.FirstOrDefault(f => f.Name == ProcedureIrName(node.Method.Name));
                 if (irFunc != null)
                 {
                     irFunc.IsExtension = true;
@@ -4652,6 +4685,21 @@ namespace BasicLang.Compiler.IR
                     return;
                 }
 
+                // `Helpers.Twice(4)`: the analyzer resolved the callee to a Module's PROCEDURE,
+                // so this is a plain call to it — not a method on a receiver. ⛔ Before the
+                // receiver visit, which materialized a phantom variable named after the module
+                // and lowered an INSTANCE call on it: `t0 = Helpers.Twice(4);` on C++ ("'Helpers'
+                // was not declared"), ReferenceError on JavaScript, `callvirt ... System.Object::
+                // 'Twice'` (MissingMethodException) on MSIL — and C# ran it only by re-emitting
+                // the text. Measured in the single-file AND the multi-file path alike.
+                if (_semanticAnalyzer.GetNodeSymbol(memberExpr) is Symbol moduleProcedure
+                    && (moduleProcedure.Kind == SymbolKind.Function || moduleProcedure.Kind == SymbolKind.Subroutine)
+                    && !string.IsNullOrEmpty(moduleProcedure.OwningModule))
+                {
+                    EmitProcedureCall(node, moduleProcedure, memberExpr.MemberName, tempName, returnType);
+                    return;
+                }
+
                 // Check if this is an instance method call vs static method call
                 // Instance: obj.Method() where obj is a variable
                 // Static: ClassName.Method() where ClassName is a type
@@ -4980,40 +5028,9 @@ namespace BasicLang.Compiler.IR
                     return;
                 }
 
-                // Get function symbol to check source module and ByRef parameters
-                var funcSymbol = symbol;
-
-                // Determine qualified function name (add module prefix if imported)
-                // Use funcSymbol.Name for correct casing (BASIC is case-insensitive, C# is not)
-                var functionName = funcSymbol?.Name ?? idExpr.Name;
-                if (funcSymbol != null && funcSymbol.IsImported && !string.IsNullOrEmpty(funcSymbol.SourceModule))
-                {
-                    // Prefix with source module name for imported functions
-                    functionName = $"{funcSymbol.SourceModule}.{funcSymbol.Name}";
-                }
-
-                // Regular function call
-                var call = new IRCall(tempName, functionName, returnType);
-                call.GenericArguments.AddRange(BuildGenericArgTypes(node.GenericArguments));
-
-                for (int i = 0; i < node.Arguments.Count; i++)
-                {
-                    node.Arguments[i].Accept(this);
-                    call.Arguments.Add(CoerceToParameterType(_expressionResult, funcSymbol, i));
-
-                    // Check if this parameter is ByRef
-                    bool isByRef = false;
-                    if (funcSymbol?.Parameters != null && i < funcSymbol.Parameters.Count)
-                    {
-                        isByRef = funcSymbol.Parameters[i].IsByRef;
-                    }
-                    call.ByRefArguments.Add(isByRef);
-                }
-
-                AppendOmittedOptionalArguments(call.Arguments, call.ByRefArguments, funcSymbol);
-
-                EmitInstruction(call);
-                _expressionResult = call;
+                // A user procedure: same unit, another Module, or another file — one path.
+                EmitProcedureCall(node, symbol, idExpr.Name, tempName, returnType);
+                return;
             }
             else
             {
@@ -5037,6 +5054,40 @@ namespace BasicLang.Compiler.IR
                 EmitInstruction(call);
                 _expressionResult = call;
             }
+        }
+
+        /// <summary>
+        /// Emits a call to a user procedure — the arguments coerced to the declared parameter
+        /// types, ByRef marked from the declaration, omitted Optionals filled — under the IR name
+        /// and owner <see cref="ProcedureCallTarget"/> decides. Shared by the bare-identifier
+        /// callee and the <c>Module.Procedure</c> callee, so a qualified call cannot lose what a
+        /// bare one has: before this, <c>Helpers.Inc(x)</c> went through the INSTANCE arm and
+        /// dropped its ByRef marker on every backend (CS1620 on C#).
+        /// </summary>
+        private void EmitProcedureCall(CallExpressionNode node, Symbol funcSymbol, string writtenName,
+            string tempName, TypeInfo returnType)
+        {
+            var (functionName, calleeModule) = ProcedureCallTarget(funcSymbol, funcSymbol?.Name ?? writtenName);
+            var call = new IRCall(tempName, functionName, returnType) { CalleeModule = calleeModule };
+            call.GenericArguments.AddRange(BuildGenericArgTypes(node.GenericArguments));
+
+            for (int i = 0; i < node.Arguments.Count; i++)
+            {
+                node.Arguments[i].Accept(this);
+                call.Arguments.Add(CoerceToParameterType(_expressionResult, funcSymbol, i));
+
+                bool isByRef = false;
+                if (funcSymbol?.Parameters != null && i < funcSymbol.Parameters.Count)
+                {
+                    isByRef = funcSymbol.Parameters[i].IsByRef;
+                }
+                call.ByRefArguments.Add(isByRef);
+            }
+
+            AppendOmittedOptionalArguments(call.Arguments, call.ByRefArguments, funcSymbol);
+
+            EmitInstruction(call);
+            _expressionResult = call;
         }
 
         public void Visit(ArrayAccessExpressionNode node)

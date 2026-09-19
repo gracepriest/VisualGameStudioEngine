@@ -290,17 +290,23 @@ public class NativeEntryPointTests
     // Probe (recon open question, PINNED): what does the BasicLang FRONTEND do
     // with a duplicate Sub Main split across two .bas files on the cpp backend?
     //
-    // OBSERVED (Jul 13 2026): it SILENTLY SUCCEEDS — no duplicate-definition
-    // semantic error is reported, and the combined IR contains exactly ONE
-    // function named Main (the combiner drops the duplicate, first-wins).
-    // This silent pass is exactly why Task 4 must count BasicLang Mains from
-    // the PER-UNIT IRs (one per source file, pre-merge) rather than from the
-    // combined IR — by combine time the second Main has already vanished and
-    // BL6012 could never fire for the two-.bas-Mains case.
+    // OBSERVED (Jul 13 2026): it SILENTLY SUCCEEDED — no duplicate-definition
+    // semantic error was reported, and the combined IR contained exactly ONE
+    // function named Main (the combiner dropped the duplicate, first-wins).
+    // That silent pass is exactly why Task 4 counts BasicLang Mains from the
+    // PER-UNIT IRs (one per source file, pre-merge) rather than from the
+    // combined IR — and that design stays right regardless of what follows.
+    //
+    // UPDATED (Sep 19 2026): the combiner no longer drops a same-named
+    // module-level procedure from a second file; it REFUSES, naming both
+    // modules and files (see ModuleProcedureCallTests). A duplicate Sub Main
+    // is that case, so the front end now fails the build here instead of
+    // silently keeping one — which is the outcome BL6012 exists to force.
+    // Pinned as it now is: refused, with both files named.
     // ========================================================================
 
     [Test]
-    public void Probe_DuplicateSubMain_AcrossTwoBasFiles_FrontendSilentlySucceeds_CombinerKeepsOneMain()
+    public void Probe_DuplicateSubMain_AcrossTwoBasFiles_IsRefusedByTheCombiner_NamingBothFiles()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "bl-entry-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
@@ -314,13 +320,11 @@ public class NativeEntryPointTests
             var compiler = new BasicCompiler(new CompilerOptions { TargetBackend = "cpp" });
             var result = compiler.CompileProjectFiles(new[] { a, b });
 
-            Assert.That(result.Success, Is.True,
-                "expected the frontend to silently accept duplicate cross-file Mains, got: "
-                + string.Join(" | ", result.AllErrors));
-            Assert.That(result.AllErrors, Is.Empty);
-            Assert.That(result.CombinedIR, Is.Not.Null);
-            Assert.That(result.CombinedIR!.Functions.Count(f => f.Name == "Main"), Is.EqualTo(1),
-                "combined IR was expected to keep exactly one Main (duplicate dropped by the merge)");
+            var messages = string.Join(" | ", result.AllErrors.Select(e => e.Message));
+            Assert.That(result.Success, Is.False,
+                "a duplicate cross-file Main is refused now, not silently merged; got no error");
+            Assert.That(messages, Does.Contain("Procedure 'Main'").And.Contain("A.bas").And.Contain("B.bas"),
+                "the refusal names both files: " + messages);
         }
         finally
         {
