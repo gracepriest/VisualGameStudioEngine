@@ -54,6 +54,86 @@ public class FormCatalogCoverageTests
             "the toolbox is missing controls a user expects to find: " + string.Join(", ", missing));
     }
 
+    // ==================================================================
+    // Task 25 — the component tray
+    // ==================================================================
+
+    /// <summary>The four components the brief names, as COMPONENT rows: no place on the canvas.</summary>
+    [Test]
+    public void TheTrayComponentsAreCatalogRows_MarkedNonVisual()
+    {
+        var kinds = new[] { "Timer", "ToolTip", "ErrorProvider", "BackgroundWorker" };
+
+        foreach (var kind in kinds)
+        {
+            var def = FormControlCatalog.Find(kind);
+            Assert.That(def, Is.Not.Null, kind);
+            Assert.That(def!.IsComponent, Is.True, $"'{kind}' must be a component, or the canvas would try to place it");
+            Assert.That(def.SupportsTarget(FormTarget.WinForms), Is.True, kind);
+            Assert.That(def.IsContainer, Is.False, kind);
+        }
+
+        // Each has its own schematic, like every control kind: the tray shows a mark per kind, and
+        // FormCanvasRenderTests never draws one, so the schematic is a glyph key and nothing else.
+        var schematics = kinds.Select(k => FormControlCatalog.Find(k)!.Schematic).ToList();
+        Assert.That(schematics.Distinct().Count(), Is.EqualTo(kinds.Length), "components must not share a mark");
+        Assert.That(FormControlCatalog.All.Where(d => !d.IsComponent).Select(d => d.Schematic).Intersect(schematics),
+            Is.Empty, "a component's schematic is not a control's");
+    }
+
+    /// <summary>
+    /// ⛔ <c>Common(...)</c> bakes Visible/ForeColor/BackColor into a row. A component has none of
+    /// them; the row would compile green through BasicLang and fail only at csc.
+    /// </summary>
+    [Test]
+    public void AComponentRow_CarriesNoControlOnlyProperties()
+    {
+        var offenders = FormControlCatalog.All
+            .Where(d => d.IsComponent)
+            .SelectMany(d => d.Properties.Select(p => $"{d.Kind}.{p.Name}"))
+            .Where(name => name.EndsWith(".Visible") || name.EndsWith(".ForeColor") || name.EndsWith(".BackColor"))
+            .ToList();
+
+        Assert.That(offenders, Is.Empty, string.Join(", ", offenders));
+    }
+
+    /// <summary>
+    /// ⛔ The C# backend imports <c>System.Threading</c> whenever the generated body contains the
+    /// substring "Thread", and the scaffold never imports <c>System.ComponentModel</c> — a bare
+    /// <c>Timer</c> is then CS0104 and a bare <c>BackgroundWorker</c> CS0246, with BasicLang silent
+    /// on both (spec M10, M11). Every component type is qualified.
+    /// </summary>
+    [Test]
+    public void EveryComponentRow_QualifiesItsWinFormsType()
+    {
+        var bare = FormControlCatalog.All
+            .Where(d => d.IsComponent && d.WinFormsType != null && !d.WinFormsType.Contains('.'))
+            .Select(d => d.Kind)
+            .ToList();
+
+        Assert.That(bare, Is.Empty, "unqualified component types: " + string.Join(", ", bare));
+    }
+
+    /// <summary>
+    /// The honest web equivalents: a Timer IS <c>setInterval</c>; a ToolTip's web form lives on
+    /// OTHER controls (the <c>title</c> attribute); an ErrorProvider and a BackgroundWorker have
+    /// none. The catalog says so rather than faking an element.
+    /// </summary>
+    [Test]
+    public void OnlyTheTimer_HasAWebEquivalent_AndItIsScript_NotAnElement()
+    {
+        var web = FormControlCatalog.All.Where(d => d.IsComponent && d.SupportsTarget(FormTarget.Web)).ToList();
+
+        Assert.That(web.Select(d => d.Kind), Is.EqualTo(new[] { "Timer" }));
+        Assert.Multiple(() =>
+        {
+            Assert.That(web[0].HtmlTag, Is.Null, "a Timer is not an element");
+            Assert.That(web[0].WebScript, Is.Not.Null);
+            Assert.That(web[0].WebScript!.Construct, Does.Contain("{handler}").And.Contain("{Interval}"));
+            Assert.That(web[0].WebHandlerTakesEvent, Is.False, "Window.setInterval takes an Action, not an Action(Of DomEvent)");
+        });
+    }
+
     /// <summary>
     /// ⛔ Every row must declare its own default event or the double-click gesture refuses by name.
     /// Driven from the catalog, so a row added tomorrow is covered without touching this file.

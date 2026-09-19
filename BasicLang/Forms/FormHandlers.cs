@@ -130,16 +130,24 @@ public static class FormHandlers
                 "not written. Fix the '<vgs:designer>' markers and try again.");
         }
 
-        return Insert(form, codeText, index, init, eventName, handler);
+        return Insert(form, codeText, index, init, eventName, handler, control.Definition);
     }
 
+    /// <param name="definition">
+    /// The control's catalog row, which owns the stub's SIGNATURE (Task 25): the <c>e</c> type of
+    /// a WinForms handler (<c>DoWorkEventArgs</c> for a BackgroundWorker — the <c>EventArgs</c>
+    /// stub compiles by contravariance but cannot reach <c>e.Argument</c>), and whether a web
+    /// callback takes the event at all (a Timer's does not: <c>Window.setInterval</c> takes an
+    /// <c>Action</c> and refuses <c>Action(Of DomEvent)</c>, measured).
+    /// </param>
     private static FormHandlerPlan Insert(
         FormDocument form,
         string codeText,
         Recognizer.SourceIndex index,
         FormRegion init,
         string eventName,
-        string handler)
+        string handler,
+        FormControlDef? definition)
     {
         // ⚠ The file's own terminator, not the platform's. A stub inserted with the wrong one leaves
         // a file with both, which reads as a whole-file diff the next time anything touches it.
@@ -147,9 +155,11 @@ public static class FormHandlers
         var indent = IndentOf(index, init.Line);
 
         var signature = form.Target == FormTarget.Web
-            // ⛔ addEventListener will not accept anything but Action(Of DomEvent).
-            ? $"{indent}Private Sub {handler}(e As DomEvent)"
-            : $"{indent}Private Sub {handler}(sender As Object, e As EventArgs)";
+            ? definition?.WebHandlerTakesEvent == false
+                ? $"{indent}Private Sub {handler}()"
+                // ⛔ addEventListener will not accept anything but Action(Of DomEvent).
+                : $"{indent}Private Sub {handler}(e As DomEvent)"
+            : $"{indent}Private Sub {handler}(sender As Object, e As {definition?.WinFormsEventArgs ?? "EventArgs"})";
 
         var stub = new StringBuilder()
             .Append(signature).Append(newline)

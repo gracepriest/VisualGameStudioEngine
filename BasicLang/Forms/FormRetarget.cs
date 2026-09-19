@@ -215,7 +215,8 @@ public static class FormRetarget
                 Document.UnknownChildren.Add(new XElement(child));
             }
 
-            Document.Components.AddRange(_source.Components.Select(e => new XElement(e)));
+            // Components (Task 25) cross in ConvertComponents, with the same kind/property/bind
+            // rules as controls and no geometry pass — see FormRetargetTests.
             Document.Resources.AddRange(_source.Resources.Select(e => new XElement(e)));
         }
 

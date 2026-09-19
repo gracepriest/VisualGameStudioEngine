@@ -88,6 +88,25 @@ public class FormToolboxGlyphTests
             $"the catalog has {target} controls the toolbox does not offer: " + string.Join(", ", missing));
     }
 
+    /// <summary>Task 25: components are their own toolbox category, last, as VS's tab orders them.</summary>
+    [Test]
+    public void ComponentsSitInTheirOwnCategory_LastLikeVs()
+    {
+        var items = new FormToolboxViewModel { Target = FormTarget.WinForms }.Items;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(items.Where(i => i.Category == "Components").Select(i => i.Kind),
+                Is.EquivalentTo(new[] { "Timer", "ToolTip", "ErrorProvider", "BackgroundWorker" }));
+            Assert.That(items.Last().Category, Is.EqualTo("Components"));
+            Assert.That(items.First(i => i.Kind == "Timer").Description, Is.EqualTo("System.Windows.Forms.Timer"));
+        });
+
+        var web = new FormToolboxViewModel { Target = FormTarget.Web }.Items;
+        Assert.That(web.Single(i => i.Kind == "Timer").Description, Is.EqualTo("script"),
+            "a script-backed component is not an element and must not read as one");
+    }
+
     /// <summary>
     /// ⛔ The mirror of the above, and the one that matters more: a WinForms-only control must NOT
     /// appear in the web toolbox. Offering it would let a user place a DataGridView on a page that

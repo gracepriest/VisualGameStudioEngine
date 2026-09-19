@@ -122,9 +122,18 @@ public static class FormDocumentWriter
             root.Add(new XElement(unknown));
         }
 
+        // The tray (Task 25). Written even when empty, so the shape of a designer-created document
+        // is unchanged from before the tray existed.
+        var components = new XElement("Components");
+        foreach (var component in model.Components)
+        {
+            components.Add(ControlElement(component, isComponent: true));
+        }
+
+        root.Add(components);
+
         // Reserved and empty in v1, but written so the shape of a designer-created document matches
         // the shape of one a later version will produce.
-        root.Add(new XElement("Components"));
         root.Add(new XElement("Resources"));
 
         var doc = new XDocument(root);
@@ -171,11 +180,42 @@ public static class FormDocumentWriter
         }
 
         ApplyControls(root, model);
+        ApplyComponents(root, model);
 
         if (model.Target == FormTarget.Web)
         {
             ApplyLiteral(root, model);
         }
+    }
+
+    /// <summary>
+    /// The tray (Task 25): <c>&lt;Components&gt;</c> is patched in place exactly as
+    /// <c>&lt;Controls&gt;</c> is — find by Id, set-if-changed, remove what the model dropped,
+    /// reorder — so the D9 algebra holds for a document that has components.
+    ///
+    /// <para>⛔⛔ Before this existed the slot was WRITE-NEVER: <c>Apply</c> skipped the element and
+    /// <c>Create</c> wrote an empty one. A component added on the model would have reached the
+    /// canvas and never the file, and undo — which rewinds TEXT — could not have seen it.</para>
+    ///
+    /// <para>⚠ A document that never had the element keeps not having it while the model has no
+    /// components: "a no-op patch writes nothing". The element is created, before
+    /// <c>&lt;Resources&gt;</c>, only when there is something to put in it.</para>
+    /// </summary>
+    private static void ApplyComponents(XElement root, FormDocument model)
+    {
+        var container = root.Element("Components");
+        if (container == null)
+        {
+            if (model.Components.Count == 0)
+            {
+                return;
+            }
+
+            container = new XElement("Components");
+            InsertPreservingIndent(root, container, before: root.Element("Resources"));
+        }
+
+        ApplyControlList(container, model.Components, isComponent: true);
     }
 
     /// <summary>
@@ -248,7 +288,8 @@ public static class FormDocumentWriter
         ApplyControlList(container, model.Controls);
     }
 
-    private static void ApplyControlList(XElement container, List<FormControl> controls)
+    /// <param name="isComponent">The list is the tray's: no geometry, no TabIndex, no children (Task 25).</param>
+    private static void ApplyControlList(XElement container, List<FormControl> controls, bool isComponent = false)
     {
         var wanted = controls.Select(c => c.Id).ToList();
 
@@ -281,11 +322,11 @@ public static class FormDocumentWriter
 
             if (element == null)
             {
-                InsertPreservingIndent(container, ControlElement(control), before: null);
+                InsertPreservingIndent(container, ControlElement(control, isComponent), before: null);
                 continue;
             }
 
-            ApplyControl(element, control);
+            ApplyControl(element, control, isComponent);
         }
 
         ReorderToMatchModel(container, controls);
@@ -344,37 +385,45 @@ public static class FormDocumentWriter
         }
     }
 
-    private static void ApplyControl(XElement element, FormControl control)
+    private static void ApplyControl(XElement element, FormControl control, bool isComponent = false)
     {
         // TabIndex is written on EVERY control in v1, defaulting to document order on creation —
         // explicit rather than implied, so reordering the XML cannot silently reorder tab focus.
         SetAttributeIfChanged(element, "Id", control.Id);
 
-        // Defaults again: the reader reads an absent TabIndex/Col/Row as 0, so writing "0" back into
-        // a document that omitted them is inventing content. TabIndex IS written on every control the
-        // designer creates — Create does that — but adopting a hand-written document must not
-        // rewrite it wholesale on the first unrelated edit.
-        SetIntAttributeIfChanged(element, "TabIndex", control.TabIndex, 0);
-
-        // Each geometry writes only its own vocabulary. The model carries exactly one shape, the
-        // reader selected it from the document's target, and nothing here converts between them.
-        switch (control.Geometry)
+        // ⛔ A COMPONENT has no tab order and no geometry, and the reader put any such attribute
+        // it carried into UnknownAttributes. Running the TabIndex write here would rewrite a
+        // component's TabIndex="5" to "0" on the first unrelated edit — the model holds 0, the
+        // text parses to 5, and SetIntAttributeIfChanged would "correct" it.
+        if (!isComponent)
         {
-            case PixelGeometry pixel:
-                SetIntAttributeIfChanged(element, "X", pixel.X, 0);
-                SetIntAttributeIfChanged(element, "Y", pixel.Y, 0);
-                SetIntAttributeIfChanged(element, "Width", pixel.Width, 0);
-                SetIntAttributeIfChanged(element, "Height", pixel.Height, 0);
-                SetAttributeIfChanged(element, "Anchor", pixel.Anchor);
-                SetAttributeIfChanged(element, "Dock", pixel.Dock);
-                break;
+            // Defaults again: the reader reads an absent TabIndex/Col/Row as 0, so writing "0" back
+            // into a document that omitted them is inventing content. TabIndex IS written on every
+            // control the designer creates — Create does that — but adopting a hand-written
+            // document must not rewrite it wholesale on the first unrelated edit.
+            SetIntAttributeIfChanged(element, "TabIndex", control.TabIndex, 0);
 
-            case GridGeometry grid:
-                SetIntAttributeIfChanged(element, "Col", grid.Col, 0);
-                SetIntAttributeIfChanged(element, "Row", grid.Row, 0);
-                SetOptionalIntAttribute(element, "ColSpan", grid.ColSpan, 1);
-                SetOptionalIntAttribute(element, "RowSpan", grid.RowSpan, 1);
-                break;
+            // Each geometry writes only its own vocabulary. The model carries exactly one shape,
+            // the reader selected it from the document's target, and nothing here converts between
+            // them.
+            switch (control.Geometry)
+            {
+                case PixelGeometry pixel:
+                    SetIntAttributeIfChanged(element, "X", pixel.X, 0);
+                    SetIntAttributeIfChanged(element, "Y", pixel.Y, 0);
+                    SetIntAttributeIfChanged(element, "Width", pixel.Width, 0);
+                    SetIntAttributeIfChanged(element, "Height", pixel.Height, 0);
+                    SetAttributeIfChanged(element, "Anchor", pixel.Anchor);
+                    SetAttributeIfChanged(element, "Dock", pixel.Dock);
+                    break;
+
+                case GridGeometry grid:
+                    SetIntAttributeIfChanged(element, "Col", grid.Col, 0);
+                    SetIntAttributeIfChanged(element, "Row", grid.Row, 0);
+                    SetOptionalIntAttribute(element, "ColSpan", grid.ColSpan, 1);
+                    SetOptionalIntAttribute(element, "RowSpan", grid.RowSpan, 1);
+                    break;
+            }
         }
 
         foreach (var (name, value) in control.Properties)
@@ -397,7 +446,11 @@ public static class FormDocumentWriter
         }
 
         ApplyBinds(element, control);
-        ApplyControlList(element, control.Children);
+
+        if (!isComponent)
+        {
+            ApplyControlList(element, control.Children);
+        }
     }
 
     private static void ApplyBinds(XElement element, FormControl control)
@@ -473,32 +526,36 @@ public static class FormDocumentWriter
         return element;
     }
 
-    private static XElement ControlElement(FormControl control)
+    /// <param name="isComponent">A tray component: no geometry, no TabIndex, no children (Task 25).</param>
+    private static XElement ControlElement(FormControl control, bool isComponent = false)
     {
         var element = new XElement(control.Kind);
 
         element.SetAttributeValue("Id", control.Id);
 
-        switch (control.Geometry)
+        if (!isComponent)
         {
-            case PixelGeometry pixel:
-                element.SetAttributeValue("X", pixel.X);
-                element.SetAttributeValue("Y", pixel.Y);
-                element.SetAttributeValue("Width", pixel.Width);
-                element.SetAttributeValue("Height", pixel.Height);
-                element.SetAttributeValue("Anchor", pixel.Anchor);
-                element.SetAttributeValue("Dock", pixel.Dock);
-                break;
+            switch (control.Geometry)
+            {
+                case PixelGeometry pixel:
+                    element.SetAttributeValue("X", pixel.X);
+                    element.SetAttributeValue("Y", pixel.Y);
+                    element.SetAttributeValue("Width", pixel.Width);
+                    element.SetAttributeValue("Height", pixel.Height);
+                    element.SetAttributeValue("Anchor", pixel.Anchor);
+                    element.SetAttributeValue("Dock", pixel.Dock);
+                    break;
 
-            case GridGeometry grid:
-                element.SetAttributeValue("Col", grid.Col);
-                element.SetAttributeValue("Row", grid.Row);
-                if (grid.ColSpan != 1) element.SetAttributeValue("ColSpan", grid.ColSpan);
-                if (grid.RowSpan != 1) element.SetAttributeValue("RowSpan", grid.RowSpan);
-                break;
+                case GridGeometry grid:
+                    element.SetAttributeValue("Col", grid.Col);
+                    element.SetAttributeValue("Row", grid.Row);
+                    if (grid.ColSpan != 1) element.SetAttributeValue("ColSpan", grid.ColSpan);
+                    if (grid.RowSpan != 1) element.SetAttributeValue("RowSpan", grid.RowSpan);
+                    break;
+            }
+
+            element.SetAttributeValue("TabIndex", control.TabIndex);
         }
-
-        element.SetAttributeValue("TabIndex", control.TabIndex);
 
         // Catalog order, not dictionary order: the property grid shows them in this order and the
         // file should read the same way.
@@ -529,10 +586,14 @@ public static class FormDocumentWriter
             element.Add(new XElement(unknown));
         }
 
-        // Children in z-order — document order IS z-order, so nothing sorts them.
-        foreach (var child in control.Children)
+        // Children in z-order — document order IS z-order, so nothing sorts them. A component
+        // cannot nest.
+        if (!isComponent)
         {
-            element.Add(ControlElement(child));
+            foreach (var child in control.Children)
+            {
+                element.Add(ControlElement(child));
+            }
         }
 
         return element;

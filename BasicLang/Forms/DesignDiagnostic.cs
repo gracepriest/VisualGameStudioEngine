@@ -62,7 +62,7 @@ public static class DesignCodes
     //   BL8011..BL8017  designer-owned region states, region-writer and document findings
     //   BL8018          the generated D7 dispatch helper is never called (here)
     //   BL8019          a toolbox drop the designer refused (here)
-    //   BL8020          free
+    //   BL8020          a component under <Controls>, or a control under <Components> (here)
     //   BL8021, BL8022  document-level refusals in a form document (here)
     //   BL8023..BL8026  retarget findings — what could not cross between the two formats (here)
     //   BL8027..BL8030  free
@@ -198,6 +198,15 @@ public static class DesignCodes
     /// fires.
     /// </summary>
     public const string RetargetBindLost = "BL8026";
+
+    /// <summary>
+    /// A component kind under <c>&lt;Controls&gt;</c>, or a control kind under
+    /// <c>&lt;Components&gt;</c> (Task 25). A REFUSAL: either would generate code csc rejects —
+    /// <c>Me.Controls.Add(tmr)</c> for a Timer, or a Button that is constructed and never added —
+    /// and a document that says two different things about where a thing lives is refused rather
+    /// than half-read.
+    /// </summary>
+    public const string ComponentMisplaced = "BL8020";
 
     /// <summary>The form document itself is not well-formed XML, or its root/version is not one we know.</summary>
     public const string MalformedDocument = "BL8008";

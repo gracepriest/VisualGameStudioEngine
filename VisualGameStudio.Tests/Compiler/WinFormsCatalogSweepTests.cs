@@ -145,7 +145,13 @@ public class WinFormsCatalogSweepTests
             Kind = definition.Kind,
             Id = "ctl",
             TabIndex = 0,
-            Geometry = new PixelGeometry { X = 96, Y = 80, Width = 120, Height = 24, Anchor = "Top" }
+            // ⚠ A component (Task 25) has no place: no geometry, and it goes in the tray, not on the
+            // form. Measured 2026-09-19 with the shape forced on: csc rejects Location/Size/Anchor
+            // (CS1061) and Controls.Add (CS1503, not a Control) for all four — and NOTHING else,
+            // which is why the gate still runs every one of their properties through csc here.
+            Geometry = definition.IsComponent
+                ? null
+                : new PixelGeometry { X = 96, Y = 80, Width = 120, Height = 24, Anchor = "Top" }
         };
 
         foreach (var property in definition.Properties)
@@ -153,7 +159,7 @@ public class WinFormsCatalogSweepTests
             control.Properties[property.Name] = SampleValue(property);
         }
 
-        form.Controls.Add(control);
+        (definition.IsComponent ? form.Components : form.Controls).Add(control);
 
         var generated = GenerateCSharp(form);
         WinFormsCompile.AssertCompiles(generated,
@@ -190,11 +196,13 @@ public class WinFormsCatalogSweepTests
             Kind = definition.Kind,
             Id = "ctl",
             TabIndex = 0,
-            Geometry = new PixelGeometry { X = 96, Y = 80, Width = 120, Height = 24 }
+            Geometry = definition.IsComponent ? null : new PixelGeometry { X = 96, Y = 80, Width = 120, Height = 24 }
         };
-        form.Controls.Add(control);
+        (definition.IsComponent ? form.Components : form.Controls).Add(control);
 
-        // The gesture's own output: the stub it writes, where it chooses to put it.
+        // The gesture's own output: the stub it writes, where it chooses to put it. For a component
+        // that includes the row's WinFormsEventArgs — DoWorkEventArgs, PopupEventArgs — which is
+        // exactly as unfalsifiable as the event name and gated the same way.
         var plan = FormHandlers.PlanDefault(
             form, control, FormScaffolder.Create("SweepForm", FormTarget.WinForms).CodeText);
 

@@ -74,8 +74,11 @@ public class FormCanvasRenderTests
     [AvaloniaTest]
     public void EveryControlKindRendersDistinctly()
     {
+        // ⚠ Components are excluded on PURPOSE, not for convenience: a component has no position, is
+        // never in <Controls> (the reader refuses one there, BL8020) and is never drawn — the tray
+        // shows it. AComponent_IsNeverLaidOut below is the pin for that claim.
         var winFormsKinds = FormControlCatalog.All
-            .Where(d => d.SupportsTarget(FormTarget.WinForms))
+            .Where(d => d.SupportsTarget(FormTarget.WinForms) && !d.IsComponent)
             .ToList();
 
         Assert.That(winFormsKinds, Is.Not.Empty, "the catalog has no WinForms kinds to draw");
@@ -96,6 +99,30 @@ public class FormCanvasRenderTests
         Assert.That(collisions, Is.Empty,
             "these kinds paint IDENTICAL pixels, so the canvas cannot tell them apart: " +
             string.Join(" | ", collisions.Select(k => string.Join(", ", k))));
+    }
+
+    /// <summary>
+    /// Task 25: a component has no place on the canvas, so the layout must never yield bounds for
+    /// one — on either target. It lives in the tray.
+    /// </summary>
+    [Test]
+    public void AComponent_IsNeverLaidOut()
+    {
+        var document = DocumentWith("Button");
+        document.Components.Add(new FormControl { Kind = "Timer", Id = "tmr" });
+
+        var web = new FormDocument
+        {
+            Target = FormTarget.Web, Name = "T", Layout = new FormLayout { Kind = FormLayoutKind.Grid }
+        };
+        web.Controls.Add(new FormControl { Kind = "Button", Id = "btn", Geometry = new GridGeometry() });
+        web.Components.Add(new FormControl { Kind = "Timer", Id = "tmr" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(FormCanvasTransform.Layout(document).Select(l => l.Control.Id), Is.EqualTo(new[] { SharedId }));
+            Assert.That(FormCanvasTransform.Layout(web).Select(l => l.Control.Id), Is.EqualTo(new[] { "btn" }));
+        });
     }
 
     /// <summary>

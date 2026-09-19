@@ -46,11 +46,12 @@ public partial class FormToolboxViewModel : ObservableObject
     {
         Items.Clear();
 
-        // Containers last, the way VS orders its Windows Forms tab. Ordered here rather than in the
-        // catalog because the catalog's order is the order controls were SPECIFIED in, and changing
-        // it to suit one panel would move every row of every other consumer.
+        // Containers after the common controls and components last, the way VS orders its Windows
+        // Forms tab. Ordered here rather than in the catalog because the catalog's order is the
+        // order controls were SPECIFIED in, and changing it to suit one panel would move every row
+        // of every other consumer.
         var ordered = FormControlCatalog.For(Target)
-            .OrderBy(c => c.IsContainer ? 1 : 0)
+            .OrderBy(c => c.IsComponent ? 2 : c.IsContainer ? 1 : 0)
             .ThenBy(c => c.Kind, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
@@ -59,14 +60,20 @@ public partial class FormToolboxViewModel : ObservableObject
         {
             // What this kind IS on the target the user is looking at — the WinForms type name or
             // the HTML tag. A toolbox that only says "TextBox" leaves them guessing which of the
-            // three <input> kinds they are about to place.
+            // three <input> kinds they are about to place. A script-backed component is not an
+            // element and must not read as one; a WinForms component shows its qualified type,
+            // which is exactly what it is.
             var description = Target == FormTarget.WinForms
                 ? control.WinFormsType ?? control.Kind
-                : control.HtmlInputType != null
-                    ? $"<{control.HtmlTag} type=\"{control.HtmlInputType}\">"
-                    : $"<{control.HtmlTag}>";
+                : control.WebScript != null
+                    ? "script"
+                    : control.HtmlInputType != null
+                        ? $"<{control.HtmlTag} type=\"{control.HtmlInputType}\">"
+                        : $"<{control.HtmlTag}>";
 
-            var category = control.IsContainer ? "Containers" : "Common Controls";
+            var category = control.IsComponent ? "Components"
+                : control.IsContainer ? "Containers"
+                : "Common Controls";
 
             Items.Add(new FormToolboxItem(
                 control.Kind,
@@ -83,7 +90,7 @@ public partial class FormToolboxViewModel : ObservableObject
     /// A stand-in for VS's icons, keyed on the same catalog field the canvas draws from — so the
     /// mark beside a row and the shape it produces cannot drift apart.
     /// </summary>
-    private static string GlyphFor(FormSchematic schematic) => schematic switch
+    internal static string GlyphFor(FormSchematic schematic) => schematic switch
     {
         FormSchematic.Text => "A",
         FormSchematic.Input => "ab",
@@ -112,6 +119,13 @@ public partial class FormToolboxViewModel : ObservableObject
         FormSchematic.Split => "|:|",
         FormSchematic.FlowContainer => ">>",
         FormSchematic.TableContainer => "#|#",
+
+        // Task 25: the tray. One mark per component kind, as VS gives each its own icon — a tray
+        // with a Timer and a ToolTip in it must not show two of the same thing.
+        FormSchematic.Clock => "(t)",
+        FormSchematic.Hint => "(?)",
+        FormSchematic.Alert => "(!)",
+        FormSchematic.Worker => "(w)",
 
         // ⛔ Reached only by a schematic added without a mark, which FormToolboxGlyphTests fails on.
         // Left as a visible "?" rather than something plausible precisely so it cannot pass for a

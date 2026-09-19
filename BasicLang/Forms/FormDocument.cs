@@ -72,19 +72,37 @@ public sealed class FormDocument
     /// <summary>Top-level controls, in document order.</summary>
     public List<FormControl> Controls { get; } = new();
 
+    /// <summary>
+    /// The tray (Task 25): non-visual components, in document order. Each is a
+    /// <see cref="FormControl"/> with NO geometry, NO children and NO tab index — the reader is the
+    /// one place that invariant is enforced (a component element never acquires them), and every
+    /// walker chooses explicitly whether it visits this list: the region writer, the id namespace
+    /// and the retarget do; the canvas, the markup emitter and tab renumbering do not.
+    ///
+    /// <para>⚠ Was a list of raw <c>XElement</c>s while the slot was reserved — and write-never:
+    /// <c>Create</c> emitted an empty element and <c>Apply</c> never visited it.</para>
+    /// </summary>
+    public List<FormControl> Components { get; } = new();
+
     /// <summary>Reserved and empty in v1; parsed and re-emitted so a future document round-trips.</summary>
-    public List<XElement> Components { get; } = new();
     public List<XElement> Resources { get; } = new();
 
     /// <summary>Root attributes and child elements the reader did not recognise (D9).</summary>
     public Dictionary<string, string> UnknownAttributes { get; } = new(StringComparer.Ordinal);
     public List<XElement> UnknownChildren { get; } = new();
 
-    /// <summary>Every control in the document, containers before their children.</summary>
+    /// <summary>Every control in the document, containers before their children. NOT the components.</summary>
     public IEnumerable<FormControl> AllControls() => Controls.SelectMany(c => c.SelfAndDescendants());
 
+    /// <summary>The tray's components. A separate walk on purpose — see <see cref="Components"/>.</summary>
+    public IEnumerable<FormControl> AllComponents() => Components;
+
+    /// <summary>
+    /// A control OR a component by id. One class, one field namespace: a Timer called <c>btn</c>
+    /// and a Button called <c>btn</c> collide in the generated code exactly as two Buttons do.
+    /// </summary>
     public FormControl? FindById(string id) =>
-        AllControls().FirstOrDefault(c => string.Equals(c.Id, id, StringComparison.Ordinal));
+        AllControls().Concat(Components).FirstOrDefault(c => string.Equals(c.Id, id, StringComparison.Ordinal));
 
     /// <summary>
     /// The list <paramref name="control"/> lives in — this document's own, or its container's.
@@ -107,6 +125,12 @@ public sealed class FormDocument
             {
                 return candidate.Children;
             }
+        }
+
+        // The tray: Delete and Cut remove a component through this, like anything else.
+        if (Components.Contains(control))
+        {
+            return Components;
         }
 
         return null;

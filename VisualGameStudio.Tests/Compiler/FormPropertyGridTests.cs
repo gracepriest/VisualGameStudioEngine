@@ -555,9 +555,10 @@ public class FormPropertyGridTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(categories, Is.EqualTo(categories.OrderBy(c => c == "Containers" ? 1 : 0)),
+            // Task 25 added the third category, last, as VS's tab orders them.
+            Assert.That(categories, Is.EqualTo(categories.OrderBy(c => c == "Components" ? 2 : c == "Containers" ? 1 : 0)),
                 "categories interleave, so a header would be drawn more than once");
-            Assert.That(starts, Is.EqualTo(new[] { "Common Controls", "Containers" }),
+            Assert.That(starts, Is.EqualTo(new[] { "Common Controls", "Containers", "Components" }),
                 "exactly one header per category, in that order");
             Assert.That(toolbox.Items.Select(i => i.Glyph).Distinct().Count(),
                 Is.EqualTo(toolbox.Items.Count),

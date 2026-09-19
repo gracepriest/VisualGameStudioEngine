@@ -219,7 +219,8 @@ public static class RegionWriter
     private static void CheckTargetProperties(
         string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
     {
-        foreach (var control in form.AllControls())
+        // Components too (Task 25): a Timer's Enabled is WinForms-only and is skipped on the web.
+        foreach (var control in form.AllControls().Concat(form.AllComponents()))
         {
             var definition = control.Definition;
             if (definition == null)
@@ -276,7 +277,9 @@ public static class RegionWriter
             return;
         }
 
-        var handlers = form.AllControls()
+        // Components too (Task 25). A Timer's parameterless callback is not bitten by the erasure
+        // (measured), so for it this check is stricter than the compiler — the safe side.
+        var handlers = form.AllControls().Concat(form.AllComponents())
             .SelectMany(c => c.Binds)
             .Select(b => b.Handler)
             .Where(h => !string.IsNullOrEmpty(h))
@@ -370,6 +373,14 @@ public static class RegionWriter
         var body = new StringBuilder();
         var inner = indent;
 
+        // Components first, as VS declares them (Task 25). A component's field is declared even
+        // when nothing constructs it — a web Timer with no handler yet — so the user's own
+        // clearInterval compiles before the handler is wired.
+        foreach (var component in form.Components)
+        {
+            body.Append($"{inner}Private {component.Id} As {DeclaredType(form, component)}").Append(newline);
+        }
+
         foreach (var control in form.AllControls())
         {
             body.Append($"{inner}Private {control.Id} As {DeclaredType(form, control)}").Append(newline);
@@ -391,6 +402,16 @@ public static class RegionWriter
             // Declared locally so the region is self-contained — it must not depend on a field the
             // user could rename or remove.
             body.Append($"{inner}Dim doc As Document = ::document").Append(newline);
+
+            // ⛔ The TYPED Window, and only when a script component exists (Task 25). Typed rather
+            // than the ::window hatch so that the compiler — not a runtime TypeError — rejects a
+            // wrong callback: Window.setInterval takes an Action and refuses Action(Of DomEvent),
+            // which the hatch would have let through (measured 2026-09-19). Keyed on a script
+            // component EXISTING, not on one being wired — an unused local is the cheaper wrong.
+            if (form.Components.Any(c => c.Definition?.WebScript != null))
+            {
+                body.Append($"{inner}Dim w As Window = ::window").Append(newline);
+            }
         }
         else
         {
@@ -406,6 +427,12 @@ public static class RegionWriter
             {
                 body.Append($"{inner}Me.ClientSize = New Size({form.Width}, {form.Height})").Append(newline);
             }
+        }
+
+        // Components before controls, as VS constructs them (Task 25).
+        foreach (var component in form.Components)
+        {
+            AppendComponentInit(body, form, component, inner, newline, filePath, diagnostics);
         }
 
         AppendSiblings(body, form, form.Controls, parent: "Me", inner, newline, filePath, diagnostics);
@@ -479,62 +506,160 @@ public static class RegionWriter
             body.Append($"{inner}{control.Id} = New {DeclaredType(form, control)}()").Append(newline);
 
             AppendPixelGeometry(body, control, inner, newline);
-
-            // ⛔ One statement per property. There is no object-initializer syntax, and `With` must
-            // NEVER be emitted: `.Prop = value` inside a With block is silently discarded by the IR
-            // builder, so the running program would not set what the designer shows.
-            foreach (var (name, value) in control.Properties)
-            {
-                var property = control.Definition?.Property(name);
-
-                // A property that does not exist on this target is skipped, not emitted. The
-                // document keeps it (the other target uses it) and the caller reports it.
-                if (property != null && !property.AppliesTo(FormTarget.WinForms))
-                {
-                    continue;
-                }
-
-                // ⛔⛔ A DEGRADED value never reaches generated source. The catalog knows the
-                // attribute but cannot parse the value, and splicing it in produces a file the
-                // user cannot build: `lbl.TextAlign = ContentAlignment.Bogus` is CS0117, and
-                // `lbl.Enabled = maybe` does not even get past BasicLang. D9 requires the value to
-                // be preserved in the DOCUMENT and shown frozen in the property grid — it says
-                // nothing about emitting it, and emitting it breaks the build for a value the
-                // designer has already told the user it cannot use.
-                //
-                // ⚠ A value that is ALREADY this property's source form is not degraded — it is
-                // what the catalog would itself have written. `ContentAlignment.MiddleLeft` does
-                // not parse as the designer's `Left`, but it is exactly what emitting `Left`
-                // produces, so skipping it would strip the property for no reason. The catalog
-                // answers that per row; a shape test cannot (FormPropertyDef.IsSourceForm).
-                if (property != null && !property.Accepts(value) && !property.IsSourceForm(value))
-                {
-                    diagnostics.Add(new DesignDiagnostic(
-                        DesignCodes.DegradedProperty,
-                        $"{DesignCodes.DegradedProperty}: '{control.Id}.{name}' is '{value}', which " +
-                        $"is not a valid {property.Type}, so it is not written into the generated " +
-                        "code. The value is preserved in the document.",
-                        filePath, 0, 0, IsWarning: true));
-                    continue;
-                }
-
-                // ⛔ A get-only collection is ADDED to, never assigned — `cmb.Items = "a,b"` is
-                // CS0200, and BasicLang reports nothing because Items types as Object.
-                if (property is { IsItemCollection: true })
-                {
-                    foreach (var item in FormPropertyDef.SplitItems(value))
-                    {
-                        body.Append($"{inner}{control.Id}.{name}.Add(\"{item.Replace("\"", "\"\"")}\")")
-                            .Append(newline);
-                    }
-
-                    continue;
-                }
-
-                body.Append($"{inner}{control.Id}.{name} = {Literal(control, name, value)}").Append(newline);
-            }
+            AppendProperties(body, control, inner, newline, filePath, diagnostics);
         }
 
+        AppendBinds(body, form, control, inner, newline);
+
+        // ⚠ The container's own children, parented to IT — and their adds happen here, so a
+        // container is fully populated before the caller adds it to its own parent, which is the
+        // order the shipped template uses.
+        AppendSiblings(body, form, control.Children, control.Id, inner, newline, filePath, diagnostics);
+    }
+
+    /// <summary>
+    /// A tray component (Task 25): the same declare → construct → set → wire shape as a control,
+    /// minus the geometry and the <c>Controls.Add</c> — a component is not a control.
+    ///
+    /// <para><b>Web:</b> a script-backed component is built from the catalog's template, and its
+    /// one bind IS the constructor argument: <c>tmr = w.setInterval(AddressOf tmr_Tick, 100)</c>.
+    /// Emitted only when that bind exists (setInterval needs a callback), and never followed by
+    /// <c>addEventListener</c> — the field is an Integer handle. A component with no
+    /// <see cref="FormWebScript"/> has no web form at all and emits nothing here; the catalog says
+    /// it does not support the target, so the toolbox never offered it.</para>
+    /// </summary>
+    private static void AppendComponentInit(
+        StringBuilder body, FormDocument form, FormControl component, string inner,
+        string newline, string filePath, List<DesignDiagnostic> diagnostics)
+    {
+        var definition = component.Definition;
+
+        if (form.Target == FormTarget.Web)
+        {
+            var script = definition?.WebScript;
+            var eventName = definition?.DefaultEvent(FormTarget.Web);
+            var bind = eventName == null
+                ? null
+                : component.Binds.FirstOrDefault(b =>
+                    !string.IsNullOrEmpty(b.Handler) &&
+                    string.Equals(b.Event, eventName, StringComparison.OrdinalIgnoreCase));
+
+            if (script == null || bind == null)
+            {
+                return;
+            }
+
+            body.Append($"{inner}{component.Id} = {ExpandWebScript(script.Construct, definition!, component, bind.Handler)}")
+                .Append(newline);
+            return;
+        }
+
+        body.Append($"{inner}{component.Id} = New {DeclaredType(form, component)}()").Append(newline);
+        AppendProperties(body, component, inner, newline, filePath, diagnostics);
+        AppendBinds(body, form, component, inner, newline);
+    }
+
+    /// <summary>
+    /// Fills a <see cref="FormWebScript.Construct"/> template: <c>{handler}</c> is the bind's Sub,
+    /// and <c>{Name}</c> is that catalog property's document value when set and valid, else the
+    /// row's default. A placeholder the row does not declare is left in place, visibly — a catalog
+    /// typo must not become a silently empty argument.
+    /// </summary>
+    private static string ExpandWebScript(string template, FormControlDef definition, FormControl component, string handler)
+    {
+        return System.Text.RegularExpressions.Regex.Replace(template, @"\{(\w+)\}", match =>
+        {
+            var name = match.Groups[1].Value;
+            if (string.Equals(name, "handler", StringComparison.Ordinal))
+            {
+                return handler;
+            }
+
+            var property = definition.Property(name);
+            if (property == null)
+            {
+                return match.Value;
+            }
+
+            if (component.Properties.TryGetValue(property.Name, out var value) && property.Accepts(value))
+            {
+                return value;
+            }
+
+            return property.Default ?? "";
+        });
+    }
+
+    /// <summary>
+    /// One statement per catalog property, WinForms only — the web's properties reach the page as
+    /// markup, never this region.
+    ///
+    /// <para>Shared by controls and components so the Degraded and collection rules below exist
+    /// once; a second copy for the tray would drift on the first fix applied to one of them.</para>
+    /// </summary>
+    private static void AppendProperties(
+        StringBuilder body, FormControl control, string inner, string newline,
+        string filePath, List<DesignDiagnostic> diagnostics)
+    {
+        // ⛔ One statement per property. There is no object-initializer syntax, and `With` must
+        // NEVER be emitted: `.Prop = value` inside a With block is silently discarded by the IR
+        // builder, so the running program would not set what the designer shows.
+        foreach (var (name, value) in control.Properties)
+        {
+            var property = control.Definition?.Property(name);
+
+            // A property that does not exist on this target is skipped, not emitted. The
+            // document keeps it (the other target uses it) and the caller reports it.
+            if (property != null && !property.AppliesTo(FormTarget.WinForms))
+            {
+                continue;
+            }
+
+            // ⛔⛔ A DEGRADED value never reaches generated source. The catalog knows the
+            // attribute but cannot parse the value, and splicing it in produces a file the
+            // user cannot build: `lbl.TextAlign = ContentAlignment.Bogus` is CS0117, and
+            // `lbl.Enabled = maybe` does not even get past BasicLang. D9 requires the value to
+            // be preserved in the DOCUMENT and shown frozen in the property grid — it says
+            // nothing about emitting it, and emitting it breaks the build for a value the
+            // designer has already told the user it cannot use.
+            //
+            // ⚠ A value that is ALREADY this property's source form is not degraded — it is
+            // what the catalog would itself have written. `ContentAlignment.MiddleLeft` does
+            // not parse as the designer's `Left`, but it is exactly what emitting `Left`
+            // produces, so skipping it would strip the property for no reason. The catalog
+            // answers that per row; a shape test cannot (FormPropertyDef.IsSourceForm).
+            if (property != null && !property.Accepts(value) && !property.IsSourceForm(value))
+            {
+                diagnostics.Add(new DesignDiagnostic(
+                    DesignCodes.DegradedProperty,
+                    $"{DesignCodes.DegradedProperty}: '{control.Id}.{name}' is '{value}', which " +
+                    $"is not a valid {property.Type}, so it is not written into the generated " +
+                    "code. The value is preserved in the document.",
+                    filePath, 0, 0, IsWarning: true));
+                continue;
+            }
+
+            // ⛔ A get-only collection is ADDED to, never assigned — `cmb.Items = "a,b"` is
+            // CS0200, and BasicLang reports nothing because Items types as Object.
+            if (property is { IsItemCollection: true })
+            {
+                foreach (var item in FormPropertyDef.SplitItems(value))
+                {
+                    body.Append($"{inner}{control.Id}.{name}.Add(\"{item.Replace("\"", "\"\"")}\")")
+                        .Append(newline);
+                }
+
+                continue;
+            }
+
+            body.Append($"{inner}{control.Id}.{name} = {Literal(control, name, value)}").Append(newline);
+        }
+    }
+
+    /// <summary>The wiring, shared by controls and components: <c>AddHandler</c> or <c>addEventListener</c> per bind.</summary>
+    private static void AppendBinds(
+        StringBuilder body, FormDocument form, FormControl control, string inner, string newline)
+    {
         foreach (var bind in control.Binds)
         {
             if (string.IsNullOrEmpty(bind.Handler))
@@ -558,11 +683,6 @@ public static class RegionWriter
                     .Append(newline);
             }
         }
-
-        // ⚠ The container's own children, parented to IT — and their adds happen here, so a
-        // container is fully populated before the caller adds it to its own parent, which is the
-        // order the shipped template uses.
-        AppendSiblings(body, form, control.Children, control.Id, inner, newline, filePath, diagnostics);
     }
 
     /// <summary>
@@ -696,12 +816,14 @@ public static class RegionWriter
     /// <summary>
     /// The BasicLang type a control's field is declared as: the catalog's WinForms type on the
     /// desktop, and <c>Element</c> on the web — the typed DOM handle every element comes back as.
+    /// A script-backed component (Task 25) declares its <see cref="FormWebScript.FieldType"/>
+    /// instead: a Timer is an <c>Integer</c> handle, not an element.
     /// </summary>
     private static string DeclaredType(FormDocument form, FormControl control)
     {
         if (form.Target == FormTarget.Web)
         {
-            return "Element";
+            return control.Definition?.WebScript?.FieldType ?? "Element";
         }
 
         return control.Definition?.WinFormsType ?? "Control";

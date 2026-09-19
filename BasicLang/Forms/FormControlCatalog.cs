@@ -240,7 +240,14 @@ public sealed record FormPropertyDef(
 
 /// <summary>One control kind, in both target vocabularies.</summary>
 /// <param name="Kind">The document element name, e.g. <c>Button</c>. Shared by both formats.</param>
-/// <param name="WinFormsType">Unqualified <c>System.Windows.Forms</c> type name, or null if web-only.</param>
+/// <param name="WinFormsType">
+/// The WinForms type name, or null if web-only. Unqualified for a control (<c>Button</c>);
+/// <b>fully qualified for a component</b> (<c>System.Windows.Forms.Timer</c>), and that is
+/// measured, not stylistic: the C# backend adds <c>using System.Threading;</c> whenever the
+/// generated body contains the substring <c>Thread</c>, which makes a bare <c>Timer</c> CS0104,
+/// and the scaffold never imports <c>System.ComponentModel</c>, which makes a bare
+/// <c>BackgroundWorker</c> CS0246 — BasicLang silent on both.
+/// </param>
 /// <param name="HtmlTag">HTML element the web emitter produces, or null if WinForms-only.</param>
 /// <param name="HtmlInputType">
 /// <c>type=</c> for an <c>&lt;input&gt;</c>, e.g. <c>checkbox</c>. Null when <see cref="HtmlTag"/>
@@ -340,9 +347,61 @@ public enum FormSchematic
     FlowContainer,
 
     /// <summary>A container ruled into cells, so its layout is visible when it is empty.</summary>
-    TableContainer
+    TableContainer,
+
+    // ==================================================================
+    // Task 25's tray components. NEVER drawn on the canvas — a component has no position — so these
+    // members name the tray and toolbox GLYPH only, one per kind, as every control kind has its own:
+    // four Timers in a tray must not look like four of the same thing. FormCanvasRenderTests excludes
+    // IsComponent rows and pins that Layout never yields bounds for one.
+    // ==================================================================
+
+    /// <summary>A Timer: a clock face.</summary>
+    Clock,
+
+    /// <summary>A ToolTip: a hint bubble.</summary>
+    Hint,
+
+    /// <summary>An ErrorProvider: the alert badge it puts beside a control.</summary>
+    Alert,
+
+    /// <summary>A BackgroundWorker: work off the UI thread.</summary>
+    Worker
 }
 
+/// <summary>
+/// How a script-backed component is built on the web — a kind that is not an element. A Timer is a
+/// <c>setInterval</c> handle (measured 2026-09-19 under node), not a tag.
+/// </summary>
+/// <param name="FieldType">The BasicLang type of the generated field, e.g. <c>Integer</c> for a handle.</param>
+/// <param name="Construct">
+/// A template for the construct statement's right-hand side. Two placeholder kinds:
+/// <c>{handler}</c> — the default-event bind's Sub — and <c>{PropertyName}</c> — that property's
+/// document value, or the catalog default when unset. It may name <c>w</c>, the typed
+/// <c>Window</c> the init region declares once whenever any script component exists.
+///
+/// <para>⛔ Emitted only when the default-event bind exists: <c>setInterval</c> needs a callback,
+/// and a component with no handler does nothing visible on either target. The field is declared
+/// regardless.</para>
+/// </param>
+public sealed record FormWebScript(string FieldType, string Construct);
+
+/// <param name="IsComponent">
+/// A tray component (Task 25): no geometry, no children, no tab index, no <c>Controls.Add</c>; it
+/// lives under <c>&lt;Components&gt;</c> and is refused anywhere else (BL8020). Every consumer that
+/// enumerates the catalog branches on THIS flag, never on the kind's name.
+/// </param>
+/// <param name="WinFormsEventArgs">
+/// The <c>e</c> type of the default event's handler, qualified; null means <c>EventArgs</c>. A
+/// <c>BackgroundWorker.DoWork</c> handler declared with <c>EventArgs</c> compiles by contravariance
+/// but cannot reach <c>e.Argument</c>; the typed stub is the useful one.
+/// </param>
+/// <param name="WebHandlerTakesEvent">
+/// False when the web callback is a plain <c>Action</c> rather than an <c>Action(Of DomEvent)</c>.
+/// Measured: the typed <c>Window.setInterval</c> REFUSES a <c>(e As DomEvent)</c> handler
+/// ("cannot convert from 'Action&lt;DomEvent&gt;' to 'Action'"), so a Timer's stub is parameterless.
+/// </param>
+/// <param name="WebScript">How a script-backed component is built on the web; null for elements.</param>
 public sealed record FormControlDef(
     string Kind,
     string? WinFormsType,
@@ -354,12 +413,20 @@ public sealed record FormControlDef(
     int DefaultHeight = 24,
     FormSchematic Schematic = FormSchematic.Input,
     string? WinFormsEvent = null,
-    string? WebEvent = null)
+    string? WebEvent = null,
+    bool IsComponent = false,
+    string? WinFormsEventArgs = null,
+    bool WebHandlerTakesEvent = true,
+    FormWebScript? WebScript = null)
 {
+    /// <summary>
+    /// Whether the kind exists on <paramref name="target"/>. On the web an element has a tag and a
+    /// script component has a <see cref="WebScript"/>; a kind with neither is honestly absent.
+    /// </summary>
     public bool SupportsTarget(FormTarget target) => target switch
     {
         FormTarget.WinForms => WinFormsType != null,
-        FormTarget.Web => HtmlTag != null,
+        FormTarget.Web => HtmlTag != null || WebScript != null,
         _ => false
     };
 
@@ -659,6 +726,63 @@ public static class FormControlCatalog
                 WinFormsEnumType: "TableLayoutPanelCellBorderStyle")),
             DefaultWidth: 220, DefaultHeight: 120, Schematic: FormSchematic.TableContainer,
             WinFormsEvent: "Click"),
+
+        // ==================================================================
+        // Task 25 — the component tray. Non-visual: no place on the canvas, no Controls.Add.
+        //
+        // ⛔ No Common(): Visible, ForeColor and BackColor do not exist on a component; a row built
+        //   with the helper compiles green through BasicLang and fails only at csc.
+        // ⛔ QUALIFIED types — see the WinFormsType doc comment; both failures were measured
+        //   2026-09-19 with BasicLang silent (spec M10, M11), the qualified shape ran (M13).
+        // ⚠ Every property and event name below is unfalsifiable except through csc:
+        //   WinFormsCatalogSweepTests builds each component into Components and gates it.
+        // ==================================================================
+
+        new("Timer", "System.Windows.Forms.Timer", null, null, false, new List<FormPropertyDef>
+            {
+                new("Interval", FormPropertyType.Int, "100"),
+                // ⚠ WinForms only: a JS interval cannot exist disabled — wired means running.
+                new("Enabled", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms })
+            },
+            Schematic: FormSchematic.Clock, WinFormsEvent: "Tick", WebEvent: "tick",
+            IsComponent: true,
+            // ⛔ The TYPED call over the Window the init region declares, and a parameterless
+            // callback: Window.setInterval takes an Action and refuses Action(Of DomEvent) (M7).
+            WebHandlerTakesEvent: false,
+            WebScript: new FormWebScript("Integer", "w.setInterval(AddressOf {handler}, {Interval})")),
+
+        // ⚠ A ToolTip's per-control text (SetToolTip / the web's title attribute) is an EXTENDER
+        // property the catalog cannot express yet — docs/form-designer-followups.md 19. Present,
+        // inert, callable from code: what VS gives you before you set a tooltip on anything.
+        new("ToolTip", "System.Windows.Forms.ToolTip", null, null, false, new List<FormPropertyDef>
+            {
+                new("InitialDelay", FormPropertyType.Int, "500"),
+                new("AutoPopDelay", FormPropertyType.Int, "5000"),
+                new("ReshowDelay", FormPropertyType.Int, "100"),
+                new("ShowAlways", FormPropertyType.Bool, "false"),
+                new("IsBalloon", FormPropertyType.Bool, "false"),
+                new("ToolTipTitle", FormPropertyType.String)
+            },
+            Schematic: FormSchematic.Hint, WinFormsEvent: "Popup",
+            IsComponent: true, WinFormsEventArgs: "PopupEventArgs"),
+
+        new("ErrorProvider", "System.Windows.Forms.ErrorProvider", null, null, false, new List<FormPropertyDef>
+            {
+                new("BlinkStyle", FormPropertyType.Enum, "BlinkIfDifferentError",
+                    new[] { "BlinkIfDifferentError", "AlwaysBlink", "NeverBlink" },
+                    WinFormsEnumType: "ErrorBlinkStyle"),
+                new("BlinkRate", FormPropertyType.Int, "250")
+            },
+            Schematic: FormSchematic.Alert, WinFormsEvent: "RightToLeftChanged",
+            IsComponent: true),
+
+        new("BackgroundWorker", "System.ComponentModel.BackgroundWorker", null, null, false, new List<FormPropertyDef>
+            {
+                new("WorkerReportsProgress", FormPropertyType.Bool, "false"),
+                new("WorkerSupportsCancellation", FormPropertyType.Bool, "false")
+            },
+            Schematic: FormSchematic.Worker, WinFormsEvent: "DoWork",
+            IsComponent: true, WinFormsEventArgs: "System.ComponentModel.DoWorkEventArgs"),
     };
 
     public static FormControlDef? Find(string kind) =>

@@ -159,8 +159,20 @@ public static class FormDocumentReader
                         n is XCData cdata ? cdata.Value : n is XText t ? t.Value : n.ToString()));
                     break;
 
+                // The tray (Task 25): the same element grammar as a control — id, catalog
+                // properties, <Bind>, unknown content — read through the same method, which is
+                // what stops the two shapes drifting; the isComponent flag is what keeps a
+                // component from acquiring a position or a tab index it cannot have.
                 case "Components":
-                    model.Components.AddRange(element.Elements().Select(e => new XElement(e)));
+                    foreach (var child in element.Elements())
+                    {
+                        var component = ReadControl(
+                            child, target.Value, filePath, diagnostics, degraded, positions, isComponent: true);
+                        if (component != null)
+                        {
+                            model.Components.Add(component);
+                        }
+                    }
                     break;
 
                 case "Resources":
@@ -185,7 +197,8 @@ public static class FormDocumentReader
     /// <para>⛔ Checked across the WHOLE tree, not per container: the generated fields are all
     /// members of one class, so a Button inside a Panel and a Button on the form collide just as
     /// surely as two siblings. The generated code would declare the field twice and every
-    /// reference to it would be ambiguous.</para>
+    /// reference to it would be ambiguous. Components are in the same class, so they are in the
+    /// same check.</para>
     /// </summary>
     private static void CheckDuplicateIds(
         FormDocument model, string filePath, List<DesignDiagnostic> diagnostics,
@@ -193,7 +206,7 @@ public static class FormDocumentReader
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var control in model.AllControls())
+        foreach (var control in model.AllControls().Concat(model.AllComponents()))
         {
             if (control.Id.Length > 0 && !seen.Add(control.Id))
             {
@@ -287,10 +300,15 @@ public static class FormDocumentReader
         return layout;
     }
 
+    /// <param name="isComponent">
+    /// True when the element sits under <c>&lt;Components&gt;</c>. A component is a control with no
+    /// place: it never acquires geometry or a tab index — a stray <c>X=</c> or <c>TabIndex=</c> on
+    /// one is an unknown attribute that round-trips untouched (D9) — and it cannot nest.
+    /// </param>
     private static FormControl? ReadControl(
         XElement element, FormTarget target, string filePath,
         List<DesignDiagnostic> diagnostics, List<DegradedProperty> degraded,
-        Dictionary<FormControl, XElement> positions)
+        Dictionary<FormControl, XElement> positions, bool isComponent = false)
     {
         var definition = FormControlCatalog.Find(element.Name.LocalName);
         if (definition == null)
@@ -310,12 +328,30 @@ public static class FormDocumentReader
             return null;
         }
 
+        // ⛔ BL8020: a component kind under <Controls>, or a control kind under <Components>. Either
+        // would generate code csc rejects — Me.Controls.Add(tmr) for a Timer, or a Button that is
+        // constructed and never added — so the document is refused rather than half-read.
+        if (definition.IsComponent != isComponent)
+        {
+            var misplacedId = (string?)element.Attribute("Id") ?? "";
+            diagnostics.Add(Error(DesignCodes.ComponentMisplaced,
+                isComponent
+                    ? $"'{misplacedId}' is a {definition.Kind}, a control with a position, but it sits " +
+                      "under <Components>. Move it under <Controls>: constructed here it would never " +
+                      "be added to the form."
+                    : $"'{misplacedId}' is a {definition.Kind}, a component with no position, but it " +
+                      "sits under <Controls>. Move it under <Components>: emitting " +
+                      $"Me.Controls.Add({misplacedId}) for it does not compile.",
+                filePath, Line(element), Column(element)));
+            return null;
+        }
+
         var control = new FormControl
         {
             Kind = definition.Kind,
             Id = (string?)element.Attribute("Id") ?? "",
-            TabIndex = IntAttribute(element, "TabIndex") ?? 0,
-            Geometry = ReadGeometry(element, target)
+            TabIndex = isComponent ? 0 : IntAttribute(element, "TabIndex") ?? 0,
+            Geometry = isComponent ? null : ReadGeometry(element, target)
         };
 
         // Where this control came from, for the checks that run over the finished MODEL and would
@@ -352,7 +388,13 @@ public static class FormDocumentReader
             // reproduce it. Each format treats only its OWN layout vocabulary as structural; the
             // other format's spelling is just an attribute this document does not model, which is
             // exactly what the unknown round trip is for.
-            if (FormControlCatalog.IsStructural(name, target))
+            //
+            // ⚠ A COMPONENT skips only Id. Its X= or TabIndex= are neither geometry nor tab order
+            // (it has none) nor a catalog property, so they fall through to UnknownAttributes and
+            // round-trip untouched — the same rule as any attribute the designer does not model.
+            if (isComponent
+                    ? string.Equals(name, "Id", StringComparison.OrdinalIgnoreCase)
+                    : FormControlCatalog.IsStructural(name, target))
             {
                 continue;
             }
@@ -427,7 +469,8 @@ public static class FormDocumentReader
                 continue;
             }
 
-            if (FormControlCatalog.Find(child.Name.LocalName) != null)
+            // A component cannot nest, so a catalog kind under one is an unknown child.
+            if (!isComponent && FormControlCatalog.Find(child.Name.LocalName) != null)
             {
                 var nested = ReadControl(child, target, filePath, diagnostics, degraded, positions);
                 if (nested != null)
