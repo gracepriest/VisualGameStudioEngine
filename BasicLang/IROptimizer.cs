@@ -2370,14 +2370,14 @@ namespace BasicLang.Compiler.IR.Optimization
 
                 foreach (var block in function.Blocks)
                 {
-                    SimplifyBlock(block);
+                    SimplifyBlock(function, block);
                 }
             }
 
             return ModificationCount > 0;
         }
 
-        private void SimplifyBlock(BasicBlock block)
+        private void SimplifyBlock(IRFunction function, BasicBlock block)
         {
             for (int i = 0; i < block.Instructions.Count; i++)
             {
@@ -2392,12 +2392,34 @@ namespace BasicLang.Compiler.IR.Optimization
                         // `2 * x -> x + x` arm builds a NEW value carrying the old name, and without
                         // the flag a write to a class member was emitted as a fresh local on
                         // JavaScript and dropped on C#. MEASURED on `K = 2 * p` under --optimize,
-                        // which is the only pipeline this pass runs in. An arm returning an
-                        // IRAssignment instead is unaffected — its target is an explicit variable —
-                        // and is left alone.
+                        // which is the only pipeline this pass runs in.
                         if (simplified is IRValue replacement) InheritIdentity(replacement, binOp);
 
                         block.Instructions[i] = simplified;
+
+                        // ⛔ THE MISSING HALF. This pass swapped the instruction and never
+                        // re-pointed the CONSUMERS, which the base class's ReplaceUses doc states
+                        // a pass doing so MUST. Every consumer still held the discarded node, so
+                        // the simplification did not merely fail to apply — it left broken code:
+                        //     const t0 = ((a + b) | 0);
+                        //     t1 = a;                             // UNDECLARED -> ReferenceError
+                        //     return ((((a + b) | 0) - b) | 0);   // consumer re-materialised the
+                        //                                         // WHOLE original expression
+                        // MEASURED on `Return (a + b) - b`. Carrying the old NAME is not enough,
+                        // exactly as that doc says: `2 * x -> x + x` survived only by NAME
+                        // COINCIDENCE (its replacement is a value with the same name, so the
+                        // orphaned consumer resolved by accident), while an arm replacing a value
+                        // with an IRAssignment gives the consumer nothing to resolve at all.
+                        //
+                        // Scoped to the whole FUNCTION, not this block: a use may live in a later
+                        // block (a compare feeding an If, a Return after a branch), which is why
+                        // StrengthReductionPass scopes it the same way.
+                        var definition = simplified is IRAssignment assignment
+                            ? (IRValue)assignment.Target
+                            : simplified as IRValue;
+                        if (definition != null)
+                            ReplaceUses(function.Blocks.SelectMany(b => b.Instructions), binOp, definition);
+
                         ReportModification();
                     }
                 }
@@ -2406,43 +2428,31 @@ namespace BasicLang.Compiler.IR.Optimization
 
         private IRInstruction SimplifyBinaryOp(IRBinaryOp binOp)
         {
-            // (a + b) - b -> a
-            if (binOp.Operation == BinaryOpKind.Sub && binOp.Left is IRBinaryOp leftAdd)
-            {
-                if (leftAdd.Operation == BinaryOpKind.Add &&
-                    leftAdd.Right is IRVariable addRight &&
-                    binOp.Right is IRVariable subRight &&
-                    addRight.Name == subRight.Name)
-                {
-                    return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), leftAdd.Left);
-                }
-            }
+            // `(a + b) - b -> a`, `(a - b) + b -> a` and `(a * b) / b -> a` REMOVED — all three were
+            // UNSOUND for floating-point operands, and this pass's missing ReplaceUses is the only
+            // reason nobody ever saw a wrong answer. The same story as the Div and Mod arms removed
+            // from StrengthReductionPass, and recorded there in the same words: latent rather than
+            // harmless, because the broken machinery around them hid the bad arithmetic behind a
+            // compile or run error.
+            //
+            // MEASURED, correct answer first and what the arm would have produced second:
+            //   (a + b) - b   a=1e-19, b=1e18   ->   0      the arm gives a (1e-19).
+            //                                           Catastrophic cancellation: adding b makes a
+            //                                           vanish, and subtracting it does not bring a
+            //                                           back.
+            //   (a * b) / b   a=4, b=0          ->   NaN    the arm gives 4. Its own comment claimed
+            //                                           "when b != 0" — the code NEVER CHECKED IT.
+            //   (a * b) / b   a=0.1, b=3        ->   0.10000000000000002
+            //                                           the arm gives 0.1. Plain rounding: the
+            //                                           round trip is not the identity.
+            //
+            // Restricting them to integers would be sound for the two additive ones, but `(a*b)/b`
+            // stays wrong at b = 0 there too (DivideByZeroException versus `a`), and none of the
+            // three is a shape anyone writes. Every backend's own optimizer does this legally
+            // downstream where it is legal at all.
 
-            // (a - b) + b -> a
-            if (binOp.Operation == BinaryOpKind.Add && binOp.Left is IRBinaryOp leftSub)
-            {
-                if (leftSub.Operation == BinaryOpKind.Sub &&
-                    leftSub.Right is IRVariable subRightVar &&
-                    binOp.Right is IRVariable addRightVar &&
-                    subRightVar.Name == addRightVar.Name)
-                {
-                    return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), leftSub.Left);
-                }
-            }
-
-            // (a * b) / b -> a (when b != 0)
-            if (binOp.Operation == BinaryOpKind.Div && binOp.Left is IRBinaryOp leftMul)
-            {
-                if (leftMul.Operation == BinaryOpKind.Mul &&
-                    leftMul.Right is IRVariable mulRight &&
-                    binOp.Right is IRVariable divRight &&
-                    mulRight.Name == divRight.Name)
-                {
-                    return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), leftMul.Left);
-                }
-            }
-
-            // 2 * x -> x + x (sometimes faster)
+            // 2 * x -> x + x. KEPT, and sound on both fronts: `x + x` is EXACTLY `2 * x` in IEEE 754
+            // (one rounding either way, same result), and it wraps identically on integer overflow.
             if (binOp.Operation == BinaryOpKind.Mul)
             {
                 if (binOp.Left is IRConstant c && c.Value is int i && i == 2)
