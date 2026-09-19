@@ -19,8 +19,8 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ## ⛔ THE FORM DESIGNER, 2026-09-18 — read this before touching `BasicLang/Forms/`
 
-Branch `feat/form-designer`: 25d is `e992d8d`; 25e (the review's eight) is the commit carrying this
-line, and the IDE drop after it records both SHAs. **97 commits ahead of master after 25e, 19 behind**
+Branch `feat/form-designer`: 25d is `e992d8d`, 25e (the review's eight) is `2a93800`, and the IDE
+drop that carries this line follows it. **97 commits ahead of master after 25e, 19 behind**
 (master moved on 2026-09-19; re-measure before any merge talk).
 
 ### ⛔⛔ The plan's checkboxes are a LIE — do not start at Task 1

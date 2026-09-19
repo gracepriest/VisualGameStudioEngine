@@ -876,7 +876,7 @@ plus a `Styles` entry for `.tray-item.selected` (accent border). Code-behind: `O
 - [x] `docs/form-designer-followups.md`: **19** extender properties (ToolTip/ErrorProvider per-control values; web `title`, M9); **20** two compiler gaps user code will meet: `Container`→`IContainer` assignability (M5, with the `Container`-typed field that does work, M14) and a component's `GetToolTip`/`GetError` result refused into a typed variable (M15).
 - [x] `CLAUDE.md` form-designer section: one ⛔ bullet — a component is a `FormControl` with no place; walkers pick their lists explicitly; qualified component types because of the `System.Threading` import; the sweep covers component rows in `Components`.
 - [x] `docs/HANDOFF.md`: task table (25 done), a short section, gates. Memory file + `MEMORY.md`.
-- [ ] Full suite on the final binaries (`--no-build` after the last build), compare the failure NAMES against the 8-row baseline; then `robocopy VisualGameStudio.Shell\bin\Release\net8.0 IDE /E` (never `/MIR`), verify `IDE\BasicLang.exe --help` exits 0 and `IDE\lib\js\dom-core.bli` exists; commit the drop separately.
+- [x] Full suite on the final binaries (`--no-build` after the last build), compare the failure NAMES against the 8-row baseline; then `robocopy VisualGameStudio.Shell\bin\Release\net8.0 IDE /E` (never `/MIR`), verify `IDE\BasicLang.exe --help` exits 0 and `IDE\lib\js\dom-core.bli` exists; commit the drop separately. (25d: 7155/8/2 of 7165; 25e: 7177/8/2 of 7187; drop from the post-mutant clean build, `--help` and `new --list` both exit 0.)
 
 ---
 
