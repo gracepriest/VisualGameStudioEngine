@@ -284,6 +284,79 @@ public class FormDesignerCommandTests
         Assert.That(vm.Selection.Controls.Single(), Is.SameAs(vm.DesignDocument!.Controls.Last()));
     }
 
+    // ==================================================================
+    // Task 25 — a component copies, cuts and pastes through the same commands, into the tray
+    // ==================================================================
+
+    private static FormControl PlaceTimer(CodeEditorDocumentViewModel vm)
+    {
+        Assert.That(vm.PlaceControl("Timer", 0, 0), Is.Null);
+        var timer = vm.DesignDocument!.FindById("Timer1")!;
+        FormHandlers.EnsureBind(timer, "Tick", "Timer1_Tick");
+
+        // A stray X= on a component is an unknown attribute (the reader would say so); the paste
+        // must carry it as one and never read it as a position.
+        timer.UnknownAttributes["X"] = "5";
+        return timer;
+    }
+
+    [Test]
+    public void CopyThenPaste_OfAComponent_LandsInTheTray_RenamedWithItsHandler()
+    {
+        var vm = Open();
+        var timer = PlaceTimer(vm);
+        vm.Selection.Set(timer);
+
+        vm.CopyControlsCommand.Execute(null);
+        vm.PasteControlsCommand.Execute(null);
+
+        var components = vm.DesignDocument!.Components;
+        Assert.Multiple(() =>
+        {
+            Assert.That(components.Select(c => c.Id), Is.EqualTo(new[] { "Timer1", "Timer2" }),
+                "renamed rather than colliding — it becomes a field name");
+            Assert.That(components[1].Binds.Single().Handler, Is.EqualTo("Timer2_Tick"),
+                "the convention-named handler follows the rename, as it does for a control");
+            Assert.That(components[1].Geometry, Is.Null, "no pixels are invented on paste — not even from a stray X=");
+            Assert.That(components[1].UnknownAttributes["X"], Is.EqualTo("5"), "which rides along as the unknown attribute it is");
+            Assert.That(components[1].TabIndex, Is.Zero);
+            Assert.That(Ids(vm), Is.EqualTo(new[] { "a", "b", "c" }), "the controls are untouched — a component never lands among them");
+            Assert.That(vm.Selection.Controls.Single(), Is.SameAs(components[1]), "the paste becomes the selection");
+            Assert.That(vm.Text, Does.Contain("Timer2"), "and it reached the document");
+        });
+    }
+
+    [Test]
+    public void CopyThenPaste_OfAControlAndAComponentTogether_RoutesEachToItsList()
+    {
+        var vm = Open();
+        var timer = PlaceTimer(vm);
+        vm.Selection.Set(Control(vm, "a"));
+        vm.Selection.Add(timer);
+
+        vm.CopyControlsCommand.Execute(null);
+        vm.PasteControlsCommand.Execute(null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.DesignDocument!.Controls, Has.Count.EqualTo(4));
+            Assert.That(vm.DesignDocument.Components, Has.Count.EqualTo(2));
+        });
+    }
+
+    [Test]
+    public void Cut_OfAComponent_RemovesItFromTheTray()
+    {
+        var vm = Open();
+        var timer = PlaceTimer(vm);
+        vm.Selection.Set(timer);
+
+        vm.CutControlsCommand.Execute(null);
+
+        Assert.That(vm.DesignDocument!.Components, Is.Empty);
+        Assert.That(vm.Text, Does.Not.Contain("<Timer"));
+    }
+
     [Test]
     public void CutRemovesTheControlAndPasteBringsItBack()
     {

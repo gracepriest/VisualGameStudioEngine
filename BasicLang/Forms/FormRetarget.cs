@@ -71,6 +71,11 @@ public static class FormRetarget
         var document = state.Document;
         state.ConvertControls(source.Controls, document.Controls, "the form");
 
+        // The tray (Task 25): the same kind/property/bind rules — a ToolTip has no web row and is
+        // BL8023, a Timer's Enabled has no web meaning and is BL8024, the Tick bind becomes tick —
+        // and none of the geometry pass below, because a component has no place on either side.
+        state.ConvertControls(source.Components, document.Components, "the tray");
+
         if (to == FormTarget.Web)
         {
             state.ToCells();
@@ -113,11 +118,12 @@ public static class FormRetarget
         var scaffold = FormScaffolder.Create(document.Name, to);
         var code = scaffold.CodeText;
 
-        foreach (var control in document.AllControls())
+        foreach (var control in document.AllControls().Concat(document.AllComponents()))
         {
             // Every non-reserved bind that crossed is on the kind's DEFAULT event — that is the only
             // kind Convert lets through — so PlanDefault names exactly the Sub it wires. A control with
-            // no such bind is skipped: a stub nothing wires is dead code.
+            // no such bind is skipped: a stub nothing wires is dead code. Components too: a web
+            // Timer's tick handler is the setInterval callback, and the stub is parameterless.
             if (!control.Binds.Any(b => !b.UsesReservedDataBinding))
             {
                 continue;

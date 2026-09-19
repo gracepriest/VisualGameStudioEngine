@@ -740,6 +740,128 @@ public class FormRetargetTests
     }
 
     // ==================================================================
+    // Task 25 — components cross with the same rules, and never touch the layout edge
+    // ==================================================================
+
+    private const string WinFormsWithTray = """
+        <Form Name="LoginForm" Version="1" Width="400" Height="300" Text="Sign in">
+          <Controls>
+            <Button Id="btnLogin" Text="Sign in" X="190" Y="60" Width="100" Height="30" TabIndex="0"/>
+          </Controls>
+          <Components>
+            <Timer Id="tmr" Interval="500" Enabled="true" Note="keep me">
+              <Bind Event="Tick" Handler="tmr_Tick"/>
+            </Timer>
+            <ToolTip Id="tip" InitialDelay="300"/>
+          </Components>
+          <Resources/>
+        </Form>
+        """;
+
+    [Test]
+    public void ToWeb_ATimerCrossesToTheTray_WithItsTickBind_AndLosesWhatTheWebLacks()
+    {
+        var source = WinForms(WinFormsWithTray);
+
+        var result = FormRetarget.Convert(source, FormTarget.Web);
+        var tmr = result.Document.Components.Single(c => c.Id == "tmr");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Document.Controls.Select(c => c.Id), Is.EqualTo(new[] { "btnLogin" }), "a component is not hoisted into the controls");
+            Assert.That(tmr.Geometry, Is.Null);
+            Assert.That(tmr.Properties["Interval"], Is.EqualTo("500"), "shared, so it crosses");
+            Assert.That(tmr.Properties.ContainsKey("Enabled"), Is.False, "WinForms-only: a JS interval cannot exist disabled");
+            Assert.That(tmr.UnknownAttributes["Note"], Is.EqualTo("keep me"), "D9: not ours, so it crosses");
+            Assert.That(tmr.Binds.Single().Event, Is.EqualTo("tick"), "the catalog's default event, in the web's vocabulary");
+            Assert.That(tmr.Binds.Single().Handler, Is.EqualTo("tmr_Tick"));
+
+            Assert.That(Of(result, DesignCodes.RetargetPropertyLost).Single().Message, Does.Contain("'tmr.Enabled'"));
+            Assert.That(source.Components[0].Properties.ContainsKey("Enabled"), Is.True, "the source is untouched");
+        });
+    }
+
+    [Test]
+    public void ToWeb_AComponentWithNoWebRow_IsLost_AndNamed()
+    {
+        var result = FormRetarget.Convert(WinForms(WinFormsWithTray), FormTarget.Web);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Document.FindById("tip"), Is.Null, "a ToolTip has no honest web form");
+            var lost = Of(result, DesignCodes.RetargetControlLost).Single();
+            Assert.That(lost.Message, Does.Contain("'tip'").And.Contain("ToolTip"));
+        });
+    }
+
+    [Test]
+    public void Components_NeverTouchTheLayoutEdge()
+    {
+        // The hard edge is pixels ⇄ cells. A component has neither, so it must not be reported at it.
+        var result = FormRetarget.Convert(WinForms(WinFormsWithTray), FormTarget.Web);
+
+        Assert.That(Of(result, DesignCodes.RetargetLayoutCrossed).Select(d => d.Message),
+            Has.None.Contains("'tmr'").And.None.Contains("'tip'"));
+    }
+
+    [Test]
+    public void ToWinForms_AWebTimer_CrossesToTheTray_WithItsTickBind()
+    {
+        var source = Web("""
+            <WebForm Name="LoginForm" Version="1">
+              <Layout Kind="Grid"/>
+              <Controls><Button Id="btn" Col="0" Row="0" TabIndex="0"/></Controls>
+              <Components><Timer Id="tmr" Interval="50"><Bind Event="tick" Handler="tmr_Tick"/></Timer></Components>
+            </WebForm>
+            """);
+
+        var doc = FormRetarget.Convert(source, FormTarget.WinForms).Document;
+        var tmr = doc.Components.Single();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(tmr.Binds.Single().Event, Is.EqualTo("Tick"));
+            Assert.That(tmr.Properties["Interval"], Is.EqualTo("50"));
+            Assert.That(tmr.Geometry, Is.Null, "no pixels are invented for a component");
+            Assert.That(doc.Controls.Single().Geometry, Is.TypeOf<PixelGeometry>(), "…while the control is placed");
+        });
+    }
+
+    [Test]
+    public void RoundTrip_AFixedPointFormWithATimer_ComesBackByteIdentical()
+    {
+        // Task 21's fixed point, plus a Timer: the component crosses losslessly in both directions.
+        var xml = FixedPointWinForms.Replace(
+            "  <Components/>",
+            "  <Components>\n    <Timer Id=\"tmr\" Interval=\"500\" Enabled=\"true\">\n      <Bind Event=\"Tick\" Handler=\"tmr_Tick\"/>\n    </Timer>\n  </Components>");
+        Assume.That(xml, Does.Contain("<Timer"), "the fixture's <Components/> line must match");
+        var source = WinForms(xml);
+
+        var back = RoundTrip(source);
+
+        // Enabled is WinForms-only and is LOST on the way to the web, so the round trip is
+        // byte-identical everywhere but that one attribute — which is the loss the finding names.
+        var expected = FormDocumentWriter.Create(source).Replace(" Enabled=\"true\"", "");
+        Assert.That(FormDocumentWriter.Create(back), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void ConvertToPair_ForAWebTimer_WritesTheTypedSetInterval_AndAParameterlessStub()
+    {
+        var pair = FormRetarget.ConvertToPair(WinForms(WinFormsWithTray), FormTarget.Web);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pair.DocumentText, Does.Contain("<Timer Id=\"tmr\"").And.Contain("Event=\"tick\""));
+            Assert.That(pair.CodeText, Does.Contain("Private tmr As Integer"));
+            Assert.That(pair.CodeText, Does.Contain("Dim w As Window = ::window"));
+            Assert.That(pair.CodeText, Does.Contain("tmr = w.setInterval(AddressOf tmr_Tick, 500)"));
+            Assert.That(pair.CodeText, Does.Contain("Private Sub tmr_Tick()"), "parameterless: Window.setInterval takes an Action");
+            Assert.That(pair.CodeText, Does.Not.Contain("tip"), "the ToolTip did not cross");
+        });
+    }
+
+    // ==================================================================
     // The catalog gate: every kind, every property, both directions
     // ==================================================================
 
@@ -764,13 +886,16 @@ public class FormRetargetTests
                 control.Properties[property.Name] = Sample(property);
             }
 
-            source.Controls.Add(control);
+            // A component (Task 25) lives in the tray, and the crossed one is read back from there.
+            // The assertions below are the same for both lists; only the list differs.
+            (definition.IsComponent ? source.Components : source.Controls).Add(control);
 
             var result = FormRetarget.Convert(source, to);
+            var destinationList = definition.IsComponent ? result.Document.Components : result.Document.Controls;
 
             if (!definition.SupportsTarget(to))
             {
-                Assert.That(result.Document.Controls, Is.Empty, $"{definition.Kind} has no {to} row and must go");
+                Assert.That(destinationList, Is.Empty, $"{definition.Kind} has no {to} row and must go");
                 Assert.That(Of(result, DesignCodes.RetargetControlLost).Count(), Is.EqualTo(1), definition.Kind);
                 continue;
             }
@@ -787,7 +912,7 @@ public class FormRetargetTests
                 .OrderBy(n => n)
                 .ToList();
 
-            var crossed = result.Document.Controls.Single().Properties.Keys.OrderBy(n => n).ToList();
+            var crossed = destinationList.Single().Properties.Keys.OrderBy(n => n).ToList();
             var expectedCrossed = definition.Properties
                 .Where(p => p.AppliesTo(from) && p.AppliesTo(to))
                 .Select(p => p.Name)

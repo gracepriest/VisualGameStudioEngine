@@ -413,8 +413,11 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
             return;
         }
 
+        // Both lists: a component and a control become fields of one class, so a pasted Timer
+        // must not be allowed the name of an existing Button either.
         var taken = new HashSet<string>(
-            file.Model.AllControls().Select(c => c.Id), StringComparer.OrdinalIgnoreCase);
+            file.Model.AllControls().Concat(file.Model.AllComponents()).Select(c => c.Id),
+            StringComparer.OrdinalIgnoreCase);
 
         var pasted = BasicLang.Forms.FormClipboard.DeserializeSubtree(
             _designerClipboard, file.Model.Target, id => taken.Contains(id));
@@ -432,7 +435,9 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
                 pixel.Y += 8;
             }
 
-            file.Model.Controls.Add(control);
+            // ⛔ By the ROW, never by where the copy came from: a component pasted among the
+            // controls would be drawn nowhere, emitted with Controls.Add, and refused on reload.
+            (control.Definition?.IsComponent == true ? file.Model.Components : file.Model.Controls).Add(control);
         }
 
         file.Model.RenumberTabIndexes();

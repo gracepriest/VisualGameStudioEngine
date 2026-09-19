@@ -341,9 +341,14 @@ public static class FormClipboard
 
     private static XElement ToElement(FormControl control)
     {
-        var element = new XElement(control.Kind,
-            new XAttribute("Id", control.Id),
-            new XAttribute("TabIndex", control.TabIndex));
+        var element = new XElement(control.Kind, new XAttribute("Id", control.Id));
+
+        // A component (Task 25) has no tab order; writing one would give the paste a TabIndex the
+        // reader would then treat as an unknown attribute.
+        if (control.Definition?.IsComponent != true)
+        {
+            element.SetAttributeValue("TabIndex", control.TabIndex);
+        }
 
         switch (control.Geometry)
         {
@@ -415,19 +420,25 @@ public static class FormClipboard
             return null;
         }
 
+        // A component (Task 25) takes no geometry and no tab index from a fragment, exactly as the
+        // document reader gives it none: a paste must not be the one path that positions a Timer.
+        var isComponent = definition.IsComponent;
+
         var control = new FormControl
         {
             Kind = definition.Kind,
             Id = (string?)element.Attribute("Id") ?? "",
-            TabIndex = IntAttribute(element, "TabIndex") ?? 0
+            TabIndex = isComponent ? 0 : IntAttribute(element, "TabIndex") ?? 0
         };
 
-        control.Geometry = ReadGeometry(element, target);
+        control.Geometry = isComponent ? null : ReadGeometry(element, target);
 
         foreach (var attribute in element.Attributes())
         {
             var name = attribute.Name.LocalName;
-            if (FormControlCatalog.IsStructural(name, target))
+            if (isComponent
+                    ? string.Equals(name, "Id", StringComparison.OrdinalIgnoreCase)
+                    : FormControlCatalog.IsStructural(name, target))
             {
                 continue;
             }
@@ -455,7 +466,7 @@ public static class FormClipboard
                     Path = (string?)child.Attribute("Path")
                 });
             }
-            else if (FormControlCatalog.Find(child.Name.LocalName) != null)
+            else if (!isComponent && FormControlCatalog.Find(child.Name.LocalName) != null)
             {
                 var nested = FromElement(child, target);
                 if (nested != null)
