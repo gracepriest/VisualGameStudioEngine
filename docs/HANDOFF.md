@@ -445,8 +445,8 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   then removed — untestable, and redundant anyway since an array-typed parameter is already
   rejected by the Integer/Long/Single/Double restriction.
   ⚠ **Still failing for unrelated reasons, all pre-existing**: a `Shared` method on a user class
-  has no JS lowering and emits an undeclared identifier on C++; MSIL fails any ByRef call with
-  InvalidProgramException.
+  emits an undeclared identifier on C++ (the JS half of this was FIXED 2026-09-19, see the JS
+  Shared-method entry); MSIL fails any ByRef call with InvalidProgramException.
   ⚠ **Omitted `Optional` arguments are filled at the CALL as of 2026-09-16** —
   `IRBuilder.AppendOmittedOptionalArguments`, at the same three arms the argument coercion uses.
   ⛔ **One backend of four was right, and it was right by accident.** C# emits the default into the
@@ -990,8 +990,44 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   `MemberNames`, walks the same chain — if only that one did, the day inherited members resolve
   `_memberNames` would hold the inherited static while the owners map did not, and the read would
   fall back to `this.K`, silently reintroducing this exact bug for inherited statics.
-  ⚠ **A `Shared` METHOD call is a separate gap, untouched**: `Box.Read()` is still "JavaScript
-  backend: no lowering for 'Box.Read'".
+  ⚠ **A `Shared` METHOD call was a separate gap, untouched there — FIXED 2026-09-19**, see the
+  JS Shared-method entry below.
+  ⚠ **`Shared` METHOD calls work on JavaScript as of 2026-09-19** — `JavaScriptSharedMethodTests`,
+  `JavaScriptBackend`: `_staticMethodOwners` + `MethodReference` + `DeclaringClassOfStaticMethod`,
+  at three call sites.
+  ⛔ **THIS WAS THREE DEFECTS AND THE LOUD ONE HID THE OTHER TWO.** Measured over nine call shapes
+  against MSIL (which has all of it right) and C++:
+  (1) a qualified `Box.Read()` was REFUSED — `CallTarget`'s dotted arm knew only `Console.WriteLine`
+  and `Console.Write` and threw on everything else. Loud, so safe.
+  (2) an unqualified SIBLING call COMPILED and emitted the BARE name — `Helper()` — a
+  `ReferenceError`, because a member body is not a top-level function.
+  (3) `obj.SharedMethod()` COMPILED and emitted `obj.Read()` — a `TypeError`, because a JS static
+  is not on the instance. **(2) and (3) were SILENT**: clean build, crash only at run time.
+  ⛔ **(2) IS NOT SHARED-SPECIFIC.** An unqualified call to an INSTANCE sibling was equally broken,
+  same path, same symptom — measured. Fixing only the Shared half would have left that hole open
+  for every instance method, so both are fixed and both are asserted.
+  ⚠ **Cross-checked against MSIL, not C++, for the qualified shapes**: C++ has the SAME gap there
+  (`Box.Read()` → "use of undeclared identifier", the file does not compile), so it cannot be the
+  oracle. C++ IS asserted on the sibling and instance-receiver shapes, which it gets right.
+  ⚠ **`Derived.Tag()` now works HERE and is still broken on MSIL** (`NullReferenceException`), so
+  that case asserts JavaScript alone — deliberately, rather than pinning a defect as the contract.
+  ⚠ **The receiver is still EVALUATED** for `Make().Read()`: a bare identifier cannot have side
+  effects so the common case stays clean, and anything else rides a comma expression
+  (`(this.B, Box.Read())`, measured reachable through a field receiver).
+  ⛔ **FOUR PRE-EXISTING DEFECTS FOUND WHILE DOING THIS, none fixed here, each measured:**
+  - **An explicit `Shared` PROPERTY emits a non-static accessor.** `EmitProperty` does not consult
+    `prop.IsStatic` for the getter/setter (it does for an auto-property), so `Public Shared
+    ReadOnly Property P` emits `get P()` and `Box.P` reads **undefined**. Closest neighbour to
+    this change and the obvious next fix.
+  - **The front end ACCEPTS an unqualified INSTANCE call from a `Shared` member** — invalid VB
+    (BC30469). MSIL compiles it and dies with `MissingMethodException`. The JS backend deliberately
+    does NOT rewrite it to `this.Inst()` (inside a static, `this` is the class, so that would be a
+    TypeError wearing the shape of working code); the gap belongs in the front end and is pinned.
+  - **A module function whose name collides with a class method is DROPPED from emission.**
+    Measured identically before and after this change (zero `function Tag` emitted) and broken on
+    MSIL too (`MissingMethodException`). Only the in-class resolution is asserted.
+  - **MSIL cannot assemble a module function returning a user class**: it emits `Box 'Make'()`
+    where ilasm requires `class Box`, and rejects the file with a syntax error.
   ⚠ **Narrowing shapes are refused by the SEMANTIC ANALYZER, before any of this** —
   `Public N As Single = 1.5 + 1.0` is "Cannot assign value of type 'Double' to variable of type
   'Single'", before and after. Not a folding gap.

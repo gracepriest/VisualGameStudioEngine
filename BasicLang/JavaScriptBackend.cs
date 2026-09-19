@@ -449,14 +449,32 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 if (evt?.Name != null) _currentClassEvents[evt.Name] = evt;
 
             _currentClassMethods = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            _staticMethodOwners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             {
                 var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 var current = irClass;
                 while (current != null && seen.Add(current.Name))
                 {
                     foreach (var m in current.Methods ?? new List<IRMethod>())
-                        if (m?.Name != null && !m.IsStatic && !_currentClassMethods.ContainsKey(m.Name))
+                    {
+                        if (m?.Name == null) continue;
+
+                        // ⛔ The STATIC half of this walk used to be simply dropped, and an
+                        // unqualified sibling call fell through to a BARE name: `Helper()`
+                        // inside the class, which is a ReferenceError because a member body is
+                        // not a top-level function. It compiled clean and died at run time.
+                        // Statics are keyed to their DECLARING class, instance methods to
+                        // `this` — see MethodReference.
+                        if (m.IsStatic)
+                        {
+                            if (!_staticMethodOwners.ContainsKey(m.Name))
+                                _staticMethodOwners[m.Name] = current.Name;
+                        }
+                        else if (!_currentClassMethods.ContainsKey(m.Name))
+                        {
                             _currentClassMethods[m.Name] = m.Name;
+                        }
+                    }
                     if (string.IsNullOrEmpty(current.BaseClass)) break;
                     module.Classes.TryGetValue(current.BaseClass, out current);
                 }
@@ -506,6 +524,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             _currentClassEvents = new Dictionary<string, IREvent>(StringComparer.OrdinalIgnoreCase);
             _currentClassMethods = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             _staticMemberOwners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            _staticMethodOwners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -649,15 +668,25 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             var parameters = string.Join(", ", impl.Parameters.ConvertAll(p => SanitizeName(p.Name)));
             EmitMemberBody($"{(method.IsStatic ? "static " : "")}{SanitizeName(method.Name)}({parameters})",
-                impl, members);
+                impl, members, isStatic: method.IsStatic);
         }
 
-        /// <summary>Emits a class member's body, with member names resolving to this.X.</summary>
+        /// <summary>
+        /// Emits a class member's body, with member names resolving to this.X.
+        ///
+        /// <para><paramref name="isStatic"/> is what stops an unqualified call to an INSTANCE
+        /// sibling from being rewritten to <c>this.X()</c> inside a <c>Shared</c> member, where
+        /// <c>this</c> is the CLASS and the call would be a TypeError. That shape is invalid VB
+        /// the front end currently accepts (see MethodReference); emitting a plausible-looking
+        /// <c>this.</c> call for it would hide the gap rather than leave it visible.</para>
+        /// </summary>
         private void EmitMemberBody(string signature, IRFunction impl, HashSet<string> members,
-            List<string> prologue = null)
+            List<string> prologue = null, bool isStatic = false)
         {
             var savedMembers = _memberNames;
             _memberNames = members;
+            var savedStatic = _inStaticMember;
+            _inStaticMember = isStatic;
 
             CollectUsedOperands(impl);
             _currentFunction = impl;
@@ -693,6 +722,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             _currentFunction = null;
             _memberNames = savedMembers;
+            _inStaticMember = savedStatic;
         }
 
         /// <summary>
@@ -1006,6 +1036,70 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         /// <summary>The methods of the class being emitted (and its bases), use-site name → declared name.</summary>
         private Dictionary<string, string> _currentClassMethods = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// STATIC methods in scope for the class being emitted, mapped to their DECLARING class's
+        /// name — the method-side twin of <see cref="_staticMemberOwners"/>.
+        /// </summary>
+        private Dictionary<string, string> _staticMethodOwners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>True while emitting a <c>Shared</c> member's body, where <c>this</c> is the class.</summary>
+        private bool _inStaticMember;
+
+        /// <summary>
+        /// The call target an UNQUALIFIED name lowers to inside a class body, or null when the
+        /// name is not a sibling method and the caller should fall through.
+        ///
+        /// <para>⛔ Without this, an unqualified sibling call emitted the BARE name — `Helper()`
+        /// — which is a ReferenceError at run time, because a class member body is not a
+        /// top-level function. It affected STATIC and INSTANCE siblings alike (both measured),
+        /// and it compiled clean every time: nothing failed until the program ran.</para>
+        ///
+        /// <para>⚠ A static is called on its DECLARING class and an instance method through
+        /// <c>this</c>, the same split <see cref="MemberReference"/> makes for fields. Statics
+        /// are checked FIRST so a Shared method shadowing a base's instance method of the same
+        /// name resolves the way the nearest declaration says.</para>
+        ///
+        /// <para>⛔ An unqualified INSTANCE call from inside a <c>Shared</c> member is deliberately
+        /// NOT rewritten. `this` is the class there, so `this.Inst()` would be a TypeError — and
+        /// the shape is invalid VB (BC30469, "Reference to a non-shared member requires an object
+        /// reference") that this front end WRONGLY ACCEPTS. Measured: MSIL compiles it and dies
+        /// with MissingMethodException. It is left alone rather than given a plausible-looking
+        /// lowering, so the front-end gap stays visible instead of being papered over here.</para>
+        /// </summary>
+        private string MethodReference(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return null;
+
+            if (_staticMethodOwners.TryGetValue(name, out var owner))
+                return $"{SanitizeName(owner)}.{SanitizeName(name)}";
+
+            if (!_inStaticMember && _currentClassMethods.TryGetValue(name, out var declared))
+                return $"this.{SanitizeName(declared)}";
+
+            return null;
+        }
+
+        /// <summary>
+        /// The name of the class that DECLARES a STATIC method <paramref name="member"/> reachable
+        /// from <paramref name="typeName"/> (walking bases), else null. The static twin of
+        /// <see cref="DeclaredInstanceMethod"/>.
+        /// </summary>
+        private string DeclaringClassOfStaticMethod(string typeName, string member)
+        {
+            if (string.IsNullOrEmpty(typeName) || string.IsNullOrEmpty(member) || _module?.Classes == null) return null;
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            while (!string.IsNullOrEmpty(typeName) && seen.Add(typeName) &&
+                   _module.Classes.TryGetValue(typeName, out var cls) && cls != null)
+            {
+                foreach (var m in cls.Methods ?? new List<IRMethod>())
+                    if (m?.Name != null && m.IsStatic && string.Equals(m.Name, member, StringComparison.OrdinalIgnoreCase))
+                        return cls.Name;
+                typeName = cls.BaseClass;
+            }
+            return null;
+        }
 
         /// <summary>The declared name of an INSTANCE method <paramref name="member"/> on the class <paramref name="typeName"/> (or a base), else null.</summary>
         private string DeclaredInstanceMethod(string typeName, string member)
@@ -1420,6 +1514,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     StdLibRegistry.IsStdLibFunction(functionName))
                     throw NoLowering(functionName);
 
+                // A SIBLING method called unqualified from inside the class. Checked after the
+                // stdlib refusal (a builtin's name is not silently captured by a class member)
+                // and before the passthrough, which would emit the bare name and ReferenceError.
+                if (MethodReference(functionName) is string sibling) return sibling;
+
                 return SanitizeName(functionName);
             }
 
@@ -1427,9 +1526,26 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             {
                 case "Console.WriteLine": return "console.log";
                 case "Console.Write":     return "process.stdout.write";
-                default:
-                    throw NoLowering(functionName);
             }
+
+            // `Type.Method(...)` where Method is Shared on Type (or on one of its bases).
+            //
+            // ⛔ Every such call was REFUSED outright — "no lowering for 'Box.Read'" — because
+            // this arm knew only the two Console names. That is the whole Shared-method surface:
+            // a qualified call, a call qualified by the class's own name from inside it, and an
+            // unqualified call from a Shared member (which arrives here already qualified).
+            //
+            // ⚠ Emitted on the DECLARING class, not the written one. A call would survive the
+            // written spelling — JS resolves statics up the prototype chain — but the declaring
+            // class is what the method actually belongs to, and it keeps this arm agreeing with
+            // MemberReference, where naming the wrong class silently creates a second static.
+            var dot = functionName.LastIndexOf('.');
+            var typeName = functionName.Substring(0, dot);
+            var methodName = functionName.Substring(dot + 1);
+            if (DeclaringClassOfStaticMethod(typeName, methodName) is string owner)
+                return $"{SanitizeName(owner)}.{SanitizeName(methodName)}";
+
+            throw NoLowering(functionName);
         }
 
         // ------------------------------------------------------------------
@@ -2748,6 +2864,21 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // Record the RESULT as a sequence so the next link in the chain resolves.
                 if (yieldsSequence && !string.IsNullOrEmpty(mc.Name)) _sequenceValued.Add(mc.Name);
                 return linq;
+            }
+
+            // ⛔ `obj.SharedMethod()` — legal BasicLang, and it emitted `obj.Read()`, which is a
+            // TypeError because a JS static does not live on the instance. It compiled clean and
+            // died at run time. The call goes to the DECLARING class instead.
+            //
+            // ⚠ The RECEIVER IS STILL EVALUATED, because it may have side effects and VB
+            // evaluates it — `Make().Shared()` must still run Make(). A bare identifier cannot
+            // have any, so the common case stays clean; anything else rides a comma expression,
+            // which keeps both the effect and its order. MSIL does the same thing by evaluating
+            // and then popping.
+            if (DeclaringClassOfStaticMethod(mc.Object?.Type?.Name, mc.MethodName) is string staticOwner)
+            {
+                var call = $"{SanitizeName(staticOwner)}.{SanitizeName(mc.MethodName)}({string.Join(", ", args)})";
+                return Receiver(receiver) == receiver ? call : $"({receiver}, {call})";
             }
 
             return $"{receiver}.{SanitizeName(mc.MethodName)}({string.Join(", ", args)})";
