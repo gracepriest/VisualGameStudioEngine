@@ -461,17 +461,15 @@ public class ModuleProcedureCallTests
         """, "12");
 
     /// <summary>
-    /// ⛔ PINNED DIVERGENCE, pre-existing and NOT this change's: a module procedure with NO
-    /// modifier. The parser defaults it to <c>Private</c> — the opposite of the language's
-    /// default — and nothing but csc enforces that: C++, JavaScript and MSIL call it from
-    /// anywhere (8), while C# emits <c>private static</c> and refuses the cross-module call
-    /// (CS0122 now that the call is qualified; CS0103 before, when it was bare). Enforcing
-    /// Private in the front end would refuse every plain <c>Function</c> on all four, so the
-    /// front end enforces access for module variables and constants only. The fix is the
-    /// parser's default; until then this pins both halves.
+    /// A module procedure with NO modifier, called from another module. ⛔ This was a PINNED
+    /// DIVERGENCE: the parser defaulted it to <c>Private</c> — the opposite of the language —
+    /// and nothing but csc enforced that, so C++, JavaScript and MSIL printed 8 while C#
+    /// emitted <c>private static</c> and refused the call (CS0122). The parser now says
+    /// Public, as VB does, and this is the promoted four-backend case;
+    /// <see cref="ModuleProcedureAccessTests"/> holds the rest of the access surface.
     /// </summary>
     [Test]
-    public void ANoModifierModuleFunction_IsCallableOnThreeBackends_AndPrivateOnCSharp_PinnedDivergence()
+    public void ANoModifierModuleFunction_RunsOnEveryBackend()
     {
         const string program = """
             Module Helpers
@@ -485,18 +483,9 @@ public class ModuleProcedureCallTests
              End Sub
             End Module
             """;
-        Assert.Multiple(() =>
-        {
-            Assert.That(Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(program))), Is.EqualTo("8"), "C++");
-            Assert.That(Norm(JavaScriptExecutionTests.RunJs(program)), Is.EqualTo("8"), "JavaScript");
-            Assert.That(Norm(MsilHarness.RunExpectingSuccess(program)), Is.EqualTo("8"), "MSIL");
-            Assert.That(ReturnCoercionTests.EmitCSharpForTest(program), Does.Contain("private static int Twice"),
-                "the parser's Private default, made visible by C#");
-            Assert.That(ReturnCoercionTests.CompileEmittedCSharpForTest(program),
-                Has.Some.Contains("CS0122"),
-                "PINNED: csc refuses the private cross-module call; if this passes, the parser " +
-                "default changed — promote this to a four-backend running case");
-        });
+        FourBackends.RunsOnEveryBackend(program, "8");
+        Assert.That(ReturnCoercionTests.EmitCSharpForTest(program), Does.Contain("public static int Twice"),
+            "the language's default, spelled by C#");
     }
 
     /// <summary>

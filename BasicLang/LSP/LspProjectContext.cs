@@ -484,8 +484,10 @@ namespace BasicLang.Compiler.LSP
     /// Collects the public/exported symbols of a parsed file into a
     /// ProjectSymbolTable, mirroring the compiler's export rules:
     /// functions, subroutines and classes are always exported (the compiler's
-    /// CollectExportedSymbols does the same), other members require
-    /// Public/Friend access (.mod files promote Private to Public).
+    /// CollectExportedSymbols does the same) — procedures with the access they
+    /// were declared with, which the analyzer enforces at the use site — and
+    /// other members require Public/Friend access (.mod files promote Private
+    /// to Public for those).
     ///
     /// IMPORTANT (Wave 4 lesson): declarations are usually nested inside a
     /// Module block, so the walk recurses into ModuleNode (and NamespaceNode).
@@ -565,9 +567,12 @@ namespace BasicLang.Compiler.LSP
                     {
                         ReturnType = ConvertTypeReference(func.ReturnType),
                         Parameters = ConvertParameters(func.Parameters),
-                        Access = EffectiveAccess(func.Access, isModuleFile)
+                        // Declared access, .mod or not (compiler parity): the parser defaults a
+                        // procedure to Public, so Private here is the user's word, and the
+                        // analyzer refuses it at the use site.
+                        Access = func.Access
                     };
-                    // Functions are always exported (compiler parity)
+                    // Functions are always exported, carrying their access (compiler parity)
                     symbol.SourceFilePath = filePath;
                     target.AddSymbol(symbol, AccessModifier.Public);
                     break;
@@ -580,9 +585,9 @@ namespace BasicLang.Compiler.LSP
                     {
                         ReturnType = new TypeInfo("Void", TypeKind.Void),
                         Parameters = ConvertParameters(sub.Parameters),
-                        Access = EffectiveAccess(sub.Access, isModuleFile)
+                        Access = sub.Access
                     };
-                    // Subroutines are always exported (compiler parity)
+                    // Subroutines are always exported, carrying their access (compiler parity)
                     symbol.SourceFilePath = filePath;
                     target.AddSymbol(symbol, AccessModifier.Public);
                     break;

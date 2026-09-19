@@ -1386,13 +1386,14 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   - **Compiler**: `CombineIRModules` REFUSES a cross-file same-named module procedure, naming
     both modules and files, instead of dropping the second; same-named METHODS of different
     classes stay exempt.
-  ⚠ **Access is enforced for a Module's variables and constants ONLY, not its procedures** —
+  ⚠ **Access WAS enforced for a Module's variables and constants ONLY, not its procedures** —
   parity with `CollectExportedSymbols` ("procedures are always visible"), and because the PARSER
-  defaults a procedure with no modifier to `Private`, the opposite of the language. Enforcing it
-  would refuse every plain `Function` on all four. **PINNED DIVERGENCE**: a no-modifier module
-  Function runs on C++/JavaScript/MSIL (8) and C# refuses it through csc (`private static`;
-  CS0122 now that the call is qualified, CS0103 before). The fix is the parser's default. Next
-  candidate.
+  defaulted a procedure with no modifier to `Private`, the opposite of the language. Enforcing it
+  would have refused every plain `Function` on all four. That was a **PINNED DIVERGENCE**: a
+  no-modifier module Function ran on C++/JavaScript/MSIL (8) and C# refused it through csc
+  (`private static`; CS0122 once the call was qualified, CS0103 before). **FIXED the same day** —
+  see the "NO-MODIFIER PROCEDURE IS PUBLIC" entry below: the parser's default, and procedure
+  access enforced by the front end on all four.
   ⚠ **PINNED, pre-existing and UNMASKED rather than caused**: a CLASS method calling a module
   procedure by bare name. The front end used to refuse the whole program ("Cannot return type
   'Object'"); it resolves now and runs on JavaScript, MSIL and C#, while C++ emits the class
@@ -1434,6 +1435,83 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   `ResolveSiblingSignatureType` (`report: false` on dimensions), the resolver the sibling pre-pass
   already uses for this reason. Same lesson as every entry in this file: the fixture proves the
   change, only the full suite proves what it broke — compared BY NAME.
+
+  ⚠ **A NO-MODIFIER PROCEDURE IS PUBLIC, and a procedure's access is enforced on every backend
+  as of 2026-09-19** — `ModuleProcedureAccessTests` (fixture), `Parser.ImplicitProcedureAccess` /
+  `ImplicitMemberAccess`, `FunctionNode`'s constructor default, `SemanticAnalyzer.IsAccessChecked`
+  + `PreferModuleProcedure` + `RefuseHiddenProcedure` + `BindCrossUnitProcedure`, the
+  pending-sibling pre-pass (`RegisterSiblingContainerMemberSignatures(…, applyDeclaredAccess)`),
+  `LspModuleSymbolCollector.AddMember`, `MsilHarness.RunIl`. The pinned divergence in
+  `ModuleProcedureCallTests` is promoted to `ANoModifierModuleFunction_RunsOnEveryBackend`.
+  ⛔ **THE PARSER DEFAULTED A NO-MODIFIER `Function`/`Sub` TO `Private`, THE OPPOSITE OF THE
+  LANGUAGE** (VB: a Module's or a file's procedures are Public; its Dim/Const Private). Measured
+  per parser path before the change: Module member Function/Sub/Async/Iterator → Private; bare
+  file-scope `Function` → Private but bare `Sub` → PUBLIC (the two AST constructors disagreed —
+  `FunctionNode` said "Private for multi-file", `SubroutineNode` Public); the top-level modifier
+  branch (`Iterator Function`, `Shared Function`, no access word) → Private; interface methods and
+  extension methods → Private (the constructor default). Class members were Public already. Only
+  C# ever noticed, because csc is the one backend that enforces the `private static` the C#
+  backend emits per Module class: a plain `Function Twice` ran from any other module on C++,
+  JavaScript and MSIL (8) and was CS0122 on C# — single-file, multi-file with Import, multi-file
+  WITHOUT Import in either compile order, `.mod`, and a bare file-scope function from another file.
+  ⛔ **AND BECAUSE OF THAT DEFAULT, THE FRONT END ENFORCED NOTHING FOR PROCEDURES** (`IsAccessChecked`
+  was variables and constants only — enforcing Private would have refused every plain Function
+  called across modules). So an explicit `Private Function` / `Private Sub` — qualified, bare,
+  statement call, from a class method, from another FILE (every channel), from a `.mod` — ran on
+  three backends and was refused by csc alone; a Private `F` beside a Public `F` made a bare call
+  from a third module "'F' is ambiguous between modules 'A', 'B'" on all four, because the Private
+  one counted as a candidate.
+  ⚠ **The fix, layer by layer:**
+  - **Parser**: two constants, applied per arm. `ImplicitProcedureAccess` = Public for
+    Function/Sub (plain, Async/Iterator, the top-level modifier branch); `ImplicitMemberAccess` =
+    Private for Dim/Const/Class/Enum/Structure/Dim-less field — those keep exactly what they had.
+    `FunctionNode`'s constructor defaults to Public like `SubroutineNode`, so a bare file-scope
+    Function, an interface method, an extension method and a template function all parse Public.
+  - **Analyzer**: `IsAccessChecked` covers procedures, so `A.F` on a Private F is refused where
+    `A.V` on a Private V is. `PreferModuleProcedure` decides among VISIBLE candidates: the enclosing
+    Module's own procedure whatever its access; of the other modules' only Public/Friend — one is
+    the answer (so Private-beside-Public binds to the Public one, in either declaration order), two
+    are ambiguous and the message names only the visible owners, none with a Private present is
+    "'F' is Private to module 'A' and cannot be accessed from here". Cross-unit: exports ALWAYS
+    carried every procedure with its declared access (`CollectExportedSymbols`, `Kind == Function`
+    arm) — that is kept, deliberately, so the refusal at the binding can name the module instead
+    of "Undefined identifier": `BindCrossUnitProcedure` (stamp + refuse) at the three qualified
+    channels, `RefuseHiddenProcedure` on an imported bare callee and on the IDE's Import channel.
+    ⛔ **The pending-sibling pre-pass registered a Module's procedures WITHOUT their declared
+    access** ("applyDeclaredAccess: false", with a comment that misdescribed the compiled path —
+    pass 1 does set `symbol.Access`). Measured: with the CALLER's file listed first, the Private
+    procedure was callable (9 on three backends); listed second, refused. Module and Namespace
+    containers now apply it; a class's methods keep the default, untouched.
+  - **LSP**: `LspModuleSymbolCollector` no longer maps a `.mod` procedure's Private to Public
+    (`EffectiveAccess`) — that was a workaround for the parser's default and would now hide the
+    user's own `Private`. Other member kinds still get the `.mod` promotion. The IDE's
+    `ProjectSymbolTable` channel gives the same refusal (tested through `ConfigureProjectSymbols`).
+  - **`.mod` promotion** (`Visit(ModuleNode)`) still promotes every procedure to the unit's global
+    scope, now WITH its access — the same surface pass 1 flattens for an explicit Module — so a
+    `.mod` `Private Sub` is refused by name from another file, Import or not.
+  ⚠ **One message for all of it**, the one Private variables already had: "'Hidden' is Private to
+  module 'Helpers' and cannot be accessed from here". A Module declared in a differently NAMED file
+  (`Module Helpers` in `Util.bas`) is reported as Private to module 'Util' — the unit's name, which
+  is what a cross-unit symbol carries (`SourceModule`); `OwningModule` is not copied onto imported
+  clones, and copying it would change `IRCall.CalleeModule` for that shape, unmeasured. Recorded.
+  ⚠ **Pre-existing and unrelated, surfaced by the probe**: an `Iterator Function` — in a Module or
+  at file scope, Public or not — fails to ASSEMBLE on MSIL ("syntax error at token") and is CS0029
+  on C# ("Cannot implicitly convert type 'int' to IEnumerable<int>"), C++ and JavaScript run it;
+  an Enum declared inside a Module is unresolvable from another module ("Cannot assign value of
+  type 'Object' to variable of type 'Color'"); and an UNKNOWN member of a PENDING sibling
+  (`Helpers.Nope()`, caller listed first) takes the documented "permissive path WITHOUT erroring"
+  and lowers to the phantom instance call on all four (a completed sibling gives "does not have a
+  public member"). None touched.
+  ⛔ **SIXTEEN MUTATIONS, SIXTEEN KILLS, NO SURVIVORS** (49 kills in all; per-mutant counts in
+  the commit message). Two are worth knowing: "bind the lexical symbol instead of the visible
+  candidate" is killed by ONE test — the Private-FIRST declaration order, where pass 1's
+  first-wins global is A's Private `F` and only the candidate walk reaches B's; and "register a
+  pending sibling's procedures without their access" is killed by exactly the two CALLER-FIRST
+  cases, which is why the multi-file refusals are asserted in both orders. The parser's Dim arm
+  was mutated to Public as a guard and died to one new parse case and two existing
+  module-variable tests. Full suite in place: 195 / 6069 / 203 / 6467 against the 195 / 6015 /
+  203 / 6413 baseline at `e486382` — 195 reported = 195 anchored lines, the same 170 failing
+  names, nothing new and nothing newly passing; the +54 are the fixture's 54 cases.
   ⚠ **Narrowing shapes are refused by the SEMANTIC ANALYZER, before any of this** —
   `Public N As Single = 1.5 + 1.0` is "Cannot assign value of type 'Double' to variable of type
   'Single'", before and after. Not a folding gap.

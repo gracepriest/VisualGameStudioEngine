@@ -627,11 +627,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             SourceModule = unit.ModuleName
                         });
                     }
-                    RegisterSiblingContainerMemberSignatures(moduleNode.Members, unit);
+                    RegisterSiblingContainerMemberSignatures(moduleNode.Members, unit, applyDeclaredAccess: true);
                     break;
 
                 case NamespaceNode namespaceNode:
-                    RegisterSiblingContainerMemberSignatures(namespaceNode.Members, unit);
+                    RegisterSiblingContainerMemberSignatures(namespaceNode.Members, unit, applyDeclaredAccess: true);
                     break;
 
                 // .cls/.class units export ONLY their class symbol (Compiler.
@@ -639,7 +639,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 // signatures must not be flattened. For every other file the
                 // compiled path flattens class-member signatures globally.
                 case ClassNode classNode when !unit.IsClassFile:
-                    RegisterSiblingContainerMemberSignatures(classNode.Members, unit);
+                    RegisterSiblingContainerMemberSignatures(classNode.Members, unit, applyDeclaredAccess: false);
                     break;
 
                 case VariableDeclarationNode field when field.Access == AccessModifier.Public:
@@ -683,12 +683,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// Fields and constants inside these containers are NOT flattened —
         /// the compiled path's pass 1 only registers functions/subs, so
         /// registering more here would make code compile caller-first that
-        /// fails callee-first. Declared access is not applied: the compiled
-        /// path's pass-1 signatures keep the default (public) symbol access
-        /// because pass 2 re-declares the member inside its container scope
-        /// and never touches the flattened global signature.
+        /// fails callee-first.
+        ///
+        /// <para><paramref name="applyDeclaredAccess"/> is true for a Module's (and a
+        /// Namespace's) procedures: a completed sibling exports them with their declared
+        /// access and the use site refuses a Private one, so a pending sibling's must carry
+        /// it too — otherwise a <c>Private Function</c> was callable whenever its file was
+        /// listed AFTER the caller's, and refused when it was listed before. A class's
+        /// methods keep the default, as before.</para>
         /// </summary>
-        private void RegisterSiblingContainerMemberSignatures(IEnumerable<ASTNode> members, CompilationUnit unit)
+        private void RegisterSiblingContainerMemberSignatures(IEnumerable<ASTNode> members, CompilationUnit unit, bool applyDeclaredAccess)
         {
             if (members == null) return;
 
@@ -697,19 +701,19 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 switch (member)
                 {
                     case FunctionNode func:
-                        RegisterSiblingFunctionSignature(func, unit, applyDeclaredAccess: false);
+                        RegisterSiblingFunctionSignature(func, unit, applyDeclaredAccess);
                         break;
                     case SubroutineNode sub:
-                        RegisterSiblingSubroutineSignature(sub, unit, applyDeclaredAccess: false);
+                        RegisterSiblingSubroutineSignature(sub, unit, applyDeclaredAccess);
                         break;
                     case ModuleNode nestedModule:
-                        RegisterSiblingContainerMemberSignatures(nestedModule.Members, unit);
+                        RegisterSiblingContainerMemberSignatures(nestedModule.Members, unit, applyDeclaredAccess: true);
                         break;
                     case ClassNode nestedClass:
-                        RegisterSiblingContainerMemberSignatures(nestedClass.Members, unit);
+                        RegisterSiblingContainerMemberSignatures(nestedClass.Members, unit, applyDeclaredAccess: false);
                         break;
                     case NamespaceNode nestedNamespace:
-                        RegisterSiblingContainerMemberSignatures(nestedNamespace.Members, unit);
+                        RegisterSiblingContainerMemberSignatures(nestedNamespace.Members, unit, applyDeclaredAccess: true);
                         break;
                 }
             }
@@ -5157,16 +5161,30 @@ namespace BasicLang.Compiler.SemanticAnalysis
             s != null && (s.Kind == SymbolKind.Function || s.Kind == SymbolKind.Subroutine);
 
         /// <summary>
-        /// Access is enforced for a Module's VARIABLES and CONSTANTS only. Its procedures are
-        /// treated as reachable from anywhere, for parity with <c>Compiler.CollectExportedSymbols</c>
-        /// ("functions and subroutines are always visible") and because the parser gives a
-        /// procedure with NO modifier <c>Private</c> — the opposite of the language's default —
-        /// so enforcing it here would refuse every plain <c>Function</c> called across modules.
-        /// (C# enforces it anyway, through csc: see the pinned divergence in
-        /// <c>ModuleProcedureCallTests</c>.)
+        /// The Module members whose declared access is enforced at a use site outside their
+        /// Module: variables, constants, and — since the parser defaults a no-modifier procedure
+        /// to Public, as the language does — procedures too.
+        ///
+        /// <para>⛔ Procedures were exempt while the parser defaulted them to <c>Private</c>:
+        /// enforcing that would have refused every plain <c>Function</c> called across modules.
+        /// So nothing in the front end enforced a procedure's access, and an explicit
+        /// <c>Private Function</c> ran from any module on C++, JavaScript and MSIL while csc
+        /// alone refused it (CS0122) — the one backend that enforces the <c>private static</c>
+        /// the C# backend emits. Now all four agree, from the front end.</para>
         /// </summary>
         private static bool IsAccessChecked(Symbol s) =>
-            s != null && (s.Kind == SymbolKind.Variable || s.Kind == SymbolKind.Constant);
+            s != null && (s.Kind == SymbolKind.Variable || s.Kind == SymbolKind.Constant || IsProcedure(s));
+
+        /// <summary>
+        /// A procedure reached across a Module or unit boundary whose declared access does not
+        /// allow it, refused with the message a Private variable gets. <paramref name="moduleName"/>
+        /// is the module the message names: the written qualifier, or the owner the symbol carries.
+        /// </summary>
+        private void RefuseHiddenProcedure(Symbol symbol, string moduleName, int line, int column)
+        {
+            if (IsProcedure(symbol) && !IsVisibleOutsideItsModule(symbol))
+                Error($"'{symbol.Name}' is Private to module '{moduleName}' and cannot be accessed from here", line, column);
+        }
 
         /// <summary>
         /// The procedure a BARE call binds to, given what lexical scope resolved.
@@ -5179,6 +5197,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// enclosing Module's own procedure wins here whatever the order, and a bare name two
         /// OTHER modules both declare is refused as ambiguous. A local or parameter of the same
         /// name still shadows both, exactly as before.</para>
+        ///
+        /// <para>Access is decided here as well, because it decides WHICH candidates there are:
+        /// the enclosing Module's own procedure is reachable whatever its access; of the other
+        /// modules' procedures only the Public/Friend ones count — one is the answer, two are
+        /// ambiguous, and none with a Private one present is refused as Private. ⛔ Before, a
+        /// Private procedure counted as a candidate: a Private <c>F</c> beside a Public <c>F</c> was
+        /// "ambiguous" on all four backends, and a lone Private <c>F</c> bound and ran on three. A
+        /// procedure imported from another unit is refused the same way when its declared access
+        /// is not Public/Friend — the exporting unit exports every procedure with the access it
+        /// was declared with, precisely so this can name the module.</para>
         /// </summary>
         private Symbol PreferModuleProcedure(string name, Symbol resolved, int line, int column)
         {
@@ -5189,17 +5217,32 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 && own.TryGetValue(name, out var ownProcedure) && IsProcedure(ownProcedure))
                 return ownProcedure;
 
-            if (!IsProcedure(resolved) || string.IsNullOrEmpty(resolved.OwningModule)) return resolved;
-
-            var owners = _moduleMembers
-                .Where(kv => kv.Value.TryGetValue(name, out var p) && IsProcedure(p))
-                .Select(kv => kv.Key)
-                .Where(k => !string.Equals(k, current, StringComparison.OrdinalIgnoreCase))
-                .OrderBy(k => k, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            if (owners.Count > 1)
+            if (resolved == null) return null;
+            if (resolved.IsImported)
             {
-                Error($"'{name}' is ambiguous between modules '{string.Join("', '", owners)}'. Qualify it with the module name", line, column);
+                RefuseHiddenProcedure(resolved, resolved.OwningModule ?? resolved.SourceModule, line, column);
+                return resolved;
+            }
+            if (string.IsNullOrEmpty(resolved.OwningModule)) return resolved;
+
+            var others = _moduleMembers
+                .Where(kv => !string.Equals(kv.Key, current, StringComparison.OrdinalIgnoreCase)
+                             && kv.Value.TryGetValue(name, out var p) && IsProcedure(p))
+                .Select(kv => kv.Value[name])
+                .OrderBy(p => p.OwningModule, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var visible = others.Where(IsVisibleOutsideItsModule).ToList();
+            if (visible.Count > 1)
+            {
+                var owners = string.Join("', '", visible.Select(v => v.OwningModule));
+                Error($"'{name}' is ambiguous between modules '{owners}'. Qualify it with the module name", line, column);
+                return visible[0];
+            }
+            if (visible.Count == 1) return visible[0];
+            if (others.Count > 0)
+            {
+                RefuseHiddenProcedure(others[0], others[0].OwningModule, line, column);
+                return others[0];
             }
             return resolved;
         }
@@ -5213,6 +5256,18 @@ namespace BasicLang.Compiler.SemanticAnalysis
         {
             if (IsProcedure(symbol) && string.IsNullOrEmpty(symbol.OwningModule) && !string.IsNullOrEmpty(moduleName))
                 symbol.OwningModule = moduleName;
+        }
+
+        /// <summary>
+        /// The qualified cross-unit binding: <see cref="StampProcedureOwner"/>, then the declared
+        /// access is enforced — a sibling unit's <c>Private Function</c> is reachable through
+        /// every cross-unit channel (exports carry it with its access), so the refusal lives at
+        /// the binding, where the written qualifier names the module.
+        /// </summary>
+        private void BindCrossUnitProcedure(Symbol symbol, string moduleName, int line, int column)
+        {
+            StampProcedureOwner(symbol, moduleName);
+            RefuseHiddenProcedure(symbol, moduleName, line, column);
         }
 
 
@@ -5268,7 +5323,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     foreach (var memberSymbol in _currentScope.Symbols.Values)
                     {
-                        // Only promote public members (or functions/subs which are public by default in modules)
+                        // Public members, classes and constants; and EVERY procedure, with the
+                        // access it was declared with — the same surface pass 1 flattens for an
+                        // explicit Module block, so an importing unit refuses a Private one at
+                        // the use site by name (see BindCrossUnitProcedure) rather than "Undefined".
                         if (memberSymbol.Access == AST.AccessModifier.Public ||
                             memberSymbol.Kind == SymbolKind.Function ||
                             memberSymbol.Kind == SymbolKind.Subroutine ||
@@ -8639,7 +8697,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     var symbol = _projectSymbols.LookupQualified(moduleName, node.MemberName);
                     if (symbol != null)
                     {
-                        StampProcedureOwner(symbol, moduleName);
+                        BindCrossUnitProcedure(symbol, moduleName, node.Line, node.Column);
                         SetNodeSymbol(node, symbol);
                         SetNodeType(node, symbol.Type);
                         return;
@@ -8669,7 +8727,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             s.Name.Equals(node.MemberName, StringComparison.OrdinalIgnoreCase));
                         if (symbol != null)
                         {
-                            StampProcedureOwner(symbol, moduleName);
+                            BindCrossUnitProcedure(symbol, moduleName, node.Line, node.Column);
                             SetNodeSymbol(node, symbol);
                             SetNodeType(node, symbol.Type);
                             return;
@@ -8704,7 +8762,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             !string.IsNullOrEmpty(signature.SourceModule) &&
                             signature.SourceModule.Equals(unit.ModuleName, StringComparison.OrdinalIgnoreCase))
                         {
-                            StampProcedureOwner(signature, moduleName);
+                            BindCrossUnitProcedure(signature, moduleName, node.Line, node.Column);
                             SetNodeSymbol(node, signature);
                             SetNodeType(node, signature.Type);
                             return;
@@ -8863,6 +8921,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 if (calleeSymbol == null)
                 {
                     calleeSymbol = ResolveQualifiedName(idExpr.Name);
+                    if (calleeSymbol != null)
+                        RefuseHiddenProcedure(calleeSymbol, calleeSymbol.SourceModule, node.Line, node.Column);
                 }
             }
             else if (node.Callee is MemberAccessExpressionNode memberExpr)

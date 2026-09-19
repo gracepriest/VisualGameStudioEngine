@@ -73,6 +73,22 @@ namespace BasicLang.Compiler
         // Top-Level Declarations
         // ====================================================================
 
+        /// <summary>
+        /// The access a declaration gets when it names none. VB's table: a Module's (or a file's)
+        /// Functions and Subs are <b>Public</b>; its variables and constants are <b>Private</b>.
+        ///
+        /// <para>⛔ A procedure defaulted to Private here — the opposite of the language — and only
+        /// C# ever noticed, because csc is the one backend that enforces the <c>private static</c>
+        /// the C# backend emits per Module class: a plain <c>Function Twice</c> ran from any module
+        /// on C++, JavaScript and MSIL and was CS0122 on C#. Every arm that used to write
+        /// <c>Private</c> for a Function or Sub now writes this; variables, constants and nested
+        /// types keep the Private they always had.</para>
+        /// </summary>
+        private const AccessModifier ImplicitProcedureAccess = AccessModifier.Public;
+
+        /// <summary>The no-modifier default for a Dim, Const, Class, Enum or Structure member.</summary>
+        private const AccessModifier ImplicitMemberAccess = AccessModifier.Private;
+
         private ASTNode ParseTopLevelDeclaration()
         {
             SkipNewlines();
@@ -127,7 +143,7 @@ namespace BasicLang.Compiler
                 Check(TokenType.Async) || Check(TokenType.Iterator) || Check(TokenType.Inline) ||
                 Check(TokenType.Shared) || Check(TokenType.Extern))
             {
-                var access = AccessModifier.Private;  // Default for top-level
+                AccessModifier? access = null;  // none written: each arm applies its kind's default
                 bool isAsync = false;
                 bool isIterator = false;
                 bool isInline = false;
@@ -177,14 +193,14 @@ namespace BasicLang.Compiler
                             "apply to.", Peek());
 
                     var externCls = ParseClass(isExtern: true);
-                    externCls.Access = access;
+                    externCls.Access = access ?? ImplicitMemberAccess;
                     return externCls;
                 }
 
                 if (Check(TokenType.Function))
                 {
                     var func = ParseFunction();
-                    func.Access = access;
+                    func.Access = access ?? ImplicitProcedureAccess;
                     func.IsAsync = isAsync;
                     func.IsIterator = isIterator;
                     func.IsInline = isInline;
@@ -194,7 +210,7 @@ namespace BasicLang.Compiler
                 if (Check(TokenType.Sub))
                 {
                     var sub = ParseSubroutine();
-                    sub.Access = access;
+                    sub.Access = access ?? ImplicitProcedureAccess;
                     sub.IsAsync = isAsync;
                     sub.IsStatic = isStatic;
                     return sub;
@@ -204,7 +220,7 @@ namespace BasicLang.Compiler
                     var statement = ParseVariableDeclaration();
                     if (statement is VariableDeclarationNode variable)
                     {
-                        variable.Access = access;
+                        variable.Access = access ?? ImplicitMemberAccess;
                         variable.IsStatic = isStatic;
                     }
                     return statement;
@@ -214,14 +230,14 @@ namespace BasicLang.Compiler
                     var statement = ParseConstantDeclaration();
                     if (statement is ConstantDeclarationNode constant)
                     {
-                        constant.Access = access;
+                        constant.Access = access ?? ImplicitMemberAccess;
                     }
                     return statement;
                 }
                 if (Check(TokenType.Class))
                 {
                     var cls = ParseClass();
-                    cls.Access = access;
+                    cls.Access = access ?? ImplicitMemberAccess;
                     return cls;
                 }
                 if (Check(TokenType.Module))
@@ -235,13 +251,13 @@ namespace BasicLang.Compiler
                 if (Check(TokenType.Enum))
                 {
                     var en = ParseEnum();
-                    en.Access = access;
+                    en.Access = access ?? ImplicitMemberAccess;
                     return en;
                 }
                 if (Check(TokenType.Structure))
                 {
                     var st = ParseStructure();
-                    st.Access = access;
+                    st.Access = access ?? ImplicitMemberAccess;
                     return st;
                 }
                 if (Check(TokenType.MustInherit))
@@ -250,7 +266,7 @@ namespace BasicLang.Compiler
                     if (Check(TokenType.Class))
                     {
                         var cls = ParseClass();
-                        cls.Access = access;
+                        cls.Access = access ?? ImplicitMemberAccess;
                         cls.IsAbstract = true;
                         return cls;
                     }
@@ -557,8 +573,10 @@ namespace BasicLang.Compiler
                 SkipNewlines();
             }
 
-            // Handle access modifiers (Public, Private, Friend)
-            var access = AccessModifier.Private; // Default
+            // Handle access modifiers (Public, Private, Friend). None written means the
+            // member KIND's default — Public for a procedure, Private for the rest (see
+            // ImplicitProcedureAccess) — applied at each arm below.
+            AccessModifier? access = null;
             if (Check(TokenType.Public) || Check(TokenType.Private) || Check(TokenType.Friend))
             {
                 if (Match(TokenType.Public)) access = AccessModifier.Public;
@@ -582,27 +600,27 @@ namespace BasicLang.Compiler
                     var func = ParseFunction();
                     func.IsAsync = isAsync;
                     func.IsIterator = isIterator;
-                    func.Access = access;
+                    func.Access = access ?? ImplicitProcedureAccess;
                     return func;
                 }
                 if (Check(TokenType.Sub))
                 {
                     var sub = ParseSubroutine();
                     sub.IsAsync = isAsync;
-                    sub.Access = access;
+                    sub.Access = access ?? ImplicitProcedureAccess;
                     return sub;
                 }
             }
             if (Check(TokenType.Function))
             {
                 var func = ParseFunction();
-                func.Access = access;
+                func.Access = access ?? ImplicitProcedureAccess;
                 return func;
             }
             if (Check(TokenType.Sub))
             {
                 var sub = ParseSubroutine();
-                sub.Access = access;
+                sub.Access = access ?? ImplicitProcedureAccess;
                 return sub;
             }
             if (Check(TokenType.Dim))
@@ -610,7 +628,7 @@ namespace BasicLang.Compiler
                 var statement = ParseVariableDeclaration();
                 if (statement is VariableDeclarationNode varDecl)
                 {
-                    varDecl.Access = access;
+                    varDecl.Access = access ?? ImplicitMemberAccess;
                 }
                 return statement;
             }
@@ -619,7 +637,7 @@ namespace BasicLang.Compiler
                 var statement = ParseConstantDeclaration();
                 if (statement is ConstantDeclarationNode constDecl)
                 {
-                    constDecl.Access = access;
+                    constDecl.Access = access ?? ImplicitMemberAccess;
                 }
                 return statement;
             }
@@ -628,7 +646,7 @@ namespace BasicLang.Compiler
             if (Check(TokenType.Class))
             {
                 var cls = ParseClass();
-                cls.Access = access;
+                cls.Access = access ?? ImplicitMemberAccess;
                 return cls;
             }
             if (Check(TokenType.Module))
@@ -638,13 +656,13 @@ namespace BasicLang.Compiler
             if (Check(TokenType.Enum))
             {
                 var en = ParseEnum();
-                en.Access = access;
+                en.Access = access ?? ImplicitMemberAccess;
                 return en;
             }
             if (Check(TokenType.Structure))
             {
                 var st = ParseStructure();
-                st.Access = access;
+                st.Access = access ?? ImplicitMemberAccess;
                 return st;
             }
             // Module-level field without 'Dim' (VB.NET style):
@@ -654,7 +672,7 @@ namespace BasicLang.Compiler
                 var statement = ParseVariableDeclaration(requireDim: false);
                 if (statement is VariableDeclarationNode fieldDecl)
                 {
-                    fieldDecl.Access = access;
+                    fieldDecl.Access = access ?? ImplicitMemberAccess;
                 }
                 return statement;
             }

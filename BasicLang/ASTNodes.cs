@@ -614,7 +614,12 @@ namespace BasicLang.Compiler.AST
 
         public FunctionNode(int line, int column) : base(line, column)
         {
-            Access = AccessModifier.Private;  // Default to Private for multi-file
+            // Public, like SubroutineNode: VB's default for a procedure. ⛔ This was Private
+            // ("for multi-file") while a Sub's was Public, so a bare file-scope `Function F`
+            // came out `private static` on C# and a bare `Sub S` `public static` — the one
+            // backend that enforces access refused the cross-file call to the Function alone.
+            // The interface, extension-method and template parsers all take this default.
+            Access = AccessModifier.Public;
             Parameters = new List<ParameterNode>();
             GenericParameters = new List<string>();
             GenericTypeParams = new List<GenericTypeParameter>();

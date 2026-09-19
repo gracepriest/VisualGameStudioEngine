@@ -826,7 +826,12 @@ namespace BasicLang.Compiler
                     continue;
                 }
 
-                // Export public symbols
+                // Export public symbols — and every procedure and class, carrying its declared
+                // access: the importing analyzer enforces a procedure's access at the binding
+                // (SemanticAnalyzer.BindCrossUnitProcedure / PreferModuleProcedure), which is
+                // what lets it say "'Hidden' is Private to module 'Helpers'" instead of
+                // "Undefined identifier". Pass 1 flattens a Module's procedures into this
+                // global scope, so a Module's are here too.
                 if (symbol.Access == AST.AccessModifier.Public ||
                     symbol.Kind == SymbolKind.Function ||
                     symbol.Kind == SymbolKind.Subroutine ||
