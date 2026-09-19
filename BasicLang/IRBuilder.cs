@@ -23,6 +23,12 @@ namespace BasicLang.Compiler.IR
         private readonly Dictionary<string, IRVariable> _globalVariables;
         private readonly Dictionary<string, IRAlloca> _locals;
         private string _currentClassName;
+
+        /// <summary>
+        /// Method names declared by the class currently being built, from its AST. Empty outside a
+        /// class. See <see cref="IsCurrentClassMethod"/> for why this exists.
+        /// </summary>
+        private HashSet<string> _currentClassMethodNames;
         private string _currentNamespace;
         private string _currentModuleName;  // Track current module for constants/globals
         private string _sourceFilePath;
@@ -252,6 +258,27 @@ namespace BasicLang.Compiler.IR
         /// being built (or of a base). Class scope is NEARER than module scope, so an unqualified
         /// name inside a method is the member before it is a same-named module-level Dim.
         /// </summary>
+        /// <summary>
+        /// Whether <paramref name="name"/> is a method of the class whose member is being built.
+        /// The method twin of <see cref="IsCurrentClassMember"/>, and it exists for the same reason:
+        /// class scope is NEARER than module scope.
+        ///
+        /// <para>⛔⛔ Without this, two classes each declaring a method of the same name MISCOMPILE.
+        /// The symbol table keeps one entry per name, so the LAST declaration wins and carries its
+        /// own <c>SourceModule</c>; the unqualified self-call in the FIRST class was then emitted
+        /// qualified with the OTHER class's name. Measured: two classes with a private
+        /// <c>Setup()</c> produced <c>Beta.Setup();</c> inside <c>Alpha</c>'s constructor
+        /// (CS0122 — inaccessible). The WinForms path hits this every time, because the project
+        /// template and the form designer both write <c>InitializeComponent</c>.</para>
+        ///
+        /// <para>⚠ It failed LOUDLY only because those methods are Private. A colliding
+        /// <c>Public Shared</c> pair compiles clean and calls the wrong class's method.</para>
+        /// </summary>
+        private bool IsCurrentClassMethod(string name) =>
+            !string.IsNullOrEmpty(_currentClassName)
+            && _currentClassMethodNames != null
+            && _currentClassMethodNames.Contains(name);
+
         private bool IsCurrentClassMember(string name)
         {
             if (string.IsNullOrEmpty(_currentClassName) || _module?.Classes == null) return false;
@@ -969,6 +996,24 @@ namespace BasicLang.Compiler.IR
             _module.Classes[node.Name] = irClass;
             _currentClassName = node.Name;
 
+            // ⛔ Taken from the AST, BEFORE the loop below, and not from irClass.Methods — that list
+            // is filled as each member is PROCESSED, so a constructor declared above the method it
+            // calls (the shape every form has: New() then InitializeComponent()) would look up a
+            // method that is not in the IR yet. See IsCurrentClassMethod.
+            _currentClassMethodNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var member in node.Members)
+            {
+                switch (member)
+                {
+                    case FunctionNode f when !string.IsNullOrEmpty(f.Name):
+                        _currentClassMethodNames.Add(f.Name);
+                        break;
+                    case SubroutineNode s when !string.IsNullOrEmpty(s.Name):
+                        _currentClassMethodNames.Add(s.Name);
+                        break;
+                }
+            }
+
             // Process members - they will populate the IRClass
             foreach (var member in node.Members)
             {
@@ -1122,6 +1167,7 @@ namespace BasicLang.Compiler.IR
             SynthesizeImplicitConstructor(node, irClass);
 
             _currentClassName = null;
+            _currentClassMethodNames = null;
         }
 
         /// <summary>
@@ -4835,9 +4881,15 @@ namespace BasicLang.Compiler.IR
                 // Determine qualified function name (add module prefix if imported)
                 // Use funcSymbol.Name for correct casing (BASIC is case-insensitive, C# is not)
                 var functionName = funcSymbol?.Name ?? idExpr.Name;
-                if (funcSymbol != null && funcSymbol.IsImported && !string.IsNullOrEmpty(funcSymbol.SourceModule))
+                if (funcSymbol != null && funcSymbol.IsImported && !string.IsNullOrEmpty(funcSymbol.SourceModule)
+                    && !IsCurrentClassMethod(functionName))
                 {
-                    // Prefix with source module name for imported functions
+                    // Prefix with source module name for imported functions.
+                    //
+                    // ⛔ ...but NEVER when the class being built declares that method itself. One
+                    // symbol table entry per name means the last declaration wins, so without this
+                    // guard an unqualified self-call is emitted against whichever OTHER class
+                    // happened to declare the same name last. See IsCurrentClassMethod.
                     functionName = $"{funcSymbol.SourceModule}.{funcSymbol.Name}";
                 }
 

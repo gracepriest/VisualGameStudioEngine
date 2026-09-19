@@ -62,6 +62,14 @@
                   <TextBlock Text="C" FontSize="12" FontWeight="Bold" Foreground="#66BB6A"/>
                 </MenuItem.Icon>
               </MenuItem>
+              <!-- The form designer's only entry point in the IDE. Sits with the source templates
+                   because it creates a PAIR: the .blform/.blwebform document, which opens in the
+                   designer, and its .bas code-behind beside it in the tree. -->
+              <MenuItem Header="New Form..." Command="{Binding #SolutionTreeView.DataContext.AddNewFormCommand}">
+                <MenuItem.Icon>
+                  <TextBlock Text="F" FontSize="12" FontWeight="Bold" Foreground="#CE93D8"/>
+                </MenuItem.Icon>
+              </MenuItem>
               <Separator/>
               <MenuItem Header="New File..." Command="{Binding #SolutionTreeView.DataContext.AddNewFileCommand}">
                 <MenuItem.Icon>
@@ -82,6 +90,13 @@
             </MenuItem>
             <Separator/>
             <MenuItem Header="Open" Click="OnOpenMenuItemClick"/>
+            <!-- Task 21: convert the selected form document to the other target. Writes a NEW
+                 document + code-behind pair into a folder the user picks and never touches this
+                 project — the pair's class is named after the form and would collide with the
+                 source form's own code-behind. Shown only on a .blform / .blwebform node. -->
+            <MenuItem Header="Retarget Form..."
+                      Command="{Binding #SolutionTreeView.DataContext.RetargetFormCommand}"
+                      IsVisible="{Binding #SolutionTreeView.DataContext.SelectedIsFormDocument}"/>
             <Separator/>
             <MenuItem Header="Rename" Command="{Binding #SolutionTreeView.DataContext.StartRenameCommand}" InputGesture="F2"/>
             <MenuItem Header="Delete" Command="{Binding #SolutionTreeView.DataContext.DeleteCommand}" InputGesture="Delete">

@@ -4861,6 +4861,36 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
+        /// "Already defined" — naming WHAT it collides with, and WHERE.
+        ///
+        /// <para>⚠ The bare message cost real debugging time: a class with a field <c>tag</c> and a
+        /// function <c>Tag</c> reported only "Function 'Tag' is already defined in this scope" at the
+        /// FUNCTION's line, so the field eleven lines above — differing only in case — was invisible,
+        /// and the error read like a cross-class collision. BasicLang is case-insensitive, so those
+        /// are one identifier; when that is what happened, the message now says so outright.</para>
+        /// </summary>
+        private static string AlreadyDefinedMessage(string kindWord, string name, Symbol existing)
+        {
+            if (existing == null)
+            {
+                return $"{kindWord} '{name}' is already defined in this scope";
+            }
+
+            var where = existing.Line > 0 ? $" at line {existing.Line}" : "";
+            var collidesWith = $"the {existing.Kind} '{existing.Name}'{where}";
+
+            // Only worth saying when the spellings actually differ — otherwise it is noise on an
+            // ordinary duplicate.
+            var caseOnly = !string.Equals(existing.Name, name, StringComparison.Ordinal)
+                && string.Equals(existing.Name, name, StringComparison.OrdinalIgnoreCase);
+            var note = caseOnly
+                ? $" Names are case-insensitive, so '{existing.Name}' and '{name}' are the same identifier."
+                : string.Empty;
+
+            return $"{kindWord} '{name}' is already defined in this scope — it collides with {collidesWith}.{note}";
+        }
+
+        /// <summary>
         /// Pass 1, sweep 2: record a constructor's signature on its class, so a <c>New</c> written
         /// ABOVE the class declaration binds to the real constructor.
         ///
@@ -5414,7 +5444,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
                 else
                 {
-                    Error($"Function '{node.Name}' is already defined in this scope", node.Line, node.Column);
+                    Error(AlreadyDefinedMessage("Function", node.Name, existing), node.Line, node.Column);
                     symbol = new Symbol(node.Name, SymbolKind.Function, null, node.Line, node.Column);
                 }
             }
@@ -5503,7 +5533,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
                 else
                 {
-                    Error($"Subroutine '{node.Name}' is already defined in this scope", node.Line, node.Column);
+                    Error(AlreadyDefinedMessage("Subroutine", node.Name, existing), node.Line, node.Column);
                     symbol = new Symbol(node.Name, SymbolKind.Subroutine, _typeManager.VoidType, node.Line, node.Column);
                 }
             }
@@ -6743,6 +6773,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             // Analyze the handler expression
             node.HandlerExpression?.Accept(this);
+
+            ValidateHandlerWiring(node.EventExpression, node.HandlerExpression, "AddHandler",
+                node.Line, node.Column);
         }
 
         public void Visit(RemoveHandlerStatementNode node)
@@ -6752,7 +6785,116 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             // Analyze the handler expression
             node.HandlerExpression?.Accept(this);
+
+            ValidateHandlerWiring(node.EventExpression, node.HandlerExpression, "RemoveHandler",
+                node.Line, node.Column);
         }
+
+        /// <summary>
+        /// What <c>AddHandler</c>/<c>RemoveHandler</c> can actually be checked for here.
+        ///
+        /// <para>⛔⛔ Deliberately silent whenever the event side is UNRESOLVED, which on the
+        /// target this matters most for is nearly always. <c>EnableNetResolution</c> returns early
+        /// for <c>UseWindowsForms</c> (<c>Compiler.cs:145</c>) and the resolver closure cannot reach
+        /// <c>System.Windows.Forms.dll</c>, so <c>btnLogin.Click</c> types as <c>Object</c> with no
+        /// symbol and no diagnostic. Requiring <c>SymbolKind.Event</c> outright would therefore
+        /// reject every correct WinForms program — including the code this designer generates for
+        /// D8. The check fires only where there is real evidence of a mistake: a resolved symbol
+        /// that is plainly not an event, or two delegate shapes we can both see and that disagree.
+        /// </para>
+        /// </summary>
+        private void ValidateHandlerWiring(
+            ExpressionNode eventExpression, ExpressionNode handlerExpression,
+            string keyword, int line, int column)
+        {
+            if (eventExpression == null || handlerExpression == null)
+            {
+                return;
+            }
+
+            var eventSymbol = GetNodeSymbol(eventExpression);
+            var eventType = GetNodeType(eventExpression);
+
+            // A resolved symbol that is neither an event nor delegate-typed is a real mistake:
+            // `AddHandler someInteger, AddressOf Foo` wires nothing and reports nothing today.
+            if (eventSymbol != null &&
+                eventSymbol.Kind != SymbolKind.Event &&
+                eventSymbol.Kind != SymbolKind.Property &&
+                eventType != null &&
+                eventType.Kind != TypeKind.Delegate &&
+                !IsUnresolvedType(eventType))
+            {
+                Error($"'{eventSymbol.Name}' is a {eventSymbol.Kind}, not an event, so " +
+                      $"{keyword} cannot attach a handler to it.", line, column);
+                return;
+            }
+
+            // Shape comparison, only when BOTH shapes are visible. GetDelegateParameterTypes
+            // returns null for anything it cannot read, and a null on either side means "no
+            // evidence", never "mismatch".
+            var expected = GetDelegateParameterTypes(eventType);
+            var actual = GetDelegateParameterTypes(GetNodeType(handlerExpression));
+
+            if (expected == null || actual == null)
+            {
+                return;
+            }
+
+            if (expected.Count != actual.Count)
+            {
+                Error($"the handler passed to {keyword} takes {actual.Count} parameter(s) but the " +
+                      $"event supplies {expected.Count}.", line, column);
+                return;
+            }
+
+            for (var i = 0; i < expected.Count; i++)
+            {
+                if (IsDefiniteParameterMismatch(expected[i], actual[i]))
+                {
+                    Error($"the handler passed to {keyword} takes '{actual[i].Name}' as parameter " +
+                          $"{i + 1}, but the event supplies '{expected[i].Name}'.", line, column);
+                    return;
+                }
+            }
+        }
+
+        /// <summary>
+        /// True only when two parameter types CANNOT be the same type — never merely "these look
+        /// different".
+        ///
+        /// <para>⛔ Restricted to primitives on both sides, and there is no general
+        /// assignability helper in this analyzer to widen it with. Comparing class names would
+        /// report <c>EventArgs</c> against <c>MouseEventArgs</c> as a mismatch, which is the
+        /// ordinary correct shape of an event handler; primitives have no inheritance, so a
+        /// difference between two of them is a real disagreement and not a widening. Anything
+        /// outside that — an unresolved type, a class, an interface, a foreign type — is treated
+        /// as no evidence, because a false error on a hot path is worse than a missed one.</para>
+        /// </summary>
+        private bool IsDefiniteParameterMismatch(TypeInfo expected, TypeInfo actual)
+        {
+            if (expected == null || actual == null ||
+                IsUnresolvedType(expected) || IsUnresolvedType(actual))
+            {
+                return false;
+            }
+
+            if (expected.Kind != TypeKind.Primitive || actual.Kind != TypeKind.Primitive)
+            {
+                return false;
+            }
+
+            return !expected.Name.Equals(actual.Name, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// True when the type is the resolver's stand-in for "I could not work this out" rather
+        /// than a type the user wrote. Everything unresolved lands on Object here (IsNetType), so
+        /// treating Object as evidence would turn every unreadable .NET member into a false error.
+        /// </summary>
+        private bool IsUnresolvedType(TypeInfo type) =>
+            type == null ||
+            type.Name.Equals("Object", StringComparison.OrdinalIgnoreCase) ||
+            type.Kind == TypeKind.Foreign;
 
         public void Visit(TypePatternNode node)
         {
@@ -8166,9 +8308,49 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     break;
 
                 case "AddressOf":
-                    resultType = DelegateTypeOf(GetNodeSymbol(node.Operand))
-                                 ?? _typeManager.CreatePointerType(operandType);
+                {
+                    // ⛔ This arm could not fail, and the accidental guarantee it gave was
+                    // PUNCTUATION-DEPENDENT: `AddressOf OnClick` naming a handler the user had
+                    // deleted produced NO diagnostic, while `AddressOf On_Click` produced
+                    // "Undefined identifier". The difference is IsNetType, which treats any
+                    // PascalCase identifier without an underscore as a .NET type — so the
+                    // un-punctuated name typed as Object, the symbol lookup returned null, and the
+                    // ungated pointer fallback below accepted it. D8 wires every generated handler
+                    // through AddressOf, so that silence is a handler that never fires.
+                    var handlerDelegate = DelegateTypeOf(GetNodeSymbol(node.Operand));
+
+                    if (handlerDelegate != null)
+                    {
+                        resultType = handlerDelegate;
+                    }
+                    else if (node.Operand is IdentifierExpressionNode bareName &&
+                             !bareName.IsForeignQualified &&
+                             GetNodeSymbol(node.Operand) == null &&
+                             !operandType.IsPointer)
+                    {
+                        // ⛔⛔ The ONLY new error, and deliberately the narrowest one that catches
+                        // the defect: a BARE NAME that resolved to no symbol whatsoever. A member
+                        // access is left alone because the resolver genuinely cannot see through it
+                        // — EnableNetResolution returns early for UseWindowsForms (Compiler.cs:145)
+                        // and the closure cannot reach System.Windows.Forms.dll, so every
+                        // `AddressOf Me.Handler` and `AddressOf obj.Method` in a WinForms program
+                        // has a null symbol and always will. Erroring on those would make every
+                        // AddHandler this designer generates a build failure. IsNetType is NOT
+                        // narrowed — the plan is explicit that doing so fails programs across the
+                        // suite, and this arm does not need it to.
+                        Error($"'{bareName.Name}' is not a Sub or Function in scope, so " +
+                              "AddressOf cannot take its address. If this names an event handler, " +
+                              "check it has not been renamed or deleted.",
+                              node.Line, node.Column);
+                        resultType = _typeManager.ObjectType;
+                    }
+                    else
+                    {
+                        resultType = _typeManager.CreatePointerType(operandType);
+                    }
+
                     break;
+                }
 
                 case "Deref":
                     // Dereference pointer
@@ -9240,8 +9422,39 @@ namespace BasicLang.Compiler.SemanticAnalysis
             static bool IsReference(TypeInfo t) =>
                 (t.Kind == TypeKind.Class || t.Kind == TypeKind.Interface) && !IsScalar(t);
 
-            if ((IsReference(sourceType) && IsScalar(targetType)) ||
-                (IsScalar(sourceType) && IsReference(targetType)))
+            // ⛔⛔ AN UNRESOLVABLE .NET TYPE IS NOT A JUDGEMENT THIS CHECK CAN MAKE.
+            //
+            // `ResolveTypeName` falls back to the permissive .NET branch only after the type
+            // manager and the project-symbol channel have both declined the name, so a type that
+            // is absent from _typeManager AND looks like a .NET name is one the analyzer has
+            // never seen a declaration for. It registers as a Class-kind handle — which is why
+            // `AnchorStyles` is not TypeKind.Enum and does not take the enum exemption above.
+            //
+            // MEASURED 2026-09-18 against csc: `btn.Anchor = (AnchorStyles)7;` is ACCEPTED, and
+            // `btn.Anchor = 7` is rejected with CS0266. So `CType(7, AnchorStyles)` is both
+            // correct and necessary, and refusing it here is the ONLY reason the form designer
+            // could not emit a multi-edge `Anchor` — every stage downstream was already able to.
+            var targetIsUnresolvedNet =
+                _typeManager.GetType(targetType.Name) == null && IsNetType(targetType.Name);
+
+            // ⛔ The reference→scalar arm is UNTOUCHED. It is what closed chip task_0c803e75 — a
+            // GREEN build emitting `static_cast<int32_t>(NetRef)` — and its worst row is silent:
+            // any reference cast to Boolean compiles AND RUNS on the C++ backend, binding to the
+            // handle's `explicit operator bool()`. Loosening this direction would reopen that.
+            if (IsReference(sourceType) && IsScalar(targetType))
+            {
+                Error($"Cannot convert '{sourceType.Name}' to '{targetType.Name}': no such " +
+                      $"conversion exists",
+                      node.Line, node.Column);
+                return;
+            }
+
+            // ⚠ The native path stays protected without this check's help: CppCapabilityChecker
+            // refuses unmapped .NET types outright, and records that refusal as permanent until a
+            // .NET-surface design exists. So exempting this arm cannot put a .NET handle through
+            // a `static_cast` on C++ — it only stops refusing what the C# backend already emits
+            // correctly.
+            if (IsScalar(sourceType) && IsReference(targetType) && !targetIsUnresolvedNet)
             {
                 Error($"Cannot convert '{sourceType.Name}' to '{targetType.Name}': no such " +
                       $"conversion exists",

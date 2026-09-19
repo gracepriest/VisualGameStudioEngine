@@ -5,6 +5,8 @@
              xmlns:vm="using:VisualGameStudio.Shell.ViewModels.Documents"
              xmlns:editor="using:VisualGameStudio.Editor.Controls"
              xmlns:controls="using:VisualGameStudio.Shell.Views.Controls"
+             xmlns:designer="using:VisualGameStudio.Shell.Controls"
+             xmlns:designerVm="using:VisualGameStudio.Shell.ViewModels.Designer"
              xmlns:avalonEdit="https://github.com/avaloniaui/avaloniaedit"
              mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="400"
              x:Class="VisualGameStudio.Shell.Views.Documents.CodeEditorDocumentView"
@@ -147,12 +149,303 @@
                                 CaretPositionChanged="OnCaretPositionChanged"/>
     </Grid>
 
+    <!-- Design view. Overlays the editor rather than replacing it: MainEditor and both split
+         containers already carry their own IsVisible bindings, and threading a third condition
+         through all three is how a rarely-used mode makes the COMMON path go blank. An opaque
+         overlay leaves every one of those bindings exactly as it was. -->
+    <Border Background="{DynamicResource IdeBg}"
+            IsVisible="{Binding IsDesignMode}">
+      <!-- Ctrl+Z here, not only in the editor underneath: the canvas takes focus on a click, so
+           without these the design view would have no undo at all for the user who never leaves
+           it. Both gestures are bound because Ctrl+Y and Ctrl+Shift+Z are each "redo" depending on
+           what the user came from. -->
+      <Border.KeyBindings>
+        <KeyBinding Gesture="Ctrl+Z" Command="{Binding UndoDesignerEditCommand}"/>
+        <KeyBinding Gesture="Ctrl+Y" Command="{Binding RedoDesignerEditCommand}"/>
+        <KeyBinding Gesture="Ctrl+Shift+Z" Command="{Binding RedoDesignerEditCommand}"/>
+      </Border.KeyBindings>
+      <Grid ColumnDefinitions="150,*,260">
+
+        <!-- Toolbox, shaped like Visual Studio's: a panel caption, controls grouped under category
+             headers, and one compact row per control — glyph, name, and what it maps to. -->
+        <Border Grid.Column="0" Background="{DynamicResource IdePanelBg}"
+                BorderBrush="{DynamicResource IdeBorder}" BorderThickness="0,0,1,0">
+          <DockPanel>
+            <Border DockPanel.Dock="Top" Padding="8,5"
+                    BorderBrush="{DynamicResource IdeBorder}" BorderThickness="0,0,0,1">
+              <TextBlock Text="Toolbox" FontWeight="SemiBold" FontSize="11"/>
+            </Border>
+
+            <!-- Drag a row onto the canvas to place one. PointerPressed is wired in the
+                 constructor, NOT here — see the note there; PointerMoved starts the drag once the
+                 pointer has actually travelled, so a plain click still just selects. -->
+            <ListBox x:Name="ToolboxList"
+                     ItemsSource="{Binding Toolbox.Items}"
+                     Background="Transparent"
+                     BorderThickness="0"
+                     PointerMoved="OnToolboxPointerMoved"
+                     PointerReleased="OnToolboxPointerReleased">
+              <ListBox.Styles>
+                <!-- VS rows are one line tall and full width; the default padding makes a toolbox
+                     of ten controls scroll for no reason. -->
+                <Style Selector="ListBoxItem">
+                  <Setter Property="Padding" Value="0"/>
+                  <Setter Property="MinHeight" Value="0"/>
+                </Style>
+              </ListBox.Styles>
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="designerVm:FormToolboxItem">
+                  <StackPanel>
+                    <!-- The group header, drawn by the FIRST row of each category. -->
+                    <TextBlock Text="{Binding Category}"
+                               IsVisible="{Binding StartsCategory}"
+                               FontSize="10" FontWeight="SemiBold" Opacity="0.55"
+                               Margin="6,8,0,3"/>
+                    <Grid ColumnDefinitions="26,*" Margin="6,2,4,2" ToolTip.Tip="{Binding Description}">
+                      <Border Grid.Column="0" Width="20" Height="16"
+                              Background="{DynamicResource IdeBg}"
+                              BorderBrush="{DynamicResource IdeBorder}" BorderThickness="1"
+                              HorizontalAlignment="Left" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding Glyph}" FontSize="9"
+                                   FontFamily="Cascadia Code, Consolas, monospace"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                      </Border>
+                      <TextBlock Grid.Column="1" Text="{Binding Kind}" FontSize="12"
+                                 VerticalAlignment="Center"/>
+                    </Grid>
+                  </StackPanel>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+        </Border>
+
+        <Grid Grid.Column="1" RowDefinitions="*,Auto">
+          <designer:FormCanvasControl Grid.Row="0"
+                                      Document="{Binding DesignDocument}"
+                                      ModelRevision="{Binding DesignModelRevision}"
+                                      DropCommand="{Binding PlaceDroppedControlCommand}"
+                                      CommitGeometryCommand="{Binding CommitGeometryCommand}"
+                                      DeleteCommand="{Binding DeleteControlCommand}"
+                                      ActivateControlCommand="{Binding ActivateControlCommand}"
+                                      Selection="{Binding Selection}"
+                                      CopyCommand="{Binding CopyControlsCommand}"
+                                      CutCommand="{Binding CutControlsCommand}"
+                                      PasteCommand="{Binding PasteControlsCommand}"
+                                      SelectedControl="{Binding PropertyGrid.SelectedControl, Mode=TwoWay}"/>
+
+          <!-- Task 25: the component tray — VS's strip under the surface for the things that are
+               part of the form but have no position on it. Click selects (through the shared
+               Selection, so the canvas pushes it into the property grid), double-click opens the
+               default handler, Delete removes, and a toolbox drag can be dropped here.
+               ⛔ Focusable="True" is load-bearing: a KeyBinding fires only while keyboard focus is
+               INSIDE the element, and a Border is not focusable by default. Without it the tray's
+               Delete would be complete, tested and dead the moment the user clicked anything but
+               the canvas. OnTrayItemPressed focuses this Border; FormTrayViewTests asserts the
+               attribute. -->
+          <Border Grid.Row="1" x:Name="ComponentTray" Focusable="True"
+                  IsVisible="{Binding Tray.IsVisible}"
+                  Background="{DynamicResource IdePanelBg}"
+                  BorderBrush="{DynamicResource IdeBorder}" BorderThickness="0,1,0,0"
+                  Padding="6,4" DragDrop.AllowDrop="True">
+            <Border.KeyBindings>
+              <KeyBinding Gesture="Delete" Command="{Binding DeleteControlCommand}"
+                          CommandParameter="{Binding PropertyGrid.SelectedControl}"/>
+            </Border.KeyBindings>
+            <Border.Styles>
+              <Style Selector="Border.tray-item">
+                <Setter Property="BorderBrush" Value="{DynamicResource IdeBorder}"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="Background" Value="{DynamicResource IdeBg}"/>
+              </Style>
+              <Style Selector="Border.tray-item.selected">
+                <Setter Property="BorderBrush" Value="#569CD6"/>
+              </Style>
+            </Border.Styles>
+            <ItemsControl ItemsSource="{Binding Tray.Items}">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                  <WrapPanel Orientation="Horizontal"/>
+                </ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="designerVm:FormTrayItem">
+                  <Border Classes="tray-item" Classes.selected="{Binding IsSelected}"
+                          Margin="0,0,8,0" Padding="6,3" CornerRadius="2"
+                          PointerPressed="OnTrayItemPressed" DoubleTapped="OnTrayItemDoubleTapped"
+                          ToolTip.Tip="{Binding Kind}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <TextBlock Text="{Binding Glyph}" FontSize="10"
+                                 FontFamily="Cascadia Code, Consolas, monospace"
+                                 VerticalAlignment="Center"/>
+                      <TextBlock Text="{Binding Id}" FontSize="12" VerticalAlignment="Center"/>
+                    </StackPanel>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </Border>
+        </Grid>
+
+        <!-- Property window, shaped like Visual Studio's: "id  Kind" caption, a two-column
+             name/value grid, and a description pane at the bottom explaining the selected row.
+             That pane is the most useful thing VS's window does for anyone who does not already
+             know the control's API, which is why it is worth the third of the panel it takes. -->
+        <Border Grid.Column="2" Background="{DynamicResource IdePanelBg}"
+                BorderBrush="{DynamicResource IdeBorder}" BorderThickness="1,0,0,0">
+          <DockPanel>
+            <Border DockPanel.Dock="Top" Padding="8,5"
+                    BorderBrush="{DynamicResource IdeBorder}" BorderThickness="0,0,0,1">
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <TextBlock Text="{Binding PropertyGrid.Header}" FontWeight="SemiBold" FontSize="11"/>
+                <TextBlock Text="{Binding PropertyGrid.HeaderKind}" FontSize="11" Opacity="0.55"/>
+              </StackPanel>
+            </Border>
+
+            <!-- The description pane. Docked BOTTOM before the grid takes the rest, so it keeps its
+                 height instead of being pushed off by a long property list. -->
+            <Border DockPanel.Dock="Bottom" Padding="8,6" MinHeight="54"
+                    Background="{DynamicResource IdeBg}"
+                    BorderBrush="{DynamicResource IdeBorder}" BorderThickness="0,1,0,0">
+              <StackPanel Spacing="2">
+                <TextBlock Text="{Binding PropertyGrid.DescriptionTitle}"
+                           FontWeight="SemiBold" FontSize="11"/>
+                <TextBlock Text="{Binding PropertyGrid.DescriptionBody}"
+                           FontSize="11" Opacity="0.7" TextWrapping="Wrap"/>
+              </StackPanel>
+            </Border>
+
+            <ListBox ItemsSource="{Binding PropertyGrid.Rows}"
+                     SelectedItem="{Binding PropertyGrid.SelectedRow, Mode=TwoWay}"
+                     Background="Transparent" BorderThickness="0">
+              <ListBox.Styles>
+                <Style Selector="ListBoxItem">
+                  <Setter Property="Padding" Value="0"/>
+                  <Setter Property="MinHeight" Value="0"/>
+                </Style>
+              </ListBox.Styles>
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="designerVm:FormPropertyRow">
+                  <!-- Two columns with a rule between them and under each row — VS's grid lines.
+                       The name column is fixed so the values line up down the panel rather than
+                       stepping in and out with the length of each name. -->
+                  <Border BorderBrush="{DynamicResource IdeBorder}" BorderThickness="0,0,0,1">
+                    <Grid ColumnDefinitions="96,1,*" MinHeight="22">
+                      <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="11"
+                                 VerticalAlignment="Center" Margin="6,0,4,0"
+                                 TextTrimming="CharacterEllipsis"/>
+
+                      <Border Grid.Column="1" Background="{DynamicResource IdeBorder}"/>
+
+                      <!-- Editable: the SAME four editors the Settings dialog uses.
+                           ⛔ Bound to UsesTypedEditor, NOT IsEditable. An Anchor row is editable
+                           and typed String, so IsEditable would render a text box underneath the
+                           picker — two editors for one value, each able to contradict the other. -->
+                      <controls:TypedValueEditor Grid.Column="2" VerticalAlignment="Center"
+                                                 Margin="4,1,4,1"
+                                                 IsVisible="{Binding UsesTypedEditor}"/>
+
+                      <!-- ⛔ Task 26: the Anchor box. Four edge bars around a centre — click an
+                           edge to anchor to it. Avalonia 11.3 ships nothing like this, so it is
+                           hand-built, as every type editor here has to be.
+                           ⚠ Shown ONLY for pixel geometry: the grid never builds this row for a
+                           .blwebform control, so there is no `hide on web` rule here to forget. -->
+                      <Border Grid.Column="2" IsVisible="{Binding IsAnchorPicker}"
+                              Margin="4,2,4,2" HorizontalAlignment="Left"
+                              Width="46" Height="46"
+                              Background="{DynamicResource IdeBg}"
+                              BorderBrush="{DynamicResource IdeBorder}" BorderThickness="1">
+                        <Grid RowDefinitions="12,*,12" ColumnDefinitions="12,*,12" Margin="2">
+                          <ToggleButton Grid.Row="0" Grid.Column="1" Padding="0" MinWidth="0" MinHeight="0"
+                                        IsChecked="{Binding AnchorTop, Mode=TwoWay}" ToolTip.Tip="Anchor to the top edge"/>
+                          <ToggleButton Grid.Row="2" Grid.Column="1" Padding="0" MinWidth="0" MinHeight="0"
+                                        IsChecked="{Binding AnchorBottom, Mode=TwoWay}" ToolTip.Tip="Anchor to the bottom edge"/>
+                          <ToggleButton Grid.Row="1" Grid.Column="0" Padding="0" MinWidth="0" MinHeight="0"
+                                        IsChecked="{Binding AnchorLeft, Mode=TwoWay}" ToolTip.Tip="Anchor to the left edge"/>
+                          <ToggleButton Grid.Row="1" Grid.Column="2" Padding="0" MinWidth="0" MinHeight="0"
+                                        IsChecked="{Binding AnchorRight, Mode=TwoWay}" ToolTip.Tip="Anchor to the right edge"/>
+                          <Border Grid.Row="1" Grid.Column="1" Margin="1"
+                                  Background="{DynamicResource IdeBorder}" Opacity="0.5"/>
+                        </Grid>
+                      </Border>
+
+                      <!-- ⛔ Task 26: the Dock box. DockStyle is NOT flags — exactly one region at
+                           a time — so these are commands rather than toggles, and "None" is its own
+                           button because un-docking is a thing the user has to be able to say. -->
+                      <StackPanel Grid.Column="2" IsVisible="{Binding IsDockPicker}"
+                                  Orientation="Horizontal" Spacing="6" Margin="4,2,4,2">
+                        <Border Width="46" Height="46"
+                                Background="{DynamicResource IdeBg}"
+                                BorderBrush="{DynamicResource IdeBorder}" BorderThickness="1">
+                          <Grid RowDefinitions="12,*,12" ColumnDefinitions="12,*,12" Margin="2">
+                            <ToggleButton Grid.Row="0" Grid.Column="1" Padding="0" MinWidth="0" MinHeight="0"
+                                          IsChecked="{Binding IsDockedTop, Mode=OneWay}"
+                                          Command="{Binding SetDockRegionCommand}" CommandParameter="Top"
+                                          ToolTip.Tip="Dock to the top"/>
+                            <ToggleButton Grid.Row="2" Grid.Column="1" Padding="0" MinWidth="0" MinHeight="0"
+                                          IsChecked="{Binding IsDockedBottom, Mode=OneWay}"
+                                          Command="{Binding SetDockRegionCommand}" CommandParameter="Bottom"
+                                          ToolTip.Tip="Dock to the bottom"/>
+                            <ToggleButton Grid.Row="1" Grid.Column="0" Padding="0" MinWidth="0" MinHeight="0"
+                                          IsChecked="{Binding IsDockedLeft, Mode=OneWay}"
+                                          Command="{Binding SetDockRegionCommand}" CommandParameter="Left"
+                                          ToolTip.Tip="Dock to the left"/>
+                            <ToggleButton Grid.Row="1" Grid.Column="2" Padding="0" MinWidth="0" MinHeight="0"
+                                          IsChecked="{Binding IsDockedRight, Mode=OneWay}"
+                                          Command="{Binding SetDockRegionCommand}" CommandParameter="Right"
+                                          ToolTip.Tip="Dock to the right"/>
+                            <ToggleButton Grid.Row="1" Grid.Column="1" Padding="0" MinWidth="0" MinHeight="0" Margin="1"
+                                          IsChecked="{Binding IsDockedFill, Mode=OneWay}"
+                                          Command="{Binding SetDockRegionCommand}" CommandParameter="Fill"
+                                          ToolTip.Tip="Fill the container"/>
+                          </Grid>
+                        </Border>
+                        <Button Content="None" FontSize="10" Padding="6,2" VerticalAlignment="Center"
+                                Command="{Binding SetDockRegionCommand}" CommandParameter="None"
+                                ToolTip.Tip="Not docked"/>
+                      </StackPanel>
+
+                      <!-- ⛔⛔ D9 Degraded. The raw value, read-only. A typed editor here would
+                           coerce the value the moment it rendered. The REASON now lives in the
+                           description pane, where "why can I not edit this" is actually asked. -->
+                      <TextBox Grid.Column="2" Text="{Binding RawValue}" IsReadOnly="True"
+                               FontSize="11" Margin="4,1,4,1" VerticalAlignment="Center"
+                               FontFamily="Cascadia Code, Consolas, monospace"
+                               IsVisible="{Binding IsFrozen}"/>
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+        </Border>
+      </Grid>
+    </Border>
+
     <!-- Split View Toggle Button -->
     <StackPanel Orientation="Horizontal"
                 HorizontalAlignment="Right"
                 VerticalAlignment="Top"
                 Margin="0,2,20,0"
                 Spacing="2">
+      <!-- Design|Code. Only for a form document — every other file has nothing to draw. -->
+      <Button Command="{Binding ToggleDesignModeCommand}"
+              ToolTip.Tip="Toggle Design / Code view"
+              Height="20"
+              Padding="6,2"
+              Background="Transparent"
+              Opacity="0.6"
+              IsVisible="{Binding IsFormDocument}">
+        <!-- Two labels rather than a value converter: the label is the only thing that varies,
+             and a converter would be a new public type, a namespace import and a registration to
+             carry one string each way. -->
+        <Panel>
+          <TextBlock FontSize="10" Foreground="{DynamicResource IdeFg}"
+                     Text="Design" IsVisible="{Binding !IsDesignMode}"/>
+          <TextBlock FontSize="10" Foreground="{DynamicResource IdeFg}"
+                     Text="Code" IsVisible="{Binding IsDesignMode}"/>
+        </Panel>
+      </Button>
       <Button Command="{Binding SplitHorizontalCommand}"
               ToolTip.Tip="Split Horizontal"
               Width="20" Height="20"

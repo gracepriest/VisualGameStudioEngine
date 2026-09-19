@@ -135,6 +135,21 @@ namespace BasicLang.Compiler.Driver
                             return 1;
                         }
 
+                    // ⛔ Shaped like `build`, NOT like the six arms above. `new`, `restore`, `add`,
+                    // `remove`, `list` and `search` all `return 0` unconditionally, discarding
+                    // whatever their handler decided. A `design --check` that always exited 0 would
+                    // be useless in CI — which is the only place anyone would run it.
+                    case "design":
+                        try
+                        {
+                            return HandleDesignCommand(subArgs);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine($"design failed: {ex.Message}");
+                            return 2;
+                        }
+
                     case "list":
                         HandleListCommand(subArgs);
                         return 0;
@@ -157,8 +172,36 @@ namespace BasicLang.Compiler.Driver
             // (.bas/.bl/.basic/.mod/.cls/.class) — routing through it keeps the CLI
             // in sync so class files (.cls/.class) are no longer silently ignored.
             // .blproj is a project file, not a source file, so it is checked separately.
-            var fileArg = args.FirstOrDefault(a => !a.StartsWith("-") &&
-                (ModuleResolver.IsSourceFile(a) || a.EndsWith(".blproj")));
+            // ⛔ A form document is deliberately NOT in ModuleResolver's list (it must never be
+            // lexed or importable), so it must be admitted here explicitly or the CLI never routes
+            // it at all — it falls through to "unrecognized argument" and exits 2, which reads as a
+            // typo rather than as "that is not a program". Same reason .blproj is checked separately.
+            var fileArgs = args.Where(a => !a.StartsWith("-") &&
+                (ModuleResolver.IsSourceFile(a) || a.EndsWith(".blproj") || BasicCompiler.IsFormDocument(a)))
+                .ToList();
+
+            // ⛔ EXTRA SOURCE FILES ARE REFUSED, not ignored. This used to be FirstOrDefault, so
+            // `basiclang Program.bas MainForm.bas --target=csharp` compiled ONLY Program.bas,
+            // printed "Compilation successful!" and "Files compiled: 1", and exited 0 — while the
+            // emitted C# referenced a class that had never been compiled and failed at csc with
+            // "The type or namespace name 'MainForm' could not be found". Measured 2026-09-13 on
+            // the shipped VSIX WinForms template, which is exactly two files.
+            //
+            // Single-file compilation is the documented contract (CLAUDE.md: "CLI compile a
+            // file"); multi-file is what a project is for, and the resolver only ever sees the
+            // files a project lists. So the fix is to say so rather than to silently widen either
+            // one.
+            if (fileArgs.Count > 1)
+            {
+                Console.Error.WriteLine(
+                    $"error: {fileArgs.Count} source files were given, but compiling a file directly " +
+                    "takes exactly one — the others would be silently ignored. Put them in a " +
+                    ".blproj and build that instead:");
+                Console.Error.WriteLine("  basiclang build MyProject.blproj");
+                return 2;
+            }
+
+            var fileArg = fileArgs.FirstOrDefault();
 
             if (fileArg != null)
             {
@@ -167,6 +210,18 @@ namespace BasicLang.Compiler.Driver
                     if (fileArg.EndsWith(".blproj"))
                     {
                         return await HandleBuildCommand(new[] { fileArg });
+                    }
+
+                    // A form document rides in a project as a <Compile> item but is XML, not a
+                    // program. Refused HERE as well as in CompileFile: this is the message a user
+                    // actually sees, and CompileFile's copy guards the other callers
+                    // (Debugger/DebugSession, the IDE's build service).
+                    if (BasicCompiler.IsFormDocument(fileArg))
+                    {
+                        Console.Error.WriteLine(
+                            $"BL8001: '{Path.GetFileName(fileArg)}' is a form document, not a program — " +
+                            "it describes a form the designer owns. Build the project instead.");
+                        return 1;
                     }
 
                     // A .bli is resolvable (so a project may include it) but is declarations,
@@ -267,6 +322,8 @@ namespace BasicLang.Compiler.Driver
             Console.WriteLine("  remove package    Remove a NuGet package");
             Console.WriteLine("  list packages     List installed packages");
             Console.WriteLine("  search <query>    Search for NuGet packages");
+            Console.WriteLine("  design --check    Check what the form designer reads from a file");
+            Console.WriteLine("  design --retarget Convert a form to the other target, into --out <dir>");
             Console.WriteLine();
             Console.WriteLine("Options:");
             Console.WriteLine("  --repl, -i        Start interactive REPL");
@@ -286,6 +343,8 @@ namespace BasicLang.Compiler.Driver
             Console.WriteLine("  basiclang run                          Build and run project");
             Console.WriteLine("  basiclang add package Newtonsoft.Json  Add a package");
             Console.WriteLine("  basiclang restore                      Restore all packages");
+            Console.WriteLine("  basiclang design --check MainForm.bas  Check a form for design issues");
+            Console.WriteLine("  basiclang design --retarget MainForm.blform --out web   Make the web version of a form");
             Console.WriteLine("  basiclang --repl                       Start interactive mode");
             Console.WriteLine("  basiclang program.bas                  Compile a source file");
         }
@@ -293,6 +352,236 @@ namespace BasicLang.Compiler.Driver
         // ====================================================================
         // Command Handlers
         // ====================================================================
+
+        /// <summary>
+        /// <c>basiclang design --check &lt;files…&gt;</c> — validates what the form designer would
+        /// read from each file, without opening an IDE.
+        ///
+        /// <para>Exit codes: <b>0</b> clean, warnings included; <b>1</b> when any error-severity
+        /// finding was reported; <b>2</b> for an argument error. Warnings do not fail the build,
+        /// because an unsupported control type is information, not breakage.</para>
+        ///
+        /// <para>⛔ Every flag here must avoid the names sniffed BEFORE the verb switch ever runs:
+        /// <c>--lsp</c>, <c>--language-server</c>, <c>--debug-adapter</c>, <c>--dap</c>,
+        /// <c>--repl</c>, <c>-i</c>, <c>--interactive</c>, <c>--help</c>, <c>-h</c>,
+        /// <c>--version</c>, <c>-v</c>. Those checks are <c>args.Contains</c> over the WHOLE
+        /// command line, so <c>design --check foo.bas -i</c> starts the REPL and never reaches this
+        /// method. <c>--check</c> is safe; adding a <c>-v</c> "verbose" would not be.</para>
+        /// </summary>
+        static int HandleDesignCommand(string[] args)
+        {
+            var check = false;
+            var retarget = false;
+            string? outDir = null;
+            var paths = new List<string>();
+
+            for (var i = 0; i < args.Length; i++)
+            {
+                switch (args[i])
+                {
+                    case "--check":
+                        check = true;
+                        break;
+
+                    case "--retarget":
+                        retarget = true;
+                        break;
+
+                    case "--out":
+                        if (i + 1 >= args.Length)
+                        {
+                            Console.Error.WriteLine("design --retarget: --out needs a directory.");
+                            return 2;
+                        }
+
+                        outDir = args[++i];
+                        break;
+
+                    default:
+                        // ⚠ Reject an unrecognised flag rather than dropping it. Silently ignoring one
+                        // means `design --chek file.bas` runs as if the typo were not there — and since
+                        // the verb's whole job is to report, a run that quietly did something else is
+                        // worse than no run.
+                        if (args[i].StartsWith("-", StringComparison.Ordinal))
+                        {
+                            Console.Error.WriteLine($"design: unknown option '{args[i]}'.");
+                            PrintDesignUsage();
+                            return 2;
+                        }
+
+                        paths.Add(args[i]);
+                        break;
+                }
+            }
+
+            // Exactly one of the two verbs.
+            if (check == retarget)
+            {
+                PrintDesignUsage();
+                return 2;
+            }
+
+            return check ? DesignCheck(paths, outDir) : DesignRetarget(paths, outDir);
+        }
+
+        static void PrintDesignUsage()
+        {
+            Console.Error.WriteLine("Usage: basiclang design --check <file.bas> [more files...]");
+            Console.Error.WriteLine("       basiclang design --retarget <form.blform|form.blwebform> --out <directory>");
+        }
+
+        static int DesignCheck(List<string> paths, string? outDir)
+        {
+            if (outDir != null)
+            {
+                Console.Error.WriteLine("design --check: --out is a --retarget option.");
+                return 2;
+            }
+
+            if (paths.Count == 0)
+            {
+                Console.Error.WriteLine("design --check: no input files.");
+                return 2;
+            }
+
+            var findings = new List<BasicLang.Forms.DesignDiagnostic>();
+            foreach (var path in paths)
+            {
+                if (!File.Exists(path))
+                {
+                    Console.Error.WriteLine($"design --check: file not found: {path}");
+                    return 2;
+                }
+
+                findings.AddRange(BasicLang.Forms.DesignCheck.CheckFile(path));
+            }
+
+            // ⛔ ALL findings go to stdout, errors included — deliberately NOT the warnings-to-stdout
+            // / errors-to-stderr split the native build route uses. There, the split exists because
+            // the caller treats stderr as failure. Here the EXIT CODE carries that signal, and the
+            // findings are this verb's output rather than its errors: a CI step that captures only
+            // stdout must still see every line it is meant to act on. stderr is left for tool-level
+            // failures — bad arguments, an unreadable file — which are exit 2, not findings.
+            foreach (var finding in findings)
+            {
+                Console.WriteLine(finding.Format());
+            }
+
+            var errors = findings.Count(f => !f.IsWarning);
+            var warnings = findings.Count - errors;
+            Console.WriteLine($"design --check: {paths.Count} file(s), {errors} error(s), {warnings} warning(s).");
+
+            return errors > 0 ? 1 : 0;
+        }
+
+        /// <summary>
+        /// <c>basiclang design --retarget &lt;form&gt; --out &lt;directory&gt;</c> — converts a form
+        /// document to the other format (Task 21) and writes the document plus a fresh code-behind
+        /// into <c>--out</c>.
+        ///
+        /// <para>Exit codes as <c>--check</c>: <b>0</b> written, with every loss listed on stdout;
+        /// <b>1</b> the source was refused by the reader, nothing written; <b>2</b> an argument
+        /// error — including a destination file that already exists, which is never overwritten.</para>
+        ///
+        /// <para>⛔ <c>--out</c> is required. A form's document and code-behind pair by BASE NAME in
+        /// one directory (<c>FormCodeBehind.PathFor</c>), so <c>LoginForm.blwebform</c> written
+        /// beside <c>LoginForm.blform</c> would pair with the WinForms class already there — and the
+        /// designer's next save would write web regions into it. The pair needs its own directory,
+        /// and the verb refuses to guess one.</para>
+        /// </summary>
+        static int DesignRetarget(List<string> paths, string? outDir)
+        {
+            if (paths.Count != 1)
+            {
+                Console.Error.WriteLine("design --retarget: exactly one form document (.blform or .blwebform) is required.");
+                return 2;
+            }
+
+            var source = paths[0];
+            if (!File.Exists(source))
+            {
+                Console.Error.WriteLine($"design --retarget: file not found: {source}");
+                return 2;
+            }
+
+            var from = BasicLang.Forms.Serialization.FormDocumentReader.TargetOfExtension(source);
+            if (from == null)
+            {
+                Console.Error.WriteLine(
+                    $"design --retarget: '{Path.GetFileName(source)}' is not a form document — " +
+                    "expected a .blform or a .blwebform.");
+                return 2;
+            }
+
+            if (outDir == null)
+            {
+                Console.Error.WriteLine(
+                    "design --retarget: --out <directory> is required. A form's document and code-behind " +
+                    "pair by base name in one directory, so the retargeted pair cannot be written beside " +
+                    "the source — it would pair with the source's own .bas.");
+                return 2;
+            }
+
+            var to = from == BasicLang.Forms.FormTarget.Web
+                ? BasicLang.Forms.FormTarget.WinForms
+                : BasicLang.Forms.FormTarget.Web;
+
+            var file = BasicLang.Forms.Serialization.FormDocumentReader.Read(source, File.ReadAllText(source));
+            if (file.IsRefused)
+            {
+                // The reader's refusal IS the finding, on stdout like every other. A document the
+                // designer will not open must not become a second one it will not open either.
+                foreach (var finding in file.Diagnostics)
+                {
+                    Console.WriteLine(finding.Format());
+                }
+
+                Console.WriteLine($"design --retarget: '{Path.GetFileName(source)}' was refused; nothing was written.");
+                return 1;
+            }
+
+            BasicLang.Forms.FormRetargetPair pair;
+            try
+            {
+                pair = BasicLang.Forms.FormRetarget.ConvertToPair(file.Model, to);
+            }
+            catch (ArgumentException ex)
+            {
+                Console.Error.WriteLine($"design --retarget: {ex.Message}");
+                return 2;
+            }
+
+            var documentPath = Path.Combine(outDir, pair.DocumentFileName);
+            var codePath = Path.Combine(outDir, pair.CodeFileName);
+
+            // ⛔ Neither half is ever overwritten, and NEITHER is written when EITHER exists — half a
+            // pair is a document whose code-behind belongs to something else.
+            var existing = new[] { documentPath, codePath }.FirstOrDefault(File.Exists);
+            if (existing != null)
+            {
+                Console.Error.WriteLine(
+                    $"design --retarget: '{existing}' already exists; nothing was written. " +
+                    "Choose another --out directory, or remove it first.");
+                return 2;
+            }
+
+            Directory.CreateDirectory(outDir);
+            File.WriteAllText(documentPath, pair.DocumentText);
+            File.WriteAllText(codePath, pair.CodeText);
+
+            foreach (var finding in pair.Diagnostics)
+            {
+                Console.WriteLine(finding.Format());
+            }
+
+            Console.WriteLine(
+                $"design --retarget: wrote {pair.DocumentFileName} and {pair.CodeFileName} into {outDir}, " +
+                $"{pair.Diagnostics.Count} warning(s).");
+            Console.WriteLine(
+                "The code-behind is a fresh scaffold with an empty stub per handler; the original " +
+                "code-behind was not converted.");
+            return 0;
+        }
 
         static void HandleNewCommand(string[] args)
         {
@@ -495,6 +784,40 @@ namespace BasicLang.Compiler.Driver
                 return 1;
             }
 
+            // ⚠ JavaScript only — reading every form document on a C++ or C# build costs nothing
+            // useful and puts a page-emitter warning into a build that will never emit a page.
+            IReadOnlyList<Forms.FormDocument> webForms = Array.Empty<Forms.FormDocument>();
+
+            if (IsJavaScriptTarget(project.Backend?.ToLowerInvariant() ?? "csharp"))
+            {
+                // ⛔⛔ Form documents come from their OWN glob, not from GetSourceFiles(). That
+                // glob cannot yield a .blwebform by design (it feeds the lexer, and a form document
+                // is XML), so handing it to the page emitter meant a project with explicit
+                // <Compile> items got pages and a default one — same files on disk — got none,
+                // silently.
+                webForms = Forms.FormDocumentLoader.LoadWebForms(
+                    project.GetFormDocuments(), m => Console.Error.WriteLine($"  Warning: {m}"));
+
+                // ⛔⛔ D7's dispatch, as a real source file compiled with everything else. Without
+                // this the `data-form` attribute every generated page carries is read by NOTHING:
+                // the helper existed only as a string the emitter could produce and no caller ever
+                // asked for, so three forms produced three pages that all ran the same Main() and
+                // showed nothing at all.
+                var dispatchPath = Forms.FormDispatch.Write(
+                    webForms, Path.Combine(projectDir, "obj", configuration),
+                    m => Console.Error.WriteLine($"  Warning: {m}"));
+
+                if (dispatchPath != null)
+                {
+                    if (!Forms.FormDispatch.IsCalled(sourceFiles))
+                    {
+                        Console.Error.WriteLine($"  Warning: {Forms.FormDispatch.NotCalledMessage}");
+                    }
+
+                    sourceFiles.Add(dispatchPath);
+                }
+            }
+
             var options = new BasicLang.Compiler.CompilerOptions
             {
                 TargetBackend = project.Backend.ToLowerInvariant(),
@@ -615,6 +938,10 @@ namespace BasicLang.Compiler.Driver
                         sourceMapJson: BuildSourceMapJson(generator, scriptName, projectDir),
                         jsImports: combinedIR.JsImports,
                         importBaseDirectory: projectDir,
+                        // ⛔ Without this the markup emitter never runs: a project containing a
+                        // .blwebform built successfully and wrote no .html and no .css, because
+                        // `forms` is optional and nothing but the tests ever passed it.
+                        forms: webForms,
                         warn: m => Console.Error.WriteLine($"  Warning: {m}"));
                     Console.WriteLine($"  Site written to: {outputDir}");
                 }
@@ -707,6 +1034,18 @@ namespace BasicLang.Compiler.Driver
                         uiFrameworkProps.AppendLine("    <UseWindowsForms>true</UseWindowsForms>");
                     if (project.UseWpf)
                         uiFrameworkProps.AppendLine("    <UseWPF>true</UseWPF>");
+                    // WinForms defaults to the legacy DPI-unaware mode, in which the form
+                    // designer's pixel coordinates and the running window's are different units
+                    // on a scaled display. Kept in step with BuildService.GenerateCsprojContent —
+                    // the CLI and the IDE must emit the same csproj.
+                    if (project.UseWindowsForms)
+                    {
+                        var highDpiMode = string.IsNullOrWhiteSpace(project.ApplicationHighDpiMode)
+                            ? "PerMonitorV2"
+                            : project.ApplicationHighDpiMode;
+                        uiFrameworkProps.AppendLine(
+                            $"    <ApplicationHighDpiMode>{MSBuildText.EscapeValue(highDpiMode)}</ApplicationHighDpiMode>");
+                    }
 
                     // User-controlled values are XML/MSBuild-escaped: ';' in a
                     // project name splits derived item paths (MSB4094), '&'

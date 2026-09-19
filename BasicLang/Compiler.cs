@@ -212,6 +212,17 @@ namespace BasicLang.Compiler
                     return result;
                 }
 
+                // ⛔ A form document is not a program either. This route gates on NOTHING but .bli,
+                // so `BasicLang.exe LoginForm.blwebform --target=csharp` used to send XML straight
+                // to the BasicLang lexer. Also reached from Debugger/DebugSession.cs.
+                if (IsFormDocument(filePath))
+                {
+                    result.AllErrors.Add(new SemanticError(
+                        $"BL8001: '{Path.GetFileName(filePath)}' is a form document, not a program — " +
+                        "it describes a form the designer owns. Build the project instead.", 0, 0));
+                    return FinalizeResult(result, startTime);
+                }
+
                 // A declaration file is not a program.
                 if (IsDeclarationFile(filePath))
                 {
@@ -382,6 +393,16 @@ namespace BasicLang.Compiler
                     files = files.Except(cFamilyFiles, StringComparer.OrdinalIgnoreCase).ToList();
                 }
 
+                // ⛔ Partition form documents OUT before anything reads them. They ride in the
+                // project as <Compile> items so the build can find them (D11), but they are XML:
+                // the loop below does File.ReadAllText straight into the BasicLang lexer, and the
+                // BL6014 guard above cannot catch them because it is an ALLOWLIST of C-family
+                // extensions, not a denylist of non-source ones. This repo has been bitten by that
+                // exact shape before — a .cpp reaching the lexer, where "the pollution is invisible
+                // in diagnostics" — so the filter is unconditional and silent by design: a form
+                // document in a project build is correct, not an error.
+                files = files.Where(f => !IsFormDocument(f)).ToList();
+
                 // Register + preprocess every file up front.
                 foreach (var file in files)
                 {
@@ -477,8 +498,26 @@ namespace BasicLang.Compiler
         private static bool IsEntryLikeFile(string filePath)
         {
             var ext = Path.GetExtension(filePath)?.ToLowerInvariant();
-            // .mod/.cls/.class are library units and .bli is declarations; everything else can hold Main.
-            return ext != ".mod" && ext != ".cls" && ext != ".class" && ext != ".bli";
+            // .mod/.cls/.class are library units, .bli is declarations, and a form document is not
+            // source at all; everything else can hold Main.
+            return ext != ".mod" && ext != ".cls" && ext != ".class" && ext != ".bli"
+                && ext != ".blform" && ext != ".blwebform";
+        }
+
+        /// <summary>
+        /// A <c>.blform</c> or <c>.blwebform</c> — a designer document. Listed in the project as a
+        /// <c>&lt;Compile&gt;</c> item so the build can find it (D11), and skipped by BOTH compile
+        /// routes: it is XML, and the BasicLang lexer would choke on it or, worse, not choke.
+        ///
+        /// <para>⛔ Deliberately duplicated from <c>VisualGameStudio.Core.Constants.FileExtensions</c>
+        /// rather than shared: the reference edge runs ProjectSystem → BasicLang, so the compiler
+        /// cannot see Core. Keep the two lists in step.</para>
+        /// </summary>
+        public static bool IsFormDocument(string filePath)
+        {
+            var ext = Path.GetExtension(filePath);
+            return string.Equals(ext, ".blform", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(ext, ".blwebform", StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>A <c>.bli</c> — declarations of runtime-provided types; compiled with the program, never a program itself.</summary>

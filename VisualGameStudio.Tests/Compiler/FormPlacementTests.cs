@@ -1,0 +1,514 @@
+using BasicLang.Forms;
+using NUnit.Framework;
+using VisualGameStudio.Shell.ViewModels.Designer;
+
+namespace VisualGameStudio.Tests.Compiler;
+
+/// <summary>
+/// Placing a control on the canvas — the model half of toolbox drag-and-drop.
+///
+/// <para>⛔ Deliberately UI-free. What a drop does to the document is decidable without a pointer,
+/// a visual tree or a headless renderer, and the parts that genuinely need a running IDE (does the
+/// cursor show a drop effect, does the ListBox start a drag) are not pretended at here. The canvas
+/// contributes exactly one thing to a drop — the form-space point, via the same
+/// <c>FormCanvasTransform</c> that renders and hit-tests — and that mapping has its own tests.</para>
+/// </summary>
+[TestFixture]
+public class FormPlacementTests
+{
+    // ==================================================================
+    // Task 25 — a component has no place, so a drop of one goes to the tray
+    // ==================================================================
+
+    [Test]
+    public void PlacingAComponent_LandsInTheTray_AndIgnoresThePoint()
+    {
+        var document = WinFormsDocument();
+
+        var result = FormPlacement.Place(document, "Timer", 999, 999);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Refusal, Is.Null);
+            Assert.That(document.Components.Single(), Is.SameAs(result.Control));
+            Assert.That(result.Control!.Id, Is.EqualTo("Timer1"));
+            Assert.That(result.Control.Geometry, Is.Null, "no position — the point is irrelevant");
+            Assert.That(result.Control.TabIndex, Is.Zero, "no tab order");
+            Assert.That(result.Control.Properties, Is.Empty, "no Text stamped: a Timer has no caption");
+            Assert.That(document.Controls, Is.Empty, "not a control");
+        });
+    }
+
+    [Test]
+    public void PlacingASecondComponent_MintsTheNextId_AcrossBothLists()
+    {
+        var document = WinFormsDocument();
+        document.Controls.Add(Existing("Button", "Timer1", 0, 0, 10, 10));   // a control squatting on the name
+
+        var result = FormPlacement.Place(document, "Timer", 0, 0);
+
+        Assert.That(result.Control!.Id, Is.EqualTo("Timer2"), "one class, one field namespace");
+    }
+
+    [Test]
+    public void PlacingAWebComponent_NeedsNoLayout_BecauseItHasNoCell()
+    {
+        // A web control refuses without a <Layout> (no cell to land in); a component has no cell
+        // to need. A WinForms-only component is still refused on the web, by the catalog.
+        var document = new FormDocument { Target = FormTarget.Web, Name = "F" };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(FormPlacement.Place(document, "Timer", 0, 0).Refusal, Is.Null);
+            Assert.That(document.Components.Single().Kind, Is.EqualTo("Timer"));
+            Assert.That(FormPlacement.Place(document, "ToolTip", 0, 0).Refusal, Does.Contain("not available"));
+        });
+    }
+
+    private static FormDocument WinFormsDocument(int width = 400, int height = 300)
+    {
+        var document = new FormDocument
+        {
+            Target = FormTarget.WinForms,
+            Name = "LoginForm",
+            Width = width,
+            Height = height
+        };
+
+        return document;
+    }
+
+    private static FormControl Existing(string kind, string id, int x, int y, int w, int h)
+    {
+        var control = new FormControl
+        {
+            Kind = kind,
+            Id = id,
+            Geometry = new PixelGeometry { X = x, Y = y, Width = w, Height = h }
+        };
+
+        return control;
+    }
+
+    // ==================================================================
+    // What a drop produces
+    // ==================================================================
+
+    [Test]
+    public void ADroppedControl_LandsAtTheDropPoint()
+    {
+        var document = WinFormsDocument();
+
+        var result = FormPlacement.Place(document, "Button", 96, 80);
+
+        Assert.That(result.Refusal, Is.Null);
+        Assert.That(result.Control, Is.Not.Null);
+        var pixel = (PixelGeometry)result.Control!.Geometry!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(pixel.X, Is.EqualTo(96));
+            Assert.That(pixel.Y, Is.EqualTo(80));
+        });
+    }
+
+    [Test]
+    public void ADroppedControl_GetsTheKindsDefaultSize()
+    {
+        // ⛔ From the CATALOG, not a switch in the placer. A switch over kinds is the missing-arm
+        // trap this repo has hit four times: add a catalog row, forget the arm, and the control
+        // lands as a zero-size box the user cannot see or click.
+        var document = WinFormsDocument();
+        var button = FormControlCatalog.Find("Button")!;
+
+        var result = FormPlacement.Place(document, "Button", 10, 10);
+
+        var pixel = (PixelGeometry)result.Control!.Geometry!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(pixel.Width, Is.EqualTo(button.DefaultWidth));
+            Assert.That(pixel.Height, Is.EqualTo(button.DefaultHeight));
+        });
+    }
+
+    [Test]
+    public void EveryCatalogKind_HasAUsableDefaultSize()
+    {
+        // Driven from the catalog so a NEW row is covered the day it lands, rather than the day
+        // someone remembers to add a case here.
+        Assert.Multiple(() =>
+        {
+            foreach (var control in FormControlCatalog.All)
+            {
+                Assert.That(control.DefaultWidth, Is.GreaterThan(0), $"{control.Kind} width");
+                Assert.That(control.DefaultHeight, Is.GreaterThan(0), $"{control.Kind} height");
+            }
+        });
+    }
+
+    [Test]
+    public void ADroppedControl_IsAddedToTheDocument()
+    {
+        var document = WinFormsDocument();
+
+        var result = FormPlacement.Place(document, "Button", 10, 10);
+
+        Assert.That(document.Controls, Does.Contain(result.Control));
+    }
+
+    [Test]
+    public void ADroppedControl_GoesOnTopOfItsSiblings()
+    {
+        // Document order is z-order. A control dropped onto the form belongs in front of what is
+        // already there — dropping behind an existing control looks like the drop did nothing.
+        var document = WinFormsDocument();
+        document.Controls.Add(Existing("Label", "Label1", 0, 0, 400, 300));
+
+        var result = FormPlacement.Place(document, "Button", 10, 10);
+
+        Assert.That(document.Controls[^1], Is.SameAs(result.Control));
+    }
+
+    // ==================================================================
+    // Identity
+    // ==================================================================
+
+    [Test]
+    public void ADroppedControl_IsNamedAfterItsKind()
+    {
+        var document = WinFormsDocument();
+
+        var result = FormPlacement.Place(document, "TextBox", 10, 10);
+
+        Assert.That(result.Control!.Id, Is.EqualTo("TextBox1"));
+    }
+
+    [Test]
+    public void TwoOfAKind_DoNotCollide()
+    {
+        var document = WinFormsDocument();
+
+        var first = FormPlacement.Place(document, "Button", 10, 10).Control!;
+        var second = FormPlacement.Place(document, "Button", 20, 20).Control!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.Id, Is.EqualTo("Button1"));
+            Assert.That(second.Id, Is.EqualTo("Button2"));
+        });
+    }
+
+    [Test]
+    public void AnIdAlreadyUsedByAHandWrittenControl_IsSkipped()
+    {
+        // ⛔ The document is the user's file. A designer that mints an id already in the XML
+        // produces two controls with one name, and the region writer then declares the field twice.
+        var document = WinFormsDocument();
+        document.Controls.Add(Existing("Button", "Button1", 0, 0, 75, 23));
+
+        var result = FormPlacement.Place(document, "Button", 10, 10);
+
+        Assert.That(result.Control!.Id, Is.EqualTo("Button2"));
+    }
+
+    [Test]
+    public void ADroppedControl_TakesTheNextTabIndex()
+    {
+        var document = WinFormsDocument();
+        var first = Existing("Label", "Label1", 0, 0, 50, 20);
+        first.TabIndex = 0;
+        document.Controls.Add(first);
+
+        var result = FormPlacement.Place(document, "Button", 10, 10);
+
+        Assert.That(result.Control!.TabIndex, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void ADroppedControl_CarriesItsIdAsItsCaption()
+    {
+        // What every VB/WinForms designer does, and the reason is legibility: the canvas draws the
+        // Text when there is one, so a caption-less Button is a blank box on a schematic.
+        var document = WinFormsDocument();
+
+        var result = FormPlacement.Place(document, "Button", 10, 10);
+
+        Assert.That(result.Control!.Properties["Text"], Is.EqualTo("Button1"));
+    }
+
+    [Test]
+    public void AKindWithNoTextProperty_GetsNoCaption()
+    {
+        // ⛔ Ask the catalog. Stamping Text onto a kind whose catalog row has no Text property is
+        // how an unknown attribute reaches the writer and, on WinForms, how csc rejects the
+        // generated file.
+        var document = WinFormsDocument();
+
+        var result = FormPlacement.Place(document, "ListBox", 10, 10);
+
+        Assert.That(result.Control!.Properties.ContainsKey("Text"), Is.False);
+    }
+
+    // ==================================================================
+    // Containers
+    // ==================================================================
+
+    [Test]
+    public void ADropInsideAPanel_BecomesAChildOfThatPanel()
+    {
+        var document = WinFormsDocument();
+        var panel = Existing("Panel", "Panel1", 50, 40, 200, 150);
+        document.Controls.Add(panel);
+
+        var result = FormPlacement.Place(document, "Button", 100, 90);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(panel.Children, Does.Contain(result.Control));
+            Assert.That(document.Controls, Does.Not.Contain(result.Control));
+        });
+    }
+
+    [Test]
+    public void ADropInsideAPanel_IsPositionedRelativeToThePanel()
+    {
+        // ⛔ WinForms child coordinates are relative to the CONTAINER. Storing the form-space point
+        // puts the control at panel.X + x once the program runs — it looks right on the canvas and
+        // lands somewhere else at run time, which is the worst shape a designer bug can take.
+        var document = WinFormsDocument();
+        var panel = Existing("Panel", "Panel1", 50, 40, 200, 150);
+        document.Controls.Add(panel);
+
+        var result = FormPlacement.Place(document, "Button", 100, 90);
+
+        var pixel = (PixelGeometry)result.Control!.Geometry!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(pixel.X, Is.EqualTo(50));
+            Assert.That(pixel.Y, Is.EqualTo(50));
+        });
+    }
+
+    [Test]
+    public void ADropOnANonContainer_LandsOnTheFormNotInsideIt()
+    {
+        // A Button is not a container. Dropping on one must not nest.
+        var document = WinFormsDocument();
+        var button = Existing("Button", "Button1", 50, 40, 200, 150);
+        document.Controls.Add(button);
+
+        var result = FormPlacement.Place(document, "Label", 100, 90);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(button.Children, Is.Empty);
+            Assert.That(document.Controls, Does.Contain(result.Control));
+        });
+    }
+
+    // ==================================================================
+    // Staying on the form
+    // ==================================================================
+
+    [Test]
+    public void ADropNearTheRightEdge_IsPulledBackSoTheControlFits()
+    {
+        var document = WinFormsDocument(width: 400, height: 300);
+        var button = FormControlCatalog.Find("Button")!;
+
+        var result = FormPlacement.Place(document, "Button", 390, 295);
+
+        var pixel = (PixelGeometry)result.Control!.Geometry!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(pixel.X, Is.EqualTo(400 - button.DefaultWidth));
+            Assert.That(pixel.Y, Is.EqualTo(300 - button.DefaultHeight));
+        });
+    }
+
+    [Test]
+    public void ADropAboveOrLeftOfTheForm_IsPulledToTheOrigin()
+    {
+        var document = WinFormsDocument();
+
+        var result = FormPlacement.Place(document, "Button", -30, -30);
+
+        var pixel = (PixelGeometry)result.Control!.Geometry!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(pixel.X, Is.EqualTo(0));
+            Assert.That(pixel.Y, Is.EqualTo(0));
+        });
+    }
+
+    [Test]
+    public void AControlLargerThanTheForm_IsNotGivenANegativePosition()
+    {
+        var document = WinFormsDocument(width: 40, height: 30);
+
+        var result = FormPlacement.Place(document, "ListBox", 20, 20);
+
+        var pixel = (PixelGeometry)result.Control!.Geometry!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(pixel.X, Is.EqualTo(0));
+            Assert.That(pixel.Y, Is.EqualTo(0));
+        });
+    }
+
+    // ==================================================================
+    // Refusals — each says why, because a drop that silently does nothing reads as a broken IDE
+    // ==================================================================
+
+    [Test]
+    /// <summary>
+    /// ⚠ The example used to be <c>DataGridView</c> — a real WinForms control the catalog did not
+    /// have yet. Task 23 added it, and this test began failing for a reason that had nothing to do
+    /// with what it checks. The stand-in is now a name no control will ever have, so widening the
+    /// catalog cannot break it again.
+    /// </summary>
+    public void AnUnknownKind_IsRefusedWithAReason()
+    {
+        var document = WinFormsDocument();
+
+        var result = FormPlacement.Place(document, "NotARealControl", 10, 10);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Control, Is.Null);
+            Assert.That(result.Refusal, Does.Contain("NotARealControl"));
+            Assert.That(document.Controls, Is.Empty);
+        });
+    }
+
+    // ==================================================================
+    // Web documents — placed by CELL, not by pixel (D3)
+    // ==================================================================
+
+    private static FormDocument WebGrid(string cols = "1fr,1fr", string rows = "1fr,1fr") =>
+        new()
+        {
+            Target = FormTarget.Web,
+            Name = "LoginForm",
+            Layout = new FormLayout { Kind = FormLayoutKind.Grid, Cols = cols, Rows = rows, Gap = "0px" }
+        };
+
+    [Test]
+    public void ADropOnAWebGrid_LandsInTheCellUnderThePointer()
+    {
+        // The web half of a drop. A .blwebform records WHICH CELL a control is in, so that — not a
+        // pixel — is what the drop has to produce.
+        var document = WebGrid();
+
+        var result = FormPlacement.Place(document, "Button", 300, 250);   // right column, second row
+
+        Assert.That(result.Refusal, Is.Null);
+        var grid = (GridGeometry)result.Control!.Geometry!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(grid.Col, Is.EqualTo(1));
+            Assert.That(grid.Row, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void AWebControl_SpansOneCell()
+    {
+        // ⚠ Span 1 is the default and is deliberately NOT written out by the writer, so inventing
+        // anything else here would put ColSpan="1" into every element the designer touches.
+        var document = WebGrid();
+
+        var result = FormPlacement.Place(document, "Button", 50, 50);
+
+        var grid = (GridGeometry)result.Control!.Geometry!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(grid.ColSpan, Is.EqualTo(1));
+            Assert.That(grid.RowSpan, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void AWebDrop_GetsTheSameIdAndCaptionRulesAsAWinFormsOne()
+    {
+        var document = WebGrid();
+
+        var result = FormPlacement.Place(document, "Button", 50, 50);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Control!.Id, Is.EqualTo("Button1"));
+            Assert.That(result.Control.Properties["Text"], Is.EqualTo("Button1"));
+            Assert.That(result.Control.TabIndex, Is.EqualTo(0));
+        });
+    }
+
+    [Test]
+    public void AWebDropOutsideThePage_IsRefused()
+    {
+        var document = WebGrid();
+
+        var result = FormPlacement.Place(document, "Button", -50, -50);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Control, Is.Null);
+            Assert.That(result.Refusal, Is.Not.Null.And.Not.Empty);
+            Assert.That(document.Controls, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void AFlowLayout_IsStillRefused_BecauseItHasNoCells()
+    {
+        // ⛔ Flow is flexbox: position comes from document ORDER, not from a cell, so there is
+        // nothing on the canvas for a point to mean. Refusing with a reason beats inventing a Col
+        // and Row that the emitted page would ignore.
+        var document = new FormDocument
+        {
+            Target = FormTarget.Web,
+            Name = "LoginForm",
+            Layout = new FormLayout { Kind = FormLayoutKind.Flow, Dir = "Vertical" }
+        };
+
+        var result = FormPlacement.Place(document, "Button", 10, 10);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Control, Is.Null);
+            Assert.That(result.Refusal, Does.Contain("Flow"));
+            Assert.That(document.Controls, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void APageWithNoLayout_IsRefused()
+    {
+        // No <Layout> means no grid in the emitted CSS either, so a Col and Row would describe a
+        // grid the page does not have.
+        var document = new FormDocument { Target = FormTarget.Web, Name = "LoginForm" };
+
+        var result = FormPlacement.Place(document, "Button", 10, 10);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Control, Is.Null);
+            Assert.That(result.Refusal, Is.Not.Null.And.Not.Empty);
+            Assert.That(document.Controls, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void ARefusal_LeavesTheDocumentExactlyAsItWas()
+    {
+        var document = WinFormsDocument();
+        document.Controls.Add(Existing("Button", "Button1", 0, 0, 75, 23));
+
+        FormPlacement.Place(document, "NotAControl", 10, 10);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(document.Controls, Has.Count.EqualTo(1));
+            Assert.That(document.Controls[0].Id, Is.EqualTo("Button1"));
+        });
+    }
+}

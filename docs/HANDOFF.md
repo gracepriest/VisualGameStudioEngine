@@ -1,4 +1,4 @@
-# Handoff snapshot — 2026-09-11
+# Handoff snapshot — 2026-09-11, updated 2026-09-19
 
 **Why this file exists.** Working state for this repo normally lives in a per-machine
 auto-memory directory (`~/.claude/projects/…/memory/`) that is **outside the repo and does not
@@ -7,7 +7,9 @@ another person — actually needs. It is a dated snapshot, not a changelog: hist
 `git log`, rationale in `docs/superpowers/{plans,specs}/`, conventions in `CLAUDE.md`.
 
 ⚠ **Dated 2026-09-11.** Sections carry their own commit where it matters; anything without one
-dates from `6139386`. Re-verify before relying on it.
+dates from `6139386`. Re-verify before relying on it. **The 2026-09-13 and 2026-09-14 sections are
+newer than the rest of this file and supersede it wherever they disagree** — in particular about
+whether a cloud container can build and test this repo.
 
 **P2a-2 is COMPLETE.** Tasks 1-15 are done, Step 4 included — the `IDE/` refresh shipped
 2026-09-14 in `fbb3694`. The work merged to master in `77e415b`, together with the blnet C++
@@ -15,11 +17,526 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
-## ✅ READ FIRST — master is FULL-SUITE GREEN at `f54416b`, and Task 14 is PROVEN (2026-09-11)
+## ⛔ THE FORM DESIGNER, 2026-09-18 — read this before touching `BasicLang/Forms/`
 
-`origin/master` == **`f54416b`**, which merged eight P2a-2 Task 14 commits (tip `87a6c5e`) into
-master. **Full suite measured on Windows: 5826 tests, 4 failures — exactly the standing baseline
-below, nothing new.**
+Branch `feat/form-designer`, at `f380186`. **89 commits ahead of master, 10 behind.**
+
+### ⛔⛔ The plan's checkboxes are a LIE — do not start at Task 1
+
+`docs/superpowers/plans/2026-09-11-visual-form-designer.md` reads **0 ticked / 98 open**. Tasks 1–19
+are *done*; the file was simply never written to again after it was authored. A session briefed from
+those checkboxes was told "zero code is written, start at Task 1" — which, followed literally, would
+have re-implemented 111 commits over the top of themselves. Verify against `git log` and the
+reference counts, never against the checkboxes.
+
+| Task | State |
+|---|---|
+| 1–19 | done before 2026-09-18 |
+| **20** direct manipulation | done — multi-select, rubber band, group drag, align/size, z-order, clipboard, undo |
+| **22** double-click → handler | done |
+| **23** catalog | done — **10 → 23 kinds**; 8 are WinForms-only by decision |
+| **26** Anchor/Dock pickers | done — multi-edge, after the analyzer fix |
+| **27** acceptance | done — both targets **built and RUN**, output recorded in the commit |
+| **21** retarget | done 2026-09-19 — `FormRetarget`, `design --retarget`, "Retarget Form…"; see its section below |
+| **24** menus · **25** tray · **28** closeout | NOT STARTED |
+
+⚠ **24 is compiler-gated**: array-literal element typing has no base-class widening
+(`SemanticAnalyzer.cs:6056-6061`), so `{mnuFile, sep1}` degrades to `Object[]`. Measure what csc
+accepts before designing the fix — that is how the `Anchor` blocker turned out to be one line.
+
+### ⛔ Two defects that only running the thing could find
+
+`WinFormsCompile` says it in its own summary — *compile only, never run* — so until
+`FormDesignerAcceptanceTests` **no form this designer produced had ever been executed** on either
+target. Running them found both of these, with a green build throughout:
+
+1. **Every web form was dead on load.** The JS backend emits an unqualified call to the enclosing
+   class's own method as a bare global, so `InitializeComponent()` in `Public Sub New()` became a
+   `ReferenceError`. `FormScaffolder` now emits `Me.InitializeComponent()`. **The backend defect is
+   UNFIXED** and still hits hand-written user code.
+2. **WinForms z-order was inverted.** `Controls` index 0 is the TOP of the z-order and
+   `Controls.Add` appends, so the document's front-most control was reaching the very back. The
+   region writer now emits sibling adds in REVERSE. Confirmed at run time.
+
+Also found and fixed: the structure-preserving writer **never reordered elements**, so a z-order
+change never reached the file — the command looked right until you reloaded.
+
+### Task 21 — retarget (2026-09-19): one form, two targets
+
+`FormRetarget.Convert` turns a `.blform` model into a `.blwebform` model and back. The shared
+grammar crosses losslessly — kinds, ids, tab order, catalog properties that exist on both targets,
+default-event binds (`Click` ⇄ `click`, `TextChanged` ⇄ `input`, from the catalog), unknown
+content. Everything else is a **warning** in a new `BL8023..BL8026` block, one per thing:
+
+| Code | What it names |
+|---|---|
+| `BL8023` | a kind with no row on the destination — removed, its children hoisted into its place |
+| `BL8024` | a property the destination lacks, or an unknown attribute the destination would READ as layout |
+| `BL8025` | the hard edge: per control, what it had and where it landed; once for the window / the page |
+| `BL8026` | a bind on an event only one side can name — dropped, the handler named for hand-wiring |
+
+⛔ **The pixel ⇄ cell edge is derived by a rule the finding can state, never guessed.** Going to the
+web: one column per distinct X, one row per distinct Y among siblings, all-`auto` tracks, the
+scaffolder's gap. Going to WinForms: catalog sizes, cells pitched to the largest sibling + 8,
+origin 16, containers grown to hold their children, window never smaller than a new form. A form
+laid out AT that rule's fixed point round-trips **byte-identical** (`FormRetargetTests`); any other
+form round-trips byte-identical on the shared subset and moves only its geometry — and says so.
+
+⛔⛔ **A retargeted form is a PAIR and lives in its own directory, outside the source project.**
+`ConvertToPair` scaffolds a fresh code-behind on the destination, writes the regions into it and
+adds an empty stub per crossed handler, so a CLI user who never opens the IDE still gets a form
+that constructs its controls. It is never written beside the source and never added to the same
+project: document and code-behind pair by BASE NAME (`FormCodeBehind.PathFor`) and the class is
+named after the form, so `LoginForm.blwebform` beside `LoginForm.blform` would pair with the
+WinForms class and the designer's next save would write web regions into it. `design --retarget`
+therefore REQUIRES `--out <dir>`, and "Retarget Form…" asks for a folder. Neither ever overwrites.
+
+Gated by running, not reading: the retargeted web pair is built by the real CLI and executed under
+node (handler fires); the retargeted WinForms pair goes through the real compiler and csc.
+⚠ Not run: the WinForms pair as a live window — csc is where its layout ints are checked.
+
+Left for later (`docs/form-designer-followups.md` 18): only a kind's DEFAULT event has a measured
+name on both sides, so a `MouseEnter` bind is dropped-and-named rather than mapped.
+
+### ⛔ Master is NOT healthy — 4 of this branch's failures are inherited
+
+Verified 2026-09-18 in a detached worktree at plain `origin/master`, with no designer code present:
+every game template fails to build with `CS1503: cannot convert from 'float' to 'int'`
+(`Build_GameAppTemplate_*`, `CliTemplate("game")`, `Template("game-app")`, plus two `cpp-game`
+siblings). The likely cause is master's own *"Round every narrowing conversion half-to-even"* /
+*"Fold lossless widening casts"* work. It escaped because those tests are all
+`[Category("Integration")]`, which the fast subset skips.
+
+⛔ **Task 28 cannot honestly claim a clean baseline until this is fixed** — the alternative is
+quietly re-baselining around someone else's regression, which is how a known-bad build becomes the
+new normal.
+
+### Current gates on this branch
+
+| Gate | Result |
+|---|---|
+| Full suite (2026-09-19, Task 21 tree) | **7088 passed / 8 failed / 2 skipped of 7098**, 59m |
+| Fast subset + the designer's Integration fixtures | **5815 passed / 2 failed / 1 skipped of 5818** |
+| `WinFormsCatalogSweepTests` | 57/57 through real `csc` |
+
+The 8: 2 standing `SearchSnippets` · 1 pre-existing `Cli_Build_CppProject` · **4 inherited from
+master** · 1 `RaylibScreenSpaceMath` NaN row that is display-dependent. (The previous run's 9th, an
+Anchor test, was rewritten with Task 26.) ⚠ This branch has no clean full-suite baseline of its own, and the old "5826 / 4 known
+failures" number was measured on a *different branch* 100+ commits ago. Do not quote it.
+
+---
+
+### → START HERE
+
+| If you want | Go to |
+|---|---|
+| **What to do next** | *What the next session should pick up* |
+| Can this machine build and gate? | *READ FIRST — a cloud container CAN build and test* (next section) |
+| How to run a trustworthy baseline | *Gates and expected numbers* — including three ways a baseline run LIES |
+| Why a green suite proved nothing here | *FOUR REVIEW PASSES* — read before trusting one |
+| **Form designer: what is done and what is left** | *THE FORM DESIGNER, 2026-09-18* — read before touching `BasicLang/Forms/` |
+| **Is master healthy right now?** | *No* — see the game-template regression in that section |
+| Decisions waiting on a human | items 3–4 of the next-session list. ⚠ Multi-edge `Anchor` is **RESOLVED**, see its section |
+
+---
+
+## ⛔ READ FIRST — 2026-09-13: a cloud container CAN build and test this repo
+
+**This overturns the standing assumption that cloud sessions cannot gate.** A .NET 8 SDK installs
+from the Ubuntu archive; the package index in a fresh container is just stale:
+
+```bash
+apt-get update && apt-get install -y --no-install-recommends dotnet-sdk-8.0   # ~1 min
+```
+
+`builds.dotnet.microsoft.com` IS blocked by the agent proxy, which is what made the earlier
+"no compiler here" finding correct at the time and wrong now. Nothing else is needed: NuGet
+restore works, the compiler and the test project both build, and the full suite runs.
+
+**What that cost.** Twelve commits of form-designer work (`d8d6124`…`8c841f0`) were written,
+reviewed by subagents, and reported as gated — with a compiler nobody had run. The first real
+build found:
+
+- **`VisualGameStudio.Tests` had not compiled since `0152506`** (CS0104: `MethodInfo` is
+  ambiguous between `System.Reflection` and `VisualGameStudio.Core.Abstractions.Services`, which
+  declares its own at `IRefactoringService.cs:131`). **Every "gate" reported in commits
+  `0152506` through `8c841f0` was therefore never run.** Fixed in `e2c4c51`.
+- Two tests that had never executed asserted the wrong thing — one demonstrated "an Int is bare"
+  using a property the control's catalog row does not declare, the other counted `"Sub "`
+  occurrences and expected the count to include `End Sub`, which has no trailing space.
+- `CliTestHarness.CliPath()` hardcoded `BasicLang.exe`. The apphost is `BasicLang` with no
+  extension off Windows, so **every spawned-CLI test in this suite was red on Linux**, and the
+  failure read as "not deployed — project reference output changed?", which looks like a build
+  layout problem rather than an unsupported platform. Fixing it turned 38 pre-existing failures
+  green.
+
+**Take the lesson, not just the fix:** subagent review is a decent proof-reader and is not a
+compiler. It found 29 real defects across three passes and still missed a file that did not
+compile.
+
+### ⛔ WinForms can be TYPE-CHECKED here too — the catalog is falsifiable off Windows
+
+The WinForms **reference assemblies** restore as an ordinary NuGet package, and reference-only
+compilation is cross-platform (they are metadata, not code):
+
+```xml
+<PackageReference Include="Microsoft.WindowsDesktop.App.Ref" Version="8.0.31"
+                  GeneratePathProperty="true" ExcludeAssets="all" PrivateAssets="all" />
+```
+
+So `csc` type-checks generated WinForms C# on Linux, where the WindowsDesktop **MSBuild SDK** does
+not exist at all (`dotnet build` of a `net8.0-windows` project fails with MSB4019, and
+`EnableWindowsTargeting` does not help — it needs those same missing targets). Running a WinForms
+app still needs Windows; nothing the catalog gate checks needs the program to start.
+
+⚠ Three assemblies ship in BOTH the base and desktop ref packs — `System.Drawing`, `WindowsBase`,
+`Microsoft.VisualBasic` — and the DESKTOP copy must win, as it does under the real SDK. Pass both
+and Roslyn sees two assemblies with the same simple name; the error it then produces points at the
+innocent one.
+
+### ⛔ Avalonia.Headless is restorable too — the third assumption to fall
+
+`Avalonia.Headless` and `Avalonia.Headless.NUnit` 11.3.13 both restore. Task 7's plan entry says
+"there is no `Avalonia.Headless` reference, so the canvas is verified by running the IDE — say so";
+that constraint no longer holds, and whoever takes **Task 14** should know before pricing it.
+
+Nothing on this branch uses it yet: Task 7's risky part is pure geometry and needs no UI thread.
+But three inherited platform assumptions have now been measured and all three were wrong — no
+compiler in a cloud container, no WinForms type-checking off Windows, no Avalonia headless. **Check
+the next one before planning around it.**
+
+### Measured on Linux, .NET 8.0.131 (this container)
+
+| Run | Result | Time |
+|---|---|---|
+| Full suite, pre-branch baseline `6a6d224` | **174 failed / 5837 total** (5460 passed, 203 skipped) | ~8 min |
+| Full suite, `feat/form-designer` tip | **174 failed / 6191 total** (5814 passed, 203 skipped) | ~8 min |
+| Fast subset, baseline `6a6d224` | 90 failed / 4939 total | ~1 min |
+| Fast subset, `feat/form-designer` tip | 90 failed / 5196 total | ~1 min |
+
+⛔ **The two full-suite failure sets are IDENTICAL, compared by test name** — 174 names, no
+regressions and no accidental fixes. That comparison, not the count, is the gate: run the
+baseline in a `git worktree` and `comm -23` the sorted failure names. A raw count hides a
+regression that lands as another test goes green.
+
+⚠ **The 174 are environmental, not the Windows baseline of 4.** They are Windows-only tests on
+Linux: 23 assert on hardcoded `C:\` paths, 10 need clang, 8 need MSVC/`vcvars`. **Do not treat
+174 as "the number" on Windows** — re-measure there. The Windows baseline in the table further
+down (5826 total / 4 failures at `f54416b`) is still the number that matters for a release.
+
+⚠ The full suite takes **~7 minutes here, not ~2 hours**. That is not a faster machine: the
+native/clang/MSVC integration tests fail fast instead of running. A green-looking short run on
+Linux has not exercised codegen end-to-end.
+
+### Form designer — where it actually is
+
+Plan: `docs/superpowers/plans/2026-09-11-visual-form-designer.md` (19 tasks).
+Spec: `docs/superpowers/specs/2026-09-11-visual-form-designer-design.md`.
+Branch: **`feat/form-designer`** (PR #4). Not merged.
+
+**Done and now genuinely gated:** Tasks **1–18**. Task **19** (closeout) is partial — two of its
+four items cannot be done off Windows.
+
+| Task | What landed |
+|---|---|
+| 1 | `ProjectSerializer` preserves the `.blproj` in place instead of rebuilding it from the model |
+| 2–3 | TFM reaches the file; DPI mode emitted; two silent C# backend defaults now throw |
+| 4 | Form model — geometry, controls, catalog, document, clipboard |
+| 5 | The recognizer (importer) — WinForms and DOM dialects, values kept as raw source text |
+| 6 | `DesignDiagnostic`, the `BL8xxx` band, `basiclang design --check` |
+| 8 | `CSharpTestSupport` with the false-green guard |
+| 9 | `.blwebform` reader/writer, D9 tiers, the algebra |
+| 10 | Form documents ride as `<Compile>` and are skipped on both compile routes |
+| 11 | Designer-owned marked regions — hashing, refusal, handler ordering |
+| 12 | Markup/CSS/JS emission, the two-step `data-form` dispatch |
+| 13 | Creating a form — the document + `.bas` pair, and the glob guard |
+| **15** | **A missing handler is a hard error (D8)** |
+| **16** | **`.blform` — the same reader and writer, not a second one** |
+| **17** | **The WinForms catalog gate — every control, every property, through the real chain to `csc`** |
+| **18** | **The VSIX shape promoted across IDE and CLI, geometry fan-in, build + equivalence gates** |
+| **7** | **`FormCanvasControl`, the one shared transform, and the Design\|Code mode** |
+| **14** | **Toolbox and property grid — D9's tiers reaching the UI, on one extracted row editor** |
+| **19** | **Closeout — partial. See below.** |
+
+**Not done:** Task 7 and 14 (Avalonia canvas + property grid — they build here, but there is no
+`Avalonia.Headless` package so nothing can drive them), 19 (closeout).
+
+### Task 19 — what is left, and why
+
+| Item | State |
+|---|---|
+| Full suite, both entry points | ✅ Run every commit; see the table above |
+| Update `docs/HANDOFF.md` and `CLAUDE.md` | ✅ This file, plus a durable *Form designer* section in `CLAUDE.md` |
+| File the follow-up chips | ⚠ **Written up, not filed** — `docs/form-designer-followups.md` has all **seventeen**, filable verbatim. Opening issues is outward-facing and nobody asked. |
+| Refresh the `IDE/` drop | ✅ **Done on Windows** — landed with `claude/jolly-pasteur-l4mpzs`, in master at `77e415b`. It must never be refreshed from a Linux build: `IDE/BasicLang.exe` is a **PE32+ Windows binary** and a Linux refresh swaps the Windows executables for ELF apphosts. `robocopy` on Windows — never `/MIR`. |
+
+⛔ `docs/MULTI_FILE_SYSTEM_PLAN.md:21` is **untouched**, per owner decision 2 — `.frm` stays reserved
+for a user-authored form file and is not obsoleted by `.blform`.
+
+### ⛔ Still unverified: everything you can only see
+
+Three pieces of UI shipped without anyone looking at them. Their LOGIC is tested; their APPEARANCE
+is not, and no test claims otherwise:
+
+- the **canvas** (`FormCanvasControl`) — its transform has 15 tests because a drift there lands
+  clicks on the wrong control with no visual symptom, but what it draws is unchecked;
+- the **property grid and toolbox** — the rows, tiers and commit semantics have 18 tests;
+- the **Settings dialog**, whose duplicated row editor was extracted into `TypedValueEditor` and
+  which now renders through it. 165 settings tests still pass, and the AXAML compiles with its
+  bindings resolved, but nobody has opened the dialog.
+
+**Open the IDE before merging.** A build proves Avalonia compiled the markup and the compiled
+bindings resolved. It does not prove anything is visible, laid out, or the right size.
+
+### ⛔⛔ D8's handler-ordering rule is real but WEB-ONLY
+
+Measured 2026-09-13, three ways, because applying it to both targets made the designer refuse the
+very shape Owner decision 3 calls canonical:
+
+| Shape, handler declared AFTER the wiring | Result |
+|---|---|
+| Web: `addEventListener("click", AddressOf H)` | **FAILS** — "cannot convert from `Action(Of Object)` to `Action(Of DomEvent)`". The DOM signature declares the parameter type, so the erased handler has something concrete to fail against. |
+| WinForms: `AddHandler btn.Click, AddressOf H` | **Compiles**, through BasicLang *and* csc, and binds with full parameter types (`object sender, EventArgs e`). The event is an unresolvable .NET member typed as `Object` — there is no declared delegate to mismatch. |
+| Module-level `Sub` into a declared `Action(Of Integer)` | **Compiles.** |
+
+The shipped VSIX template declares `btnClick_Click` **below** the `InitializeComponent` that wires
+it. `RegionWriter` was refusing that on both targets (BL8013), so the designer rejected the template
+it is modelled on and blocked the D12 import route for every existing WinForms file. The check is
+now web-only, and the scaffolder emits the init region in the canonical position on WinForms and
+last on the web.
+
+### ⛔ `basiclang a.bas b.bas` silently compiled only the first file
+
+`FirstOrDefault` over the file arguments. It printed *"Compilation successful!"*, *"Files compiled:
+1"* and exit 0, while the emitted C# referenced a class that was never compiled and failed at csc
+with *"The type or namespace name 'MainForm' could not be found"*. Found on the shipped VSIX
+template, which is exactly two files. Extra source files are now **refused** with a message pointing
+at the project route — single-file is the documented contract and multi-file is what a `.blproj` is
+for.
+
+### ⛔⛔ Task 17's gate found six defects the whole toolchain was blind to
+
+Every one compiled **green** through BasicLang and would have shipped. This is the clearest
+evidence in the repo for why the catalog needs csc rather than review:
+
+| Catalog claim | What WinForms actually has | csc |
+|---|---|---|
+| `TextBox.PasswordChar` is a String | a `char` | CS0029 |
+| `RadioButton.GroupName` | **does not exist** (grouping is by container) | CS1061 |
+| `ComboBox.Items` assignable | get-only collection | CS0200 |
+| `ListBox.Items` assignable | get-only collection | CS0200 |
+| `ListBox.MultiSelect` | **does not exist** (it is `SelectionMode`, an enum) | CS1061 |
+| `PictureBox.Image` is a path String | a `System.Drawing.Image` | CS0029 |
+| `TextAlign = Center` | `ContentAlignment` has no `Center` — it has `MiddleCenter` | CS0103 |
+
+`GroupName` and `MultiSelect` are now **web-only** — a platform fact, not a preference. The rest
+gained a WinForms enum type, a member mapping, a value factory (`Convert.ToChar`,
+`Image.FromFile`), or a collection marker. Completeness guards now FAIL on an Enum row with no
+enum type, an allowed value that maps to no member, and a WinForms control with no type name.
+
+⚠ `Convert.ToChar`, **not** `CChar` — measured. BasicLang passes `CChar` through to the C# backend
+verbatim and C# has no such function (CS0103). The same is true of anything VB-shaped: that backend
+is a passthrough for names it does not know, so "it compiled" means nothing on its own.
+
+### ✅ RESOLVED 2026-09-18: multi-edge `Anchor` now works — the premise below was incomplete
+
+**Do not act on this section as an open decision.** It is kept because the measurements are correct
+and the reasoning is worth reading; only the conclusion was wrong.
+
+The two options offered at the bottom — "teach the parser a bitwise `Or`" or "ship single-edge only"
+— both rested on *BasicLang cannot express a combined flags value*. Re-measured 2026-09-18: all
+three spellings below still fail, **but csc was never asked what it would accept**, and a fourth
+route was never tried:
+
+| BasicLang source | BasicLang | csc |
+|---|---|---|
+| `btn.Anchor = 7` | **compiles** | `CS0266` — needs a cast |
+| `CType(7, AnchorStyles)` | was refused | **accepted** as `(AnchorStyles)7` |
+
+So the cast was the entire gap, and it was refused by the **semantic analyzer**, not the parser:
+`AnchorStyles` registers as a Class-kind handle (the resolver cannot reach `System.Windows.Forms`),
+so it never reached the `TypeKind.Enum` exemption sitting three lines above it in
+`RejectImpossibleConversion`.
+
+**What shipped** (`b7c6699`): that check now exempts scalar → an *unresolvable* .NET type — **one arm
+only**. ⛔ The reference→scalar arm is untouched; it is what closed chip `task_0c803e75`, whose worst
+row is silent (a reference cast to `Boolean` compiles *and runs* on C++, binding to the handle's
+`explicit operator bool()`). The exemption cannot reach a type the analyzer can see, so
+`CType(7, Widget)` is still refused. Both pinned by tests in `CastLegalityTests`.
+
+`RegionWriter` emits multi-edge as `CType(13, AnchorStyles)   ' Left, Top, Right`, and `BL8015` now
+means only *an edge name `AnchorStyles` does not have* — still refused, because summing it as zero
+would silently anchor the control to nothing. The Anchor/Dock pickers (Task 26) use it.
+
+---
+
+*The original section follows, for its measurements.*
+
+`Anchor="Left,Top,Right"` — an ordinary WinForms thing — cannot be generated. Measured three ways
+on 2026-09-13:
+
+| Attempt | Result |
+|---|---|
+| `AnchorStyles.Left Or AnchorStyles.Top` | *"Logical operator 'Or' requires Boolean operands"* |
+| `CType(7, AnchorStyles)` | *"Cannot convert 'Integer' to 'AnchorStyles': no such conversion exists"* — the enum is an unresolvable .NET type |
+| `AnchorStyles.Left \| AnchorStyles.Top` | `\|` **lexes** (`TokenType.BitwiseOr`, `BasicLangLexer.cs:754`) but the parser never consumes it: *"Unexpected token in expression"* |
+
+The designer currently **refuses** such a document (`BL8015`) rather than emitting one flag (which
+puts geometry on screen the running program will not reproduce — the exact D9 divergence) or all of
+them (which does not compile). Reachable today only from a hand-authored `.blform`, because the
+canvas that would offer multiple anchors is Task 14.
+
+**The decision someone has to make:** teach the parser a bitwise `Or`/`|` (a language change with a
+full-suite blast radius, and the semantic analyzer would also have to stop demanding Boolean
+operands for an unresolvable enum type), or keep refusing and ship single-edge anchors plus `Dock`.
+Not this writer's call, so it refuses and says why.
+
+### Contradictions found against the spec and the briefing
+
+1. **The briefing's platform table is wrong** — see the top of this section. Tasks marked
+   "build but unverifiable" and "needs the full suite" were both doable here.
+2. **`FormClipboard` used `(int?)` casts on XML attributes**, which throw `FormatException` on a
+   non-integer. The clipboard is precisely where unvetted text arrives; a paste carrying
+   `X="20px"` took the IDE down rather than declining the paste. Now `int.TryParse`, like every
+   other reader in the feature.
+3. **"Structural attribute" is not a property of the attribute NAME.** The two formats overlap in
+   spelling and not in meaning — `Width` is a `.blform` control's pixel width and is read into its
+   geometry, while on a `.blwebform` control nothing reads it. Under one flat list it was neither
+   a property nor an unknown attribute: absent from the model entirely, and dropped by anything
+   rebuilding the document from it. `IsStructural` now takes a `FormTarget`.
+4. **The spec does not say what happens when a file's NAME disagrees with its ROOT element.** A
+   `.blform` containing `<WebForm>` is now REFUSED. Neither side can be believed over the other:
+   trust the root and the writer emits one format's geometry into a file the project system
+   compiles as the other; trust the extension and every `X`/`Y` reads as an unknown attribute and
+   the canvas comes up empty. Both are invisible until the user saves.
+5. **Task 15 could not be implemented as the plan words it.** The plan says to error whenever
+   `GetNodeSymbol(operand)` is null. That would reject every correct WinForms program, this
+   designer's generated output included, because `EnableNetResolution` returns early for
+   `UseWindowsForms` (`Compiler.cs:145`) and the resolver closure cannot reach
+   `System.Windows.Forms.dll` — so every `AddressOf Me.Handler` has a null symbol and always
+   will. **Implemented narrower:** the only new error is a BARE NAME that resolved to no symbol
+   at all. A member access is left alone. `IsNetType` is NOT narrowed, per the plan's own warning.
+   The `AddHandler`/`RemoveHandler` validation is likewise silent whenever the event side is
+   unresolved, and reports only a resolved symbol that is plainly not an event, a parameter-count
+   disagreement, or two *primitive* parameter types that differ. There is no assignability helper
+   in `SemanticAnalyzer` to widen that last one with, and comparing class names would flag
+   `EventArgs` against `MouseEventArgs` — the ordinary correct shape of a handler.
+
+### ⛔⛔ 2026-09-14 — FOUR REVIEW PASSES, ~30 DEFECTS. READ THIS BEFORE TRUSTING A GREEN SUITE.
+
+*(Blow-by-blow is in `git log 0d3e7c3..313da82`. What follows is only what stays true.)*
+
+**The question that found nearly all of it**, asked of every pass:
+
+> a targeted audit for **functionality reachable ONLY from tests** — optional parameters no
+> production caller passes, public methods whose only callers are tests, wiring that exists but is
+> never invoked from a shipping path.
+
+**FIVE pieces of this feature were complete, unit-tested and unreachable. The suite was green
+through every one.**
+
+| Dead thing | What the user actually got |
+|---|---|
+| `JavaScriptEmitter.Emit(forms:)` — optional, no caller passed it | a `.blwebform` built green and wrote **no `.html`, no `.css`** |
+| `RegionWriter.Write` — **no production caller at all** | scaffold a form, drop a button, save, build → **the build fails on the `InitializeComponent` the scaffold itself calls**. Canvas drew, grid edited, document round-tripped byte for byte, program missing a member |
+| `FormAssetEmitter.DispatchSource` — no production caller | every page carried `<body data-form="…">` and **nothing read it** |
+| The **default project shape** (no explicit `<Compile>` items) | emitted no pages at all — the source glob cannot yield a `.blwebform` by design |
+| `SolutionExplorerViewModel.AddNewFormAsync` — **its `[RelayCommand]` bound to the wrong method, and no menu item** | **the entry point to the whole designer.** There was no way to create a form in the IDE at all: no Add ▸ New Form, nothing. Found by the owner opening the IDE and asking where the designer was. ⚠ The attribute was THERE — a doc comment for `SaveProjectOrReportAsync` had been inserted between it and the method it was written for, and an attribute binds to the next DECLARATION (a doc comment in between is trivia). So the toolkit generated a `SaveProjectOrReportCommand` nothing binds and no `AddNewFormCommand`; it compiles either way |
+
+⚠ **`FormClipboard` is the one still standing** — complete, tested, and the canvas has no
+Copy/Cut/Paste to reach it. Follow-up 11.
+
+#### ⛔⛔ The one that shipped: a green build is not a running page
+
+The dispatch was generated as a `Public Module`. It compiled clean, every string the tests looked
+for was present, and every page died on load with **`ReferenceError: VgsForms is not defined`** —
+the JavaScript backend FLATTENS a module's members to bare globals while emitting the call site
+QUALIFIED, so the script referenced an object appearing nowhere in the file. I read that exact
+output and called it success: one line said `VgsForms.VgsDispatchForm();` and another said
+`function VgsDispatchForm() {`, two lines that contradict each other.
+
+Generated as `Public Class` + `Public Shared Sub` now. **The backend bug is UNFIXED and belongs to
+the compiler** (follow-ups 3 and 14) — anyone calling a module across files gets a clean build and
+a dead page.
+
+✅ **`node` v22 is on PATH here, and `FormBuildEmissionTests` RUNS the emitted script** against a
+stub `document`. That gate is what catches this class. Keep it green.
+
+⛔⛔ **And that bug was already in our own notes** — `docs/form-designer-followups.md` entry 3,
+third bullet, measured three days earlier: *"a qualified module call emits a reference to a
+container JS does not have → ReferenceError"*. Nobody reread it, including the person who wrote it.
+**The lesson is not "read more carefully": a bullet in a seventeen-entry list is not a safeguard.**
+What caught this was running the output and comparing failure sets — mechanisms, not memory. A
+finding that matters needs a gate or a filed issue.
+
+#### The four rules that came out of it
+
+1. **Ask the CATALOG what a value means, never the SHAPE of the string.** A `Type.Member` regex
+   answering *"is this already source?"* was wrong both ways: `Text="config.json"` emitted unquoted
+   (form stops building), and `TextAlign="ContentAlignment.Bogus"` sailed past the Degraded check
+   into CS0117 with no diagnostic. `FormPropertyDef.IsSourceForm` is the answer.
+2. **A throw needs a catcher before it is an improvement.** Making `ProjectSerializer` refuse a
+   namespaced save was right — it used to lie — but eleven `SaveProjectAsync` call sites caught
+   nothing, so it traded a silent failure for an unhandled exception *after* both new files were on
+   disk. Now `ProjectSaveRefusedException`, reported everywhere.
+3. **Mirrored code is not shared code.** `ProjectGlobSafety.MaterialiseGlobbedSources` exists to
+   reproduce `GetSourceFiles`' glob exactly. A guard added to one and not the other let the IDE
+   write an explicit `<Compile>` item for a file the compiler's glob rejects — and the explicit
+   branch does no extension filtering at all.
+4. **Writing that a test runs something is not it running.** A two-form test was described in its
+   own commit message as executing the result; it built and string-asserted. Check the body.
+
+#### Diagnostics
+
+**BL8018** claimed and in the band table (form pages exist, nothing calls the dispatch).
+**BL8031 left alone** — the spec and plan reserve it for one specific `--check` collision.
+
+### What the next session should pick up
+
+1. **Re-run the full suite on Windows.** Everything above is a Linux measurement. The Windows
+   number to beat is 5893 passed / 4 failed at `ee3c086`. On Linux, **re-gated against the current
+   master `77e415b`** (2026-09-14): baseline **213 failed / 5876**, `feat/form-designer` **175 /
+   6273 — 0 new, 38 fixed**, `fix/js-module-qualified-call` **213 / 5882 — 0 new**. Both PRs now
+   carry master merged in, so those are the numbers a Windows run should be checked against.
+2. **Open the IDE and look at the designer and the Settings dialog** — see *Still unverified* above.
+   ⚠ Now also: **save a form and confirm the `.bas` is regenerated**, and that a hand-edited region
+   puts BL8011 in the Error List. That path is covered by caller tests driving the real `SaveAsync`,
+   but nobody has watched it happen.
+3. **Decide the multi-edge `Anchor` question above.** Until then anchoring is single-edge or `Dock`.
+4. **Decide follow-up 13**: nothing makes `Main()` call the dispatch. BL8018 warns, which is the
+   honest minimum, but a warning is not the feature working. Both ways to close it edit the user's
+   code, which is why neither was done unilaterally.
+5. **File the seventeen chips** in `docs/form-designer-followups.md`. Several are runtime failures
+   from clean builds, which is the highest-severity shape this repo tracks. Entries 3 and 14 are
+   the SAME compiler bug — file them together. Entry 15's residue (Win32 `*.bas` matching `.basic`)
+   is unverified on Linux; confirm it during the Windows run.
+6. **Finish Task 19.** (The `IDE/` drop refresh is DONE — it landed with
+   `claude/jolly-pasteur-l4mpzs` in master `77e415b`.)
+7. **PR #3 (`claude/busy-newton-gsispd`)** is still open carrying a superseded spec/plan pair.
+8. **Decide the C# and C++ halves of the module-call bug.** PR #6 fixes JavaScript only. Re-measured
+   on `77e415b` (2026-09-14): **C++ is still broken** — `M.Go()` gives clang *"use of undeclared
+   identifier 'M'"*, `IRBuilder.cs` untouched by the facade merge — and C# still rejects the
+   unqualified `Go()` with CS0103. Matrix and per-backend fix shapes in
+   `docs/form-designer-followups.md` 14.
+
+⛔ **Do not take a green suite as evidence the feature works.** FIVE separate pieces of this
+branch were complete, unit-tested and unreachable, and the suite was green through every one — the
+last of them the Add ▸ New Form command, the only way into the designer at all. When you add
+anything here, the question that matters is *who calls it in a shipping build* — and the answer has
+to be a test that drives the real entry point, not one that constructs the thing. For UI, that
+means a test that reads the AXAML for the binding: a `[RelayCommand]` no menu binds is exactly as
+unreachable as the un-attributed method was.
+
+---
+
+## ✅ master is FULL-SUITE GREEN, and Task 14 is PROVEN (2026-09-11)
+
+⚠ **`origin/master` has since moved to `77e415b`** (2026-09-14) — `claude/jolly-pasteur-l4mpzs`
+merged, carrying the `ee3c086` Windows gate (5893 passed / 4 failed, all baseline) and a refreshed
+`IDE/` drop. The record below is the `f54416b` state it built on.
+
+At `f54416b`, master merged eight P2a-2 Task 14 commits (tip `87a6c5e`). **Full suite measured on
+Windows: 5826 tests, 4 failures — exactly the standing baseline below, nothing new.**
 
 Worth recording *because* it was in doubt: that merge combined two sides that had only ever been
 gated apart. Task 14's commits are test-only (plus one small seam); the incoming master commits
@@ -93,6 +610,13 @@ These are measured, not cautionary. Each one shipped a green build that did the 
   operand and stops. Name new CFGs exactly like `Visit(IfStatementNode)` does. The JS backend
   differs again (it derives the merge via `FindMergeBlock`, so the true target must never *be*
   the merge); C++ is goto-based and tolerates any shape.
+- ⛔⛔ **`git merge-tree` gave FALSE NEGATIVES on conflict detection — repeatedly.** Across several
+  check-ins it reported both open PRs as conflict-free against master; the real
+  `git merge origin/master` conflicted in `docs/HANDOFF.md` every time. The check said "clean" while
+  the merge did not, so the branch looked mergeable for days. **Test-merge for real** — add a
+  DETACHED worktree at the branch tip (`git worktree add --detach <dir> <sha>`; without `--detach`
+  it refuses with *"already used by worktree"*), run the actual merge there, read the conflicts,
+  then throw the worktree away. Nothing else answers the question.
 - ⛔ **Every shipping route runs the IR optimizer; the unit-test helper does not.** A fixture
   can be green while the CLI and the IDE both miscompile. Validate codegen through the CLI or
   an optimizer-running helper. **stdout is the only valid oracle.**
@@ -144,6 +668,36 @@ These are measured, not cautionary. Each one shipped a green build that did the 
 dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release
 dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --filter "TestCategory!=Integration"
 ```
+
+### ⛔ Three ways a baseline run lies, all three hit in one session
+
+1. **`git stash` without `-u` leaves new UNTRACKED files behind.** Nothing compiles, the run
+   produces zero test results, and you read it as "0 failures" — a baseline that looks perfect
+   because it never ran. Use a `git worktree`, or `git stash -u`.
+2. **A worktree run can die mid-suite** (the C++ end-to-end tests are where it happened), leaving a
+   truncated file with failures in it and **no summary line**. Always confirm a `Failed!`/`Passed!`
+   line exists before trusting any count you grepped out.
+3. **Take totals from the FINAL run of a session.** Two runs a few commits apart differ by whatever
+   tests landed between them, and quoting the earlier one into a document is how a corrected number
+   gets un-corrected.
+
+⛔ And the rule those serve: **compare sorted FAILURE NAMES with `comm -23`, never counts.** A
+count hides a regression that lands as another test goes green — which is not hypothetical here:
+this branch turns 38 tests green while introducing none, so its count moved for two reasons at once.
+
+**Re-gated 2026-09-14 against the CURRENT master `77e415b`** (Linux container, this box). The
+earlier numbers below were taken against `6a6d224`; master has moved twice since, so these are the
+ones that count for the two open PRs:
+
+| Run (Linux, `77e415b` baseline) | Failed / Total | Names vs baseline | Time |
+|---|---|---|---|
+| **Baseline `77e415b`** (worktree) | 213 / 5876 | — | 7m31s |
+| **`feat/form-designer`** merged to `77e415b` (`05f736f`, PR #4) | **175 / 6273** | **0 new, 38 fixed** | 11m40s |
+| **`fix/js-module-qualified-call`** merged to `77e415b` (`7cbff64`, PR #6) | **213 / 5882** | **0 new, 0 fixed** | 7m05s |
+
+Both diffs are by sorted failure NAME (`comm -13`), not by count — and the form-designer row is
+exactly why: its count moved 213 → 175 for two reasons at once. PR #6's six new tests pass (5876 →
+5882 total) without disturbing the set, which is the shape a compiler fix should have.
 
 | Run | Count | Time |
 |---|---|---|
