@@ -1015,10 +1015,10 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   effects so the common case stays clean, and anything else rides a comma expression
   (`(this.B, Box.Read())`, measured reachable through a field receiver).
   ⛔ **FOUR PRE-EXISTING DEFECTS FOUND WHILE DOING THIS, none fixed here, each measured:**
-  - **An explicit `Shared` PROPERTY emits a non-static accessor.** `EmitProperty` does not consult
-    `prop.IsStatic` for the getter/setter (it does for an auto-property), so `Public Shared
-    ReadOnly Property P` emits `get P()` and `Box.P` reads **undefined**. Closest neighbour to
-    this change and the obvious next fix.
+  - **An explicit `Shared` PROPERTY emits a non-static accessor — FIXED 2026-09-19**, see the JS
+    Shared-property entry below. `EmitProperty` did not consult `prop.IsStatic` for the
+    getter/setter (it does for an auto-property), so `Public Shared ReadOnly Property P` emitted
+    `get P()` and `Box.P` read **undefined**.
   - **The front end ACCEPTS an unqualified INSTANCE call from a `Shared` member** — invalid VB
     (BC30469). MSIL compiles it and dies with `MissingMethodException`. The JS backend deliberately
     does NOT rewrite it to `this.Inst()` (inside a static, `this` is the class, so that would be a
@@ -1028,6 +1028,38 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
     MSIL too (`MissingMethodException`). Only the in-class resolution is asserted.
   - **MSIL cannot assemble a module function returning a user class**: it emits `Box 'Make'()`
     where ilasm requires `class Box`, and rejects the file with a syntax error.
+  ⚠ **`Shared` PROPERTY accessors are `static` on JavaScript as of 2026-09-19** —
+  `JavaScriptSharedPropertyTests`, `JavaScriptBackend.EmitProperty`.
+  ⛔ **Measured before**: the auto-property arm had always emitted `static`, but the explicit
+  accessors never did, so a `Shared` property got INSTANCE accessors and nothing reached them.
+  Reading `Box.P` answered **undefined** (the getter lives on the prototype, not the class), and
+  `Box.P = 7` never called the setter — it quietly created a plain own-property on the class.
+  ⛔ **A READ-WRITE Shared property LOOKED CORRECT WHILE DOING NOTHING.** The write created `Box.P`
+  and the read handed that same value back, so a value-only test passes on a completely broken
+  property. Only a setter with an OBSERVABLE EFFECT separates them: value / backing field / setter
+  call count measured **`8|0|0`** before and **`8|8|2`** after and on MSIL. The leading 8 is the
+  whole trap — it is the accidental own-property, not the property. The fixture counts setter calls
+  for exactly this reason.
+  ⚠ **MSIL is the oracle and agrees on every shape** (8/9; only the INHERITED one is broken there,
+  `NullReferenceException`, so that case asserts JavaScript alone). **C++ is not asserted at all**:
+  it does not emit an explicit property as a member — `no member named 'P' in 'Box'` — a
+  pre-existing gap, so it cannot serve as an oracle.
+  ⛔ **A SEPARATE AND MORE SEVERE DEFECT FOUND HERE, NOT FIXED — and it is the OPTIMIZER'S.**
+  An assignment whose RHS computes something and does not mention the target field is SILENTLY
+  DISCARDED: `_v = value * 2` emits `const _v = (value << 1);`, a fresh local, so the write goes
+  nowhere and the field keeps its old value. Nothing fails; a plausible number is printed.
+  - **NOT a property bug**: measured in an ordinary method on an INSTANCE field as well as a Shared
+    one (`K = p * 2` → `const K = (p << 1)`, prints the old value).
+  - **The NON-OPTIMIZING path is CORRECT (14), the OPTIMIZED path is not (old value).** Strength
+    reduction rewrites `* 2` to `<< 1`, the rewritten value loses the marking that says it is named
+    after a variable, and `Bind` then treats it as a temp. This is exactly the CLAUDE.md hazard —
+    a green suite built on the non-optimizing helper cannot see it. Both paths are asserted in the
+    pin BECAUSE THEY DISAGREE.
+  - **Precise trigger**: `K = 7`, `K = p`, `K = 3 * 2` and `K = K + 1` all lower correctly; only a
+    computed RHS that survives folding and does not name the target is lost.
+  - **Not JavaScript-only**: C++ (14) and MSIL (14) are both correct; JavaScript discards the write
+    under the optimizer, and **C# emits an EMPTY METHOD BODY** — the statement vanishes on both
+    paths. Two backends right, two wrong in different ways. **This is the next fix.**
   ⚠ **Narrowing shapes are refused by the SEMANTIC ANALYZER, before any of this** —
   `Public N As Single = 1.5 + 1.0` is "Cannot assign value of type 'Double' to variable of type
   'Single'", before and after. Not a folding gap.
