@@ -655,6 +655,20 @@ namespace BasicLang.Compiler.IR
         public List<bool> ByRefArguments { get; set; }  // Track which arguments are by-ref
 
         /// <summary>
+        /// The <c>Module</c> that declares the callee, for a user procedure; null for anything
+        /// else (a class method, a stdlib or .NET call, a delegate invocation).
+        ///
+        /// <para>⛔ Carried BESIDE a bare <see cref="FunctionName"/>, never folded into it. The
+        /// old wire form for a cross-unit call was the dotted <c>"Helpers.Twice"</c>, and exactly
+        /// one backend honoured it: C++ strips the qualifier back off, JavaScript refused it
+        /// outright ("no lowering for 'Helpers.Twice'") and MSIL sanitised the dot away into a
+        /// call to <c>Combined::HelpersTwice</c>, a method nothing defines. Three backends spell
+        /// a module procedure by its bare (or owner-qualified) IR name; only C#, which emits one
+        /// static class per module, needs to know the owner — and reads it from here.</para>
+        /// </summary>
+        public string CalleeModule { get; set; }
+
+        /// <summary>
         /// P2a-2 Task 9 (Task-8 quality review I5) — HOW each by-ref argument is passed, for a
         /// call whose target is a resolved .NET member. Parallel to
         /// <see cref="ByRefArguments"/>, and consulted only where an entry exists.

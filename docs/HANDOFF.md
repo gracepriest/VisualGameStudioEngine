@@ -1318,15 +1318,12 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
     built, so their names stay bare. C# is fine (per-module classes), C++ and JavaScript were
     already loud, and MSIL now REFUSES ("declared by more than one module ... across files")
     instead of keeping the last one. Pinned with a two-file compile.
-  - **A qualified module CALL in a single file is STILL a phantom-receiver call** —
-    `t0 = Helpers.Twice(4);` on C++ ("'Helpers' was not declared"), ReferenceError on JavaScript,
-    MissingMethodException on MSIL, while C# runs it (8). Same family, separate mechanism (the
-    call visitor, not member access); pinned, and it is why the fixture's write read-backs use
-    file-scope functions rather than a `Peek()` inside the module. **Next obvious candidate.**
-  - **And its mirror on C#**: a BARE cross-module call (`BumpA()` from outside `A`) is CS0103
-    there — C# qualifies cross-module VARIABLES but not calls — while the other three run it and
-    refuse the qualified spelling. No single call form runs on all four today; the fixture's
-    one case that needs a call uses two program texts and says so.
+  - **A qualified module CALL in a single file was STILL a phantom-receiver call — FIXED
+    2026-09-19**, see the module-procedure-call entry below. (It was why this fixture's write
+    read-backs use file-scope functions rather than a `Peek()` inside the module; they still do,
+    and the pin that recorded the gap is promoted to a running case.)
+  - **And its mirror on C# — FIXED in the same entry**: a BARE cross-module call was CS0103
+    there, and there alone.
   - Module = file is still the multi-file resolver's assumption (`FindModuleByName` matches
     unit names, i.e. file stems). Unchanged.
   ⛔ **TWO MUTATIONS SURVIVED THE FIRST SWEEP, and both exposed an uncovered shape.** "Prefer the
@@ -1340,6 +1337,95 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   `GetOrCreateVariable` looks, so a reference minted a fresh LOCAL of the same name — fine only
   while both were spelled identically, broken the moment the colliding Const is renamed.
   Sixteen mutations, sixteen kills after that.
+
+  ⚠ **CALLS TO A `Module`'s PROCEDURES — qualified, bare and imported — run on every backend as
+  of 2026-09-19** — `ModuleProcedureCallTests` (23 cases), `FourBackends` (the shared in-process
+  four-backend harness), `SemanticAnalyzer.RecordModuleProcedure` + `PreferModuleProcedure` +
+  `StampProcedureOwner`, `IRBuilder.EmitProcedureCall` + `ProcedureCallTarget` + `ProcedureIrName`,
+  `IRCall.CalleeModule`, `CSharpBackend.UserCallTarget`, `Compiler.CombineIRModules` (refusal).
+  ⛔ **A QUALIFIED CALL LOWERED TO AN INSTANCE CALL ON A PHANTOM RECEIVER.** The analyzer resolved
+  `Helpers` to its Module symbol (no type), typed the access Object, and the IR builder's
+  static-vs-instance heuristic — "is the receiver's name exactly a class?" — said instance:
+  `t0 = Helpers.Twice(4);` on C++ ("'Helpers' was not declared"), ReferenceError on JavaScript,
+  `callvirt ... System.Object::'Twice'` (MissingMethodException) on MSIL, 8 on C# by re-emitting
+  the text. With the declaring module SECOND, MSIL did not even assemble (`'Helpers'` undefined
+  class). Every shape — Function, Sub, self-qualified, nested, from file scope, ByRef, Optional —
+  and the MULTI-FILE path identically. **Measured, not assumed, this time: the previous entry's
+  "multi-file resolves fine" was the front end only.**
+  ⛔ **THE BARE FORM HAD THE MIRROR DEFECT ON C#.** One static class per Module, cross-module
+  VARIABLES qualified, CALLS never: `Twice(4)` from Module M was emitted bare inside
+  `static class M` — CS0103, on C# alone. No single call form ran on all four backends.
+  ⛔ **TWO MODULES WITH THE SAME PROCEDURE NAME LOST ONE, SILENTLY.** Pass 1 flattens procedure
+  signatures into the global scope first-wins, so B's `F` had no symbol; a bare `F()` from a
+  third module bound to A's; and `CombineIRModules` — which the single-file CLI path ALSO goes
+  through (`CompileFile` → `CompileProjectFiles`) — deduplicated IR functions by bare name and
+  dropped B's `F` from the output, body and all. Three backends printed A's value for B's caller;
+  C# emitted no class B at all. The same first-wins defect this file records for class member
+  bodies and for module globals, in its third home.
+  ⛔ **THE IMPORTED-CALL WIRE FORM WAS HONOURED BY ONE BACKEND.** A cross-unit bare call went out
+  as the dotted IRCall name `"Helpers.Twice"`: C++ stripped it back off
+  (`ResolveFlattenedFunctionName`), JavaScript refused it ("no lowering for 'Helpers.Twice'"),
+  MSIL sanitised the dot away into `Combined::HelpersTwice` — a method nothing defines. So the
+  multi-file bare call was broken on two backends too; nobody had run it.
+  ⚠ **The fix mirrors the module-variable one, layer for layer:**
+  - **Analyzer**: pass 1 records every Module's procedures in `_moduleMembers` beside its
+    variables — ALWAYS, not only when the global scope was free — stamped with `OwningModule`;
+    `Module.Proc` resolves through the same `TryResolveModuleMember`. A BARE call prefers the
+    enclosing Module's own procedure whatever the declaration order, and a bare name two OTHER
+    modules declare is refused ("'F' is ambiguous between modules 'A', 'B'. Qualify it"). ⛔ The
+    preferred symbol is WRITTEN BACK onto the callee node: corrected only in the call visitor's
+    local, the call was typed against A's F and lowered to B's — measured "2" for "1" on all four.
+  - **IR builder**: every module-procedure call — bare, qualified, imported — goes through ONE
+    `EmitProcedureCall`, so a qualified call cannot lose what a bare one has (ByRef markers,
+    Optional fill, argument coercion). The IR name is bare, or owner-qualified (`A_F` / `B_F`)
+    when contested — decided from the AST up front, the same `_sharedGlobalNames` walk as
+    variables — and the owner rides on `IRCall.CalleeModule`. One wire form, no dotted names.
+  - **C#**: `UserCallTarget` qualifies a call whose `CalleeModule` differs from the emitting
+    function's module, "Main" spelled "Program" (a Module literally named `Main` is tested in
+    both directions).
+  - **Compiler**: `CombineIRModules` REFUSES a cross-file same-named module procedure, naming
+    both modules and files, instead of dropping the second; same-named METHODS of different
+    classes stay exempt.
+  ⚠ **Access is enforced for a Module's variables and constants ONLY, not its procedures** —
+  parity with `CollectExportedSymbols` ("procedures are always visible"), and because the PARSER
+  defaults a procedure with no modifier to `Private`, the opposite of the language. Enforcing it
+  would refuse every plain `Function` on all four. **PINNED DIVERGENCE**: a no-modifier module
+  Function runs on C++/JavaScript/MSIL (8) and C# refuses it through csc (`private static`;
+  CS0122 now that the call is qualified, CS0103 before). The fix is the parser's default. Next
+  candidate.
+  ⚠ **PINNED, pre-existing and UNMASKED rather than caused**: a CLASS method calling a module
+  procedure by bare name. The front end used to refuse the whole program ("Cannot return type
+  'Object'"); it resolves now and runs on JavaScript, MSIL and C#, while C++ emits the class
+  BEFORE the free-function prototypes — `'Twice' was not declared`. An emission-order gap; the
+  call text is right. Also pre-existing and untouched: a class declared INSIDE a Module block
+  (`Helpers.Box`) is broken on all four; MSIL fails any ByRef call (InvalidProgramException) and
+  JavaScript refuses ByRef by design (BL7002) — the qualified-ByRef case asserts both as they are.
+  ⚠ **`FourBackends` is the shared harness now** (`Norm`, `RunsOnEveryBackend`,
+  `RunEmittedCSharp`, `RunEmittedCSharpText`) — `ModuleMemberAccessTests` and this fixture both
+  use it; the multi-file case runs the COMBINED IR through all four generators and executes
+  three of them (MSIL's IL is asserted by text: two `call int32 'Combined'::'Twice'`, no
+  `HelpersTwice`, no `System.Object::'Twice'`).
+  ⛔ **THIRTEEN MUTATIONS, THIRTEEN KILLS — TWO SURVIVED THE FIRST SWEEP, and one was WRONGLY
+  REMOVED before the full suite caught it.** (1) The member-body exemption in `CombineIRModules`'
+  collision lookup survived a method-vs-method test, because a class method from the SECOND
+  file is added before the lookup ever runs; the shape that reaches it is a class METHOD in the
+  first file and a module FUNCTION of the same name in the second. (2) Re-stamping a procedure's
+  owner in pass 2 (`AttachOwningModule` in `Visit(FunctionNode)`) survived; a probe on PARAMETER
+  types found no distinguishing shape (array parameters do not parse, a generic parameter widens
+  to Object either way), so it was removed as unobservable — and the full suite failed three
+  `TaskResultTests` rows: "Cannot assign value of type 'Object' to variable of type 'Task'". The
+  observable is the RETURN type: pass 1 types `Task(Of Integer)` by bare name and lands on
+  Object, and a Module's call to its own procedure BELOW the declaration resolves through the
+  record that stamp swaps the fully typed symbol into. Restored, with a fixture test for the
+  shape; killed by four now. **"No shape distinguishes it" is a claim about the shapes that were
+  TRIED** — the by-name suite comparison is what makes it a fact.
+  ⚠ **`NativeEntryPointTests`' duplicate-`Sub Main` probe is re-pinned**: it documented the
+  combiner silently keeping one Main (first-wins) as the hazard BL6012's per-unit counting
+  exists for; that drop is now a refusal naming both files, and the per-unit design stays right.
+  ⛔ **Also in the table**: "never record procedures in pass 1" did NOT kill the plain qualified
+  call — with the declaring module first, pass 2's visit still records it — so pass-1
+  registration is load-bearing precisely for the reversed order, the bare forms and the
+  ambiguity check. Counts are in the commit message.
   ⛔ **THE FIRST FULL-SUITE RUN CAUGHT A REGRESSION THE FIXTURE COULD NOT** — two green C++ tests
   (`Cpp_ModuleLevelConstSizedArray_Allocates…`, `…TwoDimensionalArray_ConstSized…`) went red with
   "Array size must be a compile-time constant". A FILE-SCOPE `Const K` with `Dim g(K)` inside a

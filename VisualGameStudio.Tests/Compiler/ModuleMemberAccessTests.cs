@@ -48,84 +48,19 @@ namespace VisualGameStudio.Tests.Compiler;
 /// that cannot see <c>Main</c>'s locals: a write that had landed on a fresh local named
 /// <c>Value</c> would still read 13 back inside <c>Main</c> and prove nothing.</para>
 ///
-/// <para>⚠ A qualified module CALL (<c>Helpers.Peek()</c>) is a SEPARATE gap and is NOT fixed
-/// here — pinned at the end. It is why the read-backs use file-scope functions rather than a
-/// <c>Peek</c> inside the module.</para>
+/// <para>⚠ A qualified module CALL (<c>Helpers.Peek()</c>) was a SEPARATE gap, fixed after this
+/// (<see cref="ModuleProcedureCallTests"/>). The read-backs here still go through file-scope
+/// functions — they were written when a <c>Peek</c> inside the module could not be called, and
+/// they pin the variable half on its own.</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
-[NonParallelizable] // RunEmittedCSharp redirects Console.Out
+[NonParallelizable] // the C# leg redirects Console.Out
 public class ModuleMemberAccessTests
 {
-    private static string Norm(string s) => (s ?? "").Replace("\r\n", "\n").Trim();
-
-    private static void RunsOnEveryBackend(string program, string expected)
-    {
-        Assert.Multiple(() =>
-        {
-            Assert.That(Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(program))), Is.EqualTo(expected), "C++");
-            Assert.That(Norm(JavaScriptExecutionTests.RunJs(program)), Is.EqualTo(expected), "JavaScript");
-            Assert.That(Norm(Msil.MsilHarness.RunExpectingSuccess(program)), Is.EqualTo(expected), "MSIL");
-            Assert.That(Norm(RunEmittedCSharp(program)), Is.EqualTo(expected), "C#");
-        });
-    }
-
-    /// <summary>
-    /// The emitted C#, compiled AND RUN in process through Roslyn: a console assembly emitted
-    /// to memory, loaded, its entry point invoked with <c>Console.Out</c> captured.
-    ///
-    /// <para>⚠ Not <c>CliTestHarness.CompileRunCSharp</c>, which spawns <c>BasicLang.exe</c> — a
-    /// Windows apphost that is not deployed on Linux, which is why every <c>_CSharp</c> row that
-    /// uses it (18 of them) sits in this machine's baseline failure set. This fixture's C# leg
-    /// must run wherever the other three do, so it takes the same in-process route
-    /// <see cref="ReturnCoercionTests"/> already uses to compile, one step further. Each program
-    /// loads as a fresh assembly, so one test's module globals cannot leak into the next.</para>
-    /// </summary>
-    private static string RunEmittedCSharp(string program)
-    {
-        var csharp = ReturnCoercionTests.EmitCSharpForTest(program);
-
-        var references = AppDomain.CurrentDomain.GetAssemblies()
-            .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location))
-            .Select(a => MetadataReference.CreateFromFile(a.Location))
-            .Cast<MetadataReference>()
-            .ToImmutableArray();
-
-        var compilation = CSharpCompilation.Create(
-            "ModuleMemberProbe_" + Guid.NewGuid().ToString("N"),
-            new[] { CSharpSyntaxTree.ParseText(csharp) },
-            references,
-            new CSharpCompilationOptions(OutputKind.ConsoleApplication));
-
-        using var ms = new MemoryStream();
-        var emitted = compilation.Emit(ms);
-        Assert.That(emitted.Success, Is.True,
-            "the emitted C# does not compile:\n" + string.Join("\n",
-                emitted.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).Select(d => d.ToString()))
-            + "\n--- emitted ---\n" + csharp);
-
-        var assembly = Assembly.Load(ms.ToArray());
-        var entry = assembly.EntryPoint;
-        Assert.That(entry, Is.Not.Null, "no entry point in the emitted program");
-
-        var captured = new StringWriter();
-        var original = Console.Out;
-        Console.SetOut(captured);
-        try
-        {
-            var args = entry!.GetParameters().Length == 0 ? null : new object[] { Array.Empty<string>() };
-            entry.Invoke(null, args);
-        }
-        catch (TargetInvocationException ex)
-        {
-            Assert.Fail("the emitted C# threw: " + (ex.InnerException ?? ex) + "\n--- emitted ---\n" + csharp);
-        }
-        finally
-        {
-            Console.SetOut(original);
-        }
-        return captured.ToString();
-    }
+    private static string Norm(string s) => FourBackends.Norm(s);
+    private static void RunsOnEveryBackend(string program, string expected) => FourBackends.RunsOnEveryBackend(program, expected);
+    private static string RunEmittedCSharp(string program) => FourBackends.RunEmittedCSharp(program);
 
     private static SemanticAnalyzer Analyze(string source, out bool ok)
     {
@@ -600,36 +535,24 @@ public class ModuleMemberAccessTests
         finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
-    // ------------------------------------------------------------------ pin on what is STILL broken
+    // ------------------------------------------------------------------ promoted pin
 
     /// <summary>
-    /// ⛔ PINNED AS BROKEN, and NOT this change's: a QUALIFIED MODULE CALL in a single file.
-    /// <c>Helpers.Twice(4)</c> still lowers to an instance call on the phantom receiver —
-    /// <c>t0 = Helpers.Twice(4);</c> on C++ ("'Helpers' was not declared"), ReferenceError on
-    /// JavaScript, MissingMethodException on MSIL — while C# runs it (8). Same family, separate
-    /// mechanism (the call visitor, not member access), left for its own change. If this
-    /// stops matching, that change has landed: promote it to a compile-and-run case.
+    /// ✅ PROMOTED. This was pinned as broken — <c>t0 = Helpers.Twice(4);</c> on C++ ("'Helpers'
+    /// was not declared"), ReferenceError on JavaScript, MissingMethodException on MSIL, 8 on C#
+    /// by re-emission — with the instruction to promote it to a running case when the emitted
+    /// text stopped matching. It stopped matching when <see cref="ModuleProcedureCallTests"/>
+    /// landed, and this is the running case: all four backends, 8.
     /// </summary>
     [Test]
-    public void AQualifiedModuleCall_IsStillAPhantomReceiverCall_PinnedDivergence()
-    {
-        const string program = """
-            Module Helpers
-             Public Function Twice(n As Integer) As Integer
-              Return n * 2
-             End Function
-            End Module
-            Sub Main()
-             PrintLine(CStr(Helpers.Twice(4)))
-            End Sub
-            """;
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(BclE2E.CompileToCppOptimized(program), Does.Match(@"=\s*Helpers\.Twice\(4\);"),
-                "PINNED: the call is still emitted on the module name as if it were an object");
-            Assert.That(Norm(RunEmittedCSharp(program)), Is.EqualTo("8"),
-                "C# runs it — by re-emitting the text, which is not a lowering");
-        });
-    }
+    public void AQualifiedModuleCall_RunsOnEveryBackend() => RunsOnEveryBackend("""
+        Module Helpers
+         Public Function Twice(n As Integer) As Integer
+          Return n * 2
+         End Function
+        End Module
+        Sub Main()
+         PrintLine(CStr(Helpers.Twice(4)))
+        End Sub
+        """, "8");
 }

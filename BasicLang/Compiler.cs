@@ -269,6 +269,8 @@ namespace BasicLang.Compiler
                 if (!result.HasErrors)
                 {
                     result.CombinedIR = CombineIRModules(compilationOrder);
+                    foreach (var combineError in _combineErrors)
+                        result.AllErrors.Add(new SemanticError(combineError, 0, 0));
 
                     // Thread #CppInclude passthrough headers (collected during
                     // preprocessing across all units) onto the module the C++
@@ -436,6 +438,8 @@ namespace BasicLang.Compiler
                 // dependencies), not just the entry file's closure.
                 var allModuleIds = _registry.Modules.Select(u => u.Id).ToList();
                 result.CombinedIR = CombineIRModules(allModuleIds);
+                foreach (var combineError in _combineErrors)
+                    result.AllErrors.Add(new SemanticError(combineError, 0, 0));
 
                 // Thread #CppInclude passthrough headers (collected during
                 // preprocessing across all units) onto the module the C++
@@ -859,8 +863,13 @@ namespace BasicLang.Compiler
         /// <summary>
         /// Combine IR modules from all compilation units
         /// </summary>
+        /// <summary>Diagnostics from the most recent <see cref="CombineIRModules"/>; see there.</summary>
+        private readonly List<string> _combineErrors = new List<string>();
+
         private IRModule CombineIRModules(List<string> compilationOrder)
         {
+            _combineErrors.Clear();
+            var combinedMemberBodies = new HashSet<IRFunction>();
             var combined = new IRModule("Combined");
 
             foreach (var moduleId in compilationOrder)
@@ -888,14 +897,34 @@ namespace BasicLang.Compiler
                 // IRClass.Methods[].Implementation, which still points at the dropped object;
                 // only a backend that walks Functions (JavaScript) lost the method.
                 var memberBodies = unit.IR.CollectMemberImplementations();
+                foreach (var body in memberBodies) combinedMemberBodies.Add(body);
 
                 foreach (var func in unit.IR.Functions)
                 {
-                    if (memberBodies.Contains(func) ||
-                        !combined.Functions.Any(f => f.Name == func.Name))
+                    if (memberBodies.Contains(func))
                     {
                         combined.Functions.Add(func);
+                        continue;
                     }
+
+                    // ⛔ REFUSED, NOT DROPPED. This was a first-wins name check, and the second
+                    // file's same-named module procedure vanished from the output — body and
+                    // all — from a build that reported success. Within ONE unit the IR builder
+                    // now names such procedures apart by owner; two FILES meet only here, after
+                    // each unit's IR is built, and no backend can carry two functions of one bare
+                    // name. So it is a diagnostic naming both, with the member-body exemption
+                    // above intact (same-named METHODS of different classes are fine).
+                    var earlier = combined.Functions.FirstOrDefault(f =>
+                        f.Name == func.Name && !combinedMemberBodies.Contains(f));
+                    if (earlier == null)
+                    {
+                        combined.Functions.Add(func);
+                        continue;
+                    }
+                    _combineErrors.Add(
+                        $"Procedure '{func.Name}' is declared by module '{earlier.ModuleName}' ({System.IO.Path.GetFileName(earlier.SourceFilePath)}) " +
+                        $"and by module '{func.ModuleName}' ({System.IO.Path.GetFileName(func.SourceFilePath)}). " +
+                        "Two files may not declare the same module-level procedure name; rename one of them.");
                 }
 
                 // Add globals. Routed through AddGlobalVariable rather than a first-wins

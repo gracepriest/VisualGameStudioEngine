@@ -4868,7 +4868,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 || !members.TryGetValue(memberName, out var found)) return false;
 
             var sameModule = string.Equals(EnclosingModuleName(), found.OwningModule, StringComparison.OrdinalIgnoreCase);
-            if (!sameModule && !IsVisibleOutsideItsModule(found))
+            if (!sameModule && IsAccessChecked(found) && !IsVisibleOutsideItsModule(found))
             {
                 Error($"'{found.Name}' is Private to module '{found.OwningModule}' and cannot be accessed from here", line, column);
             }
@@ -4893,7 +4893,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 if (!members.TryGetValue(name, out var candidate)) continue;
                 if (string.Equals(candidate.OwningModule, current, StringComparison.OrdinalIgnoreCase)) continue;
-                if (IsVisibleOutsideItsModule(candidate)) visible.Add(candidate);
+                if (!IsAccessChecked(candidate) || IsVisibleOutsideItsModule(candidate)) visible.Add(candidate);
                 else hidden ??= candidate;
             }
 
@@ -5000,25 +5000,29 @@ namespace BasicLang.Compiler.SemanticAnalysis
         private readonly HashSet<string> _preRegisteredClasses =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        private void RegisterDeclaration(ASTNode node, ClassNode owner = null)
+        private void RegisterDeclaration(ASTNode node, ClassNode owner = null, string moduleName = null)
         {
             // DEBUG: Console.WriteLine($"RegisterDeclaration: {node?.GetType()?.Name}");
             switch (node)
             {
                 case FunctionNode func:
                     // DEBUG: Console.WriteLine($"  -> Function: {func.Name} returns {func.ReturnType?.Name}");
-                    RegisterFunctionSignature(func);
+                    RegisterFunctionSignature(func, moduleName);
                     break;
                 case SubroutineNode sub:
                     // DEBUG: Console.WriteLine($"  -> Subroutine: {sub.Name}");
-                    RegisterSubSignature(sub);
+                    RegisterSubSignature(sub, moduleName);
                     break;
                 case ConstructorNode ctor when owner != null:
                     RegisterConstructorSignature(ctor, owner);
                     break;
                 case ModuleNode module:
+                    // The Module's name rides along so its procedures are recorded as ITS members
+                    // (see RecordModuleProcedure) — the flattened global-scope symbol alone cannot
+                    // say which Module a procedure belongs to, and a second Module's same-named
+                    // procedure never reaches the global scope at all.
                     foreach (var member in module.Members)
-                        RegisterDeclaration(member);
+                        RegisterDeclaration(member, moduleName: module.Name);
                     break;
                 case ClassNode cls:
                     foreach (var member in cls.Members)
@@ -5026,7 +5030,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     break;
                 case NamespaceNode ns:
                     foreach (var member in ns.Members)
-                        RegisterDeclaration(member);
+                        RegisterDeclaration(member, moduleName: moduleName);
                     break;
             }
         }
@@ -5079,7 +5083,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             };
         }
 
-        private void RegisterFunctionSignature(FunctionNode node)
+        private void RegisterFunctionSignature(FunctionNode node, string moduleName = null)
         {
             // Get return type
             var returnTypeName = node.ReturnType?.Name ?? "Object";
@@ -5093,17 +5097,20 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 parameters.Add(new Symbol(param.Name, SymbolKind.Parameter, paramType, param.Line, param.Column) { IsOptional = param.IsOptional, IsByRef = param.IsByRef, IsParamArray = param.IsParamArray, DefaultValueExpression = param.DefaultValue });
             }
 
+            var symbol = new Symbol(node.Name, SymbolKind.Function, returnType, node.Line, node.Column);
+            symbol.ReturnType = returnType;
+            symbol.Parameters = parameters;
+            symbol.Access = node.Access;
+            RecordModuleProcedure(symbol, moduleName);
+
             // Check if already defined
             if (_currentScope.Resolve(node.Name) == null)
             {
-                var symbol = new Symbol(node.Name, SymbolKind.Function, returnType, node.Line, node.Column);
-                symbol.ReturnType = returnType;
-                symbol.Parameters = parameters;
                 _currentScope.Define(symbol);
             }
         }
 
-        private void RegisterSubSignature(SubroutineNode node)
+        private void RegisterSubSignature(SubroutineNode node, string moduleName = null)
         {
             // Build parameter list
             var parameters = new List<Symbol>();
@@ -5113,13 +5120,99 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 parameters.Add(new Symbol(param.Name, SymbolKind.Parameter, paramType, param.Line, param.Column) { IsOptional = param.IsOptional, IsByRef = param.IsByRef, IsParamArray = param.IsParamArray, DefaultValueExpression = param.DefaultValue });
             }
 
+            var symbol = new Symbol(node.Name, SymbolKind.Subroutine, _typeManager.VoidType, node.Line, node.Column);
+            symbol.Parameters = parameters;
+            symbol.Access = node.Access;
+            RecordModuleProcedure(symbol, moduleName);
+
             // Check if already defined
             if (_currentScope.Resolve(node.Name) == null)
             {
-                var symbol = new Symbol(node.Name, SymbolKind.Subroutine, _typeManager.VoidType, node.Line, node.Column);
-                symbol.Parameters = parameters;
                 _currentScope.Define(symbol);
             }
+        }
+
+        /// <summary>
+        /// Pass 1's half for a Module's PROCEDURE: stamp the owner and record it in
+        /// <see cref="_moduleMembers"/> beside the Module's variables and constants — ALWAYS,
+        /// whether or not the name is also defined in the global scope.
+        ///
+        /// <para>⛔ Pass 1 flattens every procedure signature into the global scope by bare name,
+        /// first wins. So <c>Module A / Function F</c> and <c>Module B / Function F</c> left B's
+        /// with no symbol anywhere: <c>B.F()</c> could not resolve, a bare <c>F()</c> from a third
+        /// module silently bound to A's, and — because IR functions were then deduplicated by
+        /// bare name in <c>CombineIRModules</c> — B's <c>F</c> was DROPPED from the output
+        /// entirely, body and all, from a build that reported success. Recording both here is
+        /// what lets the qualified form resolve, the bare form be refused as ambiguous, and the
+        /// IR builder name them apart.</para>
+        /// </summary>
+        private void RecordModuleProcedure(Symbol symbol, string moduleName)
+        {
+            if (symbol == null || string.IsNullOrEmpty(moduleName)) return;
+            symbol.OwningModule = moduleName;
+            RecordModuleMember(symbol);
+        }
+
+        private static bool IsProcedure(Symbol s) =>
+            s != null && (s.Kind == SymbolKind.Function || s.Kind == SymbolKind.Subroutine);
+
+        /// <summary>
+        /// Access is enforced for a Module's VARIABLES and CONSTANTS only. Its procedures are
+        /// treated as reachable from anywhere, for parity with <c>Compiler.CollectExportedSymbols</c>
+        /// ("functions and subroutines are always visible") and because the parser gives a
+        /// procedure with NO modifier <c>Private</c> — the opposite of the language's default —
+        /// so enforcing it here would refuse every plain <c>Function</c> called across modules.
+        /// (C# enforces it anyway, through csc: see the pinned divergence in
+        /// <c>ModuleProcedureCallTests</c>.)
+        /// </summary>
+        private static bool IsAccessChecked(Symbol s) =>
+            s != null && (s.Kind == SymbolKind.Variable || s.Kind == SymbolKind.Constant);
+
+        /// <summary>
+        /// The procedure a BARE call binds to, given what lexical scope resolved.
+        ///
+        /// <para>⛔ Two things scope resolution gets wrong for a Module procedure, both
+        /// order-dependent: (1) inside Module B, a call to B's own <c>F</c> written ABOVE
+        /// <c>F</c>'s declaration resolved to A's <c>F</c> in the global scope — pass 2 defines
+        /// B's copy in B's scope only when it reaches the declaration; (2) from a third module,
+        /// <c>F()</c> with two candidates silently took whichever pass 1 registered first. The
+        /// enclosing Module's own procedure wins here whatever the order, and a bare name two
+        /// OTHER modules both declare is refused as ambiguous. A local or parameter of the same
+        /// name still shadows both, exactly as before.</para>
+        /// </summary>
+        private Symbol PreferModuleProcedure(string name, Symbol resolved, int line, int column)
+        {
+            if (resolved != null && !IsProcedure(resolved)) return resolved;
+
+            var current = EnclosingModuleName();
+            if (current != null && _moduleMembers.TryGetValue(current, out var own)
+                && own.TryGetValue(name, out var ownProcedure) && IsProcedure(ownProcedure))
+                return ownProcedure;
+
+            if (!IsProcedure(resolved) || string.IsNullOrEmpty(resolved.OwningModule)) return resolved;
+
+            var owners = _moduleMembers
+                .Where(kv => kv.Value.TryGetValue(name, out var p) && IsProcedure(p))
+                .Select(kv => kv.Key)
+                .Where(k => !string.Equals(k, current, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(k => k, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (owners.Count > 1)
+            {
+                Error($"'{name}' is ambiguous between modules '{string.Join("', '", owners)}'. Qualify it with the module name", line, column);
+            }
+            return resolved;
+        }
+
+        /// <summary>
+        /// A procedure symbol reached through a cross-unit channel carries no owner of its own;
+        /// the written qualifier IS the declaring module, so it is stamped here for the IR
+        /// builder, which lowers every module-procedure call the same way.
+        /// </summary>
+        private static void StampProcedureOwner(Symbol symbol, string moduleName)
+        {
+            if (IsProcedure(symbol) && string.IsNullOrEmpty(symbol.OwningModule) && !string.IsNullOrEmpty(moduleName))
+                symbol.OwningModule = moduleName;
         }
 
 
@@ -5595,7 +5688,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 _currentScope.Define(symbol);
             }
             
+            // ⛔ LOAD-BEARING, and it was removed once on a wrong measurement. This re-records
+            // the fully typed pass-2 symbol over pass 1's stand-in, and every call a Module makes
+            // to its own procedure BELOW the declaration resolves through that record
+            // (PreferModuleProcedure). Pass 1 types a RETURN type by bare name — `Task(Of
+            // Integer)` is looked up as "Task" and lands on Object — so without this,
+            // `Dim t As Task(Of Integer) = GetCount()` was refused: "Cannot assign value of type
+            // 'Object' to variable of type 'Task'" (TaskResultTests, three rows). The mutation
+            // that drops this survived the fixture because it probed PARAMETER types only; the
+            // full suite found the return-type shape, and the fixture now has it.
             symbol.Access = node.Access;
+            AttachOwningModule(symbol);
 
             // Enter function scope
             var functionScope = EnterScope(node.Name, ScopeKind.Function);
@@ -5686,6 +5789,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             
             symbol.ReturnType = _typeManager.VoidType;
             symbol.Access = node.Access;
+            AttachOwningModule(symbol);
             SetNodeSymbol(node, symbol);
 
             // Enter subroutine scope
@@ -8535,6 +8639,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     var symbol = _projectSymbols.LookupQualified(moduleName, node.MemberName);
                     if (symbol != null)
                     {
+                        StampProcedureOwner(symbol, moduleName);
                         SetNodeSymbol(node, symbol);
                         SetNodeType(node, symbol.Type);
                         return;
@@ -8564,6 +8669,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             s.Name.Equals(node.MemberName, StringComparison.OrdinalIgnoreCase));
                         if (symbol != null)
                         {
+                            StampProcedureOwner(symbol, moduleName);
                             SetNodeSymbol(node, symbol);
                             SetNodeType(node, symbol.Type);
                             return;
@@ -8598,6 +8704,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             !string.IsNullOrEmpty(signature.SourceModule) &&
                             signature.SourceModule.Equals(unit.ModuleName, StringComparison.OrdinalIgnoreCase))
                         {
+                            StampProcedureOwner(signature, moduleName);
                             SetNodeSymbol(node, signature);
                             SetNodeType(node, signature.Type);
                             return;
@@ -8745,6 +8852,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (node.Callee is IdentifierExpressionNode idExpr)
             {
                 calleeSymbol = _currentScope.Resolve(idExpr.Name);
+                calleeSymbol = PreferModuleProcedure(idExpr.Name, calleeSymbol, node.Line, node.Column);
+                // ⛔ Written back onto the callee node. The identifier visit above bound the node
+                // to what lexical scope found; the IR builder reads THAT, not this local. With
+                // only the local corrected, the call was typed against A's F and lowered to
+                // B's — measured: "1" expected, "2" on all four backends.
+                if (calleeSymbol != null) SetNodeSymbol(idExpr, calleeSymbol);
                 // DEBUG: Console.WriteLine($"DEBUG: Resolving call to '{idExpr.Name}': symbol={calleeSymbol?.Name}, kind={calleeSymbol?.Kind}, returnType={calleeSymbol?.ReturnType?.Name}");
                 // If not found in local scope, check imported modules from project symbol table
                 if (calleeSymbol == null)
