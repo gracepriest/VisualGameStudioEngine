@@ -489,15 +489,15 @@ public class ModuleProcedureCallTests
     }
 
     /// <summary>
-    /// ⛔ PINNED, pre-existing and unmasked rather than caused: a CLASS method calling a module
-    /// procedure by bare name. Before, the front end refused the whole program ("Cannot return
-    /// type 'Object'") — the call was never typed. It resolves now, and runs on JavaScript, MSIL
-    /// and C#; on C++ the class body is emitted BEFORE the free-function prototypes, so
-    /// <c>Twice</c> is undeclared at the point of use. A C++ emission-order gap, not a lowering
-    /// one — the call text is right. If the C++ leg starts running, promote it.
+    /// A CLASS method calling a module procedure by bare name and qualified. ⛔ This was PINNED
+    /// as a C++ ordering gap: the front end used to refuse the whole program ("Cannot return
+    /// type 'Object'"), then resolved it — and C++ emitted the class body BEFORE the
+    /// free-function prototypes, so <c>Twice</c> was "use of undeclared identifier" there
+    /// alone. The prototypes now precede the classes; this is the promoted four-backend case,
+    /// and <see cref="CppEmissionOrderTests"/> holds every other shape of it.
     /// </summary>
     [Test]
-    public void AClassMethodCallingAModuleProcedure_RunsOnThree_AndIsAnOrderingGapOnCpp_Pinned()
+    public void AClassMethodCallingAModuleProcedure_RunsOnEveryBackend()
     {
         const string program = """
             Module Helpers
@@ -519,17 +519,9 @@ public class ModuleProcedureCallTests
              PrintLine(CStr(b.RunQ()))
             End Sub
             """;
-        Assert.Multiple(() =>
-        {
-            Assert.That(Norm(JavaScriptExecutionTests.RunJs(program)), Is.EqualTo("8\n10"), "JavaScript");
-            Assert.That(Norm(MsilHarness.RunExpectingSuccess(program)), Is.EqualTo("8\n10"), "MSIL");
-            Assert.That(Norm(FourBackends.RunEmittedCSharp(program)), Is.EqualTo("8\n10"), "C#");
-            var cpp = BclE2E.CompileToCppOptimized(program);
-            Assert.That(cpp, Does.Match(@"=\s*Twice\(4\);"), "the call itself lowers to the free function");
-            Assert.That(() => BclE2E.CompileRun(cpp), Throws.Exception,
-                "PINNED: C++ emits the class before the free-function prototypes, so this does " +
-                "not compile — if it runs, promote this leg to \"8\\n10\"");
-        });
+        FourBackends.RunsOnEveryBackend(program, "8\n10");
+        Assert.That(BclE2E.CompileToCppOptimized(program), Does.Match(@"=\s*Twice\(4\);"),
+            "the call lowers to the free function, which the prototype above the class declares");
     }
 
     // ------------------------------------------------------------------ multi-file
