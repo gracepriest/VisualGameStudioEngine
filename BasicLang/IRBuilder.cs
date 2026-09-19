@@ -195,22 +195,24 @@ namespace BasicLang.Compiler.IR
         /// function that no backend defined, broken on all four.</para>
         ///
         /// <para>⚠ What is NOT file scope, each measured: a stdlib procedure (registered at line
-        /// 0 — its IR name must stay the one the backends' tables know); a <c>Declare</c>; a
-        /// symbol declared in a class, module or function scope; and — the case that needs the
-        /// class lookup — a method of the class being built or of a base, whichever symbol the
-        /// analyzer bound the bare name to. Pass 1 flattens every method signature into the
-        /// global scope by bare name, first wins, so a method declared BELOW its caller, or
-        /// sharing a name with a file-scope function declared above the class, arrives here
-        /// bound to a global-scope symbol; every backend resolves the bare spelling to the member
-        /// (the probe printed the member's 3, not the function's 100, on all four), and this
-        /// keeps that so.</para>
+        /// 0 — its IR name must stay the one the backends' tables know); a <c>Declare</c>; and —
+        /// the case that needs the class lookup — a method of the class being built or of a
+        /// base, whichever symbol the analyzer bound the bare name to. Pass 1 flattens every
+        /// method signature into the global scope by bare name, first wins, so a method declared
+        /// BELOW its caller, or sharing a name with a file-scope function declared above the
+        /// class, arrives here bound to a global-scope symbol; every backend resolves the bare
+        /// spelling to the member (the probe printed the member's 3, not the function's 100, on
+        /// all four), and this keeps that so. A Module's procedure and an import never reach
+        /// here: <see cref="ProcedureCallTarget"/> answers those first.</para>
+        ///
+        /// <para>⚠ A check on the symbol's DECLARING SCOPE was here and is gone: it survived
+        /// mutation. Every class-scope symbol the class lookup already excludes, and every
+        /// module-scope one carries its owner, so nothing it refused ever reached it.</para>
         /// </summary>
         private bool IsFileScopeProcedure(Symbol callee)
         {
             if (callee.IsExtern) return false;
             if (callee.Line == 0 && callee.Column == 0) return false;
-            var kind = callee.DeclaringScope?.Kind;
-            if (kind != ScopeKind.Global && kind != ScopeKind.Namespace) return false;
             return !IsCurrentClassProcedure(callee.Name);
         }
 

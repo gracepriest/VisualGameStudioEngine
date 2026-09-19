@@ -1603,9 +1603,9 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   form a Module's procedure has. What is NOT file scope, each measured: a stdlib procedure
   (registered at line 0 — its IR name must stay the one the backends' tables know), a
   `Declare` (externs are emitted into whichever module class comes first, so no owner is right;
-  a Declare from a class body stays CS0103, out of scope), a symbol declared in a class, module
-  or function scope, and a method of the class being built or of a base — decided by asking the
-  analyzer's class type (`LookupType`, complete after analysis), because pass 1 flattens every
+  a Declare from a class body stays CS0103, out of scope), and a method of the class being built
+  or of a base — decided by asking the analyzer's class type (`LookupType`, complete after
+  analysis), because pass 1 flattens every
   method signature into the global scope first-wins, so a method declared BELOW its caller, or
   one sharing a name with a file-scope function declared ABOVE the class, arrives bound to a
   global-scope symbol; every backend resolves the bare spelling to the member (the probe
