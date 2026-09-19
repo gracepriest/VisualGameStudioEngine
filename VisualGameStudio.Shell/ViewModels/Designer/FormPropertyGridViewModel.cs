@@ -173,8 +173,14 @@ public partial class FormPropertyGridViewModel : ObservableObject
                 break;
         }
 
-        Rows.Add(IntRow(
-            "TabIndex", () => control.TabIndex, v => control.TabIndex = Math.Max(0, v), Changed));
+        // A component (Task 25) has no tab order. Its geometry rows were already absent — the switch
+        // above has no arm for a null Geometry — but TabIndex was unconditional, and a Timer with a
+        // TabIndex row would write a number the emitter cannot use.
+        if (control.Definition?.IsComponent != true)
+        {
+            Rows.Add(IntRow(
+                "TabIndex", () => control.TabIndex, v => control.TabIndex = Math.Max(0, v), Changed));
+        }
     }
 
     /// <summary>

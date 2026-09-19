@@ -46,6 +46,33 @@ public class FormPropertyGridTests
     }
 
     // ==================================================================
+    // Task 25 — a component's rows: its name and its catalog properties, nothing positional
+    // ==================================================================
+
+    [Test]
+    public void Rows_ForAComponent_AreNameAndItsCatalogProperties_WithNoTabIndexAndNoGeometry()
+    {
+        // ⚠ The helper is Read(string xml, string name) — xml FIRST.
+        var file = Read("""
+            <Form Name="F" Version="1">
+              <Controls/>
+              <Components><Timer Id="tmr" Interval="250"/></Components>
+            </Form>
+            """, "F.blform");
+        var grid = new FormPropertyGridViewModel();
+        grid.Load(file);
+        grid.SelectedControl = file.Model.FindById("tmr");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grid.Rows.Select(r => r.Name), Is.EqualTo(new[] { "Name", "Interval", "Enabled" }),
+                "no X/Y/Width/Height/Anchor/Dock, and no TabIndex — a component has none of them");
+            Assert.That(grid.Header, Is.EqualTo("tmr"));
+            Assert.That(grid.HeaderKind, Is.EqualTo("Timer"));
+        });
+    }
+
+    // ==================================================================
     // Rows come from the catalog, not from the document
     // ==================================================================
 

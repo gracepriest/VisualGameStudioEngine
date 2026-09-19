@@ -16,6 +16,55 @@ namespace VisualGameStudio.Tests.Compiler;
 [TestFixture]
 public class FormPlacementTests
 {
+    // ==================================================================
+    // Task 25 — a component has no place, so a drop of one goes to the tray
+    // ==================================================================
+
+    [Test]
+    public void PlacingAComponent_LandsInTheTray_AndIgnoresThePoint()
+    {
+        var document = WinFormsDocument();
+
+        var result = FormPlacement.Place(document, "Timer", 999, 999);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Refusal, Is.Null);
+            Assert.That(document.Components.Single(), Is.SameAs(result.Control));
+            Assert.That(result.Control!.Id, Is.EqualTo("Timer1"));
+            Assert.That(result.Control.Geometry, Is.Null, "no position — the point is irrelevant");
+            Assert.That(result.Control.TabIndex, Is.Zero, "no tab order");
+            Assert.That(result.Control.Properties, Is.Empty, "no Text stamped: a Timer has no caption");
+            Assert.That(document.Controls, Is.Empty, "not a control");
+        });
+    }
+
+    [Test]
+    public void PlacingASecondComponent_MintsTheNextId_AcrossBothLists()
+    {
+        var document = WinFormsDocument();
+        document.Controls.Add(Existing("Button", "Timer1", 0, 0, 10, 10));   // a control squatting on the name
+
+        var result = FormPlacement.Place(document, "Timer", 0, 0);
+
+        Assert.That(result.Control!.Id, Is.EqualTo("Timer2"), "one class, one field namespace");
+    }
+
+    [Test]
+    public void PlacingAWebComponent_NeedsNoLayout_BecauseItHasNoCell()
+    {
+        // A web control refuses without a <Layout> (no cell to land in); a component has no cell
+        // to need. A WinForms-only component is still refused on the web, by the catalog.
+        var document = new FormDocument { Target = FormTarget.Web, Name = "F" };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(FormPlacement.Place(document, "Timer", 0, 0).Refusal, Is.Null);
+            Assert.That(document.Components.Single().Kind, Is.EqualTo("Timer"));
+            Assert.That(FormPlacement.Place(document, "ToolTip", 0, 0).Refusal, Does.Contain("not available"));
+        });
+    }
+
     private static FormDocument WinFormsDocument(int width = 400, int height = 300)
     {
         var document = new FormDocument

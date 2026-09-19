@@ -220,18 +220,72 @@
           </DockPanel>
         </Border>
 
-        <designer:FormCanvasControl Grid.Column="1"
-                                    Document="{Binding DesignDocument}"
-                                    ModelRevision="{Binding DesignModelRevision}"
-                                    DropCommand="{Binding PlaceDroppedControlCommand}"
-                                    CommitGeometryCommand="{Binding CommitGeometryCommand}"
-                                    DeleteCommand="{Binding DeleteControlCommand}"
-                                    ActivateControlCommand="{Binding ActivateControlCommand}"
-                                    Selection="{Binding Selection}"
-                                    CopyCommand="{Binding CopyControlsCommand}"
-                                    CutCommand="{Binding CutControlsCommand}"
-                                    PasteCommand="{Binding PasteControlsCommand}"
-                                    SelectedControl="{Binding PropertyGrid.SelectedControl, Mode=TwoWay}"/>
+        <Grid Grid.Column="1" RowDefinitions="*,Auto">
+          <designer:FormCanvasControl Grid.Row="0"
+                                      Document="{Binding DesignDocument}"
+                                      ModelRevision="{Binding DesignModelRevision}"
+                                      DropCommand="{Binding PlaceDroppedControlCommand}"
+                                      CommitGeometryCommand="{Binding CommitGeometryCommand}"
+                                      DeleteCommand="{Binding DeleteControlCommand}"
+                                      ActivateControlCommand="{Binding ActivateControlCommand}"
+                                      Selection="{Binding Selection}"
+                                      CopyCommand="{Binding CopyControlsCommand}"
+                                      CutCommand="{Binding CutControlsCommand}"
+                                      PasteCommand="{Binding PasteControlsCommand}"
+                                      SelectedControl="{Binding PropertyGrid.SelectedControl, Mode=TwoWay}"/>
+
+          <!-- Task 25: the component tray — VS's strip under the surface for the things that are
+               part of the form but have no position on it. Click selects (through the shared
+               Selection, so the canvas pushes it into the property grid), double-click opens the
+               default handler, Delete removes, and a toolbox drag can be dropped here.
+               ⛔ Focusable="True" is load-bearing: a KeyBinding fires only while keyboard focus is
+               INSIDE the element, and a Border is not focusable by default. Without it the tray's
+               Delete would be complete, tested and dead the moment the user clicked anything but
+               the canvas. OnTrayItemPressed focuses this Border; FormTrayViewTests asserts the
+               attribute. -->
+          <Border Grid.Row="1" x:Name="ComponentTray" Focusable="True"
+                  IsVisible="{Binding Tray.IsVisible}"
+                  Background="{DynamicResource IdePanelBg}"
+                  BorderBrush="{DynamicResource IdeBorder}" BorderThickness="0,1,0,0"
+                  Padding="6,4" DragDrop.AllowDrop="True">
+            <Border.KeyBindings>
+              <KeyBinding Gesture="Delete" Command="{Binding DeleteControlCommand}"
+                          CommandParameter="{Binding PropertyGrid.SelectedControl}"/>
+            </Border.KeyBindings>
+            <Border.Styles>
+              <Style Selector="Border.tray-item">
+                <Setter Property="BorderBrush" Value="{DynamicResource IdeBorder}"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="Background" Value="{DynamicResource IdeBg}"/>
+              </Style>
+              <Style Selector="Border.tray-item.selected">
+                <Setter Property="BorderBrush" Value="#569CD6"/>
+              </Style>
+            </Border.Styles>
+            <ItemsControl ItemsSource="{Binding Tray.Items}">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                  <WrapPanel Orientation="Horizontal"/>
+                </ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="designerVm:FormTrayItem">
+                  <Border Classes="tray-item" Classes.selected="{Binding IsSelected}"
+                          Margin="0,0,8,0" Padding="6,3" CornerRadius="2"
+                          PointerPressed="OnTrayItemPressed" DoubleTapped="OnTrayItemDoubleTapped"
+                          ToolTip.Tip="{Binding Kind}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <TextBlock Text="{Binding Glyph}" FontSize="10"
+                                 FontFamily="Cascadia Code, Consolas, monospace"
+                                 VerticalAlignment="Center"/>
+                      <TextBlock Text="{Binding Id}" FontSize="12" VerticalAlignment="Center"/>
+                    </StackPanel>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </Border>
+        </Grid>
 
         <!-- Property window, shaped like Visual Studio's: "id  Kind" caption, a two-column
              name/value grid, and a description pane at the bottom explaining the selected row.

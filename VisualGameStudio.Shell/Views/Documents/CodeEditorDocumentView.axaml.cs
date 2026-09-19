@@ -71,6 +71,82 @@ public partial class CodeEditorDocumentView : UserControl
             OnToolboxPointerPressed,
             RoutingStrategies.Bubble,
             handledEventsToo: true);
+
+        // Task 25: the component tray is a drop target for the same toolbox drag the canvas
+        // accepts — but it routes to ITS OWN command (see OnTrayDrop).
+        ComponentTray.AddHandler(DragDrop.DragOverEvent, OnTrayDragOver);
+        ComponentTray.AddHandler(DragDrop.DropEvent, OnTrayDrop);
+    }
+
+    // ==================================================================
+    // Task 25 — the component tray
+    // ==================================================================
+
+    /// <summary>
+    /// A click on a tray item selects it through the shared <c>Selection</c> — the canvas's own
+    /// subscription then pushes it into the property grid — and moves keyboard focus INTO the tray,
+    /// which is what makes its Delete KeyBinding live.
+    /// </summary>
+    private void OnTrayItemPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if ((sender as Control)?.DataContext is not FormTrayItem item ||
+            DataContext is not CodeEditorDocumentViewModel vm)
+        {
+            return;
+        }
+
+        vm.Tray.Select(item);
+        ComponentTray.Focus();
+        e.Handled = true;
+    }
+
+    /// <summary>Double-click: the default handler, exactly as on the canvas (Task 22).</summary>
+    private void OnTrayItemDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        if ((sender as Control)?.DataContext is not FormTrayItem item ||
+            DataContext is not CodeEditorDocumentViewModel vm)
+        {
+            return;
+        }
+
+        vm.ActivateControlCommand.Execute(item.Control);
+        e.Handled = true;
+    }
+
+    private static string? DraggedKind(DragEventArgs e) =>
+        e.Data.Contains(FormCanvasControl.ControlKindFormat) &&
+        e.Data.Get(FormCanvasControl.ControlKindFormat) is string kind &&
+        !string.IsNullOrEmpty(kind)
+            ? kind
+            : null;
+
+    private void OnTrayDragOver(object? sender, DragEventArgs e)
+    {
+        // Copy only for a COMPONENT kind: the cursor says no to a Button over the tray before the
+        // drop does, which is where a refusal is cheapest.
+        var kind = DraggedKind(e);
+        e.DragEffects = kind != null && BasicLang.Forms.FormControlCatalog.Find(kind) is { IsComponent: true }
+            ? DragDropEffects.Copy
+            : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// ⛔ The tray's OWN command, never the canvas's <c>PlaceDroppedControlCommand</c>: a
+    /// <c>FormControlDropRequest</c> carries no origin, so the canvas path would place a control
+    /// kind at (0,0). <c>TrayDropCommand</c> places a component and refuses a control by name.
+    /// </summary>
+    private void OnTrayDrop(object? sender, DragEventArgs e)
+    {
+        e.Handled = true;
+
+        var kind = DraggedKind(e);
+        if (kind == null || DataContext is not CodeEditorDocumentViewModel vm)
+        {
+            return;
+        }
+
+        vm.TrayDropCommand.Execute(kind);
     }
 
     private void UnsubscribeFromViewModel(CodeEditorDocumentViewModel vm)

@@ -51,6 +51,16 @@ public static class FormPlacement
                 null, $"{definition.Kind} is not available on a {document.Target} form.");
         }
 
+        // A component (Task 25) has no place: it goes in the tray wherever it was dropped, on either
+        // target, and needs no cell and no <Layout>. Nothing positional is minted for it — no
+        // geometry, no tab index, no caption — because it has none of those to have.
+        if (definition.IsComponent)
+        {
+            var component = new FormControl { Kind = definition.Kind, Id = NextId(document, definition.Kind) };
+            document.Components.Add(component);
+            return new FormPlacementResult(component, null);
+        }
+
         // ⛔ D3. A .blwebform positions controls by CELL, not by pixel, so the web path produces a
         // GridGeometry from the cell the pointer is in rather than an X/Y.
         if (document.Target != FormTarget.WinForms)

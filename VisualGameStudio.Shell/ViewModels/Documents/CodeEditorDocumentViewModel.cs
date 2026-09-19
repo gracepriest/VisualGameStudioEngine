@@ -216,6 +216,8 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         {
             Toolbox.Target = file.Model.Target;
         }
+
+        Tray.Rebuild(file?.Model);
     }
 
     /// <summary>
@@ -543,15 +545,47 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         }
 
         var refusal = PlaceControl(request.Kind, request.X, request.Y);
-        if (refusal == null)
+        if (refusal != null)
+        {
+            ReportPlacementRefusal(refusal);
+        }
+    }
+
+    /// <summary>
+    /// A drop on the component TRAY (Task 25). Its own command, deliberately: a
+    /// <c>FormControlDropRequest</c> carries no origin, so the canvas's command cannot tell a tray
+    /// drop from a canvas drop and would place a Button at (0,0). A component kind is placed — the
+    /// point is irrelevant to it — and a control kind is refused the way a bad canvas drop is.
+    /// </summary>
+    [RelayCommand]
+    private void TrayDrop(string? kind)
+    {
+        if (string.IsNullOrEmpty(kind))
         {
             return;
         }
 
-        // ⛔ A drop that does nothing and says nothing is the failure this feature was added to
-        // fix. The finding goes on the CODE-BEHIND's key, like every other designer diagnostic, so
-        // the next good save clears it — see RegenerateDesignerRegionsAsync, which republishes the
-        // same (collection, file) pair and would otherwise leave this stranded in the Error List.
+        if (BasicLang.Forms.FormControlCatalog.Find(kind) is not { IsComponent: true })
+        {
+            ReportPlacementRefusal($"'{kind}' has a position; drop it on the form, not the tray.");
+            return;
+        }
+
+        var refusal = PlaceControl(kind, 0, 0);
+        if (refusal != null)
+        {
+            ReportPlacementRefusal(refusal);
+        }
+    }
+
+    /// <summary>
+    /// ⛔ A drop that does nothing and says nothing is the failure this feature was added to fix.
+    /// The finding goes on the CODE-BEHIND's key, like every other designer diagnostic, so the next
+    /// good save clears it — see RegenerateDesignerRegionsAsync, which republishes the same
+    /// (collection, file) pair and would otherwise leave this stranded in the Error List.
+    /// </summary>
+    private void ReportPlacementRefusal(string refusal)
+    {
         var codePath = BasicLang.Forms.FormCodeBehind.PathFor(FilePath ?? "");
         _eventAggregator.Publish(new DesignerDiagnosticsEvent(codePath, new List<DiagnosticItem>
         {
@@ -791,7 +825,20 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         _fileService = fileService;
         _eventAggregator = eventAggregator;
         _bookmarkService = bookmarkService;
+
+        // ⚠ In the constructor, not a property initializer: an initializer cannot reference the
+        // instance member Selection (CS0236), and the tray marks its items from that selection.
+        Tray = new ViewModels.Designer.FormTrayViewModel(Selection);
     }
+
+    /// <summary>The component tray under the canvas (Task 25): a view of <c>DesignDocument.Components</c>.</summary>
+    public ViewModels.Designer.FormTrayViewModel Tray { get; }
+
+    /// <summary>
+    /// The tray follows the DOCUMENT: every designer edit bumps the revision, and an undo re-parses
+    /// and bumps it too, so the strip can never show a component the file no longer has.
+    /// </summary>
+    partial void OnDesignModelRevisionChanged(int value) => Tray.Rebuild(DesignDocument);
 
     public IBookmarkService? BookmarkService => _bookmarkService;
 
