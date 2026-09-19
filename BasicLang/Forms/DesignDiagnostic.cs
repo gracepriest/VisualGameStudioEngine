@@ -64,6 +64,8 @@ public static class DesignCodes
     //   BL8019          a toolbox drop the designer refused (here)
     //   BL8020          free
     //   BL8021, BL8022  document-level refusals in a form document (here)
+    //   BL8023..BL8026  retarget findings — what could not cross between the two formats (here)
+    //   BL8027..BL8030  free
     //   BL8031          reserved — the spec and plan both name it for ONE thing: the --check
     //                   collision between a user's own top-level name and the dispatch helper.
     //                   BL8018 below is a different finding and takes a different number.
@@ -162,6 +164,40 @@ public static class DesignCodes
     /// nothing.
     /// </summary>
     public const string ReservedResourceReference = "BL8022";
+
+    // ==================================================================
+    // Retarget (Task 21). All four are WARNINGS: the conversion succeeded, and each one names a
+    // thing the other format could not take so the user can review it. A retarget that failed
+    // outright is the SOURCE being refused, which is the reader's own error, not one of these.
+    // ==================================================================
+
+    /// <summary>
+    /// A control whose kind has no catalog row on the destination — a <c>DataGridView</c> going to
+    /// the web. Removed, with its children moved up into its place so their work survives.
+    /// </summary>
+    public const string RetargetControlLost = "BL8023";
+
+    /// <summary>
+    /// A property the destination does not have — <c>DecimalPlaces</c> going to the web,
+    /// <c>GroupName</c> going to WinForms — or an attribute the destination would read as layout.
+    /// Dropped rather than carried as dead data the property grid would then show.
+    /// </summary>
+    public const string RetargetPropertyLost = "BL8024";
+
+    /// <summary>
+    /// The hard edge: absolute pixels ⇄ grid cells. One per control, saying what it had and where
+    /// it landed; one for the document, saying what the window (size, caption) or the page
+    /// (<c>&lt;Layout&gt;</c>, <c>&lt;Literal&gt;</c>) lost.
+    /// </summary>
+    public const string RetargetLayoutCrossed = "BL8025";
+
+    /// <summary>
+    /// A <c>&lt;Bind&gt;</c> on an event the catalog cannot name on the destination. Only a kind's
+    /// default event has a measured name on both sides (D8); anything else is dropped and named,
+    /// because carrying <c>MouseEnter</c> into <c>addEventListener</c> registers cleanly and never
+    /// fires.
+    /// </summary>
+    public const string RetargetBindLost = "BL8026";
 
     /// <summary>The form document itself is not well-formed XML, or its root/version is not one we know.</summary>
     public const string MalformedDocument = "BL8008";

@@ -86,6 +86,11 @@ Clean build; `csc` accepts it. **The call runs twice**, so anything with side ef
 and correctly so: that gate asks whether the output COMPILES, not what it does.
 
 ### 8. Multi-flag `Anchor` cannot be expressed in BasicLang at all
+**✅ RESOLVED 2026-09-18** — the premise below was incomplete: csc had never been asked, and
+`CType(7, AnchorStyles)` was refused by `SemanticAnalyzer.RejectImpossibleConversion`, not by the
+parser. One arm of that check now exempts scalar → *unresolvable* .NET type, and multi-edge anchors
+are emitted (`FormAnchorEmissionTests`). Kept for the measurements; the decision is closed.
+
 `Anchor="Left,Top,Right"` — an ordinary WinForms thing. Three routes, all refused:
 
 | Attempt | Result |
@@ -348,3 +353,21 @@ tab. The designer would be the front tab only by luck.
 sibling, found by swapping the extension — `.blform`/`.blwebform` ↔ `.bas` — and only offered when
 the sibling exists. Small, and it wants a caller test that drives the command and an AXAML guard
 for the binding, like every other UI seam on this branch.
+
+### 18. A retarget can only carry a kind's DEFAULT event across — found 2026-09-19
+
+`FormControlDef` names one measured event per target per kind (`WinFormsEvent` / `WebEvent`), and
+that is the whole cross-target event vocabulary. `FormRetarget` therefore maps `Click` ⇄ `click`,
+`TextChanged` ⇄ `input` and so on through the catalog, and DROPS any other bind with a `BL8026`
+naming the handler — `MouseEnter` on a Button, say, which a human would map to `mouseenter`
+without thinking.
+
+Carrying the WinForms spelling into the web document instead was measured as the worse failure:
+`addEventListener("MouseEnter", …)` registers cleanly and never fires, and nothing in the page says
+so. Dropped-and-named is honest; mapped would be better.
+
+**Shape of the fix:** a per-kind event table on the catalog row — `Events: { (WinForms:"MouseEnter",
+Web:"mouseenter"), … }` — driven through the same csc / node gates as the default event
+(`WinFormsCatalogSweepTests.TheDefaultEvent_…`, `FormRetargetPairTests`), because an event name is
+exactly as unfalsifiable as a property name and by the same mechanism. That table is also what an
+Events tab in the property grid would read, so the two features want the same row.

@@ -372,7 +372,7 @@ public class DesignCheckCliTests
             "--repl", "-i", "--interactive", "--help", "-h", "--version", "-v", "--parser-tests"
         };
 
-        string[] designFlags = { "--check" };
+        string[] designFlags = { "--check", "--retarget", "--out" };
 
         Assert.That(designFlags.Intersect(preEmptedFlags), Is.Empty,
             "a design flag sharing a name with a global flag would be swallowed before the verb " +

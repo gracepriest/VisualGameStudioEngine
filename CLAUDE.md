@@ -189,6 +189,17 @@ a second document type.
   happened with every piece of it working. It is called on the OPEN route only — a later reload must
   not throw a user who chose Code view back into the canvas — and a refused document stays in Code
   view, because its model is empty and Code view is where the problem is visible.
+- ⛔⛔ **A retargeted form (`FormRetarget`, `design --retarget`, "Retarget Form…") is a PAIR that
+  lives in its OWN directory and is NOT added to the source project.** Document and code-behind
+  pair by BASE NAME (`FormCodeBehind.PathFor`) and the class is named after the form, so
+  `LoginForm.blwebform` written beside `LoginForm.blform` pairs with the WinForms class already
+  there — the designer's next save writes web regions into it — and a second `LoginForm.bas` in
+  one project is a duplicate class. `--out` is required and the IDE asks for a folder; neither
+  ever overwrites. ⚠ The pixel ⇄ cell edge is DERIVED by a stated rule and reported per control
+  (`BL8025`); an unknown attribute the destination would read as layout (`Col` on a `.blform`
+  control, `Width` on a `.blwebform` root) is dropped-and-named (`BL8024`), never carried —
+  `Create()` writes unknown attributes after the modelled ones, and a stale one would overrule the
+  derived position with nothing looking wrong.
 - ⛔⛔ **A drag that re-parents must exclude the dragged subtree from the search for a target.**
   Two failures, one fix. The pointer is over the control being dragged, so without excluding it a
   non-container swallows its own point and nothing can ever be dragged into anything. And a

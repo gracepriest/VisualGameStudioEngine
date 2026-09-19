@@ -1,4 +1,4 @@
-# Handoff snapshot — 2026-09-11, updated 2026-09-18
+# Handoff snapshot — 2026-09-11, updated 2026-09-19
 
 **Why this file exists.** Working state for this repo normally lives in a per-machine
 auto-memory directory (`~/.claude/projects/…/memory/`) that is **outside the repo and does not
@@ -37,7 +37,8 @@ reference counts, never against the checkboxes.
 | **23** catalog | done — **10 → 23 kinds**; 8 are WinForms-only by decision |
 | **26** Anchor/Dock pickers | done — multi-edge, after the analyzer fix |
 | **27** acceptance | done — both targets **built and RUN**, output recorded in the commit |
-| **21** retarget · **24** menus · **25** tray · **28** closeout | NOT STARTED |
+| **21** retarget | done 2026-09-19 — `FormRetarget`, `design --retarget`, "Retarget Form…"; see its section below |
+| **24** menus · **25** tray · **28** closeout | NOT STARTED |
 
 ⚠ **24 is compiler-gated**: array-literal element typing has no base-class widening
 (`SemanticAnalyzer.cs:6056-6061`), so `{mnuFile, sep1}` degrades to `Object[]`. Measure what csc
@@ -60,6 +61,43 @@ target. Running them found both of these, with a green build throughout:
 Also found and fixed: the structure-preserving writer **never reordered elements**, so a z-order
 change never reached the file — the command looked right until you reloaded.
 
+### Task 21 — retarget (2026-09-19): one form, two targets
+
+`FormRetarget.Convert` turns a `.blform` model into a `.blwebform` model and back. The shared
+grammar crosses losslessly — kinds, ids, tab order, catalog properties that exist on both targets,
+default-event binds (`Click` ⇄ `click`, `TextChanged` ⇄ `input`, from the catalog), unknown
+content. Everything else is a **warning** in a new `BL8023..BL8026` block, one per thing:
+
+| Code | What it names |
+|---|---|
+| `BL8023` | a kind with no row on the destination — removed, its children hoisted into its place |
+| `BL8024` | a property the destination lacks, or an unknown attribute the destination would READ as layout |
+| `BL8025` | the hard edge: per control, what it had and where it landed; once for the window / the page |
+| `BL8026` | a bind on an event only one side can name — dropped, the handler named for hand-wiring |
+
+⛔ **The pixel ⇄ cell edge is derived by a rule the finding can state, never guessed.** Going to the
+web: one column per distinct X, one row per distinct Y among siblings, all-`auto` tracks, the
+scaffolder's gap. Going to WinForms: catalog sizes, cells pitched to the largest sibling + 8,
+origin 16, containers grown to hold their children, window never smaller than a new form. A form
+laid out AT that rule's fixed point round-trips **byte-identical** (`FormRetargetTests`); any other
+form round-trips byte-identical on the shared subset and moves only its geometry — and says so.
+
+⛔⛔ **A retargeted form is a PAIR and lives in its own directory, outside the source project.**
+`ConvertToPair` scaffolds a fresh code-behind on the destination, writes the regions into it and
+adds an empty stub per crossed handler, so a CLI user who never opens the IDE still gets a form
+that constructs its controls. It is never written beside the source and never added to the same
+project: document and code-behind pair by BASE NAME (`FormCodeBehind.PathFor`) and the class is
+named after the form, so `LoginForm.blwebform` beside `LoginForm.blform` would pair with the
+WinForms class and the designer's next save would write web regions into it. `design --retarget`
+therefore REQUIRES `--out <dir>`, and "Retarget Form…" asks for a folder. Neither ever overwrites.
+
+Gated by running, not reading: the retargeted web pair is built by the real CLI and executed under
+node (handler fires); the retargeted WinForms pair goes through the real compiler and csc.
+⚠ Not run: the WinForms pair as a live window — csc is where its layout ints are checked.
+
+Left for later (`docs/form-designer-followups.md` 18): only a kind's DEFAULT event has a measured
+name on both sides, so a `MouseEnter` bind is dropped-and-named rather than mapped.
+
 ### ⛔ Master is NOT healthy — 4 of this branch's failures are inherited
 
 Verified 2026-09-18 in a detached worktree at plain `origin/master`, with no designer code present:
@@ -77,13 +115,13 @@ new normal.
 
 | Gate | Result |
 |---|---|
-| Full suite | **7023 passed / 9 failed / 2 skipped of 7034**, 1h06m |
-| Fast subset | **5757 passed / 2 failed / 1 skipped of 5760** |
+| Full suite (2026-09-19, Task 21 tree) | **7088 passed / 8 failed / 2 skipped of 7098**, 59m |
+| Fast subset + the designer's Integration fixtures | **5815 passed / 2 failed / 1 skipped of 5818** |
 | `WinFormsCatalogSweepTests` | 57/57 through real `csc` |
 
-The 9: 2 standing `SearchSnippets` · 1 pre-existing `Cli_Build_CppProject` · **4 inherited from
-master** · 1 `RaylibScreenSpaceMath` NaN row that is display-dependent · 1 Anchor test since
-rewritten. ⚠ This branch has no clean full-suite baseline of its own, and the old "5826 / 4 known
+The 8: 2 standing `SearchSnippets` · 1 pre-existing `Cli_Build_CppProject` · **4 inherited from
+master** · 1 `RaylibScreenSpaceMath` NaN row that is display-dependent. (The previous run's 9th, an
+Anchor test, was rewritten with Task 26.) ⚠ This branch has no clean full-suite baseline of its own, and the old "5826 / 4 known
 failures" number was measured on a *different branch* 100+ commits ago. Do not quote it.
 
 ---

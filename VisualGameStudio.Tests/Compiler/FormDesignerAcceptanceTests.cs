@@ -258,8 +258,12 @@ public class FormDesignerAcceptanceTests
     /// <summary>
     /// Loads the emitted page's script with a minimal DOM, clicks the button, and returns everything
     /// it printed. Returns null when node is absent.
+    ///
+    /// <para>⚠ <c>internal static</c> so <c>FormRetargetPairTests</c> runs a RETARGETED page through
+    /// the same harness rather than a second DOM stub that could drift from this one. It assumes a
+    /// form named <c>LoginForm</c>, as the <c>data-form</c> line below says.</para>
     /// </summary>
-    private string? RunPageUnderNode(string outDir)
+    internal static string? RunPageUnderNode(string outDir)
     {
         var script = Directory.GetFiles(outDir, "*.js").FirstOrDefault();
         if (script == null)

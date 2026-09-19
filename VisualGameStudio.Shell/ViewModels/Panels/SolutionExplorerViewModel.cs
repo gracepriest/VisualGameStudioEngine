@@ -6,6 +6,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Core.Abstractions.ViewModels;
+using VisualGameStudio.Core.Events;
 using VisualGameStudio.Core.Models;
 using VisualGameStudio.ProjectSystem.Serialization;
 using VisualGameStudio.ProjectSystem.Services;
@@ -20,6 +21,12 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     private readonly ISolutionService _solutionService;
     private readonly IGitService? _gitService;
     private readonly IWorkspaceService? _workspaceService;
+
+    /// <summary>
+    /// Where "Retarget Form…" files its findings. Optional so the many fixtures that construct this
+    /// view model with four services keep compiling; DI resolves it because it is registered.
+    /// </summary>
+    private readonly IEventAggregator? _eventAggregator;
 
     [ObservableProperty]
     private ObservableCollection<TreeNode> _nodes = new();
@@ -94,7 +101,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     [ObservableProperty]
     private string? _startupProjectName;
 
-    public SolutionExplorerViewModel(IProjectService projectService, IFileService fileService, IDialogService dialogService, ISolutionService solutionService, IGitService? gitService = null, IWorkspaceService? workspaceService = null)
+    public SolutionExplorerViewModel(IProjectService projectService, IFileService fileService, IDialogService dialogService, ISolutionService solutionService, IGitService? gitService = null, IWorkspaceService? workspaceService = null, IEventAggregator? eventAggregator = null)
     {
         _projectService = projectService;
         _fileService = fileService;
@@ -102,6 +109,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         _solutionService = solutionService;
         _gitService = gitService;
         _workspaceService = workspaceService;
+        _eventAggregator = eventAggregator;
 
         _projectService.ProjectOpened += OnProjectOpened;
         _projectService.ProjectClosed += OnProjectClosed;
@@ -124,6 +132,7 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     {
         AddProjectReferenceCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(SelectedIsProject));
+        OnPropertyChanged(nameof(SelectedIsFormDocument));
     }
 
     /// <summary>
@@ -132,6 +141,15 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     /// Build Project, Remove from Solution).
     /// </summary>
     public bool SelectedIsProject => SelectedNode?.IsProject == true;
+
+    /// <summary>
+    /// Whether the selected node is a form DOCUMENT (<c>.blform</c> / <c>.blwebform</c>) — gates
+    /// "Retarget Form…". The code-behind beside it is a <c>.bas</c> and does not qualify: the
+    /// retarget converts the document and scaffolds a new code-behind; it never converts code.
+    /// </summary>
+    public bool SelectedIsFormDocument =>
+        SelectedNode?.IsFile == true &&
+        BasicLang.Forms.Serialization.FormDocumentReader.TargetOfExtension(SelectedNode.FullPath) != null;
 
     private void OnProjectOpened(object? sender, ProjectEventArgs e)
     {
@@ -1366,6 +1384,131 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         // ⚠ ONE file. The open handler is `async void`, so two raises race and whichever read
         // finishes last takes the active tab — "open both, designer last" is not something this
         // seam can promise.
+        FileOpenRequested?.Invoke(this, documentPath);
+    }
+
+    /// <summary>
+    /// "Retarget Form…" — Task 21's entry point in the IDE. Converts the selected form document to
+    /// the other format and writes the document plus a fresh code-behind into a folder the user
+    /// picks; every property that could not cross goes to the Error List, keyed on the new
+    /// code-behind like every other designer finding.
+    ///
+    /// <para>⛔⛔ NOT added to this project, and never written beside the source — and both for the
+    /// same reason. A form's document and code-behind pair by BASE NAME
+    /// (<c>FormCodeBehind.PathFor</c>) and the class is named after the form, so the web
+    /// <c>LoginForm.bas</c> in the same project as the WinForms <c>LoginForm.bas</c> is a duplicate
+    /// class, and <c>LoginForm.blwebform</c> beside <c>LoginForm.blform</c> would pair with the
+    /// WinForms class already there — the designer's next save would write web regions into it. The
+    /// pair belongs in the other target's project, one "Existing File…" away, and the dialog says
+    /// so.</para>
+    ///
+    /// <para>⚠ Keep the attribute adjacent to this method — see <see cref="AddNewFormAsync"/> for
+    /// how a doc comment between them once produced a command nothing could bind.</para>
+    /// </summary>
+    [RelayCommand]
+    private async Task RetargetFormAsync()
+    {
+        var node = SelectedNode;
+        if (node == null || !node.IsFile) return;
+
+        var from = BasicLang.Forms.Serialization.FormDocumentReader.TargetOfExtension(node.FullPath);
+        if (from == null) return;
+
+        var to = from == BasicLang.Forms.FormTarget.Web
+            ? BasicLang.Forms.FormTarget.WinForms
+            : BasicLang.Forms.FormTarget.Web;
+
+        string text;
+        try
+        {
+            text = await File.ReadAllTextAsync(node.FullPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            await _dialogService.ShowMessageAsync("Error", $"Could not read '{node.Name}': {ex.Message}");
+            return;
+        }
+
+        var file = BasicLang.Forms.Serialization.FormDocumentReader.Read(node.FullPath, text);
+        if (file.IsRefused)
+        {
+            // The reader's refusal is the reason. A document the designer will not open cannot
+            // become a second one it will not open either.
+            await _dialogService.ShowMessageAsync(
+                "Cannot retarget",
+                $"'{node.Name}' is refused by the designer, so it cannot be retargeted:\n\n" +
+                string.Join("\n", file.Diagnostics.Where(d => !d.IsWarning).Select(d => d.Message)));
+            return;
+        }
+
+        var describe = to == BasicLang.Forms.FormTarget.Web ? "a web form (.blwebform)" : "a WinForms form (.blform)";
+        var folder = await _dialogService.ShowFolderDialogAsync(new FolderDialogOptions
+        {
+            Title = $"Retarget '{file.Model.Name}' to {describe}: choose a folder for the new pair",
+            InitialDirectory = Path.GetDirectoryName(node.FullPath)
+        });
+
+        if (string.IsNullOrWhiteSpace(folder)) return;
+
+        BasicLang.Forms.FormRetargetPair pair;
+        try
+        {
+            pair = BasicLang.Forms.FormRetarget.ConvertToPair(file.Model, to);
+        }
+        catch (ArgumentException ex)
+        {
+            await _dialogService.ShowMessageAsync("Error", ex.Message);
+            return;
+        }
+
+        var documentPath = Path.Combine(folder, pair.DocumentFileName);
+        var codePath = Path.Combine(folder, pair.CodeFileName);
+
+        // ⛔ Neither half is ever overwritten, and neither is written when either exists — half a
+        // pair is a document whose code-behind belongs to something else.
+        var existing = new[] { documentPath, codePath }.FirstOrDefault(File.Exists);
+        if (existing != null)
+        {
+            await _dialogService.ShowMessageAsync(
+                "Error",
+                $"'{existing}' already exists. Nothing was written — choose another folder, or remove it first.");
+            return;
+        }
+
+        try
+        {
+            Directory.CreateDirectory(folder);
+            await File.WriteAllTextAsync(documentPath, pair.DocumentText);
+            await File.WriteAllTextAsync(codePath, pair.CodeText);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            await _dialogService.ShowMessageAsync("Error", $"The retargeted form could not be written: {ex.Message}");
+            return;
+        }
+
+        // Keyed on the NEW code-behind: the save path republishes designer findings on the .bas,
+        // so a finding filed anywhere else would be a phantom for the rest of the session.
+        _eventAggregator?.Publish(new DesignerDiagnosticsEvent(codePath, pair.Diagnostics
+            .Select(d => new DiagnosticItem
+            {
+                Id = d.Code,
+                Message = d.Message,
+                Severity = DiagnosticSeverity.Warning,
+                FilePath = codePath,
+                Source = Documents.CodeEditorDocumentViewModel.DesignerDiagnosticSource
+            })
+            .ToList()));
+
+        await _dialogService.ShowMessageAsync(
+            "Form retargeted",
+            $"Wrote {pair.DocumentFileName} and {pair.CodeFileName} into:\n{folder}\n\n" +
+            $"{pair.Diagnostics.Count} thing(s) could not cross between the two formats; each is " +
+            "listed in the Error List.\n\n" +
+            "The new code-behind is a fresh scaffold with an empty stub per handler — the original " +
+            "code-behind was not converted. The pair is not part of this project: add it to the " +
+            "other target's project with Add ▸ Existing File.");
+
         FileOpenRequested?.Invoke(this, documentPath);
     }
 

@@ -323,6 +323,7 @@ namespace BasicLang.Compiler.Driver
             Console.WriteLine("  list packages     List installed packages");
             Console.WriteLine("  search <query>    Search for NuGet packages");
             Console.WriteLine("  design --check    Check what the form designer reads from a file");
+            Console.WriteLine("  design --retarget Convert a form to the other target, into --out <dir>");
             Console.WriteLine();
             Console.WriteLine("Options:");
             Console.WriteLine("  --repl, -i        Start interactive REPL");
@@ -343,6 +344,7 @@ namespace BasicLang.Compiler.Driver
             Console.WriteLine("  basiclang add package Newtonsoft.Json  Add a package");
             Console.WriteLine("  basiclang restore                      Restore all packages");
             Console.WriteLine("  basiclang design --check MainForm.bas  Check a form for design issues");
+            Console.WriteLine("  basiclang design --retarget MainForm.blform --out web   Make the web version of a form");
             Console.WriteLine("  basiclang --repl                       Start interactive mode");
             Console.WriteLine("  basiclang program.bas                  Compile a source file");
         }
@@ -368,24 +370,71 @@ namespace BasicLang.Compiler.Driver
         /// </summary>
         static int HandleDesignCommand(string[] args)
         {
-            var check = args.Contains("--check");
-            var paths = args.Where(a => !a.StartsWith("-", StringComparison.Ordinal)).ToList();
+            var check = false;
+            var retarget = false;
+            string? outDir = null;
+            var paths = new List<string>();
 
-            // ⚠ Reject an unrecognised flag rather than dropping it. Silently ignoring one means
-            // `design --chek file.bas` runs as if the typo were not there — and since the verb's
-            // whole job is to report, a run that quietly did something else is worse than no run.
-            var unknown = args.FirstOrDefault(a =>
-                a.StartsWith("-", StringComparison.Ordinal) && a != "--check");
-            if (unknown != null)
+            for (var i = 0; i < args.Length; i++)
             {
-                Console.Error.WriteLine($"design: unknown option '{unknown}'.");
-                Console.Error.WriteLine("Usage: basiclang design --check <file.bas> [more files...]");
+                switch (args[i])
+                {
+                    case "--check":
+                        check = true;
+                        break;
+
+                    case "--retarget":
+                        retarget = true;
+                        break;
+
+                    case "--out":
+                        if (i + 1 >= args.Length)
+                        {
+                            Console.Error.WriteLine("design --retarget: --out needs a directory.");
+                            return 2;
+                        }
+
+                        outDir = args[++i];
+                        break;
+
+                    default:
+                        // ⚠ Reject an unrecognised flag rather than dropping it. Silently ignoring one
+                        // means `design --chek file.bas` runs as if the typo were not there — and since
+                        // the verb's whole job is to report, a run that quietly did something else is
+                        // worse than no run.
+                        if (args[i].StartsWith("-", StringComparison.Ordinal))
+                        {
+                            Console.Error.WriteLine($"design: unknown option '{args[i]}'.");
+                            PrintDesignUsage();
+                            return 2;
+                        }
+
+                        paths.Add(args[i]);
+                        break;
+                }
+            }
+
+            // Exactly one of the two verbs.
+            if (check == retarget)
+            {
+                PrintDesignUsage();
                 return 2;
             }
 
-            if (!check)
+            return check ? DesignCheck(paths, outDir) : DesignRetarget(paths, outDir);
+        }
+
+        static void PrintDesignUsage()
+        {
+            Console.Error.WriteLine("Usage: basiclang design --check <file.bas> [more files...]");
+            Console.Error.WriteLine("       basiclang design --retarget <form.blform|form.blwebform> --out <directory>");
+        }
+
+        static int DesignCheck(List<string> paths, string? outDir)
+        {
+            if (outDir != null)
             {
-                Console.Error.WriteLine("Usage: basiclang design --check <file.bas> [more files...]");
+                Console.Error.WriteLine("design --check: --out is a --retarget option.");
                 return 2;
             }
 
@@ -423,6 +472,115 @@ namespace BasicLang.Compiler.Driver
             Console.WriteLine($"design --check: {paths.Count} file(s), {errors} error(s), {warnings} warning(s).");
 
             return errors > 0 ? 1 : 0;
+        }
+
+        /// <summary>
+        /// <c>basiclang design --retarget &lt;form&gt; --out &lt;directory&gt;</c> — converts a form
+        /// document to the other format (Task 21) and writes the document plus a fresh code-behind
+        /// into <c>--out</c>.
+        ///
+        /// <para>Exit codes as <c>--check</c>: <b>0</b> written, with every loss listed on stdout;
+        /// <b>1</b> the source was refused by the reader, nothing written; <b>2</b> an argument
+        /// error — including a destination file that already exists, which is never overwritten.</para>
+        ///
+        /// <para>⛔ <c>--out</c> is required. A form's document and code-behind pair by BASE NAME in
+        /// one directory (<c>FormCodeBehind.PathFor</c>), so <c>LoginForm.blwebform</c> written
+        /// beside <c>LoginForm.blform</c> would pair with the WinForms class already there — and the
+        /// designer's next save would write web regions into it. The pair needs its own directory,
+        /// and the verb refuses to guess one.</para>
+        /// </summary>
+        static int DesignRetarget(List<string> paths, string? outDir)
+        {
+            if (paths.Count != 1)
+            {
+                Console.Error.WriteLine("design --retarget: exactly one form document (.blform or .blwebform) is required.");
+                return 2;
+            }
+
+            var source = paths[0];
+            if (!File.Exists(source))
+            {
+                Console.Error.WriteLine($"design --retarget: file not found: {source}");
+                return 2;
+            }
+
+            var from = BasicLang.Forms.Serialization.FormDocumentReader.TargetOfExtension(source);
+            if (from == null)
+            {
+                Console.Error.WriteLine(
+                    $"design --retarget: '{Path.GetFileName(source)}' is not a form document — " +
+                    "expected a .blform or a .blwebform.");
+                return 2;
+            }
+
+            if (outDir == null)
+            {
+                Console.Error.WriteLine(
+                    "design --retarget: --out <directory> is required. A form's document and code-behind " +
+                    "pair by base name in one directory, so the retargeted pair cannot be written beside " +
+                    "the source — it would pair with the source's own .bas.");
+                return 2;
+            }
+
+            var to = from == BasicLang.Forms.FormTarget.Web
+                ? BasicLang.Forms.FormTarget.WinForms
+                : BasicLang.Forms.FormTarget.Web;
+
+            var file = BasicLang.Forms.Serialization.FormDocumentReader.Read(source, File.ReadAllText(source));
+            if (file.IsRefused)
+            {
+                // The reader's refusal IS the finding, on stdout like every other. A document the
+                // designer will not open must not become a second one it will not open either.
+                foreach (var finding in file.Diagnostics)
+                {
+                    Console.WriteLine(finding.Format());
+                }
+
+                Console.WriteLine($"design --retarget: '{Path.GetFileName(source)}' was refused; nothing was written.");
+                return 1;
+            }
+
+            BasicLang.Forms.FormRetargetPair pair;
+            try
+            {
+                pair = BasicLang.Forms.FormRetarget.ConvertToPair(file.Model, to);
+            }
+            catch (ArgumentException ex)
+            {
+                Console.Error.WriteLine($"design --retarget: {ex.Message}");
+                return 2;
+            }
+
+            var documentPath = Path.Combine(outDir, pair.DocumentFileName);
+            var codePath = Path.Combine(outDir, pair.CodeFileName);
+
+            // ⛔ Neither half is ever overwritten, and NEITHER is written when EITHER exists — half a
+            // pair is a document whose code-behind belongs to something else.
+            var existing = new[] { documentPath, codePath }.FirstOrDefault(File.Exists);
+            if (existing != null)
+            {
+                Console.Error.WriteLine(
+                    $"design --retarget: '{existing}' already exists; nothing was written. " +
+                    "Choose another --out directory, or remove it first.");
+                return 2;
+            }
+
+            Directory.CreateDirectory(outDir);
+            File.WriteAllText(documentPath, pair.DocumentText);
+            File.WriteAllText(codePath, pair.CodeText);
+
+            foreach (var finding in pair.Diagnostics)
+            {
+                Console.WriteLine(finding.Format());
+            }
+
+            Console.WriteLine(
+                $"design --retarget: wrote {pair.DocumentFileName} and {pair.CodeFileName} into {outDir}, " +
+                $"{pair.Diagnostics.Count} warning(s).");
+            Console.WriteLine(
+                "The code-behind is a fresh scaffold with an empty stub per handler; the original " +
+                "code-behind was not converted.");
+            return 0;
         }
 
         static void HandleNewCommand(string[] args)
