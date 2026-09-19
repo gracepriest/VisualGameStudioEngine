@@ -176,7 +176,65 @@ namespace BasicLang.Compiler.IR
                 return (GlobalIrName(callee.OwningModule, callee.Name), callee.OwningModule);
             if (callee.IsImported && !string.IsNullOrEmpty(callee.SourceModule))
                 return (callee.Name, callee.SourceModule);
+            if (isProcedure && IsFileScopeProcedure(callee))
+                return (GlobalIrName(_module.Name, callee.Name), _module.Name);
             return (callee.Name, null);
+        }
+
+        /// <summary>
+        /// Whether <paramref name="callee"/> is a procedure declared at the FILE scope of this
+        /// unit: its owner is the file's own module, and it is spelled under that owner exactly
+        /// as a Module's procedure is under its Module.
+        ///
+        /// <para>⛔ A file-scope callee used to go out with NO owner, so the one backend that
+        /// keeps each module in its own static class (C#) could not qualify it: <c>Twice(4)</c>
+        /// from a class body, a constructor, a Shared method, a lambda or a <c>Module</c> block
+        /// was CS0103 — measured — while the three flattening backends ran it. And its IR name
+        /// was the BARE one even when <see cref="ProcedureIrName"/> had declared it owner-
+        /// qualified (a file-scope <c>F</c> beside <c>Module A</c>'s <c>F</c>): a call to a
+        /// function that no backend defined, broken on all four.</para>
+        ///
+        /// <para>⚠ What is NOT file scope, each measured: a stdlib procedure (registered at line
+        /// 0 — its IR name must stay the one the backends' tables know); a <c>Declare</c>; a
+        /// symbol declared in a class, module or function scope; and — the case that needs the
+        /// class lookup — a method of the class being built or of a base, whichever symbol the
+        /// analyzer bound the bare name to. Pass 1 flattens every method signature into the
+        /// global scope by bare name, first wins, so a method declared BELOW its caller, or
+        /// sharing a name with a file-scope function declared above the class, arrives here
+        /// bound to a global-scope symbol; every backend resolves the bare spelling to the member
+        /// (the probe printed the member's 3, not the function's 100, on all four), and this
+        /// keeps that so.</para>
+        /// </summary>
+        private bool IsFileScopeProcedure(Symbol callee)
+        {
+            if (callee.IsExtern) return false;
+            if (callee.Line == 0 && callee.Column == 0) return false;
+            var kind = callee.DeclaringScope?.Kind;
+            if (kind != ScopeKind.Global && kind != ScopeKind.Namespace) return false;
+            return !IsCurrentClassProcedure(callee.Name);
+        }
+
+        /// <summary>
+        /// Whether the class whose member is being built, or one of its bases, declares a
+        /// method or Sub named <paramref name="name"/>. Read from the analyzer's class type,
+        /// which is complete for every member once analysis has run — the IR class lists only
+        /// the methods built so far, and a method declared below its caller is not among them.
+        /// </summary>
+        private bool IsCurrentClassProcedure(string name)
+        {
+            if (string.IsNullOrEmpty(_currentClassName) || string.IsNullOrEmpty(name)) return false;
+
+            var guard = 0;
+            for (var type = _semanticAnalyzer.LookupType(_currentClassName); type != null && guard++ < 64;)
+            {
+                if (type.Members != null && type.Members.TryGetValue(name, out var member) && member != null
+                    && (member.Kind == SymbolKind.Function || member.Kind == SymbolKind.Subroutine))
+                    return true;
+
+                var baseType = type.BaseType;
+                type = baseType == null ? null : (_semanticAnalyzer.LookupType(baseType.Name) ?? baseType);
+            }
+            return false;
         }
 
         /// <summary>

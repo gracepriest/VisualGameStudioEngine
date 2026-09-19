@@ -34,12 +34,12 @@ namespace VisualGameStudio.Tests.Compiler;
 /// build that reported success, on that path alone. The combined emission had this exact bug
 /// fixed on 2026-09-17; the split site never got it. Fixed the same way; its own test below.</para>
 ///
-/// <para>⚠ Every running case with a MODULE-scoped callee or global asserts all four backends.
-/// The FILE-SCOPE shapes run on three and are PINNED on C#: that backend qualifies a call or a
-/// global only when module names differ, and a class body — or a Module block — is never inside
-/// the file module's static class, so <c>Twice</c> declared at file scope is CS0103 from either.
-/// A separate C# defect, recorded, not this change's. Four C++ gaps the probe measured are
-/// pinned at the end so the next reader knows they are real and not this ordering.</para>
+/// <para>⚠ Every running case asserts all four backends. The FILE-SCOPE shapes were pinned on
+/// C# when this fixture was written (that backend left a file-scope callee or global bare
+/// inside a class body or a Module block — CS0103) and are promoted since the fix; the
+/// qualification itself is <c>CsFileScopeQualificationTests</c>' subject. Four C++ gaps the
+/// probe measured are pinned at the end so the next reader knows they are real and not this
+/// ordering.</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -375,36 +375,27 @@ public class CppEmissionOrderTests
         });
     }
 
-    // ------------------------------------------------------------------ file scope: C++ fixed, C# pinned
+    // ------------------------------------------------------------------ file scope
 
     /// <summary>
     /// A FILE-SCOPE function from a method, declared before or after the class in source: the
-    /// prototype now precedes the class either way. ⛔ PINNED on C#: that backend qualifies a
-    /// call only when the callee's module differs from the emitting function's, and a class body
-    /// is never inside the file module's static class — CS0103. A separate C# defect, recorded.
+    /// prototype now precedes the class either way. Was pinned on C# (CS0103: the callee went
+    /// out bare inside the class); promoted with the qualification fix.
     /// </summary>
     [TestCase(true, TestName = "{m}(declared before the class)")]
     [TestCase(false, TestName = "{m}(declared after the class)")]
-    public void AClassMethod_CallingAFileScopeFunction_RunsOnThree_AndIsPinnedOnCSharp(bool declaredBefore)
+    public void AClassMethod_CallingAFileScopeFunction_RunsOnEveryBackend(bool declaredBefore)
     {
         const string fn = "Function Twice(n As Integer) As Integer\n Return n * 2\nEnd Function\n";
         const string cls = "Class Box\n Public Function Run() As Integer\n  Return Twice(4)\n End Function\nEnd Class\n";
         const string main = "Sub Main()\n Dim b As New Box()\n PrintLine(CStr(b.Run()))\nEnd Sub\n";
-        var program = declaredBefore ? fn + cls + main : cls + fn + main;
-        Assert.Multiple(() =>
-        {
-            Assert.That(Cpp(program), Is.EqualTo("8"), "C++");
-            Assert.That(Js(program), Is.EqualTo("8"), "JavaScript");
-            Assert.That(Msil(program), Is.EqualTo("8"), "MSIL");
-            Assert.That(ReturnCoercionTests.CompileEmittedCSharpForTest(program), Has.Some.Contains("CS0103"),
-                "PINNED: C# leaves a file-scope callee unqualified inside a class");
-        });
+        RunsOnEveryBackend(declaredBefore ? fn + cls + main : cls + fn + main, "8");
     }
 
+    /// <summary>Was pinned on C# (the write went out bare); promoted with the qualification fix.</summary>
     [Test]
-    public void AClassMethod_WritingAFileScopeGlobal_RunsOnThree_AndIsPinnedOnCSharp()
-    {
-        const string program = """
+    public void AClassMethod_WritingAFileScopeGlobal_RunsOnEveryBackend()
+        => RunsOnEveryBackend("""
             Dim Total As Integer = 1
             Class Box
              Public Sub Bump()
@@ -416,25 +407,15 @@ public class CppEmissionOrderTests
              b.Bump()
              PrintLine(CStr(Total))
             End Sub
-            """;
-        Assert.Multiple(() =>
-        {
-            Assert.That(Cpp(program), Is.EqualTo("11"), "C++");
-            Assert.That(Js(program), Is.EqualTo("11"), "JavaScript");
-            Assert.That(Msil(program), Is.EqualTo("11"), "MSIL");
-            Assert.That(ReturnCoercionTests.CompileEmittedCSharpForTest(program), Has.Some.Contains("CS0103"),
-                "PINNED: C# leaves a file-scope global unqualified inside a class");
-        });
-    }
+            """, "11");
 
     /// <summary>
-    /// The C# gap is not about classes: a MODULE block calling a file-scope function is CS0103
-    /// too, because the Module is its own static class. Pinned here so the extent is on record.
+    /// The C# gap was not about classes: a MODULE block calling a file-scope function was CS0103
+    /// too, because the Module is its own static class. Promoted with the qualification fix.
     /// </summary>
     [Test]
-    public void AModule_CallingAFileScopeFunction_RunsOnThree_AndIsPinnedOnCSharp()
-    {
-        const string program = """
+    public void AModule_CallingAFileScopeFunction_RunsOnEveryBackend()
+        => RunsOnEveryBackend("""
             Function Twice(n As Integer) As Integer
              Return n * 2
             End Function
@@ -443,16 +424,7 @@ public class CppEmissionOrderTests
               PrintLine(CStr(Twice(4)))
              End Sub
             End Module
-            """;
-        Assert.Multiple(() =>
-        {
-            Assert.That(Cpp(program), Is.EqualTo("8"), "C++");
-            Assert.That(Js(program), Is.EqualTo("8"), "JavaScript");
-            Assert.That(Msil(program), Is.EqualTo("8"), "MSIL");
-            Assert.That(ReturnCoercionTests.CompileEmittedCSharpForTest(program), Has.Some.Contains("CS0103"),
-                "PINNED: C# leaves a file-scope callee unqualified inside a Module's class");
-        });
-    }
+            """, "8");
 
     // ------------------------------------------------------------------ placement: after what a prototype may name
 
