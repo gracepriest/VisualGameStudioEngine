@@ -1546,15 +1546,12 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   got it; `Split_AModuleGlobalWithADeclaredInitializer_IsInitialized_CompilesAndRuns` is its
   own test, with no class involved. Fifth declaration site of the same helper, second home of
   the same drop.
-  ⚠ **C# HAS ITS OWN GAP HERE, PINNED, NOT FIXED**: it qualifies a call or a global only when the
-  callee's module name differs from the emitting function's, and a class body — or a MODULE
+  ⚠ **C# HAD ITS OWN GAP HERE — FIXED the same day, see "A FILE-SCOPE PROCEDURE OR GLOBAL IS
+  REACHABLE FROM ANY CONTEXT ON C#" below**: it qualified a call or a global only when the
+  callee's module name differed from the emitting function's, and a class body — or a MODULE
   BLOCK — is never inside the file module's static class. So a FILE-SCOPE function or global
-  used from a class method, or from `Module M`'s `Sub Main`, is CS0103 on C# while the other
-  three run it (`AClassMethod_CallingAFileScopeFunction_RunsOnThree_AndIsPinnedOnCSharp`, the
-  global twin, and `AModule_CallingAFileScopeFunction_…`). `UserCallTarget` / `QualifyCross-
-  ModuleGlobal` need "the emitting function is not in that module's class", not "the module
-  names differ" — and a file-scope callee arrives with no `CalleeModule` at all (no
-  `OwningModule`), so the C# backend must find the declaring `IRFunction` by name. Next candidate.
+  used from a class method, or from `Module M`'s `Sub Main`, was CS0103 on C# while the other
+  three ran it. The three pins here are promoted to `_RunsOnEveryBackend`.
   ⛔ **FOUR C++ GAPS MEASURED AND PINNED, none this change's**: (1) a class using a LATER class's
   member — "member access into incomplete type"; the reverse order runs on all four. Needs
   out-of-line member definitions (or dependency-ordered classes); the prototype fix cannot
@@ -1585,6 +1582,84 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   test. Full suite in place: 195 / 6101 / 203 / 6499 against the 195 / 6069 / 203 / 6467 baseline
   at `d2ad064` — 195 reported = 195 anchored lines, the same 170 failing names, nothing new and
   nothing newly passing; the +32 are the fixture's 32 cases.
+
+  ⚠ **A FILE-SCOPE PROCEDURE OR GLOBAL IS REACHABLE FROM ANY CONTEXT ON C# as of 2026-09-19** —
+  `CsFileScopeQualificationTests` (fixture), `IRBuilder.ProcedureCallTarget` +
+  `IsFileScopeProcedure` + `IsCurrentClassProcedure`, `SemanticAnalyzer.LookupType`,
+  `CSharpBackend._currentModuleClass` + `EmittedInsideModuleClass` + `ModuleMemberAccess`. The
+  three C# pins in `CppEmissionOrderTests` are promoted to `_RunsOnEveryBackend`.
+  ⛔ **EVERY FILE-SCOPE NAME USED FROM OUTSIDE THE FILE MODULE'S STATIC CLASS WAS CS0103 ON C#
+  ALONE** — measured, compiled and run on all four, before the change: a file-scope function
+  (declared before or after the class), Sub, Optional and ByRef callee, global (read and
+  write), Const, sized array and class-typed global from a METHOD; a function from a
+  constructor, a property getter, a Shared method, a lambda in a method; a function from a
+  `Module` block's `Sub Main` and from its procedure (either declaration order); and, in a
+  multi-file build, a class calling a function of ITS OWN file (an IMPORTED file's ran — that
+  callee arrived with its source module). C++, JavaScript and MSIL ran every one.
+  ⚠ **Two causes, both fixed.** (1) The IR builder gave a file-scope callee NO owner:
+  `ProcedureCallTarget` stamped a Module's procedure with its Module and an import with its
+  source module and left everything else `(Name, null)`. It now stamps a file-scope procedure
+  with the file's module — `(GlobalIrName(_module.Name, name), _module.Name)` — the same wire
+  form a Module's procedure has. What is NOT file scope, each measured: a stdlib procedure
+  (registered at line 0 — its IR name must stay the one the backends' tables know), a
+  `Declare` (externs are emitted into whichever module class comes first, so no owner is right;
+  a Declare from a class body stays CS0103, out of scope), and a method of the class being built
+  or of a base — decided by asking the analyzer's class type (`LookupType`, complete after
+  analysis), because pass 1 flattens every
+  method signature into the global scope first-wins, so a method declared BELOW its caller, or
+  one sharing a name with a file-scope function declared ABOVE the class, arrives bound to a
+  global-scope symbol; every backend resolves the bare spelling to the member (the probe
+  printed the member's 3, never the function's 100, on all four) and the stamp must not turn
+  that into `Program.Helper()`. (2) The C# backend decided "bare or qualified" by comparing
+  MODULE NAMES, the member's against the emitting function's; a class's methods carry the file
+  module's name too, so the names compared equal and the reference went out bare inside a class
+  that has no such member. It now records WHICH module's static class it is writing
+  (`_currentModuleClass`, set around each one) and qualifies unless the reference lands there —
+  a class body, an interface, a class in a named namespace are outside every module class.
+  ⛔ **A THIRD DEFECT, unmasked by qualification: a file-scope `Dim` or `Const` is Private by
+  default and was `private static` in the file's class, so `Program.Total` from a class or a
+  Module block was CS0122 the moment it was spelled right** (a Module block reading a
+  file-scope global ALREADY failed that way — qualified, then inaccessible — measured before the
+  change). A file-scope Private is private to its FILE, a Module's Private to its Module, and
+  the front end enforces both; a module static class's members now map Public → `public`,
+  else `internal` (`ModuleMemberAccess`: constants, globals and the standalone functions), as
+  MSIL already did (`assembly`). Class members keep `MapAccessModifier`. A Module's own Private
+  global and procedure are asserted still reachable inside it.
+  ⚠ **Also fixed by (1), broken on ALL FOUR before**: a file-scope `F` beside `Module A`'s `F`
+  was DECLARED owner-qualified (`Main_F`, from `ProcedureIrName`) but CALLED as the bare `F` —
+  a function nothing defined ("undeclared identifier 'F'" on C++, "F is not defined" on
+  JavaScript, MissingMethod on MSIL, CS0103 on C#). The call now goes out under the declared
+  name. Same for the contest against a Module VARIABLE of that name.
+  ⚠ **Pre-existing, measured here, untouched**: a class in a NAMED NAMESPACE does not run on
+  C# — the module classes go into the default namespace and the class into `App`, with no using
+  between them (CS0246 `Box` from the Module's `Main`, CS0103 the file class from `App`); the
+  other three run it, and the qualified spelling is pinned on the text. A property getter as a
+  member on C++, an inherited method on MSIL (MissingMethod), `Func` on MSIL, a class-returning
+  callee on MSIL (ilasm syntax error), ByRef on JavaScript/MSIL — each case runs on the
+  backends without that gap and names it. `Public Total As Integer` at file scope (no `Dim`)
+  does not parse.
+  ⛔ **SEVENTEEN MUTATIONS, SIXTEEN KILLS, ONE SURVIVOR REMOVED** (164 kills in all on the
+  final code; per-mutant counts in the commit message). Every kill set is discriminating: no
+  file-scope stamp died to the 21 call shapes and nothing global; the contested name called
+  bare to exactly the two contested tests; the `Declare` and stdlib exclusions to the wire-form
+  pin alone; the class lookup disabled to the five own-method and inherited cases, and the base
+  walk skipped to the inherited one alone; the module-class record never set — everything
+  qualified, which COMPILES — to the two "stays bare" pins alone, and never cleared to the
+  namespace pin alone; the old module-name comparison to the 20 class-body shapes and no
+  Module-block one; the global qualification dropped to 32 global shapes (the pre-existing
+  module-global tests included) and the call qualification dropped to 57 call shapes; the
+  named-destination lookup to the five writes; each of the three `internal` sites to exactly
+  its shapes (Const 2, global 7, function 2); the analyzer lookup returning null to the same
+  five as the class lookup. **The survivor**: a check that the callee's DECLARING SCOPE is the
+  global or namespace scope passed every test — every class-scope symbol the class lookup
+  already excludes, and every module-scope one carries its owner, so nothing it refused ever
+  reached it. Removed rather than tested around; the five mutants that had run before the
+  removal were re-run on the final code (same kills, and the class lookup now also catches the
+  two "declared above" own-method cases the removed check used to, five kills where it had
+  three).
+  **Full suite in place: 195 / 6136 / 203 / 6534 against the 195 / 6101 / 203 / 6499 baseline
+  at `045477d`** — 195 reported = 195 anchored lines, the same 170 failing names, nothing new
+  and nothing newly passing; the +35 are the fixture's 35 cases.
   ⚠ **Narrowing shapes are refused by the SEMANTIC ANALYZER, before any of this** —
   `Public N As Single = 1.5 + 1.0` is "Cannot assign value of type 'Double' to variable of type
   'Single'", before and after. Not a folding gap.

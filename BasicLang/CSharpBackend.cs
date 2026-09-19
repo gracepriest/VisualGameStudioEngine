@@ -331,6 +331,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     // Generate a static class for each module
                     foreach (var moduleName in allModules.OrderBy(m => m))
                     {
+                        _currentModuleClass = moduleName;
                         var className = SanitizeName(moduleName);
                         // C# doesn't allow a method with the same name as its enclosing class
                         if (className.Equals("Main", StringComparison.OrdinalIgnoreCase))
@@ -352,7 +353,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                                 {
                                     var type = MapType(constVar.Type);
                                     var name = SanitizeName(constVar.Name);
-                                    var accessMod = MapAccessModifier(constVar.Access);
+                                    var accessMod = ModuleMemberAccess(constVar.Access);
                                     var value = constVar.InitialValue != null ? EmitExpression(constVar.InitialValue) : "default";
                                     WriteLine($"{accessMod} const {type} {name} = {value};");
                                 }
@@ -368,7 +369,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                                 {
                                     var type = MapType(globalVar.Type);
                                     var name = SanitizeName(globalVar.Name);
-                                    var accessMod = MapAccessModifier(globalVar.Access);
+                                    var accessMod = ModuleMemberAccess(globalVar.Access);
                                     if (globalVar.InitialValue != null)
                                     {
                                         var initVal = EmitExpression(globalVar.InitialValue);
@@ -416,6 +417,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                         Unindent();
                         WriteLine("}");
                         WriteLine();
+                        _currentModuleClass = null;
                     }
 
                     // Optional default Main - generate in a Program class
@@ -1402,6 +1404,21 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         }
 
         /// <summary>
+        /// The C# access of a member of a MODULE's static class — a Module's or a file-scope
+        /// procedure, global or constant: <c>public</c> when declared Public, else <c>internal</c>.
+        ///
+        /// <para>⛔ A file-scope Private is private to its FILE, and a Module's Private to its
+        /// Module; the front end enforces both. Here every module is its own static class, so
+        /// C#'s <c>private</c> ALSO hid the member from the classes and Module blocks of the same
+        /// file, which the front end had let through: <c>Program.Total</c> from a class body, once
+        /// it was qualified, was CS0122 — measured, on this backend alone. MSIL maps the same way
+        /// (<c>assembly</c>); the flattening backends have no such boundary. Class members keep
+        /// <see cref="MapAccessModifier(IR.AccessModifier)"/>: a class IS the C# class.</para>
+        /// </summary>
+        private static string ModuleMemberAccess(IR.AccessModifier access) =>
+            access == IR.AccessModifier.Public ? "public" : "internal";
+
+        /// <summary>
         /// Map IR access modifier to C# string
         /// </summary>
         private string MapAccessModifier(IR.AccessModifier access)
@@ -1524,8 +1541,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // Generate constraint clauses for generic type parameters
             var constraints = GenerateConstraintClauses(function.GenericTypeParams);
 
-            // Use the function's access modifier if set, otherwise use the default
-            var accessMod = MapAccessModifier(function.Access);
+            // A module's procedure, so its declared access maps like a module's global does.
+            var accessMod = ModuleMemberAccess(function.Access);
 
             // WinForms/WPF require an STA entry point; harmless for console apps.
             // Not valid on async Main (compiler ignores it with a warning there).
@@ -2729,21 +2746,37 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         }
 
         /// <summary>
-        /// <c>Module.Name</c> for a global that lives in a DIFFERENT module from the function being
-        /// emitted, else the bare spelling. Each module is its own static class here, so a bare
-        /// name resolves only inside its owner. "Main" is spelled "Program", as the class is.
+        /// The module whose static class is being emitted, or null outside every module class:
+        /// inside a class body (its methods, constructors, accessors and field initializers),
+        /// an interface, a struct. Set around each module class in <see cref="Generate"/>.
+        ///
+        /// <para>⛔ This is what decides whether a module member is spelled bare or qualified,
+        /// and it used to be decided by comparing MODULE NAMES — the member's against the
+        /// emitting function's. A class's methods carry the file module's name too, so a
+        /// file-scope <c>Twice</c> or <c>Total</c> used from a class body compared equal and went
+        /// out bare, inside a C# class that has no such member: CS0103, measured for a method,
+        /// a constructor, a property getter, a Shared method, a lambda in a method, and a
+        /// <c>Module</c> block's procedure (a different static class, the same bare spelling).
+        /// A bare name resolves only inside the static class that declares it; nothing about
+        /// the function says whether that is where it is being written.</para>
+        /// </summary>
+        private string _currentModuleClass;
+
+        /// <summary>Whether the text being written lands inside <paramref name="module"/>'s static class.</summary>
+        private bool EmittedInsideModuleClass(string module) =>
+            !string.IsNullOrEmpty(_currentModuleClass)
+            && string.Equals(module, _currentModuleClass, StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// <c>Module.Name</c> for a global unless it is being written inside its own module's
+        /// static class, where the bare spelling is the only one that resolves a same-named
+        /// local first. "Main" is spelled "Program", as the class is.
         /// </summary>
         private string QualifyCrossModuleGlobal(IRVariable global, string spelled)
         {
-            if (global == null || string.IsNullOrEmpty(global.ModuleName) || _currentFunction == null)
-                return spelled;
-            if (string.Equals(global.ModuleName, _currentFunction.ModuleName, StringComparison.OrdinalIgnoreCase))
-                return spelled;
-
-            var qualifyingModule = global.ModuleName;
-            if (qualifyingModule.Equals("Main", StringComparison.OrdinalIgnoreCase))
-                qualifyingModule = "Program";
-            return $"{qualifyingModule}.{spelled}";
+            if (global == null || string.IsNullOrEmpty(global.ModuleName)) return spelled;
+            if (EmittedInsideModuleClass(global.ModuleName)) return spelled;
+            return $"{ModuleClassName(global.ModuleName)}.{spelled}";
         }
 
         /// <summary>
@@ -2769,8 +2802,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             moduleName.Equals("Main", StringComparison.OrdinalIgnoreCase) ? "Program" : SanitizeName(moduleName);
 
         /// <summary>
-        /// The C# spelling of a call's target: qualified by the callee's module class when the
-        /// callee lives in a DIFFERENT module from the function being emitted.
+        /// The C# spelling of a call's target: qualified by the callee's module class unless
+        /// the call is being written inside that very class.
         ///
         /// <para>⛔ This backend qualified cross-module VARIABLES and never CALLS, so a bare
         /// <c>Twice(4)</c> from Module M to Helpers' <c>Twice</c> was emitted bare inside
@@ -2785,8 +2818,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 ? string.Join(".", name.Split('.').Select(SanitizeName))
                 : SanitizeName(name);
 
-            if (string.IsNullOrEmpty(call.CalleeModule) || _currentFunction == null) return spelled;
-            if (string.Equals(call.CalleeModule, _currentFunction.ModuleName, StringComparison.OrdinalIgnoreCase)) return spelled;
+            if (string.IsNullOrEmpty(call.CalleeModule) || EmittedInsideModuleClass(call.CalleeModule)) return spelled;
             return $"{ModuleClassName(call.CalleeModule)}.{spelled}";
         }
 
