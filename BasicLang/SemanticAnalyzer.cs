@@ -1105,6 +1105,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
             return symbol;
         }
 
+        /// <summary>
+        /// The declared type named <paramref name="name"/>, as this analysis registered it — a
+        /// class's <see cref="TypeInfo.Members"/> is complete once <see cref="Analyze"/> has run
+        /// (every method, Private ones included, and the sibling-file ones), which is what the
+        /// IR builder needs to tell a class's own method from a same-named file-scope procedure.
+        /// </summary>
+        internal TypeInfo LookupType(string name) =>
+            string.IsNullOrEmpty(name) ? null : _typeManager.GetType(name);
+
         private void SetNodeType(ASTNode node, TypeInfo type)
         {
             _nodeTypes[node] = type;
