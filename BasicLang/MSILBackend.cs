@@ -193,6 +193,177 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         }
 
         /// <summary>
+        /// The DECLARED type of instance field <paramref name="fieldName"/>, found by the same
+        /// base-chain walk <see cref="DeclaringFieldToken"/> uses — its type-bearing twin.
+        ///
+        /// <para>⛔ AN ldfld/stfld OPERAND NAMES THE FIELD'S DECLARED TYPE, NOT THE VALUE'S.
+        /// The store used to render <c>MapType(fieldStore.Value?.Type)</c>, so `k.Pet = New Dog()`
+        /// against `Public Pet As Animal` emitted <c>stfld class Dog 'Kennel'::'Pet'</c> — a field
+        /// reference that binds to nothing, MissingFieldException at RUN time. The matching LOAD
+        /// always used the field's own type, which is why reads worked and writes did not.</para>
+        /// </summary>
+        private TypeInfo DeclaredFieldType(TypeInfo receiver, string fieldName)
+        {
+            if (string.IsNullOrEmpty(receiver?.Name) || string.IsNullOrEmpty(fieldName)) return null;
+            if (!TryFindClass(receiver.Name, out var cls)) return null;
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (var current = cls; current != null; )
+            {
+                if (!seen.Add(current.Name)) break;
+
+                var match = current.Fields?.FirstOrDefault(f => f?.Name != null && !f.IsStatic
+                    && string.Equals(f.Name, fieldName, StringComparison.OrdinalIgnoreCase));
+                if (match?.Type != null) return match.Type;
+
+                if (string.IsNullOrEmpty(current.BaseClass)) break;
+                if (!TryFindClass(current.BaseClass, out current)) break;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// The parameter list of a call, rendered from the CALLEE'S DECLARATION when one can be
+        /// found and from the arguments only as a last resort.
+        ///
+        /// <para>⛔ THE CALL SITE IS NOT A RELIABLE SOURCE — the rule this file already states at
+        /// <see cref="EmitStaticUserCall"/>. Rendering `Report(New Dog())` from the argument emits
+        /// <c>Report(class Dog)</c> against a method declared <c>Report(class Animal)</c>: it
+        /// assembles, because ilasm does not resolve member references, and then fails at RUN time
+        /// with MissingMethodException. Passing an EXACTLY-typed argument hid it, which is why the
+        /// control shape has always worked.</para>
+        /// </summary>
+        private string DeclaredParamList(IReadOnlyList<IRVariable> declared, IEnumerable<IRValue> arguments) =>
+            declared != null && declared.Count > 0
+                ? string.Join(", ", declared.Select(p => IlTypeSpec(p.Type)))
+                : string.Join(", ", (arguments ?? Enumerable.Empty<IRValue>()).Select(a => IlTypeSpec(a.Type)));
+
+        /// <summary>
+        /// True when <paramref name="irClass"/>, or a base of it, implements an interface that
+        /// declares a member named <paramref name="memberName"/>.
+        ///
+        /// <para>⛔ AN INTERFACE SLOT CAN ONLY BE FILLED BY A VIRTUAL METHOD. The class emitted
+        /// its `implements` clause correctly and then emitted the implementing method as an
+        /// ordinary non-virtual one, so the type would not even load: TypeLoadException "Method
+        /// 'Speak' in type 'Dog' does not have an implementation" — before a line of it ran, and
+        /// for a class that plainly does declare Speak. C# marks such a method
+        /// `newslot virtual final`, which is what the caller emits.</para>
+        /// </summary>
+        private bool ImplementsInterfaceMember(IRClass irClass, string memberName)
+        {
+            if (irClass == null || string.IsNullOrEmpty(memberName) || _module?.Interfaces == null) return false;
+
+            var classSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (var current = irClass; current != null; )
+            {
+                if (!classSeen.Add(current.Name)) break;
+
+                var pending = new Queue<string>(current.Interfaces ?? new List<string>());
+                var ifaceSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                while (pending.Count > 0)
+                {
+                    var name = pending.Dequeue();
+                    if (string.IsNullOrEmpty(name) || !ifaceSeen.Add(name)) continue;
+                    if (!_module.Interfaces.TryGetValue(name, out var iface) || iface == null) continue;
+
+                    if (iface.Methods != null && iface.Methods.Any(m => m?.Name != null
+                            && string.Equals(m.Name, memberName, StringComparison.OrdinalIgnoreCase)))
+                        return true;
+                    if (iface.Properties != null && iface.Properties.Any(pr => pr?.Name != null
+                            && string.Equals(pr.Name, memberName, StringComparison.OrdinalIgnoreCase)))
+                        return true;
+
+                    foreach (var b in iface.BaseInterfaces ?? new List<string>()) pending.Enqueue(b);
+                }
+
+                if (string.IsNullOrEmpty(current.BaseClass)) break;
+                if (!TryFindClass(current.BaseClass, out current)) break;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// The interface method <paramref name="memberName"/> declared by <paramref name="typeName"/>
+        /// or one of its base interfaces, else null.
+        ///
+        /// <para>⛔ AN INTERFACE RECEIVER IS NOT A CLASS, so the class-side lookups all miss it and
+        /// the signature fell back to the CALL SITE. The front end types an interface-method call
+        /// <c>Object</c>, so <c>s.Speak()</c> emitted
+        /// <c>callvirt instance object ISpeaker::Speak()</c> against a method declared to return
+        /// <c>string</c> — MissingMethodException at RUN time. The declaration is the only
+        /// reliable source here too.</para>
+        /// </summary>
+        private IRInterfaceMethod DeclaredInterfaceMethod(string typeName, string memberName)
+        {
+            if (string.IsNullOrEmpty(typeName) || string.IsNullOrEmpty(memberName)
+                || _module?.Interfaces == null) return null;
+
+            var pending = new Queue<string>();
+            pending.Enqueue(typeName);
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            while (pending.Count > 0)
+            {
+                var name = pending.Dequeue();
+                if (string.IsNullOrEmpty(name) || !seen.Add(name)) continue;
+                if (!_module.Interfaces.TryGetValue(name, out var iface) || iface == null) continue;
+
+                var m = iface.Methods?.FirstOrDefault(x => x?.Name != null
+                    && string.Equals(x.Name, memberName, StringComparison.OrdinalIgnoreCase));
+                if (m != null) return m;
+
+                foreach (var b in iface.BaseInterfaces ?? new List<string>()) pending.Enqueue(b);
+            }
+            return null;
+        }
+
+        /// <summary>The declared parameters of free/module function <paramref name="name"/>, or null.</summary>
+        private IReadOnlyList<IRVariable> DeclaredFunctionParams(string name)
+        {
+            if (string.IsNullOrEmpty(name) || _module?.Functions == null) return null;
+            var fn = _module.Functions.FirstOrDefault(
+                f => f?.Name != null && string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase));
+            return fn?.Parameters;
+        }
+
+        /// <summary>The declared parameters of instance method <paramref name="name"/> on
+        /// <paramref name="owner"/> or a base of it, or null.</summary>
+        private IReadOnlyList<IRVariable> DeclaredMethodParams(IRClass owner, string name)
+        {
+            if (owner == null || string.IsNullOrEmpty(name)) return null;
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (var current = owner; current != null; )
+            {
+                if (!seen.Add(current.Name)) break;
+                var m = current.Methods?.FirstOrDefault(x => x?.Name != null
+                    && string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase));
+                if (m?.Implementation?.Parameters != null) return m.Implementation.Parameters;
+                if (string.IsNullOrEmpty(current.BaseClass)) break;
+                if (!TryFindClass(current.BaseClass, out current)) break;
+            }
+            return null;
+        }
+
+        /// <summary>The declared parameters of the constructor on <paramref name="className"/>
+        /// that takes <paramref name="argCount"/> arguments, or null.</summary>
+        private IReadOnlyList<IRVariable> DeclaredCtorParams(string className, int argCount)
+        {
+            if (!TryFindClass(className, out var cls) || cls.Constructors == null) return null;
+
+            // ⛔ THE PARAMETERS LIVE ON Implementation, NOT ON IRConstructor.Parameters. The IR
+            // builder sets only Access and Implementation, so IRConstructor.Parameters is forever
+            // the empty list its own initializer made — JavaScriptBackend already carries a
+            // comment saying so, and C#, C++, LLVM and this file's own line ~1308 all read
+            // Implementation.Parameters. Reading the empty one made this helper DEAD CODE: no
+            // arity above zero could ever match, every caller silently fell back to spelling the
+            // ARGUMENT types, and that is the very defect this helper exists to prevent. Measured:
+            // `newobj instance void 'Shelter'::.ctor(class 'Dog')` against a constructor declared
+            // `.ctor(class 'Animal')` — MissingMethodException at run time.
+            var exact = cls.Constructors.FirstOrDefault(
+                c => c?.Implementation?.Parameters != null && c.Implementation.Parameters.Count == argCount);
+            return exact?.Implementation?.Parameters;
+        }
+
+        /// <summary>
         /// The class that declares INSTANCE method <paramref name="name"/>, reachable from
         /// <paramref name="irClass"/> by walking bases — the instance counterpart of
         /// <see cref="TryFindStaticMethod"/>, visited set and all.
@@ -353,7 +524,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         private void GenerateDelegate(IRDelegate irDelegate)
         {
             var delegateName = SanitizeName(irDelegate.Name);
-            var returnType = MapType(irDelegate.ReturnType);
+            var returnType = IlTypeSpec(irDelegate.ReturnType);
             var paramTypes = string.Join(", ", irDelegate.Parameters.Select(IlParameterSpec));
 
             WriteLine($".class public auto ansi sealed {delegateName}");
@@ -650,6 +821,15 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         };
 
         /// <summary>
+        /// True for an IL keyword that denotes a VALUE type — the ones that need boxing to sit in
+        /// a reference slot. ⚠ NOT the same as <see cref="IlPrimitives"/>: that set carries
+        /// <c>string</c>, <c>object</c> and <c>void</c> too, which are not value types, and using
+        /// it as a boxing test silently never fires.
+        /// </summary>
+        private static bool IsIlValueType(string spec) =>
+            IlPrimitives.Contains(spec) && spec != "string" && spec != "object" && spec != "void";
+
+        /// <summary>
         /// IL keyword → the BCL type it denotes, for token positions. <c>string</c> and
         /// <c>object</c> are reference types and never need boxing, but they DO need a real
         /// token for <c>newarr</c>/<c>castclass</c>, so they are carried here too.
@@ -728,7 +908,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Interface methods
             foreach (var method in irInterface.Methods)
             {
-                var returnType = MapType(method.ReturnType);
+                var returnType = IlTypeSpec(method.ReturnType);
                 var methodName = SanitizeName(method.Name);
                 var paramTypes = string.Join(", ", method.Parameters.Select(IlParameterSpec));
 
@@ -742,7 +922,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Interface properties
             foreach (var prop in irInterface.Properties)
             {
-                var propType = MapType(prop.Type);
+                var propType = IlTypeSpec(prop.Type);
                 var propRaw = RawName(prop.Name);
                 var propName = IlName(propRaw);
                 var getter = $"get_{propRaw}";
@@ -948,7 +1128,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
         private void GenerateProperty(IRClass irClass, IRProperty prop)
         {
-            var propType = MapType(prop.Type);
+            var propType = IlTypeSpec(prop.Type);
             // ⚠ The property NAME is quoted; the accessor names built from it are not. A composed
             // name always begins with `get_`/`set_` and so can never be an IL keyword, and quoting
             // has to happen around the WHOLE identifier — `get_'Alpha'` is not one.
@@ -1163,7 +1343,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Call base constructor
             var baseClass = string.IsNullOrEmpty(irClass.BaseClass) ? "[mscorlib]System.Object" : IlTypeToken(irClass.BaseClass);
             WriteLine("    ldarg.0");
-            EmitBaseConstructorCall(baseClass, ctor);
+            EmitBaseConstructorCall(baseClass, irClass.BaseClass, ctor);
 
             EmitInstanceFieldInitialization(irClass);
 
@@ -1214,7 +1394,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// builder coerces each base-constructor argument to its declared parameter type; the two
         /// sites share that contract, and spelling them differently is how they would drift.</para>
         /// </summary>
-        private void EmitBaseConstructorCall(string baseClass, IRConstructor ctor)
+        private void EmitBaseConstructorCall(string baseClass, string baseClassName, IRConstructor ctor)
         {
             // ⚠ No special case for ZERO arguments: the loops below do nothing and the join is
             // empty, so the general path writes exactly `::.ctor()` — the same text the dedicated
@@ -1243,7 +1423,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 EmitLoadValue(arg);
             }
 
-            var paramTypes = string.Join(", ", args.Select(a => MapType(a.Type)));
+            var paramTypes = DeclaredParamList(DeclaredCtorParams(baseClassName, args.Count), args);
             WriteLine($"    call instance void {baseClass}::.ctor({paramTypes})");
         }
 
@@ -1275,7 +1455,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         {
             var className = SanitizeName(irClass.Name);
             var methodName = SanitizeName(method.Name);
-            var returnType = MapType(method.ReturnType);
+            var returnType = IlTypeSpec(method.ReturnType);
             var staticMod = method.IsStatic ? "static " : "";
             var instanceMod = method.IsStatic ? "" : "instance ";
 
@@ -1296,6 +1476,13 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             else if (method.IsVirtual)
             {
                 modifiers = "newslot virtual ";
+            }
+            else if (!method.IsStatic && ImplementsInterfaceMember(_currentClass, method.Name))
+            {
+                // `final` because nothing in the language marks this Overridable — it fills the
+                // interface slot without opening itself to further overriding, which is exactly
+                // what C# emits for an implicit interface implementation.
+                modifiers = "newslot virtual final ";
             }
 
             var paramTypes = "";
@@ -1908,7 +2095,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             AllocateTemporaries(function);
 
             // Generate method signature
-            var returnType = MapType(function.ReturnType);
+            var returnType = IlTypeSpec(function.ReturnType);
             var methodName = SanitizeName(function.Name);
             // ⚠ Asked of the RAW name. `methodName` is quoted for ILAsm, so `'Main'` never equals
             // "Main" and the method that needs `.entrypoint` would not get it — ilasm then fails
@@ -2689,7 +2876,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // that spells it any other way binds to nothing and fails at RUN time, since ilasm
             // does not resolve member references. `Derived.Tag()` reached here with a call type of
             // `object` where the method returns `string` — the call site is not a reliable source.
-            var returnType = MapType(method.ReturnType);
+            var returnType = IlTypeSpec(method.ReturnType);
             var paramTypes = method.Implementation != null
                 ? string.Join(", ", method.Implementation.Parameters.Select(p => IlTypeSpec(p.Type)))
                 : string.Join(", ", arguments.Select(a => IlTypeSpec(a.Type)));
@@ -2828,7 +3015,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// </summary>
         private void EmitPropertyGet(IRClass owner, IRProperty prop)
         {
-            var propType = MapType(prop.Type);
+            var propType = IlTypeSpec(prop.Type);
             var token = SanitizeName(owner.Name);
             var getter = $"get_{RawName(prop.Name)}";
 
@@ -2850,7 +3037,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// </summary>
         private void EmitPropertySet(IRClass owner, IRProperty prop)
         {
-            var propType = MapType(prop.Type);
+            var propType = IlTypeSpec(prop.Type);
             var token = SanitizeName(owner.Name);
             var setter = $"set_{RawName(prop.Name)}";
 
@@ -3471,7 +3658,9 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Type SPECS: the declaration these resolve to spells its parameters the same way,
             // and a call whose signature disagrees with the declaration binds to nothing.
             var returnType = IlTypeSpec(call.Type);
-            var paramTypes = string.Join(", ", call.Arguments.Select(a => IlTypeSpec(a.Type)));
+            var paramTypes = DeclaredParamList(
+                isSelfCall ? DeclaredMethodParams(selfCallOwner, funcName) : DeclaredFunctionParams(funcName),
+                call.Arguments);
             var sanitizedName = SanitizeName(funcName);
 
             if (isSelfCall)
@@ -4706,7 +4895,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
 
             // Build constructor signature with parameter types
-            var paramTypes = string.Join(", ", newObj.Arguments.Select(a => MapType(a.Type)));
+            var paramTypes = DeclaredParamList(
+                DeclaredCtorParams(newObj.ClassName, newObj.Arguments.Count), newObj.Arguments);
 
             // Emit newobj with proper constructor signature
             WriteLine($"    newobj instance void {className}::.ctor({paramTypes})");
@@ -4761,6 +4951,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             // Build method signature
             string returnType, paramTypes, className, methodName;
+            string boxInterfaceReturn = null;
             if (TryCollectionMember(
                     methodCall.Object?.Type, methodCall.MethodName, out var collToken, out var collSig))
             {
@@ -4772,8 +4963,46 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
             else
             {
-                returnType = IlTypeSpec(methodCall.Type);
-                paramTypes = string.Join(", ", methodCall.Arguments.Select(a => IlTypeSpec(a.Type)));
+                // The DECLARATION decides the signature — an interface first, because an
+                // interface receiver is not a class and every class-side lookup misses it.
+                var ifaceMethod = DeclaredInterfaceMethod(methodCall.Object?.Type?.Name, methodCall.MethodName);
+                if (ifaceMethod != null)
+                {
+                    returnType = IlTypeSpec(ifaceMethod.ReturnType);
+                    paramTypes = string.Join(", ",
+                        (ifaceMethod.Parameters ?? new List<IRParameter>()).Select(pp => IlTypeSpec(pp.Type)));
+
+                    // ⛔ THE IR AND THE IL NOW DISAGREE, AND THE STACK FOLLOWS THE IL. The front end
+                    // types an interface-method call Object, so its destination temp is an object
+                    // slot; taking the return type from the interface declaration (as we must) means
+                    // a Function returning Integer really does leave an int32 on the stack. Storing
+                    // that into an object local UNBOXED hands the runtime a raw integer as a
+                    // reference — measured: NullReferenceException inside Console.WriteLine, with a
+                    // stack trace pointing at the print rather than at the call. Box to put the
+                    // stack back in step with what the IR believes it is holding.
+                    if (IsIlValueType(returnType) && !IsIlValueType(MapType(methodCall.Type)))
+                    {
+                        boxInterfaceReturn = IlTypeToken(ifaceMethod.ReturnType);
+                    }
+
+                    // ⛔ THE SAME DISAGREEMENT IN THE OTHER DIRECTION — a Sub. The front end types
+                    // an interface call Object whatever the member returns, so hasReturn came out
+                    // TRUE and a store was emitted; but the declaration says void, so the call
+                    // pushes NOTHING and that store underflows the stack. Measured on
+                    // `Interface ISpeaker : Sub Speak()`: `callvirt instance void
+                    // 'ISpeaker'::'Speak'()` followed by `stloc.2` — InvalidProgramException, and
+                    // the CLR names no line. The declaration decides this too. Leaving the store
+                    // out leaves the IR's destination local at the null `.locals init` already
+                    // gave it, which is the same value the store would have written.
+                    if (returnType == "void") hasReturn = false;
+                }
+                else
+                {
+                    returnType = IlTypeSpec(methodCall.Type);
+                    paramTypes = DeclaredParamList(
+                        DeclaredMethodParams(TryFindClass(methodCall.Object?.Type?.Name, out var declaringForCall)
+                            ? declaringForCall : null, methodCall.MethodName), methodCall.Arguments);
+                }
                 className = IlReceiverToken(methodCall.Object?.Type);
                 methodName = SanitizeName(methodCall.MethodName);
             }
@@ -4781,6 +5010,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // For non-virtual calls, the backend should use 'call instance' instead, but callvirt is safer as default
             var callInstruction = methodCall.IsVirtual || !methodCall.IsVirtual ? "callvirt" : "call";
             WriteLine($"    {callInstruction} instance {returnType} {className}::{methodName}({paramTypes})");
+            if (boxInterfaceReturn != null) WriteLine($"    box {boxInterfaceReturn}");
 
             // Update stack: pop 'this' + args, push return value if any
             _currentStack -= (1 + methodCall.Arguments.Count);
@@ -4822,8 +5052,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
 
             // Build method signature
-            var returnType = MapType(baseCall.Type);
-            var paramTypes = string.Join(", ", baseCall.Arguments.Select(a => MapType(a.Type)));
+            var returnType = IlTypeSpec(baseCall.Type);
+            var paramTypes = DeclaredParamList(null, baseCall.Arguments);
             var methodName = SanitizeName(baseCall.MethodName);
 
             // For base calls, we need to know the base class name from the current class context
@@ -5028,7 +5258,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             EmitLoadValue(fieldStore.Value);
 
             // Store value to field
-            var fieldType = MapType(fieldStore.Value?.Type);
+            var fieldType = IlTypeSpec(
+                DeclaredFieldType(fieldStore.Object?.Type, fieldStore.FieldName) ?? fieldStore.Value?.Type);
             var className = fieldStore.Object?.Type?.Name != null
                 ? DeclaringFieldToken(fieldStore.Object.Type, fieldStore.FieldName)
                 : "object";

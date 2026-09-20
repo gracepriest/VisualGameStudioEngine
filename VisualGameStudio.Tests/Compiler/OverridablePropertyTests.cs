@@ -317,58 +317,15 @@ public class OverridablePropertyTests
 
     /// <summary>
     /// A derived instance reaching its override through a base-typed PARAMETER.
-    /// ⚠ TWO BACKENDS, NOT THREE, AND THE REASON IS NOT PROPERTIES: MSIL emits the CALLEE
-    /// SIGNATURE from the argument's dynamic type, so `Report(New Dog())` calls a
-    /// `Report(Dog)` that was never declared — MissingMethodException. The control below is the
-    /// same shape with a METHOD instead of a property and fails identically, which is what makes
-    /// this a base-typed-parameter gap rather than this change's.
+    /// ⭐ PROMOTED FROM TWO BACKENDS TO THREE. This ran on JavaScript and C# only, because MSIL
+    /// rendered a callee signature from the argument's DYNAMIC type and so called a
+    /// `Report(class Dog)` that nobody declared — MissingMethodException. The pin that recorded
+    /// that gap went RED when MSIL started taking signatures from the DECLARATION, which is what
+    /// a pin is for; it has been deleted and this case now runs on all three.
     /// </summary>
     [Test]
-    public void AnOverriddenProperty_ThroughABaseTypedParameter_DispatchesOnTwo()
-        => Assert.Multiple(() =>
-        {
-            Assert.That(Js(ThroughAParameter), Is.EqualTo("derived"), "JavaScript");
-            Assert.That(Cs(ThroughAParameter), Is.EqualTo("derived"), "C#");
-        });
-
-    /// <summary>
-    /// ⛔ PINNED, PRE-EXISTING: a base-typed PARAMETER given a derived argument does not run on
-    /// MSIL, with a property or without one. Goes RED when MSIL stops keying the callee signature
-    /// on the argument's dynamic type — the signal to fold the case above back into RunsOnThree.
-    /// </summary>
-    [Test]
-    public void ABaseTypedParameter_IsAPreExistingMsilGap_Pinned()
-    {
-        const string withAMethod = """
-            Class Animal
-             Public Overridable Function Name() As String
-              Return "base"
-             End Function
-            End Class
-            Class Dog
-             Inherits Animal
-             Public Overrides Function Name() As String
-              Return "derived"
-             End Function
-            End Class
-            Sub Report(a As Animal)
-             PrintLine(a.Name())
-            End Sub
-            Sub Main()
-             Report(New Dog())
-            End Sub
-            """;
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(Assert.Catch(() => Msil(withAMethod)), Is.Not.Null,
-                "MSIL now runs a base-typed parameter with a METHOD — re-check the property case");
-            Assert.That(Assert.Catch(() => Msil(ThroughAParameter)), Is.Not.Null,
-                "MSIL now runs a base-typed parameter with a PROPERTY — promote the case above");
-            Assert.That(Cs(withAMethod), Is.EqualTo("derived"),
-                "the control must still pass where the gap does not apply");
-        });
-    }
+    public void AnOverriddenProperty_ThroughABaseTypedParameter_Dispatches()
+        => RunsOnThree(ThroughAParameter, "derived");
 
     // ---------------------------------------------------------------- controls
 

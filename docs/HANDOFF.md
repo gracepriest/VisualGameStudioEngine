@@ -1793,6 +1793,81 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   **Full suite in place: 195 / 6190 / 203 / 6588 against the 195 / 6169 / 203 / 6567 baseline at
   `1b7f32e`** — 195 reported = 195 anchored lines, the same 170 failing names, nothing new and
   nothing newly passing; the +21 are the fixture's 21 cases.
+
+  ⚠ **A USER CLASS WORKS AS A TYPE ON MSIL as of 2026-09-20** — `MsilClassTypeTests` (33 cases),
+  `MSILBackend.cs`: ten `IlTypeSpec` spec positions, `DeclaredParamList` +
+  `DeclaredFunctionParams`/`DeclaredMethodParams`/`DeclaredCtorParams`/`DeclaredFieldType`,
+  `ImplementsInterfaceMember`, `DeclaredInterfaceMethod`, `IsIlValueType`.
+  ⛔ **MSIL COULD NOT COMPILE A PROGRAM THAT PASSES OBJECTS AROUND** — 4 of 30 shapes ran before,
+  28 after, each asserted against C# COMPILED AND RUN rather than against a literal.
+  ⚠ **TWO INDEPENDENT DEFECTS, and the controls separate them.** (1) WRONG RENDERER: a spec
+  position rendered with `MapType` (bare) instead of `IlTypeSpec` (which adds the `class` prefix),
+  so `stfld Tag 'Box'::'Item'` came out bare and ilasm refused the whole FILE — ASSEMBLE time, and
+  a one-class control with no inheritance fails identically, so it is not about polymorphism.
+  (2) WRONG SOURCE: the type taken from the VALUE at the site rather than the DECLARATION, so
+  `Report(New Dog())` against `Report(a As Animal)` called a method nobody declared — it
+  ASSEMBLES (ilasm does not resolve member references) and dies at RUN time with
+  MissingMethodException. **An exactly-typed argument hides (2) completely**, which is the trap
+  below.
+  ⚠ **An interface needed three more things**: the implementation emitted `newslot virtual final`
+  (a non-virtual method cannot fill an interface slot — the type would not even LOAD); the call
+  signature taken from the INTERFACE (an interface receiver is not a class, so every class-side
+  lookup missed it and fell back to the call site, where the front end types the call `Object`);
+  and then the IR and the IL disagree in BOTH directions — a Function returning Integer leaves an
+  int32 where the destination temp is an object slot (stored unboxed → NullReferenceException
+  inside `Console.WriteLine`, pointing at the PRINT not the call, so box it), and a SUB returns
+  nothing while the call is still typed `Object` (a store after a call that pushes nothing →
+  `callvirt instance void …` then `stloc.2`, InvalidProgramException and the CLR names no line).
+  ⛔ **THE MUTATION SWEEP FOUND A DEAD HELPER THAT HAD ALREADY BEEN SHIPPED.**
+  `DeclaredCtorParams` read `IRConstructor.Parameters`, which `IRBuilder` NEVER fills — it sets
+  only `Access` and `Implementation` — so it always returned null and every constructor call
+  silently fell back to spelling the ARGUMENT types, the exact defect the helper exists to
+  prevent. Measured: `newobj instance void 'Shelter'::.ctor(class 'Dog')` against a constructor
+  declared `.ctor(class 'Animal')`. **`JavaScriptBackend` already carried a comment saying that
+  field is always empty**, and C#, C++, LLVM and this file's own property site all read
+  `Implementation.Parameters`. ⚠ **Two mutants survived the first sweep NOT because the tests
+  were weak but because they were EQUIVALENT MUTANTS OVER BROKEN CODE**: nulling out a helper
+  that already returns null changes nothing. A surviving mutant can mean the code under it is
+  dead — check that before blaming the fixture.
+  ⛔ **23 MUTANTS, 21 KILLS, 0 BUILD BREAKS**, LINE-anchored because several anchor texts are not
+  unique in this file (`var returnType = IlTypeSpec(method.ReturnType);` appears 3×,
+  `var propType = IlTypeSpec(prop.Type);` 4×) — a text replace would hit the wrong site and the
+  mutant's NAME WOULD LIE. A first sweep of 20 left SEVEN alive; five were converted by adding
+  the shape that distinguishes them, and **those five shapes are where the last five tests came
+  from**: a base ctor, a self call and a `newobj` each handed a DERIVED argument against a
+  base-typed parameter, an interface member returning a class, and an interface `Sub`.
+  ⚠ **SPLITTING ONE TERNARY INTO TWO MUTANTS IS WHAT EXPOSED THE SELF-CALL GAP** — the two arms
+  of one line behaved oppositely (free-function call → 5 kills, self call → SURVIVED). Mutated as
+  a unit, the free arm's kills would have masked the self arm entirely.
+  ⚠ **`IlPrimitives` IS NOT A VALUE-TYPE TEST** — it carries `string`, `object` and `void`. A
+  guard written `IlPrimitives.Contains(returnType) && !IlPrimitives.Contains(MapType(…))` SILENTLY
+  NEVER FIRES, because `MapType` is `object` for an interface call and `object` is in the set.
+  That version WAS shipped mid-task. `IsIlValueType` now says what it means. ⛔ **Mutating only
+  the FIRST half is NEAR-EQUIVALENT and proves nothing**: for `string` the extra `box` is a no-op
+  on a reference type (ECMA-335 III.4.1), so only a VOID-returning member distinguishes it — the
+  interface `Sub` case is what kills it.
+  ⚠ **TWO MUTANTS SURVIVE AND THE CODE IS KEPT, because they are UNREACHABLE, not untested.**
+  A `Delegate` returning a class: the FRONT END does not implement user Delegate types
+  (`AddressOf` yields 'Func', not the declared type; calling it types as 'Void'), so no legal
+  program reaches `GenerateDelegate`. An interface PROPERTY: broken on BOTH .NET backends
+  independently — C# emits an accessor-less property (**CS0548**) and MSIL lowers the access to a
+  FIELD load (**MissingFieldException**), both newly characterized here and a different family.
+  Both lines are correct and identical to their eight proven siblings; reverting one to the
+  spelling known to be wrong, to buy a mutation score, would re-introduce the bug the day either
+  feature starts working.
+  ⛔ **Still out of scope on MSIL, each measured and each a different family**: `For Each` over a
+  collection (the loop variable is never declared, the enumerator overwrites the list's own local,
+  and the body is emitted TWICE — `List(Of String)` fails identically), and `Dim x(n)` bounds
+  (C# throws IndexOutOfRange on the same program).
+  ⭐ **`ABaseTypedParameter_IsAPreExistingMsilGap_Pinned` WENT RED**, which is what it was written
+  for — MSIL now runs a base-typed parameter. Promoted to three backends, pin deleted.
+  **Full suite in place: 195 / 6222 / 203 / 6620 against the 195 / 6190 / 203 / 6588 baseline at
+  `f2727f4`** — 195 reported = 195 anchored lines, the same 170 failing names, nothing new and
+  nothing newly passing; the +32 are the fixture's 33 cases less the deleted pin.
+  ⚠ **Comparing failing NAMES needs the same normalization on both sides** — the recorded
+  baseline strips parameterized arguments, so a raw `sort -u` reads 195 distinct names against
+  its 170 and looks like 25 regressions. It is 3 bare names versus their 28 parameterized forms.
+  Normalize, then compare.
   ⚠ **Narrowing shapes are refused by the SEMANTIC ANALYZER, before any of this** —
   `Public N As Single = 1.5 + 1.0` is "Cannot assign value of type 'Double' to variable of type
   'Single'", before and after. Not a folding gap.
