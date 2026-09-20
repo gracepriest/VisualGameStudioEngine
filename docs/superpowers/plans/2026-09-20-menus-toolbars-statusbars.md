@@ -35,7 +35,7 @@ dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --no
 **24b — the shape, no rows**
 - Modify `BasicLang/Forms/FormControlCatalog.cs` — `FormPlace` enum, `FormItemRule` record, `FormControlDef.Place`/`Items`/`FormProperty`/`HtmlChildrenWrapper`/`HtmlRole`/`WebCss`, `IsComponent` derived; seven `FormSchematic` values.
 - Create `VisualGameStudio.Tests/Compiler/FormCatalogShapes.cs` — `Canonical`, `Locate` (test helper, `internal static`).
-- Modify the gates: `WinFormsCatalogSweepTests.cs` (three builders), `FormCanvasRenderTests.cs` (fixture + Item exclusion), `FormRetargetTests.cs` (sweep), `FormPropertyGridTests.cs:552-568`, `FormToolboxGlyphTests.cs:75-89`, `FormDocumentTests.cs:80-92`.
+- Modify the gates: `VisualGameStudio.Tests/Compiler/WinFormsCatalogSweepTests.cs` (three builders), `VisualGameStudio.Tests/Shell/FormCanvasRenderTests.cs` (fixture + Item exclusion), `VisualGameStudio.Tests/Compiler/FormRetargetTests.cs` (sweep), `VisualGameStudio.Tests/Compiler/FormPropertyGridTests.cs:552-568`, `VisualGameStudio.Tests/Compiler/FormToolboxGlyphTests.cs:75-89` (⚠ in `Compiler/`, not `Shell/`), `VisualGameStudio.Tests/Compiler/FormDocumentTests.cs:80-92`.
 - Modify `VisualGameStudio.Shell/Controls/FormCanvasControl.cs` — extract `DrawSchematic(context, schematic, bounds, label, face, client, ink)` seam from `DrawControl` (~`:1420-1890`); `FormToolboxViewModel.cs` — `GlyphFor` arms, `Rebuild` excludes `Place == Item`.
 - Create `VisualGameStudio.Tests/Shell/FormSchematicPinTests.cs` — enum-driven pairwise frame hash + glyph pins.
 
@@ -63,7 +63,10 @@ dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --no
 - [ ] **Step 1: Write the failing parser tests**
 
 ```csharp
-using BasicLang.Compiler;
+using BasicLang.Compiler;                  // Lexer, Parser
+using BasicLang.Compiler.AST;              // the node types
+using BasicLang.Compiler.SemanticAnalysis; // SemanticAnalyzer, TypeInfo, ErrorSeverity
+using BasicLang.Compiler.IR;               // IRBuilder, IRArrayAlloc, IRArrayStore, IRCast
 using NUnit.Framework;
 
 namespace VisualGameStudio.Tests.Compiler;
@@ -85,6 +88,10 @@ public class TypedArrayLiteralTests
 
     private static ExpressionNode FirstInitializer(ProgramNode program) =>
         ((VariableDeclarationNode)((SubroutineNode)program.Declarations[0]).Body.Statements[0]).Initializer!;
+
+    /// <summary>The LAST Dim's initializer — the analyzer tests declare their operands first.</summary>
+    private static ExpressionNode LastInitializer(ProgramNode program) =>
+        ((SubroutineNode)program.Declarations[^1]).Body.Statements.OfType<VariableDeclarationNode>().Last().Initializer!;
 
     [Test]
     public void NewTypeParensBraces_IsACollectionInitializerWithTheElementType()
@@ -154,11 +161,12 @@ public class TypedArrayLiteralTests
 
                     if (newExpr.Arguments.Count > 0)
                     {
+                        // ⚠ The spec's phrase, and the test's: "the initializer sets the size".
                         throw new ParseException(
-                            "An array creation with an initializer takes its size from the initializer: " +
-                            $"write `New {newExpr.Type.Name}() {{…}}` (VB's `New T(n) {{…}}` names an upper " +
-                            "bound, and this compiler's sizes are element counts)", Peek(),
-                            "Remove the size.");
+                            "An array creation with an initializer cannot also state a size — the " +
+                            $"initializer sets the size; write `New {newExpr.Type.Name}() {{…}}` (VB's " +
+                            "`New T(n) {…}` names an upper bound, and this compiler's sizes are element counts)",
+                            Peek(), "Remove the size.");
                     }
 
                     return ParseTypedCollectionInitializer(newExpr.Type);
@@ -190,7 +198,7 @@ where `sawParens` is a `bool` set to true inside the existing `if (Match(TokenTy
         }
 ```
 
-⚠ Look at how the existing `New` branch reports errors (`throw new ParseException(...)` at `:4464` is the shape in `ParsePrimary`) and match the constructor arity you find.
+⚠ Look at how the existing `New` branch reports errors (`throw new ParseException(...)` at `:4464` is the shape in `ParsePrimary`) and match the constructor arity you find. The parser is error-tolerant at statement level (`ParserErrorTests.cs:26-31`: `parser.Parse()` then `parser.Errors`) — a thrown `ParseException` inside an expression is collected into `Errors` by the statement loop; the tests read `parser.Errors[i].Message`.
 
 - [ ] **Step 4: Implement the `Dim … As New` refusal** at `:2504-2525`: AFTER the closing brace of `if (Match(TokenType.LeftParen)) { … }` (so it fires with or without parentheses) and before `node.Type = newExpr.Type;`:
 
@@ -222,19 +230,22 @@ where `sawParens` is a `bool` set to true inside the existing `if (Match(TokenTy
         Assert.That(parser.Errors, Is.Empty, string.Join("; ", parser.Errors.Select(e => e.Message)));
         var analyzer = new SemanticAnalyzer();
         var ok = analyzer.Analyze(program);
-        var init = FirstInitializer(program);   // adapt: last statement's initializer for multi-line bodies
-        return (ok, analyzer.Errors.Select(e => e.Message).ToList(), analyzer.Warnings.Select(w => w.Message).ToList(),
-                analyzer.GetNodeType(init) as TypeInfo);
+        // ⛔ ONE list, two severities: the analyzer has no `Warnings` member. `Warning(...)` appends an
+        // ErrorSeverity.Warning entry to `Errors` (SemanticAnalyzer.cs:255, :1934-1936), and every
+        // synthetic .NET type produces BL6016-style warnings, so the split below is what makes
+        // "no error" and "a warning containing …" mean anything.
+        var errors = analyzer.Errors.Where(e => e.Severity == ErrorSeverity.Error).Select(e => e.Message).ToList();
+        var warnings = analyzer.Errors.Where(e => e.Severity == ErrorSeverity.Warning).Select(e => e.Message).ToList();
+        var init = LastInitializer(program);   // the LAST Dim's initializer — bodies are several lines
+        return (ok, errors, warnings, analyzer.GetNodeType(init));   // GetNodeType is public, returns TypeInfo
     }
 ```
 
-⚠ Confirm `analyzer.Warnings` exists (grep `public .*Warnings` in SemanticAnalyzer.cs) — else assert on the diagnostics collection it does expose.
-
-Tests (one `[Test]` each, names as given):
-- `TypedLiteral_OfTwoUnresolvableNetTypes_IsTypedByT_WithNoWarning`: prelude `Using System.Windows.Forms`, body `Dim a As ToolStripMenuItem = Nothing\nDim s As ToolStripSeparator = Nothing\nDim items() As ToolStripItem = New ToolStripItem() {a, s}` → `ok`, no warning containing "mixed types", type name `ToolStripItem[]`, `ElementType.Name == "ToolStripItem"`.
-- `TypedLiteral_OverBasicLangClasses_Widens`: prelude `Class Shape\nEnd Class\nClass Circle\nInherits Shape\nEnd Class\nClass Square\nInherits Shape\nEnd Class`, body `Dim c As New Circle()\nDim s As New Square()\nDim all() As Shape = New Shape() {c, s}` → ok.
+Tests (one `[Test]` each, names as given). ⛔ Elements are declared with `As New T()`, never `= Nothing` — `Nothing` is typed `Object` and the Dim check refuses `Dim a As ToolStripMenuItem = Nothing` today (BL3001, recorded at `NetGeneratedShimConformanceTests.cs:263`); the measured scratch fixtures all used `New`.
+- `TypedLiteral_OfTwoUnresolvableNetTypes_IsTypedByT_WithNoWarning`: prelude `Using System.Windows.Forms`, body `Dim a As New ToolStripMenuItem()\nDim s As New ToolStripSeparator()\nDim items() As ToolStripItem = New ToolStripItem() {a, s}` → `ok`, no warning containing "mixed types", type name `ToolStripItem[]`, `ElementType.Name == "ToolStripItem"`.
+- `TypedLiteral_OverBasicLangClasses_Widens_AndAnAbstractElementTypeIsLegal`: prelude `MustInherit Class Shape\nEnd Class\nClass Circle\nInherits Shape\nEnd Class\nClass Square\nInherits Shape\nEnd Class` (⚠ `MustInherit`, on purpose — spec §9's second pin: an array OF an abstract type is legal, and `Visit(NewExpressionNode)`'s abstract refusal must not be reached for the typed literal; `Parser.cs:119/:254` set `IsAbstract`), body `Dim c As New Circle()\nDim s As New Square()\nDim all() As Shape = New Shape() {c, s}` → ok, no error mentioning `abstract`.
 - `TypedLiteral_RefusesAnUnrelatedElement`: same prelude, body `Dim x As String = "a"\nDim all() As Shape = New Shape() {x}` → error containing `cannot put a 'String' in a 'Shape()'`.
-- `TypedLiteral_RefusesNarrowing_ForNonLiterals`: `Dim d As Double = 1.5\nDim l As Long = 1\nDim a() As Integer = New Integer() {d}` → error `'Double' in an 'Integer()'`; and `{l}` → `'Long'`.
+- `TypedLiteral_RefusesNarrowing_ForNonLiterals`: `Dim d As Double = 1.5\nDim l As Long = 1\nDim a() As Integer = New Integer() {d}` → error `cannot put a 'Double' in an 'Integer()'` (⚠ the article: the implementation uses an `Article()` helper — `an` before a vowel-initial type name — so the spec's two spellings are both produced); and `{l}` → `'Long'`.
 - `TypedLiteral_NumericLiteralRule`: admitted — `New Byte() {65}`, `New Long() {1}`, `New Double() {1}`, `New Decimal() {1.5}`, `New Single() {1.5}`; refused — `New Integer() {1.5}` (error names Double→Integer), `New Byte() {300}` (message contains `not representable` — the BC30439 text `CheckConstantFitsNumericTarget` emits; read its message at `:1633-1665` and assert a stable fragment).
 - `TypedLiteral_Nothing`: `New String() {"a", Nothing}` and (prelude Shape) `New Shape() {c, Nothing}` admitted; `New Integer() {Nothing}` refused with `Nothing has no value of type 'Integer'`.
 - `TypedLiteral_SyntheticGenericElement_IsAccepted`: prelude Shape; body `Dim l As New List(Of Integer)()\nDim all() As Shape = New Shape() {l}` → ok (csc decides).
@@ -326,8 +337,8 @@ Tests (one `[Test]` each, names as given):
 
                 if (elementType.IsFloatingPoint() && target.IsIntegral())
                 {
-                    Error($"cannot put a '{elementType.Name}' in a '{target.Name}()' — a floating literal never " +
-                          "narrows into an integral array; write an integer or change the element type",
+                    Error($"cannot put {Article(elementType.Name)} '{elementType.Name}' in {Article(target.Name)} '{target.Name}()' — " +
+                          "a floating literal never narrows into an integral array; write an integer or change the element type",
                           element.Line, element.Column);
                     return;
                 }
@@ -352,8 +363,13 @@ Tests (one `[Test]` each, names as given):
                 return;
             }
 
-            Error($"cannot put a '{elementType.Name}' in a '{target.Name}()'", element.Line, element.Column);
+            Error($"cannot put {Article(elementType.Name)} '{elementType.Name}' in {Article(target.Name)} '{target.Name}()'",
+                element.Line, element.Column);
         }
+
+        /// <summary>"a Double", "an Integer" — the spec's messages use both, so the article is computed.</summary>
+        private static string Article(string typeName) =>
+            typeName.Length > 0 && "AEIOUaeiou".IndexOf(typeName[0]) >= 0 ? "an" : "a";
 
         /// <summary>IsAssignableFrom WITHOUT its permissive narrowing arm (SymbolTable.cs:195).</summary>
         private static bool WidensTo(TypeInfo source, TypeInfo target)
@@ -380,7 +396,7 @@ Tests (one `[Test]` each, names as given):
 
 **Files:** Modify `BasicLang/IRBuilder.cs:1893-1922`.
 
-- [ ] **Step 1: Write the failing test** in `TypedArrayLiteralTests` — `TypedLiteral_Lowering_RetypesALiteral_AndCastsANonLiteral`: build the IR for `Dim i As Integer = 1\nDim a() As Double = New Double() {1, i}` (`new IRBuilder(analyzer).Build(program, "T")`, as `BclE2E.CompileToCppOptimized` does at `CppBclEndToEndTests.cs:49-54`), find the `IRArrayAlloc` in Main's blocks, assert `ElementType.Name == "Double"`; find the two `IRArrayStore`s: the first's `Value` is an `IRConstant` whose `Type.Name == "Double"` (re-typed in place), the second's `Value` is an `IRCast` (a non-literal is wrapped). ⚠ Discover the block/instruction accessors from `IRPrettyPrinter.cs` or an existing IR test (grep `IRArrayStore` in the Tests tree).
+- [ ] **Step 1: Write the failing test** in `TypedArrayLiteralTests` — `TypedLiteral_Lowering_RetypesALiteral_AndCastsANonLiteral`: build the IR for `Dim i As Integer = 1\nDim a() As Double = New Double() {1, i}` (`new IRBuilder(analyzer).Build(program, "T")`, as `BclE2E.CompileToCppOptimized` does at `CppBclEndToEndTests.cs:49-54`); walk `irModule.Functions` (`IRNodes.cs:1406`) → `function.Blocks` (a `List<BasicBlock>`, `:1310`) → `block.Instructions` (`:1252`); find the `IRArrayAlloc` (`:915`), assert `ElementType.Name == "Double"`; find the two `IRArrayStore`s (`:935`): the first's `Value` is an `IRConstant` whose `Type.Name == "Double"` (re-typed in place), the second's `Value` is an `IRCast` (`:797`; a non-literal is wrapped). No existing test references `IRArrayStore` — this is the first.
 
 - [ ] **Step 2: Run** → fails (both stores are raw).
 
@@ -487,9 +503,39 @@ and in the `Expr` switch before `default:`:
 
 - [ ] **Step 1: Write the failing tests**
 
-- `WinForms_TheVsIdiom_BuildsUnderCsc_AndRuns`: the M4 program (`scratchpad t24/M4/F.bas`, class renamed `MenuForm`, plus a `Public Sub Poke()` printing `menuStrip1.Items.Count`) → `WinFormsCatalogSweepTests.CompileToCSharp(source)` (assert the C# contains `new ToolStripItem[2]`) → `WinFormsCompile.AssertCompiles(csharp, …)`; then a dotnet-build + run exactly as `FormComponentAcceptanceTests.cs:146-204` does (copy its csproj/driver text; `new MenuForm()`, `form.Poke()`), asserting the run prints `ITEMS 2`.
-- `WinForms_TheDeclaredArrayShape_BuildsUnderCsc`: the M3 shape `Dim items() As ToolStripItem = New ToolStripItem() {mnuFile, sep}` then `AddRange(items)` → `CompileToCSharp` + `WinFormsCompile.AssertCompiles`.
-- `TwoFiles_ASiblingClass_IsNotExemptedAsANetType`: write `Shape.bas` (`Public Class Shape\nEnd Class`) and `Main.bas` (`Public Class Prog\nPublic Shared Sub Main()\nDim s As String = "a"\nDim all() As Shape = New Shape() {s}\nEnd Sub\nEnd Class`) into a temp dir, run `CliTestHarness.RunProcess(CliTestHarness.CliPath(), new[] { "Main.bas", "Shape.bas", "--target=csharp" }, dir, 120_000)` (⚠ check how the CLI takes several files — `Program.cs` usage text, or a `.blproj`; `CliTestHarness.RunCli` accepts params args) → exit ≠ 0 and stdout contains `cannot put a 'String' in a 'Shape()'`.
+- `WinForms_TheVsIdiom_BuildsUnderCsc_AndRuns`: the M4 program, INLINE in the fixture (never a scratchpad path — a fresh session cannot find it):
+
+```basic
+Using System
+Using System.Windows.Forms
+Using System.Drawing
+
+Public Class MenuForm
+    Inherits Form
+
+    Private menuStrip1 As MenuStrip
+    Private mnuFile As ToolStripMenuItem
+    Private sep As ToolStripSeparator
+
+    Public Sub New()
+        menuStrip1 = New MenuStrip()
+        mnuFile = New ToolStripMenuItem()
+        mnuFile.Text = "File"
+        sep = New ToolStripSeparator()
+        menuStrip1.Items.AddRange(New ToolStripItem() {mnuFile, sep})
+        Me.MainMenuStrip = menuStrip1
+        Me.Controls.Add(menuStrip1)
+    End Sub
+
+    Public Sub Poke()
+        Console.WriteLine("ITEMS " & menuStrip1.Items.Count)
+    End Sub
+End Class
+```
+
+  → `WinFormsCatalogSweepTests.CompileToCSharp(source)` (assert the C# contains `new ToolStripItem[2]`) → `WinFormsCompile.AssertCompiles(csharp, …)`; then a dotnet-build + run exactly as `FormComponentAcceptanceTests.cs:146-204` does (copy its csproj/driver text; `new MenuForm()`, `form.Poke()`), asserting the run prints `ITEMS 2`.
+- `WinForms_TheDeclaredArrayShape_BuildsUnderCsc`: the same class with the constructor's `AddRange` line replaced by the TYPED M3 shape, two lines: `Dim items() As ToolStripItem = New ToolStripItem() {mnuFile, sep}` then `menuStrip1.Items.AddRange(items)` (⚠ the scratch `M3n` file holds the BARE literal, which is the refused shape — do not copy it) → `CompileToCSharp` + `WinFormsCompile.AssertCompiles`. (`CreateArrayType` names arrays `T[]`, `SymbolTable.cs:657/:677`, so the declared type and the literal's `Equals` — there is no `()` spelling to chase.)
+- `TwoFiles_ASiblingClass_IsNotExemptedAsANetType`: ⛔ the single-file CLI REFUSES two source files before parsing (`Program.cs:194-202`, exit 2 on stderr), and the build route prints semantic errors to STDERR (`:870-877`, exit 1 at `:1180`). So: write `Shape.bas` (`Public Class Shape\nEnd Class`), `Main.bas` (`Public Class Prog\nPublic Shared Sub Main()\nDim s As String = "a"\nDim all() As Shape = New Shape() {s}\nEnd Sub\nEnd Class`) and `App.blproj` copied from `CliTestHarness.cs:126-138` (`CompileRunCSharp`'s template) with TWO `<Compile Include>` items and `<TargetBackend>CSharp</TargetBackend>`; run `CliTestHarness.RunProcess(CliTestHarness.CliPath(), new[] { "build", "App.blproj" }, dir, 120_000)` → `ExitCode != 0` AND `StdErr` contains `cannot put a 'String' in a 'Shape()'` (both halves, or mutant (c) below is not discriminated — the exit code alone is also what a multi-file refusal gives).
 
 - [ ] **Step 2: Run** → the first two fail today only if Tasks 1–3 are incomplete; the two-file row fails if the predicate was spelled without `IsUserDefinedTypeName`. All three must be green at the end.
 
@@ -584,7 +630,7 @@ internal static class FormCatalogShapes
 {
     /// <summary>Adds <paramref name="definition"/>'s canonical shape to <paramref name="document"/> and returns the control it added.</summary>
     public static FormControl Canonical(FormDocument document, FormControlDef definition, string id, string? hostId = null,
-        PixelGeometry? geometry = null)
+        FormGeometry? geometry = null)
     {
         switch (definition.Place)
         {
@@ -631,10 +677,10 @@ internal static class FormCatalogShapes
 }
 ```
 
-⚠ Keep the property sweep's `Anchor = "Top"` in the default geometry (spec Decision 12 note). ⚠ For a `.blwebform` document the Positioned shape needs a `GridGeometry`; add a `target` check: `document.Target == FormTarget.Web ? new GridGeometry { Col = 0, Row = 0 } : …`.
+⚠ Keep the property sweep's `Anchor = "Top"` in the default geometry (spec Decision 12 note). ⚠ For a `.blwebform` document the Positioned shape needs a `GridGeometry`: when `geometry == null`, use `document.Target == FormTarget.Web ? new GridGeometry { Col = 0, Row = 0 } : new PixelGeometry { … }` (the parameter is `FormGeometry?` for exactly this). ⚠ Moving the retarget sweep onto `Canonical` gives its Positioned controls geometry they never had; that adds BL8025 `RetargetLayoutCrossed` warnings, never `RetargetPropertyLost`, so the sweep's property assertions stand.
 
 - [ ] **Step 2: Move the gates onto it**, one at a time, running each after:
-  - `WinFormsCatalogSweepTests.EveryProperty_OfEveryControl_…` (`:143-162`): replace the hand-built control with `var control = FormCatalogShapes.Canonical(form, definition, "ctl");` then the property loop. Same in `TheDefaultEvent_OfEveryControl_…` (`:194-201`). The enum sweep (`:182-218`): `Canonical(form, definition, $"ctl{i}", hostId: $"ctl{i}Host")` per value.
+  - `WinFormsCatalogSweepTests.EveryProperty_OfEveryControl_…` (`:143-162`): replace the hand-built control with `var control = FormCatalogShapes.Canonical(form, definition, "ctl");` then the property loop. Same in `TheDefaultEvent_OfEveryControl_…` (`:237` onward — the enum sweep sits at `:184-218` in between). The enum sweep: `Canonical(form, definition, $"ctl{i}", hostId: $"ctl{i}Host")` per value.
   - `FormCanvasRenderTests.DocumentWith(kind)`: `FormCatalogShapes.Canonical(document, FormControlCatalog.Find(kind)!, SharedId, hostId: SharedId, geometry: new PixelGeometry { X = 20, Y = 20, Width = 140, Height = 40 })`; `EveryControlKindRendersDistinctly` filter becomes `d.SupportsTarget(WinForms) && d.Place != FormPlace.Tray && d.Place != FormPlace.Item` (items leave the hash — spec §7).
   - `FormRetargetTests.EveryCatalogKind_Retargets_…`: build with `Canonical(source, definition, "c")`, locate the crossed control with `FormCatalogShapes.Locate(result.Document, definition)`, and scope `reportedLost` to messages containing `'c.`, i.e. `.Where(m => m.Contains("'c."))` before the `Single` lookup.
 - [ ] **Step 3: Run** the three fixtures (`WinFormsCatalogSweepTests` is Integration: run it explicitly) → green with today's rows (no behaviour change yet).
@@ -680,10 +726,10 @@ public class FormSchematicPinTests
 }
 ```
 
-`RenderSchematicForTest` is an `internal static` helper on `FormCanvasControl` that creates a headless `Window` hosting a `FormCanvasControl` with a `SchematicOverride`, renders, and hashes the frame (reuse `FormCanvasRenderTests.RenderHash`'s body; make `VisualGameStudio.Shell` internals visible to the tests if not already — check `InternalsVisibleTo` in the Shell csproj / `FormToolboxViewModel.GlyphFor` is already `internal` and reachable, so it is).
+`RenderSchematicForTest` is a `public static` helper on `FormCanvasControl` that creates a headless `Window` hosting a `FormCanvasControl` with a `SchematicOverride`, renders, and hashes the frame (reuse `FormCanvasRenderTests.RenderHash`'s body). ⛔ PUBLIC, and `FormToolboxViewModel.GlyphFor` becomes `public static` too: the Shell grants NO `InternalsVisibleTo` to the test project, by convention (the only IVT in the repo is BasicLang's; `CodeEditorDocumentView.axaml.cs:770` records the "public seams, never internal+IVT" rule, and no test calls `GlyphFor` today — the glyph gates read the public `FormToolboxItem.Glyph`).
 
 - [ ] **Step 2: Run** → the glyph test fails (seven `?`), the paint test fails (seven schematics fall to the default arm and hash alike).
-- [ ] **Step 3: Implement.** Extract from `DrawControl` everything after the label/colour setup into `private void DrawSchematic(DrawingContext context, FormSchematic schematic, Rect bounds, string label, IBrush face, IBrush client, IBrush ink)` — the existing `switch (schematic)` verbatim — and have `DrawControl` call it. Add the seven arms with distinct shapes: `MenuBar` (a flat band with a 1px bottom rule), `ToolBar` (a band with a left grip of two vertical lines), `StatusBar` (a band with a 1px top rule and a sizing-grip triangle bottom-right), `MenuItem` (the caption, with a 2px left pad, no box), `Separator` (a 1px vertical line, or horizontal when `bounds.Width > bounds.Height`), `ToolButton` (a small raised box with the caption), `StatusLabel` (caption at left). ⛔ Bands draw NO caption (spec §6). Add the seven `GlyphFor` arms: `MenuBar => "≡_"`, `ToolBar => "[▸]"`, `StatusBar => "_≡"`, `MenuItem => "≡"`, `Separator => "—"`, `ToolButton => "[▸"`, `StatusLabel => "_A"` — distinct from every existing mark (run the glyph test). Add `internal static string RenderSchematicForTest(FormSchematic, Rect, string)` and a `SchematicOverride` used only when non-null.
+- [ ] **Step 3: Implement.** Extract from `DrawControl` everything after the label/colour setup into `private bool DrawSchematic(DrawingContext context, FormSchematic schematic, Rect bounds, string label, IBrush face, IBrush client, IBrush ink)` — the existing `switch (schematic)` verbatim — and have `DrawControl` call it. ⚠ The post-switch label draw (`FormCanvasControl.cs:1881-1889`) runs for EVERY schematic today; the seam returns `true` when the arm drew its own label (or must draw none), and `DrawControl` skips the post-switch draw on `true` — the three band arms return `true`, because a band draws NO caption (spec §6; a strip's id as a caption would be the only pixel a render gate sees). Add the seven arms with distinct shapes: `MenuBar` (a flat band with a 1px bottom rule), `ToolBar` (a band with a left grip of two vertical lines), `StatusBar` (a band with a 1px top rule and a sizing-grip triangle bottom-right), `MenuItem` (the caption, with a 2px left pad, no box), `Separator` (a 1px vertical line, or horizontal when `bounds.Width > bounds.Height`), `ToolButton` (a small raised box with the caption), `StatusLabel` (caption at left). ⛔ Bands draw NO caption (spec §6). Add the seven `GlyphFor` arms: `MenuBar => "≡_"`, `ToolBar => "[▸]"`, `StatusBar => "_≡"`, `MenuItem => "≡"`, `Separator => "—"`, `ToolButton => "[▸"`, `StatusLabel => "_A"` — distinct from every existing mark (run the glyph test). Add `internal static string RenderSchematicForTest(FormSchematic, Rect, string)` and a `SchematicOverride` used only when non-null.
 - [ ] **Step 4: Run** `FormSchematicPinTests`, `FormCanvasRenderTests`, `FormToolboxGlyphTests` → green.
 
 ### Task 11: Gate and commit 24b
@@ -795,7 +841,7 @@ public class FormSchematicPinTests
 
 ⚠ Positional parameters of `FormControlDef` are `(Kind, WinFormsType, HtmlTag, HtmlInputType, IsContainer, Properties, …)` — the six positional then named. ⚠ `Dock` stays `Targets: null` (shared). Add `DesignCodes.StripMisplaced = "BL8030"` with the spec §3 doc, and update the band comment: `BL8030 a strip item outside a host / a non-item in a host / a strip below the top level (here)`, `BL8031 reserved`, and a line "the enumerated table is exhausted; the next claim starts at BL8032".
 
-- [ ] **Step 4: Run** `FormCatalogCoverageTests`, `FormToolboxGlyphTests`, `FormPropertyGridTests`, `FormSchematicPinTests`, `FormCanvasRenderTests` (Docked rows draw bands via `DrawSchematic` — they will be laid out only after Task 17; if the render gate is red for the three strips because `Layout` skips null geometry, do Task 17 BEFORE running it — see the ordering note in Task 19).
+- [ ] **Step 4: Run** `FormCatalogCoverageTests`, `FormToolboxGlyphTests`, `FormPropertyGridTests` (⚠ `TheToolbox_GroupsContainersAfterCommonControls` at `:586-589` pins the category list `["Common Controls","Containers","Components"]` and ranks an unknown category 0 — it is a file to MODIFY in Task 18, and it is RED between here and there; run it only after Task 18), `FormSchematicPinTests`. ⛔ Do NOT run `FormCanvasRenderTests` yet: `Layout` skips null geometry, so the three strips hash identical to the empty form until Task 17's bands land — the gate IS red between Task 12 and Task 17 by construction. Run it after Task 17.
 
 ### Task 13: The reader — the `Place` branch and BL8030
 
@@ -871,7 +917,7 @@ In `GenerateInit`, after the root `AppendSiblings(...)` call and INSIDE a `form.
 
 **Files:** `FormAssetEmitter.cs` (`Html` `:100-136`, `AppendControl` `:138-272`, `Css` `:282-331`); Tests: `FormStripEmissionTests`.
 
-- [ ] **Step 1: Failing tests:** `Web_StripsArePageChrome`: the HTML has `<nav id="menuStrip1"` and `<menu id="toolStrip1"` BEFORE `<div class="vgs-form">`, `<footer id="statusStrip1"` AFTER `</div>`, `data-form` on `<body>`, none of the strip ids inside the div; `Web_TwoBottomStrips_AreEmittedInReverseDocumentOrder`; `Web_MenuNesting`: `<nav id="menuStrip1" class="vgs-MenuStrip"><ul><li id="mnuFile" class="vgs-ToolStripMenuItem">File<ul><li id="mnuOpen"` (the `&` stripped: `&amp;File` is NOT present), `<li id="sep1" class="vgs-ToolStripSeparator" role="separator">`, `<menu id="toolStrip1" class="vgs-ToolStrip" role="toolbar"><input id="tsbOpen" class="vgs-ToolStripButton" type="button" value="Open">`, `<footer … role="status"><span id="lblStatus" …>Ready</span>`; no `tabindex` on any strip or item element; `Web_ToolTipTextBecomesTitle`; `Web_TheStylesheetCarriesEachPresentStripsCss_Once`.
+- [ ] **Step 1: Failing tests:** `Web_StripsArePageChrome`: the HTML has `<nav id="menuStrip1"` and `<menu id="toolStrip1"` BEFORE `<div class="vgs-form">`, `<footer id="statusStrip1"` AFTER `</div>`, `data-form` on `<body>`, none of the strip ids inside the div; `Web_TwoBottomStrips_AreEmittedInReverseDocumentOrder`; `Web_MenuNesting` — ⚠ the emitter writes a newline plus indent between a parent's opening tag and its children (`FormAssetEmitter.cs:260-269`), so assert ORDERED fragments with `IndexOf`, never one contiguous string: `<nav id="menuStrip1" class="vgs-MenuStrip"` < `<ul>` < `<li id="mnuFile" class="vgs-ToolStripMenuItem"` < `File` < `<ul>` < `<li id="mnuOpen"` < `<li id="sep1" class="vgs-ToolStripSeparator" role="separator">` < `</ul>` < `</li>` (and `&amp;File` is NOT present — the `&` is stripped); `<menu id="toolStrip1" class="vgs-ToolStrip" role="toolbar"` then `<input id="tsbOpen" class="vgs-ToolStripButton" type="button" value="Open">`; `<footer` … `role="status"` then `<span id="lblStatus"` … `>Ready</span>`; no `tabindex` on any strip or item element; `Web_ToolTipTextBecomesTitle`; `Web_TheStylesheetCarriesEachPresentStripsCss_Once`.
 - [ ] **Step 2: Run** → red.
 - [ ] **Step 3: Implement** in `Html`: partition `form.Controls` into `top = Docked with Dock (property or default) == "Top"`, `bottom = Docked … "Bottom"`, `rest`; emit `top` in document order before the div, `rest` inside, `bottom` in REVERSE document order after `</div>`. In `AppendControl`: `tabindex` only when `definition.Place == FormPlace.Positioned`; after `class`, `if (definition.HtmlRole != null) sb.Append($" role=\"{definition.HtmlRole}\"")`; the text for an `Item` row strips `&` (`text.Replace("&", "")`, once — a literal `&&` in a WinForms caption means one `&`; handle `&&` → `&` first); children wrapped: `if (definition.HtmlChildrenWrapper is { } w) sb.Append($"<{w}>")` before the child loop and the close after. In `Css`: after the per-control rules, `foreach (var css in form.AllControls().Select(c => c.Definition?.WebCss).Where(s => s != null).Distinct()) sb.Append(css).Append('\n')`.
 - [ ] **Step 4: Run** the fixture + `FormAssetEmitterTests` (or whatever the existing emitter fixture is called — grep `FormAssetEmitter.Html(` in Tests) → green.
@@ -919,11 +965,11 @@ In `GenerateInit`, after the root `AppendSiblings(...)` call and INSIDE a `form.
 
 ### Task 18: Placement, toolbox category, grid, drop refusal, recognizer
 
-**Files:** `FormPlacement.cs` (`Place` `:37-106`, new `PlaceItem`), `FormToolboxViewModel.cs` (category), `FormPropertyGridViewModel.cs` (`:176-183`), `CodeEditorDocumentViewModel.cs` (`TrayDrop` `:566-584`, `PlaceDroppedControl` `:545-557`), `Recognizer/WinFormsDialect.cs` (`:161`, `:302-315`); Tests: `FormPlacementTests`, `FormToolboxGlyphTests`/`FormPropertyGridTests`, `FormTrayTests`-style VM tests in a new `FormStripEditorTests.cs` (VM level), `FormStripRecognizerTests.cs`.
+**Files:** `FormPlacement.cs` (`Place` `:37-106`, new `PlaceItem`), `FormToolboxViewModel.cs` (category), `FormPropertyGridViewModel.cs` (`:176-183`), `CodeEditorDocumentViewModel.cs` (`PlaceDroppedControl` `:566`, `TrayDrop` `:587`, `ReportPlacementRefusal` `:613`), `Recognizer/WinFormsDialect.cs` (`:161`, `:302-315`); Tests: `FormPlacementTests`, `FormToolboxGlyphTests`/`FormPropertyGridTests` (incl. `TheToolbox_GroupsContainersAfterCommonControls`), `FormTrayTests`-style VM tests in a new `FormStripEditorTests.cs` (VM level), `FormStripRecognizerTests.cs`.
 
 - [ ] **Step 1: Failing tests:** `Place_ADockedKind_LandsTopLevel_GeometryLess_WithTheRowsDock_IgnoringThePoint`; `Place_AnItemKind_IsRefused_NamingTypeHere` (message contains "Type Here"); `PlaceItem_AppendsToTheHost_WithTheCaptionAsId` (`PlaceItem(doc, menuStrip, "ToolStripMenuItem", "&Open...")` → id `openToolStripMenuItem`, `Text == "&Open..."`, last child of the host; a second `Open` → `openToolStripMenuItem1`; `"-"` → a `ToolStripSeparator` `toolStripSeparator1`; `"123"` → `toolStripMenuItem1` fallback; a kind the host does not accept → refusal); toolbox: the three strips appear under category `Menus & Toolbars`, no item kind is offered; grid: `Rows_ForAStrip_HaveDockAndNoTabIndexOrGeometry`, `Rows_ForAnItem_HaveNoTabIndex`; VM: `TrayDropCommand.Execute("ToolStripMenuItem")` and `PlaceDroppedControl` of an Item kind publish BL8019 whose message contains "Type Here" and place nothing; recognizer: `design --check` on a `.bas` with `menuStrip1.Items.Add(mnuFile)` and `mnuFile.DropDownItems.Add(mnuOpen)` reports NO BL8006 for `mnuFile`/`mnuOpen` (build the source through `DesignCheck.CheckSource`).
 - [ ] **Step 2: Run** → red.
-- [ ] **Step 3: Implement.** `FormPlacement.Place`: after the Tray branch, `if (definition.Place == FormPlace.Item) return new FormPlacementResult(null, $"'{definition.Kind}' is created from its menu's Type Here slot, not dropped.");` and `if (definition.Place == FormPlace.Docked) { var strip = new FormControl { Kind, Id = NextId(…) }; var dock = definition.Property("Dock"); if (dock?.Default != null) strip.Properties["Dock"] = dock.Default; document.Controls.Add(strip); return new(strip, null); }`. New:
+- [ ] **Step 3: Implement.** Toolbox category pin first: `FormPropertyGridTests.TheToolbox_GroupsContainersAfterCommonControls` (`:586-589`) becomes `["Common Controls","Containers","Menus & Toolbars","Components"]` with the new category ranked 2 and Components 3. Then `FormPlacement.Place`: after the Tray branch, `if (definition.Place == FormPlace.Item) return new FormPlacementResult(null, $"'{definition.Kind}' is created from its menu's Type Here slot, not dropped.");` and `if (definition.Place == FormPlace.Docked) { var strip = new FormControl { Kind, Id = NextId(…) }; var dock = definition.Property("Dock"); if (dock?.Default != null) strip.Properties["Dock"] = dock.Default; document.Controls.Add(strip); return new(strip, null); }`. New:
 
 ```csharp
     /// <summary>Type Here (spec §6): appends an item of <paramref name="kind"/> to <paramref name="host"/>, or refuses.</summary>
@@ -940,21 +986,36 @@ In `GenerateInit`, after the root `AppendSiblings(...)` call and INSIDE a `form.
         return new FormPlacementResult(item, null);
     }
 
-    /// <summary>VS's id: the caption camel-cased and sanitised + the kind; `-` → `toolStripSeparator1`; unusable → kind + N.</summary>
-    internal static string ItemId(FormDocument document, FormControlDef definition, string text)
+    /// <summary>
+    /// VS's id: the caption camel-cased and sanitised + the kind (`openToolStripMenuItem`); `-` →
+    /// `toolStripSeparator1`; an unusable caption (empty, leading digit) → `toolStripMenuItem1`.
+    /// </summary>
+    public static string ItemId(FormDocument document, FormControlDef definition, string text)
     {
         var kindPart = char.ToLowerInvariant(definition.Kind[0]) + definition.Kind[1..];
-        var words = new string(text.Replace("&&", "").Replace("&", "").Replace("", "&").Where(c => char.IsLetterOrDigit(c) || c == ' ').ToArray())
+
+        // `&&` is a literal ampersand in a WinForms caption, a lone `&` is the accelerator mark:
+        // one regex — never String.Replace with an empty pattern, which throws.
+        var plain = System.Text.RegularExpressions.Regex.Replace(text, "&(&?)", "$1");
+        var words = new string(plain.Where(c => char.IsLetterOrDigit(c) || c == ' ').ToArray())
             .Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        var caption = string.Concat(words.Select((w, i) => i == 0 ? char.ToLowerInvariant(w[0]) + w[1..] : char.ToUpperInvariant(w[0]) + w[1..]));
-        var stem = caption.Length > 0 && char.IsLetter(caption[0]) && definition.Kind != "ToolStripSeparator"
-            ? caption + definition.Kind
-            : kindPart;
-        return FormDocument.IsLegalControlId(stem) ? MakeUnique(document, stem) : MakeUnique(document, kindPart);
+        var caption = string.Concat(words.Select((w, i) =>
+            i == 0 ? char.ToLowerInvariant(w[0]) + w[1..] : char.ToUpperInvariant(w[0]) + w[1..]));
+
+        var usable = caption.Length > 0 && char.IsLetter(caption[0]) && definition.Kind != "ToolStripSeparator";
+        Func<string, bool> taken = id => document.FindById(id) != null;
+
+        // ⚠ MakeUniqueId returns its argument UNCHANGED when free (FormDocument.cs:153-158), so the
+        // fallback is seeded with the "1" the way NextId seeds `kind + "1"` — `toolStripSeparator1`,
+        // not `toolStripSeparator`. The caption stem is not seeded: `openToolStripMenuItem`, then
+        // `openToolStripMenuItem1` when taken.
+        return usable && FormDocument.IsLegalControlId(caption + definition.Kind)
+            ? FormDocument.MakeUniqueId(caption + definition.Kind, taken)
+            : FormDocument.MakeUniqueId(kindPart + "1", taken);
     }
 ```
 
-(`MakeUnique`: `stem`, then `stem1`, `stem2`… over `document.FindById`; if `FormDocument.MakeUniqueId` exists, use it.) Toolbox: category `Place == Docked ? "Menus & Toolbars"` sorted after Containers (`OrderBy(c => c.Place switch { Tray => 3, Docked => 2, _ when c.IsContainer => 1, _ => 0 })`). Grid: `if (control.Definition?.Place is null or FormPlace.Positioned)` around the TabIndex row. VM: `TrayDrop`'s refusal text for a non-component already names "drop it on the form"; add an `Item` check first with the Type Here message; `PlaceDroppedControl` gets the refusal from `Place` automatically. Recognizer: at `WinFormsDialect.cs:161` also match `CheckName(2, "Items") && CheckName(4, "Add")` and `CheckName(2, "DropDownItems") && CheckName(4, "Add")` → `MarkParented`.
+(⚠ Read `FormDocument.MakeUniqueId`'s real signature at `FormDocument.cs:153-174` and match it.) Toolbox: category `Place == Docked ? "Menus & Toolbars"` sorted after Containers (`OrderBy(c => c.Place switch { Tray => 3, Docked => 2, _ when c.IsContainer => 1, _ => 0 })`). Grid: `if (control.Definition?.Place is null or FormPlace.Positioned)` around the TabIndex row. VM: `TrayDrop`'s refusal text for a non-component already names "drop it on the form"; add an `Item` check first with the Type Here message; `PlaceDroppedControl` gets the refusal from `Place` automatically. Recognizer: at `WinFormsDialect.cs:161` also match `CheckName(2, "Items") && CheckName(4, "Add")` and `CheckName(2, "DropDownItems") && CheckName(4, "Add")` → `MarkParented`.
 - [ ] **Step 4: Run** all named fixtures → green.
 
 ### Task 19: Gate and commit 24c
@@ -974,7 +1035,7 @@ In `GenerateInit`, after the root `AppendSiblings(...)` call and INSIDE a `form.
 
 - [ ] **Step 1: Failing tests:** with the §3 document and `selected: menuStrip1` → after the band, cells for `mnuFile` (`Role == Cell`, `Bounds.X == 0`, width `8 + 7*len("&File") + 8` — the schematic width rule, `&` counted as written), then ONE `TypeHere` entry (`Control == null`) at `x = cell.Right` in the band; with `selected: mnuOpen` → `mnuFile`'s dropdown cells `[mnuOpen, sep1, mnuExit]` stacked below `mnuFile`'s cell (each 22 high; a separator 6 high) + `mnuFile`'s slot below them + `mnuOpen`'s own dropdown (empty) to the RIGHT of `mnuOpen`'s cell at the same y with its slot; the dropdown entries come LAST in the sequence; with `selected: null` → no `TypeHere` entry at all; `TypeHereAt(document, point, selected)` returns the host for a point in the slot and null elsewhere; `HitTest` on a dropdown cell returns the nested item; `ControlsIn` still excludes items.
 - [ ] **Step 2: Run** → red.
-- [ ] **Step 3: Implement** `Cells(document, selected)`: for each band, lay its top-level items left→right (`x += CellWidth(item)`; `CellWidth = item is Separator ? 6 : 8 + 7 * (Text ?? Id).Length + 8`); the ACTIVE strip (selected strip, or the selected item's root strip via a parent map built from `AllControls()`) gets a `TypeHere` entry after its cells; then the EXPANSION PATH: walk from the selected item up to the strip collecting item ancestors; expanded = ancestors ∪ {selected item if `IsHost`}; for each, outermost first: a dropdown at `(cell.X, cell.Bottom)` for a band cell or `(cell.Right, cell.Y)` for a nested cell, rows stacked, then the slot; yield all dropdown entries after every band/cell entry. `TypeHereAt(document, canvasPoint, selected)` = the last `TypeHere` entry containing the form point → its host (carry the host in the entry: make `FormLayoutEntry` `(Control, Bounds, Role, Host)` or return the host as `Control` with `Role == TypeHere` and let consumers skip `Role == TypeHere` — choose the latter and update the Task 17 consumers' filter from `Control != null` to `Role != TypeHere`).
+- [ ] **Step 3: Implement** `Cells(document, selected)`: for each band, lay its top-level items left→right (`x += CellWidth(item)`; `CellWidth = item is Separator ? 6 : 8 + 7 * (Text ?? Id).Length + 8`); the ACTIVE strip (selected strip, or the selected item's root strip via a parent map built from `AllControls()`) gets a `TypeHere` entry after its cells; then the EXPANSION PATH: walk from the selected item up to the strip collecting item ancestors; expanded = ancestors ∪ {selected item if `IsHost`}; for each, outermost first: a dropdown at `(cell.X, cell.Bottom)` for a band cell or `(cell.Right, cell.Y)` for a nested cell, rows stacked, then the slot; yield all dropdown entries after every band/cell entry. ⛔ The entry shape, decided ONCE (spec §2: the slot has NO control and every consumer skips an entry with no control): `FormLayoutEntry(FormControl? Control, Rect Bounds, FormLayoutRole Role, FormControl? Host = null)` — a slot is `(null, rect, TypeHere, host)`, so Task 17's `Control != null` filters stay exactly as they are, and `TypeHereAt(document, canvasPoint, selected)` = the LAST entry with `Role == TypeHere` whose bounds contain the form point → its `Host`. Task 21's `TypeHereBounds` reads `Host` too.
 - [ ] **Step 4: Run** the fixture (+ Task 17's) → green.
 
 ### Task 21: The canvas — `TypeHereHost`, `TypeHereBounds`, `BeginTypeHereCommand`, cell/slot drawing, presses
@@ -990,7 +1051,7 @@ In `GenerateInit`, after the root `AppendSiblings(...)` call and INSIDE a `form.
 
 **Files:** Create `VisualGameStudio.Shell/Controls/FormTypeHereEditor.cs`; Create `VisualGameStudio.Tests/Shell/FormTypeHereEditorTests.cs`.
 
-- [ ] **Step 1: Failing tests:** a `Window` hosting the editor; set `SlotBounds = new Rect(30, 40, 120, 22)`, `IsActive = true` → the inner `TextBox.Bounds` (after layout, `window.UpdateLayout()`/a render) equals that rect and the box `IsFocused`; `window.KeyTextInput("Open")` then `window.KeyPress(Key.Enter, RawInputModifiers.None)` → a `Recorder` on `CommitCommand` fired once with `"Open"` and `Text` is cleared; `KeyPress(Escape)` → `CancelCommand` fired; set `Host` to another object while `IsActive` → the box is focused again (the focus-on-every-Begin rule); `IsActive = false` → the editor is collapsed/hidden.
+- [ ] **Step 1: Failing tests:** a `Window` hosting the editor; set `SlotBounds = new Rect(30, 40, 120, 22)`, `IsActive = true` → the inner `TextBox.Bounds` (after layout, `window.UpdateLayout()`/a render) equals that rect and the box `IsFocused` (⚠ the control POSTS the focus call to the dispatcher, so the test calls `Dispatcher.UIThread.RunJobs()` before asserting); `window.KeyTextInput("Open")` then `window.KeyPress(Key.Enter, RawInputModifiers.None)` → a `Recorder` on `CommitCommand` fired once with `"Open"` and `Text` is cleared; `KeyPress(Escape)` → `CancelCommand` fired; set `Host` to another object while `IsActive` → the box is focused again (the focus-on-every-Begin rule); `IsActive = false` → the editor is collapsed/hidden.
 - [ ] **Step 2: Run** → compile error.
 - [ ] **Step 3: Implement** a `TemplatedControl`-free `Panel` subclass (a `Canvas` with one `TextBox` child): styled `IsActive` (bool), `Host` (object?), `Text` (string, TwoWay to the box), `SlotBounds` (Rect), `CommitCommand`/`CancelCommand` (ICommand?). `OnPropertyChanged`: `IsActive` or `Host` changed while active → `IsVisible = IsActive; if (IsActive) Dispatcher.UIThread.Post(() => _box.Focus())`; `SlotBounds` changed → `Canvas.SetLeft/SetTop(_box, …)`, `_box.Width/Height`. `_box.KeyDown`: `Enter` → `CommitCommand?.Execute(_box.Text ?? "")`, `_box.Text = ""`, handled; `Escape` → `CancelCommand?.Execute(null)`, handled. `IsHitTestVisible` false when inactive so the canvas below receives clicks.
 - [ ] **Step 4: Run** → green.
@@ -999,7 +1060,7 @@ In `GenerateInit`, after the root `AppendSiblings(...)` call and INSIDE a `form.
 
 **Files:** Create `VisualGameStudio.Shell/ViewModels/Designer/FormStripEditorViewModel.cs`; Modify `CodeEditorDocumentViewModel.cs` (ctor, `PasteControls` `:429-468`, `SelectInDesigner`); Create `VisualGameStudio.Tests/Compiler/FormStripEditorTests.cs` (VM-level, the `FormTrayTests` rig).
 
-- [ ] **Step 1: Failing tests:** open a `.blform` with a MenuStrip (the §3 document without items, `MenuForm`); `vm.BeginTypeHere(menuStrip)` → `vm.StripEditor.IsActive`, `Host == menuStrip`, `Selection.Primary == menuStrip`; `vm.CommitTypeHere("&File")` → `fileToolStripMenuItem` under the strip with `Text == "&File"`, selected through `Selection` (and the grid), the document text contains it (undoable), editor still active with `Host == menuStrip`; `BeginTypeHere(fileToolStripMenuItem)` then `CommitTypeHere("&Open...")` → `openToolStripMenuItem` under it; `CommitTypeHere("-")` → `toolStripSeparator1`, a `ToolStripSeparator`; `CommitTypeHere("E&xit")` → `exitToolStripMenuItem`; the order is Open, sep, Exit; `FormCanvasTransform.Layout(doc, selected: exitToolStripMenuItem)` yields `fileToolStripMenuItem`'s dropdown cells, its slot, and `exitToolStripMenuItem`'s own slot to the right; `CommitTypeHere("-")` on a StatusStrip → refused via a `DesignerDiagnosticsEvent` BL8019 with "separator" in the message and nothing placed; `CancelTypeHere()` → inactive; with the editor active on the strip, `SelectInDesigner(theButton)` → the editor is cancelled; `Selection.Set(fileToolStripMenuItem)` (inside the host) → still active; undo after a commit → the item is gone from `DesignDocument` and the editor is cancelled (the model was rebuilt); paste: copy `fileToolStripMenuItem`, select `menuStrip`, paste → a renamed item appended to the strip; select the Button, paste an item → refused-and-reported, nothing added.
+- [ ] **Step 1: Failing tests:** open a `.blform` with a MenuStrip (the §3 document without items, `MenuForm`); ⛔ the three methods are PUBLIC (`public void BeginTypeHere(FormControl? host)` etc. — a `[RelayCommand]` on a public method still generates the command; `PlaceControl` is the precedent) because the Shell grants no internals access to the tests; `vm.BeginTypeHere(menuStrip)` → `vm.StripEditor.IsActive`, `Host == menuStrip`, `Selection.Primary == menuStrip`; `vm.CommitTypeHere("&File")` → `fileToolStripMenuItem` under the strip with `Text == "&File"`, selected through `Selection` (and the grid), the document text contains it (undoable), editor still active with `Host == menuStrip`; `BeginTypeHere(fileToolStripMenuItem)` then `CommitTypeHere("&Open...")` → `openToolStripMenuItem` under it; `CommitTypeHere("-")` → `toolStripSeparator1`, a `ToolStripSeparator`; `CommitTypeHere("E&xit")` → `exitToolStripMenuItem`; the order is Open, sep, Exit; `FormCanvasTransform.Layout(doc, selected: exitToolStripMenuItem)` yields `fileToolStripMenuItem`'s dropdown cells, its slot, and `exitToolStripMenuItem`'s own slot to the right; `CommitTypeHere("-")` on a StatusStrip → refused via a `DesignerDiagnosticsEvent` BL8019 whose message contains `Separator` (the `PlaceItem` refusal names the kind: `not a ToolStripSeparator`) and nothing placed; `vm.DeleteControlCommand.Execute(openToolStripMenuItem)` → gone from the host's `Children` and from `vm.Text` (`ListContaining` walks nested children), and the editor is cancelled when the deleted item WAS the host; `CancelTypeHere()` → inactive; with the editor active on the strip, `vm.Selection.Set(theButton)` (the public store — `SelectInDesigner` is private) → the editor is cancelled; `vm.Selection.Set(fileToolStripMenuItem)` (inside the host) → still active; undo after a commit → the item is gone from `DesignDocument` and the editor is cancelled (the model was rebuilt); paste: copy `fileToolStripMenuItem`, select `menuStrip`, paste → a renamed item appended to the strip and it is the selection; select the Button, paste an item → refused-and-reported, nothing added, the selection unchanged.
 - [ ] **Step 2: Run** → red.
 - [ ] **Step 3: Implement.** `FormStripEditorViewModel : ObservableObject` with `[ObservableProperty] bool _isActive; FormControl? _host; string _text = ""`. On the document VM:
 
@@ -1007,7 +1068,7 @@ In `GenerateInit`, after the root `AppendSiblings(...)` call and INSIDE a `form.
     public FormStripEditorViewModel StripEditor { get; } = new();
 
     [RelayCommand]
-    private void BeginTypeHere(BasicLang.Forms.FormControl? host)
+    public void BeginTypeHere(BasicLang.Forms.FormControl? host)
     {
         if (host?.Definition?.Items == null) return;
         SelectInDesigner(host);                 // the slot exists only for the selected strip/item's path
@@ -1017,7 +1078,7 @@ In `GenerateInit`, after the root `AppendSiblings(...)` call and INSIDE a `form.
     }
 
     [RelayCommand]
-    private void CommitTypeHere(string? text)
+    public void CommitTypeHere(string? text)
     {
         var host = StripEditor.Host;
         var file = DesignFile;
@@ -1036,10 +1097,31 @@ In `GenerateInit`, after the root `AppendSiblings(...)` call and INSIDE a `form.
     }
 
     [RelayCommand]
-    private void CancelTypeHere() { StripEditor.IsActive = false; StripEditor.Host = null; StripEditor.Text = ""; }
+    public void CancelTypeHere() { StripEditor.IsActive = false; StripEditor.Host = null; StripEditor.Text = ""; }
+
+    /// <summary>Whether <paramref name="control"/> is <paramref name="host"/> or lies inside it — the editor's "leave" test.</summary>
+    private static bool IsInside(BasicLang.Forms.FormDocument document, BasicLang.Forms.FormControl? control, BasicLang.Forms.FormControl host)
+    {
+        for (var c = control; c != null; c = ViewModels.Designer.FormGeometryEdit.ParentOf(document, c))
+        {
+            if (ReferenceEquals(c, host)) return true;
+        }
+        return false;
+    }
 ```
 
-In the ctor's `Selection.Changed` handler, after the grid update: `if (StripEditor.IsActive && StripEditor.Host is { } h && !(Selection.Primary == h || Selection.Primary?.SelfAndAncestors(file.Model).Contains(h) == true)) CancelTypeHere();` (write an ancestor walk over `AllControls()` — `FormDocument` has no parent pointers; a small `ParentOf(document, control)` exists in `FormGeometryEdit.cs:262` — reuse it). Cancel in `OnDesignModelRevisionChanged` when the host is no longer in the document (undo). `PasteControls`: for a pasted root whose row is `Item`: `var host = Selection.Primary; if (host?.Definition?.Items?.Accepts(control.Kind) == true) host.Children.Add(control); else { ReportPlacementRefusal(...); continue; }`; a pasted `Docked` root → `Controls`, no offset.
+`FormGeometryEdit.ParentOf` (`FormGeometryEdit.cs:262`) is `private static` today — make it `internal static` (same assembly; no test needs it). In the ctor's `Selection.Changed` handler, after the grid update:
+
+```csharp
+            var model = DesignFile?.Model;
+            if (StripEditor.IsActive && StripEditor.Host is { } host && model != null &&
+                !IsInside(model, Selection.Primary, host))
+            {
+                CancelTypeHere();
+            }
+```
+
+Cancel in `OnDesignModelRevisionChanged` when the host is no longer in the document (`DesignDocument?.FindById(host.Id)` is not the same reference — an undo re-parsed the model). `PasteControls`: for a pasted root whose row is `Item`: `var host = Selection.Primary; if (host?.Definition?.Items?.Accepts(control.Kind) == true) { host.Children.Add(control); added.Add(control); } else { ReportPlacementRefusal(...); continue; }`; a pasted `Docked` root → `Controls`, no offset; ⚠ collect the controls ACTUALLY added into `added` and pass THAT to `Selection.SetRange` (`:465` passes every pasted root, which would select a refused one).
 - [ ] **Step 4: Run** the fixture + `FormTrayTests` + `FormDesignerCommandTests` → green.
 
 ### Task 24: Wire the view — AXAML, gate
@@ -1051,7 +1133,8 @@ In the ctor's `Selection.Changed` handler, after the grid update: `if (StripEdit
 
 ### Task 25: Per-item render pin, gate, commit 24d
 
-- [ ] `FormCanvasRenderTests.EveryItemKind_ChangesItsHostsFrame`: for each `Place == Item` row, `RenderHash(Canonical(host with item, SharedId, hostId: SharedId, item Text "X"))` ≠ `RenderHash(host alone)`, WITH `SelectedControl = item` so cells are laid out (cells are unconditional per band in Task 20 — verify; if cells only appear on the band regardless of selection, no selection is needed). Mutant: blank the `MenuItem` arm in `DrawSchematic` → the pin fails.
+- [ ] `FormCanvasRenderTests.EveryItemKind_ChangesItsHostsFrame`: for each `Place == Item` row, `RenderHash(Canonical(host with item, SharedId, hostId: SharedId, item Text "X"))` ≠ `RenderHash(host alone)` (cells are laid out for every band unconditionally in Task 20, so no selection is needed). Mutant: blank the `MenuItem` arm in `DrawSchematic` → the pin fails.
+- [ ] The Task 21 bounds test must see TWO slots to discriminate: select `mnuFile` (so the strip's slot AND `mnuFile`'s dropdown slot are yielded) and set `TypeHereHost = mnuFile`; assert `TypeHereBounds` is the DROPDOWN slot's canvas rect — the "wrong entry" mutant then fails it.
 - [ ] Build (after `dotnet clean` Shell); fast subset; `FormCanvasRenderTests`; `FormSchematicPinTests`; `FormTypeHereEditorTests`; `FormStripCanvasTests`; `FormStripEditorTests`. Mutants: `BeginTypeHere` not selecting the host → the slot test; commit selecting nothing → the "selected through Selection" assertion; the cancel-on-leave handler removed → its test; the editor not re-focusing on `Host` change → the editor test; `TypeHereBounds` computed from the wrong entry → the bounds test; the slot press placed after the marquee branch → the slot press test (a marquee starts instead).
 - [ ] Commit `feat(designer): Task 24d — the Type Here strip: cells, dropdowns, the in-place editor`.
 
@@ -1064,8 +1147,8 @@ In the ctor's `Selection.Changed` handler, after the grid update: `if (StripEdit
 **Files:** `FormRetarget.cs` (`Place` `:584-676`), `FormRetargetTests.cs`.
 
 - [ ] **Step 1: Failing tests:** `ToWinForms_AStripAndItsItems_CrossGeometryLess_WithDock` (a `.blwebform` with a MenuStrip+items and a Button in a cell → the strip has `Geometry == null`, `Properties["Dock"] == "Top"`, items nested with null geometry, the Button placed in pixels, no BL8025 naming the strip or an item); `ToWinForms_APageWhoseTopLevelIsAStripAlone_DoesNotThrow`; `ToWeb_AStripCrosses_AndTheRetargetedPageIsChrome` (through `ConvertToPair`, the HTML has `<nav` before the div); the sweep (`Canonical` for every Docked/Item row, both directions) → `Locate` finds the crossed control, geometry null, no BL8025 for it.
-- [ ] **Step 2: Run** → the strip-alone page throws `InvalidOperationException` (`Max` on empty).
-- [ ] **Step 3: Implement** in `Place`: `var positioned = siblings.Where(c => c.Definition?.Place is null or FormPlace.Positioned).ToList(); if (positioned.Count == 0) return (0, 0);` and use `positioned` everywhere `siblings` was used (sizes, pitch, the placement loop); never recurse into a Docked/Item control's children.
+- [ ] **Step 2: Run** → red for the RIGHT reason: today the strip simply receives a `PixelGeometry` and a BL8025 (`Place` sizes every sibling, `:593-611`; a lone strip is one `sizes` entry so `Max` succeeds) — the geometry-null and no-BL8025 assertions fail. ⚠ The `InvalidOperationException` (`Max` on empty) appears only once the `positioned` filter exists WITHOUT its early return — which is why Step 3 has one.
+- [ ] **Step 3: Implement** in `Place`: `var positioned = siblings.Where(c => c.Definition?.Place is null or FormPlace.Positioned).ToList(); if (positioned.Count == 0) return (0, 0);` BEFORE `Max` is reached, and use `positioned` everywhere `siblings` was used (sizes, pitch, the placement loop); never recurse into a Docked/Item control's children.
 - [ ] **Step 4: Run** `FormRetargetTests`, `DesignRetargetCliTests`, `SolutionExplorerRetargetTests` → green.
 
 ### Task 27: The node harness learns a form name and a target element
@@ -1078,15 +1161,15 @@ In the ctor's `Selection.Changed` handler, after the grid update: `if (StripEdit
 
 **Files:** Create `VisualGameStudio.Tests/Compiler/FormMenuAcceptanceTests.cs` (`[Category("Integration")]`, `[NonParallelizable]`; copy `FormComponentAcceptanceTests`' scaffolding: temp dir, `FormScaffolder.Create("MenuForm", target)`, the VM `Open`, `SaveAsync`, the CLI, the csproj+driver, `RunPageUnderNode`).
 
-- [ ] **Build the form through the designer's OWN commands:** `vm.PlaceControl("MenuStrip", 0, 0)` → `BeginTypeHere(strip)` → `CommitTypeHere("&File")` → `BeginTypeHere(fileToolStripMenuItem)` → `CommitTypeHere("&Open...")`, `CommitTypeHere("-")`, `CommitTypeHere("E&xit")`; `PlaceControl("ToolStrip", 0, 0)` → `BeginTypeHere` → `CommitTypeHere("Open")`; `PlaceControl("StatusStrip", 0, 0)` → `CommitTypeHere("Ready")`; `ActivateControlCommand.Execute(openToolStripMenuItem)` (the stub), insert `Console.WriteLine("CLICK")` into it exactly as the Timer test inserts its line; `SaveAsync`.
+- [ ] **Build the form through the designer's OWN commands:** `vm.PlaceControl("MenuStrip", 0, 0)` (⚠ the designer mints `MenuStrip1` — PascalCase, `NextId` seeds `kind + "1"` like `Button1`/`Timer1`; every strip-id assertion below uses `MenuStrip1`/`ToolStrip1`/`StatusStrip1`, and HTML ids are case-sensitive) → `BeginTypeHere(strip)` → `CommitTypeHere("&File")` → `BeginTypeHere(fileToolStripMenuItem)` → `CommitTypeHere("&Open...")`, `CommitTypeHere("-")`, `CommitTypeHere("E&xit")`; `PlaceControl("ToolStrip", 0, 0)` → `BeginTypeHere` → `CommitTypeHere("Open")`; `PlaceControl("StatusStrip", 0, 0)` → `CommitTypeHere("Ready")`; `await vm.ActivateControlCommand.ExecuteAsync(openToolStripMenuItem)` (⛔ AWAIT it — it is an async relay command and all three existing callers await it, e.g. `FormComponentAcceptanceTests.cs:90`; `.Execute` fires-and-forgets and the stub may not exist yet), insert `Console.WriteLine("CLICK")` into the stub exactly as the Timer test inserts its line; `await vm.SaveAsync()`.
 - [ ] **WinForms:** CLI `--target=csharp`; the C# contains `openToolStripMenuItem = new ToolStripMenuItem()` and `fileToolStripMenuItem.DropDownItems.Add(openToolStripMenuItem)`; driver (namespace `GeneratedCode`, `new MenuForm()`, `Show()`, then reflection-free: `form.MainMenuStrip.Items` captions joined → prints `MENU &File`; `((ToolStripMenuItem)form.MainMenuStrip.Items[0]).DropDownItems` → prints `DROP ToolStripMenuItem:&Open...,ToolStripSeparator:,ToolStripMenuItem:E&xit`; `PerformClick()` on item 0 → `CLICK`; the StatusStrip's first item text → `STATUS Ready`; `DONE`). Assert all five, in order.
-- [ ] **Web:** `basiclang build` of the project (as the Timer test does), the HTML text contains `<nav id="menuStrip1"` before `<div class="vgs-form">`, `<ul><li id="fileToolStripMenuItem"`, nested `<ul><li id="openToolStripMenuItem"`, `<li id="toolStripSeparator1" … role="separator">`, `File` not `&amp;File`; `RunPageUnderNode(outDir, "MenuForm", "openToolStripMenuItem")` output contains `CLICK` exactly once and no `LOAD ERROR`.
+- [ ] **Web:** `basiclang build` of the project (as the Timer test does), the HTML text contains `<nav id="MenuStrip1"` before `<div class="vgs-form">`, then (ordered `IndexOf`) `<ul>`, `<li id="fileToolStripMenuItem"`, `<ul>`, `<li id="openToolStripMenuItem"`, `<li id="toolStripSeparator1"` … `role="separator"`; `File` present and `&amp;File` absent; `RunPageUnderNode(outDir, "MenuForm", "openToolStripMenuItem")` output contains `CLICK` exactly once and no `LOAD ERROR`.
 - [ ] Both must PASS, not be skipped: read the totals. Mutants: reverse the host-verb loop → `DROP` order fails; drop `MainMenuStrip` → the driver NREs (`form.MainMenuStrip` null) — pinned; strip the `<ul>` wrapper → the HTML assertion.
 
 ### Task 29: Records
 
 - [ ] Spec: append "§10 — What building it changed" only if any decision above had to change; otherwise nothing.
-- [ ] `docs/form-designer-followups.md`: **22** `ShortcutKeys` (M6/M7: only `CType(n, Keys)`; needs a Keys editor + name table), **23** array-literal common-base widening for BasicLang classes (M1/M3: cannot serve WinForms types), **24** the C++ capability checker's missing `IRArrayAlloc` arm.
+- [ ] `docs/form-designer-followups.md`: **22** `ShortcutKeys` (M6/M7: only `CType(n, Keys)`; needs a Keys editor + name table), **23** array-literal common-base widening for BasicLang classes (M1/M3: cannot serve WinForms types), **24** the C++ capability checker's missing `IRArrayAlloc` arm, **25** `RejectImpossibleConversion`'s sibling-file hole (spec Decision 14; chip `task_0b7436a5` already filed — record the id).
 - [ ] `CLAUDE.md` form-designer section: one ⛔ bullet — a strip is `Place == Docked` (geometry-less, `Dock` PROPERTY, a band on the canvas, page chrome on the web), an item is `Place == Item` under its host and is added by the HOST row's verb in DOCUMENT order (reversing it is the silent failure), `FormCatalogShapes.Canonical` is the one fixture shape for every catalog gate, and the compiler now has `New T() {…}` (parens required, three policies, the JS array arms). Plus the compiler section: the typed literal and its three policies in one line.
 - [ ] `docs/HANDOFF.md`: task table (24 done), a Task 24 section (measured facts, the five commits, gates), the gates table rows.
 - [ ] Memory: `form-designer-sep18.md` + `MEMORY.md` — Task 24 done, SHAs, next = Task 28.
