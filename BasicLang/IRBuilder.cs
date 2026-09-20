@@ -1274,7 +1274,9 @@ namespace BasicLang.Compiler.IR
                         Access = MapAccessModifier(propNode.Access),
                         IsStatic = propNode.IsStatic,
                         IsReadOnly = propNode.IsReadOnly,
-                        IsWriteOnly = propNode.IsWriteOnly
+                        IsWriteOnly = propNode.IsWriteOnly,
+                        IsVirtual = propNode.IsVirtual,
+                        IsOverride = propNode.IsOverride
                     };
 
                     // Generate getter/setter methods

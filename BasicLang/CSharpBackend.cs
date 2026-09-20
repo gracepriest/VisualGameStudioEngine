@@ -1153,6 +1153,23 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var type = MapType(prop.Type);
             var name = SanitizeName(prop.Name);
 
+            // ⛔ WITHOUT THIS THE EMITTED PROPERTY WAS PLAIN ON BOTH CLASSES, and C# hiding
+            // without `new` is only a WARNING — so the file compiled and reading an overridden
+            // property through a base-typed variable returned the BASE's value. Measured. The
+            // two modifiers are mutually exclusive in C# (an override is already virtual), which
+            // is why this is an if/else and not two concatenated strings, exactly as
+            // GenerateMethod spells it.
+            // ⚠ A Shared property is never virtual, and the guard is not theoretical: the front
+            // end ACCEPTS `Public Shared Overridable Property` (VB itself refuses it, BC30503 —
+            // a separate front-end gap, not decided here), and without this the emitted
+            // `public static virtual int N` does not compile at all, where before it was a plain
+            // static property that did. MSILBackend.GenerateProperty makes the same choice, for
+            // the same reason: `static virtual` will not assemble either.
+            var virtualMod = prop.IsStatic ? ""
+                : prop.IsOverride ? "override "
+                : prop.IsVirtual ? "virtual "
+                : "";
+
             // AUTO-PROPERTY: `Public Property V As Integer` with no Get/Set body reaches the
             // IR with both accessors null. Falling through would emit `public int V { }` — a
             // property with no accessors, which does not compile. C# has real auto-property
@@ -1166,15 +1183,15 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 {
                     var backing = SanitizeName("__" + prop.Name);
                     WriteLine($"private {staticMod}{type} {backing};");
-                    WriteLine($"{access} {staticMod}{type} {name} {{ set {{ {backing} = value; }} }}");
+                    WriteLine($"{access} {staticMod}{virtualMod}{type} {name} {{ set {{ {backing} = value; }} }}");
                     return;
                 }
 
-                WriteLine($"{access} {staticMod}{type} {name} {{ {(prop.IsReadOnly ? "get;" : "get; set;")} }}");
+                WriteLine($"{access} {staticMod}{virtualMod}{type} {name} {{ {(prop.IsReadOnly ? "get;" : "get; set;")} }}");
                 return;
             }
 
-            WriteLine($"{access} {staticMod}{type} {name}");
+            WriteLine($"{access} {staticMod}{virtualMod}{type} {name}");
             WriteLine("{");
             Indent();
 

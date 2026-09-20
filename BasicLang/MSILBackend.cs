@@ -960,6 +960,18 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             var staticMod = prop.IsStatic ? "static " : "";
             var instanceMod = prop.IsStatic ? "" : "instance ";
 
+            // ⛔ WITHOUT THIS BOTH ACCESSORS WERE NON-VIRTUAL and the override never dispatched.
+            // The CALL SITE was already right — `callvirt instance string Animal::get_Name()` —
+            // but callvirt on a non-virtual method binds statically, so reading an overridden
+            // property through a base-typed variable answered the BASE's value with no
+            // diagnostic at all. Measured; a three-level chain answered the topmost value.
+            // Same spelling GenerateMethod uses: an override takes the base's slot, a fresh
+            // Overridable declares one. A Shared property is never virtual.
+            var virtualMod = prop.IsStatic ? ""
+                : prop.IsOverride ? "virtual "
+                : prop.IsVirtual ? "newslot virtual "
+                : "";
+
             // ⛔ WHAT WILL ACTUALLY BE EMITTED, computed once and used for both the `.property`
             // block and the methods. They used to disagree: the block was written
             // unconditionally while each method was gated on `prop.Getter != null`, so an AUTO
@@ -995,7 +1007,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             {
                 if (emitGetter)
                 {
-                    WriteLine($"  .method public hidebysig specialname {staticMod}");
+                    WriteLine($"  .method public hidebysig specialname {virtualMod}{staticMod}");
                     WriteLine($"          {instanceMod}{propType} {getter}() cil managed");
                     WriteLine("  {");
                     WriteLine("    .maxstack 8");
@@ -1015,7 +1027,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
                 if (emitSetter)
                 {
-                    WriteLine($"  .method public hidebysig specialname {staticMod}");
+                    WriteLine($"  .method public hidebysig specialname {virtualMod}{staticMod}");
                     WriteLine($"          {instanceMod}void {setter}({propType} 'value') cil managed");
                     WriteLine("  {");
                     WriteLine("    .maxstack 8");
@@ -1042,7 +1054,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Getter
             if (prop.Getter != null && !prop.IsWriteOnly)
             {
-                WriteLine($"  .method public hidebysig specialname {staticMod}");
+                WriteLine($"  .method public hidebysig specialname {virtualMod}{staticMod}");
                 WriteLine($"          {instanceMod}{propType} {getter}() cil managed");
                 WriteLine("  {");
                 EmitAccessorBody(prop.Getter, irClass, prop.IsStatic, closeWithRet: false);
@@ -1053,7 +1065,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Setter
             if (prop.Setter != null && !prop.IsReadOnly)
             {
-                WriteLine($"  .method public hidebysig specialname {staticMod}");
+                WriteLine($"  .method public hidebysig specialname {virtualMod}{staticMod}");
                 WriteLine($"          {instanceMod}void {setter}({propType} 'value') cil managed");
                 WriteLine("  {");
                 EmitAccessorBody(prop.Setter, irClass, prop.IsStatic, closeWithRet: true);

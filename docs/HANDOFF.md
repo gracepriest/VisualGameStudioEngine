@@ -1738,6 +1738,61 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   **Full suite in place: 195 / 6169 / 203 / 6567 against the 195 / 6136 / 203 / 6534 baseline at
   `045477d`** — 195 reported = 195 anchored lines, the same 170 failing names, nothing new and
   nothing newly passing; the +33 are the fixture's 33 cases.
+
+  ⚠ **AN OVERRIDABLE PROPERTY DISPATCHES as of 2026-09-20** — `OverridablePropertyTests` (21
+  cases), `PropertyNode.IsVirtual`/`IsOverride`, `Parser.cs` property arm,
+  `IRProperty.IsVirtual`/`IsOverride`, `IRBuilder` property build,
+  `CSharpBackend.GenerateProperty`, `MSILBackend.GenerateProperty`.
+  ⛔ **AN OVERRIDDEN PROPERTY SILENTLY ANSWERED THE BASE'S VALUE ON MSIL AND C#** — measured,
+  compiled and run before the change: reading one through a base-typed variable gave `base`
+  where `derived` is correct, with NO diagnostic from either backend, and a three-level chain
+  gave the TOPMOST value. JavaScript was right by accident (JS class members always dispatch
+  dynamically). The same programs with a METHOD were correct on all four, which is what makes it
+  a property defect and not an inheritance one.
+  ⚠ **THE MODIFIER WAS PARSED AND THEN THROWN AWAY.** `Parser.cs` reads Overridable/Overrides
+  into `isVirtual`/`isOverride` locals for EVERY class member; the `FunctionNode` and
+  `SubroutineNode` arms copy them onto the node, and the PROPERTY arm copied Access, IsStatic,
+  IsReadOnly and IsWriteOnly and dropped the two it already held — because `PropertyNode` had no
+  field for them, and neither did `IRProperty`, while `IRMethod` carried IsVirtual, IsOverride,
+  IsAbstract and IsSealed. Four layers, one omission at each.
+  ⛔ **READ OUT OF THE EMITTED CODE, NOT INFERRED.** The C# was `public string Name { get {…} }`
+  on BOTH classes — no `virtual`, no `override`, not even `new` — and C# hiding is only a
+  WARNING, so it compiled and returned the base's value. The IL emitted both getters as `.method
+  public hidebysig specialname instance string get_Name()` with no `virtual newslot`; the CALL
+  SITE was already `callvirt instance string 'Animal'::get_Name()`, and callvirt against a
+  non-virtual method binds statically.
+  ⚠ **A REGRESSION INTRODUCED BY THE FIX AND THEN FIXED.** `Public Shared Overridable Property`
+  is ACCEPTED by the front end — measured; VB refuses it (BC30503), a separate front-end gap not
+  decided here. Marking it virtual emitted `public static virtual int N`, which does not compile
+  (CS0112), where before it was a plain static property that did; `static virtual` does not
+  assemble either. Both emitters drop the modifier for a Shared property and the shape is pinned
+  on BOTH — a guard on one backend alone leaves the other emitting a file that cannot be built.
+  ⚠ **RUNS ON THREE, NOT FOUR, and the reason is pinned WITH A CONTROL**: C++ cannot emit a
+  property as a reachable member at all — the control has ONE class, no inheritance and no
+  Overridable, and still fails ("returning reference to local temporary object").
+  `CppEmissionOrderTests` pins the same gap from the other side. The base-typed-PARAMETER shape
+  runs on TWO, because MSIL keys the callee signature on the argument's DYNAMIC type and calls a
+  `Report(Dog)` nobody declared; its control is the identical shape with a method, which fails
+  the same way. Both pins go RED when the gap closes.
+  ⛔ **FIFTEEN MUTATIONS, FIFTEEN KILLS, 99 KILLS IN ALL**, discriminating by LAYER and by
+  BACKEND: the parser arm → 12 / 11 INCLUDING the parser test; the IR-builder copy → 11 / 10
+  EXCLUDING it; the C# modifier dropped, spelled `new`, or `virtual` for an override → 9 each,
+  C# rows plus the emitted-C# pin and never the IL pin; the MSIL modifier dropped or `newslot`
+  on an override → 8 each, MSIL rows plus the IL pin and never the C# pin; the explicit getter
+  site → 7; and five 1-kill mutants each dying to exactly the one test written for it (both
+  Shared guards → the Shared pin, both auto sites → the auto case, the explicit setter → the
+  setter case).
+  ⛔ **THE SWEEP FOUND A TEST GAP RATHER THAN CONFIRMING THE FIX.** Isolating each of MSIL's four
+  accessor sites showed the explicit SETTER's modifier SURVIVING: marking only the getter
+  virtual left every test green, because each one only READ a property. A write through a
+  base-typed variable binds to the static type's accessor when the setter is not virtual, so
+  `a.Tag = "x"` silently ran the BASE's setter. The gap hid behind a flaw in the harness itself
+  — a bulk "keep only the first site" mutant whose replace-the-last-N logic was off by one,
+  stripping two sites rather than three and keeping BOTH auto sites. Deleted rather than
+  repaired; the four per-site mutants cover every site exactly.
+  **Full suite in place: 195 / 6190 / 203 / 6588 against the 195 / 6169 / 203 / 6567 baseline at
+  `1b7f32e`** — 195 reported = 195 anchored lines, the same 170 failing names, nothing new and
+  nothing newly passing; the +21 are the fixture's 21 cases.
   ⚠ **Narrowing shapes are refused by the SEMANTIC ANALYZER, before any of this** —
   `Public N As Single = 1.5 + 1.0` is "Cannot assign value of type 'Double' to variable of type
   'Single'", before and after. Not a folding gap.

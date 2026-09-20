@@ -659,6 +659,20 @@ namespace BasicLang.Compiler.AST
         public bool IsReadOnly { get; set; }
         public bool IsWriteOnly { get; set; }
         public bool IsStatic { get; set; }       // Shared
+
+        /// <summary>
+        /// ⛔ WITHOUT THESE A PROPERTY OVERRIDE SILENTLY DID NOT DISPATCH. The parser already
+        /// parsed Overridable/Overrides for every class member, and <see cref="FunctionNode"/>
+        /// and <see cref="SubroutineNode"/> both carried them — a property had nowhere to put
+        /// them, so they were dropped one line after being read. Measured, compiled and run:
+        /// reading an overridden property through a base-typed variable answered the BASE's
+        /// value on MSIL and C#, with no diagnostic on either, because the emitted property was
+        /// plain (C# hiding is a warning, and `callvirt` on a non-virtual accessor binds
+        /// statically). A three-level chain answered the TOPMOST value.
+        /// </summary>
+        public bool IsVirtual { get; set; }      // Overridable
+        public bool IsOverride { get; set; }     // Overrides
+
         public BlockNode Getter { get; set; }
         public BlockNode Setter { get; set; }
         public ParameterNode SetterParameter { get; set; }  // The 'value' parameter
