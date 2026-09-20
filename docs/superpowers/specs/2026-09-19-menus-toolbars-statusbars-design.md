@@ -135,21 +135,21 @@ below is a decision; "as-is" means the recon read the code and nothing changes.
 | `FormHandlers.PlanDefault` | as-is; item rows declare `WinFormsEvent: "Click"` / `WebEvent: "click"` (a separator too — `Click` is inherited, honest); strip rows declare `ItemClicked` (`WinFormsEventArgs: "ToolStripItemClickedEventArgs"`, VS's own default for a strip) / `click` — two catalog gates require an event per supported target (`FormCatalogCoverageTests:142-158`, the csc default-event sweep) and a real, csc-gated event is better than exempting a shape from both |
 | `PasteControls` | copy of a strip carries its items. A pasted ITEM root goes into the selection's primary when that is a host accepting the kind, else the paste is refused-and-reported (BL8019 path); never into `Controls`. A pasted strip lands top-level, geometry-less, `Dock` kept, no offset |
 | `FormPlacement.Place` | `Docked`: into `Controls`, no geometry, `Dock` from the row's default, the point ignored (like the tray); `Item`: a NEW entry point `PlaceItem(document, host, kind, text)` — a parent by identity, never a point |
-| `FormRetarget.ConvertControls` | as-is for nesting; `Dock` is a shared property (both targets) so it crosses; `Place` (web→pixels) and `DeriveCells` (pixels→cells) skip `Docked`/`Item` — neither has geometry on either side. `Hoist` never sees a strip: every host and item row has both rows (coverage pin) |
+| `FormRetarget.ConvertControls` | as-is for nesting; `Dock` is a shared property (both targets) so it crosses. The web→pixels `Place` rule, stated once: `Docked`/`Item` subtrees are EXCLUDED from the sizing and pitch pass — never recursed into, never given a `PixelGeometry` — and a sibling list with no positioned control returns (0,0) BEFORE `Max` is reached (`:610-611` throws on an empty dictionary; a page whose top level is a MenuStrip alone is exactly the sweep's canonical shape). `DeriveCells` needs no change (its else-branch already leaves a control with no source geometry at null). `Hoist` never sees a strip: every host and item row has both rows (coverage pin) |
 | `FormAssetEmitter.Html` | `Docked` strips are PAGE CHROME, not cells: Top-docked strips are written BEFORE the `.vgs-form` div and Bottom-docked ones AFTER, each in document order; items nest inside. No `tabindex` for `Place != Positioned` |
 | `FormAssetEmitter.AppendControl` | row-declared `HtmlChildrenWrapper` ("ul" on MenuStrip and ToolStripMenuItem) wraps the children; row-declared `HtmlRole` ("toolbar", "status", "separator") is a fixed attribute; a row's `WebCss` is appended once per kind present (the horizontal bar, hidden submenus shown on hover) |
 | `FormControlCatalog.FindByHtmlTag` | ToolStripButton is `<input type="button">` (Text → `value`), NOT `<button>`: a second row owning `button` makes the tag ambiguous and the DOM recognizer would stop naming a plain Button (`FormRecognizerTests` web-template pin). `li` is shared by ToolStripMenuItem and ToolStripSeparator — both new, so no regression; the recognizer names a bare `createElement("li")` BL8004, recorded |
 | `WinFormsDialect.MarkParented` (recognizer) | learns `<host>.Items.Add(<id>)` and `<host>.DropDownItems.Add(<id>)` as parenting shapes, or `design --check` reports every item BL8006 "never added" |
-| `FormCanvasTransform.Layout` — the ONE place | bands and cells are computed in ONE method that has everything they depend on: `Layout(document, selected)` receives the document (surface width, sibling order) and the SELECTED control (a strip, an item, a positioned control, or null) and yields `(control, bounds, role)` entries in paint order — positioned controls as today; then every `Docked` strip as a BAND (full surface width, the row's `DefaultHeight`, Top strips stacked from y=0 in document order, Bottom strips stacked up from the bottom; never a 0x0 rect — recon rank 2, phantom grips at the origin) with its top-level items as CELLS; then, derived from `selected`: the ACTIVE strip (the selected strip, or the selected item's strip) gets ONE `TypeHere` slot entry (no control) after its cells, and the EXPANDED item (the selected item, or its nearest item ancestor) gets its dropdown cells and their own slot, yielded LAST so they paint over later controls. No other slot exists — a freshly dropped strip is selected, so its slot is there; nothing else's is. `BoundsOf` stays what it is (a positioned control's rect); it is never asked about a strip. ⛔ WinForms `HitTest` and `ContainerAt` walk `BoundsOf` recursively today (`:105-126`, `:266-294`) while the web branch reads `Layout` — both targets now read `Layout`, so a click, a drop and a paint cannot disagree (the transform's founding rule). Every consumer of `Layout` — both `HitTest` branches, `ControlsIn`, `FormBoundsOf`, the render pass — skips an entry with no control; `TypeHereAt(point)` is the one method that returns it. `ContainerAt` never returns a strip or an item. `ControlsIn` (the marquee) excludes `Place == Item` AND `Place == Docked` — a rubber band is for positioned controls; VS band-selects neither a menu item nor, in practice, a bar. `WebLayout` yields the chrome bands regardless of the page's layout kind (a Flow page has a menu too) |
-| `FormCanvasControl.DrawControl` / `Render` | three new schematics (`MenuBar`, `ToolBar`, `StatusBar`) draw the band; item schematics (`MenuItem`, `Separator`, `ToolButton`, `StatusLabel`) draw a cell, never a box; the `TypeHere` entry draws the greyed slot; each new `FormSchematic` value has BOTH a `GlyphFor` arm and a `DrawControl` arm (one without the other ships a `?` in the toolbox or a grey box on the canvas undetected), pinned per value |
+| `FormCanvasTransform.Layout` — the ONE place | bands and cells are computed in ONE method that has everything they depend on: `Layout(document, selected)` receives the document (surface width, sibling order) and the SELECTED control (a strip, an item, a positioned control, or null) and yields `(control, bounds, role)` entries in paint order — positioned controls as today; then every `Docked` strip as a BAND (full surface width, the row's `DefaultHeight`, Top strips stacked from y=0 in document order, Bottom strips stacked up from the bottom; never a 0x0 rect — recon rank 2, phantom grips at the origin) with its top-level items as CELLS; then, derived from `selected`, the EXPANSION PATH: the active strip (the selected strip, or the selected item's strip) gets ONE `TypeHere` slot entry (no control) after its cells; then EVERY item ancestor of the selection, plus the selected item itself when it is a host, is expanded — its dropdown cells and its own slot — yielded outermost-first and LAST so they paint over later controls. A path, not one item: after `Commit("Open")` selects the new `mnuOpen`, `mnuFile`'s dropdown (its parent) is still open with its slot, which is the slot the editor re-opens on; with one expanded item the second commit had no cell to draw under and no slot to publish. No other slot exists — a freshly dropped strip is selected, so its slot is there; nothing else's is. Entry shape: `(FormControl? Control, Rect Bounds, FormLayoutRole Role)`; `Layout(document, selected = null)` stays source-compatible for today's callers (`FormBoundsOf`, `ControlsIn`, the two render loops, the transform tests), each of which is updated deliberately for the nullable control. `HitTest(document, canvasPoint, selected)` and `TypeHereAt(document, canvasPoint, selected)` take the selection explicitly — a click on a dropdown cell exists only relative to it. `BoundsOf` stays what it is (a positioned control's rect); it is never asked about a strip. ⛔ WinForms `HitTest` and `ContainerAt` walk `BoundsOf` recursively today (`:105-126`, `:266-294`) while the web branch reads `Layout` — both targets now read `Layout`, so a click, a drop and a paint cannot disagree (the transform's founding rule). Every consumer of `Layout` — both `HitTest` branches, `ControlsIn`, `FormBoundsOf`, the render pass — skips an entry with no control; `TypeHereAt` is the one method that returns it. `ContainerAt` never returns a strip or an item. `ControlsIn` (the marquee) excludes `Place == Item` AND `Place == Docked` — a rubber band is for positioned controls; VS band-selects neither a menu item nor, in practice, a bar. `WebLayout` yields the chrome bands regardless of the page's layout kind (a Flow page has a menu too) |
+| `FormCanvasControl.DrawControl` / `Render` | drawing is routed through ONE seam, `DrawSchematic(context, schematic, bounds, label, …)`, which `DrawControl` calls with the row's schematic — so the per-value pin exists in 24b, before any row: `Enum.GetValues<FormSchematic>()` → every value's frame differs from the `Input` fallback's, and `GlyphFor` is not `?` and all distinct (the existing glyph gates iterate TOOLBOX rows and would never see an item schematic's missing arm). Three new schematics (`MenuBar`, `ToolBar`, `StatusBar`) draw the band; item schematics (`MenuItem`, `Separator`, `ToolButton`, `StatusLabel`) draw a cell, never a box; the `TypeHere` entry draws the greyed slot |
 | `FormCanvasControl.OnPointerPressed` | a `TypeHere` entry under the pointer is tested BEFORE the marquee branch (`:614-631` starts a rubber band whenever `HitTest` returns null) and raises the canvas's bindable `BeginTypeHereCommand` with the host; a cell press selects the item through `Selection` and arms NO drag |
 | `FormCanvasControl.TypeHereHost` / `TypeHereBounds` | the canvas OWNS the form→canvas mapping (`_transform`, recomputed by `Fit` on every render), so it needs an INPUT naming the slot to measure: a styled property `TypeHereHost` (bound to `StripEditor.Host`, null when the editor is closed) — with an expanded item there are TWO visible slots, and after Enter the editor re-opens with no click. From it the canvas publishes `TypeHereBounds`, the active slot's CANVAS-space rect, set at the end of each render pass from the same `Layout` entries it painted (so it moves with a resize, a zoom and the one-cell shift after a commit); `TypeHereBounds` is NOT in `AffectsRender` (a property written during Render must not schedule another). The view binds the overlay to it; the view model never computes a rectangle |
 | `FormGeometryEdit` / `FormArrange` | a `Docked` strip is never moved, resized or re-parented (its geometry is null, so every edit already early-returns — pinned) |
 | `FormPropertyGridViewModel.AddIntrinsicRows` | no TabIndex row for `Place != Positioned`; no geometry rows (null geometry already); the strip's `Dock` is a catalog row like any other |
-| `FormToolboxViewModel` | a fourth category, **Menus & Toolbars**, holding the three strips. Item kinds are NOT toolbox rows (VS does not list them either); they are created by Type Here |
+| `FormToolboxViewModel` | a fourth category, **Menus & Toolbars**, holding the three strips. Item kinds are NOT toolbox rows (VS does not list them either); they are created by Type Here. ⚠ Two pins assert the toolbox offers EVERY `For(target)` kind — `FormPropertyGridTests.TheToolbox_OffersOnlyKindsThatExistOnTheTarget` and `FormToolboxGlyphTests.TheToolboxOffersEveryCatalogKindForItsTarget` — and `Rebuild` iterates `For(Target)` with no exclusion; both pins and `Rebuild` learn `Place != Item` in 24b, BEFORE the rows land |
 | `FormTrayViewModel` | unchanged; the tray is the MODEL for "rebuild from the document, select through the one store", not the surface (a menu is a tree) |
 | `CodeEditorDocumentViewModel` | `PlaceControl` unchanged for strips (the point is ignored); new `StripEditor` (§6) with `BeginTypeHere` / `CommitTypeHere` / `CancelTypeHere`; `SelectInDesigner` for every selection (the 25e rule) |
-| Gates (`WinFormsCatalogSweepTests` ×3, `FormCanvasRenderTests`, `FormRetargetTests` sweep) | each chooses its shape by `IsComponent` alone today. They move onto ONE helper, `FormCatalogShapes`, BEFORE any row is added (commit 24b, so no gate is ever red between commits): `Canonical(document, definition, id, hostId = null) → FormControl` adds the row's canonical shape and returns the control it added — Positioned → geometry in `Controls`; Tray → `Components`; Docked → top-level in `Controls`, geometry-less, `Dock` from the row; Item → the FIRST host row listing it is added first (its own canonical shape, id `hostId ?? id + "Host"`), the item as its child; `Locate(document, definition) → FormControl?` finds that control again on the crossed side for the retarget sweep (an item is `Controls[0].Children[0]`, not a top-level `Single()`); the enum sweep's N-controls case is N hosts each with one item (`ctl{i}Host`/`ctl{i}`). The render fixture passes `hostId: SharedId` so host and item share the one id its rule requires, and a band draws no caption anyway (§6). A fifth shape cannot be forgotten by three gates again |
+| Gates (`WinFormsCatalogSweepTests` ×3, `FormCanvasRenderTests`, `FormRetargetTests` sweep) | each chooses its shape by `IsComponent` alone today. They move onto ONE helper, `FormCatalogShapes`, BEFORE any row is added (commit 24b, so no gate is ever red between commits): `Canonical(document, definition, id, hostId = null) → FormControl` adds the row's canonical shape and returns the control it added — Positioned → geometry in `Controls`; Tray → `Components`; Docked → top-level in `Controls`, geometry-less, `Dock` from the row; Item → the first DOCKED host row listing it (deterministic: never a menu item hosting a menu item, so catalog row order cannot turn the canonical shape into an item under nothing) is added first (its own canonical shape, id `hostId ?? id + "Host"`), the item as its child; `Locate(document, definition) → FormControl?` finds that control again on the crossed side for the retarget sweep (an item is `Controls[0].Children[0]`, not a top-level `Single()`); the enum sweep's N-controls case is N hosts each with one item (`ctl{i}Host`/`ctl{i}`). The render fixture passes `hostId: SharedId` so host and item share the one id its rule requires, and a band draws no caption anyway (§6). A fifth shape cannot be forgotten by three gates again |
 | `FormDocumentLoader` (build) | as-is: a refused document skips its page with a warning, as BL8020 does today |
 
 ## 3. The document
@@ -210,7 +210,8 @@ below is a decision; "as-is" means the recon read the code and nothing changes.
 - **Targets, per property** (Task 25 decided `Enabled` per property; so here): shared by both
   targets — `Text` (content, or `value` on the input), `Enabled` (the emitter's `disabled`),
   `Visible` (the stylesheet's `display: none`), `Dock`, and `ToolTipText`, which is the ONE property
-  with an honest web form, `HtmlAttributeName: "title"`. WinForms-only (`Targets: WinForms`) —
+  with an honest web form, `HtmlAttribute: "title"` (the record's constructor parameter;
+  `HtmlAttributeName` is its read-only view). WinForms-only (`Targets: WinForms`) —
   `Checked`, `CheckOnClick`, `DisplayStyle`, `Spring`, `GripStyle`, `SizingGrip`: the generic
   emitter would otherwise append ` checked` by NAME to an `<li>`, and the retarget sweep derives
   crossed/lost EXACTLY from `AppliesTo`. A row's web absence is the property grid's too.
@@ -319,22 +320,32 @@ The brief asks for the VS in-place editor, not a positioned box and not a side t
   `TypeHereBounds` (canvas space, from its own `_transform`, republished on render, resize and
   model revision); the VIEW binds the overlay's margin/size to it and its text to
   `StripEditor.Text`; the VIEW MODEL's `StripEditor` holds only `IsActive`, the host and the text.
-  `BeginTypeHere(host)` activates and focuses the box; `Enter` commits: `CommitTypeHere(text)`
-  places `host.Items.Kinds[0]` with `Text = text` — or a `ToolStripSeparator` when the text is
-  exactly `-` (VS's own convention) — through `FormPlacement.PlaceItem`, writes the document
-  (undoable), selects the new item, and re-opens Type Here on the same host so a menu can be typed
-  in one run, as in VS. `Escape` cancels. **What each test can honestly prove** (no test on this
-  branch instantiates the real `CodeEditorDocumentView`; the headless rigs host a
-  `FormCanvasControl` alone): the CANVAS test presses the slot's pixels and asserts
-  `BeginTypeHereCommand` fired with the host, and presses a cell and asserts the selection; the
-  VIEW-MODEL test drives `BeginTypeHere` → `CommitTypeHere("Open")` → `CommitTypeHere("-")` →
-  `CancelTypeHere` and asserts the document, the order, the separator rule and the re-open; the
-  AXAML + code-behind gate asserts the overlay's `Text`/`IsActive` bindings, the canvas's
-  `TypeHereHost` and `BeginTypeHereCommand` bindings, and the NAME of the Enter/Escape handler in
-  the code-behind (a handler bound to nothing is this feature's failure mode). `KeyTextInput`
-  exists in `Avalonia.Headless` 11.3.13 (read from the package's XML doc) and drives a TextBox
-  hosted by the TEST beside the canvas — that proves the box accepts text, not the view's wiring,
-  and the spec says so rather than claiming pixels-to-document.
+  `BeginTypeHere(host)` activates the editor (the CONTROL focuses its box when `IsActive` turns
+  true — a view model cannot focus anything); `Enter` commits: `CommitTypeHere(text)` places
+  `host.Items.Kinds[0]` with `Text = text` — or a `ToolStripSeparator` when the text is exactly `-`
+  (VS's own convention; on a host whose rule has no separator, `-` is refused-and-reported through
+  the BL8019 path rather than writing a document BL8030 refuses on reload) — through
+  `FormPlacement.PlaceItem`, writes the document (undoable), selects the new item, and re-opens Type
+  Here on the same host so a menu can be typed in one run, as in VS. `Escape` cancels.
+  **`PlaceItem`'s id rule**, VS's: the caption camel-cased and sanitised plus the kind
+  (`openToolStripMenuItem`, `saveAsToolStripMenuItem`, `exitToolStripMenuItem`;
+  `toolStripSeparator1` for `-`) — `&` and every non-identifier character dropped, a leading digit
+  or an empty result falling back to `kind + N` — then `FormDocument.MakeUniqueId` and
+  `IsLegalControlId`, so the acceptance test can click a PREDICTABLE element and the grid's frozen
+  Name is readable. **The editor is its own control**, `FormTypeHereEditor` (a TextBox-hosting
+  control with styled `IsActive`/`Host`/`Text` and `CommitCommand`/`CancelCommand`), so the view
+  only BINDS it — the tray's lesson, applied: a headless test types into it with `KeyTextInput`,
+  presses Enter with `KeyPress`, and asserts `CommitCommand` fired with the text; Escape fires
+  `CancelCommand`. **What each other test proves** (no test on this branch instantiates the real
+  `CodeEditorDocumentView`): the CANVAS test presses the slot's pixels and asserts
+  `BeginTypeHereCommand` fired with the host, presses a band cell AND a dropdown cell and asserts
+  the selection each time; the VIEW-MODEL test drives `BeginTypeHere` → `CommitTypeHere("Open")` →
+  `CommitTypeHere("-")` → `CancelTypeHere` and asserts the document, the order, the separator rule,
+  the ids and the re-open — and lays the result out with the new item selected, asserting the
+  parent's dropdown cells, the parent's slot and the new item's slot are all entries; the AXAML
+  gate asserts the editor element's `IsActive`/`Host`/`Text`/`CommitCommand`/`CancelCommand`
+  bindings and the canvas's `TypeHereHost`/`BeginTypeHereCommand` bindings by name (a binding
+  absent from the AXAML is this feature's failure mode, and a text gate is what the tray uses).
 - **Gestures that already exist and keep working:** Delete (`ListContaining`), undo (text),
   double-click → `ActivateControlCommand` (the default `Click` handler, stub below/above the region
   per target), `BringToFront`/`SendToBack` on a selected item move it to the end/start of its list —
@@ -364,8 +375,10 @@ The brief asks for the VS in-place editor, not a positioned box and not a side t
   host WITH one of it renders differently from the host without" — the one gate the four item
   arms have, so it is a MUTATION KILL by construction: blank the item's `DrawControl` arm and the
   two frames must become equal (24d, when cells exist); the retarget sweep builds the canonical
-  shape, locates the crossed control with `Locate`, and asserts a strip crosses docked and an item
-  crosses nested, with no geometry either way (24e, with the `Place`/`DeriveCells` skip).
+  shape, locates the crossed control with `Locate`, scopes its `reportedLost` set to THAT control's
+  id (today it derives the set from every BL8024 message with `Single`, which a finding about the
+  canonical host would break), and asserts a strip crosses docked and an item crosses nested, with
+  no geometry either way (24e, with the `Place` exclusion).
 - **Emission:** the region writer's per-item `Add` in document order (a mutant that reverses it
   must fail), the host verb per row, `MainMenuStrip` once; the web page's nesting
   (`<nav><ul><li id="mnuFile">…<ul><li id="mnuOpen">`), chrome placement before/after the form
@@ -379,8 +392,10 @@ The brief asks for the VS in-place editor, not a positioned box and not a side t
   strip, and the Button's own pixels are unchanged); the AXAML + code-behind gate for the overlay,
   its bindings, the canvas's two bindings and the handler name.
 - **Acceptance, RUN on both targets** (`FormMenuAcceptanceTests`, the Timer test's shape; the form
-  is named `MenuForm` on both targets, and §3's `MainForm` is illustrative): the designer's own
-  commands build File → Open, `-`, Exit plus a toolbar button and a status label;
+  is named `MenuForm` on both targets, and §3's `MainForm` and hand-written ids are illustrative —
+  the designer mints `fileToolStripMenuItem`, `openToolStripMenuItem`, `toolStripSeparator1`,
+  `exitToolStripMenuItem`, and the assertions use those): the designer's own commands build File →
+  Open, `-`, Exit plus a toolbar button and a status label;
   double-click on Open writes the stub; `Console.WriteLine("CLICK")` in it; save; the real CLI.
   WinForms: csc + a driver that prints `form.MainMenuStrip.Items` captions in order, the dropdown's
   items in order WITH THEIR TYPES (so the `-` → separator rule is asserted, not only captions),
@@ -389,7 +404,8 @@ The brief asks for the VS in-place editor, not a positioned box and not a side t
   element — `RunPageUnderNode` gains a form-name parameter (it hard-codes `data-form="LoginForm"`,
   `FormDesignerAcceptanceTests.cs:266-270`, so a `MenuForm` page would construct nothing and the
   failure would look like a wiring defect) and an optional element id (today it clicks every
-  registered element and cannot say which handler fired) — `CLICK` for `mnuOpen` only.
+  registered element and cannot say which handler fired) — `CLICK` for `openToolStripMenuItem`
+  only.
 - **Mutation kills** for every new test, as on Tasks 21–25.
 
 ## 8. Deliberately out of scope, and where it goes
@@ -424,22 +440,36 @@ ELEMENT COUNTS, so accepting it would be a silent off-by-one); and `Dim x As New
 
 **Typing.** `Visit(CollectionInitializerNode)`: when `ElementType` is present, resolve it with
 `ResolveTypeReference`, type the node as `T[]` with element `T`, and check each element:
-- both resolvable → the element must be `T`, or WIDEN to it: `IsAssignableFrom` with its WHOLE
-  permissive arm excluded (`SymbolTable.cs:195`, the single `if` that admits integral←floating AND
-  integral←integral narrowing) — so `New Integer() {1.5}`, `New Integer() {aLong}` and `New
-  Shape() {aString}` are the three errors ("cannot put a 'Double' in an 'Integer()'", "… a 'Long'
-  …", "cannot put a 'String' in a 'Shape()'"); an element whose node type is null (`Nothing`, an
-  unresolved expression) is skipped as the untyped visitor already skips it (`:6647`); a literal
-  element is retyped per element the way the declaration path retypes one (`New Double() {1}` is
-  a Double literal; `New Decimal() {1.5}` takes `TryRetypeLiteralToDecimal`, `:5707`, so the typed
-  form is not stricter than `Dim d As Decimal = 1.5`); a constant that does not FIT a narrow target
-  (`New Byte() {300}`) stays green in BasicLang and red at csc, exactly as `Dim b As Byte = 300`
-  is today (`IRBuilder.cs:3508-3513`) — stated, not widened;
-- either side an unresolvable .NET type — the predicate itself, `_typeManager.GetType(name) ==
-  null && IsNetType(name)` (`SemanticAnalyzer.cs:9437-9438`), applied to BOTH `T` and the element
-  — → accepted, csc decides (`IsAssignableFrom` is false for two DIFFERENT-named synthetic handles,
-  so this one line is what makes the M4 program pass; two of the SAME name are `Equals`, which is
-  why M2 passes today);
+- both resolvable, element NOT a literal → the element must be `T`, or WIDEN to it:
+  `IsAssignableFrom` with its WHOLE permissive arm excluded (`SymbolTable.cs:195`, the single `if`
+  that admits integral←floating AND integral←integral narrowing) — so `New Integer() {aDouble}`,
+  `New Integer() {aLong}` and `New Shape() {aString}` are errors ("cannot put a 'Double' in an
+  'Integer()'", "… a 'Long' …", "cannot put a 'String' in a 'Shape()'"); an element whose node type
+  is null (`Nothing`, an unresolved expression) is skipped as the untyped visitor already skips it
+  (`:6647`);
+- both resolvable, element a NUMERIC LITERAL → this rule, OWNED here and deliberately stricter than
+  the declaration path's `IsNumericLiteralAssignable` (`:1582-1602`), which admits `Dim i As
+  Integer = 1.5` today and must not be "harmonised" back: an integral literal is admitted into any
+  numeric target (`New Byte() {65}`, `New Long() {1}`, `New Double() {1}`; Decimal through
+  `TryRetypeLiteralToDecimal`); a floating literal is admitted into Single/Double, into Decimal
+  through the same retype, and NEVER into an integral target (`New Integer() {1.5}` is an error);
+  and `CheckConstantFitsNumericTarget` (`:1633`, the BC30439 check every other store site already
+  calls — Dim `:5729`, Const, Return, assignment, argument) runs per element, so `New Byte() {300}`
+  is refused exactly as `Dim b As Byte = 300` is today. For Byte/Short/Long the analyzer admits the
+  literal and `CoerceToDeclaredType` leaves the Integer constant in place (`IsFoldableNumeric`,
+  `IRBuilder.cs:3759-3763`) — the emission `Dim b As Byte = 65` has today;
+- either side an unresolvable .NET type → accepted, csc decides. The predicate is "`ResolveTypeName`
+  fell to its synthetic .NET branch" (`:2566-2587`, the `new TypeInfo(name, TypeKind.Class)` with no
+  base) — NOT `_typeManager.GetType(name) == null && IsNetType(name)`, because `IsNetType` is "any
+  PascalCase identifier" and on the CLI a sibling-file BasicLang class lives in scope rather than in
+  `_typeManager`, so that spelling would exempt `New Shape() {aString}` with `Shape` declared in
+  another `.bas`; a two-file CLI row pins that case as an error. Applied to BOTH `T` and the element
+  (`IsAssignableFrom` is false for two DIFFERENT-named synthetic handles, so this is what makes the
+  M4 program pass; two of the SAME name are `Equals`, which is why M2 passes today). ⚠ This is a
+  THIRD conversion policy, on purpose: it is not the Dim path's check (`:5713`, which exempts
+  nothing — the tray spec's M5 `Container`→`IContainer` refusal) and not `RejectImpossibleConversion`
+  (which exempts only the target, only in its scalar→reference arm); the element check is never
+  routed through either;
 - no "mixed types" warning for a typed literal; the UNTYPED path is untouched and gains its first
   pin (bare `{1, 2, 3}` is still `Integer[]`; bare mixed is still `Object[]` + the warning — no
   test asserts either today).
@@ -455,11 +485,19 @@ NON-literal is wrapped in an `IRCast` (`New Double() {i}` for an Integer `i`); `
 in both its statement and expression arms today (`JavaScriptBackend.cs:2379-2380`, `:747-748`), so
 no array literal runs there. 24a adds both arms (`[]` of `n` slots, index stores), because a literal
 the capability checker approves and the backend then dies on is the green-build-dead-page class.
-`ASTPrettyPrinter` prints the type.
+⛔ The expression arm returns the BOUND name for an `IRArrayAlloc` that already appeared in
+`block.Instructions` (the `Bound(n) ? SanitizeName(n.Name) : …` pattern at `:709-729`, whose comment
+records a constructor printed twice): the M4 shape passes the array temp as a call ARGUMENT after its
+stores, and re-rendering it inline would allocate a second, empty array. `ASTPrettyPrinter` prints
+the type. `Visit(NewExpressionNode)`'s abstract/Extern refusals are bypassed for the typed literal
+(an array OF an abstract type is legal) and `New T()` with no brace still yields a
+`NewExpressionNode` — both pinned.
 
-**Gate.** Parser tests (the expression path; the three refusals with their messages); analyzer
-tests (typed `ToolStripItem[]` with no warning; `New Shape() {c, s}` over BasicLang classes; the
-three errors; the untyped-path pins); emission through the real CLI, optimizer on: the M4 program
+**Gate.** Parser tests (the expression path; the three refusals with their messages; `New T()`
+alone still a constructor call); analyzer tests (typed `ToolStripItem[]` with no warning; `New
+Shape() {c, s}` over BasicLang classes and the two-file `Shape` error through the CLI; the literal
+rule's admitted and refused rows incl. `New Byte() {300}`; the non-literal errors; the untyped-path
+pins); emission through the real CLI, optimizer on: the M4 program
 builds under csc and RUNS with its menu populated (`WinFormsCompile` + the M5 driver); the M3 shape
 `Dim items() As ToolStripItem = New ToolStripItem() {mnuFile, sep}` through CLI + csc (it exercises
 the array `Equals` path the argument shape does not); `New Integer() {1, 2, 3}` summed and `New
@@ -500,7 +538,9 @@ array creation with initializer`.
     them): **24a** the compiler change, incl. the JavaScript array arms; **24b** the shape —
     `Place`, `FormItemRule`, `FormCatalogShapes` with the three catalog gates moved onto it, the
     seven `FormSchematic` values with both arms, the structural-name pin's exemption — with NO new
-    row yet, so every gate stays green by construction; **24c** the seven rows + reader/writer/
+    row yet — the three shape gates, the two toolbox-membership pins, the `DrawSchematic` seam
+    with its enum-driven pins, and `FormToolboxViewModel.Rebuild`'s item exclusion all learn
+    `Place` here — so every gate stays green by construction; **24c** the seven rows + reader/writer/
     clipboard/region writer/emitter/recognizer + the band layout and drawing (the render gate sees
     bands, not boxes; items excluded from its hash) + EVERYTHING the toolbox and a drop touch the
     moment a row exists — `FormPlacement.Place`'s Docked branch, `PlaceItem` and the BL8019 refusal
@@ -509,4 +549,10 @@ array creation with initializer`.
     a kind the surface mishandles from a green build; **24d** the editing surface — cells,
     dropdowns, Type Here, the overlay, paste, the per-item render pin; **24e** retarget (with the
     sweep's no-geometry pin) + acceptance on both targets + records (HANDOFF, CLAUDE.md, followups
-    22/23/24, memory) + the IDE drop.
+    22/23/24, memory) + the IDE drop. 24c is large BY DESIGN — the toolbox is catalog-driven, so a
+    row cannot land without everything a drop touches — and its plan orders the work so each gate
+    goes green in sequence (rows + reader/writer + clipboard; region writer + emitter + recognizer;
+    layout + drawing; placement + toolbox + grid); it is not split into a state where a gate is red.
+    Plan-level notes carried from review: `TypeHereBounds` is a `Rect`, so the overlay binds through
+    a Rect→Thickness converter (or the canvas publishes a `Thickness`); `TypeHereHost` IS in
+    `AffectsRender`, so a Begin with no selection change still republishes the slot.
