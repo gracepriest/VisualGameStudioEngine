@@ -1854,6 +1854,16 @@ namespace BasicLang.Compiler.IR
         public bool IsStatic { get; set; }
         public bool IsReadOnly { get; set; }
         public bool IsWriteOnly { get; set; }
+
+        /// <summary>
+        /// Overridable / Overrides, carried for the same reason <see cref="IRMethod"/> carries
+        /// them: a backend cannot mark an accessor virtual from information it never receives.
+        /// Dropping these here made every property override answer the BASE's value on MSIL and
+        /// C#, silently — see <c>PropertyNode.IsVirtual</c> for the measurement.
+        /// </summary>
+        public bool IsVirtual { get; set; }
+        public bool IsOverride { get; set; }
+
         public IRFunction Getter { get; set; }
         public IRFunction Setter { get; set; }
     }

@@ -946,6 +946,11 @@ namespace BasicLang.Compiler
                 prop.IsStatic = isStatic;
                 prop.IsReadOnly = isReadOnly;
                 prop.IsWriteOnly = isWriteOnly;
+                // ⛔ isVirtual/isOverride are parsed for EVERY member by the loop above; this arm
+                // used to read them and throw them away, while the Function and Sub arms below
+                // copy them. That one omission is the whole property-override defect.
+                prop.IsVirtual = isVirtual;
+                prop.IsOverride = isOverride;
                 return prop;
             }
 
