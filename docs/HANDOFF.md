@@ -1,4 +1,4 @@
-# Handoff snapshot — 2026-09-11, updated 2026-09-19
+# Handoff snapshot — 2026-09-11, updated 2026-09-20 (START HERE section below is the live handoff)
 
 **Why this file exists.** Working state for this repo normally lives in a per-machine
 auto-memory directory (`~/.claude/projects/…/memory/`) that is **outside the repo and does not
@@ -14,6 +14,101 @@ whether a cloud container can build and test this repo.
 **P2a-2 is COMPLETE.** Tasks 1-15 are done, Step 4 included — the `IDE/` refresh shipped
 2026-09-14 in `fbb3694`. The work merged to master in `77e415b`, together with the blnet C++
 facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
+
+---
+
+## 🚀 START HERE — 2026-09-20 handoff: Task 24 (menus), commit 24a is IN FLIGHT and UNCOMMITTED
+
+**Written for the session that picks this up. Newer than everything below; supersedes it where they
+disagree.** Branch `feat/form-designer` @ `15fec61` locally (origin at `c12c040` until this file's
+commit is pushed). `origin/master` is **`f2727f4`** (PRs #56–#62 landed 2026-09-20; whether the
+game-template float→int break, chip `task_9e0da8ab`, is fixed there is UNMEASURED).
+
+### The working tree is the handoff — do not stash, checkout, reset or "clean" it
+
+```
+ M BasicLang/CSharpBackend.cs        (+22)   Task 4  — EmitExpression in Visit(IRArrayStore)/Visit(IRIndexerStore) + the GetOperands IRArrayStore arm
+ M BasicLang/IRBuilder.cs            (+18)   Task 3  — CoerceToDeclaredType per typed-literal element
+ M BasicLang/JavaScriptBackend.cs    (+29)   Task 4  — Visit(IRArrayAlloc)/Visit(IRArrayStore)/Expr arm + the IRAlloca guard in Visit(IRStore)
+ M BasicLang/Parser.cs               (+68)   Task 1  — `New T() {…}` → CollectionInitializerNode.ElementType; three refusals
+ M BasicLang/SemanticAnalyzer.cs     (+186)  Task 2  — typed branch, three element policies, WidensTo, NothingAdviceFor
+ M docs/superpowers/plans/2026-09-20-menus-toolbars-statusbars.md   (the AS-BUILT notes — committed with this file)
+?? VisualGameStudio.Tests/Compiler/TypedArrayLiteralTests.cs           (47 rows: 10 parser + 35 analyzer + 2 IR)
+?? VisualGameStudio.Tests/Compiler/TypedArrayLiteralExecutionTests.cs  ([Category("Integration")], runs all three backends)
+?? csc.dll                                                              (known stray — NEVER add it)
+```
+
+Every one of those five product changes was implemented test-first by a fresh subagent, then
+spec-reviewed and code-quality-reviewed (Tasks 1–3 approved; Task 4's FIX ROUND is on disk but its
+re-review has not happened — see step 2). All mutant text is restored (`git grep MUTANT_` = 0) and no
+`dotnet`/`testhost` process was running at handoff. **Nothing is committed on purpose:** the plan's
+rule is one task → one commit → one full-suite gate (Task 6).
+
+### What each task measured (the numbers a new run must reproduce)
+
+| Task | Gate | Mutants |
+|---|---|---|
+| 1 parser | `TypedArrayLiteralTests` 10/10; `ParserErrorTests\|CompilationTests` 42/42 | refusals red-first |
+| 2 analyzer | fixture 45/45; `CompilationTests\|CppCollectionTests\|ReturnCoercionTests` 130/130 | 6 killed, each by one row |
+| 3 IR | fixture 47/47; the same 130/130 | "coerce nothing" = the RED run; ⚠ the `ElementType != null` guard is REDUNDANT BY ANALYSIS (documented in code + plan) — its mutant survives by construction |
+| 4 backends, round 1 | `TypedArrayLiteralExecutionTests` 8/8, 0 skipped; regression 326/326 over the JS and C#-array fixtures | (e)–(h) killed |
+| 4 fix round | rows added: `Bump()` double-call (`N 2`), `SumViaCall` (M4 shape on JS both routes + C# + C++), `IndexerStoreCast` — **final totals NOT received; re-run** | GetOperands arm → `N 4`; IndexerStore revert → CS0103 |
+
+Measured renderings: C# `t1[1] = (double)(i);` (the cast must survive — `i` is a Sub PARAMETER,
+never a constant, or the optimizer folds it away and the row proves nothing); JS `const t1 = new
+Array(2); t1[0] = 1; t1[1] = t0;`.
+
+### Traps found while building 24a (all folded into the plan's AS-BUILT notes)
+
+- ⛔⛔ **A THIRD JS arm**: an array local with an initializer lowers to `IRAlloca` + `IRStore` +
+  `IRAssignment`; the JS `Visit(IRStore)` threw `NotYet("IRAlloca (as an expression)")` before any JS
+  existed. Policy: skip a store whose address is an alloca (the assignment always carries the value).
+- ⛔⛔ **The C# `EmitExpression` store fix ALONE made a call element run TWICE** — `GetOperands` had
+  no `IRArrayStore` arm, so the element's use-count was 0, it was emitted bare AND inlined again
+  (`Foo(); t1[0] = Foo();`, green build; was CS0103). Fixed with the arm; pinned by the `Bump()` row.
+- ⛔ The C++ backend DELIBERATELY refuses Double string concat → the Double program prints the number alone.
+- ⛔ `Run` is a BasicLang BUILTIN — a fixture `Sub Run(i As Integer)` is refused; the helper is `SumFrom`.
+- ⛔ `WidensTo` is by numeric RANGE: the spec's "IsAssignableFrom minus its permissive arm" would refuse
+  Byte→Integer (only ever admitted BY the arm) — the spec contradicts its own word "widening"; the
+  implementation follows the word. **Task 6 opens spec §10 with this row.**
+- ⛔ `IsNetType` is PascalCase-permissive (`Integer[]` passes it) → the exemption predicate has a
+  `Kind is Class or Delegate` guard. `ResolveTypeReference` never returns null. `Nothing` advice is by
+  target kind ("write 0" sent an enum user to a second refusal).
+- ⚠ A bare literal as a STATEMENT parses silently (chip `task_2e1de6b3`); followup 26 in the plan.
+
+### Exactly what to do next, in order
+
+0. Start the session IN THIS DIRECTORY so `.claude/commands/team.md` and `.claude/agents/*.md`
+   register (`/team`, `architect`, `brief`, `implementer`, `test-writer` — cherry-picked as
+   `4e44348`/`15fec61`). ⚠ `brief.md` grants `Bash`, and on this machine **Bash opens wsl.exe** —
+   tell it to use PowerShell/Grep/Glob, or drop `Bash` from its `tools:` line. `architect.md` still
+   says "five backends" — MSIL/LLVM are OUT OF SCOPE by the 2026-07-15 decision.
+1. `git status` must match the block above. Then ONE build of `VisualGameStudio.Tests`, then
+   `--no-build --filter "FullyQualifiedName~TypedArrayLiteralTests"` (expect 47/47) and
+   `--filter "FullyQualifiedName~TypedArrayLiteralExecutionTests"` (expect every row green, 0
+   skipped — read the `Total tests` line from a captured file; a "Passed!" line is not a result).
+2. Task 4's spec RE-review of the fix round (the three items above), then Task 4's code-quality
+   review — **it has never had one**. Fix → re-review until ✅.
+3. Task 5 of the plan: the WinForms M4/M3 rows through the real CLI + csc, the two-file `.blproj`
+   row (stderr, exit ≠ 0), mutants (a)–(d).
+4. Task 6: pretty printer (no fixture exists → skip branch), spec §10 (WidensTo + Kind guard), fast
+   subset, the Execution fixture, then the FULL SUITE on the final binaries with BOTH streams
+   logged; failure NAMES vs the 8-row baseline (2 `SearchSnippets`,
+   `Cli_Build_CppProject_ProjectReference_WarnsAndStillSucceeds`, 4 game-template rows,
+   `NonEx_variants_marshal_and_are_screen_size_dependent`); zero new or stop. ONE commit
+   `feat(compiler): New T() { … } array creation with initializer` via a message file + `git commit
+   -F`, trailer `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`; push; SHA-verify.
+5. **Commit 24b through `/team`** (the owner's decision, 2026-09-20). Split: `implementer` (Opus) =
+   `FormPlace`/`FormItemRule`/derived `IsComponent`, the `DrawSchematic` seam that OWNS the label
+   draw, the seven `GlyphFor` arms, the toolbox `Rebuild` filter; `test-writer` (Sonnet) =
+   `FormCatalogShapes` (test-support), the three gate migrations, `FormSchematicPinTests`, the
+   coverage pins, mutants (a)–(c); Task 11's gate and ONE commit as the plan says. Escalate to
+   `architect` only per the protocol (3+ stacked or one blocking), through `brief`, and check
+   `docs/superpowers/decisions/` first (it holds only the template today).
+
+Plan: `docs/superpowers/plans/2026-09-20-menus-toolbars-statusbars.md` @ this commit (three review
+passes folded; every deviation recorded as "AS BUILT" beside the task). Spec:
+`docs/superpowers/specs/2026-09-19-menus-toolbars-statusbars-design.md` @ `fd38201`.
 
 ---
 
@@ -41,11 +136,13 @@ reference counts, never against the checkboxes.
 | **27** acceptance | done — both targets **built and RUN**, output recorded in the commit |
 | **21** retarget | done 2026-09-19 — `FormRetarget`, `design --retarget`, "Retarget Form…"; see its section below |
 | **25** component tray | done 2026-09-19 — Timer/ToolTip/ErrorProvider/BackgroundWorker in `<Components>`, the strip under the canvas, a Timer RUNS on both targets; see its section below |
-| **24** menus · **28** closeout | NOT STARTED |
+| **24** menus | IN FLIGHT 2026-09-20 — spec + plan written and reviewed; commit 24a (the compiler change) in the working tree, uncommitted; see START HERE above |
+| **28** closeout | NOT STARTED (blocked on master's game-template break until measured) |
 
-⚠ **24 is compiler-gated**: array-literal element typing has no base-class widening
-(`SemanticAnalyzer.cs:6056-6061`), so `{mnuFile, sep1}` degrades to `Object[]`. Measure what csc
-accepts before designing the fix — that is how the `Anchor` blocker turned out to be one line.
+⚠ **24 was called compiler-gated. Measured 2026-09-19: the premise is true (a bare `{mnuFile, sep1}`
+degrades to `Object[]`, CS1503) but the conclusion is false — the designer needs NO compiler change
+(per-item `Items.Add` compiles and RUNS). The brief's alternative `New T() {…}` is built anyway as
+commit 24a because the preferred widening cannot serve unresolvable WinForms types.
 
 ### ⛔ Two defects that only running the thing could find
 
