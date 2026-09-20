@@ -2520,6 +2520,17 @@ namespace BasicLang.Compiler
                         Consume(TokenType.RightParen, "Expected ')' after arguments");
                     }
 
+                    // Task 24a: VB has no `Dim x As New T() {…}`; the array form is `Dim x() As T = New T() {…}`.
+                    // The type is interpolated as the TypeReference (ToString), never `.Name` —
+                    // see the `New` expression branch in ParsePrimary for why.
+                    if (Check(TokenType.LeftBrace))
+                    {
+                        throw new ParseException(
+                            $"`Dim {node.Name} As New {newExpr.Type}() {{…}}` is not a form: write " +
+                            $"`Dim {node.Name}() As {newExpr.Type} = New {newExpr.Type}() {{…}}`",
+                            Peek(), "Move the initializer after `=`.");
+                    }
+
                     node.Type = newExpr.Type;
                     node.Initializer = newExpr;
                 }
@@ -4283,8 +4294,10 @@ namespace BasicLang.Compiler
                 var newExpr = new NewExpressionNode(token.Line, token.Column);
                 newExpr.Type = ParseTypeReference();
 
+                var sawParens = false;
                 if (Match(TokenType.LeftParen))
                 {
+                    sawParens = true;
                     if (!Check(TokenType.RightParen))
                     {
                         do
@@ -4293,6 +4306,42 @@ namespace BasicLang.Compiler
                         } while (Match(TokenType.Comma));
                     }
                     Consume(TokenType.RightParen, "Expected ')' after arguments");
+                }
+
+                // Task 24a — `New T() { e1, e2 }`: an array creation WITH an initializer. Measured
+                // before this branch existed: in a CALL ARGUMENT, `New ToolStripItem()` was a
+                // parameterless constructor call and the `{` fell to the enclosing call's
+                // "Expected ')' after arguments"; in a DIM INITIALIZER every shape the refusals
+                // below cover parsed with NO diagnostic at all — the `New T` / `New T(n)` ended
+                // the statement and the `{…}` became an orphan expression statement (the
+                // bare-brace literal), so the program built with the array silently missing.
+                // ⛔ The parentheses are REQUIRED (VB's shape), and a stated size is refused: VB's
+                // `New T(2) {…}` names an UPPER BOUND while this compiler's array sizes are element
+                // COUNTS, so accepting it would be a silent off-by-one.
+                // ⚠ The messages interpolate the TypeReference (its ToString), never `.Name`:
+                // Name is the bare identifier and drops the generic arguments, so `.Name` told
+                // the user to write `New List() {…}` for `New List(Of Integer) {…}` — a fix that
+                // names a different type.
+                if (Check(TokenType.LeftBrace))
+                {
+                    if (!sawParens)
+                    {
+                        throw new ParseException(
+                            "An array creation with an initializer needs its parentheses: write `New " +
+                            $"{newExpr.Type}() {{…}}`", Peek(), "Add `()` after the type name.");
+                    }
+
+                    if (newExpr.Arguments.Count > 0)
+                    {
+                        // ⚠ The spec's phrase, and the test's: "the initializer sets the size".
+                        throw new ParseException(
+                            "An array creation with an initializer cannot also state a size — the " +
+                            $"initializer sets the size; write `New {newExpr.Type}() {{…}}` (VB's " +
+                            "`New T(n) {…}` names an upper bound, and this compiler's sizes are element counts)",
+                            Peek(), "Remove the size.");
+                    }
+
+                    return ParseTypedCollectionInitializer(newExpr.Type);
                 }
 
                 return newExpr;
@@ -4465,6 +4514,25 @@ namespace BasicLang.Compiler
                 $"Unexpected token in expression: '{Peek().Lexeme}' ({Peek().Type})",
                 Peek(),
                 "Expected a value, variable, function call, or operator. Valid expression elements include: literals, identifiers, parentheses, or operators like +, -, *, /.");
+        }
+
+        /// <summary>The brace list of `New T() { … }`, typed by T (spec §9).</summary>
+        private CollectionInitializerNode ParseTypedCollectionInitializer(TypeReference elementType)
+        {
+            Consume(TokenType.LeftBrace, "Expected '{'");
+            var token = Previous();
+            var node = new CollectionInitializerNode(token.Line, token.Column) { ElementType = elementType };
+
+            if (!Check(TokenType.RightBrace))
+            {
+                do
+                {
+                    node.Elements.Add(ParseExpression());
+                } while (Match(TokenType.Comma));
+            }
+
+            Consume(TokenType.RightBrace, "Expected '}' after array initializer");
+            return node;
         }
 
         private InterpolatedStringNode ParseInterpolatedString()

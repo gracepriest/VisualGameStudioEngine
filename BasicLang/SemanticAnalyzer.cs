@@ -6636,6 +6636,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(CollectionInitializerNode node)
         {
+            if (node.ElementType != null)
+            {
+                VisitTypedCollectionInitializer(node);
+                return;
+            }
+
             TypeInfo commonType = null;
 
             // Analyze each element
@@ -6664,6 +6670,186 @@ namespace BasicLang.Compiler.SemanticAnalysis
             arrayType.ElementType = commonType ?? _typeManager.GetType("Object");
             arrayType.ArrayRank = 1;  // Collection initializers create 1D arrays
             SetNodeType(node, arrayType);
+        }
+
+        /// <summary>
+        /// <c>New T() { … }</c> (Task 24a, spec §9). The element type is STATED, so nothing is inferred
+        /// and the "mixed types" warning never applies. Three policies, deliberately distinct from the
+        /// Dim path's (<see cref="IsNumericLiteralAssignable"/>, which admits <c>Dim i As Integer = 1.5</c>)
+        /// and from <c>RejectImpossibleConversion</c>'s (which exempts only the target):
+        /// <list type="bullet">
+        /// <item><description>a numeric LITERAL: an integral literal into any numeric target, a floating
+        /// literal into Single/Double/Decimal only, and BC30439 per element;</description></item>
+        /// <item><description><c>Nothing</c>: into any reference or unresolvable .NET <c>T</c>, never into
+        /// a value type — it is typed <c>Object</c>, so the non-literal rule would refuse
+        /// <c>New String() {"a", Nothing}</c>;</description></item>
+        /// <item><description>otherwise: <c>T</c>, or a WIDENING to <c>T</c> (<see cref="WidensTo"/>:
+        /// IsAssignableFrom minus its permissive narrowing arm);</description></item>
+        /// <item><description>either side an unresolvable .NET type → accepted, csc decides.</description></item>
+        /// </list>
+        /// The parser discards the <c>NewExpressionNode</c>, so <c>Visit(NewExpressionNode)</c>'s
+        /// abstract/Extern refusals are never reached: an array OF an abstract type is legal.
+        /// </summary>
+        private void VisitTypedCollectionInitializer(CollectionInitializerNode node)
+        {
+            // ResolveTypeReference reports "Unknown type" itself and answers Object for it; it never
+            // returns null. The fallback is belt-and-braces, not a second diagnostic.
+            var elementType = ResolveTypeReference(node.ElementType) ?? _typeManager.ObjectType;
+            var targetIsUnresolvedNet = IsUnresolvableNetType(elementType);
+
+            foreach (var element in node.Elements)
+            {
+                element.Accept(this);
+                CheckTypedLiteralElement(element, elementType, targetIsUnresolvedNet);
+            }
+
+            var arrayType = new TypeInfo($"{elementType.Name}[]", TypeKind.Array)
+            {
+                ElementType = elementType,
+                ArrayRank = 1
+            };
+            SetNodeType(node, arrayType);
+        }
+
+        /// <summary>
+        /// "ResolveTypeName fell to its synthetic .NET branch", re-derived from the NAME in that
+        /// method's own order — a TypeInfo carries no synthetic marker, and a sibling-file BasicLang
+        /// class lives in scope rather than in _typeManager, which is what makes the bare
+        /// <c>_typeManager.GetType(name) == null &amp;&amp; IsNetType(name)</c> spelling exempt too much.
+        ///
+        /// <para>⚠ The KIND guard is load-bearing. <see cref="IsNetType"/> is PascalCase-permissive, so
+        /// it also says yes to an array's <c>Integer[]</c> and to a type parameter's <c>TItem</c>,
+        /// neither of which any user channel or the type manager answers for. Every synthetic .NET
+        /// handle is minted as <see cref="TypeKind.Class"/> (the four mint sites) or flipped to
+        /// <see cref="TypeKind.Delegate"/> (<c>Func</c>/<c>Action</c>); every user-declared type —
+        /// class, interface, enum, structure, delegate — is registered in <c>_typeManager</c> and so
+        /// never reaches the name test.</para>
+        /// </summary>
+        private bool IsUnresolvableNetType(TypeInfo type) =>
+            type != null &&
+            (type.Kind == TypeKind.Class || type.Kind == TypeKind.Delegate) &&
+            !string.IsNullOrEmpty(type.Name) &&
+            !IsUserDefinedTypeName(type.Name) &&
+            _typeManager.GetType(type.Name) == null &&
+            IsNetType(type.Name);
+
+        private void CheckTypedLiteralElement(ExpressionNode element, TypeInfo target, bool targetIsUnresolvedNet)
+        {
+            var elementType = GetNodeType(element);
+
+            if (IsNothingLiteral(element))
+            {
+                // Admitted without a check into any reference or unresolvable .NET T (csc takes null);
+                // refused into a value type, with advice that names a value OF that type — "write 0"
+                // for an enum sends the user straight into the non-literal arm's second refusal.
+                var advice = NothingAdviceFor(target);
+                if (advice != null)
+                {
+                    Error($"Nothing has no value of type '{target.Name}'; {advice}", element.Line, element.Column);
+                }
+                return;
+            }
+
+            // ⚠ `-1` and `-1.5` are a UnaryExpressionNode WRAPPING the literal (no constant folding in
+            // the parser), typed as the operand. Unwrap a leading +/- before the literal test, exactly
+            // as TryRetypeLiteralToDecimal does — or every negative literal takes the non-literal path
+            // and `New Single() {-1.5}` / `New Short() {-1}` are refused.
+            var bare = element is UnaryExpressionNode { Operator: "-" or "+" } sign ? sign.Operand : element;
+
+            if (bare is LiteralExpressionNode && elementType != null && elementType.IsNumeric() && target.IsNumeric())
+            {
+                if (target.Name == "Decimal" && TryRetypeLiteralToDecimal(element, target))
+                {
+                    return;
+                }
+
+                if (elementType.IsFloatingPoint() && target.IsIntegral())
+                {
+                    Error($"cannot put {Article(elementType.Name)} '{elementType.Name}' in {Article(target.Name)} '{target.Name}()' — " +
+                          "a floating literal never narrows into an integral array; write an integer or change the element type",
+                          element.Line, element.Column);
+                    return;
+                }
+
+                // BC30439 per element: `New Byte() {300}` is refused exactly as `Dim b As Byte = 300`.
+                CheckConstantFitsNumericTarget(element, target, "an element of the array initializer",
+                    element.Line, element.Column);
+                return;
+            }
+
+            if (elementType == null)
+            {
+                return;   // an unresolved expression; the untyped visitor skips these too
+            }
+
+            if (targetIsUnresolvedNet || IsUnresolvableNetType(elementType))
+            {
+                return;   // csc decides — ToolStripMenuItem into ToolStripItem() is exactly this
+            }
+
+            if (target.Equals(elementType) || WidensTo(elementType, target))
+            {
+                return;
+            }
+
+            Error($"cannot put {Article(elementType.Name)} '{elementType.Name}' in {Article(target.Name)} '{target.Name}()'",
+                element.Line, element.Column);
+        }
+
+        /// <summary>
+        /// The advice half of the typed literal's <c>Nothing</c> refusal, per value-type kind; null for
+        /// a reference (or unresolvable .NET) target, which admits <c>Nothing</c>.
+        /// </summary>
+        private static string NothingAdviceFor(TypeInfo target)
+        {
+            if (target.IsNumeric()) return "write 0";
+            if (target.Name == "Boolean") return "write False";
+            if (target.Name == "Char") return "write a character literal";
+            if (target.Kind == TypeKind.Structure || target.Kind == TypeKind.UserDefinedType)
+            {
+                return $"write New {target.Name}()";   // `Type … End Type` is a value type too (CS0037 otherwise)
+            }
+            if (target.Kind == TypeKind.Enum) return $"write a member of '{target.Name}'";
+            return null;
+        }
+
+        /// <summary>
+        /// "a Double", "an Integer" — the spec's messages use both, so the article is computed.
+        /// ⚠ The unsigned family is the exception a letter test gets wrong: <c>UInteger</c> is spoken
+        /// "you-integer", so it takes "a" — a leading 'U' followed by another capital is that family.
+        /// </summary>
+        private static string Article(string typeName)
+        {
+            if (string.IsNullOrEmpty(typeName)) return "a";
+            if (typeName[0] == 'U' && typeName.Length > 1 && char.IsUpper(typeName[1])) return "a";
+            return "AEIOUaeiou".IndexOf(typeName[0]) >= 0 ? "an" : "a";
+        }
+
+        /// <summary>
+        /// <see cref="TypeInfo.IsAssignableFrom"/> WITHOUT its permissive narrowing arm (the single
+        /// <c>if</c> that admits integral ← floating AND integral ← integral, so that
+        /// <c>Dim i As Integer = a / b</c> keeps compiling). Into an integral target only a genuine
+        /// widening is admitted: never a floating or Decimal source, and an integral source only when
+        /// EVERY value of it fits the target (Byte → Integer, Integer → Long; not Long → Integer, not
+        /// Integer → UInteger). IsAssignableFrom lists just one of those pairs (Long ← Integer) ahead of
+        /// the arm — the others were only ever admitted BY the arm, so excluding it wholesale would
+        /// refuse <c>New Integer() {aByte}</c>, which VB widens.
+        /// </summary>
+        private static bool WidensTo(TypeInfo source, TypeInfo target)
+        {
+            if (source.IsNumeric() && target.IsNumeric() && target.IsIntegral())
+            {
+                if (!source.IsIntegral())
+                {
+                    return false;   // floating or Decimal into an integral array is the narrowing arm
+                }
+
+                return TryGetIntegralRange(source.Name, out var sourceMin, out var sourceMax)
+                    && TryGetIntegralRange(target.Name, out var targetMin, out var targetMax)
+                    && sourceMin >= targetMin && sourceMax <= targetMax;
+            }
+
+            return target.IsAssignableFrom(source);
         }
 
         public void Visit(TupleLiteralNode node)

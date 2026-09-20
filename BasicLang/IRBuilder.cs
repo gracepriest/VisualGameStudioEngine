@@ -1902,7 +1902,23 @@ namespace BasicLang.Compiler.IR
             foreach (var element in node.Elements)
             {
                 element.Accept(this);
-                elements.Add(_expressionResult);
+                var value = _expressionResult;
+
+                // Task 24a: a TYPED literal (`New T() {…}`) coerces each element to T — a literal is
+                // re-typed in place, a non-literal is wrapped in an IRCast (CoerceToDeclaredType's own
+                // rules, the ones `Dim x As Double = 1` / `= i` already lower by). The analyzer admitted
+                // the element (a literal by range, a non-literal by widening), but without this the
+                // store carried the RAW value: an Integer constant and an Integer variable into a
+                // Double array. The untyped literal stores raw, as before — its element type is either
+                // the type every element already carries or `Object`, and `CoerceToDeclaredType` is a
+                // no-op on both. The guard is therefore redundant by analysis today and becomes
+                // load-bearing when the untyped literal gains common-base widening (followup 23); keep it.
+                if (node.ElementType != null && value != null)
+                {
+                    value = CoerceToDeclaredType(value, elementType);
+                }
+
+                elements.Add(value);
             }
 
             // Create an array allocation IR

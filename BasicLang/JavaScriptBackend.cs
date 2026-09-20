@@ -744,6 +744,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case IRCast c when TryNumericCast(c, out var castRendered):
                     return Bound(c) ? SanitizeName(c.Name) : castRendered;
 
+                // Task 24a. See Visit(IRArrayAlloc): by name once bound, or the allocation inline.
+                case IRArrayAlloc alloc:
+                    return Bound(alloc) ? SanitizeName(alloc.Name) : ArrayAlloc(alloc);
+
                 default:
                     throw NotYet(value.GetType().Name + " (as an expression)");
             }
@@ -2192,6 +2196,18 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         public void Visit(IRStore store)
         {
+            // Task 24a. An array-typed local with an initializer lowers to IRAlloca `a_addr` +
+            // IRStore(value, a_addr) + IRAssignment(a, value) (IRBuilder.Visit(VariableDeclarationNode),
+            // `needsMemory = varType.Kind == TypeKind.Array`). The alloca is a memory-model artefact
+            // this backend has no counterpart for (`Visit(IRAlloca)` is already a no-op), and the
+            // IRAssignment that follows ALWAYS carries the value: TryRenameToVariable renames only
+            // IRCall/IRAwait/IRBinaryOp/IRUnaryOp/IRCompare, never an IRArrayAlloc. Rendering the
+            // address threw NotYet("IRAlloca (as an expression)") before any JS existed. The C#
+            // backend renders the alloca as its variable and lives with a duplicate assignment;
+            // skipping the store is the choice that does not depend on WHERE this backend declares
+            // the local.
+            if (store.Address is IRAlloca) return;
+
             // The destination is an L-VALUE expression, not a previously-bound temp.
             Line($"{Expr(store.Address)} = {Expr(store.Value)};");
         }
@@ -2376,8 +2392,17 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         public void Visit(IRSwitch switchInst) => throw NotYet(nameof(IRSwitch));
         public void Visit(IRLabel label) => throw NotYet(nameof(IRLabel));
         public void Visit(IRComment comment) => throw NotYet(nameof(IRComment));
-        public void Visit(IRArrayAlloc arrayAlloc) => throw NotYet(nameof(IRArrayAlloc));
-        public void Visit(IRArrayStore arrayStore) => throw NotYet(nameof(IRArrayStore));
+        // Task 24a. An array literal is an allocation of N slots followed by N index stores; both
+        // arms are required (the renderer rebuilds operand trees). ⛔ The expression arm returns the
+        // BOUND name when the alloc already appeared in block.Instructions — the M4 shape passes the
+        // temp as a call argument AFTER its stores, and re-rendering it inline would allocate a
+        // second, empty array.
+        public void Visit(IRArrayAlloc arrayAlloc) => Bind(arrayAlloc, ArrayAlloc(arrayAlloc));
+
+        public void Visit(IRArrayStore arrayStore) =>
+            Line($"{Expr(arrayStore.Array)}[{Expr(arrayStore.Index)}] = {Expr(arrayStore.Value)};");
+
+        private static string ArrayAlloc(IRArrayAlloc a) => $"new Array({a.Size})";
         // `await` binds tighter than most operators but not all, so the operand is
         // parenthesised — `await a + b` would await only `a`.
         private string AwaitExpr(IRAwait a) => $"await {Receiver(Expr(a.Expression))}";

@@ -3059,6 +3059,15 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     return new[] { load.Address };
                 case IRStore store:
                     return new[] { store.Address, store.Value };
+                case IRArrayStore arrayStore:
+                    // Task 24a. An array-literal element's use must be COUNTED here, or a call
+                    // element has use-count 0, ShouldEmitInstruction emits it as a bare statement
+                    // for its side effect, and Visit(IRArrayStore) then re-renders it inline —
+                    // measured through the real CLI: `Bump(); Bump(); var t2 = new int[2];
+                    // t2[0] = Bump(); t2[1] = Bump();`, a green build that ran Bump four times.
+                    // (Before the store rendered its value as an expression this was the LOUD
+                    // CS0103 `t2[0] = t0;`; the arm is what makes the expression form correct.)
+                    return new[] { arrayStore.Array, arrayStore.Index, arrayStore.Value };
                 case IRReturn ret:
                     return ret.Value != null ? new[] { ret.Value } : Array.Empty<IRValue>();
                 case IRConditionalBranch br:
@@ -3550,7 +3559,15 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         {
             var arrayName = GetValueName(arrayStore.Array);
             var indexVal = arrayStore.Index is IRConstant c ? c.Value.ToString() : GetValueName(arrayStore.Index);
-            var valueVal = arrayStore.Value is IRConstant vc ? EmitConstant(vc) : GetValueName(arrayStore.Value);
+            // ⛔ EmitExpression, NOT GetValueName — the route Visit(IRAssignment), Visit(IRStore) and
+            // Visit(IRReturn) all take. A temp is INLINED on this backend (Visit(IRCast) and the
+            // other value visitors emit nothing for a non-named destination, and
+            // _declaredIdentifiers holds only params/locals/globals), so rendering the stored value
+            // by NAME emitted `t1[1] = t0;` with t0 declared nowhere — CS0103. Task 24a's typed
+            // literal (`New Double() {1, i}`) wraps the non-literal element in an IRCast and hit it;
+            // a computed untyped element (`{i + 1}`) had the same latent shape. Invisible through
+            // the optimizer when the element is a constant, because the cast folds.
+            var valueVal = EmitExpression(arrayStore.Value);
             WriteLine($"{arrayName}[{indexVal}] = {valueVal};");
         }
 
@@ -3561,7 +3578,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var collection = GetValueName(indexerStore.Collection);
             var indices = string.Join(", ", indexerStore.Indices.Select(i =>
                 i is IRConstant ic ? EmitConstant(ic) : GetValueName(i)));
-            var value = indexerStore.Value is IRConstant vc ? EmitConstant(vc) : GetValueName(indexerStore.Value);
+            // Same pattern as Visit(IRArrayStore): the stored value is an expression, not a name.
+            var value = EmitExpression(indexerStore.Value);
             WriteLine($"{collection}[{indices}] = {value};");
         }
 
