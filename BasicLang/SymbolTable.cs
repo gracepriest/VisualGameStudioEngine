@@ -210,8 +210,59 @@ public class TypeInfo
             {
                 return other.Interfaces.Any(i => Equals(i));
             }
-            
+
             return false;
+        }
+
+        /// <summary>
+        /// The member named <paramref name="name"/> on this type, or — failing that — on the
+        /// nearest base class that declares one. <see cref="Members"/> holds a type's OWN members
+        /// only, so every lookup that should see an INHERITED member has to walk.
+        ///
+        /// <para>⛔ Nothing in the front end walked, and the language's most basic inheritance was
+        /// unusable because of it: a derived class's method naming an inherited field, Const,
+        /// property or Shared field was refused on all four backends, and so was
+        /// <c>obj.InheritedMember</c> — measured. Only METHODS appeared to work, and not by
+        /// inheritance: pass 1 flattens every procedure signature into the GLOBAL scope by bare
+        /// name, so a bare inherited call found it there.</para>
+        ///
+        /// <para>⚠ A PRIVATE member is skipped at depth &gt; 0 and honoured at depth 0: private is
+        /// private to the declaring class. Without that, whether a base's Private field resolved
+        /// depended on declaration order (pass 1 filters Private out of <see cref="Members"/>,
+        /// pass 2 does not), and admitting one turned a front-end acceptance into a CS0122 or a
+        /// clang private-access failure in the emitted code.</para>
+        ///
+        /// <para>⚠ The depth guard is not decoration: a base is a NAME in the source and nothing
+        /// validates that the chain is acyclic, so <c>Class A Inherits B</c> against
+        /// <c>Class B Inherits A</c> would spin here forever. Failing to resolve a member is a
+        /// diagnostic; hanging the compiler is not.</para>
+        ///
+        /// <para>⚠ A re-resolution of each base BY NAME (through the analyzer's type table) was
+        /// here and is gone: it survived mutation. <see cref="BaseType"/> already holds the
+        /// registered type object, so the lookup could only ever return what the walk already
+        /// had — and in the one case it was meant for, a synthetic member-less stand-in minted
+        /// for an unresolved base, the name is not in the table either. The IR builder's own base
+        /// walks DO re-resolve, because they walk a chain of names rather than of types.</para>
+        /// </summary>
+        public Symbol ResolveMember(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return null;
+
+            var guard = 0;
+            for (var type = this; type != null && guard++ < 64; )
+            {
+                if (type.Members != null
+                    && type.Members.TryGetValue(name, out var member)
+                    && member != null
+                    && (ReferenceEquals(type, this) || member.Access != AccessModifier.Private))
+                {
+                    return member;
+                }
+
+                type = type.BaseType;
+            }
+
+            return null;
         }
         
         public bool Equals(TypeInfo other)

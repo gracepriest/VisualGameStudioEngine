@@ -1105,6 +1105,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
             return symbol;
         }
 
+        /// <summary>
+        /// The declared type named <paramref name="name"/>, as this analysis registered it — a
+        /// class's <see cref="TypeInfo.Members"/> is complete once <see cref="Analyze"/> has run
+        /// (every method, Private ones included, and the sibling-file ones), which is what the
+        /// IR builder needs to tell a class's own method from a same-named file-scope procedure.
+        /// </summary>
+        internal TypeInfo LookupType(string name) =>
+            string.IsNullOrEmpty(name) ? null : _typeManager.GetType(name);
+
         private void SetNodeType(ASTNode node, TypeInfo type)
         {
             _nodeTypes[node] = type;
@@ -7831,8 +7840,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return;
             }
 
-            // Look up the member in the With object type
-            if (withType.Members.TryGetValue(node.MemberName, out var memberSymbol))
+            // Look up the member in the With object type, base chain included — without the walk
+            // `With b : .InheritedMember : End With` was a hard compile error on all four.
+            if (withType.ResolveMember(node.MemberName) is Symbol memberSymbol)
             {
                 SetNodeType(node, memberSymbol.Type ?? memberSymbol.ReturnType ?? _typeManager.ObjectType);
             }
@@ -8039,7 +8049,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Check if target is assignable
             if (node.Target is IdentifierExpressionNode idExpr)
             {
-                var symbol = _currentScope.Resolve(idExpr.Name);
+                // The inherited half needs the same walk the read side got, or an inherited
+                // Const is silently writable by bare name.
+                var symbol = _currentScope.Resolve(idExpr.Name) ?? ResolveClassMember(idExpr.Name);
                 if (symbol != null && symbol.IsConstant)
                 {
                     Error($"Cannot assign to constant '{idExpr.Name}'", node.Line, node.Column);
@@ -8622,6 +8634,22 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             var symbol = _currentScope.Resolve(node.Name);
 
+            // A member of the class being analyzed, or of one of its BASES, by bare name.
+            // ⛔ BEFORE every channel below. Two things forced that position, both measured:
+            // the .NET-type arm further down is deliberately permissive ("any PascalCase
+            // identifier could be a .NET type"), so an inherited `Total` was swallowed into a
+            // phantom type named Total with NO diagnostic — only a one-character or lowercase
+            // name ever reached "Undefined identifier"; and class scope is NEARER than module
+            // scope, which the IR builder already assumes (IsCurrentClassMember suppresses the
+            // module-global fallback for a name it classifies as a class member), so binding a
+            // module global here would leave the two halves disagreeing about where the value
+            // lives. Lexical resolution still wins: a local, a parameter and the class's own
+            // already-defined members are found above.
+            if (symbol == null)
+            {
+                symbol = ResolveClassMember(node.Name);
+            }
+
             if (symbol == null)
             {
                 // Try project symbol table for cross-module references (ModuleName.Symbol or imported symbols)
@@ -8668,6 +8696,20 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 SetNodeType(node, symbol.Type);
             }
         }
+
+        /// <summary>
+        /// The member of the class currently being analyzed — its own, or an inherited one —
+        /// named <paramref name="name"/>, or null outside a class.
+        ///
+        /// <para>⚠ Own members are included, not only inherited ones. A class's own member is
+        /// normally found by lexical resolution before this is reached, but not one declared
+        /// BELOW the method that names it: pass 2 defines members into the class scope in source
+        /// order while analyzing each body inline, so the later declaration does not exist yet.
+        /// <c>TypeInfo.Members</c> is complete from pass 1 whatever the order, so including self
+        /// closes that at no cost.</para>
+        /// </summary>
+        private Symbol ResolveClassMember(string name) =>
+            _currentScope?.GetClassScope()?.ClassType?.ResolveMember(name);
 
         public void Visit(MemberAccessExpressionNode node)
         {
@@ -8814,8 +8856,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
             }
 
-            // Look up member in type
-            if (objectType.Members.TryGetValue(node.MemberName, out var memberSymbol))
+            // Look up member in type — including the BASE CHAIN. ⛔ A flat lookup here typed every
+            // inherited member access Object without a diagnostic, because the .NET arm below
+            // claims any PascalCase receiver: `b.InheritedField + 1` was "Arithmetic operator '+'
+            // requires numeric operands" and `Dim n As Integer = b.InheritedField` was a
+            // conversion error, on all four backends, from a receiver whose class really does
+            // have the member.
+            if (objectType.ResolveMember(node.MemberName) is Symbol memberSymbol)
             {
                 SetNodeSymbol(node, memberSymbol);
                 SetNodeType(node, memberSymbol.Type);

@@ -1633,10 +1633,25 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // bodies (`Y = Y - Speed` binds the computed value to the field);
             // without them registered the destination decays to a temp and the
             // mutation is lost.
-            if (_emittingClass != null)
+            //
+            // ⛔ INHERITED fields count, and they were not registered. The base's
+            // members are as much in scope inside a derived method as the class's own — the
+            // emitted `class Box : public Base` resolves them — so a bare `Total = Total + 10`
+            // against a base field COMPILED CLEAN and threw the write away, the exact
+            // silent-mutation-loss this registration exists to prevent. A simple RHS never
+            // showed it: only a computed one is renamed to its destination and so has to be
+            // recognised as a real name. The walk mirrors DeclaringClassOfStaticMember.
+            //
+            // ⚠ PROPERTIES were registered here too and are not any more: that half survived
+            // mutation. A property is not a storage destination on this backend — a bare
+            // Get/Set property is not even readable here (pinned) — so nothing observed it.
+            for (var cls = _emittingClass; cls != null; )
             {
-                foreach (var field in _emittingClass.Fields)
-                    _declaredIdentifiers.Add(field.Name);
+                foreach (var field in cls.Fields ?? new List<IRField>())
+                    if (field?.Name != null) _declaredIdentifiers.Add(field.Name);
+
+                cls = string.IsNullOrEmpty(cls.BaseClass) || _module?.Classes == null ? null
+                    : (_module.Classes.TryGetValue(cls.BaseClass, out var b) && !ReferenceEquals(b, cls) ? b : null);
             }
 
             // Foreign ::-qualified locals that are written by an assignment/store in the
