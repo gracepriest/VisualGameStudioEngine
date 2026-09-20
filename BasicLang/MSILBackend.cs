@@ -96,6 +96,66 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// </summary>
         private readonly List<(int Index, string Spec, string Name)> _syntheticLocals = new();
 
+        // ---- For Each state -----------------------------------------------------------
+        //
+        // A For Each is a STRUCTURED instruction like IRTryCatch: it carries its body and its
+        // continuation as blocks rather than as branch terminators, so it has the same three
+        // obligations — reserve the slots it needs BEFORE `.locals init` is written, mark the
+        // blocks it emits so nothing writes them a second time, and re-spell the branches that
+        // cross its own boundary. The old emitter met none of them.
+
+        /// <summary>
+        /// The two slots each <c>For Each</c> needs, reserved before <c>.locals init</c> is
+        /// written: one for the loop VARIABLE and one for the enumerator.
+        ///
+        /// <para>⛔ <b>Neither existed.</b> <c>IRBuilder</c> deliberately keeps the loop variable
+        /// out of <c>IRFunction.LocalVariables</c> ("the foreach statement declares it") — which
+        /// is right for C#, C++ and JavaScript, where the emitted loop header really does declare
+        /// it, and leaves IL with no storage at all: every read emitted
+        /// <c>// WARNING: Unknown local 'n'</c> and pushed NOTHING, so the next instruction ran an
+        /// operand short. The enumerator was worse than absent: it was allocated during emission
+        /// with <c>_localCounter++</c>, a counter unrelated to <c>_localIndices</c>, so
+        /// <c>stloc.s 0</c> landed on the COLLECTION's own slot — measured, the same defect the
+        /// indexer path records.</para>
+        ///
+        /// <para>Keyed by the instruction, not by the variable's name, so two loops in one method
+        /// get two slots even when they share a name and differ in element type.</para>
+        /// </summary>
+        private readonly Dictionary<IRForEach, (int VarIndex, int EnumIndex)> _foreachSlots = new();
+
+        /// <summary>
+        /// Continuation blocks whose incoming branch means "next iteration", mapped to the loop
+        /// head to branch to instead.
+        ///
+        /// <para>⛔ <b>The IR gives the end of an iteration and the end of the loop the SAME
+        /// target.</b> <c>IRBuilder</c> terminates the body with <c>IRBranch(endBlock)</c> and
+        /// pushes <c>LoopContext(endBlock, endBlock)</c>, so falling off the end of the body is
+        /// spelled exactly like leaving it. Emitting that branch literally runs the body once and
+        /// walks out — which is what every other backend has to work around too (C++ turns the
+        /// same edge into <c>continue;</c>, C# lets the emitted <c>foreach</c> header own
+        /// iteration). Saved and restored around each body so a nested loop classifies its edges
+        /// against the INNER loop while it is being emitted and the outer one afterwards.</para>
+        /// </summary>
+        private readonly Dictionary<BasicBlock, string> _foreachContinueLabels = new();
+
+        /// <summary>
+        /// Blocks a structured instruction has already written, so a surrounding walk does not
+        /// write them again.
+        ///
+        /// <para>⛔ <b>The For Each body was emitted TWICE</b> — once inlined by
+        /// <c>Visit(IRForEach)</c> and once as an ordinary labelled block, because
+        /// <c>ControlFlowGraph.Build</c> wires the body in as a CFG successor of the block holding
+        /// the instruction. That is the same defect <c>Try</c> had; <c>Visit(IRTryCatch)</c> fixed
+        /// it by marking <c>_visitedBlocks</c>, which is enough for
+        /// <see cref="GenerateBasicBlock"/> but NOT for <see cref="EmitRegionBody"/>, whose block
+        /// list is collected up front. A For Each inside a Try needs both, so both consult
+        /// this.</para>
+        /// </summary>
+        private readonly HashSet<BasicBlock> _consumedBlocks = new();
+
+        /// <summary>The slot spec for a For Each's enumerator.</summary>
+        private const string EnumeratorSpec = "class [mscorlib]System.Collections.IEnumerator";
+
         // ---- Instance-method state ----------------------------------------------------
         //
         // An instance method is handed `Me` in argument slot 0, which shifts EVERY declared
@@ -1561,6 +1621,9 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // The same per-method reset GenerateMethod does. Without it a Try inside a class
             // member would find no exception-handling state prepared for it.
             _syntheticLocals.Clear();
+            _foreachSlots.Clear();
+            _foreachContinueLabels.Clear();
+            _consumedBlocks.Clear();
             _regionBlocks = null;
             _regionIsFinally = false;
             _regionIsCatch = false;
@@ -1634,6 +1697,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             RegisterModuleGlobals();
 
             AllocateExceptionHandlingLocals(function);
+            AllocateForEachLocals(function);
             AllocateFieldStoreScratch(function);
             AllocateTemporaries(function);
         }
@@ -2061,8 +2125,12 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _currentStack = 0;
 
             // Exception-handling state is per METHOD: a region, its synthetic locals and its exit
-            // label never outlive the method they were emitted for.
+            // label never outlive the method they were emitted for. The same is true of the
+            // For Each tables — a slot index means nothing in another method's frame.
             _syntheticLocals.Clear();
+            _foreachSlots.Clear();
+            _foreachContinueLabels.Clear();
+            _consumedBlocks.Clear();
             _regionBlocks = null;
             _regionIsFinally = false;
             _regionIsCatch = false;
@@ -2090,6 +2158,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // MUST run before AllocateTemporaries: temp indices continue from _localIndices.Count,
             // and .locals init is written from these tables before any body instruction exists.
             AllocateExceptionHandlingLocals(function);
+            AllocateForEachLocals(function);
 
             // Allocate indices for temporaries
             AllocateTemporaries(function);
@@ -2207,6 +2276,61 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 var name = $"eh_result_{_methodExitResultLocal}";
                 _localIndices[name] = _methodExitResultLocal;
                 _syntheticLocals.Add((_methodExitResultLocal, IlTypeSpec(function.ReturnType), name));
+            }
+        }
+
+        /// <summary>
+        /// Reserves the two locals every <c>For Each</c> needs and <c>IRFunction.LocalVariables</c>
+        /// never lists: the loop VARIABLE and the enumerator.
+        ///
+        /// <para><b>Why a pre-pass, for the third time in this file.</b> <c>.locals init</c> is
+        /// written from these tables before the first body instruction is emitted, so a slot
+        /// discovered mid-emission cannot be declared. The old emitter took both slots from
+        /// <c>_localCounter++</c> — a counter that starts at 0 and is unrelated to
+        /// <c>_localIndices</c> — so the enumerator's <c>stloc.s 0</c> landed on the COLLECTION's
+        /// own slot and the loop variable's <c>stloc.s 1</c> on whatever happened to be next.
+        /// Same shape as the catch-variable defect, same fix.</para>
+        ///
+        /// <para>⛔ <b>Keyed by the INSTRUCTION, not the variable name.</b> Two loops in one
+        /// method may share a name and differ in element type
+        /// (<c>For Each n In ints</c> … <c>For Each n In names</c>); one slot for both would
+        /// declare <c>int32</c> and then store a string into it. The name is bound to the slot
+        /// only while that loop's body is being emitted — see <see cref="EmitForEachBody"/>.</para>
+        ///
+        /// <para>The name goes into <c>_declaredIdentifiers</c> here and stays there, so
+        /// <see cref="AllocateTemporaries"/> does not also hand the loop variable a temporary.</para>
+        /// </summary>
+        private void AllocateForEachLocals(IRFunction function)
+        {
+            var loops = function.Blocks
+                .SelectMany(b => b.Instructions)
+                .OfType<IRForEach>()
+                .ToList();
+            if (loops.Count == 0) return;
+
+            // `.locals init` names every slot, and two slots may not share a name. A loop
+            // variable that collides with a declared local — or with another loop's — is
+            // suffixed rather than renamed away, so the IL still reads like the source.
+            var printedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var local in function.LocalVariables) printedNames.Add(RawName(local.Name));
+
+            foreach (var forEach in loops)
+            {
+                if (forEach?.VariableName == null || _foreachSlots.ContainsKey(forEach)) continue;
+
+                var varIndex = _localIndices.Count;
+                _localIndices[$"fe_var_{varIndex}"] = varIndex;
+                var printed = RawName(forEach.VariableName);
+                if (!printedNames.Add(printed)) printed = $"{printed}_fe{varIndex}";
+                _syntheticLocals.Add((varIndex, IlTypeSpec(forEach.ElementType), SanitizeName(printed)));
+                _declaredIdentifiers.Add(forEach.VariableName);
+
+                var enumIndex = _localIndices.Count;
+                var enumName = $"fe_enum_{enumIndex}";
+                _localIndices[enumName] = enumIndex;
+                _syntheticLocals.Add((enumIndex, EnumeratorSpec, enumName));
+
+                _foreachSlots[forEach] = (varIndex, enumIndex);
             }
         }
 
@@ -4268,7 +4392,15 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
         public override void Visit(IRBranch branch)
         {
-            EmitRegionAwareBranch(branch.Target);
+            // ⛔ <c>Exit For</c> and the end of an ordinary iteration are the SAME branch to the
+            // SAME block in the IR — <c>IRBuilder</c> gives a loop's break and continue targets
+            // one block — and <c>IRBranch.IsLoopExit</c> is the only thing that tells them apart.
+            // C++ and JavaScript have both read it since task_4cc381f1; MSIL never did, so
+            // <c>Exit For</c> inside a <c>For Each</c> ran as <c>Continue For</c>: measured, a loop
+            // over 1,2,3,4 exiting at 3 totalled 7 instead of 3, from a program that ran clean.
+            // ⛔ It cannot be recovered positionally — an <c>If</c> in the body produces a merge
+            // block that branches to the same place and MUST stay an iteration.
+            EmitRegionAwareBranch(branch.Target, branch.IsLoopExit);
         }
 
         public override void Visit(IRConditionalBranch condBranch)
@@ -4278,6 +4410,17 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             var trueTarget = condBranch.TrueTarget;
             var falseTarget = condBranch.FalseTarget;
+
+            // An edge to a For Each's continuation, taken from inside its body, is the next
+            // ITERATION — and the loop head is always inside whatever region encloses it, so the
+            // region test below must not see this target at all. Without this arm an `If` inside
+            // a loop body branches out of the loop on its first true test.
+            if (IsIterationBranch(trueTarget, out var trueIterationHead))
+            {
+                WriteLine($"    brtrue {trueIterationHead}");
+                EmitRegionAwareBranch(falseTarget);
+                return;
+            }
 
             if (!LeavesRegion(trueTarget))
             {
@@ -4303,14 +4446,41 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _regionBlocks != null && target != null && !_regionBlocks.Contains(target);
 
         /// <summary>
+        /// True when a branch to <paramref name="target"/> is the end of a <c>For Each</c>
+        /// ITERATION rather than the end of the loop, giving the loop head to branch to.
+        ///
+        /// <para>Only ever true while that loop's body is being emitted — the entry is pushed and
+        /// popped around the body — so the identical branch AFTER the loop still goes to the
+        /// continuation.</para>
+        /// </summary>
+        private bool IsIterationBranch(BasicBlock target, out string loopHead)
+        {
+            loopHead = null;
+            return target != null && _foreachContinueLabels.TryGetValue(target, out loopHead);
+        }
+
+        /// <summary>
         /// An unconditional transfer to <paramref name="target"/>, spelled the way the CURRENT
         /// region allows: <c>br</c> within the region (or outside any), <c>leave</c> out of a
         /// try/catch, and <c>endfinally</c> out of a finally — where the target is implicit,
         /// because a finally resumes whatever unwinding or <c>leave</c> entered it and cannot
         /// choose its own destination.
         /// </summary>
-        private void EmitRegionAwareBranch(BasicBlock target)
+        /// <param name="isLoopExit">
+        /// True for the branch an <c>Exit For</c> emits, which targets the loop's continuation
+        /// exactly as the end of an iteration does and must NOT be redirected back to the head.
+        /// </param>
+        private void EmitRegionAwareBranch(BasicBlock target, bool isLoopExit = false)
         {
+            // Checked FIRST, and before the region test: the loop head is inside the region, so
+            // classifying this edge as one that leaves would emit `leave` out of a Try for what
+            // is only the next iteration of a loop inside it.
+            if (!isLoopExit && IsIterationBranch(target, out var iterationHead))
+            {
+                WriteLine($"    br {iterationHead}");
+                return;
+            }
+
             if (!LeavesRegion(target))
             {
                 WriteLine($"    br {SanitizeLabel(target.Name)}");
@@ -5458,6 +5628,12 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             foreach (var block in blocks)
             {
+                // A For Each inside this region writes its own body blocks when its instruction
+                // is visited. They are collected here as ordinary CFG successors, so without this
+                // they would be written a second time — "Duplicate label", the same failure a
+                // nested Try's arms produce. Marked as each block is taken, and the walk order is
+                // depth-first from the entry, so the loop's own block is always seen first.
+                if (!_consumedBlocks.Add(block)) continue;
                 _visitedBlocks?.Add(block);
                 WriteLine($"  {SanitizeLabel(block.Name)}:");
 
@@ -5584,68 +5760,180 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
         }
 
+        /// <summary>
+        /// A <c>For Each</c> in IL: an enumerator parked in a slot, <c>MoveNext</c> at the head,
+        /// <c>get_Current</c> into the loop variable's slot, and the body emitted ONCE with its
+        /// end-of-iteration branch pointed back at the head.
+        ///
+        /// <para>⛔ <b>Measured before, on <c>For Each n In l</c> over a
+        /// <c>List(Of Integer)</c></b> — InvalidProgramException, from THREE defects at once:
+        /// the enumerator's <c>stloc.s 0</c> overwrote the list's own local; the loop variable had
+        /// no slot anywhere, so <c>total = total + n</c> emitted <c>ldloc.1</c>,
+        /// <c>// WARNING: Unknown local 'n'</c>, <c>add</c> — an <c>add</c> with ONE operand; and
+        /// the whole body was then emitted a SECOND time as the labelled block
+        /// <c>foreach0body:</c>, because <c>ControlFlowGraph.Build</c> wires the body in as a CFG
+        /// successor and <see cref="GenerateBasicBlock"/> walks successors.</para>
+        ///
+        /// <para><b>The non-generic enumerator, deliberately.</b>
+        /// <c>IEnumerable::GetEnumerator</c> / <c>IEnumerator::MoveNext</c> /
+        /// <c>IEnumerator::get_Current</c> is the ONE spelling that serves every receiver this
+        /// backend can name — <c>List`1</c>, <c>Dictionary`2</c>, a vector array and
+        /// <c>String</c> all implement it — where <c>IEnumerable`1&lt;T&gt;</c> would need the
+        /// element type to be recoverable from the receiver, which it is not for an array or a
+        /// string. The cost is one <c>unbox.any</c> per iteration, which is also what makes the
+        /// element type explicit in the IL instead of inferred.</para>
+        ///
+        /// <para>⚠ <b>The enumerator is NOT disposed.</b> A C# <c>foreach</c> wraps the loop in
+        /// <c>try/finally</c> and calls <c>IDisposable::Dispose</c>; this does not. No collection
+        /// this backend can name has a disposal-sensitive enumerator, and adding a protected
+        /// region around every loop would put every <c>Return</c> inside one — the lowering
+        /// <c>Visit(IRReturn)</c> documents as the expensive path. Revisit when an iterator
+        /// method (<c>Yield</c>) becomes reachable here, where it would matter.</para>
+        ///
+        /// <para>⚠ <b><c>Exit For</c> and <c>Continue For</c> are indistinguishable in the IR</b>
+        /// and both arrive as a branch to the continuation block, so both lower to "next
+        /// iteration". That is an IRBuilder fact, not an MSIL one — <c>LoopContext(endBlock,
+        /// endBlock)</c> gives break and continue the same target — and the other backends divide
+        /// the same way: C++ and JavaScript also run <c>Exit For</c> as a continue, and C# runs it
+        /// as nothing at all. Fixing it means giving the node a break target, which every backend
+        /// reads.</para>
+        /// </summary>
         public override void Visit(IRForEach forEach)
         {
-            // MSIL foreach uses GetEnumerator pattern
-            var elemType = MapType(forEach.ElementType);
-            var varName = SanitizeName(forEach.VariableName);
-            var collectionVal = GetValueName(forEach.Collection);
-
-            var loopStart = $"foreach_start_{_labelCounter}";
-            var loopBody = $"foreach_body_{_labelCounter}";
-            var loopEnd = $"foreach_end_{_labelCounter}";
-            _labelCounter++;
-
-            WriteLine($"    // ForEach loop: {varName} in {collectionVal}");
-
-            // Get enumerator
-            EmitLoadValue(forEach.Collection);
-            WriteLine($"    callvirt instance class [mscorlib]System.Collections.IEnumerator [mscorlib]System.Collections.IEnumerable::GetEnumerator()");
-            var enumLocal = _localCounter++;
-            WriteLine($"    stloc.s {enumLocal}");
-            _currentStack--;
-
-            // Loop start - MoveNext check
-            WriteLine($"  {loopStart}:");
-            WriteLine($"    ldloc.s {enumLocal}");
-            WriteLine($"    callvirt instance bool [mscorlib]System.Collections.IEnumerator::MoveNext()");
-            WriteLine($"    brfalse.s {loopEnd}");
-            _currentStack++;
-            _currentStack--;
-
-            // Loop body - get Current
-            WriteLine($"  {loopBody}:");
-            WriteLine($"    ldloc.s {enumLocal}");
-            WriteLine($"    callvirt instance object [mscorlib]System.Collections.IEnumerator::get_Current()");
-            _currentStack++;
-
-            // Cast to element type if needed
-            if (elemType != "object")
+            if (forEach.BodyBlock == null || forEach.EndBlock == null)
             {
-                WriteLine($"    unbox.any {elemType}");
+                throw new ForeignFeatureException(
+                    "MSIL: a For Each with no body block or no continuation block cannot be "
+                    + "lowered. IRBuilder always creates both, so this is an emitter invariant "
+                    + "failure.");
             }
 
-            // Store in loop variable
-            var varLocal = _localCounter++;
-            _localIndices[varName] = varLocal;
-            WriteLine($"    stloc.s {varLocal}");
+            if (!_foreachSlots.TryGetValue(forEach, out var slots))
+            {
+                throw new ForeignFeatureException(
+                    "MSIL: this For Each has no reserved local slots. AllocateForEachLocals "
+                    + "reserves the loop variable and the enumerator for every loop in the "
+                    + "function before .locals init is written; taking a slot during emission is "
+                    + "what made the enumerator overwrite the collection's own local here before.");
+            }
+
+            var loopHead = $"foreach_next_{_labelCounter}";
+            var loopExit = $"foreach_done_{_labelCounter}";
+            _labelCounter++;
+
+            WriteLine($"    // ForEach loop: {SanitizeName(forEach.VariableName)} in {GetValueName(forEach.Collection)}");
+
+            EmitLoadValue(forEach.Collection);
+            WriteLine("    callvirt instance class [mscorlib]System.Collections.IEnumerator "
+                      + "[mscorlib]System.Collections.IEnumerable::GetEnumerator()");
+            EmitStloc(slots.EnumIndex);
             _currentStack--;
 
-            // Process body block
-            if (forEach.BodyBlock != null)
+            WriteLine($"  {loopHead}:");
+            EmitLdloc(slots.EnumIndex);
+            _currentStack++;
+            WriteLine("    callvirt instance bool [mscorlib]System.Collections.IEnumerator::MoveNext()");
+            WriteLine($"    brfalse {loopExit}");
+            _currentStack--;
+
+            EmitLdloc(slots.EnumIndex);
+            _currentStack++;
+            WriteLine("    callvirt instance object [mscorlib]System.Collections.IEnumerator::get_Current()");
+
+            // ⛔ IlTypeToken, not MapType: `unbox.any` takes a TOKEN, so `[mscorlib]System.Int32`
+            // and never `class`-prefixed. One instruction covers both halves — ECMA-335 III.4.33
+            // makes `unbox.any` on a reference type behave exactly as `castclass` — so the
+            // element type does not have to be classified here to be handled correctly.
+            var elementToken = IlTypeToken(forEach.ElementType);
+            if (elementToken != "[mscorlib]System.Object")
             {
-                foreach (var inst in forEach.BodyBlock.Instructions)
+                WriteLine($"    unbox.any {elementToken}");
+            }
+
+            EmitStloc(slots.VarIndex);
+            _currentStack--;
+
+            // ⚠ No `br {loopHead}` here. EmitForEachBody gives EVERY block it writes a transfer —
+            // its own terminator, or an explicit branch to the head when it has none — so a
+            // branch appended after the body is unreachable in every shape. The first version
+            // emitted one and the generated IL showed it: `br foreach_next_1` twice in a row.
+            EmitForEachBody(forEach, slots.VarIndex, loopHead);
+
+            WriteLine($"  {loopExit}:");
+
+            // The continuation, spelled the way the enclosing region allows. EmitForEachBody has
+            // already dropped this loop's redirect, so this is the real exit rather than another
+            // iteration — which is exactly why the branch is emitted here and not inside it.
+            EmitRegionAwareBranch(forEach.EndBlock);
+        }
+
+        /// <summary>
+        /// Emits every block of one <c>For Each</c> body, ONCE, with the loop variable's name
+        /// bound to its slot and the end-of-iteration edge redirected to the loop head.
+        ///
+        /// <para>Both bindings are saved and restored rather than assigned, which is what makes
+        /// nesting work: the inner loop's variable and its continuation are in scope only while
+        /// the inner body is being written, and the outer loop's come back afterwards. It is also
+        /// what SCOPES the loop variable — after <c>Next</c> the name resolves to whatever it
+        /// meant before, as it does in every other backend's emitted loop header.</para>
+        ///
+        /// <para>The body region stops at the continuation block, and a nested loop's body blocks
+        /// are reached as ordinary CFG successors from here — they are collected into this list
+        /// and then skipped, because the nested <c>Visit(IRForEach)</c> has already written them
+        /// by the time the list reaches them.</para>
+        /// </summary>
+        private void EmitForEachBody(IRForEach forEach, int varIndex, string loopHead)
+        {
+            var blocks = CollectRegionBlocks(
+                forEach.BodyBlock, new HashSet<BasicBlock> { forEach.EndBlock });
+
+            var hadName = _localIndices.TryGetValue(forEach.VariableName, out var previousIndex);
+            _localIndices[forEach.VariableName] = varIndex;
+
+            var hadRedirect = _foreachContinueLabels.TryGetValue(forEach.EndBlock, out var previousHead);
+            _foreachContinueLabels[forEach.EndBlock] = loopHead;
+
+            foreach (var block in blocks)
+            {
+                if (!_consumedBlocks.Add(block)) continue;
+                _visitedBlocks?.Add(block);
+                WriteLine($"  {SanitizeLabel(block.Name)}:");
+
+                foreach (var instruction in block.Instructions)
                 {
-                    if (inst is IRBranch or IRConditionalBranch) continue;
-                    inst.Accept(this);
+                    instruction.Accept(this);
+                }
+
+                // An IR block with no terminator falls through to the next block in source order.
+                // Inside a loop that is not expressible — the block emitted after it in this list
+                // is not necessarily its successor — so make the exit explicit.
+                //
+                // ⚠ MEASURED DEAD TODAY, AND KEPT ANYWAY. `IsTerminated` is false only for a block
+                // whose last instruction is a STRUCTURED one (a nested For Each, or a Try), because
+                // IRBuilder terminates every other block it makes. In both of those cases the
+                // structured visitor has already emitted an unconditional transfer, so what this
+                // writes is unreachable — visible in the generated IL as
+                // `br foreach1end` / `br foreach_next_1` back to back for a nested loop, and as a
+                // `br` sitting between a closing `catch { }` and the continuation's label for a Try.
+                // The mutant that deletes this line therefore SURVIVES.
+                //
+                // ⛔ It is kept because the deadness is a property of the OTHER visitors, not of
+                // this one: nothing here can check that the last instruction emitted a transfer.
+                // If that ever stops holding, control falls into this loop's own `loopExit:` label
+                // and the loop ends after one iteration — a clean run with a wrong answer, which is
+                // the failure class this whole family exists to close. An unreachable `br` costs two
+                // bytes; the alternative costs correctness silently.
+                if (!block.IsTerminated())
+                {
+                    WriteLine($"    br {loopHead}");
                 }
             }
 
-            // Jump back to loop start
-            WriteLine($"    br.s {loopStart}");
+            if (hadRedirect) _foreachContinueLabels[forEach.EndBlock] = previousHead;
+            else _foreachContinueLabels.Remove(forEach.EndBlock);
 
-            // Loop end
-            WriteLine($"  {loopEnd}:");
+            if (hadName) _localIndices[forEach.VariableName] = previousIndex;
+            else _localIndices.Remove(forEach.VariableName);
         }
 
         public override void Visit(IRIndexerAccess indexer)

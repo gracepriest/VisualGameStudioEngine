@@ -1857,8 +1857,8 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   feature starts working.
   ⛔ **Still out of scope on MSIL, each measured and each a different family**: `For Each` over a
   collection (the loop variable is never declared, the enumerator overwrites the list's own local,
-  and the body is emitted TWICE — `List(Of String)` fails identically), and `Dim x(n)` bounds
-  (C# throws IndexOutOfRange on the same program).
+  and the body is emitted TWICE — `List(Of String)` fails identically) — **FIXED 2026-09-20, see
+  the entry below** — and `Dim x(n)` bounds (C# throws IndexOutOfRange on the same program).
   ⭐ **`ABaseTypedParameter_IsAPreExistingMsilGap_Pinned` WENT RED**, which is what it was written
   for — MSIL now runs a base-typed parameter. Promoted to three backends, pin deleted.
   **Full suite in place: 195 / 6222 / 203 / 6620 against the 195 / 6190 / 203 / 6588 baseline at
@@ -1868,6 +1868,102 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   baseline strips parameterized arguments, so a raw `sort -u` reads 195 distinct names against
   its 170 and looks like 25 regressions. It is 3 bare names versus their 28 parameterized forms.
   Normalize, then compare.
+
+  ⚠ **`For Each` RUNS ON MSIL as of 2026-09-20** — `MsilForEachTests` (40 cases),
+  `MSILBackend.cs`: `AllocateForEachLocals`, `EmitForEachBody`, `Visit(IRForEach)`,
+  `EmitRegionAwareBranch`, `IsIterationBranch`,
+  `_foreachSlots`/`_foreachContinueLabels`/`_consumedBlocks`. Before: `InvalidProgramException`.
+  ⛔ **FOUR DEFECTS IN ONE CONSTRUCT, NOT ONE.**
+  - **(A)** the enumerator local came from `_localCounter++`, unrelated to `_localIndices`, so it
+    **overwrote the collection's own slot** — the same counter defect the catch-variable and
+    indexer sites already record.
+  - **(B)** the loop variable got **no `.locals` slot at all** — `IRBuilder` deliberately keeps it
+    out of `IRFunction.LocalVariables` ("the foreach statement declares it"), which is right for
+    the three text-emitting backends and leaves IL with no storage. Emitted
+    `// WARNING: Unknown local 'n'` and an `add` with ONE operand.
+  - **(C)** the body was **emitted TWICE** — `ControlFlowGraph.Build` wires `IRForEach.BodyBlock`
+    in as a CFG successor and `GenerateBasicBlock` walks successors. ⚠ **It is the same bug
+    Try/Catch had (~line 219), and `Visit(IRTryCatch)`'s `_visitedBlocks` fix is necessary but
+    NOT sufficient** — `EmitRegionBody` collects its block list UP FRONT, so a `For Each` inside
+    a `Try` needs both `_visitedBlocks` and `_consumedBlocks`.
+  - **(D)** ⛔ **`Exit For` ran as `Continue For`** — `IRBuilder` gives a loop's break and continue
+    targets ONE block and `IRBranch.IsLoopExit` is the only discriminator; C++ and JS have read it
+    since task_4cc381f1, MSIL never did. Measured on `{1,2,3,4}` exiting at 3: total **7** instead
+    of **3**, **from a program that ran clean**. A wrong answer, not a crash.
+  ⛔ **THE C# BACKEND IS WRONG ON FOUR OF THESE SHAPES**, so those four cases assert against
+  C++/JS instead of C#: `Exit For` in a `For Each` (correct 3, C# **10** — `Exit For` is a
+  **no-op on C#**); nested (60 vs 120); inside a `Try` (3 vs 10); as the last statement (1 vs 2).
+  Also `For Each n In Make()` — MSIL gives 7, **C# does not compile** (`CS0103 't0'`). `Exit Sub`
+  is ALSO a no-op on C#; a separate C#-backend family, not fixed here.
+  ⭐ **What the mutation sweep taught, worth recording as method.**
+  - **`a1`/`a2` killed DISJOINT sets summing to exactly 40, and so did `c2`/`c3`.** Mutated as one
+    site each, the 34-kill arm would have masked the 4-kill arm and the nested arm would have
+    masked the Try arm. Line-anchored splitting was load-bearing — the same lesson this file
+    already records for splitting a ternary.
+  - **`d6` killed by infinite loop** — every shape hit the harness's 30s timeout; that one mutant
+    took 17m21s.
+  - ⛔ **A mistyped `.locals` slot is INVISIBLE TO A ROUND TRIP.**
+    `a3-loopvar-type-from-collection` (the loop variable typed from the COLLECTION, not the
+    element) **assembles and prints the correct answer** — .NET Core does not verify IL for
+    fully-trusted code. Not cosmetic: **a reference-typed slot is a GC ROOT**, so the collector
+    traces it as an object pointer while it holds a raw integer. Latent, not absent. The FOURTH
+    property in this backend invisible at run time (the file already records the Select Case
+    default branch, the variable-less `Catch`'s `pop`, and the wrong overload); the remedy is the
+    same — an IL-TEXT pin via `MsilHarness.CompileToIl`.
+  - ⚠ **A test can prove its own name and still not discriminate.**
+    `ExitFor_InANestedForEach_LeavesOnlyTheInnerLoop` with inner `{5,10,15}` exiting at 15 totals
+    60 under BOTH exit and continue — nothing after the exit point for them to diverge on.
+    `{5,10,15,20}` makes them diverge (60 vs 140) and took the two `IsLoopExit` mutants
+    (`d3`/`d4`) from 3 kills of the fixture's 4 `Exit For` tests to 4. Found only because those
+    two mutants each killed 3 of 4 instead of all 4.
+  - **`e2-name-binding-never-withdrawn` needed a DIFFERENT shape than the obvious one.** Shadowing
+    a real LOCAL only exercises `EmitForEachBody`'s restore-to-prior-index arm; the
+    withdraw-with-no-prior-binding arm needs a name with no local meaning but a MODULE-level one,
+    so the read after the loop is satisfied only by falling through `_localIndices` to
+    `_moduleGlobals` — which happens only if the binding was genuinely removed. Measured:
+    `ldloc.1` (the stale loop slot) instead of `ldsfld int32 'Combined'::'n'`, printing the loop's
+    last element (2) instead of the module global (7).
+  ⚠ **TWO MUTANTS SURVIVE AND THE CODE IS KEPT, both unreachable by measurement.**
+  - **`d2`** — the iteration redirect in `Visit(IRConditionalBranch)`. Measured over 9 body
+    shapes: the redirect fires 13×, a `brtrue` targets a `For Each` continuation ZERO times,
+    because `IRBuilder` always gives an `If` a dedicated merge block and it is the merge block
+    that carries the edge. Kept: it is the structural sibling of the reachable
+    `LeavesRegion(trueTarget)` arm below it, and deleting it plants a silent wrong answer the day
+    anything threads `if0end`'s sole `br` into the condbr.
+  - **`d7`** — the fall-out branch for an unterminated body block. It IS reached (only when a
+    block ends with a nested `For Each` or a `Try`) but in both measured cases the structured
+    visitor has already emitted an unconditional transfer, so what it writes is unreachable.
+    Kept: that deadness is a property of the OTHER visitors, which nothing at this site can
+    check; if it lapses, control falls into `loopExit:` and the loop ends after one iteration.
+  ⚠ **Not fixed, out of family, each measured — added to the open list:**
+  - **MSIL: `For i = 1 To n` with NO explicit `As Type` throws `InvalidProgramException`
+    completely on its own**, no `For Each` involved. Root cause confirmed at source:
+    `IRBuilder.Visit(ForLoopNode)` (`IRBuilder.cs:3155-3166`) adds the induction variable to
+    `LocalVariables` ONLY inside `if (!string.IsNullOrEmpty(node.VariableType))` — the
+    inline-declaration arm — so the inferred form never gets a slot. **That is defect (B) of
+    this family, on the `IRFor` node.** Strong next candidate; `AllocateForEachLocals` is the
+    mechanism to copy.
+  - **C# backend: a property `Get` accessor never hoists locals declared inside a loop**
+    (`CS0103`), independent of loop construct.
+  - **C# backend: an emitted `foreach` reuses the source loop-variable name even when it collides
+    with an outer local** (`CS0136`).
+  - `For Each` over a `Dictionary` — front-end (C# `CS0030` too), not MSIL's.
+  - Two same-named `For Each` loops of DIFFERENT element types — the IR variable in the second
+    body carries the FIRST loop's type. Shared-IR/analyzer defect; only MSIL can observe it
+    because the text-emitting backends re-resolve the identifier. Deliberately not papered over
+    in the backend.
+  ⭐ **The top of the remaining MSIL worklist, so the next session starts here**: **`l(0) = 42` on
+  a List writes NOTHING and runs clean, printing the OLD value** — `MSILBackend` never overrides
+  `Visit(IRIndexerStore)` and `ICodeGenerator`'s is a `virtual { }` no-op, the same hazard that
+  lost `IRThrow`. `a(i) = v` is fine (`IRArrayStore` IS overridden) — only the collection indexer
+  path is silent.
+  **18 of 20 mutants killed, 2 kept as unreachable-with-recorded-reason, 0 build breaks.** The
+  two new tests each killed exactly one mutant — the one written for it, no collateral.
+  **Full suite in place: 195 / 6262 / 203 / 6660 against the master `7ce1200` baseline
+  195 / 6222 / 203 / 6620** — +40 passed, +40 total, +0 failed; 195 reported = 195 anchored
+  lines, 170 normalized failing names, `diff` clean; nothing new, nothing newly passing.
+  Filtered `FullyQualifiedName~Msil` reference: `Failed: 0, Passed: 228`.
+
   ⚠ **Narrowing shapes are refused by the SEMANTIC ANALYZER, before any of this** —
   `Public N As Single = 1.5 + 1.0` is "Cannot assign value of type 'Double' to variable of type
   'Single'", before and after. Not a folding gap.
