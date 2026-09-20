@@ -40,8 +40,11 @@ game-template float→int break, chip `task_9e0da8ab`, is fixed there is UNMEASU
 
 Every one of those five product changes was implemented test-first by a fresh subagent, then
 spec-reviewed and code-quality-reviewed (Tasks 1–3 approved; Task 4's FIX ROUND is on disk but its
-re-review has not happened — see step 2). All mutant text is restored (`git grep MUTANT_` = 0) and no
-`dotnet`/`testhost` process was running at handoff. **Nothing is committed on purpose:** the plan's
+re-review has not happened — see step 2). All mutant text is restored (`git grep MUTANT_` = 0).
+⚠ **A `--no-build` regression run from the old session may still be alive at handoff** (its Task 4
+implementer was mid-`CppCollectionTests`, ~30 min, when this was written). Before ANY build:
+`Get-Process dotnet, testhost` and either wait for it or stop it by WORKTREE PATH, one PID at a time
+(never by project name) — a rebuild overwrites DLLs a running test host has loaded. **Nothing is committed on purpose:** the plan's
 rule is one task → one commit → one full-suite gate (Task 6).
 
 ### What each task measured (the numbers a new run must reproduce)
