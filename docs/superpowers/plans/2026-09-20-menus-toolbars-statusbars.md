@@ -28,7 +28,7 @@ dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --no
 - Modify `BasicLang/Parser.cs` — `New` expression branch (~`:4280-4298`), `Dim … As New` branch (~`:2504-2525`).
 - Modify `BasicLang/SemanticAnalyzer.cs` — `Visit(CollectionInitializerNode)` (~`:6637-6667`); new helpers `IsUnresolvableNetName`, `CheckTypedLiteralElement`.
 - Modify `BasicLang/IRBuilder.cs` — `Visit(CollectionInitializerNode)` (~`:1893-1922`) coerces each element via `CoerceToDeclaredType` (`:3501`).
-- Modify `BasicLang/JavaScriptBackend.cs` — `Visit(IRArrayAlloc)` / `Visit(IRArrayStore)` (`:2379-2380`), `Expr` default arm (`:747-748`).
+- Modify `BasicLang/JavaScriptBackend.cs` — `Visit(IRArrayAlloc)` / `Visit(IRArrayStore)` (`:2379-2380`), `Expr` default arm (`:747-748`), and `Visit(IRStore)` (`:2193-2197` — the THIRD arm, found by plan review pass 3).
 - Modify `BasicLang/ASTPrettyPrinter.cs` — `Visit(CollectionInitializerNode)` (`:827`).
 - Create `VisualGameStudio.Tests/Compiler/TypedArrayLiteralTests.cs` (parser + analyzer + C# emission + untyped pins), `VisualGameStudio.Tests/Compiler/TypedArrayLiteralExecutionTests.cs` (`[Category("Integration")]`: C# run, C++ run, JS run, the M4/M3/two-file CLI rows).
 
@@ -40,7 +40,7 @@ dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --no
 - Create `VisualGameStudio.Tests/Shell/FormSchematicPinTests.cs` — enum-driven pairwise frame hash + glyph pins.
 
 **24c — rows, format, emission, bands**
-- Modify `FormControlCatalog.cs` (seven rows), `DesignDiagnostic.cs` (BL8030), `Serialization/FormDocumentReader.cs`, `Serialization/FormDocumentWriter.cs`, `FormDocument.cs` (`FormClipboard`, `RenumberTabIndexes`), `RegionWriter.cs`, `FormAssetEmitter.cs`, `Recognizer/WinFormsDialect.cs`; `FormCanvasTransform.cs` (`Layout(document, selected)`, bands), `FormCanvasControl.cs` (band arms), `FormPlacement.cs` (Docked branch, `PlaceItem`), `FormToolboxViewModel.cs` (category), `FormPropertyGridViewModel.cs`, `CodeEditorDocumentViewModel.cs` (`TrayDrop`/canvas drop refusal of an Item kind).
+- Modify `FormControlCatalog.cs` (seven rows), `DesignDiagnostic.cs` (BL8030), `Serialization/FormDocumentReader.cs`, `Serialization/FormDocumentWriter.cs`, `FormDocument.cs` (`FormClipboard`, `RenumberTabIndexes`), `RegionWriter.cs`, `FormAssetEmitter.cs`, `Recognizer/WinFormsDialect.cs`; `VisualGameStudio.Shell/Controls/FormCanvasTransform.cs` (⚠ in `Controls/`, NOT `ViewModels/Designer/` — do not create a second file; `Layout(document, selected)`, bands), `FormCanvasControl.cs` (band arms), `FormPlacement.cs` (Docked branch, `PlaceItem`), `FormToolboxViewModel.cs` (category), `FormPropertyGridViewModel.cs`, `CodeEditorDocumentViewModel.cs` (`TrayDrop`/canvas drop refusal of an Item kind).
 - Create `VisualGameStudio.Tests/Compiler/FormStripDocumentTests.cs`, `FormStripEmissionTests.cs`, `FormStripRecognizerTests.cs`; `VisualGameStudio.Tests/Shell/FormStripLayoutTests.cs`.
 
 **24d — the editing surface**
@@ -122,15 +122,42 @@ public class TypedArrayLiteralTests
         Assert.That(FirstInitializer(program), Is.TypeOf<NewExpressionNode>());
     }
 
+    [Test]
+    public void NewTypeParensBraces_InACallArgument_IsTheLiteral()
+    {
+        // The motivating shape — `Items.AddRange(New ToolStripItem() {…})` (spec §9, M4): after the
+        // literal returns, control goes back to the enclosing call's argument loop, which must see `)`.
+        var program = Parse("Foo(New Integer() {1, 2})", out var parser);
+        Assert.That(parser.Errors, Is.Empty, string.Join("; ", parser.Errors.Select(e => e.Message)));
+        var statement = ((SubroutineNode)program.Declarations[0]).Body.Statements[0];
+        var call = (CallExpressionNode)((ExpressionStatementNode)statement).Expression;   // ⚠ real node names — see below
+        var literal = (CollectionInitializerNode)call.Arguments[0];
+        Assert.That(literal.ElementType?.Name, Is.EqualTo("Integer"));
+        Assert.That(literal.Elements, Has.Count.EqualTo(2));
+    }
+
+    [Test]
+    public void NewTypeParensBraces_Nests()
+    {
+        var program = Parse("Dim rows() As Object = New Object() {New Integer() {1, 2}}", out var parser);
+        Assert.That(parser.Errors, Is.Empty);
+        var outer = (CollectionInitializerNode)FirstInitializer(program);
+        Assert.That(outer.ElementType?.Name, Is.EqualTo("Object"));
+        Assert.That(((CollectionInitializerNode)outer.Elements[0]).ElementType?.Name, Is.EqualTo("Integer"));
+    }
+
     [TestCase("Dim items() As Integer = New Integer {1, 2}", "New Integer() {")]
     [TestCase("Dim items() As Integer = New Integer(2) {1, 2, 3}", "the initializer sets the size")]
     [TestCase("Dim items As New Integer() {1, 2}", "Dim items() As Integer = New Integer() {")]
     [TestCase("Dim items As New Integer {1, 2}", "Dim items() As Integer = New Integer() {")]
+    [TestCase("Dim items() As Integer = New List(Of Integer) {1}", "New List(Of Integer)() {")]   // generic args survive
     public void TheThreeRefusals_NameTheFix(string body, string expectedInMessage)
     {
         Parse(body, out var parser);
         Assert.That(parser.Errors, Is.Not.Empty, "expected a parse refusal");
-        Assert.That(string.Join("\n", parser.Errors.Select(e => e.Message)), Does.Contain(expectedInMessage));
+        // The FIRST error is the one the IDE shows (ParserErrorTests.cs:31) — a join would let a
+        // spurious second error after Synchronize pass unnoticed.
+        Assert.That(parser.Errors[0].Message, Does.Contain(expectedInMessage));
     }
 }
 ```
@@ -156,7 +183,7 @@ public class TypedArrayLiteralTests
                     {
                         throw new ParseException(
                             "An array creation with an initializer needs its parentheses: write `New " +
-                            $"{newExpr.Type.Name}() {{…}}`", Peek(), "Add `()` after the type name.");
+                            $"{newExpr.Type}() {{…}}`", Peek(), "Add `()` after the type name.");
                     }
 
                     if (newExpr.Arguments.Count > 0)
@@ -164,7 +191,7 @@ public class TypedArrayLiteralTests
                         // ⚠ The spec's phrase, and the test's: "the initializer sets the size".
                         throw new ParseException(
                             "An array creation with an initializer cannot also state a size — the " +
-                            $"initializer sets the size; write `New {newExpr.Type.Name}() {{…}}` (VB's " +
+                            $"initializer sets the size; write `New {newExpr.Type}() {{…}}` (VB's " +
                             "`New T(n) {…}` names an upper bound, and this compiler's sizes are element counts)",
                             Peek(), "Remove the size.");
                     }
@@ -175,7 +202,7 @@ public class TypedArrayLiteralTests
                 return newExpr;
 ```
 
-where `sawParens` is a `bool` set to true inside the existing `if (Match(TokenType.LeftParen))` block (declare `var sawParens = false;` before it), and:
+where `sawParens` is a `bool` set to true inside the existing `if (Match(TokenType.LeftParen))` block (declare `var sawParens = false;` before it). ⚠ The messages interpolate the `TypeReference` ITSELF (its `ToString()`, `ASTNodes.cs:274-279`), never `.Name`: `Name` is the bare identifier and drops generic arguments, so `New List(Of Integer) {1}` would otherwise be told to write `New List() {…}` — a different type (code-quality review of Task 1). And:
 
 ```csharp
         /// <summary>The brace list of `New T() { … }`, typed by T (spec §9).</summary>
@@ -207,8 +234,8 @@ where `sawParens` is a `bool` set to true inside the existing `if (Match(TokenTy
                     if (Check(TokenType.LeftBrace))
                     {
                         throw new ParseException(
-                            $"`Dim {node.Name} As New {newExpr.Type.Name}() {{…}}` is not a form: write " +
-                            $"`Dim {node.Name}() As {newExpr.Type.Name} = New {newExpr.Type.Name}() {{…}}`",
+                            $"`Dim {node.Name} As New {newExpr.Type}() {{…}}` is not a form: write " +
+                            $"`Dim {node.Name}() As {newExpr.Type} = New {newExpr.Type}() {{…}}`",
                             Peek(), "Move the initializer after `=`.");
                     }
 ```
@@ -430,7 +457,7 @@ Tests (one `[Test]` each, names as given). ⛔ Elements are declared with `As Ne
 
 ### Task 4: The JavaScript backend — the missing array arms
 
-**Files:** Modify `BasicLang/JavaScriptBackend.cs:2379-2380` and the `Expr` switch (`:747-748`); Test: `TypedArrayLiteralExecutionTests.cs` (new, `[Category("Integration")]`).
+**Files:** Modify `BasicLang/JavaScriptBackend.cs:2379-2380`, the `Expr` switch (`:747-748`) and `Visit(IRStore)` (`:2193-2197`); Test: `TypedArrayLiteralExecutionTests.cs` (new, `[Category("Integration")]`).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -448,23 +475,35 @@ public class TypedArrayLiteralExecutionTests
 
     private const string SumTyped = "Sub Main()\nDim a() As Integer = New Integer() {1, 2, 3}\nDim total As Integer = 0\nFor Each x As Integer In a\ntotal = total + x\nNext\nConsole.WriteLine(\"SUM \" & total)\nEnd Sub";
     private const string SumBare  = "Sub Main()\nDim a() As Integer = {1, 2, 3}\nDim total As Integer = 0\nFor Each x As Integer In a\ntotal = total + x\nNext\nConsole.WriteLine(\"SUM \" & total)\nEnd Sub";
-    private const string SumDouble = "Sub Main()\nDim i As Integer = 2\nDim a() As Double = New Double() {1, i}\nDim total As Double = 0\nFor Each x As Double In a\ntotal = total + x\nNext\nConsole.WriteLine(\"SUM \" & total)\nEnd Sub";
+    // ⚠ The Double program prints the NUMBER ALONE. The C++ backend DELIBERATELY refuses floating-point
+    // string concatenation (CppCodeGenerator.cs:2192-2198 — `StringifyForText` has no Single/Double arm;
+    // :2245-2277 — `"SUM " & aDouble` becomes `std::string("SUM ") + aDouble`, the intended build break),
+    // while its print arm formats a Double .NET-style (CppBclEndToEndTests.cs:698-710 → `19.99`).
+    // C# prints `3` for 3.0 and node prints `3`, so one expected string serves all three.
+    private const string SumDouble = "Sub Main()\nDim i As Integer = 2\nDim a() As Double = New Double() {1, i}\nDim total As Double = 0\nFor Each x As Double In a\ntotal = total + x\nNext\nConsole.WriteLine(total)\nEnd Sub";
 
-    [TestCase(SumTyped, "SUM 6"), TestCase(SumBare, "SUM 6"), TestCase(SumDouble, "SUM 3")]
+    [TestCase(SumTyped, "SUM 6"), TestCase(SumBare, "SUM 6"), TestCase(SumDouble, "3")]
     public void JavaScript_RunsTheLiteral(string source, string expected)
     {
         RequireNode();
-        Assert.That(JavaScriptExecutionTests.RunJs(source), Is.EqualTo(expected));
+        // ⛔ BOTH routes. `RunJs` compiles through `JsTestSupport.Compile`, which runs NO optimizer pass,
+        // while every shipping route runs `AddStandardPasses()` unconditionally (JsTestSupport.cs:
+        // 101-118 says so in its own doc); the new `Expr` arm's `Bound()` branch depends on the alloc
+        // still sitting in block.Instructions after those passes, which only the optimized run shows
+        // (CLAUDE.md: never the non-optimizing helper alone).
+        Assert.That(JavaScriptExecutionTests.RunJs(source), Is.EqualTo(expected), "non-optimized");
+        Assert.That(JavaScriptExecutionTests.RunNodeScript(JsTestSupport.CompileOptimized(source)).Trim(),
+            Is.EqualTo(expected), "optimized — the IR a user gets");
     }
 
-    [TestCase(SumTyped, "SUM 6"), TestCase(SumDouble, "SUM 3")]
+    [TestCase(SumTyped, "SUM 6"), TestCase(SumDouble, "3")]
     public void CSharp_RunsTheLiteral(string source, string expected)
     {
         var csharp = WinFormsCatalogSweepTests.CompileToCSharp(source);   // the real CLI, optimizer on
         Assert.That(VisualGameStudio.Tests.Native.CSharpRun.CompileAndRun(csharp).Trim(), Is.EqualTo(expected));
     }
 
-    [TestCase(SumTyped, "SUM 6"), TestCase(SumDouble, "SUM 3")]
+    [TestCase(SumTyped, "SUM 6"), TestCase(SumDouble, "3")]
     public void Cpp_RunsTheLiteral(string source, string expected)
     {
         Assert.That(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(source)).Trim(), Is.EqualTo(expected));
@@ -472,9 +511,9 @@ public class TypedArrayLiteralExecutionTests
 }
 ```
 
-⚠ `WinFormsCatalogSweepTests.CompileToCSharp` writes a `SweepForm.bas` and compiles it; its output file is `SweepForm.cs` — fine for a Module-less `Sub Main`; if the CLI needs a class, wrap in `Public Class Prog … Public Shared Sub Main()` as the JS scratch measurement did. ⚠ `JavaScriptExecutionTests.RunJs` is `internal static` and `Assert.Ignore`s without node — `RequireNode()` runs first so this fixture fails instead. ⚠ `BclE2E.CompileRun` ignores without a C++ compiler; this box has MSVC.
+⚠ `WinFormsCatalogSweepTests.CompileToCSharp` writes a `SweepForm.bas` and compiles it; its output file is `SweepForm.cs` — fine for a Module-less `Sub Main`; if the CLI needs a class, wrap in `Public Class Prog … Public Shared Sub Main()` as the JS scratch measurement did. ⚠ `JavaScriptExecutionTests.RunJs` is `internal static` and `Assert.Ignore`s without node — `RequireNode()` runs first so this fixture fails instead. ⚠ `JsTestSupport.CompileOptimized` is at `JsTestSupport.cs:119-129` and `RunNodeScript` beside `RunJs` (`JavaScriptExecutionTests.cs:26-33`) — check their accessibility and whether `RunNodeScript` trims before relying on the `.Trim()`. ⚠ `BclE2E.CompileRun` ignores without a C++ compiler; this box has MSVC.
 
-- [ ] **Step 2: Run** the JS rows → `NotSupportedException … IRArrayAlloc` (the arm that has never run). The C#/C++ rows should already pass (the lowering is shared) — if the C# row fails on `New Double()`, Task 3's coercion is wrong.
+- [ ] **Step 2: Run** the JS rows → `NotSupportedException … IRArrayAlloc` (the arm that has never run). ⚠ After the two array arms land they STILL throw — `IRAlloca (as an expression)` — because of the THIRD arm Step 3 names; that exception fires before any JS text exists, so at this point a `NotYet` is a missing arm, never a codegen defect to read the output for. The C# rows should already pass (the lowering is shared) — if the C# row fails on `New Double()`, Task 3's coercion is wrong. The C++ `SumTyped` row passes today (`CppCollectionTests.cs:461-475` runs the same bare-literal shape); the C++ Double row is why `SumDouble` prints the number alone (its note above) — a C++ build failure on it means the concat crept back, not that the IR is wrong.
 
 - [ ] **Step 3: Implement** in `JavaScriptBackend.cs`. Replace the two `NotYet` visitors (`:2379-2380`):
 
@@ -499,7 +538,27 @@ and in the `Expr` switch before `default:`:
                     return Bound(alloc) ? SanitizeName(alloc.Name) : ArrayAlloc(alloc);
 ```
 
-⚠ `Bind(IRValue, string)` exists at `:1513`; it declares a `const` when the name is not a declared local, or assigns when it is (`:1516-1522`) — which is what makes `Dim a() As Integer = {…}` work whether or not `TryRenameToVariable` renamed the alloc temp to `a`. If the JS row still fails, print the generated JS (`JsTestSupport.Compile(source)`) and read it before touching anything else.
+**The THIRD arm** (plan review pass 3, verified against the code). An array-typed local WITH an initializer lowers to `IRAlloca a_addr` + `IRStore(value, a_addr)` + `IRAssignment(a, value)` (`IRBuilder.cs:643-687`, `needsMemory = varType.Kind == TypeKind.Array`) — for the typed literal and the bare `{1, 2, 3}` alike (no JS fixture has ever compiled either shape). `Visit(IRStore)` (`:2193-2197`) renders `Expr(store.Address)`; `IRAlloca` derives from `IRValue`, not `IRVariable` (`IRNodes.cs:347`), and `Expr` has no arm for it, so the store throws `NotYet("IRAlloca (as an expression)")`. Replace `Visit(IRStore)` with:
+
+```csharp
+        public void Visit(IRStore store)
+        {
+            // Task 24a. An array-typed local with an initializer lowers to IRAlloca `a_addr` +
+            // IRStore(value, a_addr) + IRAssignment(a, value) (IRBuilder.cs:643-687). The alloca is a
+            // memory-model artefact this backend has no counterpart for (`Visit(IRAlloca)` is already a
+            // no-op), and the IRAssignment that follows ALWAYS carries the value: TryRenameToVariable
+            // (IRBuilder.cs:237-254) renames only IRCall/IRAwait/IRBinaryOp/IRUnaryOp/IRCompare, never
+            // an IRArrayAlloc. Rendering the address threw NotYet("IRAlloca (as an expression)") before
+            // any JS existed. The C# backend renders the alloca as its variable (CSharpBackend.cs:
+            // 2994-3005) and lives with a duplicate assignment; skipping the store is the choice that
+            // does not depend on WHERE this backend declares the local.
+            if (store.Address is IRAlloca) return;
+
+            Line($"{Expr(store.Address)} = {Expr(store.Value)};");
+        }
+```
+
+⚠ `Bind(IRValue, string)` exists at `:1513`; it declares a `const` when the name is not a declared local, or assigns when it is (`:1516-1522`). `TryRenameToVariable` never renames an `IRArrayAlloc`, so `a` always arrives through the `IRAssignment` and `Bind` always declares `const t1` — that is the one case that occurs. If a JS row still fails AFTER all three arms, print the generated JS (`JsTestSupport.Compile(source)` AND `CompileOptimized`) and read it before touching anything else; a `NotYet` at that point names a FOURTH arm — report it, do not guess at it.
 
 - [ ] **Step 4: Run** the fixture → green on all three backends. Run `--filter "FullyQualifiedName~JavaScriptExecutionTests|FullyQualifiedName~JavaScriptArrayTests"` → still green.
 
@@ -545,7 +604,7 @@ End Class
 
 - [ ] **Step 2: Run** → the first two fail today only if Tasks 1–3 are incomplete; the two-file row fails if the predicate was spelled without `IsUserDefinedTypeName`. All three must be green at the end.
 
-- [ ] **Step 3: Mutants (kill each, revert each):** (a) parser: drop the `Arguments.Count > 0` refusal → `TheThreeRefusals` fails; (b) analyzer: replace `WidensTo` with `target.IsAssignableFrom` → `RefusesNarrowing` fails; (c) analyzer: drop `!IsUserDefinedTypeName` from the predicate → the two-file row fails; (d) IR: drop the coercion → the lowering test fails; (e) JS: make the `Expr` arm always render `new Array(n)` → the C++/C# rows stay green and `JavaScript_RunsTheLiteral(SumTyped)` prints `SUM 0` — this is the "second empty array" trap; (f) JS: remove the `IRArrayStore` arm → `SumBare` throws.
+- [ ] **Step 3: Mutants (kill each, revert each):** (a) parser: drop the `Arguments.Count > 0` refusal → `TheThreeRefusals` fails; (b) analyzer: replace `WidensTo` with `target.IsAssignableFrom` → `RefusesNarrowing` fails; (c) analyzer: drop `!IsUserDefinedTypeName` from the predicate → the two-file row fails; (d) IR: drop the coercion → the lowering test fails; (e) JS: make the `Expr` arm always render `new Array(n)` → the C++/C# rows stay green and `JavaScript_RunsTheLiteral(SumTyped)` prints anything but `SUM 6` (expect `SUM NaN`: `for…of` over three holes sums `undefined`) — this is the "second empty array" trap; (f) JS: remove the `IRArrayStore` arm → `SumBare` throws; (g) JS: remove the `store.Address is IRAlloca` guard → all three JS rows throw `NotYet … IRAlloca (as an expression)`.
 
 ### Task 6: Pretty printer, gate, commit 24a
 
@@ -597,7 +656,7 @@ public sealed record FormItemRule(IReadOnlyList<string> Kinds, string Add)
 }
 ```
 
-Then on `FormControlDef`: remove the positional `bool IsComponent = false` parameter (all four rows pass it BY NAME — `:757/:779/:789/:797` — so change those four to `Place: FormPlace.Tray`), add after `WebScript`:
+Then on `FormControlDef`: remove the positional `bool IsComponent = false` parameter (all four rows pass it BY NAME — `:757/:779/:789/:797` — so change those four to `Place: FormPlace.Tray`; ⚠ also delete or re-home the orphaned `<param name="IsComponent">` doc comment at `:398-402`, or CS1572 warns on every build), add after `WebScript`:
 
 ```csharp
     FormPlace Place = FormPlace.Positioned,
@@ -689,7 +748,7 @@ internal static class FormCatalogShapes
 
 - [ ] **Step 2: Move the gates onto it**, one at a time, running each after:
   - `WinFormsCatalogSweepTests.EveryProperty_OfEveryControl_…` (`:143-162`): replace the hand-built control with `var control = FormCatalogShapes.Canonical(form, definition, "ctl");` then the property loop. Same in `TheDefaultEvent_OfEveryControl_…` (`:237` onward — the enum sweep sits at `:184-218` in between). The enum sweep: `Canonical(form, definition, $"ctl{i}", hostId: $"ctl{i}Host")` per value.
-  - `FormCanvasRenderTests.DocumentWith(kind)`: `FormCatalogShapes.Canonical(document, FormControlCatalog.Find(kind)!, SharedId, hostId: SharedId, geometry: new PixelGeometry { X = 20, Y = 20, Width = 140, Height = 40 })`; `EveryControlKindRendersDistinctly` filter becomes `d.SupportsTarget(WinForms) && d.Place != FormPlace.Tray && d.Place != FormPlace.Item` (items leave the hash — spec §7).
+  - `FormCanvasRenderTests.DocumentWith(kind)` (⚠ this fixture is in namespace `VisualGameStudio.Tests.Shell` and the helper in `VisualGameStudio.Tests.Compiler` — add `using VisualGameStudio.Tests.Compiler;`): `FormCatalogShapes.Canonical(document, FormControlCatalog.Find(kind)!, SharedId, hostId: SharedId, geometry: new PixelGeometry { X = 20, Y = 20, Width = 140, Height = 40 })`; `EveryControlKindRendersDistinctly` filter becomes `d.SupportsTarget(WinForms) && d.Place != FormPlace.Tray && d.Place != FormPlace.Item` (items leave the hash — spec §7).
   - `FormRetargetTests.EveryCatalogKind_Retargets_…`: build with `Canonical(source, definition, "c")`, locate the crossed control with `FormCatalogShapes.Locate(result.Document, definition)`, and scope `reportedLost` to messages containing `'c.`, i.e. `.Where(m => m.Contains("'c."))` before the `Single` lookup.
 - [ ] **Step 3: Run** the three fixtures (`WinFormsCatalogSweepTests` is Integration: run it explicitly) → green with today's rows (no behaviour change yet).
 
@@ -734,10 +793,10 @@ public class FormSchematicPinTests
 }
 ```
 
-`RenderSchematicForTest` is a `public static` helper on `FormCanvasControl` that creates a headless `Window` hosting a `FormCanvasControl` with a `SchematicOverride`, renders, and hashes the frame (reuse `FormCanvasRenderTests.RenderHash`'s body). ⛔ PUBLIC, and `FormToolboxViewModel.GlyphFor` becomes `public static` too: the Shell grants NO `InternalsVisibleTo` to the test project, by convention (the only IVT in the repo is BasicLang's; `CodeEditorDocumentView.axaml.cs:770` records the "public seams, never internal+IVT" rule, and no test calls `GlyphFor` today — the glyph gates read the public `FormToolboxItem.Glyph`).
+⚠ The fixture lives in `VisualGameStudio.Tests.Shell` and needs `using VisualGameStudio.Shell.ViewModels.Designer;` (`GlyphFor`), `using VisualGameStudio.Shell.Controls;` (`FormCanvasControl`), `using Avalonia;` (`Rect`) and `using Avalonia.Headless.NUnit;`. `RenderSchematicForTest` is a `public static` helper on `FormCanvasControl` that creates a headless `Window` hosting a `FormCanvasControl` with a `SchematicOverride`, renders, and hashes the frame (reuse `FormCanvasRenderTests.RenderHash`'s body). ⛔ PUBLIC, and `FormToolboxViewModel.GlyphFor` becomes `public static` too: the Shell grants NO `InternalsVisibleTo` to the test project, by convention (the only IVT in the repo is BasicLang's; `CodeEditorDocumentView.axaml.cs:770` records the "public seams, never internal+IVT" rule, and no test calls `GlyphFor` today — the glyph gates read the public `FormToolboxItem.Glyph`).
 
 - [ ] **Step 2: Run** → the glyph test fails (seven `?`), the paint test fails (seven schematics fall to the default arm and hash alike).
-- [ ] **Step 3: Implement.** Extract from `DrawControl` everything from `var labelOrigin = …` (`FormCanvasControl.cs:1443`) THROUGH the post-switch label draw (`:1881-1889`) into `private void DrawSchematic(DrawingContext context, FormSchematic schematic, Rect bounds, string label, IBrush face, IBrush client, IBrush ink)` — the `switch (schematic)` verbatim, AND the label draw after it — and have `DrawControl` call it. ⛔ The seam OWNS the post-switch label draw, because `labelOrigin` is a local declared before the switch and MUTATED by arms (Button centres it at `:1459-1461`, Check/Radio move it past the glyph at `:1490`) and the post-switch draw consumes the mutated value; leaving that draw in `DrawControl` would paint every Button caption top-left and every CheckBox caption over its tick, from a green suite. The three band arms `return` before the label draw — a band draws NO caption (spec §6; a strip's id as a caption would be the only pixel a render gate sees). Add the seven arms with distinct shapes: `MenuBar` (a flat band with a 1px bottom rule), `ToolBar` (a band with a left grip of two vertical lines), `StatusBar` (a band with a 1px top rule and a sizing-grip triangle bottom-right), `MenuItem` (the caption, with a 2px left pad, no box), `Separator` (a 1px vertical line, or horizontal when `bounds.Width > bounds.Height`), `ToolButton` (a small raised box with the caption), `StatusLabel` (caption at left). ⛔ Bands draw NO caption (spec §6). Add the seven `GlyphFor` arms: `MenuBar => "≡_"`, `ToolBar => "[▸]"`, `StatusBar => "_≡"`, `MenuItem => "≡"`, `Separator => "—"`, `ToolButton => "[▸"`, `StatusLabel => "_A"` — distinct from every existing mark (run the glyph test) — and make `GlyphFor` `public static`. Add `public static string RenderSchematicForTest(FormSchematic, Rect, string)` (PUBLIC — see Step 1) and a `SchematicOverride` used only when non-null.
+- [ ] **Step 3: Implement.** Extract from `DrawControl` everything from `var labelOrigin = …` (`FormCanvasControl.cs:1443`) THROUGH the post-switch label draw (`:1881-1889`) into `private void DrawSchematic(DrawingContext context, FormSchematic schematic, Rect bounds, string label, IBrush face, IBrush client, IBrush ink)` — the `switch (schematic)` verbatim, AND the label draw after it — and have `DrawControl` call it. ⛔ The seam OWNS the post-switch label draw, because `labelOrigin` is a local declared before the switch and MUTATED by arms (Button centres it at `:1459-1461`, Check/Radio move it past the glyph at `:1490`) and the post-switch draw consumes the mutated value; leaving that draw in `DrawControl` would paint every Button caption top-left and every CheckBox caption over its tick, from a green suite. The three band arms `return` before the label draw — a band draws NO caption (spec §6; a strip's id as a caption would be the only pixel a render gate sees). Add the seven arms with distinct shapes: `MenuBar` (a flat band with a 1px bottom rule), `ToolBar` (a band with a left grip of two vertical lines), `StatusBar` (a band with a 1px top rule and a sizing-grip triangle bottom-right), `MenuItem` (a `client`-filled band behind the caption, no border, caption inset 8px — ⚠ NOT "the caption with a 2px pad, no box": that is the existing `Text` arm but for a 2px shift, and the pairwise pin refuses it), `Separator` (a 1px vertical line, or horizontal when `bounds.Width > bounds.Height`), `ToolButton` (a small raised box with the caption), `StatusLabel` (the caption vertically CENTRED, with a 1px `ink` rule down the left edge — the status-panel divider; ⚠ "caption at left" alone is pixel-identical to the `Text` arm, which draws no box and paints its caption at `labelOrigin = (X+4, Y+2)`, `FormCanvasControl.cs:1443/:1448-1451`, so the pin fails on `Text,StatusLabel` by construction). ⛔ Bands draw NO caption (spec §6). Add the seven `GlyphFor` arms: `MenuBar => "≡_"`, `ToolBar => "[▸]"`, `StatusBar => "_≡"`, `MenuItem => "≡"`, `Separator => "—"`, `ToolButton => "[▸"`, `StatusLabel => "_A"` — distinct from every existing mark (run the glyph test) — and make `GlyphFor` `public static`. Add `public static string RenderSchematicForTest(FormSchematic, Rect, string)` (PUBLIC — see Step 1) and a `SchematicOverride` used only when non-null.
 - [ ] **Step 4: Run** `FormSchematicPinTests`, `FormCanvasRenderTests`, `FormToolboxGlyphTests` → green.
 
 ### Task 11: Gate and commit 24b
@@ -968,7 +1027,7 @@ In `GenerateInit`, after the root `AppendSiblings(...)` call and INSIDE a `form.
     }
 ```
 
-`WebLayout` yields its cells only for a Grid layout but ALWAYS appends `Bands`. `HitTest(document, canvasPoint, selected = null)` reads `Layout(document, selected)` on BOTH targets (`.Where(e => e.Control != null && e.Bounds.Contains(formPoint)).Select(e => e.Control).LastOrDefault()`), deleting the recursive `BoundsOf` walk; `ControlsIn` filters `e.Control != null && e.Control.Definition?.Place is not (FormPlace.Item or FormPlace.Docked)`; `ContainerAt` skips `Docked` roots. Update the consumers: `Render` (`foreach (var entry in FormCanvasTransform.Layout(document, SelectedControl))` → `if (entry.Control != null) DrawControl(context, entry.Control, _transform.ToCanvas(entry.Bounds));`), `FormBoundsOf`, `FormCanvasRenderTests.cs:123-124`, the `FormCanvasTransformTests` rows, `FormZOrderTests`. ⚠ The overflow edge (spec §2 Layout row): add `FormStripLayoutTests.HitTest_FindsAChildWhereItIsPainted_EvenOutsideItsPanel` and pin whichever the new walk does.
+`WebLayout` yields its cells only for a Grid layout but ALWAYS appends `Bands`. `HitTest(document, canvasPoint, selected = null)` reads `Layout(document, selected)` on BOTH targets (`.Where(e => e.Control != null && e.Bounds.Contains(formPoint)).Select(e => e.Control).LastOrDefault()`), deleting the recursive `BoundsOf` walk; `ControlsIn` filters `e.Control != null && e.Control.Definition?.Place is not (FormPlace.Item or FormPlace.Docked)` and then `.Select(e => e.Control!)` — it still returns `IReadOnlyList<FormControl>` under `<Nullable>enable`; `ContainerAt` skips `Docked` roots. Update the consumers: `Render` (`foreach (var entry in FormCanvasTransform.Layout(document, SelectedControl))` → `if (entry.Control != null) DrawControl(context, entry.Control, _transform.ToCanvas(entry.Bounds));`), `FormBoundsOf` (`FormCanvasControl.cs:993`, and `Render` at `:1108`), `FormCanvasRenderTests.cs:123-124`, `FormCanvasTransformTests.cs:217-222/:351-354/:363/:376` — exactly these deconstruct the old 2-tuple (⚠ `FormZOrderTests` calls only `HitTest`, whose `selected` is defaulted; nothing there changes). ⚠ The overflow edge (spec §2 Layout row): add `FormStripLayoutTests.HitTest_FindsAChildWhereItIsPainted_EvenOutsideItsPanel` and pin whichever the new walk does.
 - [ ] **Step 4: Run** `FormStripLayoutTests`, `FormCanvasTransformTests`, `FormZOrderTests`, `FormCanvasMultiSelectTests`, `FormCanvasRenderTests` (the three strips now hash as bands, distinct), `FormTrayViewTests` → green. Add `FormCanvasRenderTests.AStripWithAButton_DrawsABandAtTheTop_AndLeavesTheButtonAlone` (frame with MenuStrip+Button differs from Button alone; the Button's own region — crop or compare a sub-rectangle hash — is unchanged).
 
 ### Task 18: Placement, toolbox category, grid, drop refusal, recognizer
@@ -1028,7 +1087,8 @@ In `GenerateInit`, after the root `AppendSiblings(...)` call and INSIDE a `form.
 
 ### Task 19: Gate and commit 24c
 
-- [ ] Ordering inside this commit (spec Decision 12): Tasks 12→13→14 (format), 15→16 (emission; run the csc sweep after 15), 17 (bands; run the render gate after), 18 (surface entry points). If the render gate must run before 17 for Task 12's Step 4, run it after 17 instead and say so in the commit message.
+- [ ] Ordering inside this commit (spec Decision 12): Tasks 12→13→14 (format), 15→16 (emission; run the csc sweep after 15), 17 (bands; run the render gate after), 18 (surface entry points). ⚠ TWO gates are red by construction inside this commit: the render gate between Task 12 and Task 17 (strips hash like the empty form until bands land), and `WinFormsCatalogSweepTests` between Task 12 and Task 15 (`Canonical` nests an item under its host and the unchanged `AppendSiblings` emits `ctlHost.Controls.Add(ctl)` — CS1503, spec M8). Run each after the task that closes its window, and say so in the commit message. (The retarget sweep stays green throughout: `FormRetarget.ToPixels` `:548-551` tolerates a null Layout and `DeriveCells` `:514-527` folds Anchor into BL8025, never BL8024.)
+- [ ] Spec §10 opens in THIS commit: "What building it changed — the layout entry is a four-field record (`Host` on a slot; §2 wrote a 3-tuple)". The record struct lands here, so its record does too; Task 29 extends §10, it does not write this row again.
 - [ ] `dotnet clean` is NOT needed (no AXAML yet). Build; fast subset; `WinFormsCatalogSweepTests`; `FormCanvasRenderTests`; `FormSchematicPinTests`; `FormRetargetTests` (the sweep builds canonical shapes — items nest, strips have no geometry; if `Place` (web→pixels) throws on the Docked canonical shape here, do 24e's Task 26 rule NOW and move it into this commit).
 - [ ] Mutants: reverse the host-verb loop → `InDocumentOrder` fails; emit `Controls.Add` for items → csc sweep fails (CS1503) AND the emission test; drop the `<ul>` wrapper → `Web_MenuNesting`; forward-order the Bottom chrome → `TwoBottomStrips`; write TabIndex on an item in `Create` → `Create_WritesNoZeros…`; let the reader accept a Button under a MenuStrip → `Read_RefusesAControlInsideAHost`; `Bands` yields a 0-height rect → `Layout_NeverYieldsAZeroRect`.
 - [ ] Commit `feat(designer): Task 24c — menus, toolbars and status bars: rows, format, emission on both targets, bands`.
@@ -1043,14 +1103,14 @@ In `GenerateInit`, after the root `AppendSiblings(...)` call and INSIDE a `form.
 
 - [ ] **Step 1: Failing tests:** with the §3 document and `selected: menuStrip1` → after the band, cells for `mnuFile` (`Role == Cell`, `Bounds.X == 0`, width `8 + 7*len("&File") + 8` — the schematic width rule, `&` counted as written), then ONE `TypeHere` entry (`Control == null`) at `x = cell.Right` in the band; with `selected: mnuOpen` → `mnuFile`'s dropdown cells `[mnuOpen, sep1, mnuExit]` stacked below `mnuFile`'s cell (each 22 high; a separator 6 high) + `mnuFile`'s slot below them + `mnuOpen`'s own dropdown (empty) to the RIGHT of `mnuOpen`'s cell at the same y with its slot; the dropdown entries come LAST in the sequence; with `selected: null` → no `TypeHere` entry at all; `TypeHereAt(document, point, selected)` returns the host for a point in the slot and null elsewhere; `HitTest` on a dropdown cell returns the nested item; `ControlsIn` still excludes items.
 - [ ] **Step 2: Run** → red.
-- [ ] **Step 3: Implement** `Cells(document, selected)`: for each band, lay its top-level items left→right (`x += CellWidth(item)`; `CellWidth = item is Separator ? 6 : 8 + 7 * (Text ?? Id).Length + 8`); the ACTIVE strip (selected strip, or the selected item's root strip via a parent map built from `AllControls()`) gets a `TypeHere` entry after its cells; then the EXPANSION PATH: walk from the selected item up to the strip collecting item ancestors; expanded = ancestors ∪ {selected item if `IsHost`}; for each, outermost first: a dropdown at `(cell.X, cell.Bottom)` for a band cell or `(cell.Right, cell.Y)` for a nested cell, rows stacked, then the slot; yield all dropdown entries after every band/cell entry. The entry shape was declared in Task 17 with its `Host` field; a slot is `(null, rect, TypeHere, host)`, so Task 17's `Control != null` filters stay exactly as they are, and `TypeHereAt(document, canvasPoint, selected)` = the LAST entry with `Role == TypeHere` whose bounds contain the form point → its `Host`. Task 21's `TypeHereBounds` reads `Host` too. Widths, stated once so the drawing and the layout agree: a dropdown is as wide as its widest child cell (`CellWidth`), minimum 80 px; a slot is `CellWidth("Type Here")` = 79 px wide in a band and the dropdown's width in a dropdown; rows are 22 px, a separator 6 px.
+- [ ] **Step 3: Implement** `Cells(document, selected)`: for each band, lay its top-level items left→right (`x += CellWidth(item)`; `CellWidth = item is Separator ? 6 : 8 + 7 * (Text ?? Id).Length + 8`); the ACTIVE strip (selected strip, or the selected item's root strip via a parent map built from `AllControls()`) gets a `TypeHere` entry after its cells; then the EXPANSION PATH: walk from the selected item up to the strip collecting item ancestors; expanded = ancestors ∪ {selected item if `IsHost`}; for each, outermost first: a dropdown at `(cell.X, cell.Bottom)` for a band cell or `(cell.Right, cell.Y)` for a nested cell, rows stacked, then the slot; yield all dropdown entries after every band/cell entry. The entry shape was declared in Task 17 with its `Host` field; a slot is `(null, rect, TypeHere, host)`, so Task 17's `Control != null` filters stay exactly as they are, and `TypeHereAt(document, canvasPoint, selected)` = the LAST entry with `Role == TypeHere` whose bounds contain the form point → its `Host`. Task 21's `TypeHereBounds` reads `Host` too. Rects, stated once so the drawing and the layout agree: a BAND cell is `new Rect(x, band.Y, CellWidth(item), band.Height)` — the band's full `DefaultHeight`, never a row height (Task 21's cell drawing and Task 25's per-item render pin both depend on it); a dropdown is as wide as its widest child cell (`CellWidth`), minimum 80 px; a slot is `CellWidth("Type Here")` = 79 px wide in a band (same y and height as a band cell) and the dropdown's width in a dropdown; dropdown rows are 22 px, a separator 6 px.
 - [ ] **Step 4: Run** the fixture (+ Task 17's) → green.
 
 ### Task 21: The canvas — `TypeHereHost`, `TypeHereBounds`, `BeginTypeHereCommand`, cell/slot drawing, presses
 
 **Files:** `FormCanvasControl.cs` (styled properties block `:34-215`, `OnPointerPressed` `:563-632`, `Render` `:1085-1160`, `DrawSchematic`); Create `VisualGameStudio.Tests/Shell/FormStripCanvasTests.cs`.
 
-- [ ] **Step 1: Failing headless tests** (the `FormCanvasMultiSelectTests` rig: a `Window` hosting the canvas, `MouseDown/MouseUp` at canvas points computed from `FormCanvasControl.Fit` — read `FormCanvasMultiSelectTests.cs:47-89` for the exact helper): a press on `mnuFile`'s cell → `Selection.Primary == mnuFile` (give the canvas a `Selection`); a press on a dropdown cell (after selecting `mnuFile`) → the nested item; a double-click on a dropdown cell → `ActivateControlCommand` executed with it; a press on the Type Here slot (with the strip selected) → a `Recorder` bound to `BeginTypeHereCommand` fired with the host; with `TypeHereHost = menuStrip1`, after a render `TypeHereBounds` equals the canvas rect of the slot entry (compare against `Fit(...).ToCanvas(slot.Bounds)`); the frame with `mnuFile` selected differs from the frame with nothing selected (the dropdown paints) and the frame with `TypeHereHost` set differs again (the slot is highlighted).
+- [ ] **Step 1: Failing headless tests** (the `FormCanvasMultiSelectTests` rig: a `Window` hosting the canvas, `MouseDown/MouseUp` at canvas points computed from `FormCanvasControl.Fit` — read `FormCanvasMultiSelectTests.cs:47-89` for the exact helper; ⚠ that rig's `Centre` helper (`:33-38`) dereferences `FormCanvasTransform.BoundsOf(control, default)!.Value`, which is NULL for a strip or an item — an NRE that looks like a layout bug. Cell and slot press points come from the matching `FormCanvasTransform.Layout(doc, selected)` entry's `Bounds` (Role `Cell`/`TypeHere`, the `Host` for a slot) mapped through `FormCanvasControl.Fit(...).ToCanvas(...)`, and `Selection.Set(mnuFile)` is how the dropdown is opened before a dropdown cell is pressed): a press on `mnuFile`'s cell → `Selection.Primary == mnuFile` (give the canvas a `Selection`); a press on a dropdown cell (after selecting `mnuFile`) → the nested item; a double-click on a dropdown cell → `ActivateControlCommand` executed with it; a press on the Type Here slot (with the strip selected) → a `Recorder` bound to `BeginTypeHereCommand` fired with the host; with `TypeHereHost = menuStrip1`, after a render `TypeHereBounds` equals the canvas rect of the slot entry (compare against `Fit(...).ToCanvas(slot.Bounds)`); the frame with `mnuFile` selected differs from the frame with nothing selected (the dropdown paints) and the frame with `TypeHereHost` set differs again (the slot is highlighted).
 - [ ] **Step 2: Run** → red.
 - [ ] **Step 3: Implement:** styled properties `TypeHereHost` (`FormControl?`, in `AffectsRender`), `TypeHereBounds` (`Rect`, NOT in `AffectsRender`, set at the end of `Render` from the `TypeHere` entry whose host is `TypeHereHost`, else `default`), `BeginTypeHereCommand` (`ICommand?`). `Render`: iterate `Layout(document, SelectedControl)`; `Band`/`Control` → `DrawControl`; `Cell` → `DrawSchematic(item schematic)`; `TypeHere` → draw a greyed italic "Type Here" box (highlighted when `Control == TypeHereHost`). `OnPointerPressed`, left button, BEFORE `HandleUnder` (comment at the site: stricter than the spec's "before the marquee branch" on purpose — a selected LAST band cell's right edge coincides with the slot's left edge, and a handle test first would swallow a click 1–4 px into the slot): `var slotHost = _transform.TypeHereAt(document, point, SelectedControl); if (slotHost != null) { BeginTypeHereCommand?.Execute(slotHost); e.Handled = true; return; }`; a hit on a `Cell` entry selects through `ApplyClickSelection` and arms NO drag (guard `SelectedControl?.Geometry is PixelGeometry` before the move branch — items have none, so the existing early-returns already hold; pin it). Pass `SelectedControl` to all three `HitTest` calls (`:498`, `:583`, `:617`).
 - [ ] **Step 4: Run** the fixture + every `FormCanvas*Tests` + `FormTrayViewTests` → green.
@@ -1061,16 +1121,16 @@ In `GenerateInit`, after the root `AppendSiblings(...)` call and INSIDE a `form.
 
 - [ ] **Step 1: Failing tests:** a `Window` hosting the editor; set `SlotBounds = new Rect(30, 40, 120, 22)`, `IsActive = true` → the inner `TextBox.Bounds` (after layout, `window.UpdateLayout()`/a render) equals that rect and the box `IsFocused` (⚠ the control POSTS the focus call to the dispatcher, so the test calls `Dispatcher.UIThread.RunJobs()` before asserting); `window.KeyTextInput("Open")` then `window.KeyPress(Key.Enter, RawInputModifiers.None)` → a `Recorder` on `CommitCommand` fired once with `"Open"` and `Text` is cleared; `KeyPress(Escape)` → `CancelCommand` fired; the focus-on-every-Begin rule, tested the only way it can be seen: with the editor active and focused, focus ANOTHER control in the window (host a plain `Button` beside the editor and call `other.Focus()`; `RunJobs`; assert the box is NOT focused), then set `Host` to another object while `IsActive` stays true → `RunJobs` → the box is focused again (without moving focus away first the assertion passes whether or not the control re-focuses, and Task 25's mutant would not be a kill); `IsActive = false` → the editor is collapsed/hidden.
 - [ ] **Step 2: Run** → compile error.
-- [ ] **Step 3: Implement** a `TemplatedControl`-free `Panel` subclass (a `Canvas` with one `TextBox` child): styled `IsActive` (bool), `Host` (object?), `Text` (string, TwoWay to the box), `SlotBounds` (Rect), `CommitCommand`/`CancelCommand` (ICommand?). `OnPropertyChanged`: `IsActive` or `Host` changed while active → `IsVisible = IsActive; if (IsActive) Dispatcher.UIThread.Post(() => _box.Focus())`; `SlotBounds` changed → `Canvas.SetLeft/SetTop(_box, …)`, `_box.Width/Height`. `_box.KeyDown`: `Enter` → `CommitCommand?.Execute(_box.Text ?? "")`, `_box.Text = ""`, handled; `Escape` → `CancelCommand?.Execute(null)`, handled. `IsHitTestVisible` false when inactive so the canvas below receives clicks.
+- [ ] **Step 3: Implement** a `TemplatedControl`-free `Panel` subclass (a `Canvas` with one `TextBox` child): styled `IsActive` (bool), `Host` (object?), `Text` (string, TwoWay to the box), `SlotBounds` (Rect), `CommitCommand`/`CancelCommand` (ICommand?). `OnPropertyChanged`: `IsActive` or `Host` changed while active → `IsVisible = IsActive; if (IsActive) Dispatcher.UIThread.Post(() => _box.Focus())`; `SlotBounds` changed → `Canvas.SetLeft/SetTop(_box, …)`, `_box.Width/Height`. ⛔ In the constructor: `_box.MinHeight = 0; _box.MinWidth = 0; _box.Padding = new Thickness(2, 0);` — both the headless app (`DesignerHeadlessApp.cs:32`) and the Shell (`App.axaml:12`) load `FluentTheme`, whose TextBox theme sets `MinHeight` 32 / `MinWidth` 64, and the layout clamp raises a 22px slot's box to 32px: without this the Step 1 bounds assertion reads 120x32 and the overlay overhangs the slot by 10px in the IDE. The Shell's own AXAML does the same for every small control it hosts (`CodeEditorDocumentView.axaml:359-397`, `ProblemsView.axaml:37-116`). `_box.KeyDown`: `Enter` → `CommitCommand?.Execute(_box.Text ?? "")`, `_box.Text = ""`, handled; `Escape` → `CancelCommand?.Execute(null)`, handled. `IsHitTestVisible` false when inactive so the canvas below receives clicks.
 - [ ] **Step 4: Run** → green.
 
 ### Task 23: The view model — `StripEditor`, Begin/Commit/Cancel, the selection rule, paste into a host
 
 **Files:** Create `VisualGameStudio.Shell/ViewModels/Designer/FormStripEditorViewModel.cs`; Modify `CodeEditorDocumentViewModel.cs` (ctor, `PasteControls` `:429-468`, `SelectInDesigner`); Create `VisualGameStudio.Tests/Compiler/FormStripEditorTests.cs` (VM-level, the `FormTrayTests` rig).
 
-- [ ] **Step 1: Failing tests:** open a `.blform` with a MenuStrip (the §3 document without items, `MenuForm`); ⛔ the three methods are PUBLIC (`public void BeginTypeHere(FormControl? host)` etc. — a `[RelayCommand]` on a public method still generates the command; `PlaceControl` is the precedent) because the Shell grants no internals access to the tests; `vm.BeginTypeHere(menuStrip)` → `vm.StripEditor.IsActive`, `Host == menuStrip`, `Selection.Primary == menuStrip`; `vm.CommitTypeHere("&File")` → `fileToolStripMenuItem` under the strip with `Text == "&File"`, selected through `Selection` (and the grid), the document text contains it (undoable), editor still active with `Host == menuStrip`; `BeginTypeHere(fileToolStripMenuItem)` then `CommitTypeHere("&Open...")` → `openToolStripMenuItem` under it; `CommitTypeHere("-")` → `toolStripSeparator1`, a `ToolStripSeparator`; `CommitTypeHere("E&xit")` → `exitToolStripMenuItem`; the order is Open, sep, Exit; `FormCanvasTransform.Layout(doc, selected: exitToolStripMenuItem)` yields `fileToolStripMenuItem`'s dropdown cells, its slot, and `exitToolStripMenuItem`'s own slot to the right; `CommitTypeHere("-")` on a StatusStrip → refused via a `DesignerDiagnosticsEvent` BL8019 whose message contains `Separator` (the `PlaceItem` refusal names the kind: `not a ToolStripSeparator`) and nothing placed; `vm.DeleteControlCommand.Execute(openToolStripMenuItem)` → gone from the host's `Children` and from `vm.Text` (`ListContaining` walks nested children), and the editor is cancelled (any delete clears the selection through `SelectInDesigner(null)`, and a null primary is inside no host — the leave-rule fires; no host-specific cancel path exists or is needed); `CancelTypeHere()` → inactive; with the editor active on the strip, `vm.Selection.Set(theButton)` (the public store — `SelectInDesigner` is private) → the editor is cancelled; `vm.Selection.Set(fileToolStripMenuItem)` (inside the host) → still active; undo after a commit → the item is gone from `DesignDocument` and the editor is cancelled (the model was rebuilt); paste: copy `fileToolStripMenuItem`, select `menuStrip`, paste → a renamed item appended to the strip and it is the selection; select the Button, paste an item → refused-and-reported, nothing added, the selection unchanged.
+- [ ] **Step 1: Failing tests:** open a `.blform` with a MenuStrip (the §3 document without items, `MenuForm`); ⛔ the three methods are PUBLIC (`public void BeginTypeHere(FormControl? host)` etc. — a `[RelayCommand]` on a public method still generates the command; `PlaceControl` is the precedent) because the Shell grants no internals access to the tests; `vm.BeginTypeHere(menuStrip)` → `vm.StripEditor.IsActive`, `Host == menuStrip`, `Selection.Primary == menuStrip`; `vm.CommitTypeHere("&File")` → `fileToolStripMenuItem` under the strip with `Text == "&File"`, selected through `Selection` (and the grid), the document text contains it (undoable), editor still active with `Host == menuStrip`; `BeginTypeHere(fileToolStripMenuItem)` then `CommitTypeHere("&Open...")` → `openToolStripMenuItem` under it; `CommitTypeHere("-")` → `toolStripSeparator1`, a `ToolStripSeparator`; `CommitTypeHere("E&xit")` → `exitToolStripMenuItem`; the order is Open, sep, Exit; `FormCanvasTransform.Layout(doc, selected: exitToolStripMenuItem)` yields `fileToolStripMenuItem`'s dropdown cells, its slot, and `exitToolStripMenuItem`'s own slot to the right; `CommitTypeHere("-")` on a StatusStrip → refused via a `DesignerDiagnosticsEvent` BL8019 whose message contains `Separator` (the `PlaceItem` refusal names the kind: `not a ToolStripSeparator`) and nothing placed; `vm.DeleteControlCommand.Execute(openToolStripMenuItem)` → gone from the host's `Children` and from `vm.Text` (`ListContaining` walks nested children), and the editor is cancelled (any delete clears the selection through `SelectInDesigner(null)`, and a null primary is inside no host — the leave-rule fires; no host-specific cancel path exists or is needed); `CancelTypeHere()` → inactive; with the editor active on the strip, `vm.Selection.Set(theButton)` (the public store — `SelectInDesigner` is private) → the editor is cancelled; `vm.Selection.Set(fileToolStripMenuItem)` (inside the host) → still active; undo after a commit → the item is gone from `DesignDocument` and the editor is cancelled (the model was rebuilt); paste: copy `fileToolStripMenuItem`, select `menuStrip`, paste → a renamed item appended to the strip and it is the selection; paste a STRIP: copy `menuStrip`, paste → a renamed strip appended to `Controls` with `Geometry == null`, `Properties["Dock"]` kept, `TabIndex == 0`, and it is the selection (today's `PasteControls` `:451-462` happens to do this for any geometry-less non-component, so the Docked branch below is a restatement — this pin is what stops a later edit offsetting or renumbering it); select the Button, paste an item → refused-and-reported, nothing added, the selection unchanged.
 - [ ] **Step 2: Run** → red.
-- [ ] **Step 3: Implement.** `FormStripEditorViewModel : ObservableObject` with `[ObservableProperty] bool _isActive; FormControl? _host; string _text = ""`. On the document VM:
+- [ ] **Step 3: Implement.** `public partial class FormStripEditorViewModel : ObservableObject` (⚠ `partial`, or `[ObservableProperty]` generates nothing and `IsActive` does not exist) with `[ObservableProperty] bool _isActive; FormControl? _host; string _text = ""`. On the document VM:
 
 ```csharp
     public FormStripEditorViewModel StripEditor { get; } = new();
@@ -1118,7 +1178,7 @@ In `GenerateInit`, after the root `AppendSiblings(...)` call and INSIDE a `form.
     }
 ```
 
-`FormGeometryEdit.ParentOf` (`FormGeometryEdit.cs:262`) is `private static` today — make it `internal static` (same assembly; no test needs it). In the ctor's `Selection.Changed` handler, after the grid update:
+`FormGeometryEdit.ParentOf` (`FormGeometryEdit.cs:262`) is `private static` today — make it `internal static` (same assembly; no test needs it). In the ctor's `Selection.Changed` handler (`:864` — an expression-bodied lambda today; make it a block lambda), after the grid update:
 
 ```csharp
             var model = DesignFile?.Model;
@@ -1143,7 +1203,7 @@ Cancel in `OnDesignModelRevisionChanged` when the host is no longer in the docum
 
 - [ ] `FormCanvasRenderTests.EveryItemKind_ChangesItsHostsFrame`: for each `Place == Item` row, `RenderHash(Canonical(host with item, SharedId, hostId: SharedId, item Text "X"))` ≠ `RenderHash(host alone)` (cells are laid out for every band unconditionally in Task 20, so no selection is needed). Mutant: blank the `MenuItem` arm in `DrawSchematic` → the pin fails.
 - [ ] The Task 21 bounds test must see TWO slots to discriminate: select `mnuFile` (so the strip's slot AND `mnuFile`'s dropdown slot are yielded) and set `TypeHereHost = mnuFile`; assert `TypeHereBounds` is the DROPDOWN slot's canvas rect — the "wrong entry" mutant then fails it.
-- [ ] Build (after `dotnet clean` Shell); fast subset; `FormCanvasRenderTests`; `FormSchematicPinTests`; `FormTypeHereEditorTests`; `FormStripCanvasTests`; `FormStripEditorTests`. Mutants: `BeginTypeHere` not selecting the host → the slot test; commit selecting nothing → the "selected through Selection" assertion; the cancel-on-leave handler removed → its test; the editor not re-focusing on `Host` change → the editor test; `TypeHereBounds` computed from the wrong entry → the bounds test; the slot press placed after the marquee branch → the slot press test (a marquee starts instead).
+- [ ] Build (after `dotnet clean` Shell); fast subset; `FormCanvasRenderTests`; `FormSchematicPinTests`; `FormTypeHereEditorTests`; `FormStripCanvasTests`; `FormStripEditorTests`. Mutants: `BeginTypeHere` not selecting the host → the slot test; commit selecting nothing → the "selected through Selection" assertion; the cancel-on-leave handler removed → its test; the editor not re-focusing on `Host` change → the editor test; `TypeHereBounds` computed from the wrong entry → the bounds test; the slot press placed after the marquee branch → the slot press test (for a BAND slot the band entry contains the point, so `HitTest` returns the strip and it is merely selected — the `Recorder` bound to `BeginTypeHereCommand` never fires; a marquee appears only for a dropdown slot over empty surface).
 - [ ] Commit `feat(designer): Task 24d — the Type Here strip: cells, dropdowns, the in-place editor`.
 
 ---
@@ -1154,7 +1214,7 @@ Cancel in `OnDesignModelRevisionChanged` when the host is no longer in the docum
 
 **Files:** `FormRetarget.cs` (`Place` `:584-676`), `FormRetargetTests.cs`.
 
-- [ ] **Step 1: Failing tests:** `ToWinForms_AStripAndItsItems_CrossGeometryLess_WithDock` (a `.blwebform` with a MenuStrip+items and a Button in a cell → the strip has `Geometry == null`, `Properties["Dock"] == "Top"`, items nested with null geometry, the Button placed in pixels, no BL8025 naming the strip or an item); `ToWinForms_APageWhoseTopLevelIsAStripAlone_DoesNotThrow`; `ToWeb_AStripCrosses_AndTheRetargetedPageIsChrome` (through `ConvertToPair`, the HTML has `<nav` before the div); the sweep (`Canonical` for every Docked/Item row, both directions) → `Locate` finds the crossed control, geometry null, no BL8025 for it.
+- [ ] **Step 1: Failing tests:** `ToWinForms_AStripAndItsItems_CrossGeometryLess_WithDock` (a `.blwebform` with a MenuStrip+items and a Button in a cell → the strip has `Geometry == null`, `Properties["Dock"] == "Top"`, items nested with null geometry, the Button placed in pixels, no BL8025 naming the strip or an item); `ToWinForms_APageWhoseTopLevelIsAStripAlone_DoesNotThrow`; `ToWeb_AStripCrosses_AndTheRetargetedPageIsChrome` (through `ConvertToPair`, the HTML has `<nav` before the div, AND every crossed item has `Geometry == null` — `DeriveCells` (`FormRetarget.cs:536`) recurses into a strip's items and nulls their geometry through its else-branch (`:533`) with no warning; pin that branch rather than assume it); the sweep (`Canonical` for every Docked/Item row, both directions) → `Locate` finds the crossed control, geometry null, no BL8025 for it.
 - [ ] **Step 2: Run** → red for the RIGHT reason: today the strip simply receives a `PixelGeometry` and a BL8025 (`Place` sizes every sibling, `:593-611`; a lone strip is one `sizes` entry so `Max` succeeds) — the geometry-null and no-BL8025 assertions fail. ⚠ The `InvalidOperationException` (`Max` on empty) appears only once the `positioned` filter exists WITHOUT its early return — which is why Step 3 has one.
 - [ ] **Step 3: Implement** in `Place`: `var positioned = siblings.Where(c => c.Definition?.Place is null or FormPlace.Positioned).ToList(); if (positioned.Count == 0) return (0, 0);` BEFORE `Max` is reached, and use `positioned` everywhere `siblings` was used (sizes, pitch, the placement loop); never recurse into a Docked/Item control's children.
 - [ ] **Step 4: Run** `FormRetargetTests`, `DesignRetargetCliTests`, `SolutionExplorerRetargetTests` → green.
@@ -1176,7 +1236,7 @@ Cancel in `OnDesignModelRevisionChanged` when the host is no longer in the docum
 
 ### Task 29: Records
 
-- [ ] Spec: append "§10 — What building it changed": the layout entry is a four-field record (`Host` on a slot; §2 wrote a 3-tuple); the Type Here gate asserts AXAML bindings only (no code-behind handler exists to name); anything else a task above changed.
+- [ ] Spec: extend "§10 — What building it changed" (opened in 24c's Task 19 with the four-field layout entry — do not write that row twice): the Type Here gate asserts AXAML bindings only (no code-behind handler exists to name); anything else a task above changed.
 - [ ] `docs/form-designer-followups.md`: **22** `ShortcutKeys` (M6/M7: only `CType(n, Keys)`; needs a Keys editor + name table), **23** array-literal common-base widening for BasicLang classes (M1/M3: cannot serve WinForms types), **24** the C++ capability checker's missing `IRArrayAlloc` arm, **25** `RejectImpossibleConversion`'s sibling-file hole (spec Decision 14; chip `task_0b7436a5` already filed — record the id).
 - [ ] `CLAUDE.md` form-designer section: one ⛔ bullet — a strip is `Place == Docked` (geometry-less, `Dock` PROPERTY, a band on the canvas, page chrome on the web), an item is `Place == Item` under its host and is added by the HOST row's verb in DOCUMENT order (reversing it is the silent failure), `FormCatalogShapes.Canonical` is the one fixture shape for every catalog gate, and the compiler now has `New T() {…}` (parens required, three policies, the JS array arms). Plus the compiler section: the typed literal and its three policies in one line.
 - [ ] `docs/HANDOFF.md`: task table (24 done), a Task 24 section (measured facts, the five commits, gates), the gates table rows.
