@@ -136,6 +136,84 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// <summary>The IL name of the type whose fields <see cref="_currentClassFields"/> holds.</summary>
         private string _currentClassToken;
 
+        /// <summary>
+        /// The IL token of the class that DECLARES each bare-nameable field, and the class that
+        /// declares each bare-nameable property.
+        ///
+        /// <para>⛔ An <c>ldfld</c>/<c>stfld</c> names a type, and for an INHERITED field that
+        /// type is the BASE, not the class being emitted. Both tables used to hold the emitted
+        /// class's own members only and both emission sites spelled <see cref="_currentClassToken"/>,
+        /// so once the front end let a derived method name an inherited field the IL said
+        /// <c>Box::Total</c> for a field only <c>Base</c> defines: MissingFieldException, and for a
+        /// read whose miss pushed nothing, an operand-short body the CLR refuses outright
+        /// (InvalidProgramException). Same rule as <see cref="TryFindStaticMethod"/>'s, recorded
+        /// there: name the DECLARING class.</para>
+        ///
+        /// <para>⚠ A PROPERTY twin of this table was here and is gone: it survived mutation. A
+        /// bare property goes out as an accessor CALL through <c>EmitPropertyGet</c>/<c>Set</c>,
+        /// and those resolve the accessor through <see cref="TryFindProperty"/>, which already
+        /// walks the base chain — so recording the declaring class a second time decided
+        /// nothing. The FIELD table has no such second walk, which is why it stays.</para>
+        /// </summary>
+        private readonly Dictionary<string, string> _currentClassFieldOwner =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>The IL token naming the class that declares bare field <paramref name="name"/>.</summary>
+        private string FieldOwnerToken(string name) =>
+            _currentClassFieldOwner.TryGetValue(name, out var token) ? token : _currentClassToken;
+
+        /// <summary>
+        /// The IL token for an <c>ldfld</c>/<c>stfld</c> through a RECEIVER: the class that
+        /// declares the field, found by walking up from the receiver's static type, else the
+        /// receiver's own token.
+        ///
+        /// <para>⛔ Naming the receiver's type is right only while the field is the receiver
+        /// class's own. <c>b.InheritedField</c> emitted <c>Box::Total</c> for a field that only
+        /// <c>Base</c> declares — MissingFieldException.</para>
+        /// </summary>
+        private string DeclaringFieldToken(TypeInfo receiver, string fieldName)
+        {
+            var fallback = IlReceiverToken(receiver);
+            if (string.IsNullOrEmpty(receiver?.Name) || string.IsNullOrEmpty(fieldName)) return fallback;
+            if (!TryFindClass(receiver.Name, out var cls)) return fallback;
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (var current = cls; current != null; )
+            {
+                if (!seen.Add(current.Name)) break;
+
+                if (current.Fields != null && current.Fields.Any(f => f?.Name != null && !f.IsStatic
+                        && string.Equals(f.Name, fieldName, StringComparison.OrdinalIgnoreCase)))
+                    return SanitizeName(current.Name);
+
+                if (string.IsNullOrEmpty(current.BaseClass)) break;
+                if (!TryFindClass(current.BaseClass, out current)) break;
+            }
+            return fallback;
+        }
+
+        /// <summary>
+        /// The class that declares INSTANCE method <paramref name="name"/>, reachable from
+        /// <paramref name="irClass"/> by walking bases — the instance counterpart of
+        /// <see cref="TryFindStaticMethod"/>, visited set and all.
+        /// </summary>
+        private IRClass DeclaringClassOfInstanceMethod(IRClass irClass, string name)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (var current = irClass; current != null; )
+            {
+                if (!seen.Add(current.Name)) break;
+
+                if (current.Methods != null && current.Methods.Any(m => m != null && !m.IsStatic
+                        && string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase)))
+                    return current;
+
+                if (string.IsNullOrEmpty(current.BaseClass)) break;
+                if (!TryFindClass(current.BaseClass, out current)) break;
+            }
+            return null;
+        }
+
         public override string BackendName => "MSIL";
         public override TargetPlatform Target => TargetPlatform.MSIL;
 
@@ -1295,35 +1373,46 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _currentMethodIsInstance = isInstance;
             _currentClassFields.Clear();
             _currentClassProperties.Clear();
+            _currentClassFieldOwner.Clear();
             _fieldStoreScratch.Clear();
             _currentClassToken = owner != null ? SanitizeName(owner.Name) : null;
             _currentClassOwner = owner;
 
-            if (owner?.Properties != null)
+            // The class's own members AND its bases', each recorded with the class that declares
+            // it. Own first and first-wins, so a member shadows a base's of the same name.
+            var seenClasses = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (var declaring = owner; declaring != null; )
             {
-                foreach (var ownProp in owner.Properties)
+                if (!seenClasses.Add(declaring.Name)) break;
+
+                foreach (var ownProp in declaring.Properties ?? new List<IRProperty>())
                 {
-                    if (string.IsNullOrEmpty(ownProp.Name)) continue;
+                    if (ownProp?.Name == null || _currentClassProperties.ContainsKey(ownProp.Name)) continue;
                     _currentClassProperties[ownProp.Name] = ownProp;
 
                     // Same reason the field loop does it: this is what routes an assignment's
                     // destination through the store path instead of into a dropped temporary.
                     _declaredIdentifiers.Add(ownProp.Name);
                 }
-            }
 
-            if (isInstance && owner?.Fields != null)
-            {
-                foreach (var field in owner.Fields)
+                if (isInstance)
                 {
-                    if (field.IsStatic || string.IsNullOrEmpty(field.Name)) continue;
-                    _currentClassFields[field.Name] = field.Type;
+                    foreach (var field in declaring.Fields ?? new List<IRField>())
+                    {
+                        if (field == null || field.IsStatic || string.IsNullOrEmpty(field.Name)
+                            || _currentClassFields.ContainsKey(field.Name)) continue;
+                        _currentClassFields[field.Name] = field.Type;
+                        _currentClassFieldOwner[field.Name] = SanitizeName(declaring.Name);
 
-                    // Register the field as a name the body can resolve. This is what routes an
-                    // assignment's destination through EmitStoreLocal rather than into a temp,
-                    // where `N = N + 1` used to silently land and be dropped.
-                    _declaredIdentifiers.Add(field.Name);
+                        // Register the field as a name the body can resolve. This is what routes an
+                        // assignment's destination through EmitStoreLocal rather than into a temp,
+                        // where `N = N + 1` used to silently land and be dropped.
+                        _declaredIdentifiers.Add(field.Name);
+                    }
                 }
+
+                if (string.IsNullOrEmpty(declaring.BaseClass)) break;
+                if (!TryFindClass(declaring.BaseClass, out declaring)) break;
             }
 
             // ⛔ `Me` occupies slot 0, so the first DECLARED parameter is slot 1. Numbering from 0
@@ -1752,6 +1841,23 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _tempNameIndices.Clear();
             _declaredIdentifiers.Clear();
             _localCounter = 0;
+
+            // ⛔ A MODULE-level function is not a class member, and the class-member context of
+            // whatever class was emitted last must not survive into it: only the three CLASS
+            // emission sites call InitializeMethodContext, so these tables were simply left
+            // standing. A module function whose body names something the last class also
+            // declares then took the bare-FIELD path — `ldarg.0` in a STATIC method, which is
+            // not a program the CLR will load (InvalidProgramException). It needed a name
+            // collision to show, which is why it survived: `Module G / Public Total` beside a
+            // class with a `Total` of its own, measured, before this change and without any
+            // inheritance involved.
+            _currentMethodIsInstance = false;
+            _currentClassFields.Clear();
+            _currentClassProperties.Clear();
+            _currentClassFieldOwner.Clear();
+            _fieldStoreScratch.Clear();
+            _currentClassToken = null;
+            _currentClassOwner = null;
             _maxStack = 8; // Default, will be calculated
             _currentStack = 0;
 
@@ -2370,7 +2476,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (_currentMethodIsInstance && _currentClassFields.TryGetValue(name, out var fieldType))
             {
                 EmitLdarg(0);
-                WriteLine($"    ldfld {IlTypeSpec(fieldType)} {_currentClassToken}::{SanitizeName(name)}");
+                WriteLine($"    ldfld {IlTypeSpec(fieldType)} {FieldOwnerToken(name)}::{SanitizeName(name)}");
                 return;
             }
 
@@ -2809,7 +2915,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 EmitStloc(scratch);
                 EmitLdarg(0);
                 EmitLdloc(scratch);
-                WriteLine($"    stfld {IlTypeSpec(fieldType)} {_currentClassToken}::{SanitizeName(name)}");
+                WriteLine($"    stfld {IlTypeSpec(fieldType)} {FieldOwnerToken(name)}::{SanitizeName(name)}");
                 _currentStack -= 2;
                 return;
             }
@@ -3331,11 +3437,15 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // module-class arm below and emit `call int32 Program::Inner()`: a static call, on a
             // class that does not exist, to a method that is not static. `_moduleName` is null
             // while a class body is being emitted, which is where the phantom `Program` came from.
-            var isSelfCall = _currentMethodIsInstance
-                && _currentClassToken != null
-                && _currentClass?.Methods != null
-                && _currentClass.Methods.Any(m => !m.IsStatic
-                    && string.Equals(m.Name, funcName, StringComparison.OrdinalIgnoreCase));
+            // ⛔ The walk, not just the class's own methods: a bare call to an INHERITED method
+            // fell through to the module-class arm and emitted `call {ret} Program::Helper()` —
+            // MissingMethodException from a build that reported success, measured. The receiver
+            // token has to name the class that DECLARES the method, as the static sibling
+            // TryFindStaticMethod already does.
+            var selfCallOwner = _currentMethodIsInstance && _currentClassToken != null
+                ? DeclaringClassOfInstanceMethod(_currentClass, funcName)
+                : null;
+            var isSelfCall = selfCallOwner != null;
 
             if (isSelfCall) EmitLdarg(0);
 
@@ -3354,7 +3464,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             if (isSelfCall)
             {
-                WriteLine($"    callvirt instance {returnType} {_currentClassToken}::{sanitizedName}({paramTypes})");
+                WriteLine($"    callvirt instance {returnType} {SanitizeName(selfCallOwner.Name)}::{sanitizedName}({paramTypes})");
                 _currentStack--;   // the receiver
             }
             else
@@ -4830,7 +4940,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             // Load field value from object
             var fieldType = IlTypeSpec(fieldAccess.Type);
-            var className = IlReceiverToken(fieldAccess.Object?.Type);
+            var className = DeclaringFieldToken(fieldAccess.Object?.Type, fieldAccess.FieldName);
             var fieldName = SanitizeName(fieldAccess.FieldName);
 
             WriteLine($"    ldfld {fieldType} {className}::{fieldName}");
@@ -4907,7 +5017,9 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             // Store value to field
             var fieldType = MapType(fieldStore.Value?.Type);
-            var className = fieldStore.Object?.Type?.Name != null ? SanitizeName(fieldStore.Object.Type.Name) : "object";
+            var className = fieldStore.Object?.Type?.Name != null
+                ? DeclaringFieldToken(fieldStore.Object.Type, fieldStore.FieldName)
+                : "object";
             var fieldName = SanitizeName(fieldStore.FieldName);
 
             WriteLine($"    stfld {fieldType} {className}::{fieldName}");

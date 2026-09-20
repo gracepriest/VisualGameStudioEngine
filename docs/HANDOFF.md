@@ -1660,6 +1660,84 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   **Full suite in place: 195 / 6136 / 203 / 6534 against the 195 / 6101 / 203 / 6499 baseline
   at `045477d`** — 195 reported = 195 anchored lines, the same 170 failing names, nothing new
   and nothing newly passing; the +35 are the fixture's 35 cases.
+
+  ⚠ **A DERIVED CLASS CAN SEE ITS BASE as of 2026-09-20** — `InheritedMemberTests` (33 cases),
+  `SymbolTable.TypeInfo.ResolveMember` (the walk), `SemanticAnalyzer.ResolveClassMember` plus
+  the member-access, `With`-member and assign-to-constant sites,
+  `CppCodeGenerator.InitializeFunctionContext`, `MSILBackend._currentClassFieldOwner` +
+  `FieldOwnerToken` + `DeclaringFieldToken` + `DeclaringClassOfInstanceMethod`,
+  `IRBuilder.Visit(MyBaseExpressionNode)`. The two deliberate tripwires in
+  `CppSharedAccessTests` are promoted from pins to compile-and-run.
+  ⛔ **ESSENTIALLY NO INHERITED DATA MEMBER WORKED, ON ANY OF THE FOUR BACKENDS, and the
+  language's own inheritance was unusable because of it** — measured, compiled and run before
+  the change: a derived method naming an inherited field, Protected field, `Const`,
+  auto-`Property`, Get/Set property or `Shared` field was REFUSED; so was reading or writing one
+  through an instance (`b.Total + 1` came out as "Arithmetic operator '+' requires numeric
+  operands", and `Dim n As Integer = b.Total` as a conversion error); `Me.Field` was refused;
+  `MyBase.Field` emitted a reference to an undeclared `__base` on every backend; a three-level
+  chain was refused; `With b : .InheritedMember` was "does not have a member"; and an inherited
+  member sharing a name with a module global already DIVERGED SILENTLY — C++ read the field, the
+  other three the global. 22 shapes went from refused-on-all-four to running-on-all-four.
+  ⚠ **Only METHODS appeared to work, and not by inheritance**: pass 1 flattens every procedure
+  signature into the GLOBAL scope by bare name, so a bare inherited call found it there. That
+  accident is also why ⛔ **the defect had THREE FACES BY SPELLING** — a one-character or
+  lowercase name reached "Undefined identifier", while an ordinary PascalCase name was swallowed
+  by the deliberately permissive "any PascalCase identifier could be a .NET type" arm into a
+  phantom type with NO DIAGNOSTIC AT ALL. The common case was the silent one; a fixture with one
+  face and not the other pins half the defect, which is why both are `TestCase` rows.
+  ⚠ **One missing walk was the whole cause.** `TypeInfo.Members` holds a type's OWN members, a
+  class scope's parent is the scope the class was DECLARED in (never its base's), and no lookup
+  consulted `BaseType`. The bare-name call goes AHEAD of every other channel in
+  `Visit(IdentifierExpressionNode)`: below the .NET-type arm it would fix only one-character
+  names, and class scope is nearer than module scope, which the IR builder already assumes.
+  ⚠ **Private has TWO halves and both are load-bearing.** A base's Private member is skipped —
+  pass 1 filters Private out of the member table and pass 2 does not, so without the explicit
+  skip whether one resolved would depend on DECLARATION ORDER, and admitting one turns a
+  front-end acceptance into a CS0122 or a clang private-access failure in the emitted code. The
+  class's OWN Private member is honoured, and the only shape that observes it is `Me.Secret`: a
+  bare name finds one lexically without the walker ever running.
+  ⚠ **The depth guard is not decoration.** A base is a NAME and nothing validates the chain is
+  acyclic, so `Class A Inherits B` against `Class B Inherits A` spins forever. ⛔ **The lookup
+  has to happen AFTER the cycle closes** — pass 2 binds each class's `BaseType` as it visits the
+  class, so inside A's own body B's base is still unset and the walk ends after one step. The
+  test puts the miss in `Main`, on a worker with a 30-second wait, because a hang is the one
+  failure a suite cannot report on its own. (`TypeInfo.IsAssignableFrom` has the same unguarded
+  walk, pre-existing and untouched; nothing reaches it with a cyclic pair today.)
+  ⛔ **A PRE-EXISTING MSIL DEFECT turned up in the emitted IL and is fixed here** because the
+  walk reaches it: a MODULE-level function was never given a fresh class-member context, so it
+  kept the LAST EMITTED CLASS's field tables. A module function naming something that class also
+  declares took the bare-FIELD path and emitted `ldarg.0` in a STATIC method —
+  `InvalidProgramException` at load. It needs only a name collision, no inheritance at all.
+  ⚠ **Six gaps are PINNED WITH A CONTROL proving each is not inheritance's**: the same shape
+  against the class's OWN member fails identically. A base declared BELOW its derived class (C++
+  and JavaScript emit classes in declaration order; it fails with no member access at all), a
+  Get/Set property by bare name on C++, a `With` block over a class instance (unimplemented on
+  every backend), a case-different bare spelling, a JavaScript field write whose right-hand side
+  is a call, and a cross-file base class.
+  ⛔ **SIXTEEN MUTATIONS, SIXTEEN KILLS, 172 KILLS IN ALL — FOUR REMOVALS AND TWO TESTS ADDED.**
+  The first sweep left FIVE survivors and none were accepted. Three were redundant code, deleted:
+  a re-resolution of each base BY NAME through the analyzer's type table (`BaseType` already holds
+  the registered type object, so it could only return what the walk already had — and in the one
+  case it was meant for, a synthetic member-less stand-in minted for an unresolved base, the name
+  is not in the table either), the C++ registration of inherited PROPERTIES as declared
+  identifiers (a property access never takes the decayed-temp path a field write does), and the
+  MSIL property-owner table (a property is reached through its accessor, which already names its
+  declaring class). A fourth came out of reading the final diff rather than the sweep —
+  `ResolveMember`'s `includeSelf` parameter, which no caller ever passed `false`. Two were weak
+  tests, strengthened: the depth guard and the own-Private exemption, each now killed by exactly
+  the one test written for it. ⚠ **Every kill set is discriminating**: no base step → 21; a base's
+  Private admitted → the one refusal test; the walk starting at the base instead of the type → 91
+  (it breaks every OWN-member lookup, which is the point); the bare-name site → 16 and the
+  member-access site → 6; the `With` site, the const-guard site, the cycle guard and the
+  depth-zero exemption → 1 each, their own test; C++ own-members-only → the one COMPUTED write (a
+  write that compiles clean and loses the value); `MyBase` back to `__base` → the `MyBase` test;
+  MSIL seeding own fields only → 11 and the field token taken from the class being emitted → the
+  same 11; the receiver's static type → 5; self-calls resolved own-only → the two bare inherited
+  calls; the module-function reset dropped → the two name-collision tests, one of which has no
+  inheritance in it.
+  **Full suite in place: 195 / 6169 / 203 / 6567 against the 195 / 6136 / 203 / 6534 baseline at
+  `045477d`** — 195 reported = 195 anchored lines, the same 170 failing names, nothing new and
+  nothing newly passing; the +33 are the fixture's 33 cases.
   ⚠ **Narrowing shapes are refused by the SEMANTIC ANALYZER, before any of this** —
   `Public N As Single = 1.5 + 1.0` is "Cannot assign value of type 'Double' to variable of type
   'Single'", before and after. Not a folding gap.

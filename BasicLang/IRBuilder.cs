@@ -1957,10 +1957,17 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(MyBaseExpressionNode node)
         {
-            // MyBase represents the base class instance
-            // For now, treat it as a special "this" reference for base class access
+            // MyBase is the SAME OBJECT seen as its base class — an inherited field lives on this
+            // instance, so the receiver is `Me`, carrying the BASE type so a backend that names
+            // the declaring class in the access (MSIL's ldfld token) names the right one.
+            //
+            // ⛔ It used to lower to a variable literally named `__base`, which nothing declares:
+            // "use of undeclared identifier '__base'" on C++, "__base is not defined" on
+            // JavaScript, CS0103 on C# and an InvalidProgramException on MSIL — `MyBase.Field`
+            // was broken on all four, measured. Only `MyBase.Method(...)` escaped it, through the
+            // IRBaseMethodCall arm that intercepts the call before the receiver is ever visited.
             var baseType = _semanticAnalyzer.GetNodeType(node);
-            _expressionResult = new IRVariable("__base", baseType);
+            _expressionResult = new IRVariable("Me", baseType);
         }
 
         public void Visit(LambdaExpressionNode node)

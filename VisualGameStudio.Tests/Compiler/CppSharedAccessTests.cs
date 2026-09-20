@@ -388,23 +388,14 @@ public class CppSharedAccessTests
     // ------------------------------------------------------- pin on what is STILL broken
 
     /// <summary>
-    /// ⛔ PINNED AS BROKEN, and NOT this change's to fix: an INHERITED Shared member.
-    ///
-    /// <para>The lowering here is CORRECT — the access resolves to the declaring class and emits
-    /// <c>Base::K</c>. What still fails is upstream: the IR types an inherited Shared read as
-    /// <c>Object</c>, so the result temp is declared <c>void*</c> and C++ rejects the assignment
-    /// ("incompatible integer to pointer conversion"). The measured contrast is exact — a DIRECT
-    /// read of the same field declares <c>int32_t t0</c>, an inherited one <c>void* t0</c>, with an
-    /// identical access expression.</para>
-    ///
-    /// <para>⚠ HANDOFF already records this front-end mistyping separately ("An inherited Shared
-    /// FIELD is mistyped by the FRONT END"), and C# survives it only because it re-emits the text
-    /// and lets the C# compiler resolve the name. This test pins BOTH halves: that the access is
-    /// right, and that the typing is still wrong. It goes red when the front end is fixed, which is
-    /// the signal to promote it to a full compile-and-run case.</para>
+    /// ✅ An INHERITED Shared member, PROMOTED from a pin on 2026-09-19. This was two halves: the
+    /// access already resolved to the declaring class and emitted <c>Base::K</c>, while the front
+    /// end typed the inherited Shared read <c>Object</c>, so its temp was declared <c>void*</c> and
+    /// the file did not compile. The base-chain walk in the analyzer types it now, so the second
+    /// half is a compile-and-RUN assertion; the form pin on the qualifier is kept.
     /// </summary>
     [Test]
-    public void AnInheritedSharedField_ResolvesCorrectly_ButIsStillMistypedUpstream()
+    public void AnInheritedSharedField_IsReadThroughTheDerivedClass_AndRuns()
     {
         var cpp = BclE2E.CompileToCppOptimized("""
             Class Base
@@ -437,11 +428,11 @@ public class CppSharedAccessTests
                 + "because the base walk has to run anyway to decide whether to qualify AT ALL "
                 + "(that part IS behavioural — see the inherited-write case above), and because "
                 + "it is what the other backends emit.");
-            Assert.That(cpp, Does.Match(@"void\*\s+t\d+"),
-                "PINNED FRONT-END DEFECT: an inherited Shared read is typed Object, so its temp is "
-                + "void* and the file does not compile. If this no longer matches, the front-end "
-                + "typing is fixed — promote this test to a compile-and-run case rather than "
-                + "deleting it.");
+            Assert.That(cpp, Does.Not.Match(@"void\*\s+t\d+"),
+                "the inherited Shared read is typed from the DECLARING class's field, not Object — "
+                + "a void* temp here is the old front-end mistyping come back");
+            Assert.That(BclE2E.CompileRun(cpp), Is.EqualTo("4\n"),
+                "and it compiles and runs, which the void* temp made impossible");
         });
     }
 
@@ -474,18 +465,14 @@ public class CppSharedAccessTests
     }
 
     /// <summary>
-    /// ⛔ PINNED AS BROKEN, and NOT this change's to fix: an INHERITED Shared SUB call. This is the
-    /// SAME upstream defect as the inherited read pinned above, wearing a second face. The
-    /// qualifier resolves correctly to <c>Base::Bump</c>, but the front end does not recognise the
-    /// inherited member as a Sub, so it builds an expression call and the backend binds the result:
-    /// <c>t0 = Base::Bump();</c> — <c>void value not ignored as it ought to be</c>.
-    ///
-    /// <para>⚠ The contrast is exact and is asserted by the test above: the DIRECT call
-    /// <c>Box.Bump()</c> emits a bare <c>Box::Bump();</c> statement and runs. Only going through
-    /// <c>Derived</c> loses the signature.</para>
+    /// ✅ An INHERITED Shared SUB call, PROMOTED from a pin on 2026-09-19 — the second face of the
+    /// same upstream defect as the inherited read above. The qualifier always resolved to
+    /// <c>Base::Bump</c>, but the front end did not carry the inherited member's SIGNATURE, so it
+    /// built an expression call and the backend bound the result: <c>t0 = Base::Bump();</c>, which
+    /// C++ rejects for a void function. The base-chain walk finds the real Sub symbol now.
     /// </summary>
     [Test]
-    public void AnInheritedSharedSubCall_ResolvesCorrectly_ButIsStillBoundToATempUpstream()
+    public void AnInheritedSharedSubCall_RunsAsAStatement()
     {
         var cpp = BclE2E.CompileToCppOptimized("""
             Class Base
@@ -507,10 +494,14 @@ public class CppSharedAccessTests
             End Module
             """);
 
-        Assert.That(cpp, Does.Match(@"t\d+\s*=\s*Base::Bump\(\);"),
-            "PINNED: the qualifier is RIGHT (Base::Bump, the declaring class) while the call is "
-            + "still bound to a temp, which C++ rejects for a void function. If this no longer "
-            + "matches, the front end now carries the inherited signature — promote this to a "
-            + "compile-and-run case rather than deleting it.");
+        Assert.Multiple(() =>
+        {
+            Assert.That(cpp, Does.Not.Match(@"t\d+\s*=\s*Base::Bump\(\);"),
+                "the void Sub is emitted as a STATEMENT, not bound to a temp");
+            Assert.That(cpp, Does.Match(@"(?<![=\w])\s*Base::Bump\(\);"),
+                "and it still goes to the DECLARING class");
+            Assert.That(BclE2E.CompileRun(cpp), Is.EqualTo("9\n"),
+                "compiles and runs: Bump added 5 to the one shared K");
+        });
     }
 }
