@@ -17,35 +17,41 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
-## 🚀 START HERE — 2026-09-20 handoff: Task 24 (menus), commit 24a is IN FLIGHT and UNCOMMITTED
+## 🚀 START HERE — 2026-09-20 handoff: Task 24 (menus), commit 24a is COMMITTED AS WIP `7bc41c2`, UNGATED
 
 **Written for the session that picks this up. Newer than everything below; supersedes it where they
-disagree.** Branch `feat/form-designer` @ `15fec61` locally (origin at `c12c040` until this file's
-commit is pushed). `origin/master` is **`f2727f4`** (PRs #56–#62 landed 2026-09-20; whether the
+disagree.** Branch `feat/form-designer` @ `7bc41c2` == origin (this file's final edit follows it). `origin/master` is **`f2727f4`** (PRs #56–#62 landed 2026-09-20; whether the
 game-template float→int break, chip `task_9e0da8ab`, is fixed there is UNMEASURED).
 
-### The working tree is the handoff — do not stash, checkout, reset or "clean" it
+### The 24a work is COMMITTED as a labelled WIP — `7bc41c2` — and the tree is clean
+
+At session close (2026-09-20, owner's instruction: "save your work so the other session can take
+over") the five product changes and the two fixtures were committed as
+`wip(compiler): New T() { … } — Tasks 1–4 of commit 24a, reviewed, UNGATED` and pushed
+(local == origin == `7bc41c2`). Its message is the per-task record. What that commit holds:
 
 ```
- M BasicLang/CSharpBackend.cs        (+22)   Task 4  — EmitExpression in Visit(IRArrayStore)/Visit(IRIndexerStore) + the GetOperands IRArrayStore arm
- M BasicLang/IRBuilder.cs            (+18)   Task 3  — CoerceToDeclaredType per typed-literal element
- M BasicLang/JavaScriptBackend.cs    (+29)   Task 4  — Visit(IRArrayAlloc)/Visit(IRArrayStore)/Expr arm + the IRAlloca guard in Visit(IRStore)
- M BasicLang/Parser.cs               (+68)   Task 1  — `New T() {…}` → CollectionInitializerNode.ElementType; three refusals
- M BasicLang/SemanticAnalyzer.cs     (+186)  Task 2  — typed branch, three element policies, WidensTo, NothingAdviceFor
- M docs/superpowers/plans/2026-09-20-menus-toolbars-statusbars.md   (the AS-BUILT notes — committed with this file)
-?? VisualGameStudio.Tests/Compiler/TypedArrayLiteralTests.cs           (47 rows: 10 parser + 35 analyzer + 2 IR)
-?? VisualGameStudio.Tests/Compiler/TypedArrayLiteralExecutionTests.cs  ([Category("Integration")], runs all three backends)
-?? csc.dll                                                              (known stray — NEVER add it)
+ BasicLang/CSharpBackend.cs        (+22)   Task 4  — EmitExpression in Visit(IRArrayStore)/Visit(IRIndexerStore) + the GetOperands IRArrayStore arm
+ BasicLang/IRBuilder.cs            (+18)   Task 3  — CoerceToDeclaredType per typed-literal element
+ BasicLang/JavaScriptBackend.cs    (+29)   Task 4  — Visit(IRArrayAlloc)/Visit(IRArrayStore)/Expr arm + the IRAlloca guard in Visit(IRStore)
+ BasicLang/Parser.cs               (+68)   Task 1  — `New T() {…}` → CollectionInitializerNode.ElementType; three refusals
+ BasicLang/SemanticAnalyzer.cs     (+186)  Task 2  — typed branch, three element policies, WidensTo, NothingAdviceFor
+ VisualGameStudio.Tests/Compiler/TypedArrayLiteralTests.cs           (47 rows: 10 parser + 35 analyzer + 2 IR)
+ VisualGameStudio.Tests/Compiler/TypedArrayLiteralExecutionTests.cs  ([Category("Integration")], runs all three backends)
 ```
+`?? csc.dll` stays untracked — a known stray, NEVER add it.
 
-Every one of those five product changes was implemented test-first by a fresh subagent, then
-spec-reviewed and code-quality-reviewed (Tasks 1–3 approved; Task 4's FIX ROUND is on disk but its
-re-review has not happened — see step 2). All mutant text is restored (`git grep MUTANT_` = 0).
-⚠ **A `--no-build` regression run from the old session may still be alive at handoff** (its Task 4
-implementer was mid-`CppCollectionTests`, ~30 min, when this was written). Before ANY build:
-`Get-Process dotnet, testhost` and either wait for it or stop it by WORKTREE PATH, one PID at a time
-(never by project name) — a rebuild overwrites DLLs a running test host has loaded. **Nothing is committed on purpose:** the plan's
-rule is one task → one commit → one full-suite gate (Task 6).
+⛔ **The WIP commit is NOT the gated 24a commit.** The plan's rule is one task → one commit → one
+full-suite gate (Task 6), and that gate is still owed. Do not amend `7bc41c2` (it is pushed); when
+Tasks 5–6 are done, make the FOLLOW-UP commit `feat(compiler): New T() { … } array creation with
+initializer — gated`, carrying Task 5's rows, spec §10 and the totals. Every one of the five product
+changes was implemented test-first by a fresh subagent, then spec-reviewed and
+code-quality-reviewed (Tasks 1–3 approved; Task 4's FIX ROUND is in the commit but its re-review has
+not happened — see step 2). All mutant text is restored (`git grep MUTANT_` = 0).
+⚠ **THREE `dotnet`/`testhost` processes were alive at handoff** — the old session's Task 4
+implementer was mid-`CppCollectionTests` (`--no-build`, ~30 min). Before ANY build:
+`Get-Process dotnet, testhost` and either wait for them or stop them by WORKTREE PATH, one PID at a
+time (never by project name) — a rebuild overwrites DLLs a running test host has loaded.
 
 ### What each task measured (the numbers a new run must reproduce)
 
@@ -86,7 +92,7 @@ Array(2); t1[0] = 1; t1[1] = t0;`.
    `4e44348`/`15fec61`). ⚠ `brief.md` grants `Bash`, and on this machine **Bash opens wsl.exe** —
    tell it to use PowerShell/Grep/Glob, or drop `Bash` from its `tools:` line. `architect.md` still
    says "five backends" — MSIL/LLVM are OUT OF SCOPE by the 2026-07-15 decision.
-1. `git status` must match the block above. Then ONE build of `VisualGameStudio.Tests`, then
+1. `git status` must be clean but for `?? csc.dll`, and `git log -1` must be at or after `7bc41c2`. Then ONE build of `VisualGameStudio.Tests`, then
    `--no-build --filter "FullyQualifiedName~TypedArrayLiteralTests"` (expect 47/47) and
    `--filter "FullyQualifiedName~TypedArrayLiteralExecutionTests"` (expect every row green, 0
    skipped — read the `Total tests` line from a captured file; a "Passed!" line is not a result).
