@@ -163,6 +163,34 @@ suites). The 5th failure in the `6139386` run was a
 fails only when the Native tier runs alongside it). The fast subset shows the two
 `SearchSnippets` ones.
 
+⛔ **A GAMEPAD PLUGGED INTO THE BUILD MACHINE TURNS A NATIVE ROW RED — and nothing in the repo
+changed.** Diagnosed 2026-09-20/21, root cause measured, fixed in the test; recorded here because
+the symptom is maximally misleading: a deterministic new failure, unchanged DLL, unchanged test
+file, on a branch mid-feature. `RaylibCoreC11RecordingTests.Automation_recording_cycle_marshals_…`
+asserted a flat `count == 0` ("no synthetic input → nothing recorded"). raylib's
+`RecordAutomationEvent` runs from `EndDrawing` and records one `INPUT_GAMEPAD_AXIS_MOTION`
+(type 13) **per non-trigger axis per frame for every connected pad, with every stick dead centre
+and nobody touching it**. An Xbox-compatible pad arrived on this machine at **2026-09-20 21:13**
+(`Get-PnpDevice` / `DEVPKEY_Device_LastArrivalDate` on `VID_045E&PID_028E` — that timestamp is what
+dated the regression) and the row went `Expected: 0, But was: 8`.
+**8 = (3 frames − 1) × 4 stick axes**: the pad's 2 triggers rest at `-1.0` and do not clear raylib's
+record threshold, its 4 stick axes read `0.0` and do; and the FIRST frame records nothing because
+GLFW only raises its joystick-connect callback inside `PollInputEvents()`, which `EndDrawing` calls
+*after* it records.
+⚠ **That ordering is a trap for anyone writing such a precondition check**: straight out of
+`InitWindow`, raylib still answers `IsGamepadAvailable(0) == false` with the pad plugged in. Probe
+it only AFTER frames have been pumped, or you will assert the very thing that is wrong.
+⭐ Proven, not inferred: a standalone console probe containing **zero repo code**, P/Invoking the
+shipped `VisualGameStudioEngine.dll`, reproduced `count == 8` with the test's exact call sequence
+and dumped all 8 events as `INPUT_GAMEPAD_AXIS_MOTION` on `gamepad 0` axes 0-3 — which is what
+ruled out the concurrent compiler work by measurement rather than by inspection. The fix was then
+mutation-checked: restoring the old `Is.EqualTo(0u)` puts the row back to `But was: 8` inside the
+real test host, so the new assertion is discriminating and not vacuous.
+The engine is blameless — `Framework_LoadAutomationEventList` and friends are one-line
+passthroughs at `VisualGameStudioEngine/framework.cpp:2148-2153`. **Do not baseline this row**; if
+it is ever red again, re-read the reason, because the empty-run claim is now made only when the run
+is genuinely device-free.
+
 ✅ **`ee3c086` is WINDOWS-GATED (2026-09-14).** The four failures are exactly the baseline four
 named above — so everything a Linux container structurally cannot exercise ran and passed, which
 is most of what matters for this branch: the **22 §12.5 blnet integration rows** needing the
