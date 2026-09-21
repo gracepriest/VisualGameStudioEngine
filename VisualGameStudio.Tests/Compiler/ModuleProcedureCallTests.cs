@@ -210,9 +210,10 @@ public class ModuleProcedureCallTests
     /// <summary>
     /// ⛔ ByRef through a qualified call was lost on EVERY backend — the instance arm never reads
     /// the declaration's ByRef markers — and C# said so: CS1620, "must be passed with 'ref'".
-    /// Runs on C++ and C# now. JavaScript refuses ByRef by design (BL7002) and MSIL fails every
-    /// ByRef call with InvalidProgramException, a pre-existing gap already in HANDOFF — both
-    /// asserted as they are, not normalised away.
+    /// Runs on C++ and C# now. ⛔ PIN CLOSED: MSIL also now runs and agrees at 5 — it used to fail
+    /// every ByRef call with <c>InvalidProgramException</c>, a pre-existing gap (see
+    /// <c>MsilByRefTests</c> for the family that closed it), pinned here rather than normalised
+    /// away. JavaScript still refuses ByRef by design (<c>BL7002</c>), asserted as it is.
     /// </summary>
     [Test]
     public void ByRef_ThroughAQualifiedCall_IsMarked()
@@ -235,9 +236,7 @@ public class ModuleProcedureCallTests
             Assert.That(Norm(FourBackends.RunEmittedCSharp(program)), Is.EqualTo("5"), "C#");
             Assert.That(() => JavaScriptExecutionTests.RunJs(program),
                 Throws.Exception.With.Message.Contains("ByRef"), "JavaScript refuses ByRef by design");
-            var msil = MsilHarness.Run(program);
-            Assert.That(msil.Outcome, Is.Not.EqualTo(MsilHarness.MsilOutcome.Ran),
-                "PINNED pre-existing: MSIL fails any ByRef call; if it ran, promote this leg to \"5\"");
+            Assert.That(Norm(MsilHarness.RunExpectingSuccess(program)), Is.EqualTo("5"), "MSIL");
         });
     }
 

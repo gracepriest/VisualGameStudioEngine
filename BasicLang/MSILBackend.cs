@@ -178,6 +178,39 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         private readonly Dictionary<string, int> _fieldStoreScratch =
             new(StringComparer.OrdinalIgnoreCase);
 
+        // ================================================================================
+        // ByRef. Two separate defects lived here, and only one of them is ByRef's own.
+        //
+        // (A) EmitStoreLocal had no `starg` arm AT ALL: it walked locals, fields, properties,
+        //     static fields and module globals, and fell off the end with
+        //     `// WARNING: Cannot store to 'n'` for any PARAMETER. The computed value stayed on
+        //     the stack, `ret` followed with a non-empty stack, and the CLR rejected the method.
+        //     That is why `Sub Bump(n As Integer) : n = n + 1` and `For n = 1 To 3` over a
+        //     parameter BOTH threw InvalidProgramException with no ByRef anywhere in sight.
+        //
+        // (B) ByRef itself: the signature carried no `&` and the call site pushed the VALUE, so
+        //     a write-through had nowhere to land even once (A) let it be emitted.
+        //
+        // A ByRef parameter's slot holds a MANAGED POINTER: reading it is `ldarg` + `ldind.*`,
+        // writing it is `ldarg` + value + `stind.*`, and passing it on is the bare `ldarg`.
+
+        /// <summary>
+        /// The current method's ByRef parameters, by name, holding the POINTED-AT type — what
+        /// <c>ldind</c>/<c>stind</c> need and what the <c>&amp;</c> in the signature is applied to.
+        /// Empty for every method that has none, which is what keeps their output unchanged.
+        /// </summary>
+        private readonly Dictionary<string, TypeInfo> _byRefParams =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Scratch slot per ByRef parameter the current method ASSIGNS THROUGH. <c>stind</c> wants
+        /// the address UNDER the value and this backend arrives with the value already on the
+        /// stack, so the value has to be parked while the address goes down — the same park-and-
+        /// re-push <see cref="_fieldStoreScratch"/> exists for, for the same reason: IL has no swap.
+        /// </summary>
+        private readonly Dictionary<string, int> _byRefStoreScratch =
+            new(StringComparer.OrdinalIgnoreCase);
+
         /// <summary>
         /// The enclosing class's properties, for a BARE name inside one of its own methods.
         ///
@@ -295,7 +328,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// </summary>
         private string DeclaredParamList(IReadOnlyList<IRVariable> declared, IEnumerable<IRValue> arguments) =>
             declared != null && declared.Count > 0
-                ? string.Join(", ", declared.Select(p => IlTypeSpec(p.Type)))
+                ? string.Join(", ", declared.Select(ParamSpec))
                 : string.Join(", ", (arguments ?? Enumerable.Empty<IRValue>()).Select(a => IlTypeSpec(a.Type)));
 
         /// <summary>
@@ -1377,7 +1410,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (ctor.Implementation != null)
             {
                 paramTypes = string.Join(", ", ctor.Implementation.Parameters.Select(p =>
-                    $"{IlTypeSpec(p.Type)} {SanitizeName(p.Name)}"));
+                    $"{ParamSpec(p)} {SanitizeName(p.Name)}"));
             }
 
             WriteLine("  .method public hidebysig specialname rtspecialname");
@@ -1549,7 +1582,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (method.Implementation != null)
             {
                 paramTypes = string.Join(", ", method.Implementation.Parameters.Select(p =>
-                    $"{IlTypeSpec(p.Type)} {SanitizeName(p.Name)}"));
+                    $"{ParamSpec(p)} {SanitizeName(p.Name)}"));
             }
 
             WriteLine($"  .method public hidebysig {modifiers}{staticMod}");
@@ -1611,6 +1644,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         {
             _localIndices.Clear();
             _paramIndices.Clear();
+            _byRefParams.Clear();
+            _byRefStoreScratch.Clear();
             _tempIndices.Clear();
             _tempNameIndices.Clear();
             _declaredIdentifiers.Clear();
@@ -1686,6 +1721,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 _declaredIdentifiers.Add(param.Name);
                 _paramIndices[param.Name] = argumentSlot++;
             }
+            RegisterByRefParameters(function);
 
             foreach (var local in function.LocalVariables)
             {
@@ -1699,6 +1735,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             AllocateExceptionHandlingLocals(function);
             AllocateForEachLocals(function);
             AllocateFieldStoreScratch(function);
+            AllocateByRefStoreScratch(function);
             AllocateTemporaries(function);
         }
 
@@ -1767,6 +1804,75 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 }
             }
         }
+
+        /// <summary>
+        /// Records which of <paramref name="function"/>'s parameters are ByRef, so the signature
+        /// can carry <c>&amp;</c> and every read/write through one can be an indirection.
+        ///
+        /// <para>⚠ Called AFTER <see cref="_paramIndices"/> is filled and keyed the same way, so a
+        /// name is either in both tables or in neither — a ByRef entry with no slot would emit an
+        /// <c>ldind</c> with nothing under it.</para>
+        /// </summary>
+        private void RegisterByRefParameters(IRFunction function)
+        {
+            foreach (var param in function.Parameters ?? new List<IRVariable>())
+            {
+                if (param?.Name == null || !param.IsByRef) continue;
+                _byRefParams[param.Name] = param.Type;
+            }
+        }
+
+        /// <summary>
+        /// Reserves one scratch slot per ByRef parameter this method WRITES THROUGH — the exact
+        /// twin of <see cref="AllocateFieldStoreScratch"/>, scanning the same three instruction
+        /// shapes for the same reason.
+        ///
+        /// <para>A ByRef parameter that is only READ gets no slot, so a program that never writes
+        /// one emits not a byte more than before.</para>
+        /// </summary>
+        private void AllocateByRefStoreScratch(IRFunction function)
+        {
+            if (_byRefParams.Count == 0) return;
+
+            foreach (var block in function.Blocks ?? new List<BasicBlock>())
+            {
+                foreach (var instruction in block.Instructions)
+                {
+                    // The same THREE shapes AllocateFieldStoreScratch names: a binary op whose
+                    // RESULT is the name, an IRAssignment's TARGET, and an IRStore's ADDRESS.
+                    var target = instruction switch
+                    {
+                        IRAssignment assignment => assignment.Target?.Name,
+                        IRStore store when store.Address is IRVariable variable => variable.Name,
+                        IRValue value => value.Name,
+                        _ => null,
+                    };
+
+                    if (string.IsNullOrEmpty(target)) continue;
+                    if (!_byRefParams.TryGetValue(target, out var pointee)) continue;
+                    if (_byRefStoreScratch.ContainsKey(target)) continue;
+
+                    var index = _localIndices.Count;
+                    var name = $"byref_scratch_{RawName(target)}";
+                    _localIndices[name] = index;
+                    _byRefStoreScratch[target] = index;
+                    _syntheticLocals.Add((index, IlTypeSpec(pointee), name));
+                }
+            }
+        }
+
+        /// <summary>
+        /// One parameter as the signature spells it. The <c>&amp;</c> is the whole of ByRef in IL:
+        /// the argument slot holds a managed pointer instead of a copy.
+        ///
+        /// <para>⛔ Every site that spells a signature must agree — the declaration, the call, and
+        /// <see cref="DeclaredParamList"/>. ilasm does not resolve member references, so a call
+        /// that spells <c>(int32)</c> against a method declared <c>(int32&amp;)</c> assembles
+        /// cleanly and dies at RUN time with MissingMethodException, the same trap
+        /// <see cref="DeclaredParamList"/> already documents for declared types.</para>
+        /// </summary>
+        private string ParamSpec(IRVariable parameter) =>
+            IlTypeSpec(parameter?.Type) + (parameter != null && parameter.IsByRef ? "&" : "");
 
         private void GenerateHeader(IRModule module)
         {
@@ -1952,6 +2058,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // parameters or temporaries from whatever was generated before it.
             _localIndices.Clear();
             _paramIndices.Clear();
+            _byRefParams.Clear();
+            _byRefStoreScratch.Clear();
             _tempIndices.Clear();
             _tempNameIndices.Clear();
             _declaredIdentifiers.Clear();
@@ -2015,6 +2123,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         {
             _localIndices.Clear();
             _paramIndices.Clear();
+            _byRefParams.Clear();
+            _byRefStoreScratch.Clear();
             _tempIndices.Clear();
             _tempNameIndices.Clear();
             _declaredIdentifiers.Clear();
@@ -2100,6 +2210,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _currentFunction = function;
             _localIndices.Clear();
             _paramIndices.Clear();
+            _byRefParams.Clear();
+            _byRefStoreScratch.Clear();
             _tempIndices.Clear();
             _tempNameIndices.Clear();
             _declaredIdentifiers.Clear();
@@ -2145,6 +2257,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 _declaredIdentifiers.Add(param.Name);
                 _paramIndices[param.Name] = _paramIndices.Count;
             }
+            RegisterByRefParameters(function);
 
             foreach (var local in function.LocalVariables)
             {
@@ -2159,6 +2272,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // and .locals init is written from these tables before any body instruction exists.
             AllocateExceptionHandlingLocals(function);
             AllocateForEachLocals(function);
+            AllocateByRefStoreScratch(function);
 
             // Allocate indices for temporaries
             AllocateTemporaries(function);
@@ -2176,7 +2290,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             // Parameters
             var paramList = string.Join(", ", function.Parameters.Select(p =>
-                $"{IlTypeSpec(p.Type)} {SanitizeName(p.Name)}"));
+                $"{ParamSpec(p)} {SanitizeName(p.Name)}"));
 
             WriteLine($"          {returnType} {methodName}({paramList}) cil managed");
 
@@ -2828,6 +2942,13 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (idx >= 0)
             {
                 EmitLdarg(idx);
+
+                // A ByRef parameter's slot holds a MANAGED POINTER, not the value. Reading the
+                // name means dereferencing it — without this `n + 1` would add one to the ADDRESS.
+                if (_byRefParams.TryGetValue(name, out var pointee))
+                {
+                    WriteLine($"    ldind.{GetIndirectSuffix(pointee)}");
+                }
                 return;
             }
 
@@ -2883,6 +3004,256 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
 
             WriteLine($"    // WARNING: Unknown local '{name}'");
+        }
+
+        // ================================================================================
+        // ByRef ARGUMENTS — pushing an ADDRESS where every other argument pushes a value.
+        // ================================================================================
+
+        /// <summary>What kind of storage a ByRef argument names, and so which address opcode.</summary>
+        private enum ByRefTargetKind
+        {
+            /// <summary><c>ldloca</c>.</summary>
+            Local,
+            /// <summary><c>ldarga</c> — the caller's own ByVal parameter IS a variable, and VB
+            /// lets one be passed ByRef. The callee writes the caller's copy, which is what C#
+            /// and C++ both do.</summary>
+            Argument,
+            /// <summary>A bare <c>ldarg</c>: the slot ALREADY holds the pointer, so taking its
+            /// address would alias the argument slot instead of the caller's variable.</summary>
+            ByRefArgument,
+            /// <summary><c>ldarg.0</c> + <c>ldflda</c>.</summary>
+            InstanceField,
+            /// <summary><c>ldsflda</c> — a <c>Shared</c> field and a module global alike.</summary>
+            StaticField,
+        }
+
+        private readonly struct ByRefTarget
+        {
+            internal ByRefTargetKind Kind { get; }
+            internal int Slot { get; }
+            internal TypeInfo Type { get; }
+            internal string Token { get; }
+
+            internal ByRefTarget(ByRefTargetKind kind, int slot, TypeInfo type, string token)
+            {
+                Kind = kind;
+                Slot = slot;
+                Type = type;
+                Token = token;
+            }
+        }
+
+        /// <summary>The declared type of the current method's local or parameter <paramref name="name"/>.</summary>
+        private TypeInfo DeclaredStorageType(IEnumerable<IRVariable> candidates, string name) =>
+            candidates?.FirstOrDefault(v => v?.Name != null
+                && string.Equals(v.Name, name, StringComparison.OrdinalIgnoreCase))?.Type;
+
+        /// <summary>
+        /// Resolves <paramref name="name"/> to storage whose ADDRESS can be taken, walking exactly
+        /// the ladder <see cref="EmitLoadLocal"/> walks and in the same order — a local, then a
+        /// parameter, then a field of the enclosing instance, then a <c>Shared</c> field, then a
+        /// module global. Resolving in any other order would hand the callee a pointer to
+        /// different storage than the same name reads through in the same body.
+        ///
+        /// <para>⛔ A PROPERTY IS NOT STORAGE and is refused by the caller rather than resolved
+        /// here: its bare name is an accessor CALL, so there is no address at all. VB's own
+        /// semantics for that case are copy-in/copy-out through a temporary, which is not
+        /// something this backend can synthesize without also knowing where the call ends — and a
+        /// ByRef that writes a temporary nobody reads is precisely the silent wrong answer this
+        /// refusal exists to prevent. C# refuses it too (CS0206).</para>
+        /// </summary>
+        private bool TryResolveByRefTarget(string name, out ByRefTarget target)
+        {
+            target = default;
+            if (string.IsNullOrEmpty(name)) return false;
+
+            var localIdx = GetLocalIndex(name);
+            if (localIdx >= 0)
+            {
+                target = new ByRefTarget(ByRefTargetKind.Local, localIdx,
+                    DeclaredStorageType(_currentFunction?.LocalVariables, name), null);
+                return true;
+            }
+
+            var paramIdx = GetParamIndex(name);
+            if (paramIdx >= 0)
+            {
+                var declared = DeclaredStorageType(_currentFunction?.Parameters, name);
+                target = _byRefParams.ContainsKey(name)
+                    ? new ByRefTarget(ByRefTargetKind.ByRefArgument, paramIdx, declared, null)
+                    : new ByRefTarget(ByRefTargetKind.Argument, paramIdx, declared, null);
+                return true;
+            }
+
+            if (_currentMethodIsInstance && _currentClassFields.TryGetValue(name, out var fieldType))
+            {
+                target = new ByRefTarget(ByRefTargetKind.InstanceField, 0, fieldType,
+                    $"{FieldOwnerToken(name)}::{SanitizeName(name)}");
+                return true;
+            }
+
+            // A property shadows anything further out, exactly as it does in EmitLoadLocal — so it
+            // is checked HERE and reported as unaddressable rather than skipped, which would let a
+            // module global of the same name be written instead.
+            if (_currentClassOwner != null && _currentClassProperties.ContainsKey(name)) return false;
+
+            if (TryFindStaticField(_currentClass, name, out var staticOwner, out var staticField))
+            {
+                target = new ByRefTarget(ByRefTargetKind.StaticField, 0, staticField.Type,
+                    $"{SanitizeName(staticOwner.Name)}::{SanitizeName(staticField.Name)}");
+                return true;
+            }
+
+            if (_moduleGlobals.TryGetValue(name, out var global))
+            {
+                target = new ByRefTarget(ByRefTargetKind.StaticField, 0, global.Type,
+                    $"{_moduleName}::{SanitizeName(global.Name)}");
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>Pushes the address <paramref name="target"/> describes.</summary>
+        private void EmitByRefTarget(ByRefTarget target)
+        {
+            switch (target.Kind)
+            {
+                case ByRefTargetKind.Local:
+                    if (target.Slot < 256) WriteLine($"    ldloca.s {target.Slot}");
+                    else WriteLine($"    ldloca {target.Slot}");
+                    break;
+                case ByRefTargetKind.Argument:
+                    if (target.Slot < 256) WriteLine($"    ldarga.s {target.Slot}");
+                    else WriteLine($"    ldarga {target.Slot}");
+                    break;
+                case ByRefTargetKind.ByRefArgument:
+                    // ⛔ NOT ldarga. The slot already holds the caller's pointer; `ldarga` would
+                    // hand the callee a pointer to THIS frame's argument slot, so the write would
+                    // land one level short and the original variable would never change.
+                    EmitLdarg(target.Slot);
+                    return;
+                case ByRefTargetKind.InstanceField:
+                    EmitLdarg(0);
+                    WriteLine($"    ldflda {IlTypeSpec(target.Type)} {target.Token}");
+                    return;
+                case ByRefTargetKind.StaticField:
+                    WriteLine($"    ldsflda {IlTypeSpec(target.Type)} {target.Token}");
+                    break;
+            }
+            _currentStack++;
+        }
+
+        /// <summary>
+        /// Pushes the ADDRESS of a ByRef argument, or refuses loudly.
+        ///
+        /// <para>⛔ REFUSING IS THE POINT. Every shape below that cannot be given an address has
+        /// exactly one alternative — push a value, let the callee write it, and throw the write
+        /// away — and that alternative ASSEMBLES AND RUNS. A ByRef that silently writes a
+        /// temporary instead of the caller's variable is a worse failure than not compiling, so
+        /// each of these is a hard refusal naming the shape. C# refuses the same three
+        /// (CS1510 for a literal and an expression, CS0206 for a property) and C++ refuses the
+        /// mismatched type, so this loses no program that another backend accepts.</para>
+        /// </summary>
+        private void EmitByRefArgument(IRValue argument, IRVariable declared, string calleeName, int position)
+        {
+            var where = $"argument {position + 1} of the ByRef call to '{calleeName}'";
+            var wantedSpec = IlTypeSpec(declared?.Type);
+
+            // `a(0)` lowers to a GEP — a managed pointer, already parked in a temp by
+            // Visit(IRGetElementPtr) — followed by a LOAD of that pointer. The pointer is the
+            // address; the loaded temp beside it is a copy, and passing the copy is the silent
+            // wrong answer. Take the GEP.
+            if (argument is IRLoad arrayLoad && arrayLoad.Address is IRGetElementPtr elementPtr)
+            {
+                RequireByRefSpec(wantedSpec, IlTypeSpec(arrayLoad.Type), where, "an array element");
+                EmitLoadValue(elementPtr);
+                return;
+            }
+
+            if (argument is IRVariable variable && TryResolveByRefTarget(variable.Name, out var target))
+            {
+                RequireByRefSpec(wantedSpec, IlTypeSpec(target.Type), where, $"'{variable.Name}'");
+                EmitByRefTarget(target);
+                return;
+            }
+
+            var what = argument switch
+            {
+                IRConstant => "a literal has no address",
+                IRVariable named when _currentClassProperties.ContainsKey(named.Name ?? "")
+                    => $"'{named.Name}' is a PROPERTY, and a property is an accessor call, not storage",
+                IRVariable named => $"'{named.Name}' does not resolve to a local, a parameter, a "
+                    + "field or a module-level variable",
+                _ => "an expression's value lives in a temporary, not in the caller's storage",
+            };
+
+            throw new ForeignFeatureException(
+                $"MSIL: {where} cannot be passed by reference — {what}. Passing it by VALUE "
+                + "instead would assemble and run, and quietly drop the write-back the ByRef was "
+                + "asked for; assign it to a variable first and pass that.");
+        }
+
+        /// <summary>
+        /// A ByRef argument must name storage of EXACTLY the parameter's type: a pointer is not
+        /// convertible, so there is no coercion to apply and nothing to widen through.
+        ///
+        /// <para>⚠ This is the shape <c>ArgumentCoercionTests</c> records as the discriminating
+        /// one — <c>ByRef n As Double</c> given an Integer. C# rejects it (CS1503, "cannot convert
+        /// from 'ref int' to 'ref double'") and C++ rejects it too; coercing it would create a
+        /// temporary of the right type and write the increment into THAT.</para>
+        /// </summary>
+        private void RequireByRefSpec(string wanted, string actual, string where, string what)
+        {
+            if (string.Equals(wanted, actual, StringComparison.Ordinal)) return;
+
+            throw new ForeignFeatureException(
+                $"MSIL: {where} is {what}, of type {actual}, but the parameter is declared "
+                + $"{wanted} ByRef. A managed pointer cannot be converted, so passing it would "
+                + "mean writing the callee's change into a temporary of the parameter's type and "
+                + "discarding it. C# rejects the same program (CS1503).");
+        }
+
+        /// <summary>
+        /// Loads one call argument: its ADDRESS where the signature this call will SPELL carries
+        /// <c>&amp;</c> at that position, its value everywhere else.
+        ///
+        /// <para>⛔ THE DECLARATION DECIDES, and it must be the SAME declaration
+        /// <see cref="DeclaredParamList"/> spells the signature from — same list, same
+        /// "is there one at all" test. Keying the argument on <c>IRCall.ByRefArguments</c> instead
+        /// looks equivalent and is not: measured on <c>Util.Bump(v)</c> against a
+        /// <c>Public Shared Sub Bump(ByRef n As Integer)</c>, the front end records NO by-ref
+        /// marker for a <c>Type.SharedMethod</c> call (the same gap that makes the C# backend emit
+        /// a raw CS1620 for it), so the signature came out <c>(int32&amp;)</c> from the declaration
+        /// while the argument came out a value from the call site — an invalid program. One source
+        /// for both is the only arrangement in which they cannot disagree.</para>
+        ///
+        /// <para>Shared by every call site — the module-procedure arm, the static user-class arm
+        /// and the instance-method arm — because a ByRef that works through one spelling of a call
+        /// and not another is the drift this file already carries three separate notes about.</para>
+        /// </summary>
+        private void EmitCallArguments(
+            IReadOnlyList<IRValue> arguments,
+            IReadOnlyList<IRVariable> declared,
+            string calleeName)
+        {
+            // The SAME predicate DeclaredParamList uses to decide whether the declaration is what
+            // gets spelled. Where it falls back to the argument types there is no `&` in the
+            // signature, so there must be no address at the call either.
+            var declarationDecides = declared != null && declared.Count > 0;
+
+            for (var i = 0; i < arguments.Count; i++)
+            {
+                if (declarationDecides && i < declared.Count && declared[i] != null && declared[i].IsByRef)
+                {
+                    EmitByRefArgument(arguments[i], declared[i], calleeName, i);
+                }
+                else
+                {
+                    EmitLoadValue(arguments[i]);
+                }
+            }
         }
 
         /// <summary>
@@ -3036,10 +3407,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         private void EmitUserStaticCall(
             IRValue node, IReadOnlyList<IRValue> arguments, string classToken, IRMethod method, bool hasReturn)
         {
-            foreach (var arg in arguments)
-            {
-                EmitLoadValue(arg);
-            }
+            EmitCallArguments(arguments, method?.Implementation?.Parameters, method?.Name);
 
             // ⛔ Spelled from the DECLARATION, not from the call site. GenerateClassMethod writes
             // the signature as MapType(method.ReturnType) and IlTypeSpec(parameter.Type); a call
@@ -3048,7 +3416,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // `object` where the method returns `string` — the call site is not a reliable source.
             var returnType = IlTypeSpec(method.ReturnType);
             var paramTypes = method.Implementation != null
-                ? string.Join(", ", method.Implementation.Parameters.Select(p => IlTypeSpec(p.Type)))
+                ? string.Join(", ", method.Implementation.Parameters.Select(ParamSpec))
                 : string.Join(", ", arguments.Select(a => IlTypeSpec(a.Type)));
             WriteLine($"    call {returnType} {classToken}::{SanitizeName(method.Name)}({paramTypes})");
 
@@ -3273,6 +3641,47 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 return;
             }
 
+            // ⛔ A PARAMETER — the arm this method simply did not have. EmitLoadLocal resolves a
+            // parameter immediately after a local, and a store MUST walk the same ladder in the
+            // same order: check the fields below first and `n = n + 1` inside a class whose field
+            // is also called `n` would read the argument and write the field. Falling off the end
+            // instead (`// WARNING: Cannot store to 'n'`) left the computed value on the stack and
+            // the CLR rejected the whole method — the one defect behind BOTH
+            // `Sub Bump(ByRef n As Integer)` and `For <parameter> = 1 To n`.
+            var paramIdx = GetParamIndex(name);
+            if (paramIdx >= 0)
+            {
+                if (_byRefParams.TryGetValue(name, out var pointee))
+                {
+                    // Write THROUGH the pointer. `stind` wants the address UNDER the value and the
+                    // value is already on the stack, so park it, push the address, re-push it —
+                    // the same park-and-re-push the `stfld` arm below does, and for the same
+                    // reason: IL has no swap.
+                    if (_byRefStoreScratch.TryGetValue(name, out var byRefScratch))
+                    {
+                        EmitStloc(byRefScratch);
+                        EmitLdarg(paramIdx);
+                        EmitLdloc(byRefScratch);
+                        WriteLine($"    stind.{GetIndirectSuffix(pointee)}");
+                        _currentStack -= 2;
+                        return;
+                    }
+
+                    // The scratch pre-pass scans the same instruction shapes this store is reached
+                    // from, so a missing slot means those two have drifted apart. Emitting a
+                    // `starg` here would overwrite the POINTER with the value and the caller's
+                    // variable would silently keep its old one.
+                    throw new ForeignFeatureException(
+                        $"MSIL: no scratch slot was reserved for the write to ByRef parameter "
+                        + $"'{name}'. AllocateByRefStoreScratch and EmitStoreLocal disagree about "
+                        + "which instruction shapes write a parameter; a store emitted without one "
+                        + "would overwrite the pointer instead of the caller's variable.");
+                }
+
+                EmitStarg(paramIdx);
+                return;
+            }
+
             // Assigning a field of the enclosing instance. The value is ALREADY on the stack and
             // `stfld` needs the object under it, so park the value, push `Me`, and re-push — IL
             // has no swap. Without this the assignment landed in a temporary and was dropped:
@@ -3368,6 +3777,22 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                         WriteLine($"    stloc {index}");
                     break;
             }
+            _currentStack--;
+        }
+
+        /// <summary>
+        /// Store to argument slot <paramref name="index"/>.
+        ///
+        /// <para>⚠ There is no <c>starg.0</c>: unlike <c>ldarg</c>, <c>starg</c> has exactly two
+        /// encodings — the short form <c>starg.s</c> and the long <c>starg</c>. Writing
+        /// <c>starg.0</c> by analogy with <c>ldarg.0</c> is not an instruction and ilasm rejects it.</para>
+        /// </summary>
+        private void EmitStarg(int index)
+        {
+            if (index < 256)
+                WriteLine($"    starg.s {index}");
+            else
+                WriteLine($"    starg {index}");
             _currentStack--;
         }
 
@@ -3827,19 +4252,17 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             if (isSelfCall) EmitLdarg(0);
 
-            // Load arguments
-            foreach (var arg in call.Arguments)
-            {
-                EmitLoadValue(arg);
-            }
+            var declaredParams =
+                isSelfCall ? DeclaredMethodParams(selfCallOwner, funcName) : DeclaredFunctionParams(funcName);
+
+            // Load arguments — an ADDRESS for each one the DECLARATION takes ByRef.
+            EmitCallArguments(call.Arguments, declaredParams, funcName);
 
             // Generate call
             // Type SPECS: the declaration these resolve to spells its parameters the same way,
             // and a call whose signature disagrees with the declaration binds to nothing.
             var returnType = IlTypeSpec(call.Type);
-            var paramTypes = DeclaredParamList(
-                isSelfCall ? DeclaredMethodParams(selfCallOwner, funcName) : DeclaredFunctionParams(funcName),
-                call.Arguments);
+            var paramTypes = DeclaredParamList(declaredParams, call.Arguments);
             var sanitizedName = SanitizeName(funcName);
 
             if (isSelfCall)
@@ -5387,18 +5810,23 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 _currentStack--;
 
                 EmitUserStaticCall(
-                    methodCall, methodCall.Arguments, SanitizeName(staticDeclaring.Name), staticMethod, hasReturn);
+                    methodCall, methodCall.Arguments,
+                    SanitizeName(staticDeclaring.Name), staticMethod, hasReturn);
                 return;
             }
 
             // Load 'this' reference (the object on which the method is called)
             EmitLoadValue(methodCall.Object);
 
-            // Load arguments
-            foreach (var arg in methodCall.Arguments)
-            {
-                EmitLoadValue(arg);
-            }
+            // Load arguments — an ADDRESS for each one the DECLARATION takes ByRef. An interface
+            // receiver has no IRVariable parameter list to read IsByRef from, so a ByRef through
+            // an interface stays by-value here and is caught by the signature check below.
+            EmitCallArguments(
+                methodCall.Arguments,
+                DeclaredMethodParams(
+                    TryFindClass(methodCall.Object?.Type?.Name, out var declaringForArgs) ? declaringForArgs : null,
+                    methodCall.MethodName),
+                methodCall.MethodName);
 
             // Build method signature
             string returnType, paramTypes, className, methodName;

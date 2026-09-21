@@ -457,12 +457,25 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   `ParamArray xs As Integer()` are both syntax errors), so a guard clause for it was written and
   then removed — untestable, and redundant anyway since an array-typed parameter is already
   rejected by the Integer/Long/Single/Double restriction.
-  ⚠ **Still failing for unrelated reasons, all pre-existing**: MSIL fails any ByRef call with
-  InvalidProgramException. **The C++ half of this note is now STALE and is corrected here**: a
-  `Shared` method on a user class emitted an undeclared identifier on C++, and both that and the
-  JavaScript equivalent were FIXED 2026-09-19 (see the JS Shared-method entry and the C++
-  `Shared`-access entry). Fixing them did NOT move this row — it still fails, on MSIL, which is
-  why the row's name is unchanged in the by-name suite comparison.
+  ⚠ **STALE, corrected 2026-09-21: MSIL ByRef is FIXED.** This used to read "still failing for
+  unrelated reasons, all pre-existing: MSIL fails any ByRef call with InvalidProgramException".
+  Two separate defects lived behind that: `MSILCodeGenerator.EmitStoreLocal` had NO `starg` arm
+  at all, so writing to ANY parameter — ByRef or not — fell off the end of the
+  local/field/property/static-field ladder and left a value on the stack for `ret` to reject
+  (`Sub Bump(n As Integer) : n = n + 1`, no ByRef anywhere, threw the same
+  `InvalidProgramException`); ByRef's own half needed `&` in the signature, `ldind`/`stind`, and
+  an ADDRESS at the call site for whichever argument kinds have one (a local, a caller's ByVal or
+  ByRef parameter, an instance/`Shared` field, a module global, an array element — a literal, an
+  expression or a property is refused, loudly, not silently passed by value). Both are fixed;
+  `MsilByRefTests` and `MsilParameterWriteTests` cover them, and the two rows this note used to
+  pin — `ModuleProcedureCallTests.ByRef_ThroughAQualifiedCall_IsMarked` and
+  `CountedForVariableTests.CountedFor_OverAParameter_RunsOnEveryBackend_IncludingMsil` — now run
+  MSIL with the rest instead of pinning it. ⛔ **Still open, a SEPARATE shared front-end gap, not
+  this fix's**: a ByRef parameter on a CONSTRUCTOR loses its marker in
+  `IRBuilder.Visit(ConstructorNode)` (`IRBuilder.cs:1885`), which never copies `IsByRef` for a
+  ctor parameter unlike every other parameter site in that file — MSIL and C++ both print 41/42
+  instead of 42/42 for it, identically, pinned in
+  `MsilByRefTests.ConstructorByRefParameter_IsAPinnedSharedFrontEndGap_NotThisFamilys`.
   ⚠ **Omitted `Optional` arguments are filled at the CALL as of 2026-09-16** —
   `IRBuilder.AppendOmittedOptionalArguments`, at the same three arms the argument coercion uses.
   ⛔ **One backend of four was right, and it was right by accident.** C# emits the default into the
@@ -1413,8 +1426,12 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   ("Cannot return type 'Object'"); once it resolved, it ran on JavaScript, MSIL and C#, while C++
   emitted the class BEFORE the free-function prototypes — `'Twice' was not declared`. An
   emission-order gap; the call text was right. Also pre-existing and untouched: a class declared INSIDE a Module block
-  (`Helpers.Box`) is broken on all four; MSIL fails any ByRef call (InvalidProgramException) and
-  JavaScript refuses ByRef by design (BL7002) — the qualified-ByRef case asserts both as they are.
+  (`Helpers.Box`) is broken on all four.
+  ⚠ **STALE, corrected 2026-09-21**: this used to read "MSIL fails any ByRef call
+  (InvalidProgramException) … the qualified-ByRef case asserts both as they are". **MSIL ByRef
+  is FIXED** (see the ByRef entry below): `ByRef_ThroughAQualifiedCall_IsMarked`'s MSIL leg now
+  asserts `"5"` with C++ and C# instead of pinning a failure. JavaScript still refuses ByRef by
+  design (BL7002) and that leg is unchanged.
   ⚠ **`FourBackends` is the shared harness now** (`Norm`, `RunsOnEveryBackend`,
   `RunEmittedCSharp`, `RunEmittedCSharpText`) — `ModuleMemberAccessTests` and this fixture both
   use it; the multi-file case runs the COMBINED IR through all four generators and executes
@@ -1648,8 +1665,10 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   between them (CS0246 `Box` from the Module's `Main`, CS0103 the file class from `App`); the
   other three run it, and the qualified spelling is pinned on the text. A property getter as a
   member on C++, an inherited method on MSIL (MissingMethod), `Func` on MSIL, a class-returning
-  callee on MSIL (ilasm syntax error), ByRef on JavaScript/MSIL — each case runs on the
-  backends without that gap and names it. `Public Total As Integer` at file scope (no `Dim`)
+  callee on MSIL (ilasm syntax error), ByRef on JavaScript — each case runs on the
+  backends without that gap and names it. (⚠ **corrected 2026-09-21**: this row used to read
+  "ByRef on JavaScript/MSIL". MSIL ByRef is fixed — see the ByRef entry below — so only the
+  JavaScript refusal remains.) `Public Total As Integer` at file scope (no `Dim`)
   does not parse.
   ⛔ **SEVENTEEN MUTATIONS, SIXTEEN KILLS, ONE SURVIVOR REMOVED** (164 kills in all on the
   final code; per-mutant counts in the commit message). Every kill set is discriminating: no
@@ -2367,6 +2386,164 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   and the CLI (`--target=msil` → ilasm → `dotnet`), which funnel through
   `MSILCodeGenerator.Generate(irModule)` at `Program.cs:1317` and `Program.cs:4017`.
 
+  ⚠ **ByRef RUNS ON MSIL as of 2026-09-21 — and so does writing ANY parameter** —
+  `MsilByRefTests` (28 cases) and `MsilParameterWriteTests` (7 cases). `MSILBackend.cs`:
+  `_byRefParams` / `_byRefStoreScratch` (`202-212`), `RegisterByRefParameters` (`1816`),
+  `AllocateByRefStoreScratch` (`1833`), `ParamSpec` (`1874`) and the five sites that spell a
+  signature through it (`331`, `1413`, `1585`, `2293`, `3419`), the `ldind` on a ByRef read
+  (`2948-2951`), `ByRefTarget` / `TryResolveByRefTarget` / `EmitByRefTarget` (`3014-3157`),
+  `EmitByRefArgument` + `RequireByRefSpec` (`3159-3234`), `EmitCallArguments` (`3236-3260`,
+  called from all three call arms — `3410`, `4259`, `5824`), the parameter arm of
+  `EmitStoreLocal` (`3635-3690`) and `EmitStarg` (`3790`).
+  ⭐ **THE WORKLIST ROW NAMED THE SYMPTOM, NOT THE DEFECT, AND THAT COST THE WHOLE
+  DIAGNOSIS.** "Any ByRef call → InvalidProgramException" is true and is not what was broken.
+  `EmitStoreLocal` had **no `starg` arm at all** and never consulted `_paramIndices`: it walked
+  locals → instance fields → properties → `Shared` fields → module globals and fell off the
+  end, so a store to ANY parameter emitted `// WARNING: Cannot store to 'n'` and left the
+  computed value on the evaluation stack for `ret` to reject. **The minimal discriminator has
+  no ByRef and no loop in it**: `Sub Bump(n As Integer) : n = n + 1 : PrintLine(CStr(n))` threw
+  the same `InvalidProgramException`. A parameter that is only READ always worked, ByRef or not
+  — `Sub Show(ByRef n As Integer) : PrintLine(CStr(n))` printed `41` before the fix. **Only a
+  WRITE failed**, which is why two families that looked unrelated are one.
+  ⭐ **`For <parameter> = 1 To n` WAS THE SAME DEFECT** — `CountedForVariableTests`'
+  `CountedFor_OverAParameter_…MsilIsAPinnedPreexistingGap` and `ModuleProcedureCallTests`'
+  `ByRef_ThroughAQualifiedCall_IsMarked` were BOTH pinning it from different directions, and
+  both are now promoted (to `"4"` on every backend, and to `"5"` on MSIL). The identical
+  `// WARNING: Cannot store to 'n'` marker appeared in both families' IL — twice in the counted
+  `For` (loop init and loop increment), once in `n = n + 1`. Adding the parameter arm closes
+  the whole `MsilParameterWriteTests` group on its own; ByRef's own half is a **second,
+  separable** defect that is not even reachable until stores can be emitted.
+  ⛔ **THE STORE MUST WALK THE LADDER THE LOAD WALKS, IN THE SAME ORDER.** `EmitLoadLocal`
+  resolves a parameter immediately after a local, so the new arm goes there too — putting it
+  below the field/global arms (where it naturally wants to go) makes `N = N + 1` READ the
+  argument and WRITE the module global. Pinned from both sides by
+  `AByValParameter_ShadowsAModuleGlobal_ForTheStoreAsWellAsTheLoad` and its instance-field
+  twin, which every backend answers `6 / 100`.
+  ⚠ **ByRef's own half**: `&` in the signature, `ldind.<w>` to read, `stind.<w>` to write
+  (`GetIndirectSuffix`, the same table `IRLoad` already used), and the **ADDRESS** at the call
+  site. `stind` wants the address UNDER the value and this backend arrives with the value on
+  the stack, so a ByRef parameter that is WRITTEN gets a scratch slot and the park-and-re-push
+  `_fieldStoreScratch` already existed for — IL has no swap. A ByRef parameter that is only
+  read gets no slot, so such a program emits not a byte more than before.
+  ⛔ **THE ADDRESS IS A DIFFERENT OPCODE PER ARGUMENT KIND, and one of them is a trap.** A
+  local → `ldloca`; the caller's own ByVal parameter → `ldarga`; an instance field → `ldarg.0`
+  + `ldflda`; a `Shared` field or module global → `ldsflda`; an array element → the `ldelema`
+  pointer the IR **already parks in a temp** beside the load (`a(0)` lowers to
+  `IRGetElementPtr` → `stloc int32&` then `IRLoad` → `ldind.i4`; passing the loaded copy
+  instead compiles, runs, and writes into the temporary). ⛔ **A ByRef parameter passed ON to
+  another ByRef call is a bare `ldarg`, NOT `ldarga`** — the slot already holds the caller's
+  pointer, and `ldarga` hands the callee a pointer to THIS frame's argument slot: it
+  **assembles, runs, and writes one level short**, leaving the original variable untouched.
+  That is the silent-wrong-answer mutant of this family; `CallersByRefParameterArgument_
+  StaysABareLdarg_NestedOnce` and its recursive twin are the only two shapes that catch it.
+  ⚠ **WHAT HAS NO ADDRESS IS REFUSED, LOUDLY, NOT PASSED BY VALUE** — a literal, an
+  expression's temporary, and a property (both spellings: `h.X` arrives as a temp from
+  `callvirt get_X()`, a bare in-class `X` as a name that resolves to an accessor call, and they
+  reach two different arms). The alternative in every case ASSEMBLES AND RUNS and quietly drops
+  the write-back, which is strictly worse than not compiling. A TYPE MISMATCH is refused for
+  the same reason: a managed pointer cannot be converted, so `ByRef n As Double` given an
+  Integer would mean writing the callee's change into a temporary of the parameter's type —
+  C# rejects that program too (**CS1503**), and so does C++.
+  ⚠ **⭐ THE ONE WORTH AN ADR: REAL VB PERMITS `Bump(41)`**, by creating a temporary and
+  throwing the write away. This sides with the C# backend, which refuses it (**CS1510**),
+  against C++, which accepts it (`Bump(41)` runs, `Bump(v + 1)` prints `41`). Reversing the
+  decision means implementing copy-in/copy-out — which is also exactly what a PROPERTY argument
+  would need — so it is one decision, not four. `docs/superpowers/decisions/` is still empty
+  apart from the template and the architect role has never run, so this was decided from the
+  backend and is recorded here rather than resolved.
+  ⛔ **THE DECLARATION DECIDES WHICH ARGUMENT BECOMES AN ADDRESS — NOT `IRCall.ByRefArguments`,
+  and the difference is measurable.** `EmitCallArguments` reads the same list `DeclaredParamList`
+  spells the signature from, with the same "is there one at all" test. Keying it on the IR's
+  call-site marker instead looks equivalent and is not: for `Util.Bump(v)` against a
+  `Public Shared Sub Bump(ByRef n As Integer)` the front end records **no** by-ref marker, so
+  the signature came out `(int32&)` from the declaration while the argument came out an `int32`
+  from the call site — an invalid program. One source for both halves is the only arrangement
+  in which they cannot drift.
+  ⛔ **`Optional ByRef` is no longer "no `&` at all" on MSIL** (the note further down this file
+  is corrected in place): the declaration now emits `void 'Bump'(int32& 'n')` and
+  `Bump(v)` with a supplied argument RUNS and prints `42`. **`Bump()` with the argument OMITTED
+  is a named refusal** — `AppendOmittedOptionalArguments` fills a LITERAL, and a literal has no
+  address. That is the correct answer for the shape, not a gap: the fill cannot manufacture
+  caller storage. The DECLARATION side still needs fixing on C# (`ref int n = 5`, CS1741).
+  ⛔ **NOT FIXED — A SHARED FRONT-END GAP, AND A SILENT WRONG ANSWER ON TWO BACKENDS TODAY.**
+  A ByRef parameter on a **CONSTRUCTOR** never reaches any backend:
+  `IRBuilder.Visit(ConstructorNode)` (`IRBuilder.cs:1885`) builds each ctor parameter as
+  `new IRVariable(param.Name, paramType) { IsParameter = true }` and **never copies
+  `IsByRef`**, unlike every other parameter site in that file (`711`, `790`, `1637`, `1816`,
+  `1862`, `2850`). Measured: `Public Sub New(ByRef n As Integer)` emits
+  `instance void .ctor(int32 'n')` on MSIL and `H(int32_t n)` on C++, and BOTH print `41 / 42`
+  where `42 / 42` is correct. Deliberately not fixed from a backend — it moves C#, C++,
+  JavaScript and LLVM together. Pinned as the shared gap it is in
+  `MsilByRefTests.ConstructorByRefParameter_IsAPinnedSharedFrontEndGap_NotThisFamilys`.
+  **28 of 31 mutants killed against the committed fixtures, 0 build breaks; three survivors,
+  each resolved rather than accepted.** (31 of 31 against the implementer's own kill probe;
+  probe counts do not carry over, which is why the re-sweep is the number that matters.)
+  ⭐ **`c2-one-scratch-slot-for-every-parameter` took FIVE candidate shapes to kill, and two
+  ByRef parameters is not one of them.** Giving every ByRef parameter the same scratch NAME
+  leaves the emitted IL byte-identical apart from a duplicated name in `.locals init` — the
+  indices still come out distinct, because the overwrite does not advance `_localIndices.Count`.
+  What breaks is the accounting for whatever is allocated NEXT: a plain swap, Integer+Double
+  and Integer+String all pass, and it takes two written ByRef parameters **plus a TEMPORARY in
+  the same method** for `AllocateTemporaries` to hand a temp the same index —
+  `ilasm: Local var slot 1: type conflict`. `TwoWrittenByRefParametersPlusATemporary_
+  DoNotCollideOnALocalsSlot` is the only test in 35 that kills it; **do not remove it**.
+  ⭐ **`ByRefLong_UsesTheI8IndirectSuffix`'s ARITHMETIC IS DELIBERATELY BOUNDARY-CROSSING — do
+  not "simplify" it back to `n = n + 1`.** ⛔ **It reads `Dim v As Long = 9000000` /
+  `n = n * 1000000` / `9000000000000` because that is the ONLY thing in the fixture that pins
+  the `stind` WIDTH deterministically.** Hardcoding the write suffix to `i4` originally read as
+  a mutation SURVIVOR, and both halves of why are traps worth keeping written down. A small
+  increment on a `ByRef Long` never touches the high word, so a truncating `stind.i4` writes
+  the right answer anyway — the old `41 + 1` version never once killed the mutant. And
+  `ByRefString_…`, the only other test that catches it, kills by truncating an OBJECT
+  REFERENCE to four bytes, which succeeds or not depending on where the GC happened to put the
+  new string: measured **15 kills in 17 runs**, with the clean passes including one across the
+  whole 35-test fixture — which is exactly what made the mutant read as a survivor. With the
+  boundary-crossing arithmetic in place the mutant now dies **4 runs out of 4** on the full
+  fixture, `Long` firing every time and `String` in 3 of those 4 — i.e. the `Long` case is the
+  one carrying the decision and the `String` case is a bonus that cannot be relied on. Same
+  lesson as `Right(s, n)` with n = half the length, one entry above: *a shape that cannot tell
+  the wrong answer from the right one is not coverage* — and a shape that only usually can is
+  not either.
+  ⭐ **`c3-scratch-typed-as-the-pointer` SURVIVED and the candidate space is NOT closed** —
+  declaring the scratch slot `int32&` instead of `int32` assembles and runs. Eight shapes were
+  measured against it (Integer, Long, Double written twice, Boolean, String, String under
+  400-iteration allocation pressure, a class reference reseated 500 times under pressure, and
+  mixed-width pairs); none distinguish it, because the JIT round-trips the slot regardless.
+  Unlike the `call`/`callvirt` equivalence one entry above, this is **UNTESTED, not
+  equivalent**: `.locals init` is what tells the **GC** how to trace a slot, and a byref-typed
+  slot holding a non-pointer is a reporting hazard the runtime is not obliged to tolerate. The
+  value type is kept, and the failure to find a shape is recorded rather than argued away.
+  ⭐ **`d4-constructor-signature-no-amp` SURVIVED and is DEAD, with direct evidence** — not
+  inferred from the survival. A probe asserting `instance void .ctor(int32& 'n')` in the
+  emitted IL FAILS, because `IRBuilder` never marks a ctor parameter ByRef (above), so
+  `ParamSpec` at that site can never see one. The line is kept: it is a fail-safe that costs
+  nothing and becomes correct the moment the IR is fixed.
+  ⚠ **`Single` ByRef is NOT covered by the committed fixture.** It works — measured through
+  the CLI, `void 'Bump'(float32& 'n')` with `ldind.r4`/`stind.r4`, printing `42.5` — but no
+  test pins it, so `GetIndirectSuffix`'s `r4` arm is unexercised. A fixture case needs
+  `CSng(...)` on both sides: `Dim v As Single = 41.0` with `n = n + 1.5` is refused by the
+  SEMANTIC ANALYZER (Double into Single) and the C++ backend emits an invalid literal `41f`,
+  two unrelated pre-existing bugs that have nothing to do with ByRef.
+  ⚠ **Not fixed, out of this family, measured compiled-and-run — added to the open list:**
+  - ⛔ **C# backend: a `Shared` ByRef method is CALLED WITHOUT `ref`.** `Util.Bump(v)` against
+    `Public Shared Sub Bump(ByRef n As Integer)` emits the parameter correctly
+    (`public static void Bump(ref int n)`) and then calls it without the keyword —
+    **CS1620: Argument 1 must be passed with the 'ref' keyword**, a hard build failure. C++ and
+    MSIL both run it and print `42`, so `ByRefOnASharedMethod_OracleIsCppOnly` drops the C#
+    leg and says why. Same root as the missing `IRCall.ByRefArguments` marker for a
+    `Type.SharedMethod(x)` call.
+  - ⛔ **Front end: `IRBuilder.Visit(ConstructorNode)` drops `IsByRef`** (`IRBuilder.cs:1885`)
+    — the constructor gap above, a silent wrong answer on C++ and MSIL alike.
+  **Full suite in place: 195 / 6409 / 203 / 6807 against the `aea5b8d` baseline
+  195 / 6374 / 203 / 6772** — +35 passed, +35 total, **+0 failed**, +0 skipped, which is exactly
+  the two new fixtures (28 + 7) and nothing else. The two promoted pins are **flipped, not
+  added**: they passed before (asserting the gap) and pass now (asserting the fix), so they
+  move no count. 195 reported = 195 anchored `^  Failed ` lines; 170 normalized failing names,
+  `diff` against the baseline list CLEAN. **Both entry points exercised** — `MsilHarness`
+  (optimizer on) and the CLI (`--target=msil` → ilasm → `dotnet`), the latter on one program
+  covering a local, a nested ByRef, a module global, an array element, a ByRef `Function` and a
+  counted `For` over a parameter: `42 43 42 11 41 40 4`.
+
   ⚠ **Narrowing shapes are refused by the SEMANTIC ANALYZER, before any of this** —
   `Public N As Single = 1.5 + 1.0` is "Cannot assign value of type 'Double' to variable of type
   'Single'", before and after. Not a folding gap.
@@ -2382,6 +2559,13 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   emits no `&` at all and the CLR rejects the program, and C++ trades "too few arguments" for
   "cannot bind non-const lvalue reference … to an rvalue". The DECLARATION side has to be fixed
   first. Pinned.
+  ⚠ **The MSIL half is STALE as of 2026-09-21 — re-measured, and it is no longer "no `&` at
+  all".** The declaration emits `void 'Bump'(int32& 'n')` and `Bump(v)` with a SUPPLIED
+  argument runs and prints `42`. Only the OMITTED call is refused, by name
+  (`a literal has no address`), because `AppendOmittedOptionalArguments` fills a literal and a
+  literal has no caller storage to point at — the right answer for the shape rather than a gap.
+  C#, C++ and JavaScript are unchanged, so `Optional ByRef` is still broken overall and the
+  DECLARATION side is still what has to be fixed first.
   ⚠ **A cross-file call reaches only C# today**, so that one test is structural rather than a run:
   JS refuses it ("no lowering for 'Helpers.Greet'") and MSIL emits
   `call void Combined::HelpersGreet(int32, object)` against a method declared

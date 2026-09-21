@@ -272,23 +272,26 @@ public class CountedForVariableTests
     }
 
     // ========================================================================================
-    // RISKY EDGE 6 — `For <parameter> = 1 To 3`. MSIL has an INDEPENDENT, pre-existing gap
-    // writing to a parameter from a loop (measured identical before and after this fix), so it
-    // is pinned as a known divergence rather than silently normalised into the shared assertion.
+    // RISKY EDGE 6 — `For <parameter> = 1 To 3`. Used to be an INDEPENDENT MSIL-only pin; closed
+    // below — MSIL now runs it with the other three, like every other case in this fixture.
     // ========================================================================================
 
     /// <summary>
-    /// ⛔ C# and JavaScript agree (4 — one past the end, same as every other case here). ⛔ MSIL
-    /// is NOT asserted against that value: it fails this exact program with
-    /// <c>InvalidProgramException</c>, verified identical before and after this family's change
-    /// — a pre-existing MSIL gap in writing to a PARAMETER from a loop, not a regression this
-    /// fixture introduces or this family fixes. Pinned as the failure it is, naming the cause,
-    /// rather than promoted to "4" or silently skipped.
+    /// ⛔ PIN CLOSED. This was
+    /// <c>CountedFor_OverAParameter_CSharpAndJavaScriptAgree_MsilIsAPinnedPreexistingGap</c>: C#
+    /// and JavaScript printed 4 while MSIL threw <c>InvalidProgramException</c> on this exact
+    /// program, pinned as a divergence rather than folded into the shared assertion. The cause
+    /// was never <c>For</c>-specific — <c>MSILCodeGenerator.EmitStoreLocal</c> had no
+    /// <c>starg</c> arm at all, so writing to ANY parameter (ByRef or not) walked off the end of
+    /// the local/field/property/static-field ladder with <c>// WARNING: Cannot store to 'n'</c>
+    /// and left the computed value on the stack for <c>ret</c> to choke on. Fixed alongside the
+    /// ByRef family that shares the same root cause (see <c>MsilParameterWriteTests</c> /
+    /// <c>MsilByRefTests</c>). Now runs on all four backends and prints 4, one past the end, the
+    /// same as every other case in this fixture.
     /// </summary>
     [Test]
-    public void CountedFor_OverAParameter_CSharpAndJavaScriptAgree_MsilIsAPinnedPreexistingGap()
-    {
-        const string program =
+    public void CountedFor_OverAParameter_RunsOnEveryBackend_IncludingMsil()
+        => RunsOnEveryBackend(
             "Sub Bump(n As Integer)\n" +
             " For n = 1 To 3\n" +
             " Next\n" +
@@ -296,19 +299,8 @@ public class CountedForVariableTests
             "End Sub\n\n" +
             "Sub Main()\n" +
             " Bump(0)\n" +
-            "End Sub";
-        Assert.Multiple(() =>
-        {
-            Assert.That(Norm(FourBackends.RunEmittedCSharp(program)), Is.EqualTo("4"), "C#");
-            Assert.That(Norm(JavaScriptExecutionTests.RunJs(program)), Is.EqualTo("4"), "JavaScript");
-
-            var msil = MsilHarness.Run(program);
-            Assert.That(msil.Outcome, Is.Not.EqualTo(MsilHarness.MsilOutcome.Ran),
-                "PINNED pre-existing: MSIL cannot write a parameter from a loop; "
-                + "if this now runs, promote this leg to \"4\" and update the docstring");
-            Assert.That(msil.Detail, Does.Contain("InvalidProgramException"), msil.Report);
-        });
-    }
+            "End Sub",
+            "4");
 
     // ========================================================================================
     // RISKY EDGE 7 — Step, negative Step, Exit For, zero iterations, variable bounds, writing
