@@ -69,6 +69,11 @@ public class FormToolboxGlyphTests
     /// <summary>
     /// The toolbox offers everything the catalog has FOR THAT TARGET — a row nobody can place is
     /// catalog data with no way in.
+    ///
+    /// <para>⚠ Task 24, commit 24b: EXCEPT an ITEM kind (none exist yet; commit 24c adds the first),
+    /// which has no place of its own to be dropped at — it is created from the "Type Here" slot on
+    /// its host (spec Decision 7). The production filter already drops it from
+    /// <see cref="FormToolboxViewModel.Rebuild"/>; this pin says so from the catalog's side too.</para>
     /// </summary>
     [TestCase(FormTarget.WinForms)]
     [TestCase(FormTarget.Web)]
@@ -79,7 +84,7 @@ public class FormToolboxGlyphTests
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var missing = FormControlCatalog.All
-            .Where(d => d.SupportsTarget(target))
+            .Where(d => d.SupportsTarget(target) && d.Place != FormPlace.Item)
             .Select(d => d.Kind)
             .Where(k => !offered.Contains(k))
             .ToList();

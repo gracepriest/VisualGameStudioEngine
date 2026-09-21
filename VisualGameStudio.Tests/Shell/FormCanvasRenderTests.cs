@@ -6,6 +6,7 @@ using Avalonia.Headless.NUnit;
 using BasicLang.Forms;
 using NUnit.Framework;
 using VisualGameStudio.Shell.Controls;
+using VisualGameStudio.Tests.Compiler;
 
 namespace VisualGameStudio.Tests.Shell;
 
@@ -46,12 +47,13 @@ public class FormCanvasRenderTests
             Height = FormHeight
         };
 
-        document.Controls.Add(new FormControl
-        {
-            Kind = kind,
-            Id = SharedId,
-            Geometry = new PixelGeometry { X = 20, Y = 20, Width = 140, Height = 40 }
-        });
+        // Task 24, commit 24b: the shape (Tray/Docked/Item/Positioned) is now the ONE answer in
+        // FormCatalogShapes.Canonical — the fixture no longer hand-builds a FormControl and chooses
+        // its list by IsComponent alone, which is exactly the thing a fifth shape would have slipped
+        // past. hostId reuses SharedId: it is only consulted for a FormPlace.Item kind, and no such
+        // kind exists yet (commit 24c adds the first).
+        FormCatalogShapes.Canonical(document, FormControlCatalog.Find(kind)!, SharedId, hostId: SharedId,
+            geometry: new PixelGeometry { X = 20, Y = 20, Width = 140, Height = 40 });
 
         return document;
     }
@@ -77,8 +79,11 @@ public class FormCanvasRenderTests
         // ⚠ Components are excluded on PURPOSE, not for convenience: a component has no position, is
         // never in <Controls> (the reader refuses one there, BL8020) and is never drawn — the tray
         // shows it. AComponent_IsNeverLaidOut below is the pin for that claim.
+        // ⚠ Task 24, commit 24b: an Item is excluded too — it has no geometry and no document of its
+        // own, so it leaves this document-level hash. FormSchematicPinTests pins every item schematic
+        // pairwise through the DrawSchematic seam instead (spec §7).
         var winFormsKinds = FormControlCatalog.All
-            .Where(d => d.SupportsTarget(FormTarget.WinForms) && !d.IsComponent)
+            .Where(d => d.SupportsTarget(FormTarget.WinForms) && d.Place != FormPlace.Tray && d.Place != FormPlace.Item)
             .ToList();
 
         Assert.That(winFormsKinds, Is.Not.Empty, "the catalog has no WinForms kinds to draw");

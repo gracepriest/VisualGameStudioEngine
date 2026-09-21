@@ -50,7 +50,13 @@ public partial class FormToolboxViewModel : ObservableObject
         // Forms tab. Ordered here rather than in the catalog because the catalog's order is the
         // order controls were SPECIFIED in, and changing it to suit one panel would move every row
         // of every other consumer.
+        // ⛔ An ITEM kind is never a toolbox row (spec Decision 7, and VS does not list one either):
+        // a menu item is created from the "Type Here" slot on the strip that will hold it, never
+        // dragged onto the canvas — it has no place of its own to be dropped at. Filtered HERE, in
+        // commit 24b, so the rule is in force before the first item row exists: today this excludes
+        // nothing, and the two membership pins say the same thing from the other side.
         var ordered = FormControlCatalog.For(Target)
+            .Where(c => c.Place != FormPlace.Item)
             .OrderBy(c => c.IsComponent ? 2 : c.IsContainer ? 1 : 0)
             .ThenBy(c => c.Kind, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -89,8 +95,14 @@ public partial class FormToolboxViewModel : ObservableObject
     /// <summary>
     /// A stand-in for VS's icons, keyed on the same catalog field the canvas draws from — so the
     /// mark beside a row and the shape it produces cannot drift apart.
+    ///
+    /// <para>⛔ PUBLIC, not internal: <c>FormSchematicPinTests</c> drives this per ENUM VALUE, and
+    /// the Shell grants no <c>InternalsVisibleTo</c> to the test project by convention (see
+    /// <c>CodeEditorDocumentView.axaml.cs:770</c> — public seams, never internal + IVT). The existing
+    /// glyph gates iterate toolbox ROWS and read <see cref="FormToolboxItem.Glyph"/>, so they would
+    /// never see the missing arm of a schematic no row uses — which is every item schematic.</para>
     /// </summary>
-    internal static string GlyphFor(FormSchematic schematic) => schematic switch
+    public static string GlyphFor(FormSchematic schematic) => schematic switch
     {
         FormSchematic.Text => "A",
         FormSchematic.Input => "ab",
@@ -126,6 +138,19 @@ public partial class FormToolboxViewModel : ObservableObject
         FormSchematic.Hint => "(?)",
         FormSchematic.Alert => "(!)",
         FormSchematic.Worker => "(w)",
+
+        // Task 24: menus, toolbars and status bars. The three strips are toolbox rows; the four item
+        // kinds are not (they are created from Type Here), but they still need a mark — the tray and
+        // the property grid name a control by its schematic, and a missing arm here is a "?" beside
+        // a real control. ⚠ Each bar reads as its own band: the rule is under the menu bar, over the
+        // status bar, and the tool bar wears its grip.
+        FormSchematic.MenuBar => "≡_",
+        FormSchematic.ToolBar => "[▸]",
+        FormSchematic.StatusBar => "_≡",
+        FormSchematic.MenuItem => "≡",
+        FormSchematic.Separator => "—",
+        FormSchematic.ToolButton => "[▸",
+        FormSchematic.StatusLabel => "_A",
 
         // ⛔ Reached only by a schematic added without a mark, which FormToolboxGlyphTests fails on.
         // Left as a visible "?" rather than something plausible precisely so it cannot pass for a

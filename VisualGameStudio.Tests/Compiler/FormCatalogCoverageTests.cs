@@ -213,4 +213,80 @@ public class FormCatalogCoverageTests
             Assert.That(def!.HtmlTag, Is.EqualTo(tag), $"'{kind}' should emit as <{tag}>");
         }
     }
+
+    // ==================================================================
+    // Task 24, commit 24b — the catalog SHAPE (FormPlace, FormItemRule) lands with NO new row, so
+    // every gate that will need to know the shape learns it before there is anything to go red.
+    // These two tests currently describe a catalog with no Docked/Item rows at all: commit 24c adds
+    // the seven strip/item rows and REWRITES both tests (see the per-test note).
+    // ==================================================================
+
+    /// <summary>
+    /// Every row's derived <c>IsComponent</c> must agree with its <c>Place</c>. Today only the four
+    /// tray components (Timer, ToolTip, ErrorProvider, BackgroundWorker) are <c>Tray</c>; nothing
+    /// else has landed a <c>Docked</c> or <c>Item</c> shape yet, so every other row is
+    /// <c>Positioned</c>.
+    ///
+    /// ⚠ <b>REWRITTEN in Task 12 (commit 24c).</b> Once the seven strip/item rows land, the second
+    /// half of this test changes from "every non-tray row is Positioned" to "every row that is not
+    /// a strip or an item is Positioned" — MenuStrip/ToolStrip/StatusStrip become <c>Docked</c> and
+    /// ToolStripMenuItem/ToolStripSeparator/ToolStripButton/ToolStripStatusLabel become <c>Item</c>,
+    /// and neither shape is <c>Tray</c> or <c>Positioned</c>. Do not leave this 24b wording in place
+    /// past that commit.
+    /// </summary>
+    [Test]
+    public void EveryRow_HasAPlace_AndIsComponentIsDerived()
+    {
+        var trayKinds = new[] { "Timer", "ToolTip", "ErrorProvider", "BackgroundWorker" };
+
+        foreach (var def in FormControlCatalog.All)
+        {
+            Assert.That(def.IsComponent, Is.EqualTo(def.Place == FormPlace.Tray),
+                $"'{def.Kind}': IsComponent must be derived from Place (IsComponent == (Place == Tray))");
+        }
+
+        foreach (var kind in trayKinds)
+        {
+            var def = FormControlCatalog.Find(kind);
+            Assert.That(def, Is.Not.Null, kind);
+            Assert.That(def!.Place, Is.EqualTo(FormPlace.Tray), $"'{kind}' must be Tray");
+        }
+
+        var nonTray = FormControlCatalog.All
+            .Where(d => !trayKinds.Contains(d.Kind, StringComparer.OrdinalIgnoreCase))
+            .ToList();
+        Assert.That(nonTray, Is.Not.Empty);
+
+        foreach (var def in nonTray)
+        {
+            Assert.That(def.Place, Is.EqualTo(FormPlace.Positioned),
+                $"'{def.Kind}': every row but the four tray components is Positioned today " +
+                "(no Docked/Item row exists until commit 24c)");
+        }
+    }
+
+    /// <summary>
+    /// The seven strip/item <see cref="FormSchematic"/> values exist before any catalog row uses
+    /// them (commit 24b, spec Decision 12 — the shape lands with NO new row, so nothing can go red
+    /// between the rows landing and the gates learning them).
+    ///
+    /// ⚠ <b>REWRITTEN in Task 12 (commit 24c).</b> Once the seven rows land, the second assertion
+    /// below is INVERTED, not merely relaxed: from "no row uses any of these seven yet" to "exactly
+    /// the seven new rows use exactly these seven schematics, one each".
+    /// </summary>
+    [Test]
+    public void FormSchematic_HasTheSevenStripValues()
+    {
+        var stripValues = new[]
+        {
+            FormSchematic.MenuBar, FormSchematic.ToolBar, FormSchematic.StatusBar,
+            FormSchematic.MenuItem, FormSchematic.Separator, FormSchematic.ToolButton,
+            FormSchematic.StatusLabel
+        };
+
+        Assert.That(Enum.GetValues<FormSchematic>(), Is.SupersetOf(stripValues));
+
+        Assert.That(FormControlCatalog.All.Any(d => stripValues.Contains(d.Schematic)), Is.False,
+            "commit 24b adds no new catalog row — nothing should use a strip/item schematic yet");
+    }
 }

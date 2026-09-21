@@ -784,7 +784,7 @@ internal static class FormCatalogShapes
 
 **Files:** Modify `FormPropertyGridTests.cs:552-568`, `FormToolboxGlyphTests.cs:75-89`, `FormDocumentTests.cs:80-92`, `FormToolboxViewModel.cs:53-56`.
 
-- [ ] **Step 1:** In both toolbox pins, the expected set becomes `FormControlCatalog.For(target).Where(c => c.Place != FormPlace.Item)`; in `FormToolboxViewModel.Rebuild`, `.Where(c => c.Place != FormPlace.Item)` before the `OrderBy`, with a comment: items are created from Type Here (spec Decision 7). In `Catalog_NoPropertyCollidesWithAStructuralAttribute`, skip rows with `def.Place != FormPlace.Positioned` and say why in a comment: the write-twice hazard exists only where geometry is written; a Docked row's `Dock` is a PROPERTY.
+- [ ] **Step 1:** In both toolbox pins, the expected set becomes `FormControlCatalog.For(target).Where(c => c.Place != FormPlace.Item)`; in `FormToolboxViewModel.Rebuild`, `.Where(c => c.Place != FormPlace.Item)` before the `OrderBy`, with a comment: items are created from Type Here (spec Decision 7). In `Catalog_NoPropertyCollidesWithAStructuralAttribute`, keep iterating EVERY row and vary the forbidden-name set by `Place` instead of skipping non-`Positioned` rows: `FormControlCatalog.IsStructural` treats `Id`/`TabIndex` as structural for every target before it ever consults the layout vocabulary, and the reader's attribute skip applies to any non-component control regardless of `Place` — so a Docked or Item row's own property named `Id` is silently dropped by the reader exactly as a Positioned row's would be, and even a Tray row is not exempt (its skip clause names `Id` specifically). Say so in a comment; a Docked row's `Dock` is a catalog PROPERTY, which is a separate fact and not a reason to exempt the Place from this gate.
 - [ ] **Step 2: Run** the three fixtures → green (no rows changed).
 
 ### Task 10: The `DrawSchematic` seam and the enum-driven pins
@@ -825,12 +825,99 @@ public class FormSchematicPinTests
 
 - [ ] **Step 2: Run** → the glyph test fails (seven `?`), the paint test fails (seven schematics fall to the default arm and hash alike).
 - [ ] **Step 3: Implement.** Extract from `DrawControl` everything from `var labelOrigin = …` (`FormCanvasControl.cs:1443`) THROUGH the post-switch label draw (`:1881-1889`) into `private void DrawSchematic(DrawingContext context, FormSchematic schematic, Rect bounds, string label, IBrush face, IBrush client, IBrush ink)` — the `switch (schematic)` verbatim, AND the label draw after it — and have `DrawControl` call it. ⛔ The seam OWNS the post-switch label draw, because `labelOrigin` is a local declared before the switch and MUTATED by arms (Button centres it at `:1459-1461`, Check/Radio move it past the glyph at `:1490`) and the post-switch draw consumes the mutated value; leaving that draw in `DrawControl` would paint every Button caption top-left and every CheckBox caption over its tick, from a green suite. The three band arms `return` before the label draw — a band draws NO caption (spec §6; a strip's id as a caption would be the only pixel a render gate sees). Add the seven arms with distinct shapes: `MenuBar` (a flat band with a 1px bottom rule), `ToolBar` (a band with a left grip of two vertical lines), `StatusBar` (a band with a 1px top rule and a sizing-grip triangle bottom-right), `MenuItem` (a `client`-filled band behind the caption, no border, caption inset 8px — ⚠ NOT "the caption with a 2px pad, no box": that is the existing `Text` arm but for a 2px shift, and the pairwise pin refuses it), `Separator` (a 1px vertical line, or horizontal when `bounds.Width > bounds.Height`), `ToolButton` (a small raised box with the caption), `StatusLabel` (the caption vertically CENTRED, with a 1px `ink` rule down the left edge — the status-panel divider; ⚠ "caption at left" alone is pixel-identical to the `Text` arm, which draws no box and paints its caption at `labelOrigin = (X+4, Y+2)`, `FormCanvasControl.cs:1443/:1448-1451`, so the pin fails on `Text,StatusLabel` by construction). ⛔ Bands draw NO caption (spec §6). Add the seven `GlyphFor` arms: `MenuBar => "≡_"`, `ToolBar => "[▸]"`, `StatusBar => "_≡"`, `MenuItem => "≡"`, `Separator => "—"`, `ToolButton => "[▸"`, `StatusLabel => "_A"` — distinct from every existing mark (run the glyph test) — and make `GlyphFor` `public static`. Add `public static string RenderSchematicForTest(FormSchematic, Rect, string)` (PUBLIC — see Step 1) and a `SchematicOverride` used only when non-null.
-- [ ] **Step 4: Run** `FormSchematicPinTests`, `FormCanvasRenderTests`, `FormToolboxGlyphTests` → green.
+- [x] **Step 4: Run** `FormSchematicPinTests`, `FormCanvasRenderTests`, `FormToolboxGlyphTests` → green.
+
+⚠⚠ **AS BUILT (Task 10, 2026-09-21) — four deviations from the code above, each measured.**
+
+1. ⛔ **ELEVEN arms were needed, not seven.** Step 2 predicts "seven schematics fall to the default arm
+   and hash alike". It is ELEVEN: `Clock`, `Hint`, `Alert` and `Worker` (Task 25's component glyphs)
+   have NEVER had a `DrawControl` arm either and painted pixel-for-pixel what `Input` paints, so the
+   enum-driven pin collides on `Input,Clock,Hint,Alert,Worker`. Arms were added for all four rather
+   than narrowing a pin the test-writer may not edit. ⚠ **They are UNREACHABLE from the live canvas**
+   — a component has no geometry, `AllControls()` excludes the tray, so `Layout` never yields bounds
+   for one — i.e. production code with no shipping caller, which this repo has shipped five times and
+   documents as its top failure mode. Accepted here because the alternative is an enum-driven gate
+   with a hand-maintained exclusion list, which is the second failure mode (a new value silently
+   exempted). **24c should decide whether the tray surface draws through this seam**, which would make
+   them reachable and settle it; the `FormSchematic` banner still says these values name the glyph only.
+2. ⛔ **`RenderSchematicForTest` cannot reuse `FormCanvasRenderTests.RenderHash`'s body.** That helper
+   uses `CaptureRenderedFrame` from **`Avalonia.Headless`, which `VisualGameStudio.Shell` does not
+   reference** — and referencing it would ship a test platform inside the IDE. Built on
+   `RenderTargetBitmap` (base Avalonia) instead: `Measure`/`Arrange`, `bitmap.Render(control)`, SHA256
+   of the PNG bytes. Same control, same `Render` override, same seam, same Skia backend. 33 values
+   produced 33 distinct hashes, which is what proves the frames are genuinely rasterised — a blank
+   frame would have collided all of them.
+3. **`SchematicOverride` is a private field plus a private `SchematicProbe` record**, not a public
+   property. The test reaches it only through `RenderSchematicForTest`, so exposing it would widen the
+   public surface past the two seams this task requires public.
+4. ⛔⛔ **`DrawSchematic` RETURNS `Point?` — the caption origin it used — and that is beyond this plan.**
+   Mutation testing found the gap: **every gate in 24b is a DISTINCTNESS gate, so a caption that MOVES
+   is invisible.** Deleting the Button arm's centring left the pairwise pin, the label-invariance pin
+   and the caption-presence pin all green. That matters because this task's own text calls three new
+   offsets load-bearing (MenuItem's 8px inset, ToolButton's `box.X+4,box.Y+3`, StatusLabel's vertical
+   centring). Golden hashes were refused — they break on any Avalonia/Skia/font bump — so the seam
+   reports the ARITHMETIC instead: `RenderSchematicForTest` returns
+   `SchematicFrame(string Hash, Point? CaptionOrigin)`. ⚠ `CaptionOrigin` is null in THREE cases, not
+   one: the three bands, an EMPTY label, and bounds too small for text. ⛔ A test-only write-back onto
+   the probe record was REJECTED — it would put a write in the per-control render path, record only the
+   last control drawn on a real document, and require making an immutable record mutable. A pure
+   `CaptionOriginFor(...)` helper was also rejected: it would be a MIRRORED copy of every offset that
+   drifts while agreeing with its own test, and it is impossible anyway because Button and StatusLabel
+   centre against measured caption metrics. ⚠ Changing the return type left FOUR of five call sites
+   still COMPILING with silently changed semantics (`Is.EqualTo` fell through to record equality,
+   comparing `(Hash, CaptionOrigin)` pairs) — every site now says `.Hash` explicitly.
 
 ### Task 11: Gate and commit 24b
 
-- [ ] Build (the Shell: `dotnet clean` not needed — no AXAML changed). Fast subset; `WinFormsCatalogSweepTests`; `FormCanvasRenderTests`; `FormSchematicPinTests`. Mutants: (a) remove one `GlyphFor` arm → the glyph pin; (b) make `Separator` draw like `MenuItem` → the paint pin; (c) `Canonical`'s Item branch pick `All.First(d => d.Items?.Accepts(…))` (any host) → no test yet (rows absent) — record that it is pinned in 24c's coverage test.
-- [ ] Commit `feat(designer): Task 24b — the row SHAPE (Place, FormItemRule) and every gate learns it before a strip exists`.
+- [x] Build (the Shell: `dotnet clean` not needed — no AXAML changed). Fast subset; `WinFormsCatalogSweepTests`; `FormCanvasRenderTests`; `FormSchematicPinTests`. Mutants: (a) remove one `GlyphFor` arm → the glyph pin; (b) make `Separator` draw like `MenuItem` → the paint pin; (c) `Canonical`'s Item branch pick `All.First(d => d.Items?.Accepts(…))` (any host) → no test yet (rows absent) — record that it is pinned in 24c's coverage test.
+- [x] Commit `feat(designer): Task 24b — the row SHAPE (Place, FormItemRule) and every gate learns it before a strip exists`.
+
+⚠⚠ **AS BUILT (Task 11, 2026-09-21) — the gate run, and SEVEN mutants not three.**
+
+**Gate: fast subset 5922 / 5919 passed / 2 failed / 1 skipped** — the two failures are the standing
+`SearchSnippets` pair (`task_b9620d48`), zero new — **plus EVERY Form Integration fixture, 116/116**,
+stderr empty. ⚠ The Integration tier was widened beyond this task's list on purpose: `FormControlDef`
+is a record every form consumer reads and its parameter list changed shape, so the blast radius is the
+whole designer, not three fixtures. The FULL suite was NOT run (it is ~2h29m and 24b adds no control
+row and changes no existing kind's behaviour); say so rather than implying otherwise.
+
+**Mutants (a) and (b) killed as written. (c) SURVIVES and is recorded honestly** — `Canonical`'s Item
+branch is unreachable until 24c's rows exist (`FormControlCatalog` has exactly four `Place:` arguments,
+all `Tray`, and no `Items:` anywhere), so its pin belongs in 24c's coverage test, as this plan already
+schedules. Four more were run because the review demanded them:
+
+| mutant | killed by |
+|---|---|
+| (d) delete the Button arm's centring | `CaptionOrigin_MetricDependentArms_MoveByExactlyTheBoundsDelta` — the delta fell to 0 |
+| MenuItem's 8px inset → `bounds.X + 4` | `CaptionOrigin_ConstantOffsetArms_MatchTheirExactOffset` — expected `(28,22)`, got `(24,22)` |
+| a band's `return null` → `return labelOrigin` | `CaptionOrigin_Bands_AreAlwaysNull` AND `EveryBand_IgnoresItsLabel` |
+| `Group`'s `break` → `return null` | the REWRITTEN `EveryCaptioningSchematic_ActuallyDrawsItsCaption` |
+
+⛔⛔ **(d) survived EVERY gate in this commit until the caption-origin seam existed** — that is the
+whole argument for AS BUILT note 4 above.
+
+⛔ **The original `EveryCaptioningSchematic_ActuallyDrawsItsCaption` was TAUTOLOGICAL for `Group` and
+`Link`.** Both arms draw label-SIZED geometry inside their own case (Group's background patch
+`caption.Width + 4`; Link's underline to `linkText.Width`), so deleting the shared caption draw still
+changed the frame between a short and a long label and the test stayed green — while its own doc
+comment claimed it caught exactly that. Rewritten to assert `CaptionOrigin is not null`, which is null
+**iff** the shared draw never ran, whatever else the arm measured.
+
+**Two gates the review found narrowed, both fixed here:**
+- `FormRetargetTests`' sweep lost its cardinality claim when `destinationList.Single()` became
+  `Locate(...)!` (a `FirstOrDefault`): a regression adding the converted control TWICE would have
+  passed. Now `Is.Empty` in the unsupported branch and `Count == 1` before reading properties.
+  ⛔ Deliberately NOT a total-control-count assertion — an Item with no destination row legitimately
+  leaves its Docked host behind, which would red the gate the day 24c lands.
+- `FormDocumentTests.Catalog_NoPropertyCollidesWithAStructuralAttribute` had been narrowed to
+  `Place == Positioned` **on a rationale this plan itself got wrong** (Task 9 said "the write-twice
+  hazard exists only where geometry is written"). `IsStructural` returns true for `Id`/`TabIndex`
+  BEFORE consulting any layout vocabulary, and the writer emits `Id` on every element outside the
+  component guard, so a Tray row declaring a property named `Id` would lose its identity and be
+  dropped on reload. It now iterates EVERY row and varies only the forbidden-name set by `Place`.
+  Task 9's wording and spec §2's matching line were corrected in the same commit.
+  ⭐ It carries an instrument-proving row (a locally built `Place: Tray` def with a property named
+  `Id` must be REJECTED) — the discipline `WinFormsCatalogSweepTests` already uses.
 
 ---
 

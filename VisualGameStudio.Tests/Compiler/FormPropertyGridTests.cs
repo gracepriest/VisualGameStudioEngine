@@ -558,12 +558,17 @@ public class FormPropertyGridTests
         // than its name claims: the toolbox now groups containers last so it can draw VS-style
         // category headers, and ORDER is a presentation decision the panel owns. What must stay
         // true is the membership — every kind the target has, and nothing it does not.
+        // ⚠ Task 24, commit 24b: an ITEM kind (none exist yet; commit 24c adds the first) is never a
+        // toolbox row (spec Decision 7) — it is created from the "Type Here" slot on its host, never
+        // dragged onto the canvas. The production filter (FormToolboxViewModel.Rebuild) already
+        // excludes it; this says the same thing from the other side, so a future Item row cannot
+        // silently reappear in the toolbox because only one of the two places agreed to drop it.
         Assert.Multiple(() =>
         {
             Assert.That(web.Items.Select(i => i.Kind),
-                Is.EquivalentTo(FormControlCatalog.For(FormTarget.Web).Select(c => c.Kind)));
+                Is.EquivalentTo(FormControlCatalog.For(FormTarget.Web).Where(c => c.Place != FormPlace.Item).Select(c => c.Kind)));
             Assert.That(winForms.Items.Select(i => i.Kind),
-                Is.EquivalentTo(FormControlCatalog.For(FormTarget.WinForms).Select(c => c.Kind)));
+                Is.EquivalentTo(FormControlCatalog.For(FormTarget.WinForms).Where(c => c.Place != FormPlace.Item).Select(c => c.Kind)));
         });
     }
 

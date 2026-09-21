@@ -962,22 +962,39 @@ public class FormRetargetTests
         foreach (var definition in FormControlCatalog.For(from))
         {
             var source = new FormDocument { Target = from, Name = "Sweep" };
-            var control = new FormControl { Kind = definition.Kind, Id = "c", TabIndex = 0 };
+            // Task 24, commit 24b: the shape (Tray/Docked/Item/Positioned) is the ONE answer in
+            // FormCatalogShapes.Canonical rather than a hand-picked list — an Item definition (none
+            // exist yet; commit 24c adds the first) nests "c" under a host, so the crossed control is
+            // found by kind with Locate rather than by Single()-ing a top-level list.
+            var control = FormCatalogShapes.Canonical(source, definition, "c");
             foreach (var property in definition.Properties.Where(p => p.AppliesTo(from)))
             {
                 control.Properties[property.Name] = Sample(property);
             }
 
-            // A component (Task 25) lives in the tray, and the crossed one is read back from there.
-            // The assertions below are the same for both lists; only the list differs.
-            (definition.IsComponent ? source.Components : source.Controls).Add(control);
-
             var result = FormRetarget.Convert(source, to);
-            var destinationList = definition.IsComponent ? result.Document.Components : result.Document.Controls;
+
+            // ⛔ Task 24, commit 24b: computed ONCE, as a LIST, rather than through
+            // FormCatalogShapes.Locate's FirstOrDefault. The old code trusted a bare `!` on Locate's
+            // result to mean "exactly one" — it means "at least one, or null" — so a regression that
+            // converted "c" TWICE (a duplicate control of the same kind) would still pass every
+            // assertion below: the unsupported branch never saw the duplicate (Locate found the
+            // first one and it was non-null, so Is.Null would rightly fail anyway) and the supported
+            // branch would silently read the FIRST match's properties while a second, unaccounted-for
+            // copy sat in the document. Asserting the count explicitly is what makes that regression
+            // visible.
+            //
+            // ⛔ Deliberately NOT also a total-control-count assertion. An Item has no destination row
+            // when SupportsTarget(to) is false, and its Docked HOST legitimately survives the
+            // conversion (only the Item itself is lost) — a total-count check would go red the day
+            // 24c lands an Item row, which is exactly the regression this sweep exists to prevent.
+            var matches = result.Document.AllControls().Concat(result.Document.AllComponents())
+                .Where(c => c.Kind == definition.Kind)
+                .ToList();
 
             if (!definition.SupportsTarget(to))
             {
-                Assert.That(destinationList, Is.Empty, $"{definition.Kind} has no {to} row and must go");
+                Assert.That(matches, Is.Empty, $"{definition.Kind} has no {to} row and must go");
                 Assert.That(Of(result, DesignCodes.RetargetControlLost).Count(), Is.EqualTo(1), definition.Kind);
                 continue;
             }
@@ -988,13 +1005,19 @@ public class FormRetargetTests
                 .OrderBy(n => n)
                 .ToList();
 
+            // ⚠ Scoped to messages naming 'c.' — Canonical's Item branch (none exist yet) would also
+            // add a host control whose OWN lost properties must not be mistaken for "c"'s.
             var reportedLost = Of(result, DesignCodes.RetargetPropertyLost)
                 .Select(d => d.Message)
+                .Where(m => m.Contains("'c."))
                 .Select(m => definition.Properties.Single(p => m.Contains($"'c.{p.Name}'")).Name)
                 .OrderBy(n => n)
                 .ToList();
 
-            var crossed = destinationList.Single().Properties.Keys.OrderBy(n => n).ToList();
+            Assert.That(matches, Has.Count.EqualTo(1),
+                $"{definition.Kind} {from}→{to}: expected exactly one converted control, found {matches.Count}");
+
+            var crossed = matches[0].Properties.Keys.OrderBy(n => n).ToList();
             var expectedCrossed = definition.Properties
                 .Where(p => p.AppliesTo(from) && p.AppliesTo(to))
                 .Select(p => p.Name)

@@ -1,9 +1,11 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Windows.Input;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using BasicLang.Forms;
 using VisualGameStudio.Shell.ViewModels.Designer;
 
@@ -1093,6 +1095,20 @@ public class FormCanvasControl : Control
         // exactly like a drag-and-drop that was never wired up. Costs no pixels.
         context.FillRectangle(Brushes.Transparent, new Rect(Bounds.Size));
 
+        // The schematic probe (see RenderSchematicForTest): ONE shape, at the bounds asked for, with
+        // no document at all. Honoured only when non-null, so a canvas that was never handed one
+        // behaves exactly as before — and the probe still reaches the shape through the seam
+        // DrawControl uses, rather than through a copy of it that could drift.
+        if (_schematicOverride is { } probe)
+        {
+            // ⚠ The ONLY place a caption origin is retained. It is recorded here, inside the branch
+            // that is already probe-only, rather than beside the DrawText call — so the live draw
+            // path below stays free of it.
+            _probeResult = new SchematicProbeResult(DrawSchematic(
+                context, probe.Schematic, probe.Bounds, probe.Label, SurfaceBrush, WindowBrush, LabelBrush));
+            return;
+        }
+
         var document = Document;
         if (document == null)
         {
@@ -1438,6 +1454,69 @@ public class FormCanvasControl : Control
             ? text
             : control.Id;
 
+        // ⚠ The caption origin is DISCARDED here, deliberately. It exists for the probe seam alone
+        // (see DrawSchematic's <returns>); the live canvas has no use for it, and this discard is
+        // what keeps the reporting out of the per-control, per-render path.
+        _ = DrawSchematic(context, schematic, bounds, label, face, client, ink);
+    }
+
+    /// <summary>
+    /// Draws ONE schematic at ONE rectangle — the whole of what a shape is, and the only place a
+    /// shape is decided. <see cref="DrawControl"/> resolves a control to its row's schematic, its
+    /// colours and its label, and hands them here.
+    ///
+    /// <para>⛔ The seam exists so a schematic can be pinned per VALUE rather than per catalog ROW:
+    /// <c>FormSchematicPinTests</c> hashes a frame for every <see cref="FormSchematic"/> at one
+    /// bounds with one label and requires them ALL PAIRWISE DISTINCT. The row-driven gate cannot see
+    /// a schematic no row uses — and from Task 24 the item schematics are exactly that, because an
+    /// item has no document of its own to render.</para>
+    ///
+    /// <para>⛔ The post-switch LABEL DRAW is part of this method, deliberately.
+    /// <c>labelOrigin</c> is declared before the switch and MUTATED by arms — Button centres it,
+    /// Check and Radio move it past the glyph, Tabs drops it below the tab strip — and the draw
+    /// after the switch consumes the mutated value. Split the two and every Button caption paints
+    /// at the top left and every CheckBox caption paints over its own tick, from a green suite.</para>
+    ///
+    /// <para>⚠ The three BAND arms <c>return</c> rather than <c>break</c>: a strip is chrome and
+    /// draws no caption at all (spec §6). Painting a band's id across it would be the only pixel a
+    /// render gate ever sees, which is how a band would come to look "verified".</para>
+    /// </summary>
+    /// <returns>
+    /// The origin the caption was actually drawn at, or <c>null</c> when this render drew no caption
+    /// at all — a band, an empty label, or a rectangle too small for text.
+    ///
+    /// <para>⛔ This return value is the ONLY pin caption POSITION can have, and it exists because
+    /// a hash gate cannot see one. A frame is compared for DISTINCTNESS, so deleting an arm's
+    /// centring arithmetic still yields a unique frame that is still different from every other —
+    /// both the pairwise pin and the caption-presence pin stay green while the caption sits in the
+    /// wrong place. Mutation testing proved exactly that. Golden pixel hashes would catch it and are
+    /// refused here: they break on every Avalonia or Skia bump. So the seam reports the ARITHMETIC
+    /// instead, and <c>FormSchematicPinTests</c> asserts on coordinates rather than glyphs. The
+    /// offsets this protects are load-bearing and say so in their own arms: <c>MenuItem</c>'s 8px
+    /// inset, <c>ToolButton</c>'s inset box, <c>StatusLabel</c>'s vertical centring, <c>Button</c>'s
+    /// centring, and the glyph clearance <c>Check</c>/<c>Radio</c>/<c>Tabs</c> apply.</para>
+    ///
+    /// <para>⚠ Returned, NOT written to a field from beside the <c>DrawText</c> call. A write there
+    /// would put test-only bookkeeping in the live draw path, which runs for every control on every
+    /// render, and would record only the LAST control drawn — meaningless for a real document. A
+    /// return value costs the live path nothing: <see cref="DrawControl"/> discards it.</para>
+    ///
+    /// <para>⛔ Do NOT "simplify" this by extracting a pure <c>CaptionOriginFor(...)</c> that both
+    /// the draw and the test call. That is a SECOND copy of every offset, and a mirrored pair that
+    /// drifts is the exact defect this pin exists to catch — the copy would keep agreeing with the
+    /// test while the drawn caption moved. The arms also interleave the arithmetic with drawing and
+    /// with measured text (<c>Button</c> and <c>StatusLabel</c> centre against <c>caption.Width</c>
+    /// and <c>caption.Height</c>), so there is no separable pure function here anyway.</para>
+    /// </returns>
+    private Point? DrawSchematic(
+        DrawingContext context,
+        FormSchematic schematic,
+        Rect bounds,
+        string label,
+        IBrush face,
+        IBrush client,
+        IBrush ink)
+    {
         // Where the label goes once the shape has had its say: indented past a tick or a bullet,
         // centred in a button, at the top-left of everything else.
         var labelOrigin = new Point(bounds.X + 4, bounds.Y + 2);
@@ -1871,6 +1950,174 @@ public class FormCanvasControl : Control
                 break;
             }
 
+            // ==================================================================
+            // Task 25's tray. ⚠ UNREACHABLE from the canvas and deliberately present: a component
+            // has no geometry, so Layout never yields bounds for one and DrawControl is never
+            // called with these. They are here because the per-VALUE pin hashes every schematic
+            // through this seam, and without an arm each of the four falls to `default` and paints
+            // EXACTLY what Input paints — five values, one frame. The arms are also the honest
+            // answer to "what if a positioned row ever picks one": its own mark, never a TextBox.
+            // ==================================================================
+
+            case FormSchematic.Clock:
+            {
+                // A clock face with two hands — a Timer.
+                var radius = Math.Max(3, Math.Min(bounds.Width, bounds.Height) / 2 - 3);
+                var centre = bounds.Center;
+                context.DrawEllipse(client, ShadowPen, centre, radius, radius);
+                context.DrawLine(DarkShadowPen, centre, new Point(centre.X, centre.Y - radius + 3));
+                context.DrawLine(DarkShadowPen, centre, new Point(centre.X + radius - 4, centre.Y));
+                break;
+            }
+
+            case FormSchematic.Hint:
+            {
+                // A hint bubble with a tail — what a ToolTip puts on screen.
+                var bubble = new Rect(
+                    bounds.X + 4, bounds.Y + 4,
+                    Math.Max(6, bounds.Width - 12), Math.Max(6, bounds.Height - 14));
+                context.DrawRectangle(client, ShadowPen, bubble);
+                context.DrawLine(ShadowPen,
+                    new Point(bubble.X + 8, bubble.Bottom), new Point(bubble.X + 8, bubble.Bottom + 6));
+                context.DrawLine(ShadowPen,
+                    new Point(bubble.X + 8, bubble.Bottom + 6), new Point(bubble.X + 16, bubble.Bottom));
+                break;
+            }
+
+            case FormSchematic.Alert:
+            {
+                // The badge an ErrorProvider puts BESIDE a control, so it sits at the right edge.
+                var radius = Math.Max(3, Math.Min(bounds.Width, bounds.Height) / 2 - 3);
+                var centre = new Point(bounds.Right - radius - 3, bounds.Center.Y);
+                context.DrawEllipse(client, DarkShadowPen, centre, radius, radius);
+                context.DrawLine(DarkShadowPen,
+                    new Point(centre.X, centre.Y - radius + 4), new Point(centre.X, centre.Y + radius - 8));
+                context.DrawLine(DarkShadowPen,
+                    new Point(centre.X, centre.Y + radius - 5), new Point(centre.X, centre.Y + radius - 4));
+                break;
+            }
+
+            case FormSchematic.Worker:
+            {
+                // Two offset boxes: the same work, running somewhere other than the UI thread.
+                var w = Math.Max(4, bounds.Width / 3);
+                var h = Math.Max(4, bounds.Height / 2);
+                var behind = new Rect(bounds.X + 4, bounds.Y + 4, w, h);
+                var front = new Rect(behind.X + 6, behind.Y + 6, w, h);
+                context.DrawRectangle(client, ShadowPen, behind);
+                context.DrawRectangle(client, DarkShadowPen, front);
+                break;
+            }
+
+            // ==================================================================
+            // Task 24 — menus, toolbars and status bars. Landed in commit 24b, BEFORE any catalog
+            // row uses one, so the pairwise pin is in force from the moment the shapes exist.
+            //
+            // ⛔ The three BANDS return, they do not break: a strip draws NO caption (spec §6). Its
+            //   id painted across the band would be the only pixel a render gate ever sees, and the
+            //   band would look verified while being a grey rectangle.
+            // ==================================================================
+
+            case FormSchematic.MenuBar:
+                // A flat band with a rule along its BOTTOM edge — where the menu ends and the client
+                // area begins. Flat, not bevelled: a menu strip is not a raised panel.
+                context.FillRectangle(face, bounds);
+                context.DrawLine(ShadowPen,
+                    new Point(bounds.X, bounds.Bottom - 1), new Point(bounds.Right, bounds.Bottom - 1));
+                return null;
+
+            case FormSchematic.ToolBar:
+            {
+                // A band wearing its drag grip at the left edge — the one detail that tells a tool
+                // strip from a menu bar at a glance, and the same two-tone pair Win95 draws.
+                context.FillRectangle(face, bounds);
+
+                var gripTop = bounds.Y + 3;
+                var gripBottom = Math.Max(gripTop + 1, bounds.Bottom - 3);
+                context.DrawLine(HighlightPen,
+                    new Point(bounds.X + 3, gripTop), new Point(bounds.X + 3, gripBottom));
+                context.DrawLine(ShadowPen,
+                    new Point(bounds.X + 5, gripTop), new Point(bounds.X + 5, gripBottom));
+                return null;
+            }
+
+            case FormSchematic.StatusBar:
+            {
+                // A band with the rule along its TOP edge — the mirror of the menu bar, because the
+                // client area ends ABOVE a status strip — and the sizing grip at the bottom right.
+                context.FillRectangle(face, bounds);
+                context.DrawLine(ShadowPen, new Point(bounds.X, bounds.Y), new Point(bounds.Right, bounds.Y));
+
+                for (var i = 1; i <= 3; i++)
+                {
+                    var offset = i * 4;
+                    context.DrawLine(ShadowPen,
+                        new Point(bounds.Right - 2, bounds.Bottom - offset),
+                        new Point(bounds.Right - offset, bounds.Bottom - 2));
+                }
+
+                return null;
+            }
+
+            case FormSchematic.MenuItem:
+                // A client-coloured cell behind the caption and NO border: a menu item is not a
+                // widget, it is a highlightable strip of a menu.
+                // ⚠ NOT "the caption with a 2px pad and no box" — that is the Label arm shifted two
+                // pixels, and the pairwise pin refuses it. The filled cell is the difference.
+                context.FillRectangle(client, bounds);
+                labelOrigin = new Point(bounds.X + 8, bounds.Y + 2);
+                break;
+
+            case FormSchematic.Separator:
+            {
+                // ONE rule, running whichever way its cell does: across a tool strip, down a
+                // dropdown. Nothing else — a separator has no face of its own.
+                if (bounds.Width > bounds.Height)
+                {
+                    var y = bounds.Y + (bounds.Height / 2);
+                    context.DrawLine(ShadowPen, new Point(bounds.X + 2, y), new Point(bounds.Right - 2, y));
+                }
+                else
+                {
+                    var x = bounds.X + (bounds.Width / 2);
+                    context.DrawLine(ShadowPen, new Point(x, bounds.Y + 2), new Point(x, bounds.Bottom - 2));
+                }
+
+                break;
+            }
+
+            case FormSchematic.ToolButton:
+            {
+                // A small raised box INSET in its cell, caption at its left. ⚠ Inset and left, both
+                // load-bearing: a full-bounds raised box with a centred caption IS the Button arm.
+                var box = new Rect(
+                    bounds.X + 2, bounds.Y + 2,
+                    Math.Max(4, bounds.Width - 4), Math.Max(4, bounds.Height - 4));
+                context.FillRectangle(face, box);
+                Bevel(context, box, raised: true);
+                labelOrigin = new Point(box.X + 4, box.Y + 3);
+                break;
+            }
+
+            case FormSchematic.StatusLabel:
+            {
+                // The panel divider — a rule down the LEFT edge, where one status panel ends and the
+                // next begins — with the caption centred in the band's height.
+                // ⚠ "The caption at the left" ALONE is pixel-identical to the Label arm, which draws
+                // no box and puts its caption at (X+4, Y+2). The rule and the centring are the shape.
+                context.DrawLine(new Pen(ink, 1),
+                    new Point(bounds.X, bounds.Y + 2), new Point(bounds.X, bounds.Bottom - 2));
+
+                if (!tooSmallForText && !string.IsNullOrEmpty(label))
+                {
+                    var caption = Text(label, ink);
+                    labelOrigin = new Point(
+                        bounds.X + 4, bounds.Y + Math.Max(2, (bounds.Height - caption.Height) / 2));
+                }
+
+                break;
+            }
+
             default:
                 // A TextBox and anything text-entry shaped: white client, sunken edge.
                 context.FillRectangle(client, bounds);
@@ -1880,13 +2127,116 @@ public class FormCanvasControl : Control
 
         if (string.IsNullOrEmpty(label) || tooSmallForText)
         {
-            return;
+            return null;
         }
 
         using (context.PushClip(bounds))
         {
             context.DrawText(Text(label, ink), labelOrigin);
         }
+
+        // ⚠ Reported AFTER the draw, and it is the very value the draw above consumed — not a
+        // recomputation. Anything else could agree with the test while disagreeing with the pixels,
+        // which is the whole failure this return value exists to make impossible.
+        return labelOrigin;
+    }
+
+    /// <summary>The one shape a probing canvas draws — see <see cref="RenderSchematicForTest"/>.</summary>
+    private sealed record SchematicProbe(FormSchematic Schematic, Rect Bounds, string Label);
+
+    /// <summary>
+    /// What one probe render reported back.
+    ///
+    /// <para>⛔ A REFERENCE wrapper around the nullable origin, and that is the whole point: it makes
+    /// "the probe never ran" (this object is null) distinguishable from "the probe ran and drew no
+    /// caption" (this object holds a null <c>CaptionOrigin</c>). Collapse the two into a bare
+    /// <c>Point?</c> field and a probe branch that stopped executing — an early return added above it
+    /// in <see cref="Render"/>, say — reads as null, which is exactly what a BAND is asserted to
+    /// report. Every band pin would then pass by absence, and the bands are the arms this gate was
+    /// built for.</para>
+    /// </summary>
+    private sealed record SchematicProbeResult(Point? CaptionOrigin);
+
+    /// <summary>
+    /// Set by <see cref="RenderSchematicForTest"/> alone. Honoured only when non-null: a canvas that
+    /// was never handed one renders a document exactly as it always did.
+    /// </summary>
+    private SchematicProbe? _schematicOverride;
+
+    /// <summary>
+    /// Written by <see cref="Render"/>'s probe branch only, read by <see cref="RenderSchematicForTest"/>
+    /// only. Stays null on any canvas that was never handed a probe.
+    /// </summary>
+    private SchematicProbeResult? _probeResult;
+
+    /// <summary>
+    /// One probe render's observable result: the pixels, hashed, and where the caption landed.
+    /// </summary>
+    /// <param name="Hash">SHA-256 of the rendered frame — the DISTINCTNESS gate.</param>
+    /// <param name="CaptionOrigin">
+    /// The exact point the caption was drawn at, or null when the render drew none (a band, an empty
+    /// label, or a rectangle too small for text) — the POSITION gate a hash cannot provide.
+    /// </param>
+    public sealed record SchematicFrame(string Hash, Point? CaptionOrigin);
+
+    /// <summary>
+    /// Renders ONE <see cref="FormSchematic"/> at one rectangle with one label, through the real
+    /// control and the real <see cref="DrawSchematic"/> seam, and returns both a hash of the pixels
+    /// and the origin the caption was drawn at.
+    ///
+    /// <para>⛔ Two facts, because a hash alone cannot pin caption POSITION: frames are compared for
+    /// DISTINCTNESS, so a caption that moves still hashes uniquely and every existing pin stays
+    /// green. <see cref="SchematicFrame.CaptionOrigin"/> is the coordinate the arms actually used —
+    /// null for the three bands, which draw no caption at all.</para>
+    ///
+    /// <para>⛔ PUBLIC, not internal: the Shell grants no <c>InternalsVisibleTo</c> to the test
+    /// project, by convention (public seams, never internal + IVT — see
+    /// <c>CodeEditorDocumentView.axaml.cs:770</c>). <c>FormSchematicPinTests</c> drives every enum
+    /// value through this and requires the frames ALL PAIRWISE DISTINCT, which is the only gate an
+    /// item schematic can have: it has no catalog row and no document to be rendered from.</para>
+    ///
+    /// <para>⚠ A <see cref="RenderTargetBitmap"/> rather than a headless <c>Window</c> and
+    /// <c>CaptureRenderedFrame</c>: that extension lives in <c>Avalonia.Headless</c>, which this
+    /// project does not reference and MUST NOT — it is a test platform, and referencing it here
+    /// would ship it inside the IDE. <c>RenderTargetBitmap</c> is base Avalonia and renders the same
+    /// visual through the same Skia backend. Caller must be on the dispatcher thread with a
+    /// rendering platform up, i.e. under <c>[AvaloniaTest]</c> with Skia — which is also true of
+    /// every other pixel test here.</para>
+    /// </summary>
+    public static SchematicFrame RenderSchematicForTest(FormSchematic schematic, Rect bounds, string label)
+    {
+        // Big enough to hold the requested rectangle whatever it is, with a margin, so a shape that
+        // draws slightly outside its bounds still lands in the hash instead of being cropped away.
+        var size = new Size(
+            Math.Max(1, Math.Ceiling(bounds.Right) + 20),
+            Math.Max(1, Math.Ceiling(bounds.Bottom) + 20));
+
+        var canvas = new FormCanvasControl();
+        canvas._schematicOverride = new SchematicProbe(schematic, bounds, label);
+        canvas.Measure(size);
+        canvas.Arrange(new Rect(size));
+
+        using var bitmap = new RenderTargetBitmap(
+            new PixelSize((int)size.Width, (int)size.Height), new Vector(96, 96));
+        bitmap.Render(canvas);
+
+        // ⛔ Refuse rather than report null. `bitmap.Render` is what drives Render, and if the probe
+        // branch there ever stops running, a null origin is indistinguishable from the null a BAND
+        // legitimately reports — so every band assertion would pass by absence while measuring
+        // nothing. That is the failure this whole seam was added to remove, so it must not be the
+        // thing the seam quietly does.
+        if (canvas._probeResult is not { } result)
+        {
+            throw new InvalidOperationException(
+                $"The probe branch of {nameof(Render)} never ran for {schematic}, so no caption " +
+                "origin was recorded. The frame hash would still be returned and every band's " +
+                "expected-null assertion would pass while measuring nothing — refusing instead.");
+        }
+
+        using var stream = new MemoryStream();
+        bitmap.Save(stream);
+        return new SchematicFrame(
+            Convert.ToHexString(SHA256.HashData(stream.ToArray())), result.CaptionOrigin);
     }
 
     /// <summary>

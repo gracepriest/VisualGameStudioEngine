@@ -366,7 +366,71 @@ public enum FormSchematic
     Alert,
 
     /// <summary>A BackgroundWorker: work off the UI thread.</summary>
-    Worker
+    Worker,
+
+    // ==================================================================
+    // Task 24 — menus, toolbars and status bars. Declared in commit 24b, BEFORE any row uses one
+    // (spec Decision 12), so the per-VALUE pin exists before there is anything to draw: the canvas
+    // routes every kind through ONE seam and FormSchematicPinTests hashes a frame per value at one
+    // bounds with one label, ALL PAIRWISE DISTINCT. The row-driven gate cannot give that — an item
+    // schematic has no document of its own to render (§7), so nothing else would notice a MenuItem
+    // and a Separator painting the same pixels.
+    //
+    // ⛔ The three BAND values draw NO caption: a strip is chrome, and its id painted across the
+    //   band would be the only pixel a render gate ever sees.
+    // ==================================================================
+
+    /// <summary>A menu strip: a flat band across the top with a rule along its bottom edge.</summary>
+    MenuBar,
+
+    /// <summary>A tool strip: a band with the drag grip at its left edge.</summary>
+    ToolBar,
+
+    /// <summary>A status strip: a band with a rule along its top edge and a sizing grip at its right.</summary>
+    StatusBar,
+
+    /// <summary>A menu item: a client-coloured cell behind its caption, no border — a menu is not a widget.</summary>
+    MenuItem,
+
+    /// <summary>A separator: one rule, across or down, whichever way its cell runs.</summary>
+    Separator,
+
+    /// <summary>A tool button: a small raised box with its caption, inset inside its cell.</summary>
+    ToolButton,
+
+    /// <summary>A status panel: its caption centred, behind the divider rule that starts the panel.</summary>
+    StatusLabel
+}
+
+/// <summary>
+/// The SHAPE of a catalog row — what a control of this kind is, on the canvas and in the code (Task 24,
+/// spec §1). One enum rather than a third bool: every site that once asked <c>IsComponent</c> must
+/// decide what a Docked strip and an Item are, and a switch without a default is what forces it.
+/// </summary>
+public enum FormPlace
+{
+    /// <summary>Pixels or a cell, a TabIndex, children if <c>IsContainer</c>; added with <c>Controls.Add</c>, reversed.</summary>
+    Positioned,
+
+    /// <summary>The tray (Task 25): no geometry, no TabIndex, no children, in <c>FormDocument.Components</c>.</summary>
+    Tray,
+
+    /// <summary>A strip docked to the form: no geometry, a <c>Dock</c> PROPERTY, items under its rule, in <c>Controls</c>.</summary>
+    Docked,
+
+    /// <summary>A strip item: no geometry, no TabIndex, in its host's <c>Children</c>, added by the HOST row's verb in document order.</summary>
+    Item
+}
+
+/// <summary>
+/// What a host row holds and how it adds one (spec §1). <paramref name="Kinds"/>[0] is the default kind
+/// Type Here creates; <paramref name="Add"/> is a template with <c>{parent}</c> and <c>{child}</c>,
+/// emitted in DOCUMENT order (items are ordered, not layered). On the PARENT's row, because the same
+/// ToolStripMenuItem is <c>Items.Add</c>ed under a strip and <c>DropDownItems.Add</c>ed under a menu item.
+/// </summary>
+public sealed record FormItemRule(IReadOnlyList<string> Kinds, string Add)
+{
+    public bool Accepts(string kind) => Kinds.Any(k => string.Equals(k, kind, StringComparison.OrdinalIgnoreCase));
 }
 
 /// <summary>
@@ -395,11 +459,6 @@ public sealed record FormWebScript(string FieldType, string Construct, FormImpli
 /// <summary>A property and the value the other target's construct implies for it — see <see cref="FormWebScript.Implies"/>.</summary>
 public sealed record FormImpliedProperty(string Name, string Value);
 
-/// <param name="IsComponent">
-/// A tray component (Task 25): no geometry, no children, no tab index, no <c>Controls.Add</c>; it
-/// lives under <c>&lt;Components&gt;</c> and is refused anywhere else (BL8020). Every consumer that
-/// enumerates the catalog branches on THIS flag, never on the kind's name.
-/// </param>
 /// <param name="WinFormsEventArgs">
 /// The <c>e</c> type of the default event's handler, qualified; null means <c>EventArgs</c>. A
 /// <c>BackgroundWorker.DoWork</c> handler declared with <c>EventArgs</c> compiles by contravariance
@@ -411,6 +470,33 @@ public sealed record FormImpliedProperty(string Name, string Value);
 /// ("cannot convert from 'Action&lt;DomEvent&gt;' to 'Action'"), so a Timer's stub is parameterless.
 /// </param>
 /// <param name="WebScript">How a script-backed component is built on the web; null for elements.</param>
+/// <param name="Place">
+/// The row's SHAPE — see <see cref="FormPlace"/>. It replaces the old <c>IsComponent</c> bool, which
+/// survives as a derived property: a strip is "no geometry BUT children", which neither
+/// <see cref="IsContainer"/> nor a tray flag could express, and a third bool would have let every
+/// consumer keep two of the three answers.
+/// </param>
+/// <param name="Items">
+/// On a HOST row (a strip, or a menu item that drops down), which item kinds it holds and the verb
+/// that adds one. Null on every other row — <see cref="IsHost"/> is exactly this being non-null.
+/// </param>
+/// <param name="FormProperty">
+/// A property of the FORM this row's first instance is assigned to, e.g. <c>MainMenuStrip</c> for a
+/// MenuStrip. Null when the row is only ever a child. Stated on the row so the region writer emits it
+/// by rule rather than switching on the kind.
+/// </param>
+/// <param name="HtmlChildrenWrapper">
+/// An element wrapping this row's CHILDREN on the web, e.g. <c>ul</c> — the children are list items,
+/// and the wrapper is not the control's own tag.
+/// </param>
+/// <param name="HtmlRole">
+/// A fixed ARIA <c>role</c> attribute for the emitted element, e.g. <c>toolbar</c>, <c>status</c>,
+/// <c>separator</c>. Chrome is the one part of a form whose meaning the DOM cannot infer from its tag.
+/// </param>
+/// <param name="WebCss">
+/// A stylesheet block appended ONCE per kind present on the page — the horizontal bar, the hidden
+/// submenu shown on hover. Per KIND, not per control: two menus must not emit the rules twice.
+/// </param>
 public sealed record FormControlDef(
     string Kind,
     string? WinFormsType,
@@ -423,11 +509,22 @@ public sealed record FormControlDef(
     FormSchematic Schematic = FormSchematic.Input,
     string? WinFormsEvent = null,
     string? WebEvent = null,
-    bool IsComponent = false,
     string? WinFormsEventArgs = null,
     bool WebHandlerTakesEvent = true,
-    FormWebScript? WebScript = null)
+    FormWebScript? WebScript = null,
+    FormPlace Place = FormPlace.Positioned,
+    FormItemRule? Items = null,
+    string? FormProperty = null,
+    string? HtmlChildrenWrapper = null,
+    string? HtmlRole = null,
+    string? WebCss = null)
 {
+    /// <summary>Task 25's flag, now derived: the eleven sites that read it keep reading it.</summary>
+    public bool IsComponent => Place == FormPlace.Tray;
+
+    /// <summary>A strip or a menu item — something whose children are items.</summary>
+    public bool IsHost => Items != null;
+
     /// <summary>
     /// Whether the kind exists on <paramref name="target"/>. On the web an element has a tag and a
     /// script component has a <see cref="WebScript"/>; a kind with neither is honestly absent.
@@ -754,7 +851,7 @@ public static class FormControlCatalog
                 new("Enabled", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms })
             },
             Schematic: FormSchematic.Clock, WinFormsEvent: "Tick", WebEvent: "tick",
-            IsComponent: true,
+            Place: FormPlace.Tray,
             // ⛔ The TYPED call over the Window the init region declares, and a parameterless
             // callback: Window.setInterval takes an Action and refuses Action(Of DomEvent) (M7).
             WebHandlerTakesEvent: false,
@@ -776,7 +873,7 @@ public static class FormControlCatalog
                 new("ToolTipTitle", FormPropertyType.String)
             },
             Schematic: FormSchematic.Hint, WinFormsEvent: "Popup",
-            IsComponent: true, WinFormsEventArgs: "PopupEventArgs"),
+            Place: FormPlace.Tray, WinFormsEventArgs: "PopupEventArgs"),
 
         new("ErrorProvider", "System.Windows.Forms.ErrorProvider", null, null, false, new List<FormPropertyDef>
             {
@@ -786,7 +883,7 @@ public static class FormControlCatalog
                 new("BlinkRate", FormPropertyType.Int, "250")
             },
             Schematic: FormSchematic.Alert, WinFormsEvent: "RightToLeftChanged",
-            IsComponent: true),
+            Place: FormPlace.Tray),
 
         new("BackgroundWorker", "System.ComponentModel.BackgroundWorker", null, null, false, new List<FormPropertyDef>
             {
@@ -794,7 +891,7 @@ public static class FormControlCatalog
                 new("WorkerSupportsCancellation", FormPropertyType.Bool, "false")
             },
             Schematic: FormSchematic.Worker, WinFormsEvent: "DoWork",
-            IsComponent: true, WinFormsEventArgs: "System.ComponentModel.DoWorkEventArgs"),
+            Place: FormPlace.Tray, WinFormsEventArgs: "System.ComponentModel.DoWorkEventArgs"),
     };
 
     public static FormControlDef? Find(string kind) =>

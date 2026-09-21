@@ -81,14 +81,70 @@ public class FormDocumentTests
     {
         // A property named "Width" would be written twice on the element: once as geometry and once
         // as a property, and the second would win non-deterministically depending on write order.
+        //
+        // ⛔ Task 24, commit 24b: the earlier version of this test skipped every row whose Place was
+        // not Positioned, on the rationale that the write-twice hazard exists only where GEOMETRY is
+        // written. That rationale does not hold, and the review caught it: the hazard is the
+        // READER's skip list, not whether the row happens to carry geometry.
+        // FormControlCatalog.IsStructural(name, target) — what FormDocumentReader.ReadControl
+        // actually consults — treats "Id" and "TabIndex" as structural for EVERY target, checked
+        // BEFORE it ever looks at the layout vocabulary; and the reader applies that check to any
+        // NON-COMPONENT control regardless of Place (Docked, Item and Positioned alike), with only a
+        // component's own clause narrowed to "Id" alone. So a Docked or Item row declaring a property
+        // literally named "Id" would have that attribute silently skip-and-continue past the
+        // catalog-property lookup, never reach Properties, and vanish on the very next reload — same
+        // as a Positioned row's would. Even a Tray (component) row is not exempt: its skip clause
+        // names "Id" specifically, and the writer's ApplyControl writes "Id" on every element
+        // UNCONDITIONALLY, including components. A Docked row's own "Dock" is a catalog PROPERTY,
+        // which is a true fact about that row and not a reason to exempt its Place from this gate.
         foreach (var def in FormControlCatalog.All)
         {
             foreach (var property in def.Properties)
             {
-                Assert.That(FormControlCatalog.IsStructural(property.Name), Is.False,
-                    $"'{def.Kind}.{property.Name}' collides with a structural attribute");
+                Assert.That(ForbiddenStructuralNames(def.Place), Has.None
+                        .Matches<string>(a => string.Equals(a, property.Name, StringComparison.OrdinalIgnoreCase)),
+                    $"'{def.Kind}.{property.Name}' collides with a structural attribute the reader's " +
+                    $"skip list drops silently for a {def.Place} row");
             }
         }
+    }
+
+    /// <summary>
+    /// The forbidden-name set <see cref="Catalog_NoPropertyCollidesWithAStructuralAttribute"/> checks
+    /// each row against. Only <c>Positioned</c> writes the full layout vocabulary, so only it is
+    /// checked against the full <see cref="FormControlCatalog.StructuralAttributes"/> union; every
+    /// other Place still has "Id" written onto its element unconditionally (see the test's comment),
+    /// so "Id" is the floor for all three of them.
+    /// </summary>
+    private static IReadOnlyList<string> ForbiddenStructuralNames(FormPlace place) =>
+        place == FormPlace.Positioned ? FormControlCatalog.StructuralAttributes : new[] { "Id" };
+
+    /// <summary>
+    /// ⭐ Proves the instrument before trusting it — the same discipline
+    /// <c>WinFormsCatalogSweepTests.TheGate_RejectsAPropertyTheControlDoesNotHave</c> applies to the
+    /// csc sweep. A Tray row is exactly the shape the OLD version of the gate above could never have
+    /// caught (it skipped every non-Positioned Place outright), so a hand-built Tray definition
+    /// carrying a property named "Id" — the one name <c>FormDocumentReader.ReadControl</c> drops for
+    /// a component no matter what — must be reported as a collision by <see cref="ForbiddenStructuralNames"/>.
+    /// If this ever fails, the gate above is not exercising the case it exists to catch.
+    /// </summary>
+    [Test]
+    public void Instrument_TheStructuralGate_CatchesATrayRowNamedId()
+    {
+        var bogus = new FormControlDef(
+            Kind: "BogusTray",
+            WinFormsType: null,
+            HtmlTag: null,
+            HtmlInputType: null,
+            IsContainer: false,
+            Properties: new[] { new FormPropertyDef("Id", FormPropertyType.String) },
+            Place: FormPlace.Tray);
+
+        var forbidden = ForbiddenStructuralNames(bogus.Place);
+
+        Assert.That(forbidden, Has.Some.Matches<string>(a => string.Equals(a, "Id", StringComparison.OrdinalIgnoreCase)),
+            "the structural gate must flag a Tray row's own property named 'Id' — proving the check " +
+            "can fail before trusting it to pass");
     }
 
     [Test]

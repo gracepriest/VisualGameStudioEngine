@@ -146,26 +146,18 @@ public class WinFormsCatalogSweepTests
             Target = FormTarget.WinForms, Name = "SweepForm", Width = 800, Height = 450, Text = "Sweep"
         };
 
-        var control = new FormControl
-        {
-            Kind = definition.Kind,
-            Id = "ctl",
-            TabIndex = 0,
-            // ⚠ A component (Task 25) has no place: no geometry, and it goes in the tray, not on the
-            // form. Measured 2026-09-19 with the shape forced on: csc rejects Location/Size/Anchor
-            // (CS1061) and Controls.Add (CS1503, not a Control) for all four — and NOTHING else,
-            // which is why the gate still runs every one of their properties through csc here.
-            Geometry = definition.IsComponent
-                ? null
-                : new PixelGeometry { X = 96, Y = 80, Width = 120, Height = 24, Anchor = "Top" }
-        };
+        // ⚠ Task 24, commit 24b: the shape (Tray/Docked/Item/Positioned) is now the ONE answer in
+        // FormCatalogShapes.Canonical, not hand-built here. A component (Task 25) has no place: no
+        // geometry, and it goes in the tray, not on the form. Measured 2026-09-19 with the shape
+        // forced on: csc rejects Location/Size/Anchor (CS1061) and Controls.Add (CS1503, not a
+        // Control) for all four — and NOTHING else, which is why the gate still runs every one of
+        // their properties through csc here.
+        var control = FormCatalogShapes.Canonical(form, definition, "ctl");
 
         foreach (var property in definition.Properties)
         {
             control.Properties[property.Name] = SampleValue(property);
         }
-
-        (definition.IsComponent ? form.Components : form.Controls).Add(control);
 
         var generated = GenerateCSharp(form);
         WinFormsCompile.AssertCompiles(generated,
@@ -194,22 +186,12 @@ public class WinFormsCatalogSweepTests
 
         for (var i = 0; i < width; i++)
         {
-            var control = new FormControl
-            {
-                Kind = definition.Kind,
-                Id = $"ctl{i}",
-                TabIndex = i,
-                Geometry = definition.IsComponent
-                    ? null
-                    : new PixelGeometry { X = 8, Y = 8 + 30 * i, Width = 120, Height = 24 }
-            };
+            var control = FormCatalogShapes.Canonical(form, definition, $"ctl{i}", hostId: $"ctl{i}Host");
 
             foreach (var property in enums)
             {
                 control.Properties[property.Name] = property.AllowedValues![i % property.AllowedValues.Count];
             }
-
-            (definition.IsComponent ? form.Components : form.Controls).Add(control);
         }
 
         WinFormsCompile.AssertCompiles(GenerateCSharp(form),
@@ -242,14 +224,7 @@ public class WinFormsCatalogSweepTests
             Target = FormTarget.WinForms, Name = "SweepForm", Width = 800, Height = 450, Text = "Sweep"
         };
 
-        var control = new FormControl
-        {
-            Kind = definition.Kind,
-            Id = "ctl",
-            TabIndex = 0,
-            Geometry = definition.IsComponent ? null : new PixelGeometry { X = 96, Y = 80, Width = 120, Height = 24 }
-        };
-        (definition.IsComponent ? form.Components : form.Controls).Add(control);
+        var control = FormCatalogShapes.Canonical(form, definition, "ctl");
 
         // The gesture's own output: the stub it writes, where it chooses to put it. For a component
         // that includes the row's WinFormsEventArgs — DoWorkEventArgs, PopupEventArgs — which is
