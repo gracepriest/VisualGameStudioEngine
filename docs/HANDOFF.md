@@ -17,12 +17,69 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
-## 🚀 START HERE — 2026-09-20 handoff: Task 24 (menus), commit 24a is COMPLETE AND GATED
+## 🚀 START HERE — 2026-09-21: Task 24 is three commits in; **24a, 24b and 24c are all DONE, GATED and PUSHED**
 
 **Written for the session that picks this up. Newer than everything below; supersedes it where they
-disagree.** `origin/master` moved again on 2026-09-20 to **`7ce1200`** (PR #64, MSIL); this branch is
-22 behind / 113 ahead of it. Whether master's game-template float→int break (chip `task_9e0da8ab`)
-is fixed there is still UNMEASURED — four of the gate's failures below are inherited from it.
+disagree.** Branch `feat/form-designer` == `origin/feat/form-designer` == **`1efa9c91`**, SHA-verified.
+`origin/master` == **`7ce1200`** (PR #64, MSIL); this branch is **22 behind / 117 ahead**. Whether
+master's game-template float→int break (chip `task_9e0da8ab`) is fixed there is still UNMEASURED.
+Working tree is clean apart from an untracked `csc.dll` in the repo root — ⛔ **never `git add -A`.**
+
+| Commit | What | Gate |
+|---|---|---|
+| `8ae31f1` 24a | `New T() { … }` typed array literals (compiler) | FULL suite 7255/7243/10/2 |
+| `029fbff9` 24b | the row SHAPE — `FormPlace`, `FormItemRule`, every gate learns it before a strip exists | fast 5922/5919/2/1 + Form Int 116/116 |
+| `1efa9c91` 24c | the seven strip/item ROWS, carried through reader, writer, clipboard, both emitters, canvas bands, drop surface | fast **5978/5975/2/1** + Form Int **134/134** + 43/43 by name; **12 mutants, 12 killed** |
+
+**NEXT = commit 24d** — plan Tasks 20–25, the "Type Here" editing surface. Then 24e (Tasks 26–30),
+then Task 28 closeout, then the merge to master.
+
+### What 24c taught, that the next commit needs
+
+- ⛔⛔ **Task 12 alone puts a SILENT DATA-LOSS bug in the tree, which is why 24c is one commit.** A new
+  `Dock` catalog property with the old reader makes `FormDocumentWriter.ApplyControl`'s
+  "catalog property the model dropped" sweep DELETE `Dock="Top"` from every strip on the FIRST SAVE —
+  852 bytes against 880. Measured. Two gates are also red by construction in the middle:
+  `WinFormsCatalogSweepTests` from Task 12 until 15 (CS1503) and `FormCanvasRenderTests` from 12 until
+  17 (`Layout` skips null geometry, so every strip hashed as the empty form). Run each only after the
+  task that closes its window.
+- ⛔⛔ **A subagent told to "add tests to file X" used Write instead of Edit and DESTROYED four tests**
+  in an UNTRACKED file, which git cannot recover. **Nothing went red** — the production code they
+  pinned was still correct, so the suite just had less holding it down. The only symptom was a test
+  count that did not reconcile (nine expected, five found). Say "use Edit, do NOT use Write" in the
+  prompt, back untracked test files up, and **reconcile every count against the previous round.**
+- ⛔⛔ **If the only way to produce an input is a path that REJECTS it, no end-to-end test can reach the
+  handler.** `c.Definition?.Place is null or FormPlace.Positioned` mutated to `==` survived all 842
+  tests then passing, because every fixture control comes from the reader and the reader returns null
+  for an unknown kind. Pinning it needed a HAND-BUILT `FormControl`. The same trick made
+  `ContainerAt`'s Docked skip falsifiable (give a hand-built strip real geometry).
+- ⚠ **A COMPILE-ERROR red proves nothing about the assertions** — no assertion runs, so a tautological
+  pin is invisible and the later green unreadable. Land the one missing symbol alone first, re-run, get
+  a genuine red, then implement. Used at Tasks 12 and 17; caught a real problem at 12.
+- ⚠ **A self-consistency check is blind to a bug both paths share.** `Write(a) == Write(b)` passed while
+  BOTH sides silently dropped `Dock`. It needs an anchor to something external.
+  ⚠ **Absence is not a pin**: `TabIndex == 0` on a bare element passes against the unfixed reader.
+- ⛔ **Nothing parsed the emitted HTML** until 24c added a tag-balance pin. Ordered-fragment assertions
+  prove SEQUENCE, never BALANCE — an unclosed wrapper passed every assertion in the file.
+- ⚠ `FormLayoutEntry(Control, Bounds, Role, Host)` is declared with ALL FOUR fields although `Host` is
+  unused in 24c, because a positional record struct's `Deconstruct` changes shape when a field is added
+  later. **24d is what uses `Host`** — do not re-declare it.
+- ⚠ **`FormRetarget` did NOT throw on the Docked canonical shape**, so 24e's Task 26 rule did NOT need
+  pulling forward (plan Task 19 said to fold it in if it did).
+- ⏳ **The IDE has NEVER been opened** to look at 24b's eleven schematic arms or 24c's bands.
+  CLAUDE.md requires opening it before the merge. This is the largest unverified surface on the branch.
+- New followups filed: **25** (the catalog's shared property fields have no gate), **26** (⛔⛔ a web
+  control's `Event` is emitted VERBATIM into `addEventListener`, so any wrong case is a green build and
+  a permanently dead handler — and `IsEmittedBind` compares case-INSENSITIVELY, so every diagnostic says
+  it is fine), **27** (`FormPlacement.ItemId`'s accelerator regex is dead — proven by mutation).
+
+### 📌 The 24a detail below is still accurate for 24a itself
+
+## (2026-09-20) commit 24a — Tasks 1–6, COMPLETE AND GATED
+
+`origin/master` moved on 2026-09-20 to **`7ce1200`** (PR #64, MSIL). Whether master's game-template
+float→int break (chip `task_9e0da8ab`) is fixed there is still UNMEASURED — four of the gate's failures
+below are inherited from it.
 
 ### ✅ 24a IS DONE — Tasks 1–6 all closed, full suite run, committed
 
