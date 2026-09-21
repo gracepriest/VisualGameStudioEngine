@@ -1940,9 +1940,12 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
     completely on its own**, no `For Each` involved. Root cause confirmed at source:
     `IRBuilder.Visit(ForLoopNode)` (`IRBuilder.cs:3155-3166`) adds the induction variable to
     `LocalVariables` ONLY inside `if (!string.IsNullOrEmpty(node.VariableType))` — the
-    inline-declaration arm — so the inferred form never gets a slot. **That is defect (B) of
-    this family, on the `IRFor` node.** Strong next candidate; `AllocateForEachLocals` is the
-    mechanism to copy.
+    inline-declaration arm — so the inferred form never gets a slot.
+    ⛔ **CORRECTED 2026-09-21 — BOTH HALVES OF THE NEXT SENTENCE WERE WRONG, see the counted-`For`
+    entry below.** It read "that is defect (B) of this family, on the `IRFor` node". There is no
+    `IRFor` node (a counted `For` lowers to ordinary blocks), and it was never MSIL-only: the one
+    omission broke **all four** backends. Left here with its correction rather than deleted,
+    because the wrong reading is what the next session would otherwise re-derive.
   - **C# backend: a property `Get` accessor never hoists locals declared inside a loop**
     (`CS0103`), independent of loop construct.
   - **C# backend: an emitted `foreach` reuses the source loop-variable name even when it collides
@@ -1952,7 +1955,8 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
     body carries the FIRST loop's type. Shared-IR/analyzer defect; only MSIL can observe it
     because the text-emitting backends re-resolve the identifier. Deliberately not papered over
     in the backend.
-  ⭐ **The top of the remaining MSIL worklist, so the next session starts here**: **`l(0) = 42` on
+  ⭐ **The top of the remaining MSIL worklist, so the next session starts here** — **FIXED
+  2026-09-21, see the `IRIndexerStore` entry below**: **`l(0) = 42` on
   a List writes NOTHING and runs clean, printing the OLD value** — `MSILBackend` never overrides
   `Visit(IRIndexerStore)` and `ICodeGenerator`'s is a `virtual { }` no-op, the same hazard that
   lost `IRThrow`. `a(i) = v` is fine (`IRArrayStore` IS overridden) — only the collection indexer
@@ -1963,6 +1967,216 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   195 / 6222 / 203 / 6620** — +40 passed, +40 total, +0 failed; 195 reported = 195 anchored
   lines, 170 normalized failing names, `diff` clean; nothing new, nothing newly passing.
   Filtered `FullyQualifiedName~Msil` reference: `Failed: 0, Passed: 228`.
+
+  ⚠ **INDEXED COLLECTION WRITES RUN ON MSIL as of 2026-09-21** — `MsilIndexerStoreTests`
+  (18 cases), `MSILBackend.cs`: `Visit(IRIndexerStore)`. Before: `l(0) = 42` on a
+  `List(Of Integer)` and `d("k") = 9` on a `Dictionary` **RAN CLEAN AND PRINTED THE OLD VALUE**.
+  ⛔ **THE OVERRIDE DID NOT EXIST.** `CodeGeneratorBase.Visit(IRIndexerStore)`
+  (`ICodeGenerator.cs:172`) is a `virtual { }`, so every indexed write emitted **nothing at
+  all** — not the call, not the indices, not even the evaluation of the value. The emitted IL
+  for `l.Add(1); l.Add(2); l(0) = 42` contained no `set_Item` and no `ldc.i4 42`; it went
+  straight from the second `Add` to the `get_Item` of the read. A clean run with a wrong
+  answer, which is the worst failure mode this backend has. On a `Dictionary` the dropped
+  write surfaced later and louder: `KeyNotFoundException` on the next read of that key.
+  `a(i) = v` was never affected — an array write is `IRArrayStore`, which is `abstract`.
+  ⭐ **THE ENUMERATION, worth more than the fix.** This is the THIRD instruction lost to a base
+  no-op (`IRThrow` was the identical shape — see the `Try`/`Catch` entry above, "the one that hid
+  the rest"; and `JavaScriptBackend.cs:29` names the hazard by name), so the whole surface was
+  counted rather than guessed:
+  - `CodeGeneratorBase` declares **35 `abstract` `Visit` methods** (`ICodeGenerator.cs:128-162`)
+    and **exactly TWO `virtual { }` ones** — `Visit(IRThrow)` (165) and `Visit(IRIndexerStore)`
+    (172). 35 + 2 = 37 = the whole `IIRVisitor` surface (`IRNodes.cs:37-80`). **Every other
+    visitor is `abstract`, so the compiler makes forgetting it impossible** — no third
+    instruction can be lost this way until someone adds another `virtual { }`.
+  - ⚠ **`IIRVisitor` itself carries the same two as DEFAULT INTERFACE METHODS** (`IRNodes.cs:75`
+    and `:80`, both `{ }`). Two copies of the hazard, the same two nodes. A new node added with
+    a default body is silently optional for every backend at once; add it `abstract`/undefaulted
+    instead and the compiler names each backend that has not handled it.
+  - MSIL overrode all 35 abstract + `IRThrow` (5025) and was missing **only** this one.
+  - **Per backend, measured:** C++ overrides both (`CppCodeGenerator.cs:5015`, `:5149`); C# and
+    JavaScript implement `IIRVisitor` DIRECTLY rather than deriving from `CodeGeneratorBase`,
+    and both wrote the pair anyway (`CSharpBackend.cs:3466`/`:3663`,
+    `JavaScriptBackend.cs:3312`/`:3409`); MSIL had `IRThrow` only, now has both.
+  - ⛔ **`LLVMBackend` overrides NEITHER** — it derives from `CodeGeneratorBase`, so it inherits
+    both no-ops and silently drops every `Throw` *and* every indexed collection write today.
+    Same defect class, unfixed, never swept. On the open list below.
+  - Not the same class: four empty `Visit(...) { }` bodies (`IRFunction`, `BasicBlock`,
+    `IRConstant`, `IRVariable`) are deliberate — C++ (2294-2297), C# (3195-3198, as plain
+    `public void`) and LLVM (1301-1304) all carry the identical four, because those nodes are
+    driven or consumed by their parents. `Visit(IRAwait)`/`Visit(IRYield)` emit only a warning
+    comment: degraded, but visible in the IL.
+  **The lowering is operand order and one table lookup.** `set_Item` is an ordinary instance
+  call, so IL wants receiver, then every index, then the value, and the signature comes from the
+  RECEIVER's own type through `CollectionMembers` — `List`1<T>::set_Item(int32, !0)` indexes by
+  an integer and takes a generic element, `Dictionary`2<K,V>::set_Item(!0, !1)` takes both from
+  the instantiation. Spelling either as the other assembles and then dies at run time, which is
+  why neither is inferred. The table already carried both rows; only the override was missing.
+  **Insert-or-update falls out, it is not special-cased** — `Dictionary::set_Item` adds an absent
+  key, which is what .NET means by `d(k) = v` and what C#, C++ and JS all do; `Add` would throw.
+  ⭐ **A SURVIVOR CAUGHT A DEAD FIELD IN THE FIX ITSELF.** The emission first spelled the method
+  name literally (`::set_Item(...)`) beside a table lookup, leaving `CollectionMember.Il` unread
+  on that path. `i8-dict-row-calls-add` — Dictionary's row rewritten to call `Add`, which throws
+  `ArgumentException` on an existing key instead of updating it — **SURVIVED the entire
+  fixture**, because nothing consulted the field. Now `::{collSig.Il}(...)`; the mutant kills 3
+  tests. ⚠ **The READ path (`Visit(IRIndexerAccess)`) still spells `get_Item` literally** — both
+  rows happen to agree so it emits the same text today, but it carries the identical latent
+  hazard. Left alone deliberately, to keep this diff to one family.
+  ⚠ **ONE MUTANT SURVIVES AND THE CODE IS KEPT.** `i10-fallback-dropped` — the non-collection
+  `IList`1` fallback. Measured one probe per way into it: `IList(Of T)`/`IReadOnlyList(Of T)` as
+  a parameter or a field are **semantic errors** and never reach IR; a `.NET`-handle write takes
+  the primary path; the only shape that reaches the arm is `Dim l As New List()` (no generic
+  argument), and **ilasm already refuses that whole file** — `Reference to undefined class
+  'List'` — because the receiver's own `.locals` entry is a bare `List`. Reachable, but by no
+  program that can run. Kept because it is the exact mirror of the fallback the READ path has
+  shipped with; dropping it on the write side alone would make one indexer's two halves
+  disagree about which type they call on.
+  ⚠ **DELIBERATELY NOT MUTATED:** `_currentStack -= 2 + Indices.Count`. `_currentStack` is
+  **write-only across the whole backend** — filtered for non-mutating uses, `grep` returns
+  exactly one line, the field declaration at `MSILBackend.cs:50`. `.maxstack` comes from a
+  DIFFERENT field, `_maxStack = Math.Max(8, _localIndices.Count + _tempIndices.Count + 4)`
+  (`MSILBackend.cs:1347`), which never reads `_currentStack`. A mutant there cannot change one
+  byte of IL. The line stays for consistency with every other visitor — and ⚠ **`_currentStack`
+  being dead means no visitor's stack arithmetic is checked by anything**; do not trust it as a
+  verification mechanism.
+  ⛔ **C# CANNOT BE THE ORACLE for a read-modify-write through an indexer** — `l(0) = l(1)`,
+  `l(i) = l(i) * 10`, `d("a") = d("a") + 1`, and **any** indexer write inside a `For Each` body
+  all give `CS0103: The name 'tN' does not exist in the current context`. Those cases assert
+  against JavaScript or C++. Also `List(Of Boolean)` does not compile on **C++**
+  (`std::vector<bool>`'s bit-reference will not bind to the generated `T&`). Both on the open
+  list below.
+  ⚠ **Writing a List while enumerating it now throws `InvalidOperationException: Collection was
+  modified` on MSIL, matching C#** — correct .NET behaviour that the dropped write used to hide
+  (it ran clean and printed stale values). JavaScript legitimately diverges, so that shape is
+  not a four-backend pin.
+  **10 of 11 mutants killed, 1 kept as unreachable-with-recorded-reason, 0 build breaks**
+  (`i0` 18, `i1` 17, `i2` 17, `i3` 17, `i4` 16, `i5` 18, `i6` 18, `i7` 4, `i8` 4, `i9` 15;
+  `i10-fallback-dropped` survives, declared above). Every mutant is LINE-anchored with a
+  per-mutant assertion that the expected text is on that line, so a shifted line fails the run
+  instead of silently mutating nothing.
+
+  ⚠ **`For i = 1 To n` WITH NO EXPLICIT `As Type` RUNS as of 2026-09-21** —
+  `CountedForVariableTests` (19 cases), `IRBuilder.cs`: `Visit(ForLoopNode)`,
+  `ResolvesToExistingStorage`. **SHARED IR, read by all five backends.**
+  ⛔ **IT WAS NEVER MSIL-ONLY.** The previous entry above filed this as "defect (B) of the
+  `For Each` family, on the `IRFor` node". That framing was wrong in two ways: there is **no
+  `IRFor` node** (a counted `For` lowers to ordinary blocks plus `IRAssignment`/`IRCompare`),
+  and the omission broke **all four backends**, because every one of them writes its
+  declarations from `IRFunction.LocalVariables`. One omission, four symptoms, all measured
+  compiled-and-run:
+  - **C#** — `CS0103: The name 'i' does not exist in the current context` (×5)
+  - **C++** — `error: use of undeclared identifier 'i'` at `i = 1;`
+  - **JavaScript** — `ReferenceError: i is not defined` at `i = 1;`
+  - **MSIL** — `InvalidProgramException` (`// WARNING: Unknown local 'i'` in the IL)
+  The registration lived INSIDE the `if (!string.IsNullOrEmpty(node.VariableType))` arm, so
+  `For i As Integer = 1 To n` worked and the ordinary VB spelling did not. The ONE inferred-form
+  shape that worked anywhere was `Dim i As Integer = 100` followed by `For i = 1 To 3` — the
+  discriminator, because the name already had storage.
+  ⚠ **NOT the `For Each` situation.** There `IRBuilder` deliberately withholds the element
+  variable because `foreach`/`for(:)` declares it in the target language. A counted `For` has no
+  such construct; each backend emits a bare assignment.
+  ⛔ **WE INTRODUCED A REGRESSION HERE AND CAUGHT IT BEFORE COMMIT. READ THIS BEFORE TOUCHING
+  THE GUARD.** The first fix put BOTH spellings behind one storage-resolving guard and then —
+  on the strength of an overlap mutant — deleted the guard's module-global arms as "provably
+  redundant". Measured on three builds, all four backends:
+
+  | shape | PRE-FIX `23666d6` | REGRESSED | NOW |
+  |---|---|---|---|
+  | module global, loop in a DIFFERENT `Sub` | **`4`** | **`0`** | **`4`** |
+  | module global, read back in BOTH `Sub`s | **`4 / 4`** | **`4 / 0`** | **`4 / 4`** |
+  | module global assigned before the loop | **`4`** | **`0`** | **`4`** |
+  | module global, loop in the SAME `Sub` | `4` | `4` | `4` |
+  | class FIELD (control) | `4` | `4` | `4` |
+  | **explicit** `For g As Integer`, other `Sub` | `0` | `0` | `0` |
+
+  `_variableVersions` only holds a version for a name in the function that has already touched
+  it — not in every function that can reach a module global through `_moduleGlobals`. So `Bump`
+  saw "no storage", registered a local, and every backend's declaration of that local shadowed
+  the global for the rest of `Bump`. A plain non-loop `g = 5` from another `Sub` was unaffected;
+  it was specific to the counted-`For` registration path.
+  ⭐ **WHY THE PROBE COULD NOT SEE IT, and the rule that came out.** The probe that "proved" the
+  arms redundant put the loop and the read-back in the **same function** — where the spurious
+  shadowing local happens to hold the right value when the loop ends, so the read returns `4`
+  and the shadowing is invisible. Only a read from a **different** function observes it. The
+  overlap mutant therefore ran against a fixture in which **no shape COULD kill those arms**:
+  **a mutant no shape can kill is UNTESTED, not redundant.** The question is whether a shape
+  exists that would observe the difference, not whether the current fixture contains one. Found
+  by test-writer reading the code, not by any run.
+  ⚠ **THE TWO SPELLINGS ARE DIFFERENT STATEMENTS AND MUST NOT SHARE A GUARD.**
+  `For i As Integer = 1 To 3` **declares** `i` — it introduces a loop-scoped variable that
+  SHADOWS a same-named field or module global, which is VB's rule and what all four backends
+  already did (measured `0`, correctly). `For i = 1 To 3` declares nothing and drives whatever
+  `i` already denotes (measured `4`). ⛔ **Fixing only the global arm would have flipped the
+  explicit form from `0` to `4` — a new regression in the opposite direction, and every test
+  would still have passed.** The fix is two changes: restore the asymmetry (explicit always
+  declares, with its own self-dedupe; inferred resolves first), and restore the module-global
+  arm keyed `ModuleGlobalKey(_currentModuleName ?? _module?.Name, name)` **exactly as
+  `GetOrCreateVariable` keys it** (`IRBuilder.cs:479`) — the guard and that resolver must agree
+  about what a bare name denotes.
+  ⚠ **`f13-explicit-shares-inferred-guard` — which collapses the two arms back into one guard,
+  i.e. reproduces the regression — SURVIVED all 18 of the other tests.** Measured twice: against
+  the 18-test fixture it survived outright; with
+  `ExplicitlyTypedCountedFor_OverAModuleGlobalsName_DeclaresAShadow_NotThePair` added it fails
+  exactly that one test and nothing else. That test exists solely to kill it. **Do not remove it**
+  — without it the two arms can be collapsed again and every test still passes.
+  ⚠ **The guard's arms are deliberately NOT minimal.** `f9` (module-global) and `f10`
+  (bare-global) each survive ALONE because the other covers them; disabling both
+  (`f15-no-global-arms-at-all`) kills `InferredCountedFor_OverAModuleGlobal_...` on all three
+  of its legs with `But was: "0"` — **the regression's exact signature**. ⛔ Note what that
+  means: while the pin still asserted the regressed `0`, `f15` SURVIVED, i.e. the mutation
+  that REPRODUCES the regression was blessed by a green fixture. The flip to `4` is what makes
+  the pair killable at all. The two arms mirror the two lookups `GetOrCreateVariable` performs
+  in order and are kept as a pair. Same story one arm up: `f5` (declared-local) survives alone,
+  `f7` (live-SSA-version) kills 1 alone, and `f11` (BOTH off) kills 3 — the extra two,
+  `CountedFor_OverAnExistingLocal_KeepsOneSlot` and `TwoInferredLoopsSharingAName_DoNotDoubleRegister`,
+  die only when neither arm is present. **Each survivor is half of a load-bearing pair, proved by
+  the pair-mutant, not asserted.** Do not "simplify" any of them away on the strength of a single
+  green mutant — that is precisely the reasoning that produced the regression above.
+  ⛔ **`Exit For` is NOT a no-op on a counted `For`** — measured `6` on C#, C++, JS and MSIL
+  alike. The entry above records `Exit For` as a C#-backend no-op; that is true of `For Each`
+  only. Different construct, different verdict.
+  ⚠ **A counted loop in a property `Get` accessor still does not compile on C#** (`CS0103` on
+  the local declared inside the loop) — the pre-existing C#-backend defect already on the open
+  list; MSIL and JS both give the right answer, so that shape is pinned against them.
+  ⚠ **Pre-existing, pinned, NOT ours:** `For i = 1 To n` where `i` is a **PARAMETER** throws
+  `InvalidProgramException` on MSIL. Verified identical against the pre-change build; C# and
+  JavaScript both give the right answer, so that case asserts against those two.
+  ⚠ **Not fixed, out of these two families, each measured compiled-and-run — added to the open
+  list:**
+  - ⛔ **`LLVMBackend` overrides NEITHER base no-op visitor** — not `Visit(IRThrow)`, not
+    `Visit(IRIndexerStore)`. It silently drops every `Throw` and every indexed collection write
+    today, the same clean-run-wrong-answer failure mode MSIL had. Never swept; LLVM is still
+    out of scope, so this is filed, not fixed.
+  - **`g.Items(0) = 42` — an indexer write through a member access — is broken on ALL FOUR
+    backends**, not just MSIL: it never reaches `IRIndexerStore`. Front end, upstream of every
+    emitter. `Dim l = g.Items` then `l(0) = 42` works everywhere, which is the discriminator.
+  - **MSIL: `For i = 1 To n` where `i` is a PARAMETER throws `InvalidProgramException`.**
+    Pre-existing — verified identical against the pre-change build — and pinned in
+    `CountedForVariableTests` against C# and JavaScript, which both answer correctly.
+  - **C# backend: ANY indexer write inside a `For Each` body fails** with
+    `CS0103: The name 'tN' does not exist in the current context` — the same lost-temporary
+    defect as a read-modify-write (`l(0) = l(1)`, `d("a") = d("a") + 1`). C# is therefore not a
+    valid oracle for those shapes; they assert against JavaScript or C++.
+  - **C++ backend: `List(Of Boolean)` does not compile** — `std::vector<bool>`'s proxy
+    bit-reference will not bind to the `T&` the generated code takes. Element-type-specific;
+    `List(Of Integer)` / `String` / a user class are all fine.
+  - **Parser: `Public Items As New List(Of Integer)()` does not parse as a FIELD declaration.**
+    The inline collection initializer is accepted on a `Dim` inside a method but not on a class
+    member; the field has to be declared and then assigned in the constructor.
+  - **`Catch ex As System.Exception` fails on JavaScript and MSIL** while the bare
+    `Catch ex As Exception` works on both. The dotted BCL spelling is not resolved on the catch
+    clause path.
+  **10 of 13 mutants killed, 3 survive ALONE and each is killed by its pair-mutant, 0 build
+  breaks** — `f1` 14, `f2` 14, `f3` 5, `f4` 17, `f13` 1 (all three legs), `f14` 2, `f7` 1,
+  `f8` 1, `f15` 1 (all three legs), `f11` 3; survivors `f5`, `f9`, `f10`. ⚠ **A sweep script
+  that classifies a mutant by `grep "error CS"` is WRONG here** — a fixture with a C#-backend
+  leg prints `error CS…` inside the TEST OUTPUT whenever a mutant correctly breaks the EMITTED
+  C#, and that heuristic reported four genuine kills as build breaks. A real test-project build
+  failure emits no run-summary line at all, so test for the ABSENCE of `^(Failed|Passed)!`.
+  **Full suite in place for BOTH families: 195 / 6299 / 203 / 6697 against the `23666d6`
+  baseline 195 / 6262 / 203 / 6660** — +37 passed, +37 total, +0 failed, +0 skipped, which is
+  exactly the two new fixtures (18 + 19) and nothing else. 195 reported = 195 anchored
+  `^  Failed ` lines; 170 normalized failing names, `diff` against the baseline list clean —
+  nothing new, nothing newly passing.
 
   ⚠ **Narrowing shapes are refused by the SEMANTIC ANALYZER, before any of this** —
   `Public N As Single = 1.5 + 1.0` is "Cannot assign value of type 'Double' to variable of type

@@ -495,6 +495,62 @@ namespace BasicLang.Compiler.IR
             return variable;
         }
 
+        /// <summary>
+        /// Whether <paramref name="name"/> already denotes something with STORAGE at this point
+        /// in the current function — a declared local, a parameter, a live SSA version, a field
+        /// or property of the enclosing class, or a module global.
+        ///
+        /// <para>This is the same resolution <see cref="GetOrCreateVariable"/> performs, asked
+        /// as a question instead of acted on, so a caller can tell "this name is about to be
+        /// CREATED" from "this name already resolves somewhere". The only caller is the counted
+        /// <c>For</c>, which must give its induction variable a local when nothing else holds it
+        /// and must NOT when something does — see <see cref="Visit(ForLoopNode)"/> for why each
+        /// half matters.</para>
+        ///
+        /// <para>⚠ Must be asked BEFORE <c>GetOrCreateVariable</c>, which pushes a version and
+        /// would then make every name look as though it already existed.</para>
+        /// </summary>
+        private bool ResolvesToExistingStorage(string name)
+        {
+            if (_currentFunction == null || string.IsNullOrEmpty(name)) return true;
+
+            // Ordinal, matching the guard this replaced — a case-insensitive test here would
+            // change which names the EXPLICIT `For i As Integer` form considers already declared.
+            if (_currentFunction.LocalVariables != null
+                && _currentFunction.LocalVariables.Any(v => v?.Name == name)) return true;
+
+            // A live SSA version. This covers a PARAMETER, and it covers a module global in
+            // the one function that has already touched it.
+            if (_variableVersions.TryGetValue(name, out var versions) && versions.Count > 0) return true;
+
+            // A field or property of the enclosing class. The SSA builder never binds one, so
+            // this arm is the only thing standing between `For Total = 1 To 3` and a local
+            // that shadows the member the loop is supposed to mutate.
+            if (IsCurrentClassMember(name)) return true;
+
+            // ⛔ A MODULE GLOBAL, reachable from EVERY function in its module — not only from
+            // whichever one happens to have bound a version already. Keyed exactly as
+            // GetOrCreateVariable keys it, because the two must agree about what a bare name
+            // denotes or this guard says "fresh" for something that resolver says "global".
+            //
+            // ⛔⛔ THIS ARM WAS DELETED ONCE AND HAD TO COME BACK. It was dropped as provably
+            // redundant, on the strength of a probe that put the loop and the read-back in the
+            // SAME function — where a spurious shadowing local happens to hold the right value
+            // at the end of the loop, so nothing observes the shadowing. The shape that
+            // observes it puts them in DIFFERENT functions:
+            //     Dim g As Integer = 0
+            //     Sub Bump()  : For g = 1 To 3 : Next : End Sub
+            //     Sub Main()  : Bump() : PrintLine(CStr(g)) : End Sub
+            // Measured 4 on all four backends before the deletion and 0 on all four after —
+            // the loop ran against a local nobody could see. A guard arm is not redundant
+            // because no shape kills it; it is redundant when no shape CAN.
+            if (_moduleGlobals.ContainsKey(ModuleGlobalKey(_currentModuleName ?? _module?.Name, name)))
+                return true;
+
+            // The bare-keyed fallback GetOrCreateVariable consults after the module-keyed one.
+            return _globalVariables.ContainsKey(name);
+        }
+
         private void PushVariableVersion(string name, IRVariable variable)
         {
             if (!_variableVersions.ContainsKey(name))
@@ -3155,15 +3211,54 @@ namespace BasicLang.Compiler.IR
 
             // Determine loop variable type - use inline type if specified, otherwise use start value type
             TypeInfo loopVarType = startValue.Type;
+
+            // ⚠ THE TWO SPELLINGS ARE DIFFERENT STATEMENTS AND MUST NOT SHARE A GUARD.
+            // `For i As Integer = 1 To 3` DECLARES i — it introduces a loop-scoped variable
+            // that SHADOWS any same-named field or module global, which is VB's rule and what
+            // every backend already did. `For i = 1 To 3` declares nothing; it drives whatever
+            // i already denotes. Measured on all four backends against the pre-change build:
+            // with a module-level `Dim g`, a `For g As Integer` loop in another Sub leaves g
+            // at 0 (correct: it shadowed) while a `For g` loop leaves it at 4 (correct: it
+            // drove the global). Collapsing both into one storage-resolving guard broke the
+            // second and would equally have broken the first in the other direction.
             if (!string.IsNullOrEmpty(node.VariableType))
             {
                 loopVarType = GetTypeInfoFromName(node.VariableType) ?? startValue.Type;
-                // Add to local variables since this is an inline declaration
-                var localVar = new IRVariable(node.Variable, loopVarType, 0);
+
+                // The inline declaration: always its own local, deduped only against itself.
+                var declared = new IRVariable(node.Variable, loopVarType, 0);
                 if (!_currentFunction.LocalVariables.Any(v => v.Name == node.Variable))
                 {
-                    _currentFunction.LocalVariables.Add(localVar);
+                    _currentFunction.LocalVariables.Add(declared);
                 }
+            }
+
+            // ⛔ THE INDUCTION VARIABLE NEEDS STORAGE, AND THE INFERRED FORM USED TO GET NONE.
+            // This registration lived INSIDE the `VariableType` branch above, so
+            // `For i As Integer = 1 To n` worked and `For i = 1 To n` — the ordinary VB
+            // spelling — produced a loop over a variable no backend had declared. Measured on
+            // ALL FOUR backends, compiled and run:
+            //   C#     CS0103: The name 'i' does not exist in the current context (×5)
+            //   C++    error: use of undeclared identifier 'i'  at  `i = 1;`
+            //   JS     ReferenceError: i is not defined         at  `i = 1;`
+            //   MSIL   InvalidProgramException  (`// WARNING: Unknown local 'i'` in the IL)
+            // One omission, four identical symptoms — every backend writes its declarations
+            // from IRFunction.LocalVariables, so this is the shared cause and not a per-backend
+            // gap. It is NOT the For Each situation: there IRBuilder deliberately keeps the
+            // element variable out of the list because `foreach`/`for(:)` declares it in the
+            // target language. A counted For has no such construct; each backend emits a bare
+            // assignment.
+            //
+            // ⚠ Registered only when the name does not ALREADY resolve to storage, which is
+            // exactly the resolution GetOrCreateVariable performs on the next line — and it
+            // must be asked BEFORE that call, which pushes a version of its own. Without the
+            // guard, `For Total = 1 To 3` where Total is a FIELD or a module global would
+            // acquire a same-named local and the loop would silently stop mutating the member.
+            // The already-a-local case is what keeps `Dim i As Integer = 100` followed by
+            // `For i = 1 To 3` (which works today on all four backends) unchanged.
+            else if (!ResolvesToExistingStorage(node.Variable))
+            {
+                _currentFunction.LocalVariables.Add(new IRVariable(node.Variable, loopVarType, 0));
             }
 
             var loopVar = GetOrCreateVariable(node.Variable, loopVarType);

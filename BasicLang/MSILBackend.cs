@@ -5983,6 +5983,86 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
         }
 
+        /// <summary>
+        /// The WRITE half of <see cref="Visit(IRIndexerAccess)"/> — <c>l(i) = v</c>,
+        /// <c>d(k) = v</c>, and the explicit <c>l.Item(i) = v</c> spelling that lowers to the
+        /// same node.
+        ///
+        /// <para>⛔ <b>THIS OVERRIDE DID NOT EXIST.</b>
+        /// <see cref="CodeGeneratorBase.Visit(IRIndexerStore)"/> is a <c>virtual { }</c>, so
+        /// every indexed write on a collection emitted NOTHING AT ALL — not the call, not the
+        /// indices, not even the evaluation of the value — and the program RAN CLEAN and
+        /// printed the OLD element. Measured: <c>l(0) = 42</c> on a <c>List(Of Integer)</c>
+        /// produced IL containing no <c>set_Item</c> and no <c>ldc.i4 42</c>, and printed
+        /// <c>1</c>. On a <c>Dictionary</c> the dropped write turned into a
+        /// <c>KeyNotFoundException</c> at the next read of that key.</para>
+        ///
+        /// <para>⚠ This is the THIRD time a base no-op has silently eaten an instruction on this
+        /// backend — <c>IRThrow</c> was the same shape, and
+        /// <c>JavaScriptCodeGenerator</c>'s class comment names the hazard by name. The two are
+        /// the ONLY <c>virtual</c> visitors on <see cref="CodeGeneratorBase"/>; every other
+        /// <c>Visit</c> is <c>abstract</c>, so no third instruction can be lost this way without
+        /// someone first adding another <c>virtual { }</c>. An array element write was never
+        /// affected: <c>a(i) = v</c> is <c>IRArrayStore</c>, which IS abstract.</para>
+        ///
+        /// <para><b>Operand order is the whole of the lowering.</b> <c>set_Item</c> is an
+        /// ordinary instance call, so IL wants the receiver, then every index, then the value,
+        /// and the signature comes from the RECEIVER's own type — exactly as on the read side
+        /// and through the same table. <c>List`1&lt;T&gt;::set_Item(int32, !0)</c> indexes by an
+        /// integer and takes a generic element; <c>Dictionary`2&lt;K,V&gt;::set_Item(!0, !1)</c>
+        /// takes both from the instantiation. Spelling either as the other is a call that
+        /// assembles and then dies at run time, which is why neither is inferred here.</para>
+        ///
+        /// <para><b>Insert-or-update falls out, it is not special-cased.</b>
+        /// <c>Dictionary::set_Item</c> ADDS a key that is not present — that is what .NET means
+        /// by <c>d(k) = v</c> and what C#, C++ and JavaScript all do — whereas <c>Add</c> would
+        /// throw. Calling the accessor the receiver actually declares gets this right with no
+        /// per-collection arm.</para>
+        ///
+        /// <para>A collection whose <c>set_Item</c> is outside the table — a <c>HashSet</c>, a
+        /// <c>Queue</c>, a <c>Stack</c> — is REFUSED by <see cref="TryCollectionMember"/> with
+        /// the ordinary BasicLang diagnostic rather than guessed at, per
+        /// <see cref="CollectionMembers"/>.</para>
+        /// </summary>
+        public override void Visit(IRIndexerStore indexerStore)
+        {
+            // Receiver, then indices, then value — the argument order of the accessor.
+            EmitLoadValue(indexerStore.Collection);
+
+            foreach (var index in indexerStore.Indices)
+            {
+                EmitLoadValue(index);
+            }
+
+            EmitLoadValue(indexerStore.Value);
+
+            if (TryCollectionMember(indexerStore.Collection?.Type, "set_Item", out var collToken, out var collSig))
+            {
+                // ⚠ The IL NAME comes from the table too, not from the string that was looked
+                // up. Re-spelling it here made `CollectionMember.Il` dead on this path: a
+                // mutation that changed Dictionary's row to call `Add` — which throws on an
+                // existing key instead of updating it — SURVIVED the whole fixture, because
+                // nothing read the field. The row is the single authority for all three parts
+                // of the signature or for none of them. (The read path above still spells
+                // `get_Item` literally; both rows happen to agree, so it emits the same text,
+                // but it carries the same latent hazard.)
+                WriteLine($"    callvirt instance {collSig.Ret} class {collToken}::{collSig.Il}({collSig.Params})");
+            }
+            else
+            {
+                // The receiver is not one of the collections this backend can NAME. The read
+                // side has always fallen back to IList`1 here; the write mirrors it rather than
+                // inventing a second guess, so the two halves of one indexer cannot disagree
+                // about the type they are calling on.
+                var elementSpec = IlTypeSpec(indexerStore.Value?.Type);
+                var indexTypes = string.Join(", ", indexerStore.Indices.Select(i => IlTypeSpec(i.Type)));
+                WriteLine($"    callvirt instance void class [mscorlib]System.Collections.Generic.IList`1<{elementSpec}>::set_Item({indexTypes}, {elementSpec})");
+            }
+
+            // Receiver + every index + the value all consumed; set_Item returns void.
+            _currentStack -= 2 + indexerStore.Indices.Count;
+        }
+
         #endregion
 
         private void WriteLine(string text = "")
