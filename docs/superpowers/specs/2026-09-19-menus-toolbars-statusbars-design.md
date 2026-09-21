@@ -602,3 +602,46 @@ array creation with initializer`.
 14. **Recorded for a chip, not fixed here:** `RejectImpossibleConversion`'s own unresolved-.NET
     spelling (`SemanticAnalyzer.cs:9437-9438`) has the same sibling-file hole §9 avoids — `CType(7,
     Shape)` with `Shape` in another `.bas` on the CLI is exempted. Shared machinery, different task.
+
+## 10. What building it changed
+
+Commit 24a's review found four places where the built code diverges from what this spec (or its
+own doc comments) said, each verified against the code and pinned by a test rather than reverted:
+
+- **`WidensTo` decides integral←integral by numeric RANGE, not by "IsAssignableFrom minus its
+  permissive arm."** §9's spelling would refuse `Byte→Integer` — that pair is only ever admitted BY
+  the permissive arm (`SymbolTable.cs:163-196`; the sole pair listed BEFORE it is `Long ← Integer`)
+  — so excluding the whole arm refuses a genuine VB widening and contradicts the spec's own word
+  "widening". The implementation follows the word: it compares integral ranges (`TryGetIntegralRange`
+  both sides, source ⊆ target), refuses any floating/Decimal→integral outright, and otherwise defers
+  to `IsAssignableFrom`. Every example row §9 gives still holds (Double→Integer and Long→Integer
+  refused; Integer→Long/Double/Decimal/Single admitted). Pinned by
+  `TypedLiteral_AdmitsWidening_ForNonLiterals` / `TypedLiteral_RefusesSignedIntoUnsigned_ForNonLiterals`.
+- **The exemption predicate carries a `Kind is Class or Delegate` guard**, not a name-only check.
+  `IsNetType` is PascalCase-permissive, so a nested typed literal's own array name (`Integer[]`) and
+  a type parameter both pass it without being in `_typeManager` — the name-only spelling would exempt
+  a nested typed literal as "csc decides" when it should be checked against `T` like any other
+  element. Every synthetic .NET mint is `TypeKind.Class` or `Delegate`; every user type is in
+  `_typeManager`. `!IsUserDefinedTypeName` is retained unchanged. Pinned by
+  `TypedLiteral_NestedTypedLiteral_IsNotExemptAsNet`.
+- **The JavaScript unbound-allocation arm splits on `Size`, not on boundedness alone.** §9 describes
+  the expression arm as returning the bound name or falling back to `ArrayAlloc(alloc)`; as built, an
+  UNBOUND `IRArrayAlloc` with `Size == 0` still returns `ArrayAlloc(alloc)` (`New Integer() {}` has
+  no element stores to lose), while `Size > 0` throws `NotYet(...)` naming the unrenderable node —
+  because IRBuilder's `_suppressEmit` (a `Select Case … When` guard) drops the allocation AND its
+  element stores together, and rendering `new Array(Size)` there would silently produce a sparse
+  array of holes with the right length. Measured: `Case Is > 0 When Total(New Integer() {1, 2}) = 3`
+  built clean and printed the `Case Else` arm before this arm existed. `IRArrayAlloc` is constructed
+  in exactly one place (`IRBuilder.cs:1926`) with `Size == elements.Count`, so `Size > 0` is the exact
+  — not approximate — condition for "stores were suppressed."
+- ⛔ **A correction to a rationale this spec and four other places asserted.** Several comments
+  claimed a constant element's cast gets folded away by the optimizer, which is why the execution
+  fixture's `SumDouble` program used a Sub PARAMETER for `i` rather than a local. That mechanism does
+  not exist: `AddStandardPasses()` (`IROptimizer.cs:1495-1505`) registers ConstantFolding,
+  CopyPropagation, DCE, CSE, StrengthReduction and Peephole, and `AddAggressivePasses` adds none
+  either — no cast-folding pass is registered on any shipping pipeline. Measured through the real CLI
+  on clean binaries: a parameter and a local `Dim i As Integer = 2` BOTH emit
+  `t1[1] = (double)(i);`. The true rule is the literal/non-literal split — `CoerceToDeclaredType`
+  re-types a LITERAL in place (`IRBuilder.cs:3540-3543`) and emits no cast, while any non-literal
+  element, parameter or local alike, carries the `IRCast`. Pinned by
+  `CSharp_Emission_CastsAStoredLocal_NotOnlyAParameter`.

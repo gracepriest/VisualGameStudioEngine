@@ -414,3 +414,49 @@ the designer clipboard is `SerializeSubtree` over `Selection.Controls`, and ever
 `Children` — the reader, `FormPlacement.Place`, `MoveToForm`, `Clone` — is closed to a component. If
 the clipboard ever reads the OS clipboard (spec: it does not, by design), mirror the reader's
 BL8020 check in `FromElement` first.
+
+### 22. `IROptimizer.CloneInstruction` has no `IRArrayAlloc` arm — found building commit 24a, PRE-EXISTING
+
+`IROptimizer.cs:2642-2689` has clone arms for IRAssignment/IRBinaryOp/IRUnaryOp/IRStore/IRLoad and
+`default: return inst;` (`:2687-2688`). An unrolled loop body that carries an array literal reuses
+the SAME `IRArrayAlloc` INSTANCE N times, so the JavaScript backend's new `Visit(IRArrayAlloc) =>
+Bind(...)` emits `const t0 = new Array(N);` N times in one scope — a SyntaxError — where the C#
+backend instead emits CS0128 (a redeclared local). **Aggressive pipeline only, and PRE-EXISTING**:
+before commit 24a the JS side threw `NotYet` for the same shape, so 24a newly EXPOSES this rather
+than causing it.
+
+The honest fix is larger than adding clone arms: `CloneVariable` (`:2692-2699`) already renames
+`total` to `_u0_total`, a name NEITHER backend declares, so that pass already mangles any unrolled
+loop with a local assignment — adding an `IRArrayAlloc` arm to `CloneInstruction` alone would still
+collide with that renaming gap.
+
+Repro: aggressive pipeline, under node —
+```basic
+For i = 0 To 7
+    Dim a() As Integer = New Integer() {i, i}
+    s = s + a(1)
+Next
+```
+expecting `28`.
+
+### 23. The C# backend is CS0103 for an array literal inside a `When` guard, including the EMPTY one — PRE-EXISTING
+
+`New Integer() {}` inside a `Select Case … When` guard emits `Total(t0)` with `t0` declared
+nowhere — the same IRBuilder suppression path that entry 22 and commit 24a's JavaScript
+`Size > 0` throw both come from, but the C# backend has no arm that renders an unbound
+`IRArrayAlloc` at all, literal or not. After commit 24a the JavaScript backend accepts and
+correctly RUNS that exact program (the `Size == 0` carve-out — spec §10), so the two backends now
+diverge on this shape: JS runs it, C# fails the build. Pre-existing in the same suppression path,
+untouched by 24a.
+
+### 24. Two front-end gaps that block a test commit 24a wanted — found 2026-09-20
+
+A user `Function` cannot declare an array return type in either spelling — `As Integer()` and `As
+Integer[]` are both parse errors — and `s.Split(",")` parses as an array index ("Array index must
+be an integer type"), not a method call. Consequence: no array-typed local can currently take an
+`IRCall`/`IRAwait` initializer, which is the ONLY reason the JavaScript `IRStore`-skip added in
+commit 24a (`JavaScriptBackend.cs:2225-2256` — skipping a store whose address is an `IRAlloca`) is
+safe today: `TryRenameToVariable` renames a non-foreign `IRCall`/`IRAwait` initializer, and nothing
+in the current language surface can construct an array-typed one to exercise that path. If either
+gap is fixed, the `IRStore`-skip must be re-derived from scratch — the comment at that location
+says so.

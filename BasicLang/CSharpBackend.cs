@@ -3565,8 +3565,19 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // _declaredIdentifiers holds only params/locals/globals), so rendering the stored value
             // by NAME emitted `t1[1] = t0;` with t0 declared nowhere — CS0103. Task 24a's typed
             // literal (`New Double() {1, i}`) wraps the non-literal element in an IRCast and hit it;
-            // a computed untyped element (`{i + 1}`) had the same latent shape. Invisible through
-            // the optimizer when the element is a constant, because the cast folds.
+            // a computed untyped element (`{i + 1}`) had the same latent shape.
+            //
+            // ⚠ WHAT DECIDES THIS IS NOT THE OPTIMIZER. No shipping route folds a cast away:
+            // AddStandardPasses (IROptimizer.cs:1495-1505) registers ConstantFolding,
+            // CopyPropagation, DCE, CSE, StrengthReduction and Peephole and no cast-folding pass,
+            // AddAggressivePasses (:1507-1517) adds none, WideningCastFoldingPass is referenced
+            // only at IROptimizer.cs:236/238 and IRBuilder.cs:932 (a module-scope scratch
+            // fixpoint), and CopyPropagation never rewrites an IRCast operand. The real rule is
+            // CoerceToDeclaredType (IRBuilder.cs:3540-3543): a LITERAL element is re-typed IN
+            // PLACE and no IRCast is ever built, while ANY non-literal element carries one.
+            // MEASURED through the real CLI on both spellings of `i` — a Sub parameter and a
+            // local `Dim i As Integer = 2` — which emit the IDENTICAL `t1[1] = (double)(i);`.
+            // So a local does NOT make this arm invisible; only a literal element does.
             var valueVal = EmitExpression(arrayStore.Value);
             WriteLine($"{arrayName}[{indexVal}] = {valueVal};");
         }

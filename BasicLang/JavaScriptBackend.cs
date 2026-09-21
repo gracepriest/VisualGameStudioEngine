@@ -744,9 +744,35 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case IRCast c when TryNumericCast(c, out var castRendered):
                     return Bound(c) ? SanitizeName(c.Name) : castRendered;
 
-                // Task 24a. See Visit(IRArrayAlloc): by name once bound, or the allocation inline.
+                // Task 24a. See Visit(IRArrayAlloc). BOUND is the ordinary path — the M4 shape
+                // passes the temp as a call argument AFTER its stores, so the name is declared.
+                //
+                // ⛔ UNBOUND WITH ELEMENTS IS NOT A RENDERING CHOICE, IT IS A DROPPED PROGRAM.
+                // The whole compiler builds an IRArrayAlloc in exactly one place —
+                // Visit(CollectionInitializerNode), IRBuilder.cs:1926 — which emits the alloc and
+                // then exactly Size IRArrayStores through the SAME EmitInstruction. So when
+                // `_suppressEmit` swallows the alloc (a `When` guard: IRBuilder.cs:349, set at
+                // :2883-2885) it swallowed every element store with it, and `new Array(Size)`
+                // renders a SPARSE array of holes wearing the right length. MEASURED through the
+                // real CLI: `Case Is > 0 When Total(New Integer() {1, 2}) = 3` built clean, emitted
+                // `Total(new Array(2))`, and node printed the ELSE arm — iterating two holes sums
+                // to 0, not 3. The C# backend is LOUD on that same source (`Total(t0)` with t0
+                // declared nowhere, CS0103), and the doctrine at :823-825 is that an unrenderable
+                // shape THROWS rather than falling back to something plausible.
+                //
+                // ⚠ Size == 0 is deliberately NOT refused. `New Integer() {}` has no element
+                // stores to lose, so `new Array(0)` IS the whole value; MEASURED, that program
+                // builds and prints the correct arm today, and throwing would regress a working
+                // shape to buy nothing. Size > 0 is therefore the exact condition for "stores
+                // were suppressed", not an approximation of it.
                 case IRArrayAlloc alloc:
-                    return Bound(alloc) ? SanitizeName(alloc.Name) : ArrayAlloc(alloc);
+                    if (Bound(alloc)) return SanitizeName(alloc.Name);
+                    if (alloc.Size == 0) return ArrayAlloc(alloc);
+                    throw NotYet(
+                        "IRArrayAlloc with unemitted element stores (an array literal inside a "
+                        + "`When` guard — IRBuilder suppresses the allocation and its element "
+                        + "stores together, so rendering it here would silently produce an array "
+                        + "of holes)");
 
                 default:
                     throw NotYet(value.GetType().Name + " (as an expression)");
@@ -2197,15 +2223,37 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         public void Visit(IRStore store)
         {
             // Task 24a. An array-typed local with an initializer lowers to IRAlloca `a_addr` +
-            // IRStore(value, a_addr) + IRAssignment(a, value) (IRBuilder.Visit(VariableDeclarationNode),
-            // `needsMemory = varType.Kind == TypeKind.Array`). The alloca is a memory-model artefact
-            // this backend has no counterpart for (`Visit(IRAlloca)` is already a no-op), and the
-            // IRAssignment that follows ALWAYS carries the value: TryRenameToVariable renames only
-            // IRCall/IRAwait/IRBinaryOp/IRUnaryOp/IRCompare, never an IRArrayAlloc. Rendering the
-            // address threw NotYet("IRAlloca (as an expression)") before any JS existed. The C#
-            // backend renders the alloca as its variable and lives with a duplicate assignment;
-            // skipping the store is the choice that does not depend on WHERE this backend declares
-            // the local.
+            // IRStore(value, a_addr) (IRBuilder.Visit(VariableDeclarationNode): `needsMemory =
+            // varType.Kind == TypeKind.Array` :643, the alloca :647, the store :671). The alloca is
+            // a memory-model artefact this backend has no counterpart for (`Visit(IRAlloca)` is
+            // already a no-op), and rendering the address threw
+            // NotYet("IRAlloca (as an expression)") before any JS existed.
+            //
+            // ⛔ SKIPPING THE STORE IS SAFE, BUT NOT FOR THE REASON IT IS TEMPTING TO GIVE. It is
+            // NOT true that "an IRAssignment always follows because TryRenameToVariable never
+            // renames an IRArrayAlloc". The alloca+store pair is emitted for EVERY array-typed
+            // local, while the IRAssignment is emitted ONLY when that rename DECLINES (:683-687)
+            // — and it ACCEPTS any non-foreign IRCall/IRAwait (:243-250). The node list is not
+            // what protects this.
+            //
+            // What holds today is narrower and more fragile: no array-typed local can currently
+            // HAVE an IRCall/IRAwait initializer, because the FRONT END refuses every way of
+            // producing one. MEASURED on this compiler, JS target: a user Function cannot declare
+            // an array return type in either spelling (`As Integer()` and `As Integer[]` are both
+            // parse errors), `Dim a() As Byte = Convert.FromBase64String(...)` is refused with
+            // "Cannot assign value of type 'Object'", and `s.Split(",")` is parsed as an ARRAY
+            // INDEX ("Array index must be an integer type"). So the rename never fires for this
+            // shape — by front-end gap, not by design.
+            //
+            // ⚠ THEREFORE: if array return types or the `.Split` parse are ever fixed, this skip
+            // must be RE-DERIVED, not assumed. The value would then reach `a` through Bind's
+            // declared-local arm (:1552) binding the renamed value, with IsUsed true via
+            // IROperandWalker's IRStore arm (IROperandWalker.cs:72-75) — that is the path to
+            // re-verify. Do not widen this skip on the strength of the node list above.
+            //
+            // The C# backend renders the alloca as its variable and lives with a duplicate
+            // assignment; skipping the store is the choice that does not depend on WHERE this
+            // backend declares the local.
             if (store.Address is IRAlloca) return;
 
             // The destination is an L-VALUE expression, not a previously-bound temp.

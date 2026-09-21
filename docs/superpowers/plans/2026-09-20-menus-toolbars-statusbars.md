@@ -61,7 +61,7 @@ dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --no
 
 **Files:** Modify `BasicLang/Parser.cs:4280-4298` and `:2504-2525`; Create `VisualGameStudio.Tests/Compiler/TypedArrayLiteralTests.cs`.
 
-- [ ] **Step 1: Write the failing parser tests**
+- [x] **Step 1: Write the failing parser tests**
 
 ```csharp
 using BasicLang.Compiler;                  // Lexer, Parser
@@ -165,11 +165,11 @@ public class TypedArrayLiteralTests
 
 ⚠ Check the real AST node names first: `Grep "class ProgramNode|class SubroutineNode|class VariableDeclarationNode" BasicLang/ASTNodes.cs` — the test uses whatever the tree's actual root/sub/declaration types are; adjust the two casts, not the assertions. ⚠ Check how `Parser.Errors` exposes messages (`ParserErrorTests.cs:30-31` uses `parser.Errors[0].Message`).
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 `--filter "FullyQualifiedName~TypedArrayLiteralTests"` → the first two fail (a `NewExpressionNode` comes back / errors present), the refusal cases fail on the message text.
 
-- [ ] **Step 3: Implement the expression path** in `Parser.cs` inside `if (Match(TokenType.New))` (`:4280`). After the `if (Match(TokenType.LeftParen)) { … }` block and before `return newExpr;`:
+- [x] **Step 3: Implement the expression path** in `Parser.cs` inside `if (Match(TokenType.New))` (`:4280`). After the `if (Match(TokenType.LeftParen)) { … }` block and before `return newExpr;`:
 
 ```csharp
                 // Task 24a — `New T() { e1, e2 }`: an array creation WITH an initializer. Measured
@@ -228,7 +228,7 @@ where `sawParens` is a `bool` set to true inside the existing `if (Match(TokenTy
 
 ⚠ Look at how the existing `New` branch reports errors (`throw new ParseException(...)` at `:4464` is the shape in `ParsePrimary`) and match the constructor arity you find. The parser is error-tolerant at statement level (`ParserErrorTests.cs:26-31`: `parser.Parse()` then `parser.Errors`) — a thrown `ParseException` inside an expression is collected into `Errors` by the statement loop; the tests read `parser.Errors[i].Message`.
 
-- [ ] **Step 4: Implement the `Dim … As New` refusal** at `:2504-2525`: AFTER the closing brace of `if (Match(TokenType.LeftParen)) { … }` (so it fires with or without parentheses) and before `node.Type = newExpr.Type;`:
+- [x] **Step 4: Implement the `Dim … As New` refusal** at `:2504-2525`: AFTER the closing brace of `if (Match(TokenType.LeftParen)) { … }` (so it fires with or without parentheses) and before `node.Type = newExpr.Type;`:
 
 ```csharp
                     // Task 24a: VB has no `Dim x As New T() {…}`; the array form is `Dim x() As T = New T() {…}`.
@@ -241,13 +241,13 @@ where `sawParens` is a `bool` set to true inside the existing `if (Match(TokenTy
                     }
 ```
 
-- [ ] **Step 5: Run** the fixture → all green. Run `--filter "FullyQualifiedName~ParserErrorTests|FullyQualifiedName~CompilationTests"` → still green (the bare-brace path at `:4446` is untouched).
+- [x] **Step 5: Run** the fixture → all green. Run `--filter "FullyQualifiedName~ParserErrorTests|FullyQualifiedName~CompilationTests"` → still green (the bare-brace path at `:4446` is untouched).
 
 ### Task 2: The analyzer — typing a typed literal
 
 **Files:** Modify `BasicLang/SemanticAnalyzer.cs` `Visit(CollectionInitializerNode)` (`:6637-6667`); Test: `TypedArrayLiteralTests.cs`.
 
-- [ ] **Step 1: Write the failing analyzer tests** (append to the fixture). Helper:
+- [x] **Step 1: Write the failing analyzer tests** (append to the fixture). Helper:
 
 ```csharp
     private static (bool ok, List<string> errors, List<string> warnings, TypeInfo? type) Analyze(string body, string prelude = "")
@@ -281,9 +281,9 @@ Tests (one `[Test]` each, names as given). ⛔ Elements are declared with `As Ne
 - `TypedLiteral_SyntheticGenericElement_IsAccepted`: prelude Shape; body `Dim l As New List(Of Integer)()\nDim all() As Shape = New Shape() {l}` → ok (csc decides).
 - `UntypedLiteral_IsUnchanged`: `Dim a() As Integer = {1, 2, 3}` → type `Integer[]`; `Dim o() As Object = {1, "a"}` → type `Object[]` AND a warning containing `mixed types`.
 
-- [ ] **Step 2: Run** → all fail (the typed cases come back `Object[]`/warned/wrongly refused).
+- [x] **Step 2: Run** → all fail (the typed cases come back `Object[]`/warned/wrongly refused).
 
-- [ ] **Step 3: Implement.** Replace the body of `Visit(CollectionInitializerNode)`:
+- [x] **Step 3: Implement.** Replace the body of `Visit(CollectionInitializerNode)`:
 
 ```csharp
         public void Visit(CollectionInitializerNode node)
@@ -433,17 +433,17 @@ Tests (one `[Test]` each, names as given). ⛔ Elements are declared with `As Ne
 4. **The `Nothing` value-type arm also refuses `TypeKind.Enum`** (an enum is a value type; spec §9 "never into a value type"), and the advice is BY KIND (Step 1's `TypedLiteral_Nothing` note).
 Also: `Article("UInteger")` is "a" (a `U` followed by a capital is the unsigned family), and the plan's single `TypedLiteral_NumericLiteralRule` is split into `_Admits` (8 rows) / `_Refuses` (6 rows — the code-quality review added `New String() {1}` and `New Integer() {"a"}`, the two rows that kill the literal arm's `elementType.IsNumeric() && target.IsNumeric()` guard one side each, and `New Byte() {-1}` for BC30439 through the unary). The `Nothing` advice arm also covers `TypeKind.UserDefinedType` (`Type … End Type` is a value type; `write New T()`), pinned by a fifth advice row; `TypedLiteral_Empty_IsTypedByT` pins the zero-element path. Task 2's final fixture count: 45 (10 parser + 35 analyzer).
 
-- [ ] **Step 4: Run** the fixture → green. Run `--filter "FullyQualifiedName~CompilationTests|FullyQualifiedName~CppCollectionTests|FullyQualifiedName~ReturnCoercionTests"` (bare-literal users) → green.
+- [x] **Step 4: Run** the fixture → green. Run `--filter "FullyQualifiedName~CompilationTests|FullyQualifiedName~CppCollectionTests|FullyQualifiedName~ReturnCoercionTests"` (bare-literal users) → green.
 
 ### Task 3: The IR builder — coerce each element
 
 **Files:** Modify `BasicLang/IRBuilder.cs:1893-1922`.
 
-- [ ] **Step 1: Write the failing test** in `TypedArrayLiteralTests` — `TypedLiteral_Lowering_RetypesALiteral_AndCastsANonLiteral`: build the IR for `Dim i As Integer = 1\nDim a() As Double = New Double() {1, i}` (`new IRBuilder(analyzer).Build(program, "T")`, as `BclE2E.CompileToCppOptimized` does at `CppBclEndToEndTests.cs:49-54`); walk `irModule.Functions` (`IRNodes.cs:1406`) → `function.Blocks` (a `List<BasicBlock>`, `:1310`) → `block.Instructions` (`:1252`); find the `IRArrayAlloc` (`:915`), assert `ElementType.Name == "Double"`; find the two `IRArrayStore`s (`:935`): the first's `Value` is an `IRConstant` whose `Type.Name == "Double"` (re-typed in place), the second's `Value` is an `IRCast` (`:797`; a non-literal is wrapped). No existing test references `IRArrayStore` — this is the first. ⚠ AS BUILT: a second test `UntypedLiteral_Lowering_StoresRaw` pins the untyped path (neither store is an `IRCast`; the constant keeps its own type), and its fixture is `Dim a() As Integer = {1, i}` — the `As Double` spelling does NOT analyze (`Cannot assign value of type 'Integer[]' to variable of type 'Double[]'`, measured through the CLI: the bare literal is typed by its elements and `Double[]` does not accept `Integer[]`). The typed test also asserts the re-typed constant's CLR value is a `double` (a relabelled TypeInfo over an Int32 would pass `Type.Name` alone). ⚠ The `node.ElementType != null && value != null` guard is REDUNDANT BY ANALYSIS today (spec review, Task 3): the untyped analyzer never promotes — `TypeInfo.Equals` is by exact name, so `{1, 2L}` and `{1.5, 2}` are `Object[]` and `CoerceToDeclaredType(_, Object)` returns at once — every untyped element's IR type IS its analyzer type (so `declared.Name == actual.Name`), and `CoerceToDeclaredType(null, …)` returns null. `UntypedLiteral_Lowering_StoresRaw` is therefore a PIN, not a mutant-killer (the "coerce unconditionally" mutant survives by construction; the "coerce nothing" mutant is the RED run's three assertions). The guard becomes load-bearing the day followup 23 (common-base widening for the UNTYPED literal) changes `SemanticAnalyzer.cs:6659-6664` — keep it, and do not report it as dead.
+- [x] **Step 1: Write the failing test** in `TypedArrayLiteralTests` — `TypedLiteral_Lowering_RetypesALiteral_AndCastsANonLiteral`: build the IR for `Dim i As Integer = 1\nDim a() As Double = New Double() {1, i}` (`new IRBuilder(analyzer).Build(program, "T")`, as `BclE2E.CompileToCppOptimized` does at `CppBclEndToEndTests.cs:49-54`); walk `irModule.Functions` (`IRNodes.cs:1406`) → `function.Blocks` (a `List<BasicBlock>`, `:1310`) → `block.Instructions` (`:1252`); find the `IRArrayAlloc` (`:915`), assert `ElementType.Name == "Double"`; find the two `IRArrayStore`s (`:935`): the first's `Value` is an `IRConstant` whose `Type.Name == "Double"` (re-typed in place), the second's `Value` is an `IRCast` (`:797`; a non-literal is wrapped). No existing test references `IRArrayStore` — this is the first. ⚠ AS BUILT: a second test `UntypedLiteral_Lowering_StoresRaw` pins the untyped path (neither store is an `IRCast`; the constant keeps its own type), and its fixture is `Dim a() As Integer = {1, i}` — the `As Double` spelling does NOT analyze (`Cannot assign value of type 'Integer[]' to variable of type 'Double[]'`, measured through the CLI: the bare literal is typed by its elements and `Double[]` does not accept `Integer[]`). The typed test also asserts the re-typed constant's CLR value is a `double` (a relabelled TypeInfo over an Int32 would pass `Type.Name` alone). ⚠ The `node.ElementType != null && value != null` guard is REDUNDANT BY ANALYSIS today (spec review, Task 3): the untyped analyzer never promotes — `TypeInfo.Equals` is by exact name, so `{1, 2L}` and `{1.5, 2}` are `Object[]` and `CoerceToDeclaredType(_, Object)` returns at once — every untyped element's IR type IS its analyzer type (so `declared.Name == actual.Name`), and `CoerceToDeclaredType(null, …)` returns null. `UntypedLiteral_Lowering_StoresRaw` is therefore a PIN, not a mutant-killer (the "coerce unconditionally" mutant survives by construction; the "coerce nothing" mutant is the RED run's three assertions). The guard becomes load-bearing the day followup 23 (common-base widening for the UNTYPED literal) changes `SemanticAnalyzer.cs:6659-6664` — keep it, and do not report it as dead.
 
-- [ ] **Step 2: Run** → fails (both stores are raw).
+- [x] **Step 2: Run** → fails (both stores are raw).
 
-- [ ] **Step 3: Implement.** In `Visit(CollectionInitializerNode)` (`:1902-1906`), replace the element loop:
+- [x] **Step 3: Implement.** In `Visit(CollectionInitializerNode)` (`:1902-1906`), replace the element loop:
 
 ```csharp
             foreach (var element in node.Elements)
@@ -463,13 +463,13 @@ Also: `Article("UInteger")` is "a" (a `U` followed by a capital is the unsigned 
             }
 ```
 
-- [ ] **Step 4: Run** → green.
+- [x] **Step 4: Run** → green.
 
 ### Task 4: The JavaScript backend — the missing array arms
 
 **Files:** Modify `BasicLang/JavaScriptBackend.cs:2379-2380`, the `Expr` switch (`:747-748`) and `Visit(IRStore)` (`:2193-2197`); Modify `BasicLang/CSharpBackend.cs` `Visit(IRArrayStore)` (`:3549-3555`) and `Visit(IRIndexerStore)` (`:3564`) — Step 3b; Test: `TypedArrayLiteralExecutionTests.cs` (new, `[Category("Integration")]`).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```csharp
 [TestFixture]
@@ -534,9 +534,9 @@ public class TypedArrayLiteralExecutionTests
 
 ⚠ `WinFormsCatalogSweepTests.CompileToCSharp` writes a `SweepForm.bas` and compiles it; its output file is `SweepForm.cs` — fine for a Module-less `Sub Main`; if the CLI needs a class, wrap in `Public Class Prog … Public Shared Sub Main()` as the JS scratch measurement did. ⚠ `JavaScriptExecutionTests.RunJs` is `internal static` and `Assert.Ignore`s without node — `RequireNode()` runs first so this fixture fails instead. ⚠ `JsTestSupport.CompileOptimized` is at `JsTestSupport.cs:119-129` and `RunNodeScript` beside `RunJs` (`JavaScriptExecutionTests.cs:26-33`) — check their accessibility and whether `RunNodeScript` trims before relying on the `.Trim()`. ⚠ `BclE2E.CompileRun` ignores without a C++ compiler; this box has MSVC.
 
-- [ ] **Step 2: Run** the JS rows → `NotSupportedException … IRArrayAlloc` (the arm that has never run). ⚠ After the two array arms land they STILL throw — `IRAlloca (as an expression)` — because of the THIRD arm Step 3 names; that exception fires before any JS text exists, so at this point a `NotYet` is a missing arm, never a codegen defect to read the output for. The C# `SumTyped` row passes already; the C# `SumDouble` row FAILS TO COMPILE with CS0103 (an undeclared `t2` — the cast temp rendered by name) — that is Step 3b's backend defect, NOT Task 3's coercion; read the csc error and name it in the report. The C++ `SumTyped` row passes today (`CppCollectionTests.cs:461-475` runs the same bare-literal shape); the C++ Double row is why `SumDouble` prints the number alone (its note above) — a C++ build failure on it means the concat crept back, not that the IR is wrong.
+- [x] **Step 2: Run** the JS rows → `NotSupportedException … IRArrayAlloc` (the arm that has never run). ⚠ After the two array arms land they STILL throw — `IRAlloca (as an expression)` — because of the THIRD arm Step 3 names; that exception fires before any JS text exists, so at this point a `NotYet` is a missing arm, never a codegen defect to read the output for. The C# `SumTyped` row passes already; the C# `SumDouble` row FAILS TO COMPILE with CS0103 (an undeclared `t2` — the cast temp rendered by name) — that is Step 3b's backend defect, NOT Task 3's coercion; read the csc error and name it in the report. The C++ `SumTyped` row passes today (`CppCollectionTests.cs:461-475` runs the same bare-literal shape); the C++ Double row is why `SumDouble` prints the number alone (its note above) — a C++ build failure on it means the concat crept back, not that the IR is wrong.
 
-- [ ] **Step 3: Implement** in `JavaScriptBackend.cs`. Replace the two `NotYet` visitors (`:2379-2380`):
+- [x] **Step 3: Implement** in `JavaScriptBackend.cs`. Replace the two `NotYet` visitors (`:2379-2380`):
 
 ```csharp
         // Task 24a. An array literal is an allocation of N slots followed by N index stores; both
@@ -558,6 +558,8 @@ and in the `Expr` switch before `default:`:
                 case IRArrayAlloc alloc:
                     return Bound(alloc) ? SanitizeName(alloc.Name) : ArrayAlloc(alloc);
 ```
+
+**AS BUILT (deviates from plan:557-560).** The plan prescribes `case IRArrayAlloc alloc: return Bound(alloc) ? SanitizeName(alloc.Name) : ArrayAlloc(alloc);`. As built, the unbound branch is split in two: `Size == 0` still returns `ArrayAlloc(alloc)`, and `Size > 0` throws `NotYet("IRArrayAlloc with unemitted element stores …")`. Reason: an unbound alloc means `_suppressEmit` (a `When` guard) swallowed the alloc *and* its element stores together, so `new Array(Size)` renders a sparse array of holes — measured, `Case Is > 0 When Total(New Integer() {1, 2}) = 3` built clean and printed the `Case Else` arm. `Size == 0` is excluded because `New Integer() {}` has no stores to lose; measured, it compiles and prints the correct arm today, and refusing it would regress a working shape. `IRArrayAlloc` is constructed in exactly one place (`IRBuilder.cs:1926`) with `Size == elements.Count`, so `Size > 0` is the exact condition for "stores were suppressed".
 
 **The THIRD arm** (plan review pass 3, verified against the code). An array-typed local WITH an initializer lowers to `IRAlloca a_addr` + `IRStore(value, a_addr)` + `IRAssignment(a, value)` (`IRBuilder.cs:643-687`, `needsMemory = varType.Kind == TypeKind.Array`) — for the typed literal and the bare `{1, 2, 3}` alike (no JS fixture has ever compiled either shape). `Visit(IRStore)` (`:2193-2197`) renders `Expr(store.Address)`; `IRAlloca` derives from `IRValue`, not `IRVariable` (`IRNodes.cs:347`), and `Expr` has no arm for it, so the store throws `NotYet("IRAlloca (as an expression)")`. Replace `Visit(IRStore)` with:
 
@@ -581,15 +583,15 @@ and in the `Expr` switch before `default:`:
 
 ⚠ `Bind(IRValue, string)` exists at `:1513`; it declares a `const` when the name is not a declared local, or assigns when it is (`:1516-1522`). `TryRenameToVariable` never renames an `IRArrayAlloc`, so `a` always arrives through the `IRAssignment` and `Bind` always declares `const t1` — that is the one case that occurs. If a JS row still fails AFTER all three arms, print the generated JS (`JsTestSupport.Compile(source)` AND `CompileOptimized`) and read it before touching anything else; a `NotYet` at that point names a FOURTH arm — report it, do not guess at it.
 
-- [ ] **Step 3b — the C# backend renders a store's value by NAME (Task 3's spec review).** `CSharpBackend.Visit(IRArrayStore)` (`:3549-3555`) renders the stored value with `GetValueName`, not `EmitExpression` — the route `Visit(IRAssignment)` (`:3135`), `Visit(IRStore)` (`:3153`) and `Visit(IRReturn)` (`:3338`) all take. `Visit(IRCast)` (`:3426-3429`) emits nothing for a non-named temp and `_declaredIdentifiers` holds only params/locals/globals (`:1441-1452`), so an `IRCast` in a store comes out as `t1[1] = t2;` with `t2` never declared — CS0103. Latent today for any COMPUTED untyped element (`{i + 1}`; no test exercises one — grep found none), reachable now for the spec's own gate row, and INVISIBLE through the optimizer when the element is a constant (the cast folds). Fix: `EmitExpression(arrayStore.Value)` in `Visit(IRArrayStore)`, and the same pattern at `Visit(IRIndexerStore)` (`:3564`). RED: `CSharp_RunsTheLiteral(SumDouble)` fails to compile with CS0103 (the parameter `i` keeps the cast alive). GREEN after. Add `CSharp_Emission_CastsTheStoredNonLiteral` (non-Integration is fine): the text from `WinFormsCatalogSweepTests.CompileToCSharp(SumDouble)` contains a cast of `i` inside the array store — state the EXACT rendering you measured (e.g. `(double)i`), and assert that. ⚠ The JS arms above already render `Expr(arrayStore.Value)` inline — the same choice; do not "simplify" them to a name lookup. ⛔⛔ **AS BUILT addendum (Task 4's spec review): the `EmitExpression` store ALONE turns a loud break into a silent DOUBLE CALL.** `CSharpBackend.GetOperands` (~`:3023-3081`) had no `IRArrayStore` arm, so `_useCounts` never counted an array-literal element: a call element had use-count 0, `Visit(IRCall)` emitted it BARE (`Foo();`), and the new inline store rendered it AGAIN — `Foo(); t1[0] = Foo();`, green build, `Foo` runs twice (typed or untyped literal; before the change it was CS0103). JS is unaffected (`IROperandWalker.cs:121-124` counts `IRArrayStore`). Fix in the same commit: `case IRArrayStore ast: return new[] { ast.Array, ast.Index, ast.Value };` in `GetOperands`, pinned by a three-backend run row whose elements are two `Bump()` calls (`N 2`, not `N 4`). Two more rows added: `SumViaCall` — the M4 shape `Show(New Integer() {1, 2})` RUN on JS (both routes), C# and C++, since the `Expr` arm's bound-name branch exists for exactly that shape and it had only ever been PARSED — and `IndexerStoreCast` (`l(0) = i`, a cast into an `IRIndexerStore`, C#).
+- [x] **Step 3b — the C# backend renders a store's value by NAME (Task 3's spec review).** `CSharpBackend.Visit(IRArrayStore)` (`:3549-3555`) renders the stored value with `GetValueName`, not `EmitExpression` — the route `Visit(IRAssignment)` (`:3135`), `Visit(IRStore)` (`:3153`) and `Visit(IRReturn)` (`:3338`) all take. `Visit(IRCast)` (`:3426-3429`) emits nothing for a non-named temp and `_declaredIdentifiers` holds only params/locals/globals (`:1441-1452`), so an `IRCast` in a store comes out as `t1[1] = t2;` with `t2` never declared — CS0103. Latent today for any COMPUTED untyped element (`{i + 1}`; no test exercises one — grep found none), reachable now for the spec's own gate row, and INVISIBLE through the optimizer when the element is a constant (the cast folds). Fix: `EmitExpression(arrayStore.Value)` in `Visit(IRArrayStore)`, and the same pattern at `Visit(IRIndexerStore)` (`:3564`). RED: `CSharp_RunsTheLiteral(SumDouble)` fails to compile with CS0103 (the parameter `i` keeps the cast alive). GREEN after. Add `CSharp_Emission_CastsTheStoredNonLiteral` (non-Integration is fine): the text from `WinFormsCatalogSweepTests.CompileToCSharp(SumDouble)` contains a cast of `i` inside the array store — state the EXACT rendering you measured (e.g. `(double)i`), and assert that. ⚠ The JS arms above already render `Expr(arrayStore.Value)` inline — the same choice; do not "simplify" them to a name lookup. ⛔⛔ **AS BUILT addendum (Task 4's spec review): the `EmitExpression` store ALONE turns a loud break into a silent DOUBLE CALL.** `CSharpBackend.GetOperands` (~`:3023-3081`) had no `IRArrayStore` arm, so `_useCounts` never counted an array-literal element: a call element had use-count 0, `Visit(IRCall)` emitted it BARE (`Foo();`), and the new inline store rendered it AGAIN — `Foo(); t1[0] = Foo();`, green build, `Foo` runs twice (typed or untyped literal; before the change it was CS0103). JS is unaffected (`IROperandWalker.cs:121-124` counts `IRArrayStore`). Fix in the same commit: `case IRArrayStore ast: return new[] { ast.Array, ast.Index, ast.Value };` in `GetOperands`, pinned by a three-backend run row whose elements are two `Bump()` calls (`N 2`, not `N 4`). Two more rows added: `SumViaCall` — the M4 shape `Show(New Integer() {1, 2})` RUN on JS (both routes), C# and C++, since the `Expr` arm's bound-name branch exists for exactly that shape and it had only ever been PARSED — and `IndexerStoreCast` (`l(0) = i`, a cast into an `IRIndexerStore`, C#).
 
-- [ ] **Step 4: Run** the fixture → green on all three backends. Run `--filter "FullyQualifiedName~JavaScriptExecutionTests|FullyQualifiedName~JavaScriptArrayTests"` → still green.
+- [x] **Step 4: Run** the fixture → green on all three backends. Run `--filter "FullyQualifiedName~JavaScriptExecutionTests|FullyQualifiedName~JavaScriptArrayTests"` → still green.
 
 ### Task 5: The M4 / M3 / two-file rows through the real CLI and csc
 
 **Files:** `TypedArrayLiteralExecutionTests.cs`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 - `WinForms_TheVsIdiom_BuildsUnderCsc_AndRuns`: the M4 program, INLINE in the fixture (never a scratchpad path — a fresh session cannot find it):
 
@@ -625,13 +627,15 @@ End Class
 - `WinForms_TheDeclaredArrayShape_BuildsUnderCsc`: the same class with the constructor's `AddRange` line replaced by the TYPED M3 shape, two lines: `Dim items() As ToolStripItem = New ToolStripItem() {mnuFile, sep}` then `menuStrip1.Items.AddRange(items)` (⚠ the scratch `M3n` file holds the BARE literal, which is the refused shape — do not copy it) → `CompileToCSharp` + `WinFormsCompile.AssertCompiles`. (`CreateArrayType` names arrays `T[]`, `SymbolTable.cs:657/:677`, so the declared type and the literal's `Equals` — there is no `()` spelling to chase.)
 - `TwoFiles_ASiblingClass_IsNotExemptedAsANetType`: ⛔ the single-file CLI REFUSES two source files before parsing (`Program.cs:194-202`, exit 2 on stderr), and the build route prints semantic errors to STDERR (`:870-877`, exit 1 at `:1180`). So: write `Shape.bas` (`Public Class Shape\nEnd Class`), `Main.bas` (`Public Class Prog\nPublic Shared Sub Main()\nDim s As String = "a"\nDim all() As Shape = New Shape() {s}\nEnd Sub\nEnd Class`) and `App.blproj` copied from `CliTestHarness.cs:126-138` (`CompileRunCSharp`'s template) with TWO `<Compile Include>` items and `<TargetBackend>CSharp</TargetBackend>`; run `CliTestHarness.RunProcess(CliTestHarness.CliPath(), new[] { "build", "App.blproj" }, dir, 120_000)` → `ExitCode != 0` AND `StdErr` contains `cannot put a 'String' in a 'Shape()'` (both halves, or mutant (c) below is not discriminated — the exit code alone is also what a multi-file refusal gives).
 
-- [ ] **Step 2: Run** → the first two fail today only if Tasks 1–3 are incomplete; the two-file row fails if the predicate was spelled without `IsUserDefinedTypeName`. All three must be green at the end.
+- [x] **Step 2: Run** → the first two fail today only if Tasks 1–3 are incomplete; the two-file row fails if the predicate was spelled without `IsUserDefinedTypeName`. All three must be green at the end.
 
-- [ ] **Step 3: Mutants (kill each, revert each — (a)–(d) here; (e)–(h) are run at Task 4 Step 5 by its implementer, whose results go into the commit message):** (a) parser: drop the `Arguments.Count > 0` refusal → `TheThreeRefusals` fails; (b) analyzer: replace `WidensTo` with `target.IsAssignableFrom` → `RefusesNarrowing` fails; (c) analyzer: drop `!IsUserDefinedTypeName` from the predicate → the two-file row fails; (d) IR: drop the coercion → the lowering test fails; (e) JS: make the `Expr` arm always render `new Array(n)` → the C++/C# rows stay green and `JavaScript_RunsTheLiteral(SumTyped)` prints anything but `SUM 6` (MEASURED at Task 4: the Integer rows print `SUM 0` — the Integer `For Each` skips the empty array's holes — and the Double row prints `NaN`; killed either way) — this is the "second empty array" trap; (f) JS: remove the `IRArrayStore` arm → `SumBare` throws; (g) JS: remove the `store.Address is IRAlloca` guard → all three JS rows throw `NotYet … IRAlloca (as an expression)`; (h) C#: revert `Visit(IRArrayStore)` to `GetValueName` → `CSharp_RunsTheLiteral(SumDouble)` fails with CS0103 AND `CSharp_Emission_CastsTheStoredNonLiteral` fails — if only one of the two fails, the other is not measuring the store.
+- [x] **Step 3: Mutants (kill each, revert each — (a)–(d) here; (e)–(h) are run at Task 4 Step 5 by its implementer, whose results go into the commit message):** (a) parser: drop the `Arguments.Count > 0` refusal → `TheThreeRefusals` fails; (b) analyzer: replace `WidensTo` with `target.IsAssignableFrom` → `RefusesNarrowing` fails; (c) analyzer: drop `!IsUserDefinedTypeName` from the predicate → the two-file row fails; (d) IR: drop the coercion → the lowering test fails; (e) JS: make the `Expr` arm always render `new Array(n)` → the C++/C# rows stay green and `JavaScript_RunsTheLiteral(SumTyped)` prints anything but `SUM 6` (MEASURED at Task 4: the Integer rows print `SUM 0` — the Integer `For Each` skips the empty array's holes — and the Double row prints `NaN`; killed either way) — this is the "second empty array" trap; (f) JS: remove the `IRArrayStore` arm → `SumBare` throws; (g) JS: remove the `store.Address is IRAlloca` guard → all three JS rows throw `NotYet … IRAlloca (as an expression)`; (h) C#: revert `Visit(IRArrayStore)` to `GetValueName` → `CSharp_RunsTheLiteral(SumDouble)` fails with CS0103 AND `CSharp_Emission_CastsTheStoredNonLiteral` fails — if only one of the two fails, the other is not measuring the store.
 
 ### Task 6: Pretty printer, gate, commit 24a
 
 - [ ] **Step 1:** `ASTPrettyPrinter.Visit(CollectionInitializerNode)` (`:827`): when `node.ElementType != null`, write `CollectionInitializer New {ElementType.Name}() ({n} elements):`. Pin with one test in `TypedArrayLiteralTests` if a pretty-printer test fixture exists (grep `ASTPrettyPrinter` in Tests); otherwise leave it to the untyped format and skip.
+
+  **SKIPPED (2026-09-20).** A repo-wide grep for `ASTPrettyPrinter` across `VisualGameStudio.Tests` returns nothing — no pretty-printer fixture exists to pin it, and this step's own text permits skipping in exactly that case. Shipping an unpinned production change is exactly the "a thing with no caller" failure this project keeps hitting, so the change was not made.
 - [ ] **Step 1b: Open spec §10 "What building it changed"** with the Task 2 row: `WidensTo` is integral←integral by numeric range — the spec's "IsAssignableFrom minus its permissive arm" spelling would refuse Byte→Integer (only ever admitted BY the arm, `SymbolTable.cs:163-196`) and so contradicts its own word "widening"; the implementation follows the word, and the spec's example rows all hold. Also the exemption predicate's `Kind is Class or Delegate` guard (a nested typed literal's `Integer[]` passes `IsNetType`). 24c's Task 19 APPENDS the layout-entry row to this section.
 - [ ] **Step 2: Gate.** Build; fast subset; `TypedArrayLiteralExecutionTests`; then the FULL SUITE (`dotnet test … -c Release --no-build --logger "console;verbosity=normal" > $env:TEMP\bl-t24a-full.log 2>&1`, both streams), compare failure NAMES with the 8-row baseline (2 `SearchSnippets`, `Cli_Build_CppProject_ProjectReference_WarnsAndStillSucceeds`, 4 game-template rows, `NonEx_variants_marshal_and_are_screen_size_dependent`). Zero new, or stop.
 - [ ] **Step 3: Commit** `feat(compiler): New T() { … } array creation with initializer` — message via a scratch file: the measured facts (M1–M4 and the JS "successful, no output" measurement), the three policies, the JS arms, the gates with totals, the trailer.
