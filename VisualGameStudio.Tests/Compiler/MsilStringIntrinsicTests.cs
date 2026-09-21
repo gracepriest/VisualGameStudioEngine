@@ -28,8 +28,10 @@ namespace VisualGameStudio.Tests.Compiler;
 /// calls. ⛔ <b>Do not assert VB clamping semantics anywhere below</b> — it would pin an answer
 /// nothing gives.</para>
 ///
-/// <para>Exactly ONE deliberate deviation from "match C# byte for byte":
-/// <see cref="RightWithAnEffectfulReceiver_IsEvaluatedOnce_UnlikeCSharp"/>.</para>
+/// <para>⭐ There are now NO deviations from "match C# byte for byte". There used to be exactly one:
+/// <see cref="RightWithAnEffectfulReceiver_IsEvaluatedOnce"/>, where the C# backend evaluated
+/// <c>Right</c>'s receiver twice and MSIL evaluated it once. That C#-backend defect has been fixed,
+/// and every case in this fixture now asserts MSIL against C#.</para>
 ///
 /// <para>⛔ <b><c>Chr</c> and <c>Asc</c> are UNREGISTERED in the front end</b> —
 /// <c>SemanticAnalyzer.RegisterStdLibFunctions</c> has no row for either — so, unlike every other
@@ -68,15 +70,6 @@ public class MsilStringIntrinsicTests
     }
 
     /// <summary>
-    /// MSIL only, against the value JavaScript computes — for the ONE shape where the C# backend
-    /// is independently wrong and cannot be the oracle (see
-    /// <see cref="RightWithAnEffectfulReceiver_IsEvaluatedOnce_UnlikeCSharp"/>).
-    /// </summary>
-    private static void MsilMatchesJs(string program, string expected)
-        => Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(program)), Is.EqualTo(expected),
-            "MSIL, against JavaScript (C# evaluates the receiver twice here — see the fixture note)");
-
-    /// <summary>
     /// Pins that BOTH .NET backends throw for an out-of-range shape, and that they throw the SAME
     /// exception TYPE. Never the message: it is BCL text that can move between runtimes — see the
     /// "OUT-OF-RANGE SHAPES THROW ON PURPOSE" section.
@@ -113,17 +106,21 @@ public class MsilStringIntrinsicTests
     // ============================================================================================
 
     /// <summary>
-    /// ⭐ <c>EmitRight</c> (C# backend) interpolates the receiver expression <c>{str}</c> TWICE —
-    /// once for <c>str.Length</c>, once for the <c>Substring</c> call. MSIL uses <c>dup</c> and
-    /// evaluates it once. Measured with an EFFECTFUL receiver (a function that prints): C# prints
-    /// <c>tag</c> TWICE before <c>[ef]</c>; JavaScript and C++ print it once, and MSIL now matches
-    /// them. This is deliberate, not an oversight — the C# backend's double evaluation is a
-    /// separate, pre-existing defect, and asserting against it here would pin the wrong answer as
-    /// correct. Asserted against JavaScript, not C#.
+    /// ⭐ <c>EmitRight</c> (C# backend) used to interpolate the receiver expression <c>{str}</c>
+    /// TWICE — once for <c>str.Length</c>, once for the <c>Substring</c> call. MSIL uses <c>dup</c>
+    /// and evaluates it once. Measured with an EFFECTFUL receiver (a function that prints): at
+    /// f20435d C# printed <c>tag</c> TWICE before <c>[ef]</c> where JavaScript, C++ and MSIL all
+    /// printed it once.
+    ///
+    /// <para>⭐ That C#-backend defect is fixed — <c>EmitRight</c> now emits
+    /// <c>({str})[^({length})..]</c>, one evaluation — and C# prints <c>tag\n[ef]</c> like everyone
+    /// else (re-measured). So this is no longer a deliberate deviation and no longer needs the
+    /// JavaScript oracle: it holds both .NET backends to the same answer. The C#-side contract for
+    /// <c>Right</c>'s receiver and length lives in <see cref="CSharpRightReceiverTests"/>.</para>
     /// </summary>
     [Test]
-    public void RightWithAnEffectfulReceiver_IsEvaluatedOnce_UnlikeCSharp()
-        => MsilMatchesJs(@"
+    public void RightWithAnEffectfulReceiver_IsEvaluatedOnce()
+        => MsilAgreesWithCSharp(@"
 Function Tag() As String
     PrintLine(""tag"")
     Return ""abcdef""

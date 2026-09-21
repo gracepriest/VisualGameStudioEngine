@@ -53,6 +53,35 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         // Stack of loop end blocks for break detection
         private Stack<BasicBlock> _loopEndBlocks;
 
+        /// <summary>
+        /// The end blocks of the <c>For Each</c> loops currently OPEN around the text being
+        /// written — <see cref="_loopEndBlocks"/>'s counterpart for the one loop shape that is
+        /// not emitted through <see cref="GenerateLoop"/>.
+        ///
+        /// <para>⛔ It cannot be folded into <see cref="_loopEndBlocks"/>, because the two are
+        /// asked DIFFERENT questions. A <c>while</c>-shaped loop's body ends by branching to its
+        /// CONDITION block, so any branch to its <c>.end</c> is necessarily an exit. A
+        /// <c>For Each</c>'s does not: <c>IRBuilder.Visit(ForEachLoopNode)</c> gives the loop
+        /// <c>LoopContext(endBlock, endBlock)</c> and then ends the body with
+        /// <c>IRBranch(endBlock)</c> — byte-identical to the <c>Exit For</c> branch except for
+        /// <c>IRBranch.IsLoopExit</c>. Treating every branch to a <c>For Each</c>'s end as a
+        /// <c>break</c> makes an ordinary iteration exit the loop; treating none of them as one
+        /// is what this backend did, and <c>Exit For</c> was a silent NO-OP.</para>
+        /// </summary>
+        private HashSet<BasicBlock> _forEachEndBlocks;
+
+        /// <summary>How many C# <c>switch</c> statements are open around the text being written.</summary>
+        private int _switchDepth;
+
+        /// <summary><see cref="_switchDepth"/> as it stood when each enclosing loop opened.</summary>
+        private Stack<int> _loopSwitchDepths;
+
+        /// <summary>
+        /// Loop end blocks a <c>goto</c> was emitted for, so the matching label is written after
+        /// that loop closes — and ONLY then, since an unreferenced label is CS0164.
+        /// </summary>
+        private HashSet<BasicBlock> _labelledLoopEnds;
+
         // Standard library provider for built-in functions
         private readonly CSharpStdLibProvider _stdLib;
         private readonly FrameworkStdLibProvider _frameworkStdLib;
@@ -680,6 +709,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     InitializeFunctionContext(method.DefaultImplementation);
                     _processedBlocks = new HashSet<BasicBlock>();
                     _loopEndBlocks = new Stack<BasicBlock>();
+                    ResetLoopExitState();
 
                     // Declare locals
                     var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1118,6 +1148,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 InitializeFunctionContext(ctor.Implementation);
                 _processedBlocks = new HashSet<BasicBlock>();
                 _loopEndBlocks = new Stack<BasicBlock>();
+                ResetLoopExitState();
 
                 // Declare locals (same as GenerateMethod)
                 var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1205,6 +1236,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 InitializeFunctionContext(prop.Getter);
                 _processedBlocks = new HashSet<BasicBlock>();
                 _loopEndBlocks = new Stack<BasicBlock>();
+                ResetLoopExitState();
                 if (prop.Getter.EntryBlock != null)
                     GenerateStructuredBlock(prop.Getter.EntryBlock);
                 _currentFunction = null;
@@ -1222,6 +1254,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 InitializeFunctionContext(prop.Setter);
                 _processedBlocks = new HashSet<BasicBlock>();
                 _loopEndBlocks = new Stack<BasicBlock>();
+                ResetLoopExitState();
                 if (prop.Setter.EntryBlock != null)
                     GenerateStructuredBlock(prop.Setter.EntryBlock);
                 _currentFunction = null;
@@ -1348,6 +1381,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 InitializeFunctionContext(method.Implementation);
                 _processedBlocks = new HashSet<BasicBlock>();
                 _loopEndBlocks = new Stack<BasicBlock>();
+                ResetLoopExitState();
 
                 // Declare locals
                 var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1600,6 +1634,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // Body - use structured control flow generation
             _processedBlocks = new HashSet<BasicBlock>();
             _loopEndBlocks = new Stack<BasicBlock>();
+            ResetLoopExitState();
             if (function.EntryBlock != null)
                 GenerateStructuredBlock(function.EntryBlock);
 
@@ -2066,6 +2101,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         {
             var target = branch.Target;
 
+            // ⛔ FIRST, and before the _processedBlocks / ".end" tests below: an `Exit For` out of
+            // a For Each targets a block those two tests both discard, which is exactly how
+            // `Exit For` became a silent no-op on this backend (measured: a loop over 1,2,3,4
+            // exiting at 3 totalled 10).
+            if (TryEmitLoopExit(branch))
+                return;
+
             // If the target is already processed or is a loop back-edge, skip
             // (the loop structure handles continuation)
             if (_processedBlocks.Contains(target))
@@ -2086,6 +2128,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             WriteLine($"switch ({value})");
             WriteLine("{");
             Indent();
+            // Inside these braces `break` means the SWITCH — see EmitLoopExit.
+            _switchDepth++;
 
             // Group value cases by their target block
             var casesByBlock = new Dictionary<BasicBlock, List<IRValue>>();
@@ -2150,12 +2194,17 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             {
                 // Return already emitted
             }
+            else if (defaultTerminator is IRBranch defaultExit && TryEmitLoopExit(defaultExit))
+            {
+                // `Case Else` holding an Exit For: the goto already leaves both constructs.
+            }
             else
             {
                 WriteLine("break;");
             }
             Unindent();
 
+            _switchDepth--;
             Unindent();
             WriteLine("}");
 
@@ -2338,6 +2387,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             {
                 // Return already emitted
             }
+            else if (terminator is IRBranch loopExit && TryEmitLoopExit(loopExit))
+            {
+                // ⛔ An `Exit For` written inside a `Select Case` arm. TryEmitLoopExit spells it
+                // as a `goto` precisely because a `break` here would leave the SWITCH; adding
+                // the usual trailing `break;` after it would be unreachable code (CS0162).
+            }
             else if (terminator is IRBranch br && br.Target.Name.Contains("switch.end"))
             {
                 // Jump to switch end - emit break
@@ -2437,6 +2492,28 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 }
             }
 
+            // ⛔ NO BY-NAME LAST RESORT HERE, and one was measured and removed rather than never
+            // tried. The tempting rule is "if neither scan found it, take the block named
+            // `{bodyPrefix}.inc`", on the theory that a body ending in `Exit For` never branches
+            // to its own increment and so loses it. It cannot help, in either direction:
+            //
+            //   • When the `.inc` IS reachable, the structured walk out of the body's terminator
+            //     (an If's merge block, a Select Case's `switch.end`, a nested loop's `.end`)
+            //     emits it BEFORE GenerateLoop reaches the `incBlock` check, so the name lookup
+            //     only ever hands back a block already in _processedBlocks. Measured over 207
+            //     programs through the CLI — 66 shapes written to make the body terminate in
+            //     every non-falling-through way, plus every loop program in this test project:
+            //     the lookup reached its one emission site 51 times, ALREADY PROCESSED all 51.
+            //   • When the `.inc` is NOT reachable — a body ending in an unconditional
+            //     `Exit For` — it does not survive to be found: the IR optimizer deletes it, and
+            //     every shipping route runs the optimizer unconditionally.
+            //
+            // So on the shipping path it is inert (all 207 emissions byte-identical with and
+            // without it), and on the UNOPTIMIZED path some fixtures use it emits `i = i + 1`
+            // after the `break` — CS0162, unreachable code. What actually stops
+            // `For i = 1 To 4 / t = t + 1 / Exit For / Next` from looping forever is the `break`,
+            // from TryEmitLoopExit; with the break suppressed the program hangs whether this
+            // lookup is here or not.
             return null;
         }
 
@@ -2445,6 +2522,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // Push the loop end block so inner code can emit 'break' when targeting it
             if (endBlock != null)
                 _loopEndBlocks.Push(endBlock);
+            _loopSwitchDepths.Push(_switchDepth);
 
             WriteLine($"while ({condition})");
             WriteLine("{");
@@ -2468,16 +2546,23 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
             else if (bodyTerminator is IRBranch innerBranch)
             {
-                // Nested loop: body branches unconditionally to inner loop's condition block
-                // Don't follow branches to increment or end blocks - those are handled below
-                var target = innerBranch.Target;
-                if (!_processedBlocks.Contains(target) &&
-                    target != incBlock &&
-                    target != endBlock &&
-                    !target.Name.EndsWith(".inc") &&
-                    !target.Name.EndsWith(".end"))
+                // ⛔ THE EXIT TEST GOES FIRST. `target != endBlock` below discards exactly the
+                // branch an `Exit While`/`Exit For` written as the body's LAST statement
+                // produces — measured: a While over 0..3 exiting on the first pass printed 4
+                // instead of 1, because that branch was dropped and the loop ran to completion.
+                if (!TryEmitLoopExit(innerBranch))
                 {
-                    HandleUnconditionalBranch(innerBranch);
+                    // Nested loop: body branches unconditionally to inner loop's condition block
+                    // Don't follow branches to increment or end blocks - those are handled below
+                    var target = innerBranch.Target;
+                    if (!_processedBlocks.Contains(target) &&
+                        target != incBlock &&
+                        target != endBlock &&
+                        !target.Name.EndsWith(".inc") &&
+                        !target.Name.EndsWith(".end"))
+                    {
+                        HandleUnconditionalBranch(innerBranch);
+                    }
                 }
             }
 
@@ -2490,10 +2575,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             Unindent();
             WriteLine("}");
+            EmitLoopExitLabelIfNeeded(endBlock);
 
             // Pop the loop end block
             if (endBlock != null)
                 _loopEndBlocks.Pop();
+            _loopSwitchDepths.Pop();
 
             // Continue after the loop
             if (endBlock != null && !_processedBlocks.Contains(endBlock))
@@ -2584,9 +2671,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 HandleConditionalBranch(thenCond);
             else if (thenTerminator is IRBranch thenBranch)
             {
-                if (IsLoopEndBlock(thenBranch.Target))
-                    WriteLine("break;");
-                else if (!_processedBlocks.Contains(thenBranch.Target))
+                if (!TryEmitLoopExit(thenBranch) && !_processedBlocks.Contains(thenBranch.Target))
                     HandleUnconditionalBranch(thenBranch);
             }
 
@@ -2605,9 +2690,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 HandleConditionalBranch(elseCond);
             else if (elseTerminator is IRBranch elseBranch)
             {
-                if (IsLoopEndBlock(elseBranch.Target))
-                    WriteLine("break;");
-                else if (!_processedBlocks.Contains(elseBranch.Target))
+                if (!TryEmitLoopExit(elseBranch) && !_processedBlocks.Contains(elseBranch.Target))
                     HandleUnconditionalBranch(elseBranch);
             }
 
@@ -2644,9 +2727,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             else if (thenTerminator is IRBranch thenBranch)
             {
                 // Check if this is a break (branch to loop end)
-                if (IsLoopEndBlock(thenBranch.Target))
-                    WriteLine("break;");
-                else if (!_processedBlocks.Contains(thenBranch.Target))
+                if (!TryEmitLoopExit(thenBranch) && !_processedBlocks.Contains(thenBranch.Target))
                     HandleUnconditionalBranch(thenBranch);
             }
 
@@ -2672,6 +2753,94 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (block == null || _loopEndBlocks.Count == 0)
                 return false;
             return _loopEndBlocks.Contains(block);
+        }
+
+        // ====================================================================
+        // LEAVING A LOOP. Every `Exit For` / `Exit While` / `Exit Do` in the language arrives
+        // here as an IRBranch to the enclosing loop's end block, and there are only three
+        // questions: is this branch an exit at all, is `break` the right C# for it, and where
+        // does the label go when it is not.
+        // ====================================================================
+
+        /// <summary>Fresh loop-exit bookkeeping for one method/accessor body.</summary>
+        private void ResetLoopExitState()
+        {
+            _forEachEndBlocks = new HashSet<BasicBlock>();
+            _loopSwitchDepths = new Stack<int>();
+            _labelledLoopEnds = new HashSet<BasicBlock>();
+            _switchDepth = 0;
+        }
+
+        /// <summary>
+        /// The C# label placed after a loop whose exit could not be spelled <c>break</c>.
+        /// Derived from the IR block name, which <c>IRBuilder</c> already makes unique per
+        /// function (<c>foreach0.end</c>, <c>for1.end</c>, …).
+        /// </summary>
+        private static string LoopExitLabel(BasicBlock endBlock) =>
+            "__exit_" + new string((endBlock.Name ?? "loop")
+                .Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray());
+
+        /// <summary>
+        /// Emit the jump that LEAVES the loop <paramref name="endBlock"/> ends.
+        ///
+        /// <para>⛔ <c>break</c> is not always it. Inside a C# <c>switch</c>, <c>break</c> leaves
+        /// the SWITCH — measured on the pre-existing counted-<c>For</c> path, where
+        /// <c>Exit For</c> in a <c>Select Case</c> over 1..4 totalled <b>7</b> instead of
+        /// <b>3</b> from a program that compiled, ran and exited 0. A <c>goto</c> to a label
+        /// after the loop is the only spelling C# has that means "leave the loop" from inside a
+        /// switch, and it is emitted ONLY in that case so the ordinary loops keep reading as
+        /// ordinary loops.</para>
+        /// </summary>
+        private void EmitLoopExit(BasicBlock endBlock)
+        {
+            if (_loopSwitchDepths.Count > 0 && _switchDepth > _loopSwitchDepths.Peek())
+            {
+                _labelledLoopEnds.Add(endBlock);
+                WriteLine($"goto {LoopExitLabel(endBlock)};");
+                return;
+            }
+
+            WriteLine("break;");
+        }
+
+        /// <summary>
+        /// Handle <paramref name="branch"/> if it targets an enclosing loop's end block, and say
+        /// whether it did — so every caller that owns an <c>IRBranch</c> terminator can ask the
+        /// one question before falling back to its own fall-through handling.
+        ///
+        /// <para>⛔ A <c>For Each</c>'s end block is the target of BOTH its <c>Exit For</c> and
+        /// its ordinary end-of-iteration branch, so this returns <c>true</c> (handled) for both
+        /// and emits nothing for the second. <c>IRBranch.IsLoopExit</c> is the only thing that
+        /// separates them — see <see cref="_forEachEndBlocks"/>.</para>
+        /// </summary>
+        private bool TryEmitLoopExit(IRBranch branch)
+        {
+            var target = branch?.Target;
+            if (target == null) return false;
+
+            if (_forEachEndBlocks.Contains(target))
+            {
+                if (branch.IsLoopExit) EmitLoopExit(target);
+                return true;
+            }
+
+            // A while-shaped loop's body ends by branching to its CONDITION block, so a branch
+            // to its end block is always a real exit and needs no flag to prove it.
+            if (IsLoopEndBlock(target))
+            {
+                EmitLoopExit(target);
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>Write the <c>goto</c> target for a loop that needed one, after its closing brace.</summary>
+        private void EmitLoopExitLabelIfNeeded(BasicBlock endBlock)
+        {
+            if (endBlock == null || !_labelledLoopEnds.Remove(endBlock)) return;
+            // A label must be followed by a statement; the empty one is the smallest.
+            WriteLine($"{LoopExitLabel(endBlock)}: ;");
         }
 
         private bool ShouldEmitInstruction(IRInstruction instruction)
@@ -3451,9 +3620,32 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 bool isVoidFunction = _currentFunction?.ReturnType == null ||
                     _currentFunction.ReturnType.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
 
-                bool isLastBlock = ret.ParentBlock?.Successors?.Count == 0;
+                // ⛔ THIS TEST USED TO BE `ret.ParentBlock?.Successors?.Count == 0`, WHICH IS
+                // TRUE OF EVERY RETURN. A return terminates its block, so NO return block has
+                // successors — early or not — and the suppression therefore swallowed EVERY
+                // void return. `Exit Sub` was a complete no-op: measured, a Sub that prints "5"
+                // and exits, then prints "-1", printed BOTH on C# where C++, JavaScript and
+                // MSIL all print "5".
+                //
+                // Suppressing the ONE trailing return of a void method is still worth having,
+                // and the question it really asks is "will anything else be emitted after this
+                // point?". ⚠ It is NOT "is this the last block in IRFunction.Blocks": creation
+                // order is not emission order — an `If` inside a `For Each` body creates
+                // `if0.then`/`if0.end` AFTER `foreach0.end`, so the block carrying the trailing
+                // return is followed in the list by two blocks emitted long before it. The set
+                // of blocks ALREADY EMITTED answers the real question directly.
+                //
+                // ⚠ INVARIANT RELIED ON: a return is the LAST instruction of its block, so
+                // suppressing it cannot strand statements behind it. Measured over 45 programs,
+                // optimized AND unoptimized, including `Exit Sub` with a statement written after
+                // it (the front end drops the unreachable statement and the block still ends at
+                // the return). A guard for it was written and then removed: nothing can reach it,
+                // and an unreachable guard is an unkillable mutant, not insurance.
+                bool nothingLeftToEmit = isVoidFunction
+                    && _currentFunction?.Blocks != null
+                    && _currentFunction.Blocks.All(b => _processedBlocks.Contains(b));
 
-                if (isVoidFunction && isLastBlock)
+                if (nothingLeftToEmit)
                 {
                     // Don't emit unnecessary return at end of void method
                     return;
@@ -3819,11 +4011,17 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             {
                 HandleConditionalBranch(tryCond);
             }
-            else if (tryTerminator is IRBranch tryBranch &&
-                     tryBranch.Target != tryCatch.EndBlock &&
-                     !_processedBlocks.Contains(tryBranch.Target))
+            else if (tryTerminator is IRBranch tryBranch)
             {
-                HandleUnconditionalBranch(tryBranch);
+                // An `Exit For` as the last statement of a Try body targets the LOOP's end, not
+                // the Try's, so the two guards below would drop it. C# allows both `break` and
+                // `goto` out of a try block.
+                if (!TryEmitLoopExit(tryBranch) &&
+                    tryBranch.Target != tryCatch.EndBlock &&
+                    !_processedBlocks.Contains(tryBranch.Target))
+                {
+                    HandleUnconditionalBranch(tryBranch);
+                }
             }
 
             Unindent();
@@ -3850,11 +4048,14 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 {
                     HandleConditionalBranch(catchCond);
                 }
-                else if (catchTerminator is IRBranch catchBranch &&
-                         catchBranch.Target != tryCatch.EndBlock &&
-                         !_processedBlocks.Contains(catchBranch.Target))
+                else if (catchTerminator is IRBranch catchBranch)
                 {
-                    HandleUnconditionalBranch(catchBranch);
+                    if (!TryEmitLoopExit(catchBranch) &&
+                        catchBranch.Target != tryCatch.EndBlock &&
+                        !_processedBlocks.Contains(catchBranch.Target))
+                    {
+                        HandleUnconditionalBranch(catchBranch);
+                    }
                 }
 
                 Unindent();
@@ -3899,6 +4100,15 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             WriteLine("{");
             Indent();
 
+            // ⛔ REGISTER THE END BLOCK FIRST. Everything emitted between here and the closing
+            // brace — the body, an If's arms, a Try, a Select Case — asks TryEmitLoopExit
+            // whether a branch is an `Exit For`, and the answer is "only for a block in this
+            // set, and only when IRBranch.IsLoopExit". Without the registration `Exit For`
+            // emitted NOTHING and the loop ran to completion (measured: 10 for a loop over
+            // 1,2,3,4 that must total 3).
+            var registeredEnd = forEach.EndBlock != null && _forEachEndBlocks.Add(forEach.EndBlock);
+            _loopSwitchDepths.Push(_switchDepth);
+
             // Generate body block
             _processedBlocks.Add(forEach.BodyBlock);
             EmitBlockInstructions(forEach.BodyBlock);
@@ -3909,15 +4119,31 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             {
                 HandleConditionalBranch(bodyCond);
             }
-            else if (bodyTerminator is IRBranch bodyBranch &&
-                     bodyBranch.Target != forEach.EndBlock &&
-                     !_processedBlocks.Contains(bodyBranch.Target))
+            else if (bodyTerminator is IRSwitch bodySwitch)
             {
-                HandleUnconditionalBranch(bodyBranch);
+                // ⛔ THIS ARM DID NOT EXIST, and EmitBlockInstructions skips every IRSwitch
+                // because control flow is emitted structurally — so a `Select Case` that was
+                // the whole body of a For Each was DROPPED. Measured: a loop summing 1,2,3
+                // through a Select Case printed 0 from a program that compiled and ran.
+                HandleSwitchStatement(bodySwitch);
+            }
+            else if (bodyTerminator is IRBranch bodyBranch)
+            {
+                // The exit test owns `Target == forEach.EndBlock`: that is BOTH the end of an
+                // ordinary iteration (emit nothing) and a bare `Exit For` written as the body's
+                // last statement (emit the jump), told apart only by IRBranch.IsLoopExit.
+                if (!TryEmitLoopExit(bodyBranch) && !_processedBlocks.Contains(bodyBranch.Target))
+                {
+                    HandleUnconditionalBranch(bodyBranch);
+                }
             }
 
             Unindent();
             WriteLine("}");
+
+            _loopSwitchDepths.Pop();
+            if (registeredEnd) _forEachEndBlocks.Remove(forEach.EndBlock);
+            EmitLoopExitLabelIfNeeded(forEach.EndBlock);
 
             // Continue with end block
             if (forEach.EndBlock != null && !_processedBlocks.Contains(forEach.EndBlock))

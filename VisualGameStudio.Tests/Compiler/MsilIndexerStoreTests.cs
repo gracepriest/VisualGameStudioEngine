@@ -34,14 +34,21 @@ namespace VisualGameStudio.Tests.Compiler;
 /// that could reach the refusal.</para>
 ///
 /// <para>⚠ Most cases assert MSIL against C# (<c>MsilAgreesWithCSharp</c>) — the pattern
-/// <c>MsilForEachTests</c> uses. <b>Several cannot</b>: the C# backend's own indexer-store
-/// lowering allocates a temp that does not exist in the surrounding scope for a
-/// READ-MODIFY-WRITE through an indexer (<c>l(0) = l(1)</c>, <c>l(i) = l(i) * 10</c>,
-/// <c>d("a") = d("a") + 1</c>) OR for ANY indexer write inside a <c>For Each</c> body — every one
-/// of those fails to COMPILE on C# with <c>CS0103: The name 'tN' does not exist in the current
-/// context</c>, a separate, pre-existing C#-backend defect, not this family's. Those cases assert
-/// MSIL against JavaScript instead (<c>MsilMatchesJs</c>), each naming the C# divergence in its
-/// own docstring.</para>
+/// <c>MsilForEachTests</c> uses. <b>Three cannot</b>: the C# backend's own indexer-store lowering
+/// allocates a temp that does not exist in the surrounding scope for a READ-MODIFY-WRITE through an
+/// indexer (<c>l(0) = l(1)</c>, <c>l(i) = l(i) * 10</c>, <c>d("a") = d("a") + 1</c>) — those fail to
+/// COMPILE on C# with <c>CS0103: The name 'tN' does not exist in the current context</c>, a
+/// separate, pre-existing C#-backend defect, not this family's. Those cases assert MSIL against
+/// JavaScript instead (<c>MsilMatchesJs</c>), each naming the C# divergence in its own docstring.</para>
+///
+/// <para>⛔ <b>The predicate is READ-MODIFY-WRITE, not "inside a loop".</b> An earlier version of
+/// this note claimed ANY indexer write inside a <c>For Each</c> body failed on C#; that was an
+/// over-generalization from the read-modify-write cases and it is wrong. Measured at f20435d and
+/// again after the C#-backend <c>Exit For</c> batch: a plain <c>l(0) = n</c> inside a
+/// <c>For Each</c> compiles and prints the right answer on C# (see
+/// <see cref="Write_InsideAForEach_OverADifferentCollection"/>), while <c>l(0) = l(1)</c> with NO
+/// loop anywhere is <c>CS0103</c>. The loop is incidental; reading the collection back inside the
+/// same statement is what breaks.</para>
 ///
 /// <para>⚠ NOT COVERED HERE: a qualified field-of-object indexer (<c>g.Items(0)</c>, reading or
 /// writing a collection FIELD reached through another object) is broken on ALL FOUR backends —
@@ -73,9 +80,9 @@ public class MsilIndexerStoreTests
     }
 
     /// <summary>
-    /// MSIL only, against the value JavaScript computes — for the shapes where the C# backend's
-    /// OWN indexer-store lowering does not compile (see the fixture note), so C# cannot be the
-    /// oracle.
+    /// MSIL only, against the value JavaScript computes — for the three READ-MODIFY-WRITE shapes
+    /// where the C# backend's OWN indexer-store lowering does not compile (see the fixture note),
+    /// so C# cannot be the oracle.
     /// </summary>
     private static void MsilMatchesJs(string program, string expected)
         => Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(program)), Is.EqualTo(expected),
@@ -316,14 +323,20 @@ public class MsilIndexerStoreTests
     // ========================================================================================
     // FOR EACH BODY — writing the collection BEING enumerated legitimately throws (pinned
     // separately below), so a plain value assertion needs a write to a DIFFERENT collection.
-    // ⛔ This is also one of the shapes the C# backend cannot compile at all (CS0103 'tN'), for
-    // ANY indexer write inside a For Each body, not only a read-modify-write one — so it uses
-    // the JavaScript oracle despite being a plain (non-self-referencing) assignment.
     // ========================================================================================
 
+    /// <summary>
+    /// ⛔ This case used to assert against JavaScript, on the claim that the C# backend cannot
+    /// compile ANY indexer write inside a <c>For Each</c> body. <b>That claim was our own error.</b>
+    /// Re-measured at f20435d (the parent of the C#-backend <c>Exit For</c> batch) and again after
+    /// it: this program compiles on C# and prints <b>8</b> both times. The C#-backend defect is
+    /// specifically a READ-MODIFY-WRITE through an indexer — see the three
+    /// <c>ReadModifyWrite_*</c> cases below, one of which (<c>l(0) = l(1)</c>) has no loop at all
+    /// and still fails. So this is an ordinary <c>MsilAgreesWithCSharp</c> case.
+    /// </summary>
     [Test]
     public void Write_InsideAForEach_OverADifferentCollection()
-        => MsilMatchesJs(
+        => MsilAgreesWithCSharp(
             "Sub Main()\n" +
             " Dim l As New List(Of Integer)()\n" +
             " l.Add(1)\n" +

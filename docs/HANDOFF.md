@@ -1437,6 +1437,17 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   use it; the multi-file case runs the COMBINED IR through all four generators and executes
   three of them (MSIL's IL is asserted by text: two `call int32 'Combined'::'Twice'`, no
   `HelpersTwice`, no `System.Object::'Twice'`).
+  ⛔⛔ **`FourBackends.RunEmittedCSharp` HAS NO TIMEOUT.** It is in-process Roslyn: emit to memory,
+  `Assembly.Load`, invoke the entry point. A program that loops forever HANGS THE TEST HOST —
+  there is no failure, no name, no output, just a run that never ends. ⚠ **Any shape whose
+  failure mode is a non-terminating loop must be asserted on the emitted TEXT
+  (`ReturnCoercionTests.EmitCSharpForTest`), not through this harness**, and run on JS / C++ /
+  MSIL, whose harnesses all time out. Measured 2026-09-21: `For i = 1 To 4 / t = t + 1 / Exit For
+  / Next` and `Exit Sub` in the same position both hang at f20435d. `CSharpLoopExitTests` marks
+  every such case.
+  ⚠ **One shape per test, and one shape per C++ COMPILE.** A characterization probe that compiled
+  five different programs in one test reported the FIRST program's compile error for all five —
+  `BclE2E.CompileToCppOptimized`/`CompileRun` reuse one temp directory within a test.
   ⛔ **THIRTEEN MUTATIONS, THIRTEEN KILLS — TWO SURVIVED THE FIRST SWEEP, and one was WRONGLY
   REMOVED before the full suite caught it.** (1) The member-body exemption in `CombineIRModules`'
   collision lookup survived a method-vs-method test, because a class method from the SECOND
@@ -1922,11 +1933,13 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
     targets ONE block and `IRBranch.IsLoopExit` is the only discriminator; C++ and JS have read it
     since task_4cc381f1, MSIL never did. Measured on `{1,2,3,4}` exiting at 3: total **7** instead
     of **3**, **from a program that ran clean**. A wrong answer, not a crash.
-  ⛔ **THE C# BACKEND IS WRONG ON FOUR OF THESE SHAPES**, so those four cases assert against
-  C++/JS instead of C#: `Exit For` in a `For Each` (correct 3, C# **10** — `Exit For` is a
-  **no-op on C#**); nested (60 vs 120); inside a `Try` (3 vs 10); as the last statement (1 vs 2).
-  Also `For Each n In Make()` — MSIL gives 7, **C# does not compile** (`CS0103 't0'`). `Exit Sub`
-  is ALSO a no-op on C#; a separate C#-backend family, not fixed here.
+  ⛔ **THE C# BACKEND WAS WRONG ON FOUR OF THESE SHAPES** — `Exit For` in a `For Each` (correct 3,
+  C# **10** — `Exit For` was a **no-op on C#**); nested (60 vs 200); inside a `Try` (3 vs 10); as
+  the last statement (1 vs 2) — so those four asserted against C++/JS instead of C#.
+  ⭐ **FIXED (C#-backend Exit/Right batch, 2026-09-21) and all four PROMOTED to
+  `MsilAgreesWithCSharp`.** Re-measured: 3 / 60 / 3 / 1 on C#. `Exit Sub` was a no-op on C# too and
+  is fixed in the same batch. The one shape still not promotable is `For Each n In Make()` — MSIL
+  gives 7, **C# does not compile** (`CS0103 't0'`).
   ⭐ **What the mutation sweep taught, worth recording as method.**
   - **`a1`/`a2` killed DISJOINT sets summing to exactly 40, and so did `c2`/`c3`.** Mutated as one
     site each, the 34-kill arm would have masked the 4-kill arm and the nested arm would have
@@ -1978,8 +1991,12 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
     `IRFor` node (a counted `For` lowers to ordinary blocks), and it was never MSIL-only: the one
     omission broke **all four** backends. Left here with its correction rather than deleted,
     because the wrong reading is what the next session would otherwise re-derive.
-  - **C# backend: a property `Get` accessor never hoists locals declared inside a loop**
-    (`CS0103`), independent of loop construct.
+  - **C# backend: a property `Get` accessor emits NO local declarations AT ALL** (`CS0103`).
+    ⛔ **CORRECTED 2026-09-21** — this read "never hoists locals declared inside a loop". The loop
+    is irrelevant: measured at f20435d and again after the C#-backend Exit/Right batch, a `Get`
+    whose whole body is `Dim sum As Integer = 5` / `Return sum + 1`, with no loop anywhere, is the
+    same `CS0103`, while a `Get` that declares nothing (`Return 6`) compiles and prints correctly.
+    `CSharpBackend.GenerateProperty` is the site.
   - **C# backend: an emitted `foreach` reuses the source loop-variable name even when it collides
     with an outer local** (`CS0136`).
   - `For Each` over a `Dictionary` — front-end (C# `CS0030` too), not MSIL's.
@@ -2163,12 +2180,17 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   die only when neither arm is present. **Each survivor is half of a load-bearing pair, proved by
   the pair-mutant, not asserted.** Do not "simplify" any of them away on the strength of a single
   green mutant — that is precisely the reasoning that produced the regression above.
-  ⛔ **`Exit For` is NOT a no-op on a counted `For`** — measured `6` on C#, C++, JS and MSIL
-  alike. The entry above records `Exit For` as a C#-backend no-op; that is true of `For Each`
-  only. Different construct, different verdict.
-  ⚠ **A counted loop in a property `Get` accessor still does not compile on C#** (`CS0103` on
-  the local declared inside the loop) — the pre-existing C#-backend defect already on the open
-  list; MSIL and JS both give the right answer, so that shape is pinned against them.
+  ⛔ **`Exit For` in an `If … End If` is NOT a no-op on a counted `For`** — measured `6` on C#,
+  C++, JS and MSIL alike. ⛔ **CORRECTED 2026-09-21 — this used to say "`Exit For` is NOT a no-op
+  on a counted `For`" without qualification, and that was too broad.** The `If` shape worked; the
+  SAME `Exit For` written as the body's LAST statement made the emitted C# **loop forever** (the
+  `break` was dropped and the loop's `.inc` block is unreachable, so the optimizer deletes it),
+  and inside a `Select Case` arm it totalled **7** instead of 3 (a C# `break` leaves the SWITCH).
+  Both fixed in the C#-backend Exit/Right batch and pinned in `CSharpLoopExitTests`.
+  ⚠ **A counted loop in a property `Get` accessor still does not compile on C#** — but NOT
+  because of the loop: `GenerateProperty` emits no local declarations at all (see the corrected
+  open-list entry above). MSIL and JS both give the right answer, so that shape is pinned against
+  them.
   ⚠ **Pre-existing, pinned, NOT ours:** `For i = 1 To n` where `i` is a **PARAMETER** throws
   `InvalidProgramException` on MSIL. Verified identical against the pre-change build; C# and
   JavaScript both give the right answer, so that case asserts against those two.
@@ -2184,10 +2206,16 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   - **MSIL: `For i = 1 To n` where `i` is a PARAMETER throws `InvalidProgramException`.**
     Pre-existing — verified identical against the pre-change build — and pinned in
     `CountedForVariableTests` against C# and JavaScript, which both answer correctly.
-  - **C# backend: ANY indexer write inside a `For Each` body fails** with
-    `CS0103: The name 'tN' does not exist in the current context` — the same lost-temporary
-    defect as a read-modify-write (`l(0) = l(1)`, `d("a") = d("a") + 1`). C# is therefore not a
-    valid oracle for those shapes; they assert against JavaScript or C++.
+  - **C# backend: a READ-MODIFY-WRITE through an indexer fails** with
+    `CS0103: The name 'tN' does not exist in the current context` — `l(0) = l(1)`,
+    `l(i) = l(i) * 10`, `d("a") = d("a") + 1`. C# is not a valid oracle for those three shapes;
+    they assert against JavaScript.
+    ⛔ **CORRECTED 2026-09-21 — this read "ANY indexer write inside a `For Each` body fails", and
+    that was an over-generalization from the read-modify-write cases.** The loop is incidental:
+    measured at f20435d and again after the C#-backend Exit/Right batch, a plain `l(0) = n` inside
+    a `For Each` over a DIFFERENT collection compiles and prints **8** on C#, while `l(0) = l(1)`
+    with no loop anywhere is `CS0103`. `MsilIndexerStoreTests.Write_InsideAForEach_OverADifferentCollection`
+    has been promoted to `MsilAgreesWithCSharp` accordingly.
   - **C++ backend: `List(Of Boolean)` does not compile** — `std::vector<bool>`'s proxy
     bit-reference will not bind to the `T&` the generated code takes. Element-type-specific;
     `List(Of Integer)` / `String` / a user class are all fine.
@@ -2266,11 +2294,13 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
     and the worst failure mode this backend has. `RequireChrArgument`/`RequireAscArgument`
     refuse them with a named diagnostic. ⚠ `Asc` still accepts an **Object**-typed argument and
     must: `Asc(Chr(66))` answers `66`, because the `callvirt` dispatches on the real string.
-  ⚠ **`Right` uses `dup`, and that is a DELIBERATE DIVERGENCE from the C# backend.**
-  `CSharpStdLib.EmitRight` interpolates `{str}` twice, so the receiver EXPRESSION is evaluated
+  ⚠ **`Right` uses `dup`, and that WAS a deliberate divergence from the C# backend.**
+  `CSharpStdLib.EmitRight` interpolated `{str}` twice, so the receiver EXPRESSION was evaluated
   twice: measured on `Right(Tag(), 2)` where `Tag` prints, **C# printed `tag` TWICE** while
-  JavaScript, C++ and now MSIL print it once. Two of three agree and `dup` cannot duplicate
-  work. The C# backend's double evaluation is on the open list below.
+  JavaScript, C++ and MSIL printed it once. ⭐ **FIXED (C#-backend Exit/Right batch, 2026-09-21)** —
+  `EmitRight` now emits `({str})[^({length})..]`, one evaluation, and
+  `MsilStringIntrinsicTests.RightWithAnEffectfulReceiver_IsEvaluatedOnce` has been promoted to
+  `MsilAgreesWithCSharp`. There are now NO deliberate divergences in that fixture.
   ⚠ **`BasicLang/StdLib/MSILStdLib.cs` IS DEAD CODE.** `MSILStdLibProvider` is registered in
   `StdLibRegistry.cs:36` and **referenced by nothing** — `MSILBackend.cs` has zero hits for it.
   It is also wrong where it is most tempting to reuse: its `EmitMid` emits
@@ -2350,9 +2380,12 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   implementation detail. **Do not "simplify" it to `call`.**
   ⚠ **Not fixed, out of these two families, each measured compiled-and-run — added to the open
   list:**
-  - ⛔ **C# backend: `Right` EVALUATES ITS RECEIVER TWICE.** `EmitRight` interpolates `{str}`
-    twice; `Right(Tag(), 2)` where `Tag` prints printed `tag` twice on C# and once on
-    JavaScript, C++ and MSIL. That leg asserts against JavaScript.
+  - ⭐ **FIXED 2026-09-21 (C#-backend Exit/Right batch): `Right` EVALUATED ITS RECEIVER TWICE.**
+    `EmitRight` interpolated `{str}` twice and parenthesized neither operand, so besides the
+    double evaluation `Right(Ab() & "cdef", 2)` did not COMPILE (`CS0019`) and
+    `Right("abcdef", Len(Ab()) + 1)` printed `[f]` instead of `[def]`. Now
+    `({str})[^({length})..]`; pinned in `CSharpRightReceiverTests`. ⚠ A folded receiver
+    (`Right("ab" & "cdef", 2)`) cannot see any of this — the optimizer collapses it to a literal.
   - ⛔ **C# backend: an interface property emits an accessor-less property** —
     `CS0548: 'IHolder.Slot': property or indexer must have at least one accessor`, plus CS0200.
     The program does not compile, so C# is not a valid oracle for any interface-property shape.

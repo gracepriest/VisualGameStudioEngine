@@ -332,11 +332,15 @@ public class CountedForVariableTests
             "5,3,1,");
 
     /// <summary>
-    /// ⚠ <c>Exit For</c> in a COUNTED loop is not the no-op defect: that no-op is a separate,
-    /// unrelated <c>For Each</c> gap on the C# backend (<see cref="MsilForEachTests"/>'s defect
-    /// (D) sibling). <c>Exit For</c> in a counted loop already works correctly on every backend,
-    /// including C#, both before and after this family's change — this pins that the induction
-    /// variable's new storage does not disturb it.
+    /// ⚠ <c>Exit For</c> in a COUNTED loop was not the <c>For Each</c> no-op defect. ⛔ <b>But the
+    /// counted loop was not simply fine either, and the sentence that used to stand here said it
+    /// was.</b> What already worked on every backend including C#, before and after this family's
+    /// change, is exactly the shape below: an <c>Exit For</c> inside an <c>If … End If</c>.
+    /// Measured at f20435d, the SAME <c>Exit For</c> written elsewhere in a counted loop did not:
+    /// as the body's LAST statement it made the emitted C# loop FOREVER, and inside a
+    /// <c>Select Case</c> arm it totalled 7 instead of 3. Both are pinned in
+    /// <see cref="CSharpLoopExitTests"/>. This case pins only that the induction variable's new
+    /// storage does not disturb the shape that did work.
     /// </summary>
     [Test]
     public void CountedFor_ExitFor_LeavesTheLoop_NotANoOp()

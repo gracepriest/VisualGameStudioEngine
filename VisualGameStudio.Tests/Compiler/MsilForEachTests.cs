@@ -39,12 +39,17 @@ namespace VisualGameStudio.Tests.Compiler;
 ///
 /// <para><b>The contract this fixture asserts:</b> for every shape, MSIL runs and prints what the
 /// C# backend (compiled and run in-process) prints — <c>MsilAgreesWithCSharp</c>, the same pattern
-/// <c>MsilClassTypeTests</c> uses. <b>Four shapes are the exception</b>: the implementer measured
-/// these against C# and found C# itself wrong (a pre-existing, separate C#-backend defect, not
-/// this family's — <c>Exit For</c> is a NO-OP on the C# backend, and <c>For Each</c> over a call's
-/// result does not compile there at all). Those assert MSIL against the value C++ and JavaScript
-/// both compute, never against C#'s wrong answer, and each names the measured C# divergence in its
+/// <c>MsilClassTypeTests</c> uses. <b>Three shapes are the exception</b>, and all three are C#
+/// COMPILE FAILURES, not wrong answers: <c>For Each</c> over a call's result (<c>CS0103</c>, an
+/// undefined temp), a loop variable that shadows an outer local of the same name (<c>CS0136</c>),
+/// and a property <c>Get</c> that declares any local at all (<c>CS0103</c>). Those assert MSIL
+/// against the value C++ and JavaScript compute, and each names the measured C# divergence in its
 /// own docstring rather than silently normalizing it away.</para>
+///
+/// <para>⭐ <b>The <c>Exit For</c> shapes used to be in that list and no longer are.</b> The C#
+/// backend's own <c>Exit For</c> no-op was a separate, pre-existing C#-backend defect; it has since
+/// been fixed, and those four cases now hold MSIL to C# like the rest. The C#-side contract for the
+/// whole <c>Exit</c> family lives in <see cref="CSharpLoopExitTests"/>.</para>
 ///
 /// <para>⚠ <b>Kept to ONE shape per test.</b> Both <c>MsilHarness.RunExpectingSuccess</c> and the
 /// C# leg (<c>FourBackends.RunEmittedCSharp</c>) use <c>Assert.Multiple</c> internally — grouping
@@ -69,8 +74,9 @@ public class MsilForEachTests
     }
 
     /// <summary>
-    /// MSIL only, against the value C++ and JavaScript both compute — for the shapes where C# is
-    /// independently wrong and must not be used as the oracle.
+    /// MSIL only, against the value C++ and JavaScript both compute — for the one shape the C#
+    /// backend cannot COMPILE, so it cannot be the oracle
+    /// (<see cref="CollectionIsACallsResult"/>).
     /// </summary>
     private static void MsilMatchesCppAndJs(string program, string expected)
         => Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(program)), Is.EqualTo(expected));
@@ -721,9 +727,13 @@ public class MsilForEachTests
     // CONTRACT ITEM 4 — end-of-iteration goes to the loop HEAD; Exit For goes to the
     // CONTINUATION. The first case here is the "no exit" control: an If whose merge block also
     // branches to the loop's end block must stay an ordinary iteration, not be mistaken for an
-    // exit. The rest are the FOUR shapes where the C# backend is independently wrong (defect
-    // (D)'s sibling on that backend — Exit For is a no-op there) and where C# must NOT be used
-    // as the oracle.
+    // exit.
+    //
+    // ⭐ The four Exit For cases below USED TO assert against C++ and JavaScript, because the C#
+    // backend had an independent defect of its own that made Exit For a no-op there. That defect
+    // is fixed (CSharpLoopExitTests owns its contract), and these are now ordinary
+    // MsilAgreesWithCSharp cases. Each one's docstring still records what C# measured at f20435d,
+    // because those numbers are what make the shapes discriminating.
     // ========================================================================================
 
     /// <summary>
@@ -752,13 +762,13 @@ public class MsilForEachTests
 
     /// <summary>
     /// ⛔ THE measured repro, reproduced here. Correct: 1+2=3 (Exit For at n=3 skips both the add
-    /// for 3 AND element 4). ⛔ C# MEASURED: 10 — <c>Exit For</c> is a NO-OP on the C# backend, so
-    /// it adds every element (1+2+3+4). This is a separate, pre-existing C#-backend defect, not
-    /// this family's; asserting against C# here would encode C#'s wrong answer as correct.
+    /// for 3 AND element 4). ⛔ C# MEASURED AT f20435d: 10 — <c>Exit For</c> was a NO-OP on the C#
+    /// backend, a separate, pre-existing C#-backend defect. ⭐ That is fixed; C# now prints 3
+    /// (re-measured), so this holds both .NET backends to the same answer.
     /// </summary>
     [Test]
     public void ExitFor_LeavesTheLoop()
-        => MsilMatchesCppAndJs(
+        => MsilAgreesWithCSharp(
             "Sub Main()\n" +
             " Dim l As New List(Of Integer)()\n" +
             " l.Add(1)\n" +
@@ -792,10 +802,10 @@ public class MsilForEachTests
     /// still adds 20 -> 5+10+20=35 per pass -> 140 total (the discriminating mutant's actual
     /// measured value).</para>
     ///
-    /// <para>⛔ C# MEASURED: 200 — a DIFFERENT wrong number from a DIFFERENT cause. C#'s
-    /// <c>Exit For</c> is a complete no-op (not even a same-element skip), so it adds every
-    /// element every pass: 5+10+15+20=50 per pass * 4 = 200. Not this family's defect either
-    /// way; not asserted against here.</para>
+    /// <para>⛔ C# MEASURED AT f20435d: 200 — a DIFFERENT wrong number from a DIFFERENT cause.
+    /// C#'s <c>Exit For</c> was a complete no-op (not even a same-element skip), so it added every
+    /// element every pass: 5+10+15+20=50 per pass * 4 = 200. ⭐ That C#-backend defect is fixed;
+    /// C# now prints 60 (re-measured), so C# is the oracle here like everywhere else.</para>
     ///
     /// <para>If the OUTER loop were wrongly exited too, this would total 15 (one outer pass
     /// only) instead of 60 — this case also proves outer continues, independent of the
@@ -803,7 +813,7 @@ public class MsilForEachTests
     /// </summary>
     [Test]
     public void ExitFor_InANestedForEach_LeavesOnlyTheInnerLoop()
-        => MsilMatchesCppAndJs(
+        => MsilAgreesWithCSharp(
             "Sub Main()\n" +
             " Dim outer As New List(Of Integer)()\n" +
             " outer.Add(1)\n" +
@@ -830,12 +840,12 @@ public class MsilForEachTests
 
     /// <summary>
     /// ⛔ <c>Exit For</c> INSIDE a <c>Try</c> — combines defect (D)'s fix with the region-aware
-    /// branch machinery (C) needs. Correct: 3, same shape as the unwrapped case. ⛔ C# MEASURED:
-    /// 10, same cause (Exit For a no-op there) — not this family's defect.
+    /// branch machinery (C) needs. Correct: 3, same shape as the unwrapped case. ⛔ C# MEASURED AT
+    /// f20435d: 10, same cause (Exit For a no-op there). ⭐ Fixed; C# now prints 3 (re-measured).
     /// </summary>
     [Test]
     public void ExitFor_InsideATry_LeavesTheLoop()
-        => MsilMatchesCppAndJs(
+        => MsilAgreesWithCSharp(
             "Sub Main()\n" +
             " Dim l As New List(Of Integer)()\n" +
             " l.Add(1)\n" +
@@ -860,12 +870,12 @@ public class MsilForEachTests
     /// <summary>
     /// ⛔ <c>Exit For</c> as the LAST statement in the body — no <c>If</c>/merge block, just an
     /// unconditional exit after one increment. Correct: 1 (one iteration, then leaves). ⛔ C#
-    /// MEASURED: 2 — the no-op <c>Exit For</c> falls through and the loop runs BOTH elements
-    /// (1, then 2).
+    /// MEASURED AT f20435d: 2 — the no-op <c>Exit For</c> fell through and the loop ran BOTH
+    /// elements (1, then 2). ⭐ Fixed; C# now prints 1 (re-measured).
     /// </summary>
     [Test]
     public void ExitFor_AsTheLastStatement_LeavesAfterOneIteration()
-        => MsilMatchesCppAndJs(
+        => MsilAgreesWithCSharp(
             "Sub Main()\n" +
             " Dim l As New List(Of Integer)()\n" +
             " l.Add(1)\n" +
@@ -1043,13 +1053,16 @@ public class MsilForEachTests
     /// case-insensitive naming hazard against the property <c>Total</c> noted on the constructor
     /// case above.
     ///
-    /// <para>⚠ Asserted against JavaScript, not C#: measured, the C# backend does not compile
-    /// ANY loop-carrying property <c>Get</c> body — reproduced with a plain classic <c>For</c> in
-    /// place of the <c>For Each</c> here too, same <c>CS0103</c>. Property accessors hoist their
-    /// locals through a path that misses anything declared inside a loop, independent of which
-    /// loop construct — a separate, pre-existing, general C#-backend gap, not this family's and
-    /// not fixed here. MSIL alone (verified directly, outside this helper) already prints the
-    /// correct 7 for this exact program.</para>
+    /// <para>⚠ Asserted against JavaScript, not C#: measured, the C# backend does not compile this
+    /// program — <c>CS0103: The name 'sum' does not exist in the current context</c>.
+    /// ⛔ <b>The loop is not what breaks it.</b> An earlier version of this note blamed locals
+    /// "declared inside a loop"; that is wrong, and the correction is measured:
+    /// <c>GenerateProperty</c> emits NO local declarations AT ALL, so a property <c>Get</c> whose
+    /// entire body is <c>Dim sum As Integer = 5</c> / <c>Return sum + 1</c> — no loop anywhere — is
+    /// the same <c>CS0103</c>, while a <c>Get</c> that declares nothing (<c>Return 6</c>) compiles
+    /// and prints 6. A separate, pre-existing, general C#-backend gap, unchanged by the
+    /// C#-backend batch that fixed <c>Exit For</c>, and not fixed here. MSIL alone (verified
+    /// directly, outside this helper) already prints the correct 7 for this exact program.</para>
     /// </summary>
     [Test]
     public void ForEachInAPropertyAccessorBody()
