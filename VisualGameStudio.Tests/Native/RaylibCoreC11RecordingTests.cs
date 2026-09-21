@@ -98,8 +98,14 @@ public class RaylibCoreC11RecordingTests
             // Read the pinned struct back: capacity/events are unchanged and raylib wrote count in place.
             var after = Marshal.PtrToStructure<AutomationEventList>(listPtr);
 
-            // Now — and only now, with frames already pumped (see the ⚠ note on the fixture) — ask what hardware raylib
-            // actually sees. This is what decides whether an empty run was ever on the table.
+            // Now — and ONLY now, with frames already pumped — ask what hardware raylib actually sees. This decides
+            // whether an empty run was ever on the table.
+            // ⛔ ORDER IS LOAD-BEARING, AND GETTING IT WRONG LOOKS LIKE FLAKINESS RATHER THAN A BUG. Straight out of
+            // InitWindow raylib still answers IsGamepadAvailable(0) == false WITH A PAD PHYSICALLY PLUGGED IN, because
+            // GLFW only raises its joystick-connect callback inside PollInputEvents() — which EndDrawing calls AFTER it
+            // records. Probe hardware at the top of this test and it reports "no gamepad", the else-branch below is
+            // skipped, and the row re-asserts the exact claim this fix exists to retire. That same one-frame lag is why
+            // an attached pad yields 8 and not 12 over three frames: frame 1 records nothing.
             string? attachedPad = null;
             for (int g = 0; g < 4 && attachedPad is null; g++)   // raylib's MAX_GAMEPADS
                 if (Framework_IsGamepadAvailable(g))

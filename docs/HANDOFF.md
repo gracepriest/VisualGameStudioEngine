@@ -186,6 +186,12 @@ and dumped all 8 events as `INPUT_GAMEPAD_AXIS_MOTION` on `gamepad 0` axes 0-3 �
 ruled out the concurrent compiler work by measurement rather than by inspection. The fix was then
 mutation-checked: restoring the old `Is.EqualTo(0u)` puts the row back to `But was: 8` inside the
 real test host, so the new assertion is discriminating and not vacuous.
+⭐⭐ **CONTROLLED FALSIFICATION — the cause was removed and the symptom went with it.** The pad was
+later unplugged, and the SAME code was re-measured: the device-free branch is taken and `count` is
+**0**. Attached → `count == 8`; unplugged → `count == 0`. Both directions measured on this machine,
+so this is a controlled experiment, not a mechanism that merely fits the number 8. (The mutation was
+run on the device-free branch too — forcing it to demand `> 0` goes red with `But was: 0`, so that
+branch is discriminating as well.)
 The engine is blameless — `Framework_LoadAutomationEventList` and friends are one-line
 passthroughs at `VisualGameStudioEngine/framework.cpp:2148-2153`. **Do not baseline this row**; if
 it is ever red again, re-read the reason, because the empty-run claim is now made only when the run
@@ -202,6 +208,17 @@ taken WITHOUT those rows; this run is the one that covers them.
 prints nothing at normal verbosity, so "absent from the failure list" is not by itself evidence it
 ran; the two rows the claim rests on were measured, not inferred. The run's 2 skips are unrelated
 (`Build_CppLanguageProject_NoToolchain_…`, `ReleasePins_MatchTheRunbookOnceFilled`).
+
+⛔ **RUNNING THE SUITE FROM A WORKTREE REDS 18 `Raylib*ParityTests` ROWS, AND IT IS AN ARTEFACT.**
+`packages/` is a NuGet restore directory that is **gitignored and does not travel with a worktree or
+a fresh clone**, and those rows read `packages\raylib.5.5.0\build\native\include\raylib.h` to compare
+the real raylib header against `framework.h`. Without it they throw
+`DirectoryNotFoundException` — `Every_*_export_is_bound_3_ways`,
+`Every_core_C*_export_has_a_matching_wrapper_import`, `TextFormat_is_intentionally_left_unbound`.
+**Measured 2026-09-21** in a `.claude/worktrees/` worktree: fast subset **5088 passed / 20 failed /
+1 skipped of 5109** = 18 of these + the 2 standing `SearchSnippets`. Fix by copying the package in
+(`robocopy <main checkout>\packages\raylib.5.5.0 <worktree>\packages\raylib.5.5.0 /E`), then re-run —
+do NOT read those 18 as a regression, and do not baseline them either.
 
 ⛔ **The fast subset is not a gate for codegen work** — execution tests are
 `[Category("Integration")]`. Four fixes once gated green on it, then the first full run found
