@@ -215,8 +215,15 @@ a fresh clone**, and those rows read `packages\raylib.5.5.0\build\native\include
 the real raylib header against `framework.h`. Without it they throw
 `DirectoryNotFoundException` — `Every_*_export_is_bound_3_ways`,
 `Every_core_C*_export_has_a_matching_wrapper_import`, `TextFormat_is_intentionally_left_unbound`.
-**Measured 2026-09-21** in a `.claude/worktrees/` worktree: fast subset **5088 passed / 20 failed /
-1 skipped of 5109** = 18 of these + the 2 standing `SearchSnippets`. Fix by copying the package in
+**Measured 2026-09-21** in a `.claude/worktrees/` worktree, **on a MASTER-based branch whose fast
+subset totals 5109** (⚠ quote the base with the number — a feature branch has its own total, e.g.
+`feat/form-designer` at 24c is **5978**; an unqualified total under this heading reads as the
+expected count and makes a perfectly good run look like it has ~869 phantom tests): fast subset
+**5088 passed / 20 failed / 1 skipped of 5109** = 18 of these + the 2 standing `SearchSnippets`.
+⭐ The TOTAL is identical across both runs (5088+20+1 and 5106+2+1), which is itself the proof that
+these 18 are plain `[Test]` methods rather than `TestCaseSource` generators — a throwing source
+would collapse N cases into one erroring row and MOVE the total. So the gap is base, not coverage.
+Fix by copying the package in
 (`robocopy <main checkout>\packages\raylib.5.5.0 <worktree>\packages\raylib.5.5.0 /E`), then re-run —
 do NOT read those 18 as a regression, and do not baseline them either.
 
