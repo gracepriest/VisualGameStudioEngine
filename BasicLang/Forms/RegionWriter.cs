@@ -530,7 +530,21 @@ public static class RegionWriter
             AppendComponentInit(body, form, component, inner, newline, filePath, diagnostics);
         }
 
-        AppendSiblings(body, form, form.Controls, parent: "Me", inner, newline, filePath, diagnostics);
+        AppendSiblings(
+            body, form, form.Controls, parent: "Me", parentControl: null, inner, newline, filePath, diagnostics);
+
+        if (form.Target == FormTarget.WinForms)
+        {
+            // The form property a row claims — MainMenuStrip for a MenuStrip — for the FIRST control
+            // in document order whose row declares one, AFTER the whole add run (the strip must be
+            // populated and parented before the form points at it). By rule from the catalog, never
+            // by switching on the kind, and exactly one such line.
+            var main = form.Controls.FirstOrDefault(c => c.Definition?.FormProperty != null);
+            if (main != null)
+            {
+                body.Append($"{inner}Me.{main.Definition!.FormProperty} = {main.Id}").Append(newline);
+            }
+        }
 
         body.Append($"{indent}End Sub").Append(newline);
         return body.ToString();
@@ -557,10 +571,20 @@ public static class RegionWriter
     /// <para>⚠ Initialization stays in document order; only the ADD calls reverse. The properties a
     /// control is given have nothing to do with its layering, and generating the whole region
     /// backwards would make it needlessly hard to read against the document it came from.</para>
+    ///
+    /// <para>⛔ <b>None of that applies to a HOST's items</b> (spec §5). <c>parentControl</c> is the
+    /// control these siblings belong to — null at the form root — and it is the ROW, not the id in
+    /// <c>parent</c>, that says how a child is added. When that row carries a
+    /// <see cref="FormItemRule"/>, the children are added with THAT row's verb — <c>Items.Add</c>
+    /// under a strip, <c>DropDownItems.Add</c> under a menu item — in DOCUMENT order, because a
+    /// menu's items are ordered, not layered. Reversing them would run File/Edit/Help as
+    /// Help/Edit/File, and <c>Controls.Add</c> would not compile at all (a
+    /// <c>ToolStripMenuItem</c> is not a <c>Control</c>: csc CS1503).</para>
     /// </summary>
     private static void AppendSiblings(
         StringBuilder body, FormDocument form, IReadOnlyList<FormControl> controls, string parent,
-        string inner, string newline, string filePath, List<DesignDiagnostic> diagnostics)
+        FormControl? parentControl, string inner, string newline, string filePath,
+        List<DesignDiagnostic> diagnostics)
     {
         foreach (var control in controls)
         {
@@ -569,6 +593,23 @@ public static class RegionWriter
 
         if (form.Target != FormTarget.WinForms)
         {
+            return;
+        }
+
+        var rule = parentControl?.Definition?.Items;
+        if (rule != null)
+        {
+            // A host's items: the HOST row's verb, in DOCUMENT order — items are ORDERED, not
+            // layered. ⛔ Reversing them here would run File/Edit/Help as Help/Edit/File from a
+            // green build. The verb is on the PARENT's row because the same ToolStripMenuItem is
+            // Items.Added under a strip and DropDownItems.Added under a menu item.
+            foreach (var child in controls)
+            {
+                body.Append(inner)
+                    .Append(rule.Add.Replace("{parent}", parent).Replace("{child}", child.Id))
+                    .Append(newline);
+            }
+
             return;
         }
 
@@ -609,7 +650,7 @@ public static class RegionWriter
         // ⚠ The container's own children, parented to IT — and their adds happen here, so a
         // container is fully populated before the caller adds it to its own parent, which is the
         // order the shipped template uses.
-        AppendSiblings(body, form, control.Children, control.Id, inner, newline, filePath, diagnostics);
+        AppendSiblings(body, form, control.Children, control.Id, control, inner, newline, filePath, diagnostics);
     }
 
     /// <summary>

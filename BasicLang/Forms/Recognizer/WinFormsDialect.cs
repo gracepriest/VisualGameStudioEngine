@@ -164,6 +164,23 @@ public static class WinFormsDialect
                     continue;
                 }
 
+                // A STRIP's own host verbs (Task 24, spec §1) — `menuStrip1.Items.Add(mnuFile)` and
+                // `mnuFile.DropDownItems.Add(mnuOpen)`. Identical token layout to `Controls.Add`, so
+                // `Peek(6)` is the child id. Without these arms, importing a hand-written menu through
+                // `design --check` reported every item BL8006 "created but never added to the form".
+                //
+                // ⚠ A ComboBox's own `cmb.Items.Add("Apple")` reaches the Items arm too, with a STRING
+                // LITERAL where a child id would be. MarkParented requires an Identifier token at that
+                // position and ignores anything else — the same net effect as the fallthrough this arm
+                // replaces — so do NOT "fix" this by excluding ComboBox by name: the token-type guard
+                // already handles it, and a name list would be a second catalog to keep in step.
+                if ((cursor.CheckName(2, "Items") || cursor.CheckName(2, "DropDownItems")) &&
+                    cursor.CheckName(4, "Add"))
+                {
+                    MarkParented(cursor, form);
+                    continue;
+                }
+
                 // Me.<Prop> = <raw>
                 if (token.Type == TokenType.Me && cursor.CheckAhead(1, TokenType.Dot) &&
                     cursor.CheckAhead(2, TokenType.Identifier) && cursor.CheckAhead(3, TokenType.Assignment))
@@ -301,7 +318,9 @@ public static class WinFormsDialect
 
     private static void MarkParented(TokenCursor cursor, RecognizedForm form)
     {
-        // Me . Controls . Add ( <id> )
+        // <receiver> . Controls|Items|DropDownItems . Add ( <id> ) — one token layout, three verbs.
+        // ⛔ The Identifier guard is load-bearing, not defensive: `cmb.Items.Add("Apple")` arrives here
+        // with a string literal at this position and must parent nothing.
         if (cursor.CheckAhead(6, TokenType.Identifier))
         {
             var control = form[cursor.Peek(6)!.Lexeme];

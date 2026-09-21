@@ -73,6 +73,66 @@ public class FormPropertyGridTests
     }
 
     // ==================================================================
+    // Task 24, commit 24c, Task 18 — a strip's and an item's rows: Dock (a catalog property, not
+    // pixel geometry's), no TabIndex, no geometry.
+    // ==================================================================
+
+    private const string MenuStripForm = """
+        <Form Name="F" Version="1">
+          <Controls>
+            <MenuStrip Id="menuStrip1" Dock="Top">
+              <ToolStripMenuItem Id="mnuFile" Text="&amp;File"/>
+            </MenuStrip>
+          </Controls>
+        </Form>
+        """;
+
+    /// <summary>
+    /// ⚠ TAUTOLOGY CHECK: with <c>control.Geometry == null</c>, <c>AddIntrinsicRows</c>'s geometry
+    /// switch already has no arm to fire — no X/Y/Width/Height and no Col/Row are added TODAY, before
+    /// this commit, so that half of this pin is not itself red. The genuinely red half is TabIndex:
+    /// <c>AddIntrinsicRows</c> gates it on <c>IsComponent != true</c> (<c>Place == Tray</c>), which is
+    /// true for a Docked strip (its <c>Place</c> is <c>Docked</c>, not <c>Tray</c>) — so a strip gets
+    /// a TabIndex row TODAY, and this test fails on exactly that line until the guard widens to
+    /// <c>Place is null or Positioned</c>.
+    /// </summary>
+    [Test]
+    public void Rows_ForAStrip_HaveDockAndNoTabIndexOrGeometry()
+    {
+        var file = Read(MenuStripForm, "F.blform");
+        var grid = new FormPropertyGridViewModel();
+        grid.Load(file);
+        grid.SelectedControl = file.Model.FindById("menuStrip1");
+
+        var names = grid.Rows.Select(r => r.Name).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(names, Does.Contain("Dock"), "the strip's Dock is a catalog property row");
+            Assert.That(names, Does.Not.Contain("TabIndex"), "a strip has no tab order");
+            Assert.That(names, Has.None.Matches<string>(n => n is "X" or "Y" or "Width" or "Height" or "Col" or "Row"),
+                "a strip is geometry-less on either target's vocabulary");
+        });
+    }
+
+    /// <summary>
+    /// ⚠ NOT vacuous, measured: today <c>mnuFile</c> (Place == Item, so IsComponent is false) gets a
+    /// TabIndex row from the same unconditional-except-for-Tray gate — Task 14 stopped the DOCUMENT
+    /// WRITER from emitting one, but the GRID is a separate code path the writer change never
+    /// touched. This fails today for the same reason the strip's TabIndex assertion does.
+    /// </summary>
+    [Test]
+    public void Rows_ForAnItem_HaveNoTabIndex()
+    {
+        var file = Read(MenuStripForm, "F.blform");
+        var grid = new FormPropertyGridViewModel();
+        grid.Load(file);
+        grid.SelectedControl = file.Model.FindById("mnuFile");
+
+        Assert.That(grid.Rows.Select(r => r.Name), Does.Not.Contain("TabIndex"), "an item has no tab order");
+    }
+
+    // ==================================================================
     // Rows come from the catalog, not from the document
     // ==================================================================
 
@@ -576,6 +636,11 @@ public class FormPropertyGridTests
     /// The grouping the panel draws its headers from. Pinned because the headers are rendered by
     /// the FIRST row of each category — if the order interleaves, the same header appears twice and
     /// the toolbox reads as though there are four groups.
+    ///
+    /// <para>⛔ Task 24, commit 24c, Task 18: updated FIRST, ahead of the implementation — this is
+    /// the pin that goes red and drives it. A fourth category, "Menus &amp; Toolbars" (the three
+    /// strips), is ranked between Containers and Components, the way VS's own toolbox tab orders
+    /// them.</para>
     /// </summary>
     [Test]
     public void TheToolbox_GroupsContainersAfterCommonControls()
@@ -587,10 +652,12 @@ public class FormPropertyGridTests
 
         Assert.Multiple(() =>
         {
-            // Task 25 added the third category, last, as VS's tab orders them.
-            Assert.That(categories, Is.EqualTo(categories.OrderBy(c => c == "Components" ? 2 : c == "Containers" ? 1 : 0)),
+            // Task 25 added the third category; Task 24 (commit 24c) adds a fourth, ranked before
+            // Components and after Containers.
+            Assert.That(categories, Is.EqualTo(categories.OrderBy(c =>
+                    c == "Components" ? 3 : c == "Menus & Toolbars" ? 2 : c == "Containers" ? 1 : 0)),
                 "categories interleave, so a header would be drawn more than once");
-            Assert.That(starts, Is.EqualTo(new[] { "Common Controls", "Containers", "Components" }),
+            Assert.That(starts, Is.EqualTo(new[] { "Common Controls", "Containers", "Menus & Toolbars", "Components" }),
                 "exactly one header per category, in that order");
             Assert.That(toolbox.Items.Select(i => i.Glyph).Distinct().Count(),
                 Is.EqualTo(toolbox.Items.Count),

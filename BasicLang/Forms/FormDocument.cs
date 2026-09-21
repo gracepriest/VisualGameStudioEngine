@@ -212,11 +212,23 @@ public sealed class FormDocument
         return true;
     }
 
-    /// <summary>Assigns <see cref="FormControl.TabIndex"/> in document order, starting at 0.</summary>
+    /// <summary>
+    /// Assigns <see cref="FormControl.TabIndex"/> in document order, starting at 0.
+    ///
+    /// <para>⛔ Only POSITIONED controls are numbered (Task 24). Strips and their items live inside
+    /// <see cref="AllControls"/> — they are in the visual tree, unlike the tray, which is excluded a
+    /// list at a time — so the exclusion here is per ROW. Numbering them would both give a MenuStrip
+    /// a tab order it cannot have and push the one real control in the document from index 0 to
+    /// index 7.</para>
+    ///
+    /// <para>⛔ <c>is null or FormPlace.Positioned</c>, never <c>== FormPlace.Positioned</c>. A
+    /// control whose kind is not in the catalog has a null <c>Definition</c> and IS positioned;
+    /// the equality answers false for it and would silently drop it out of the tab order.</para>
+    /// </summary>
     public void RenumberTabIndexes()
     {
         var index = 0;
-        foreach (var control in AllControls())
+        foreach (var control in AllControls().Where(c => c.Definition?.Place is null or FormPlace.Positioned))
         {
             control.TabIndex = index++;
         }
@@ -343,30 +355,36 @@ public static class FormClipboard
     {
         var element = new XElement(control.Kind, new XAttribute("Id", control.Id));
 
-        // A component (Task 25) has no tab order; writing one would give the paste a TabIndex the
-        // reader would then treat as an unknown attribute.
-        if (control.Definition?.IsComponent != true)
+        // ⛔ The row's SHAPE (Task 24), mirroring FormDocumentWriter.ControlElement — never the old
+        // IsComponent bool, which is TRAY-ONLY. Under that bool a Docked strip took the positioned
+        // path on BOTH sides of the clipboard: the fragment carried whatever stale TabIndex the model
+        // held, and the paste came back with a PixelGeometry built out of its own Dock (one of
+        // ReadGeometry's six trigger attributes) while Dock itself — structural, so skipped by the
+        // property loop — never reached Properties at all.
+        var place = control.Definition?.Place ?? FormPlace.Positioned;
+
+        if (place == FormPlace.Positioned)
         {
             element.SetAttributeValue("TabIndex", control.TabIndex);
-        }
 
-        switch (control.Geometry)
-        {
-            case PixelGeometry pixel:
-                element.SetAttributeValue("X", pixel.X);
-                element.SetAttributeValue("Y", pixel.Y);
-                element.SetAttributeValue("Width", pixel.Width);
-                element.SetAttributeValue("Height", pixel.Height);
-                element.SetAttributeValue("Anchor", pixel.Anchor);
-                element.SetAttributeValue("Dock", pixel.Dock);
-                break;
+            switch (control.Geometry)
+            {
+                case PixelGeometry pixel:
+                    element.SetAttributeValue("X", pixel.X);
+                    element.SetAttributeValue("Y", pixel.Y);
+                    element.SetAttributeValue("Width", pixel.Width);
+                    element.SetAttributeValue("Height", pixel.Height);
+                    element.SetAttributeValue("Anchor", pixel.Anchor);
+                    element.SetAttributeValue("Dock", pixel.Dock);
+                    break;
 
-            case GridGeometry grid:
-                element.SetAttributeValue("Col", grid.Col);
-                element.SetAttributeValue("Row", grid.Row);
-                if (grid.ColSpan != 1) element.SetAttributeValue("ColSpan", grid.ColSpan);
-                if (grid.RowSpan != 1) element.SetAttributeValue("RowSpan", grid.RowSpan);
-                break;
+                case GridGeometry grid:
+                    element.SetAttributeValue("Col", grid.Col);
+                    element.SetAttributeValue("Row", grid.Row);
+                    if (grid.ColSpan != 1) element.SetAttributeValue("ColSpan", grid.ColSpan);
+                    if (grid.RowSpan != 1) element.SetAttributeValue("RowSpan", grid.RowSpan);
+                    break;
+            }
         }
 
         foreach (var (name, value) in control.Properties)
@@ -395,9 +413,13 @@ public static class FormClipboard
             element.Add(new XElement(unknown));
         }
 
-        foreach (var child in control.Children)
+        // A tray component cannot nest; a strip and an item both do — their children are items.
+        if (place != FormPlace.Tray)
         {
-            element.Add(ToElement(child));
+            foreach (var child in control.Children)
+            {
+                element.Add(ToElement(child));
+            }
         }
 
         return element;
@@ -420,25 +442,31 @@ public static class FormClipboard
             return null;
         }
 
-        // A component (Task 25) takes no geometry and no tab index from a fragment, exactly as the
-        // document reader gives it none: a paste must not be the one path that positions a Timer.
-        var isComponent = definition.IsComponent;
+        // ⛔ The row's SHAPE (Task 24), the exact branch FormDocumentReader.ReadControl takes — only a
+        // POSITIONED control takes geometry and a tab index from a fragment, and only a Positioned
+        // control has a structural vocabulary to skip. A paste must not be the one path that
+        // positions a Timer, nor the one that turns a MenuStrip's Dock into pixels.
+        var place = definition.Place;
 
         var control = new FormControl
         {
             Kind = definition.Kind,
             Id = (string?)element.Attribute("Id") ?? "",
-            TabIndex = isComponent ? 0 : IntAttribute(element, "TabIndex") ?? 0
+            TabIndex = place == FormPlace.Positioned ? IntAttribute(element, "TabIndex") ?? 0 : 0
         };
 
-        control.Geometry = isComponent ? null : ReadGeometry(element, target);
+        control.Geometry = place == FormPlace.Positioned ? ReadGeometry(element, target) : null;
 
         foreach (var attribute in element.Attributes())
         {
             var name = attribute.Name.LocalName;
-            if (isComponent
-                    ? string.Equals(name, "Id", StringComparison.OrdinalIgnoreCase)
-                    : FormControlCatalog.IsStructural(name, target))
+
+            // ⛔ Everything but a Positioned control skips Id ALONE. Dock is in StructuralAttributes,
+            // so while a strip took the structural branch the catalog's own Dock property was skipped
+            // out of this loop and the pasted strip arrived with no Dock at all.
+            if (place == FormPlace.Positioned
+                    ? FormControlCatalog.IsStructural(name, target)
+                    : string.Equals(name, "Id", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
@@ -466,7 +494,7 @@ public static class FormClipboard
                     Path = (string?)child.Attribute("Path")
                 });
             }
-            else if (!isComponent && FormControlCatalog.Find(child.Name.LocalName) != null)
+            else if (place != FormPlace.Tray && FormControlCatalog.Find(child.Name.LocalName) != null)
             {
                 var nested = FromElement(child, target);
                 if (nested != null)

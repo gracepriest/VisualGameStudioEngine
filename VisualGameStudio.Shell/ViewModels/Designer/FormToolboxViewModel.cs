@@ -13,7 +13,10 @@ namespace VisualGameStudio.Shell.ViewModels.Designer;
 /// the same way the canvas drawing is — first letters collide (Label/ListBox, Panel/PictureBox,
 /// CheckBox/ComboBox) and would put the same mark beside different controls.
 /// </param>
-/// <param name="Category">"Common Controls" or "Containers", as VS groups them.</param>
+/// <param name="Category">
+/// "Common Controls", "Containers", "Menus &amp; Toolbars" or "Components", as VS groups them — in
+/// that order, which <c>Rebuild</c>'s sort and this string have to agree on.
+/// </param>
 /// <param name="StartsCategory">
 /// True on the FIRST row of each category, which is how the single flat list draws group headers.
 /// ⛔ One ListBox, deliberately: the toolbox drag is wired to <c>ToolboxList</c> by name, and
@@ -55,9 +58,18 @@ public partial class FormToolboxViewModel : ObservableObject
         // dragged onto the canvas — it has no place of its own to be dropped at. Filtered HERE, in
         // commit 24b, so the rule is in force before the first item row exists: today this excludes
         // nothing, and the two membership pins say the same thing from the other side.
+        // ⚠ Task 24 (commit 24c) adds the fourth rank: a DOCKED strip is neither a common control nor
+        // a container, and VS gives it its own tab. Ranked on Place rather than on the kind's name,
+        // so a strip row added later lands in the group without a second list to update.
         var ordered = FormControlCatalog.For(Target)
             .Where(c => c.Place != FormPlace.Item)
-            .OrderBy(c => c.IsComponent ? 2 : c.IsContainer ? 1 : 0)
+            .OrderBy(c => c.Place switch
+            {
+                FormPlace.Tray => 3,
+                FormPlace.Docked => 2,
+                _ when c.IsContainer => 1,
+                _ => 0
+            })
             .ThenBy(c => c.Kind, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
@@ -77,7 +89,11 @@ public partial class FormToolboxViewModel : ObservableObject
                         ? $"<{control.HtmlTag} type=\"{control.HtmlInputType}\">"
                         : $"<{control.HtmlTag}>";
 
+            // ⚠ The SAME rank the ordering above applies, said in words. Two spellings of one grouping
+            // is how a category header ends up drawn twice: StartsCategory fires on every change of
+            // this string, so a category that disagrees with the sort interleaves.
             var category = control.IsComponent ? "Components"
+                : control.Place == FormPlace.Docked ? "Menus & Toolbars"
                 : control.IsContainer ? "Containers"
                 : "Common Controls";
 

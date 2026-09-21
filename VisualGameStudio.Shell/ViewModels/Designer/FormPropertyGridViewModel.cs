@@ -173,10 +173,18 @@ public partial class FormPropertyGridViewModel : ObservableObject
                 break;
         }
 
-        // A component (Task 25) has no tab order. Its geometry rows were already absent — the switch
-        // above has no arm for a null Geometry — but TabIndex was unconditional, and a Timer with a
-        // TabIndex row would write a number the emitter cannot use.
-        if (control.Definition?.IsComponent != true)
+        // Only a POSITIONED control has a tab order, and this is the same filter
+        // FormDocument.RenumberTabIndexes and FormPlacement.NextTabIndex apply. A component (Tray), a
+        // strip (Docked) and a menu item (Item) each have none: geometry rows were already absent for
+        // all three — the switch above has no arm for a null Geometry — but TabIndex was gated only on
+        // Tray, so a MenuStrip and a ToolStripMenuItem still offered a row that writes a number the
+        // emitter cannot use and the writer will not emit.
+        //
+        // ⛔ `is null or FormPlace.Positioned`, never `== FormPlace.Positioned`: a control whose kind
+        // is not in the catalog has a NULL Definition and IS positioned, and the equality answers
+        // false for it — silently taking the TabIndex row away from exactly the control that most
+        // needs one.
+        if (control.Definition?.Place is null or FormPlace.Positioned)
         {
             Rows.Add(IntRow(
                 "TabIndex", () => control.TabIndex, v => control.TabIndex = Math.Max(0, v), Changed));

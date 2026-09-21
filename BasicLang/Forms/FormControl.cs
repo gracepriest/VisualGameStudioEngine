@@ -92,6 +92,47 @@ public sealed class FormControl
     public FormControlDef? Definition => FormControlCatalog.Find(Kind);
 
     /// <summary>
+    /// ⛔⛔ <b>THE one answer to "which edge is this strip docked to".</b> Every consumer asks it
+    /// here — the web emitter (<c>FormAssetEmitter.Html</c>, which puts a Bottom strip's
+    /// <c>&lt;footer&gt;</c> after the form div) and the designer canvas
+    /// (<c>FormCanvasTransform.Bands</c>, which draws its band at the bottom of the surface).
+    ///
+    /// <para>⛔ Those two were written as a MIRRORED PAIR and consolidated here the moment the
+    /// second one was needed. Two copies of this lookup is not a style problem: they read ONE
+    /// document, so a drifted copy makes the designer draw the status band on one edge while the
+    /// page puts the footer on the other, with nothing on screen looking wrong and nothing failing
+    /// anywhere. The repo already carries that scar twice — <c>FormAssetEmitter.Tracks</c> ↔
+    /// <c>FormGridLayout.ParseTracks</c>, and the four private copies of "how big is the form"
+    /// that became <c>FormCanvasTransform.SurfaceSize</c>.</para>
+    ///
+    /// <para>⚠ This is a <see cref="FormPlace.Docked"/> row's <c>Dock</c> PROPERTY — not
+    /// <c>PixelGeometry.Dock</c>, which is a positioned control's DockStyle and a different
+    /// question entirely.</para>
+    /// </summary>
+    public bool IsDockedToBottom =>
+        Definition?.Place == FormPlace.Docked &&
+        string.Equals(DockEdge, "Bottom", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The resolved edge: the DOCUMENT's own value first, then the catalog row's default, then Top.
+    ///
+    /// <para>⚠ The row default is not a nicety. A hand-written <c>.blform</c>/<c>.blwebform</c> need
+    /// not carry the attribute — the designer writes it on every save, but the file is the user's —
+    /// and reading only the property would silently put a hand-written StatusStrip at the TOP.</para>
+    ///
+    /// <para>⚠ The empty-string guard is REACHABLE, not defensive padding: <c>Dock=""</c> is legal
+    /// XML, and <c>FormDocumentReader</c> stores an attribute's value into
+    /// <see cref="Properties"/> verbatim BEFORE it asks whether the catalog accepts it (the D9
+    /// Degraded tier keeps a bad value so it round-trips). Without the guard, <c>""</c> is simply
+    /// "not Bottom", so a StatusStrip written <c>Dock=""</c> docks to the TOP instead of falling
+    /// back to its row's own Bottom.</para>
+    /// </summary>
+    private string DockEdge =>
+        Properties.TryGetValue("Dock", out var dock) && !string.IsNullOrEmpty(dock)
+            ? dock
+            : Definition?.Property("Dock")?.Default ?? "Top";
+
+    /// <summary>
     /// Every control in this subtree, parents before children. The order the markup emitter and
     /// the region writer both walk in, so a container's declaration precedes its children's.
     /// </summary>

@@ -312,6 +312,36 @@ public class FormDocumentTests
         Assert.That(document.Controls.Select(c => c.TabIndex), Is.EqualTo(new[] { 0, 1, 2 }));
     }
 
+    /// <summary>
+    /// Task 24c, Task 15 Step 1 Part 2 — a mutation the Task 14 implementer measured surviving the
+    /// whole suite: <c>RenumberTabIndexes</c>'s filter is
+    /// <c>Definition?.Place is null or FormPlace.Positioned</c>, deliberately NOT
+    /// <c>Definition?.Place == FormPlace.Positioned</c>. Every fixture control up to now has a
+    /// catalog row, so the null arm never ran and the equality mutant went undetected. A control
+    /// whose <see cref="FormControl.Kind"/> the catalog does not know has a null
+    /// <see cref="FormControl.Definition"/> and IS positioned — the equality spelling answers false
+    /// for it and would silently drop it out of the tab order.
+    /// </summary>
+    [Test]
+    public void RenumberTabIndexes_IncludesAControlWithNoCatalogRow()
+    {
+        var document = BuildLoginForm(FormTarget.Web);   // lblUser, txtUser, btnLogin — all catalog kinds
+        var mystery = new FormControl { Kind = "UnknownWidgetKind", Id = "mystery1" };
+        document.Controls.Insert(1, mystery);            // lblUser, mystery1, txtUser, btnLogin
+
+        foreach (var control in document.Controls)
+        {
+            control.TabIndex = 99;
+        }
+
+        Assert.That(mystery.Definition, Is.Null, "fixture premise: an unknown Kind has no catalog row");
+
+        document.RenumberTabIndexes();
+
+        Assert.That(document.Controls.Select(c => c.TabIndex), Is.EqualTo(new[] { 0, 1, 2, 3 }),
+            "mystery1 (no catalog row) must be numbered in its document position, not skipped");
+    }
+
     [Test]
     public void Document_FindById_IsCaseSensitive()
     {

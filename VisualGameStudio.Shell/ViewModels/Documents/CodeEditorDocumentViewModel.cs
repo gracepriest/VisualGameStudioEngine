@@ -591,6 +591,17 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
             return;
         }
 
+        // ⛔ The ITEM check comes FIRST, and says something different. The refusal below — "has a
+        // position; drop it on the form" — is true of a Button and FALSE of a ToolStripMenuItem,
+        // which has no position anywhere: it is created from its host's Type Here slot (spec §6).
+        // Sending the user to the form with it would be advice that cannot be followed.
+        if (BasicLang.Forms.FormControlCatalog.Find(kind) is { Place: BasicLang.Forms.FormPlace.Item } item)
+        {
+            ReportPlacementRefusal(
+                $"'{item.Kind}' is created from its menu's Type Here slot, not dropped.");
+            return;
+        }
+
         if (BasicLang.Forms.FormControlCatalog.Find(kind) is not { IsComponent: true })
         {
             ReportPlacementRefusal($"'{kind}' has a position; drop it on the form, not the tray.");

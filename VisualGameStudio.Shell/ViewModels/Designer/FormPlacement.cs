@@ -61,6 +61,41 @@ public static class FormPlacement
             return new FormPlacementResult(component, null);
         }
 
+        // ⛔ An ITEM (spec §1, Place == Item) has no place of its own ANYWHERE — not a pixel, not a
+        // cell, not the tray. It is created from its host's "Type Here" slot (§6) through
+        // <see cref="PlaceItem"/>. Refused BEFORE the containment walk below, which would otherwise
+        // nest it in whatever Panel the pointer happened to be over and give it geometry and a tab
+        // order it cannot have.
+        if (definition.Place == FormPlace.Item)
+        {
+            return new FormPlacementResult(
+                null, $"'{definition.Kind}' is created from its menu's Type Here slot, not dropped.");
+        }
+
+        // ⛔ A DOCKED strip (spec §1) takes the row's own Dock and nothing else: no geometry, no tab
+        // order, and TOP-LEVEL regardless of the point. Before the container walk for the same reason
+        // the Item arm is — a strip dropped over a Panel would land in `panel.Children`, where nothing
+        // emits it as chrome and the canvas's band layout never looks.
+        //
+        // ⚠ Both targets. A web page's strip is chrome too (Task 16's <nav>/<footer>), so this
+        // deliberately precedes the .blwebform branch below rather than sitting inside the WinForms
+        // half: a cell would describe a position a page's chrome does not have.
+        if (definition.Place == FormPlace.Docked)
+        {
+            var strip = new FormControl { Kind = definition.Kind, Id = NextId(document, definition.Kind) };
+
+            // The row's default, never anything derived from the point. StatusStrip docks Bottom and
+            // a MenuStrip Top, and that is a property of the KIND.
+            var dock = definition.Property("Dock");
+            if (dock?.Default != null)
+            {
+                strip.Properties["Dock"] = dock.Default;
+            }
+
+            document.Controls.Add(strip);
+            return new FormPlacementResult(strip, null);
+        }
+
         // ⛔ D3. A .blwebform positions controls by CELL, not by pixel, so the web path produces a
         // GridGeometry from the cell the pointer is in rather than an X/Y.
         if (document.Target != FormTarget.WinForms)
@@ -166,6 +201,85 @@ public static class FormPlacement
     }
 
     /// <summary>
+    /// "Type Here" (spec §6): appends an item of <paramref name="kind"/> to <paramref name="host"/>,
+    /// or refuses. The one entry point for creating an item — <see cref="Place"/> refuses a dropped
+    /// one by name, because an item has no place of its own on the canvas.
+    ///
+    /// <para>⛔ The host's own <see cref="FormItemRule"/> decides what it accepts, never the shape of
+    /// the kind's name: a StatusStrip holds only a ToolStripStatusLabel, and a separator dropped into
+    /// one has to be refused rather than emitted into a verb that cannot take it.</para>
+    /// </summary>
+    public static FormPlacementResult PlaceItem(
+        FormDocument document, FormControl host, string kind, string text)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(host);
+
+        var rule = host.Definition?.Items;
+        var definition = FormControlCatalog.Find(kind);
+        if (rule == null || definition == null || !rule.Accepts(definition.Kind))
+        {
+            return new FormPlacementResult(
+                null,
+                $"'{host.Id}' ({host.Kind}) holds " +
+                $"{string.Join(", ", rule?.Kinds ?? Array.Empty<string>())}, not a {kind}.");
+        }
+
+        var item = new FormControl { Kind = definition.Kind, Id = ItemId(document, definition, text) };
+
+        // ⛔ Ask the catalog, the same rule Place uses. A ToolStripSeparator has no Text row at all,
+        // so the first half already answers no; the explicit kind check says WHY out loud, because a
+        // separator's caption is the marker "-" the user typed, never something to store.
+        if (definition.Property("Text") != null && definition.Kind != "ToolStripSeparator")
+        {
+            item.Properties["Text"] = text;
+        }
+
+        // Appended — last in the list is last on the bar, and the host's verb emits in document order.
+        host.Children.Add(item);
+        return new FormPlacementResult(item, null);
+    }
+
+    /// <summary>
+    /// VS's own id: the caption camel-cased and sanitised plus the kind (<c>openToolStripMenuItem</c>);
+    /// <c>-</c> → <c>toolStripSeparator1</c>; an unusable caption (empty, leading digit) →
+    /// <c>toolStripMenuItem1</c>.
+    ///
+    /// <para>⚠ PUBLIC and on this class because the id rule and the placement that mints it are one
+    /// answer — a second spelling of "what is this item called" would let the designer name an item
+    /// one thing and a later consumer another.</para>
+    /// </summary>
+    public static string ItemId(FormDocument document, FormControlDef definition, string text)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(definition);
+
+        var kindPart = char.ToLowerInvariant(definition.Kind[0]) + definition.Kind[1..];
+
+        // ⛔ `&&` is a LITERAL ampersand in a WinForms caption and a lone `&` is the accelerator mark:
+        // ONE regex, never String.Replace with an empty pattern (which throws), and never two Replace
+        // calls (stripping "&" first turns "&&" into "" rather than "&"). This is the same rule,
+        // spelt the same way, as FormAssetEmitter's accelerator stripping — change them together.
+        var plain = System.Text.RegularExpressions.Regex.Replace(text ?? "", "&(&?)", "$1");
+        var words = new string(plain.Where(c => char.IsLetterOrDigit(c) || c == ' ').ToArray())
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var caption = string.Concat(words.Select((w, i) =>
+            i == 0 ? char.ToLowerInvariant(w[0]) + w[1..] : char.ToUpperInvariant(w[0]) + w[1..]));
+
+        var usable = caption.Length > 0 && char.IsLetter(caption[0]) &&
+                     definition.Kind != "ToolStripSeparator";
+        Func<string, bool> taken = id => document.FindById(id) != null;
+
+        // ⚠ MakeUniqueId returns its argument UNCHANGED when free (FormDocument.cs:153-158), so the
+        // FALLBACK is seeded with the "1" the way NextId seeds `kind + "1"` — `toolStripSeparator1`,
+        // not `toolStripSeparator`. The caption stem is NOT seeded: `openToolStripMenuItem` first,
+        // then `openToolStripMenuItem1` once that one is taken.
+        return usable && FormDocument.IsLegalControlId(caption + definition.Kind)
+            ? FormDocument.MakeUniqueId(caption + definition.Kind, taken)
+            : FormDocument.MakeUniqueId(kindPart + "1", taken);
+    }
+
+    /// <summary>
     /// Keeps the whole control on its surface. A control dropped half off the edge is placeable in
     /// a real designer only because you can drag it back; this one cannot be dragged yet.
     /// </summary>
@@ -199,9 +313,25 @@ public static class FormPlacement
     private static string NextId(FormDocument document, string kind) =>
         FormDocument.MakeUniqueId(kind + "1", id => document.FindById(id) != null);
 
+    /// <summary>
+    /// One past the highest tab order already in use.
+    ///
+    /// <para>⛔ POSITIONED rows only, the same filter <see cref="FormDocument.RenumberTabIndexes"/>
+    /// applies (Task 24). Strips and items are inside <c>AllControls()</c> — the tray is excluded a
+    /// list at a time, these are excluded a ROW at a time — and they all hold TabIndex 0, so an
+    /// unfiltered Max would still answer 0 and hand a second dropped control the index the first one
+    /// already has.</para>
+    ///
+    /// <para>⛔ <c>is null or FormPlace.Positioned</c>: a control with no catalog row is positioned,
+    /// and <c>== FormPlace.Positioned</c> is false for a null <c>Definition</c>.</para>
+    /// </summary>
     private static int NextTabIndex(FormDocument document)
     {
-        var used = document.AllControls().Select(c => c.TabIndex).ToList();
+        var used = document.AllControls()
+            .Where(c => c.Definition?.Place is null or FormPlace.Positioned)
+            .Select(c => c.TabIndex)
+            .ToList();
+
         return used.Count == 0 ? 0 : used.Max() + 1;
     }
 }

@@ -460,3 +460,82 @@ safe today: `TryRenameToVariable` renames a non-foreign `IRCall`/`IRAwait` initi
 in the current language surface can construct an array-typed one to exercise that path. If either
 gap is fixed, the `IRStore`-skip must be re-derived from scratch — the comment at that location
 says so.
+
+### 25. The catalog's shared property fields have no gate, and half the table no longer uses them — found 2026-09-21
+
+`FormControlCatalog` declares `Text`, `Enabled`, `Visible`, `ForeColor`, `BackColor`, `Checked` and
+`TextAlign` as shared `static readonly FormPropertyDef` fields at `:580-598`, and their own comment
+states why: *"Declared once so a control kind cannot drift from its peers in the spelling or the
+declared type of a property they both carry."* But the four tray rows (commit 24b) and now the seven
+strip/item rows (24c Task 12) all write `new("Visible", FormPropertyType.Bool, "true")` inline
+instead. Eleven of the rows in the table therefore do not participate in the mechanism that exists to
+keep them consistent.
+
+Some of it is unavoidable: `Enabled` is `Targets: WinForms` on six of the seven strip rows, and a
+shared field cannot carry a per-row `Targets`. But `Visible` on all seven, `Text` on three, and
+`ToolStripButton.Enabled` are byte-identical to the shared fields and could use them.
+
+⚠ The real gap is not the inlining, it is that **nothing pins the two against each other**. Change
+the shared `Visible` default from `"true"` to `"false"` today and the eleven inline copies keep the
+old value, every gate stays green, and two controls of the same document disagree about their own
+default visibility. The fix is a pin, not a refactor: for each shared field, assert that every row
+declaring a property of that NAME declares it with the same type, default and allowed values —
+allowing `Targets` alone to differ. That pin belongs in `FormCatalogCoverageTests` and would also
+retire the question of whether a row inlines or shares, because either spelling would satisfy it.
+
+⛔ Do not "fix" this by mechanically replacing the inline copies with the shared fields: that makes
+the table LOOK consistent while leaving the same absence of a check, which is the weaker of the two
+outcomes and the one that stops anyone writing the pin.
+
+### 26. ⛔⛔ A web control's `Event` is emitted VERBATIM into `addEventListener` — any wrong spelling is a green build and a dead handler — found 2026-09-21
+
+`RegionWriter.AppendBinds` (`:825`) writes
+`{control.Id}.addEventListener("{bind.Event}", AddressOf {bind.Handler})` with **no case folding and
+no validation against the catalog's `WebEvent`**. DOM event names are case-SENSITIVE, so a
+`.blwebform` carrying `<Bind Event="Click" Handler="mnuOpen_Click"/>` emits
+`addEventListener("Click", …)`, which never fires for a real click. The document is accepted, the
+build is green, *"Compilation successful!"*, and the handler is simply dead. `Event="onclick"` and a
+plain typo like `Event="clik"` behave identically.
+
+Found by accident: a test author copied `Event="Click"` from the WinForms fixture into a web fixture
+and the emitted page silently did nothing.
+
+⚠ **The asymmetry is the trap.** `RegionWriter.IsEmittedBind` (`:338`) compares the event name
+**case-INSENSITIVELY** (`StringComparison.OrdinalIgnoreCase`), so every check that consults it — the
+BL8028 "not on target" warning, the BL8013 handler-ordering check, the web component's template
+wiring — agrees that `"Click"` IS the default event and is correctly wired. Only the string that
+reaches the browser disagrees. The validation layer and the emission layer have different opinions
+about the same document, and the one that is right is the one that stays quiet.
+
+⚠ BL8028 covers COMPONENTS only (`AppendComponentBindWarnings` iterates `component.Binds`). A
+**control's** binds are never checked against the row's `WebEvent` at all, so there is no diagnostic
+of any kind on this path.
+
+**Fix shape** (not done here — out of scope for commit 24c, and it affects every web control kind,
+not just the new strip rows): make the emitter canonicalise through the catalog rather than trusting
+the document — resolve `bind.Event` case-insensitively against `definition.DefaultEvent(Web)` and the
+row's known events, emit the CATALOG's spelling, and refuse-and-name an event the row does not
+declare. ⛔ Do not "fix" it by lower-casing `bind.Event` at the emitter: a few real DOM events are
+not all-lowercase (`DOMContentLoaded`), so lower-casing trades a silent dead handler for a different
+silent dead handler. The catalog is the source of truth; the shape of the string is not.
+
+### 27. `FormPlacement.ItemId`'s accelerator regex is DEAD — proven by mutation — found 2026-09-21
+
+`ItemId` runs `Regex.Replace(text, "&(&?)", "$1")` to collapse `&&` to one literal `&` and drop a lone
+accelerator `&`, and then immediately filters the result with
+`.Where(c => char.IsLetterOrDigit(c) || c == ' ')`. That filter strips **every** `&` unconditionally,
+so the three variants — the correct regex, a blanket `text.Replace("&", "")`, and no processing at all
+— are provably identical for any caption. Measured: mutating the line to the blanket replace left all
+33 `FormPlacementTests` green, including the `"Save && Close"` id-mint case and the `"&&&"` fallback
+case written specifically to probe it.
+
+⚠ **The same regex in `FormAssetEmitter.AppendControl` IS load-bearing** and is mutation-proven: there
+the text reaches the page, so a blanket replace renders `Save  Close` where `Save &amp; Close` is
+required. The two copies are spelled identically on purpose and cross-referenced in comments, which is
+right — but only one of them can fail, and nothing says so at either site.
+
+**What to do:** not a bug, and not worth churning at the gate it was found in. Either delete the call
+in `ItemId` and state at the character filter that it is what removes accelerators, or keep it and say
+at the site that it is currently redundant *with that filter* and would only matter if the filter ever
+admitted `&`. ⛔ Do not leave it described as load-bearing — a line that cannot fail, commented as
+though it can, is what makes the next reader trust an unfalsifiable guard elsewhere.

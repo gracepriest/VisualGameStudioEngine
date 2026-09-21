@@ -218,7 +218,7 @@ public class FormCanvasTransformTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(laid.Select(x => x.Control.Id), Is.EqualTo(new[] { "pnl", "inner" }));
+            Assert.That(laid.Select(x => x.Control!.Id), Is.EqualTo(new[] { "pnl", "inner" }));
             Assert.That(laid[1].Bounds, Is.EqualTo(new Rect(110, 110, 50, 50)));
         });
     }

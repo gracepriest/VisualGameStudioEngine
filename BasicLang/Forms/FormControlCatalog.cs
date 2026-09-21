@@ -892,6 +892,102 @@ public static class FormControlCatalog
             },
             Schematic: FormSchematic.Worker, WinFormsEvent: "DoWork",
             Place: FormPlace.Tray, WinFormsEventArgs: "System.ComponentModel.DoWorkEventArgs"),
+
+        // ==================================================================
+        // Task 24 — menus, toolbars and status bars. Strips are Docked (no geometry, a Dock
+        // PROPERTY); items live in their host's Children and are added by the HOST row's verb in
+        // document order. ⛔ No Common(). ⛔ Enabled is WinForms-only except on the <input> —
+        // a browser ignores `disabled` on <nav>/<li>/<span> (spec §4).
+        // ==================================================================
+
+        new("MenuStrip", "MenuStrip", "nav", null, false, new List<FormPropertyDef>
+            {
+                new("Dock", FormPropertyType.Enum, "Top", new[] { "Top", "Bottom" }, WinFormsEnumType: "DockStyle"),
+                new("Enabled", FormPropertyType.Bool, "true", Targets: new[] { FormTarget.WinForms }),
+                new("Visible", FormPropertyType.Bool, "true")
+            },
+            DefaultHeight: 24, Schematic: FormSchematic.MenuBar,
+            WinFormsEvent: "ItemClicked", WebEvent: "click", WinFormsEventArgs: "ToolStripItemClickedEventArgs",
+            Place: FormPlace.Docked,
+            Items: new FormItemRule(new[] { "ToolStripMenuItem", "ToolStripSeparator" }, "{parent}.Items.Add({child})"),
+            FormProperty: "MainMenuStrip", HtmlChildrenWrapper: "ul",
+            WebCss: ".vgs-MenuStrip ul{list-style:none;margin:0;padding:0;display:flex;background:#f0f0f0}" +
+                    ".vgs-MenuStrip li{position:relative;padding:4px 10px;cursor:default}" +
+                    ".vgs-MenuStrip li ul{display:none;position:absolute;left:0;top:100%;flex-direction:column;min-width:10em;border:1px solid #ccc;background:#fff}" +
+                    ".vgs-MenuStrip li:hover>ul{display:flex}" +
+                    ".vgs-MenuStrip li ul li ul{left:100%;top:0}"),
+
+        new("ToolStrip", "ToolStrip", "menu", null, false, new List<FormPropertyDef>
+            {
+                new("Dock", FormPropertyType.Enum, "Top", new[] { "Top", "Bottom" }, WinFormsEnumType: "DockStyle"),
+                new("GripStyle", FormPropertyType.Enum, "Hidden", new[] { "Hidden", "Visible" }, WinFormsEnumType: "ToolStripGripStyle", Targets: new[] { FormTarget.WinForms }),
+                new("Enabled", FormPropertyType.Bool, "true", Targets: new[] { FormTarget.WinForms }),
+                new("Visible", FormPropertyType.Bool, "true")
+            },
+            DefaultHeight: 25, Schematic: FormSchematic.ToolBar,
+            WinFormsEvent: "ItemClicked", WebEvent: "click", WinFormsEventArgs: "ToolStripItemClickedEventArgs",
+            Place: FormPlace.Docked,
+            Items: new FormItemRule(new[] { "ToolStripButton", "ToolStripSeparator" }, "{parent}.Items.Add({child})"),
+            HtmlRole: "toolbar",
+            WebCss: ".vgs-ToolStrip{display:flex;gap:4px;margin:0;padding:2px;background:#f0f0f0}"),
+
+        new("StatusStrip", "StatusStrip", "footer", null, false, new List<FormPropertyDef>
+            {
+                new("Dock", FormPropertyType.Enum, "Bottom", new[] { "Top", "Bottom" }, WinFormsEnumType: "DockStyle"),
+                new("SizingGrip", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms }),
+                new("Enabled", FormPropertyType.Bool, "true", Targets: new[] { FormTarget.WinForms }),
+                new("Visible", FormPropertyType.Bool, "true")
+            },
+            DefaultHeight: 22, Schematic: FormSchematic.StatusBar,
+            WinFormsEvent: "ItemClicked", WebEvent: "click", WinFormsEventArgs: "ToolStripItemClickedEventArgs",
+            Place: FormPlace.Docked,
+            Items: new FormItemRule(new[] { "ToolStripStatusLabel" }, "{parent}.Items.Add({child})"),
+            HtmlRole: "status",
+            WebCss: ".vgs-StatusStrip{display:flex;gap:8px;padding:2px 6px;background:#f0f0f0;border-top:1px solid #ccc}"),
+
+        new("ToolStripMenuItem", "ToolStripMenuItem", "li", null, false, new List<FormPropertyDef>
+            {
+                new("Text", FormPropertyType.String),
+                new("Enabled", FormPropertyType.Bool, "true", Targets: new[] { FormTarget.WinForms }),
+                new("Visible", FormPropertyType.Bool, "true"),
+                new("Checked", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms }),
+                new("CheckOnClick", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms }),
+                new("ToolTipText", FormPropertyType.String, HtmlAttribute: "title")
+            },
+            Schematic: FormSchematic.MenuItem, WinFormsEvent: "Click", WebEvent: "click",
+            Place: FormPlace.Item,
+            Items: new FormItemRule(new[] { "ToolStripMenuItem", "ToolStripSeparator" }, "{parent}.DropDownItems.Add({child})"),
+            HtmlChildrenWrapper: "ul"),
+
+        new("ToolStripSeparator", "ToolStripSeparator", "li", null, false, new List<FormPropertyDef>
+            {
+                new("Visible", FormPropertyType.Bool, "true")
+            },
+            Schematic: FormSchematic.Separator, WinFormsEvent: "Click", WebEvent: "click",
+            Place: FormPlace.Item, HtmlRole: "separator"),
+
+        new("ToolStripButton", "ToolStripButton", "input", "button", false, new List<FormPropertyDef>
+            {
+                new("Text", FormPropertyType.String),
+                new("Enabled", FormPropertyType.Bool, "true"),
+                new("Visible", FormPropertyType.Bool, "true"),
+                new("Checked", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms }),
+                new("CheckOnClick", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms }),
+                new("ToolTipText", FormPropertyType.String, HtmlAttribute: "title"),
+                new("DisplayStyle", FormPropertyType.Enum, "Text", new[] { "None", "Text", "Image", "ImageAndText" }, WinFormsEnumType: "ToolStripItemDisplayStyle", Targets: new[] { FormTarget.WinForms })
+            },
+            Schematic: FormSchematic.ToolButton, WinFormsEvent: "Click", WebEvent: "click", Place: FormPlace.Item),
+
+        new("ToolStripStatusLabel", "ToolStripStatusLabel", "span", null, false, new List<FormPropertyDef>
+            {
+                new("Text", FormPropertyType.String),
+                new("Enabled", FormPropertyType.Bool, "true", Targets: new[] { FormTarget.WinForms }),
+                new("Visible", FormPropertyType.Bool, "true"),
+                new("Spring", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms }),
+                new("ToolTipText", FormPropertyType.String, HtmlAttribute: "title")
+            },
+            Schematic: FormSchematic.StatusLabel, WinFormsEvent: "Click", WebEvent: "click",
+            Place: FormPlace.Item),
     };
 
     public static FormControlDef? Find(string kind) =>

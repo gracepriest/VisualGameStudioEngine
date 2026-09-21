@@ -645,3 +645,26 @@ own doc comments) said, each verified against the code and pinned by a test rath
   re-types a LITERAL in place (`IRBuilder.cs:3540-3543`) and emits no cast, while any non-literal
   element, parameter or local alike, carries the `IRCast`. Pinned by
   `CSharp_Emission_CastsAStoredLocal_NotOnlyAParameter`.
+
+Commit 24c (the designer half) adds three more:
+
+- **The layout entry is a FOUR-field record struct, not the 3-tuple §2 describes.**
+  `FormLayoutEntry(FormControl? Control, Rect Bounds, FormLayoutRole Role, FormControl? Host = null)`.
+  §2's own `TypeHereHost` row says two slots can be visible at once, which a 3-tuple cannot attribute
+  — a slot has to name the host it belongs to. `Host` is declared in 24c and used by nothing until
+  24d, deliberately: a positional record struct's `Deconstruct` changes shape when a field is added
+  later, so declaring it once with all four fields is what stops 24d silently breaking 24c's tests.
+  `Role` is `FormLayoutRole { Control, Band, Cell, TypeHere }`; only `Control` and `Band` occur in 24c.
+- **"Which edge does this strip dock to" is ONE answer, on the model, not one per consumer.**
+  `FormControl.IsDockedToBottom` (public) over a private `DockEdge` (document property → row default →
+  `"Top"`). The web emitter's page-chrome split and the canvas's `Bands` both call it. They were
+  written as separate copies one task apart, and two copies would let the designer draw the status
+  band on one edge while the page puts the `<footer>` on the other, **from one document**, with
+  nothing looking wrong — the `SurfaceSize` lesson (§2) arriving a second time. ⚠ The DECISION is
+  exposed rather than the edge string, or both callers would spell
+  `string.Equals(…, "Bottom", OrdinalIgnoreCase)` themselves and drift one level down.
+- ⛔ **A correction to §4's claim that `Dock`'s absence is the only case the row default covers.**
+  `Dock=""` is also reachable: it is legal XML, and the reader stores an attribute value VERBATIM
+  before the `Accepts` check because the D9 Degraded tier keeps a bad value so it round-trips
+  (`FormDocumentReader.cs:508`). Treating `""` as merely "not Bottom" docks a `<StatusStrip Dock=""/>`
+  to the TOP, against its own row's default. `DockEdge` therefore tests for empty, not just null.

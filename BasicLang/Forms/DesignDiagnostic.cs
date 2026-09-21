@@ -67,10 +67,15 @@ public static class DesignCodes
     //   BL8023..BL8026  retarget findings — what could not cross between the two formats (here)
     //   BL8027          retarget: "wired means running" crossed by rule (here)
     //   BL8028, BL8029  region-writer findings for a component the target cannot wire / does not have (here)
-    //   BL8030          free
+    //   BL8030          a strip item outside a host / a non-item in a host / a strip below the
+    //                   top level (here)
     //   BL8031          reserved — the spec and plan both name it for ONE thing: the --check
     //                   collision between a user's own top-level name and the dispatch helper.
     //                   BL8018 below is a different finding and takes a different number.
+    //
+    // The ENUMERATED table above is now exhausted: the next claim starts at BL8032. That is not
+    // the band being full — BL8032..BL8999 are simply unclaimed, and "full" would wrongly send the
+    // next task looking for another band.
     //
     // Nothing in this band lives in BasicLang.Compiler.ErrorCode as a string; the enum registration
     // there is for discoverability only, and adding a member there does not claim a number here.
@@ -237,6 +242,28 @@ public static class DesignCodes
     /// than half-read.
     /// </summary>
     public const string ComponentMisplaced = "BL8020";
+
+    /// <summary>
+    /// A strip or a strip item that is not where its kind can live (Task 24, spec §3). A REFUSAL
+    /// <b>three ways</b>, because all three shapes generate code that does not compile — or a
+    /// document that says something the designer cannot mean:
+    ///
+    /// <list type="bullet">
+    /// <item>an ITEM outside a host that lists its kind — a <c>ToolStripMenuItem</c> under
+    /// <c>&lt;Controls&gt;</c> would be added with <c>Me.Controls.Add</c>, which does not compile
+    /// (a <c>ToolStripItem</c> is not a <c>Control</c>);</item>
+    /// <item>a NON-ITEM under a host — a <c>Button</c> under a <c>MenuStrip</c>, which holds only
+    /// the item kinds its row lists;</item>
+    /// <item>a STRIP below the top level — a <c>MenuStrip</c> under a <c>Panel</c>. A strip docks
+    /// to the FORM, and its <c>Dock</c> property means nothing anywhere else.</item>
+    /// </list>
+    ///
+    /// <para>⛔ Refused rather than warned, for the reason BL8020 is: a document that says two
+    /// different things about where a thing lives is refused rather than half-read. Reading it
+    /// anyway would put the control somewhere the user did not write it and then generate code
+    /// csc rejects, from a designer that reported the document clean.</para>
+    /// </summary>
+    public const string StripMisplaced = "BL8030";
 
     /// <summary>The form document itself is not well-formed XML, or its root/version is not one we know.</summary>
     public const string MalformedDocument = "BL8008";

@@ -130,4 +130,35 @@ public class FormToolboxGlyphTests
         Assert.That(impossible, Is.Empty,
             "the web toolbox offers controls the web cannot emit: " + string.Join(", ", impossible));
     }
+
+    /// <summary>
+    /// Task 24, commit 24c: the three strips get their own toolbox category, "Menus &amp; Toolbars"
+    /// (spec §6), the way Task 25 gave components theirs. An Item kind (a menu item, a separator, a
+    /// toolbar button, a status label) still has no toolbox row of its own — it is created from its
+    /// host's "Type Here" slot, never dragged onto the canvas.
+    ///
+    /// <para>⚠ TAUTOLOGY CHECK: the "no Item kind is offered" half of this pin is already true before
+    /// this commit — <c>FormToolboxViewModel.Rebuild</c> has filtered <c>Place != FormPlace.Item</c>
+    /// since commit 24b, before any Item row existed to filter. It is asserted here anyway, alongside
+    /// the category, because it is the fact the category split must not disturb; it is NOT itself red
+    /// against today's code and proves nothing about the category logic on its own.</para>
+    /// </summary>
+    [Test]
+    public void StripsSitInTheirOwnCategory_MenusAndToolbars()
+    {
+        var items = new FormToolboxViewModel { Target = FormTarget.WinForms }.Items;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(items.Where(i => i.Category == "Menus & Toolbars").Select(i => i.Kind),
+                Is.EquivalentTo(new[] { "MenuStrip", "ToolStrip", "StatusStrip" }));
+            Assert.That(
+                items.Select(i => i.Kind).Intersect(new[]
+                {
+                    "ToolStripMenuItem", "ToolStripSeparator", "ToolStripButton", "ToolStripStatusLabel"
+                }),
+                Is.Empty,
+                "an Item kind has no place of its own — it is never a toolbox row");
+        });
+    }
 }

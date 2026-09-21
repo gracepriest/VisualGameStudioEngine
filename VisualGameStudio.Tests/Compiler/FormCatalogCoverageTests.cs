@@ -37,7 +37,11 @@ public class FormCatalogCoverageTests
         "Panel", "GroupBox", "TabControl", "SplitContainer",
         "FlowLayoutPanel", "TableLayoutPanel",
         // Media
-        "PictureBox"
+        "PictureBox",
+        // Task 24, commit 24c — menus, toolbars and status bars (spec §4). RED until Task 12 Step 3
+        // adds the seven rows.
+        "MenuStrip", "ToolStrip", "StatusStrip",
+        "ToolStripMenuItem", "ToolStripSeparator", "ToolStripButton", "ToolStripStatusLabel"
     };
 
     [Test]
@@ -222,22 +226,25 @@ public class FormCatalogCoverageTests
     // ==================================================================
 
     /// <summary>
-    /// Every row's derived <c>IsComponent</c> must agree with its <c>Place</c>. Today only the four
-    /// tray components (Timer, ToolTip, ErrorProvider, BackgroundWorker) are <c>Tray</c>; nothing
-    /// else has landed a <c>Docked</c> or <c>Item</c> shape yet, so every other row is
+    /// Every row's derived <c>IsComponent</c> must agree with its <c>Place</c>. The four tray
+    /// components (Timer, ToolTip, ErrorProvider, BackgroundWorker) are <c>Tray</c>; the seven
+    /// strip/item rows (Task 24, commit 24c) are <c>Docked</c>/<c>Item</c>; every other row is
     /// <c>Positioned</c>.
     ///
-    /// ⚠ <b>REWRITTEN in Task 12 (commit 24c).</b> Once the seven strip/item rows land, the second
-    /// half of this test changes from "every non-tray row is Positioned" to "every row that is not
-    /// a strip or an item is Positioned" — MenuStrip/ToolStrip/StatusStrip become <c>Docked</c> and
-    /// ToolStripMenuItem/ToolStripSeparator/ToolStripButton/ToolStripStatusLabel become <c>Item</c>,
-    /// and neither shape is <c>Tray</c> or <c>Positioned</c>. Do not leave this 24b wording in place
-    /// past that commit.
+    /// ⚠ <b>FLIPPED in Task 12 (commit 24c), per plan Step 1.</b> Until Task 12 Step 3 adds the
+    /// seven rows, this is RED: no catalog row named below exists, so the "not tray, not strip"
+    /// check has nothing to exclude and — once the rows exist — must find them <c>Docked</c>/<c>Item</c>,
+    /// never <c>Positioned</c>.
     /// </summary>
     [Test]
     public void EveryRow_HasAPlace_AndIsComponentIsDerived()
     {
         var trayKinds = new[] { "Timer", "ToolTip", "ErrorProvider", "BackgroundWorker" };
+        var stripKinds = new[]
+        {
+            "MenuStrip", "ToolStrip", "StatusStrip",
+            "ToolStripMenuItem", "ToolStripSeparator", "ToolStripButton", "ToolStripStatusLabel"
+        };
 
         foreach (var def in FormControlCatalog.All)
         {
@@ -252,27 +259,39 @@ public class FormCatalogCoverageTests
             Assert.That(def!.Place, Is.EqualTo(FormPlace.Tray), $"'{kind}' must be Tray");
         }
 
-        var nonTray = FormControlCatalog.All
-            .Where(d => !trayKinds.Contains(d.Kind, StringComparer.OrdinalIgnoreCase))
-            .ToList();
-        Assert.That(nonTray, Is.Not.Empty);
+        // The seven strip/item rows must exist and must NOT be Positioned (Docked or Item).
+        foreach (var kind in stripKinds)
+        {
+            var def = FormControlCatalog.Find(kind);
+            Assert.That(def, Is.Not.Null, $"'{kind}' is not in the catalog at all");
+            Assert.That(def!.Place, Is.Not.EqualTo(FormPlace.Positioned),
+                $"'{kind}' must be Docked or Item, never Positioned");
+            Assert.That(def.Place, Is.Not.EqualTo(FormPlace.Tray), $"'{kind}' must not be Tray");
+        }
 
-        foreach (var def in nonTray)
+        // Every row whose kind is not one of the seven strip/item kinds is Positioned (the tray
+        // four excepted above, and asserted Tray, not Positioned).
+        var positioned = FormControlCatalog.All
+            .Where(d => !trayKinds.Contains(d.Kind, StringComparer.OrdinalIgnoreCase) &&
+                        !stripKinds.Contains(d.Kind, StringComparer.OrdinalIgnoreCase))
+            .ToList();
+        Assert.That(positioned, Is.Not.Empty);
+
+        foreach (var def in positioned)
         {
             Assert.That(def.Place, Is.EqualTo(FormPlace.Positioned),
-                $"'{def.Kind}': every row but the four tray components is Positioned today " +
-                "(no Docked/Item row exists until commit 24c)");
+                $"'{def.Kind}': every row but the four tray components and the seven strip/item " +
+                "rows is Positioned");
         }
     }
 
     /// <summary>
-    /// The seven strip/item <see cref="FormSchematic"/> values exist before any catalog row uses
-    /// them (commit 24b, spec Decision 12 — the shape lands with NO new row, so nothing can go red
-    /// between the rows landing and the gates learning them).
+    /// The seven strip/item <see cref="FormSchematic"/> values exist (commit 24b, spec Decision 12),
+    /// and each is used by EXACTLY ONE row, which is one of the seven strip/item kinds.
     ///
-    /// ⚠ <b>REWRITTEN in Task 12 (commit 24c).</b> Once the seven rows land, the second assertion
-    /// below is INVERTED, not merely relaxed: from "no row uses any of these seven yet" to "exactly
-    /// the seven new rows use exactly these seven schematics, one each".
+    /// ⚠ <b>FLIPPED in Task 12 (commit 24c), per plan Step 1.</b> INVERTED, not merely relaxed, from
+    /// 24b's "no row uses any of these seven yet" to "exactly the seven new rows use exactly these
+    /// seven schematics, one each". RED until Task 12 Step 3 adds the rows.
     /// </summary>
     [Test]
     public void FormSchematic_HasTheSevenStripValues()
@@ -283,10 +302,182 @@ public class FormCatalogCoverageTests
             FormSchematic.MenuItem, FormSchematic.Separator, FormSchematic.ToolButton,
             FormSchematic.StatusLabel
         };
+        var stripKinds = new[]
+        {
+            "MenuStrip", "ToolStrip", "StatusStrip",
+            "ToolStripMenuItem", "ToolStripSeparator", "ToolStripButton", "ToolStripStatusLabel"
+        };
 
         Assert.That(Enum.GetValues<FormSchematic>(), Is.SupersetOf(stripValues));
 
-        Assert.That(FormControlCatalog.All.Any(d => stripValues.Contains(d.Schematic)), Is.False,
-            "commit 24b adds no new catalog row — nothing should use a strip/item schematic yet");
+        foreach (var schematic in stripValues)
+        {
+            var rows = FormControlCatalog.All.Where(d => d.Schematic == schematic).ToList();
+            Assert.That(rows, Has.Count.EqualTo(1),
+                $"'{schematic}' must be used by exactly one row, found {rows.Count}: " +
+                string.Join(", ", rows.Select(r => r.Kind)));
+            Assert.That(stripKinds, Does.Contain(rows[0].Kind),
+                $"'{schematic}' must belong to one of the seven strip/item kinds, not '{rows[0].Kind}'");
+        }
+    }
+
+    /// <summary>
+    /// Task 24, commit 24c, Task 12 Step 1: the seven strip/item rows have the shape spec §4
+    /// states, before any row exists. RED until Task 12 Step 3 adds them.
+    /// </summary>
+    [Test]
+    public void TheStripRows_HaveTheShapeTheSpecStates()
+    {
+        FormControlDef Row(string kind)
+        {
+            var def = FormControlCatalog.Find(kind);
+            Assert.That(def, Is.Not.Null, $"'{kind}' is not in the catalog at all");
+            return def!;
+        }
+
+        var menuStrip = Row("MenuStrip");
+        var toolStrip = Row("ToolStrip");
+        var statusStrip = Row("StatusStrip");
+        var menuItem = Row("ToolStripMenuItem");
+        var separator = Row("ToolStripSeparator");
+        var toolButton = Row("ToolStripButton");
+        var statusLabel = Row("ToolStripStatusLabel");
+
+        var strips = new[] { menuStrip, toolStrip, statusStrip };
+        var items = new[] { menuItem, separator, toolButton, statusLabel };
+
+        Assert.Multiple(() =>
+        {
+            // MenuStrip/ToolStrip/StatusStrip are Docked, not a container, and host their Items
+            // rule, added through Items.Add.
+            foreach (var strip in strips)
+            {
+                Assert.That(strip.Place, Is.EqualTo(FormPlace.Docked), $"'{strip.Kind}' must be Docked");
+                Assert.That(strip.IsContainer, Is.False, $"'{strip.Kind}' must not be IsContainer");
+                Assert.That(strip.Items, Is.Not.Null, $"'{strip.Kind}' must declare an Items rule");
+                if (strip.Items != null)
+                {
+                    Assert.That(strip.Items.Add, Does.Contain("Items.Add"),
+                        $"'{strip.Kind}' must add its items through Items.Add");
+                }
+            }
+
+            if (menuStrip.Items != null) Assert.That(menuStrip.Items.Kinds[0], Is.EqualTo("ToolStripMenuItem"));
+            if (toolStrip.Items != null) Assert.That(toolStrip.Items.Kinds[0], Is.EqualTo("ToolStripButton"));
+            if (statusStrip.Items != null) Assert.That(statusStrip.Items.Kinds[0], Is.EqualTo("ToolStripStatusLabel"));
+
+            // ToolStripMenuItem is itself a host — its dropdown — via DropDownItems.Add.
+            Assert.That(menuItem.Place, Is.EqualTo(FormPlace.Item), "'ToolStripMenuItem' must be Item");
+            Assert.That(menuItem.Items, Is.Not.Null, "'ToolStripMenuItem' must also host its own dropdown");
+            if (menuItem.Items != null)
+            {
+                Assert.That(menuItem.Items.Add, Does.Contain("DropDownItems.Add"));
+            }
+
+            // The other three item rows are Item with no Items rule of their own.
+            foreach (var item in new[] { separator, toolButton, statusLabel })
+            {
+                Assert.That(item.Place, Is.EqualTo(FormPlace.Item), $"'{item.Kind}' must be Item");
+                Assert.That(item.Items, Is.Null, $"'{item.Kind}' must not be a host");
+            }
+
+            // Every strip and item row exists on both targets.
+            foreach (var def in strips.Concat(items))
+            {
+                Assert.That(def.SupportsTarget(FormTarget.WinForms), Is.True, $"'{def.Kind}' must support WinForms");
+                Assert.That(def.SupportsTarget(FormTarget.Web), Is.True, $"'{def.Kind}' must support Web");
+            }
+
+            // MenuStrip assigns itself to the form's MainMenuStrip.
+            Assert.That(menuStrip.FormProperty, Is.EqualTo("MainMenuStrip"));
+
+            // Children wrap in <ul> on MenuStrip and ToolStripMenuItem.
+            Assert.That(menuStrip.HtmlChildrenWrapper, Is.EqualTo("ul"));
+            Assert.That(menuItem.HtmlChildrenWrapper, Is.EqualTo("ul"));
+
+            // ToolStripButton is an <input type="button">.
+            Assert.That(toolButton.HtmlTag, Is.EqualTo("input"));
+            Assert.That(toolButton.HtmlInputType, Is.EqualTo("button"));
+
+            // ToolTipText is the one property with an honest attribute form, wherever it appears.
+            foreach (var def in new[] { menuItem, toolButton, statusLabel })
+            {
+                var toolTipText = def.Property("ToolTipText");
+                Assert.That(toolTipText, Is.Not.Null, $"'{def.Kind}' must declare ToolTipText");
+                if (toolTipText != null)
+                {
+                    Assert.That(toolTipText.HtmlAttributeName, Is.EqualTo("title"));
+                }
+            }
+
+            // Enabled is WinForms-only on every strip/item row that declares it, EXCEPT
+            // ToolStripButton, whose <input> honours the emitter's ` disabled`.
+            // ToolStripSeparator declares no Enabled at all — spec §4 gives it only Visible — and
+            // that absence is now asserted explicitly rather than silently skipped, so a future row
+            // that grows an Enabled property is pinned in EITHER direction: never asserted for
+            // ToolStripSeparator, always asserted for everything else.
+            foreach (var def in strips.Concat(items))
+            {
+                var enabled = def.Property("Enabled");
+
+                if (def.Kind == "ToolStripSeparator")
+                {
+                    Assert.That(enabled, Is.Null,
+                        "'ToolStripSeparator' must declare no Enabled — spec §4 gives it only Visible");
+                    continue;
+                }
+
+                Assert.That(enabled, Is.Not.Null, $"'{def.Kind}' must declare Enabled");
+                if (enabled == null)
+                {
+                    continue;
+                }
+
+                if (def.Kind == "ToolStripButton")
+                {
+                    Assert.That(enabled.AppliesTo(FormTarget.Web), Is.True,
+                        "ToolStripButton's <input> honours 'disabled' — Enabled must be shared");
+                }
+                else
+                {
+                    Assert.That(enabled.AppliesTo(FormTarget.WinForms), Is.True, $"'{def.Kind}'.Enabled must apply to WinForms");
+                    Assert.That(enabled.AppliesTo(FormTarget.Web), Is.False, $"'{def.Kind}'.Enabled must be WinForms-only");
+                }
+            }
+
+            // Checked/CheckOnClick/DisplayStyle/Spring/GripStyle/SizingGrip are WinForms-only,
+            // wherever spec §4 places them.
+            void AssertWinFormsOnly(FormControlDef def, string propertyName)
+            {
+                var prop = def.Property(propertyName);
+                Assert.That(prop, Is.Not.Null, $"'{def.Kind}' must declare {propertyName}");
+                if (prop != null)
+                {
+                    Assert.That(prop.AppliesTo(FormTarget.WinForms), Is.True, $"'{def.Kind}'.{propertyName} must apply to WinForms");
+                    Assert.That(prop.AppliesTo(FormTarget.Web), Is.False, $"'{def.Kind}'.{propertyName} must be WinForms-only");
+                }
+            }
+
+            AssertWinFormsOnly(menuItem, "Checked");
+            AssertWinFormsOnly(menuItem, "CheckOnClick");
+            AssertWinFormsOnly(toolButton, "Checked");
+            AssertWinFormsOnly(toolButton, "CheckOnClick");
+            AssertWinFormsOnly(toolButton, "DisplayStyle");
+            AssertWinFormsOnly(statusLabel, "Spring");
+            AssertWinFormsOnly(toolStrip, "GripStyle");
+            AssertWinFormsOnly(statusStrip, "SizingGrip");
+
+            // Every item kind's canonical host — the first Docked row whose Items rule accepts it,
+            // exactly FormCatalogShapes.Canonical's own selection — is Docked.
+            foreach (var item in items)
+            {
+                var host = FormControlCatalog.All.FirstOrDefault(
+                    d => d.Place == FormPlace.Docked && d.Items?.Accepts(item.Kind) == true);
+                Assert.That(host, Is.Not.Null, $"'{item.Kind}' must have a Docked canonical host that accepts it");
+            }
+        });
+
+        // The nesting invariant's refusal code (spec §3), added by Task 12 Step 3 alongside the rows.
+        Assert.That(DesignCodes.StripMisplaced, Is.EqualTo("BL8030"));
     }
 }

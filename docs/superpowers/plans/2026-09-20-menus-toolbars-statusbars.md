@@ -1025,6 +1025,31 @@ comment claimed it caught exactly that. Rewritten to assert `CaptionOrigin is no
 
 - [ ] **Step 4: Run** `FormCatalogCoverageTests`, `FormToolboxGlyphTests`, `FormPropertyGridTests` (`TheToolbox_GroupsContainersAfterCommonControls` at `:586-589` stays GREEN here — a Docked row falls to "Common Controls" until Task 18 gives it the new category, and Task 18 Step 3 updates that pin first), `FormSchematicPinTests`. ⛔ Do NOT run `FormCanvasRenderTests` yet: `Layout` skips null geometry, so the three strips hash identical to the empty form until Task 17's bands land — the gate IS red between Task 12 and Task 17 by construction. Run it after Task 17.
 
+⚠⚠ **AS BUILT (Task 12, 2026-09-21) — the rows went in exactly as written above; four things the
+build taught that the next reader needs:**
+
+1. **Step 2's red was only a COMPILE error, which proves nothing about the assertions.** The single
+   missing symbol (`DesignCodes.StripMisplaced`) failed the whole test assembly, so not one of the
+   new row-shape assertions ever executed — a tautological pin would have been invisible and the
+   later green would have been unreadable. Step 3 was therefore split: the BL8030 constant and the
+   band comment landed ALONE first, the fixture was re-run, and it produced a genuine red naming the
+   seven missing rows (`'MenuStrip' is not in the catalog at all`, `'MenuBar' must be used by exactly
+   one row, found 0`). Only then did the rows go in. **Do this for every task in this plan whose red
+   is a compile error.**
+2. **`TheStripRows_HaveTheShapeTheSpecStates` had a silent skip** — `if (enabled == null) continue;`
+   meant nothing pinned that `ToolStripSeparator` has NO `Enabled` (spec §4 gives it only `Visible`),
+   so a later row adding one as WinForms-only would have passed. Replaced with a two-way assertion:
+   the separator declares none, every other strip/item row declares one.
+3. **Eleven rows now bypass the shared `FormPropertyDef` fields** (`Text`/`Enabled`/`Visible` at
+   `:580-582`) that exist expressly to stop rows drifting, and NOTHING pins the inline copies against
+   them. Not changed here — the fix is a pin, not a refactor, and swapping the copies for the fields
+   would make the table look consistent while leaving the same missing check. Filed as
+   `docs/form-designer-followups.md` 25.
+4. **`FindByHtmlTag("li")` is now ambiguous** (ToolStripMenuItem and ToolStripSeparator both emit
+   `li`) and returns null. That is the documented rule and its one caller — `DomDialect.cs:160`,
+   *"Reported rather than guessed"* — already sets `CatalogKind = null` on ambiguity, exactly as it
+   did for `input` before this change. No action.
+
 ### Task 13: The reader — the `Place` branch and BL8030
 
 **Files:** `Serialization/FormDocumentReader.cs` (`ReadControl` `:308-490`, the `case "Components"` caller); Create `VisualGameStudio.Tests/Compiler/FormStripDocumentTests.cs`.
@@ -1043,6 +1068,36 @@ comment claimed it caught exactly that. Rewritten to assert `CaptionOrigin is no
   - Children: recurse for `place != FormPlace.Tray`, passing `definition` as `parentDefinition`.
 - [ ] **Step 4: Run** the fixture + `FormComponentDocumentTests` + `FormDocumentRoundTripTests` + `BlFormRoundTripTests` → green.
 
+⚠⚠ **AS BUILT (Task 13, 2026-09-21) — one correction to the code above, and one measured fact that
+justifies this whole commit being indivisible:**
+
+1. **The parameter is `FormControl? parent`, not `FormControlDef? parentDefinition`.** Three of the
+   four refusal messages name the parent's `Id` *as well as* its row, and passing
+   `(parentDefinition, parentId)` would be two parameters carrying two halves of one parent that can
+   disagree. `FormControl.Definition` is already a catalog lookup, so both are derived at the top.
+2. **⛔ The plan's refusal condition above admits a shape its two-arm message does not cover, and the
+   literal code would have CRASHED on it.** `<Panel><ToolStripMenuItem/></Panel>`: `parentDefinition`
+   is non-null but `Items` is null, so the "holds only {kinds}" wording has no list and `Items!.Kinds`
+   NREs *inside the reader* — turning a precise refusal into a crash on a document a user can easily
+   hand-write. A third arm was added in the same voice ("…which lives inside a MenuStrip or a
+   ToolStripMenuItem — it sits under 'pnl', a Panel, which is not one"), and its test was added in
+   Task 14's round rather than left uncovered.
+3. **`HostsOf(kind)` derives the host list from `FormControlCatalog.All`** instead of spelling
+   "a MenuStrip or a menu item" into the message, so a row added later changes the sentence with it.
+4. **⛔⛔ Task 12 ALONE puts a silent DATA-LOSS bug in the tree, which is the real reason 24c cannot
+   be split into per-task commits.** With the `Dock` catalog property present but the reader still
+   classifying `Dock` as a structural attribute, `Dock` never reaches `Properties`, and
+   `FormDocumentWriter.ApplyControl`'s "a catalog property the model dropped" sweep then DELETES
+   `Dock="Top"` from every strip **on the first save**. Measured, not theorised: the round-trip pin
+   failed at 852 bytes against 880, and the diff is exactly the stripped attribute. Confirmed fixed
+   by this reader-only change; the writer did NOT need pulling forward.
+5. ⚠ **The round trip is green here by accident, not by construction.** The writer still passes
+   `isComponent: false` for strips and items, so `SetIntAttributeIfChanged(element, "TabIndex", 0, 0)`
+   *does* run on them — harmless only because that helper writes nothing when the attribute is absent
+   and the value equals the default (`FormDocumentWriter.cs:655-667`). Task 14's `place == Positioned`
+   guard is what makes it true by construction, and Task 14's pins must be built on a NON-default
+   TabIndex or they pin nothing.
+
 ### Task 14: The writer and the clipboard mirror
 
 **Files:** `Serialization/FormDocumentWriter.cs` (`ApplyControl` `:388-454`, `ControlElement` `:530-600`, `ApplyControlList`, `Create`), `FormDocument.cs` (`FormClipboard.ToElement` `:342-404`, `FromElement` `:415-490`, `RenumberTabIndexes` `:216-223`), `FormPlacement.NextTabIndex` (`:202-206`); Tests: `FormStripDocumentTests`, `FormDesignerCommandTests`.
@@ -1051,6 +1106,34 @@ comment claimed it caught exactly that. Rewritten to assert `CaptionOrigin is no
 - [ ] **Step 2: Run** → red.
 - [ ] **Step 3: Implement:** replace every `isComponent` bool in the writer with a `FormPlace place = control.Definition?.Place ?? FormPlace.Positioned` derived per control (the `Components` list still passes `isComponent: true` for the reader-parity check — keep the parameter but compute `place` from the row): `TabIndex` and geometry written only when `place == Positioned`; children written when `place != Tray`. Same in `FormClipboard.ToElement` (`:348`) / `FromElement` (`:425-434`, `:439-441`: the attribute skip is `place == Positioned ? IsStructural(name, target) : name == "Id"`). `RenumberTabIndexes` and `NextTabIndex`: iterate `AllControls().Where(c => c.Definition?.Place is null or FormPlace.Positioned)` (⚠ `is null or` — a control with no row is Positioned, and `== Positioned` would be false for a null `Definition`).
 - [ ] **Step 4: Run** the fixtures + `FormDesignerCommandTests` + `FormComponentDocumentTests` → green.
+
+⚠⚠ **AS BUILT (Task 14, 2026-09-21) — one shape decision, one path the plan did not name, and one
+mutant found before the gate:**
+
+1. **`isComponent` was kept LOAD-BEARING, not forwarding-only.** The plan says "keep the parameter but
+   compute `place` from the row", which admits two readings. The writer uses
+   `PlaceOf(control, isComponent) => isComponent ? Tray : control.Definition?.Place ?? Positioned`,
+   so the parameter still decides something. Deriving from the row ALONE would give a control with a
+   null `Definition` sitting in `model.Components` the Positioned treatment — geometry and a tab
+   order — which is the writer disagreeing with its own reader. Not observable from any current test
+   (the reader refuses a non-Tray row under `<Components>` with BL8020); it guards a model the IDE
+   builds in memory.
+2. **⛔ `Create` and `Apply` are SEPARATE paths and both needed the guard.** `ControlElement` writes
+   `element.SetAttributeValue("TabIndex", control.TabIndex)` **unconditionally** — not the incremental
+   `SetIntAttributeIfChanged` — so `Create` stamped `TabIndex="0"` on all ten strip and item elements
+   even at the default value. The plan names `ApplyControl` and `ControlElement` separately for this
+   reason; do not assume fixing one fixes the other.
+3. **⚠ The clipboard was wrong in THREE ways at once**, because it gated on `Definition.IsComponent`
+   (Tray-only) and its geometry switch was not gated at all: a copied strip came back with a non-null
+   `PixelGeometry{Dock="Top"}`, lost `Dock` from `Properties` entirely (consumed as geometry), and
+   carried a stale `TabIndex` straight through.
+4. **⛔ A mutant that survives the ENTIRE suite was found here, not at the gate.** Mutating
+   `c.Definition?.Place is null or FormPlace.Positioned` to `== FormPlace.Positioned` in
+   `RenumberTabIndexes` and `NextTabIndex` survives all 842 tests, because every fixture control has a
+   catalog row so the null arm never runs. The arm is deliberate — a control whose `Kind` the catalog
+   does not know must still be renumbered — and pinning it needs a HAND-BUILT `FormControl` with an
+   unknown `Kind`, since the reader returns null for an unknown element and cannot produce one. The
+   pin was written in Task 15's round.
 
 ### Task 15: The region writer — host verb, document order, `MainMenuStrip`
 
@@ -1095,6 +1178,27 @@ In `GenerateInit`, after the root `AppendSiblings(...)` call and INSIDE a `form.
 
 - [ ] **Step 4: Run** `FormStripEmissionTests`, `FormRegionWriterTests`, `FormComponentEmissionTests` → green. Then the csc sweep (Integration) → the seven rows pass all three sweeps (an item builds under its canonical host).
 
+⚠⚠ **AS BUILT (Task 15, 2026-09-21) — the code above went in as written; three measured facts:**
+
+1. **The csc sweep is 98/98, not 80/80, and the +18 belongs to Task 12, not to this task.** Each of
+   the seven new rows adds one case to both `[TestCaseSource(nameof(EveryWinFormsControl))]` tests
+   (14), and four of them declare an Enum property — MenuStrip (`Dock`), ToolStrip (`Dock`,
+   `GripStyle`), StatusStrip (`Dock`), ToolStripButton (`DisplayStyle`) — adding one case each to
+   `EveryWinFormsControlWithAnEnum` (4). ToolStripMenuItem, ToolStripSeparator and
+   ToolStripStatusLabel declare none. This run is also the first to put `Me.MainMenuStrip` and BOTH
+   host verbs through real csc.
+2. ⚠ **Only the item ADD RUN was wrong today — the strip half already worked.** Top-level strip
+   reversal and `menuStrip1.Dock = DockStyle.Top` emitted correctly before this change; the second
+   pin failed solely on the missing `Me.MainMenuStrip` line. What was broken was host-blind and
+   reversed: `mnuFile.Controls.Add(mnuExit)/Add(sep1)/Add(mnuOpen)` and
+   `menuStrip1.Controls.Add(mnuFile)`.
+3. ⚠ **`AppendSiblings`'s own summary claimed the reversal UNCONDITIONALLY** and had to be corrected
+   with the change, or it would have described the opposite of what the method now does for a host.
+4. ⚠ **vstest filter syntax: every clause needs its property name.** `(~Form)&(TestCategory!=…)` is
+   rejected with *"Invalid Condition '~Form'"*; it must be
+   `(FullyQualifiedName~Form)&(TestCategory!=Integration)&(FullyQualifiedName!~FormCanvasRenderTests)`.
+   Carry this into Task 19's gate commands.
+
 ### Task 16: The web emitter — chrome, wrappers, roles, no tabindex, `&`
 
 **Files:** `FormAssetEmitter.cs` (`Html` `:100-136`, `AppendControl` `:138-272`, `Css` `:282-331`); Tests: `FormStripEmissionTests`.
@@ -1103,6 +1207,35 @@ In `GenerateInit`, after the root `AppendSiblings(...)` call and INSIDE a `form.
 - [ ] **Step 2: Run** → red.
 - [ ] **Step 3: Implement** in `Html`: partition `form.Controls` into `top = Docked with Dock (property or default) == "Top"`, `bottom = Docked … "Bottom"`, `rest`; emit `top` in document order before the div, `rest` inside, `bottom` in REVERSE document order after `</div>`. In `AppendControl`: `tabindex` only when `definition.Place == FormPlace.Positioned`; after `class`, `if (definition.HtmlRole != null) sb.Append($" role=\"{definition.HtmlRole}\"")`; the text for an `Item` row strips `&` (`text.Replace("&", "")`, once — a literal `&&` in a WinForms caption means one `&`; handle `&&` → `&` first); children wrapped: `if (definition.HtmlChildrenWrapper is { } w) sb.Append($"<{w}>")` before the child loop and the close after. In `Css`: after the per-control rules, `foreach (var css in form.AllControls().Select(c => c.Definition?.WebCss).Where(s => s != null).Distinct()) sb.Append(css).Append('\n')`.
 - [ ] **Step 4: Run** the fixture + `FormAssetEmitterTests` (or whatever the existing emitter fixture is called — grep `FormAssetEmitter.Html(` in Tests) → green.
+
+⚠⚠ **AS BUILT (Task 16, 2026-09-21) — the code above went in as written; one new shared question and
+four measured gaps:**
+
+1. **`Dock` is resolved by a new `DockOf`** — the document `Properties["Dock"]` first, falling back to
+   `Definition?.Property("Dock")?.Default`, then `"Top"` — so a hand-written `.blwebform` with no
+   `Dock` attribute still puts a StatusStrip at the bottom from its row default. ⛔ This is the SAME
+   question Task 17's `Bands` snippet asks, in a different project; it was consolidated into one
+   answer in `BasicLang/Forms` when Task 17 landed, because two copies would let the designer draw
+   the status band on one edge while the page puts the `<footer>` on the other, from one document.
+2. **Accelerator stripping is `Regex.Replace(text, "&(&?)", "$1")` on the `text` local**, the same
+   spelling Task 18 uses for `ItemId` — one pass, so `&&` → `&` and a lone `&` → nothing with no
+   ordering hazard between two `Replace` calls. Because it rewrites the local, it also covers a
+   ToolStripButton's `value=`; `ToolTipText` is untouched (generic property loop, and a tooltip
+   carries no accelerator).
+3. ⛔ **`tabindex` was written UNCONDITIONALLY at the old `:153`** for every control regardless of
+   `Place` — measured, every strip and item carried `tabindex="0"`. It is now behind
+   `Place == FormPlace.Positioned`.
+4. ⚠⚠ **Four gaps these tests do NOT close, all measured; closed at Task 19:**
+   - **No test parses the emitted HTML.** `Web_MenuNesting` asserts ordered fragments, which proves
+     SEQUENCE but not BALANCE — a wrapper opened and never closed, or closed twice, passes every
+     assertion in the file. This is "a green build is not a running page" one level up from
+     `FormBuildEmissionTests`.
+   - `DockOf`'s fallback arm is unpinned: every fixture writes `Dock=` explicitly, so dropping the
+     row-default lookup survives the whole sweep.
+   - The `&&` arm of the accelerator regex is unpinned: fixtures use only a lone `&`, so mutating the
+     regex to `text.Replace("&", "")` fails nothing.
+   - `Css`'s `Distinct()` is on the BLOCK STRING, not the kind — two rows sharing a byte-identical
+     `WebCss` would collapse to one. Correct today only because every block is kind-prefixed.
 
 ### Task 17: The canvas bands — `Layout(document, selected)` and the band arms
 
@@ -1144,6 +1277,35 @@ In `GenerateInit`, after the root `AppendSiblings(...)` call and INSIDE a `form.
 
 `WebLayout` yields its cells only for a Grid layout but ALWAYS appends `Bands`. `HitTest(document, canvasPoint, selected = null)` reads `Layout(document, selected)` on BOTH targets (`.Where(e => e.Control != null && e.Bounds.Contains(formPoint)).Select(e => e.Control).LastOrDefault()`), deleting the recursive `BoundsOf` walk; `ControlsIn` filters `e.Control != null && e.Control.Definition?.Place is not (FormPlace.Item or FormPlace.Docked)` and then `.Select(e => e.Control!)` — it still returns `IReadOnlyList<FormControl>` under `<Nullable>enable`; `ContainerAt` skips `Docked` roots. Update the consumers: `Render` (`foreach (var entry in FormCanvasTransform.Layout(document, SelectedControl))` → `if (entry.Control != null) DrawControl(context, entry.Control, _transform.ToCanvas(entry.Bounds));`), `FormBoundsOf` (`FormCanvasControl.cs:993`, and `Render` at `:1108`), `FormCanvasRenderTests.cs:123-124`, `FormCanvasTransformTests.cs:217-222/:351-354/:363/:376` — exactly these deconstruct the old 2-tuple (⚠ `FormZOrderTests` calls only `HitTest`, whose `selected` is defaulted; nothing there changes). ⚠ The overflow edge (spec §2 Layout row): add `FormStripLayoutTests.HitTest_FindsAChildWhereItIsPainted_EvenOutsideItsPanel` and pin whichever the new walk does.
 - [ ] **Step 4: Run** `FormStripLayoutTests`, `FormCanvasTransformTests`, `FormZOrderTests`, `FormCanvasMultiSelectTests`, `FormCanvasRenderTests` (the three strips now hash as bands, distinct), `FormTrayViewTests` → green. Add `FormCanvasRenderTests.AStripWithAButton_DrawsABandAtTheTop_AndLeavesTheButtonAlone` (frame with MenuStrip+Button differs from Button alone; the Button's own region — crop or compare a sub-rectangle hash — is unchanged).
+
+⚠⚠ **AS BUILT (Task 17, 2026-09-21) — the mirrored pair was collapsed, the consumer list above is
+partly wrong, and three of the nine pins were vacuous at first:**
+
+1. **The `Dock` question is ONE answer now, on `FormControl` in `BasicLang/Forms/FormControl.cs`:**
+   `IsDockedToBottom` (public) over a private `DockEdge` (document property, then the row default,
+   then `"Top"`). Both `FormAssetEmitter.Html` and `FormCanvasTransform.Bands` call it; Task 16's
+   private `DockOf` is deleted. ⚠ The **decision** is exposed, not the edge string — a public
+   `DockEdge` would leave both sites spelling `string.Equals(…, "Bottom", OrdinalIgnoreCase)`
+   themselves, which is the same drift one level down. Without this, the designer could draw the
+   status band on one edge while the page put the `<footer>` on the other, from one document.
+2. **⛔ The empty-string guard is REACHABLE — Task 16's note calling it unreachable is wrong.**
+   `Dock=""` is legal XML and `FormDocumentReader.cs:508` stores an attribute value VERBATIM before
+   the `property.Accepts` check, because the D9 Degraded tier keeps a bad value so it round-trips.
+   Without the guard `""` is merely "not Bottom", so `<StatusStrip Dock=""/>` docks to the TOP
+   instead of falling back to its row's own `Bottom` default. Kept, and documented at the member.
+3. ⚠ **The consumer list above over-states the damage.** `FormCanvasTransformTests.cs:351-354`,
+   `:363` and `:376` did NOT need touching — they access `.Control.Id`, which the record preserves;
+   only a null-forgiving `!` was needed where the field became nullable. The real 2-tuple
+   deconstructions were in `FormCanvasControl.cs` at `:995` and `:1124`.
+4. ⚠ **Three of the nine pins passed before `Bands` existed.** Two became load-bearing afterwards —
+   `ControlsIn`'s strip half now kills a dropped `Docked` filter, which it could not have caught
+   while `Layout` yielded no strip at all. The third, `ContainerAt_NeverReturnsAStrip`, still passes
+   BY ACCIDENT: `BoundsOf` returns null for a geometry-less strip, so `ContainerAt` skips it whether
+   or not the new explicit `Docked` rule is there. **That rule is unfalsifiable today** — same shape
+   as 24b's unreachable schematic arms. Recorded, not faked.
+5. The render gate closed here as predicted. `EveryControlKindRendersDistinctly` selects
+   `Place != Tray && Place != Item`, so the three strip rows ARE in its loop; with no band arm all
+   three rendered as the empty form and collided on one hash.
 
 ### Task 18: Placement, toolbox category, grid, drop refusal, recognizer
 

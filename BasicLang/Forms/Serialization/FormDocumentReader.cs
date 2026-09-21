@@ -305,10 +305,17 @@ public static class FormDocumentReader
     /// place: it never acquires geometry or a tab index — a stray <c>X=</c> or <c>TabIndex=</c> on
     /// one is an unknown attribute that round-trips untouched (D9) — and it cannot nest.
     /// </param>
+    /// <param name="parent">
+    /// The control this element is nested under, or null at the top of <c>&lt;Controls&gt;</c> /
+    /// <c>&lt;Components&gt;</c>. The CONTROL rather than its <c>FormControlDef</c> because all
+    /// three BL8030 refusals name the parent's <c>Id</c> as well as its row, and two parameters
+    /// carrying two halves of one parent are two parameters that can disagree.
+    /// </param>
     private static FormControl? ReadControl(
         XElement element, FormTarget target, string filePath,
         List<DesignDiagnostic> diagnostics, List<DegradedProperty> degraded,
-        Dictionary<FormControl, XElement> positions, bool isComponent = false)
+        Dictionary<FormControl, XElement> positions, bool isComponent = false,
+        FormControl? parent = null)
     {
         var definition = FormControlCatalog.Find(element.Name.LocalName);
         if (definition == null)
@@ -328,12 +335,20 @@ public static class FormDocumentReader
             return null;
         }
 
+        // The row's SHAPE (Task 24, spec §1). Every decision below that once asked "is this a
+        // component?" asks this instead, because the old bool could express neither of the two new
+        // answers: a Docked strip and an Item are geometry-less and tab-index-less LIKE a component,
+        // yet unlike one they live under <Controls> and they do nest.
+        var place = definition.Place;
+        var parentDefinition = parent?.Definition;
+        var misplacedId = (string?)element.Attribute("Id") ?? "";
+        var parentId = parent?.Id ?? "";
+
         // ⛔ BL8020: a component kind under <Controls>, or a control kind under <Components>. Either
         // would generate code csc rejects — Me.Controls.Add(tmr) for a Timer, or a Button that is
         // constructed and never added — so the document is refused rather than half-read.
-        if (definition.IsComponent != isComponent)
+        if ((place == FormPlace.Tray) != isComponent)
         {
-            var misplacedId = (string?)element.Attribute("Id") ?? "";
             diagnostics.Add(Error(DesignCodes.ComponentMisplaced,
                 isComponent
                     ? $"'{misplacedId}' is a {definition.Kind}, a control with a position, but it sits " +
@@ -346,12 +361,70 @@ public static class FormDocumentReader
             return null;
         }
 
+        // ⛔ BL8030, a refusal three ways (spec §3): an item outside a host that lists its kind, a
+        // non-item inside a host, and a strip below the top level. Each is a document whose nesting
+        // says something the generated code cannot honour — reading it anyway would put the control
+        // somewhere the user did not write it and then emit code csc rejects, from a designer that
+        // reported the file clean.
+        //
+        // ⚠ All three run BEFORE the FormControl is built, so a refused element contributes EXACTLY
+        // ONE diagnostic — never a second one about its Id or a property of a control that is not
+        // going to exist.
+        if (place == FormPlace.Item && parentDefinition?.Items?.Accepts(definition.Kind) != true)
+        {
+            // Two of the spec's three cases behind ONE condition, because "no host at all" and "a
+            // host that does not hold this kind" are the same fact about the item. The wording
+            // still differs, because the fix does: one moves the item under a host, the other moves
+            // it under a DIFFERENT one.
+            //
+            // ⚠ The third arm is not one of the spec's three and is not dead: a non-host PARENT (an
+            // item under a Panel) reaches here with a definition whose Items is null, and the
+            // wrong-host wording has no list of kinds to name.
+            diagnostics.Add(Error(DesignCodes.StripMisplaced,
+                parentDefinition == null
+                    ? $"'{misplacedId}' is a {definition.Kind}, which lives inside " +
+                      $"{HostsOf(definition.Kind)} — under <Controls> it would be added with " +
+                      "Me.Controls.Add, which does not compile."
+                    : parentDefinition.Items is { } rule
+                        ? $"'{misplacedId}' is a {definition.Kind}, but '{parentId}' is a " +
+                          $"{parentDefinition.Kind}, which holds only {string.Join(", ", rule.Kinds)}."
+                        : $"'{misplacedId}' is a {definition.Kind}, which lives inside " +
+                          $"{HostsOf(definition.Kind)} — it sits under '{parentId}', a " +
+                          $"{parentDefinition.Kind}, which is not one.",
+                filePath, Line(element), Column(element)));
+            return null;
+        }
+
+        if (parentDefinition is { IsHost: true } host && place != FormPlace.Item)
+        {
+            diagnostics.Add(Error(DesignCodes.StripMisplaced,
+                $"'{misplacedId}' is a {definition.Kind}, but it sits under '{parentId}'. " +
+                $"A {host.Kind} holds only {string.Join(", ", host.Items!.Kinds)}.",
+                filePath, Line(element), Column(element)));
+            return null;
+        }
+
+        if (place == FormPlace.Docked && parentDefinition != null)
+        {
+            diagnostics.Add(Error(DesignCodes.StripMisplaced,
+                $"'{misplacedId}' is a {definition.Kind}, which docks to the form — " +
+                $"it sits under '{parentId}'.",
+                filePath, Line(element), Column(element)));
+            return null;
+        }
+
         var control = new FormControl
         {
             Kind = definition.Kind,
-            Id = (string?)element.Attribute("Id") ?? "",
-            TabIndex = isComponent ? 0 : IntAttribute(element, "TabIndex") ?? 0,
-            Geometry = isComponent ? null : ReadGeometry(element, target)
+            Id = misplacedId,
+
+            // ⛔ Only a Positioned row has either. A Docked strip's position is its Dock PROPERTY
+            // and an Item's is its order among its host's children; a stray X= or TabIndex= on
+            // either falls through to UnknownAttributes below and round-trips untouched (D9, the
+            // component rule), never to geometry — which would otherwise fire, because Dock is one
+            // of ReadGeometry's six trigger attributes.
+            TabIndex = place == FormPlace.Positioned ? IntAttribute(element, "TabIndex") ?? 0 : 0,
+            Geometry = place == FormPlace.Positioned ? ReadGeometry(element, target) : null
         };
 
         // Where this control came from, for the checks that run over the finished MODEL and would
@@ -389,12 +462,19 @@ public static class FormDocumentReader
             // other format's spelling is just an attribute this document does not model, which is
             // exactly what the unknown round trip is for.
             //
-            // ⚠ A COMPONENT skips only Id. Its X= or TabIndex= are neither geometry nor tab order
-            // (it has none) nor a catalog property, so they fall through to UnknownAttributes and
-            // round-trip untouched — the same rule as any attribute the designer does not model.
-            if (isComponent
-                    ? string.Equals(name, "Id", StringComparison.OrdinalIgnoreCase)
-                    : FormControlCatalog.IsStructural(name, target))
+            // ⚠ Only a POSITIONED control has a structural vocabulary; everything else skips Id
+            // alone. Its X= or TabIndex= are neither geometry nor tab order (it has none) nor a
+            // catalog property, so they fall through to UnknownAttributes and round-trip untouched —
+            // the same rule as any attribute the designer does not model.
+            //
+            // ⛔ This is also what lets a strip's Dock reach definition.Property("Dock") and land in
+            // Properties. Dock is in StructuralAttributes, so while a Docked row took the structural
+            // branch the catalog's own Dock property was skipped out of the loop and never modelled —
+            // and FormDocumentWriter's "a catalog property the model dropped" sweep then DELETED
+            // Dock="Top" from every strip on the first save.
+            if (place == FormPlace.Positioned
+                    ? FormControlCatalog.IsStructural(name, target)
+                    : string.Equals(name, "Id", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
@@ -469,10 +549,14 @@ public static class FormDocumentReader
                 continue;
             }
 
-            // A component cannot nest, so a catalog kind under one is an unknown child.
-            if (!isComponent && FormControlCatalog.Find(child.Name.LocalName) != null)
+            // A component cannot nest, so a catalog kind under one is an unknown child. Everything
+            // else does: a Positioned container holds controls, a Docked strip holds its items and
+            // an Item holds its sub-items — and which of those are LEGAL is BL8030's answer above,
+            // reached by passing this control down as the parent, not by refusing to recurse.
+            if (place != FormPlace.Tray && FormControlCatalog.Find(child.Name.LocalName) != null)
             {
-                var nested = ReadControl(child, target, filePath, diagnostics, degraded, positions);
+                var nested = ReadControl(
+                    child, target, filePath, diagnostics, degraded, positions, parent: control);
                 if (nested != null)
                 {
                     control.Children.Add(nested);
@@ -485,6 +569,32 @@ public static class FormDocumentReader
         }
 
         return control;
+    }
+
+    /// <summary>
+    /// The kinds whose item rule lists <paramref name="kind"/>, as prose: "a MenuStrip or a
+    /// ToolStripMenuItem".
+    ///
+    /// <para>⚠ Derived from the catalog, never spelled out in the message. A row added later that
+    /// accepts this kind changes the sentence with it; a hand-written list would go on naming the
+    /// hosts of 2026 at a user who has just been told to use one of them.</para>
+    /// </summary>
+    private static string HostsOf(string kind)
+    {
+        var hosts = FormControlCatalog.All
+            .Where(d => d.Items?.Accepts(kind) == true)
+            .Select(d => "a " + d.Kind)
+            .ToList();
+
+        return hosts.Count switch
+        {
+            // No row holds it. Unreachable for the shipped rows, and NOT an exception: this is the
+            // text of a refusal that is already being reported, and throwing here would replace a
+            // precise diagnostic with a crash in the reader.
+            0 => "a strip",
+            1 => hosts[0],
+            _ => string.Join(", ", hosts.Take(hosts.Count - 1)) + " or " + hosts[^1]
+        };
     }
 
     /// <summary>

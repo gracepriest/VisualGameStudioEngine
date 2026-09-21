@@ -288,7 +288,10 @@ public static class FormDocumentWriter
         ApplyControlList(container, model.Controls);
     }
 
-    /// <param name="isComponent">The list is the tray's: no geometry, no TabIndex, no children (Task 25).</param>
+    /// <param name="isComponent">
+    /// The list is the tray's. Forwarded rather than acted on here — every place decision is made
+    /// per CONTROL, from its catalog row, by <see cref="PlaceOf"/>.
+    /// </param>
     private static void ApplyControlList(XElement container, List<FormControl> controls, bool isComponent = false)
     {
         var wanted = controls.Select(c => c.Id).ToList();
@@ -385,17 +388,30 @@ public static class FormDocumentWriter
         }
     }
 
+    /// <param name="isComponent">
+    /// The element is the tray's. Forwarded from the list; the decisions below read
+    /// <see cref="PlaceOf"/>.
+    /// </param>
     private static void ApplyControl(XElement element, FormControl control, bool isComponent = false)
     {
-        // TabIndex is written on EVERY control in v1, defaulting to document order on creation —
-        // explicit rather than implied, so reordering the XML cannot silently reorder tab focus.
+        // TabIndex is written on every POSITIONED control in v1, defaulting to document order on
+        // creation — explicit rather than implied, so reordering the XML cannot silently reorder tab
+        // focus. Nothing else has a tab order to reorder.
         SetAttributeIfChanged(element, "Id", control.Id);
 
-        // ⛔ A COMPONENT has no tab order and no geometry, and the reader put any such attribute
-        // it carried into UnknownAttributes. Running the TabIndex write here would rewrite a
-        // component's TabIndex="5" to "0" on the first unrelated edit — the model holds 0, the
-        // text parses to 5, and SetIntAttributeIfChanged would "correct" it.
-        if (!isComponent)
+        // ⛔ Anything that is not POSITIONED has no tab order and no geometry — a tray component, a
+        // Docked strip, an item — and the reader put any such attribute it carried into
+        // UnknownAttributes. Running the TabIndex write here would rewrite a strip's TabIndex="5" to
+        // "0" on the first unrelated edit: the model holds 0, the text parses to 5, and
+        // SetIntAttributeIfChanged would "correct" it.
+        //
+        // ⚠ Passing isComponent: false for a strip was harmless only by accident until now — that
+        // helper writes nothing when the attribute is absent AND the value equals the default, which
+        // is every strip the reader has just read. A renumber that gave one a non-zero TabIndex made
+        // it write. This guard is what makes it true by construction.
+        var place = PlaceOf(control, isComponent);
+
+        if (place == FormPlace.Positioned)
         {
             // Defaults again: the reader reads an absent TabIndex/Col/Row as 0, so writing "0" back
             // into a document that omitted them is inventing content. TabIndex IS written on every
@@ -447,7 +463,8 @@ public static class FormDocumentWriter
 
         ApplyBinds(element, control);
 
-        if (!isComponent)
+        // A tray component cannot nest; a strip holds its items and an item holds its sub-items.
+        if (place != FormPlace.Tray)
         {
             ApplyControlList(element, control.Children);
         }
@@ -526,14 +543,19 @@ public static class FormDocumentWriter
         return element;
     }
 
-    /// <param name="isComponent">A tray component: no geometry, no TabIndex, no children (Task 25).</param>
+    /// <param name="isComponent">The element is the tray's — see <see cref="PlaceOf"/>.</param>
     private static XElement ControlElement(FormControl control, bool isComponent = false)
     {
         var element = new XElement(control.Kind);
 
         element.SetAttributeValue("Id", control.Id);
 
-        if (!isComponent)
+        // The row's SHAPE (Task 24), not a bool. Only a Positioned control has a place in pixels or
+        // a cell and a place in the tab order; a Docked strip's position is its Dock PROPERTY and an
+        // Item's is its order among its host's children.
+        var place = PlaceOf(control, isComponent);
+
+        if (place == FormPlace.Positioned)
         {
             switch (control.Geometry)
             {
@@ -554,6 +576,11 @@ public static class FormDocumentWriter
                     break;
             }
 
+            // ⛔ UNCONDITIONAL, unlike the Apply path's SetIntAttributeIfChanged — Create stamps the
+            // tab order explicitly even at 0 so reordering the XML cannot silently reorder focus.
+            // Which is exactly why the guard has to be HERE as well: without it a strip and every
+            // item under it came out carrying TabIndex="0", an attribute their own reader would then
+            // read back as an unknown attribute.
             element.SetAttributeValue("TabIndex", control.TabIndex);
         }
 
@@ -586,9 +613,10 @@ public static class FormDocumentWriter
             element.Add(new XElement(unknown));
         }
 
-        // Children in z-order — document order IS z-order, so nothing sorts them. A component
-        // cannot nest.
-        if (!isComponent)
+        // Children in z-order — document order IS z-order, so nothing sorts them. A tray component
+        // cannot nest; a strip and an item both can, and their children are ITEMS rather than
+        // controls, which is the one shape the old isComponent bool could not express.
+        if (place != FormPlace.Tray)
         {
             foreach (var child in control.Children)
             {
@@ -598,6 +626,24 @@ public static class FormDocumentWriter
 
         return element;
     }
+
+    /// <summary>
+    /// The shape of the row this control came from — the one question the writer asks about where a
+    /// control belongs (Task 24, spec §1).
+    ///
+    /// <para>⚠ <paramref name="isComponent"/> survives as the TRAY's answer rather than being
+    /// dropped, for parity with <c>FormDocumentReader.ReadControl</c>: the reader gives everything it
+    /// reads under <c>&lt;Components&gt;</c> the component treatment, and a writer that instead
+    /// trusted the row alone would disagree with it for a control whose kind is not in the catalog —
+    /// <c>Definition</c> is then null, which reads as Positioned, and the tray would acquire geometry
+    /// and a tab order on the way out.</para>
+    ///
+    /// <para>⛔ <c>?? FormPlace.Positioned</c>, never a null-propagated comparison. A control with no
+    /// catalog row IS positioned as far as every walker here is concerned, and asking
+    /// <c>Definition?.Place == FormPlace.Positioned</c> answers false for it.</para>
+    /// </summary>
+    private static FormPlace PlaceOf(FormControl control, bool isComponent) =>
+        isComponent ? FormPlace.Tray : control.Definition?.Place ?? FormPlace.Positioned;
 
     private static XElement BindElement(FormBind bind)
     {

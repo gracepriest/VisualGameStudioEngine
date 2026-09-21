@@ -110,9 +110,41 @@ public static class FormAssetEmitter
         // data-form is how Main() knows which form to initialise (D7). One page per form, each
         // naming itself, with a single shared script.
         sb.Append($"<body data-form=\"{Attr(form.Name)}\">\n");
-        sb.Append("<div class=\"vgs-form\">\n");
+
+        // ⛔ A Docked strip is PAGE CHROME, not form content (spec §4). It sits OUTSIDE
+        // <div class="vgs-form"> because that div is the layout container — a Grid or Flow box whose
+        // tracks the user authored for their own controls. A <nav> placed inside it would consume a
+        // cell nobody declared and push every control one place along, from a green build.
+        var top = new List<FormControl>();
+        var bottom = new List<FormControl>();
+        var rest = new List<FormControl>();
 
         foreach (var control in form.Controls)
+        {
+            if (control.Definition?.Place != FormPlace.Docked)
+            {
+                rest.Add(control);
+            }
+            else if (control.IsDockedToBottom)
+            {
+                bottom.Add(control);
+            }
+            else
+            {
+                top.Add(control);
+            }
+        }
+
+        // Top chrome in DOCUMENT order: the first-documented strip is nearest the top edge, which on
+        // the page means first.
+        foreach (var control in top)
+        {
+            AppendControl(sb, control, indent: "");
+        }
+
+        sb.Append("<div class=\"vgs-form\">\n");
+
+        foreach (var control in rest)
         {
             AppendControl(sb, control, indent: "  ");
         }
@@ -130,6 +162,17 @@ public static class FormAssetEmitter
         }
 
         sb.Append("</div>\n");
+
+        // ⛔ Bottom chrome in REVERSE document order. Same algebra as the canvas bands: the
+        // FIRST-documented Bottom strip stacks nearest the true bottom edge, so on the page it is
+        // emitted LAST, closest to the end of <body>. Forward order here would put the status bar
+        // below a bottom toolbar on the page and above it in the designer — the same document
+        // rendering two ways.
+        for (var i = bottom.Count - 1; i >= 0; i--)
+        {
+            AppendControl(sb, bottom[i], indent: "");
+        }
+
         sb.Append($"<script type=\"module\" src=\"{Attr(scriptFileName)}\"></script>\n");
         sb.Append("</body>\n</html>\n");
         return sb.ToString();
@@ -150,14 +193,41 @@ public static class FormAssetEmitter
 
         sb.Append($"{indent}<{tag} id=\"{Attr(control.Id)}\"");
         sb.Append($" class=\"vgs-{Attr(control.Kind)}\"");
-        sb.Append($" tabindex=\"{control.TabIndex}\"");
 
-        if (definition!.HtmlInputType != null)
+        // Chrome is the one part of a form whose meaning the DOM cannot infer from its tag — a
+        // <menu> is not a toolbar and an <li> is not a separator to a screen reader. Stated on the
+        // ROW, so a kind that needs a role declares one rather than the emitter carrying a list.
+        if (definition!.HtmlRole != null)
+        {
+            sb.Append($" role=\"{Attr(definition.HtmlRole)}\"");
+        }
+
+        // ⛔ Only a POSITIONED control takes a tab stop. A strip and an item have no TabIndex in the
+        // document at all (Task 14 stopped writing one), so an unconditional tabindex="0" here put
+        // every menu item into the page's tab order at the same rank — Tab walking a dozen dead
+        // <li>s before reaching the first real control, from a document that says nothing of the
+        // sort.
+        if (definition.Place == FormPlace.Positioned)
+        {
+            sb.Append($" tabindex=\"{control.TabIndex}\"");
+        }
+
+        if (definition.HtmlInputType != null)
         {
             sb.Append($" type=\"{Attr(definition.HtmlInputType)}\"");
         }
 
         var text = control.Properties.TryGetValue("Text", out var t) ? t : null;
+
+        // ⛔ An item's caption carries a WinForms ACCELERATOR mark: "&File" means File with F
+        // underlined, and "&&" is a literal ampersand. The generic escaper turns both into
+        // "&amp;" — "&amp;File" reaches the page as the visible text "&File". One regex, never two
+        // Replace calls: stripping "&" first would turn "&&" into "" instead of "&".
+        // The same rule, spelt the same way, produces an item's id in FormPlacement.ItemId.
+        if (text != null && definition.Place == FormPlace.Item)
+        {
+            text = System.Text.RegularExpressions.Regex.Replace(text, "&(&?)", "$1");
+        }
 
         // ⛔ A <select> takes <option> children and NOTHING else. Its Text was being written as a
         // bare text node inside the element, which browsers drop or render as stray text above the
@@ -260,9 +330,28 @@ public static class FormAssetEmitter
         if (control.Children.Count > 0)
         {
             sb.Append('\n');
+
+            // A menu's children are LIST ITEMS, and an <li> outside a list is not a list item —
+            // the wrapper is the row's, not the control's own tag, because the same <li> nests
+            // inside another <li>'s <ul> to make a submenu. Declared on the row (spec §4) so the
+            // emitter never asks what kind this is.
+            var wrapper = definition.HtmlChildrenWrapper;
+            var childIndent = indent + "  ";
+
+            if (wrapper != null)
+            {
+                sb.Append($"{childIndent}<{wrapper}>\n");
+                childIndent += "  ";
+            }
+
             foreach (var child in control.Children)
             {
-                AppendControl(sb, child, indent + "  ");
+                AppendControl(sb, child, childIndent);
+            }
+
+            if (wrapper != null)
+            {
+                sb.Append($"{indent}  </{wrapper}>\n");
             }
 
             sb.Append(indent);
@@ -325,6 +414,19 @@ public static class FormAssetEmitter
         foreach (var control in form.AllControls())
         {
             AppendControlCss(sb, control, layout);
+        }
+
+        // Per-KIND chrome styling, appended ONCE however many controls of that kind the page has
+        // (spec §4). A menu is the one control whose appearance is not optional — an unstyled <ul>
+        // of <li>s is a bulleted vertical list, not a menu bar, and its submenus are all open at
+        // once. Distinct() on the block itself, because the rule is "one block per kind present"
+        // and two ToolStrips are one kind.
+        foreach (var css in form.AllControls()
+                     .Select(c => c.Definition?.WebCss)
+                     .Where(s => s != null)
+                     .Distinct())
+        {
+            sb.Append(css).Append('\n');
         }
 
         return sb.ToString();

@@ -992,11 +992,11 @@ public class FormCanvasControl : Control
     /// </summary>
     private static Rect? FormBoundsOf(FormDocument document, FormControl control)
     {
-        foreach (var (candidate, bounds) in FormCanvasTransform.Layout(document))
+        foreach (var entry in FormCanvasTransform.Layout(document))
         {
-            if (ReferenceEquals(candidate, control))
+            if (ReferenceEquals(entry.Control, control))
             {
-                return bounds;
+                return entry.Bounds;
             }
         }
 
@@ -1121,9 +1121,12 @@ public class FormCanvasControl : Control
 
         // ⚠ Containers before their children — Layout guarantees that order, and drawing a
         // container after its children would paint over them.
-        foreach (var (control, bounds) in FormCanvasTransform.Layout(document))
+        foreach (var entry in FormCanvasTransform.Layout(document, SelectedControl))
         {
-            DrawControl(context, control, _transform.ToCanvas(bounds));
+            if (entry.Control != null)
+            {
+                DrawControl(context, entry.Control, _transform.ToCanvas(entry.Bounds));
+            }
         }
 
         // Handles LAST, over everything. Drawn in the loop they would be painted over by the next

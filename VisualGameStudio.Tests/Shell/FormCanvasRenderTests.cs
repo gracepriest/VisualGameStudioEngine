@@ -125,8 +125,8 @@ public class FormCanvasRenderTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(FormCanvasTransform.Layout(document).Select(l => l.Control.Id), Is.EqualTo(new[] { SharedId }));
-            Assert.That(FormCanvasTransform.Layout(web).Select(l => l.Control.Id), Is.EqualTo(new[] { "btn" }));
+            Assert.That(FormCanvasTransform.Layout(document).Select(l => l.Control!.Id), Is.EqualTo(new[] { SharedId }));
+            Assert.That(FormCanvasTransform.Layout(web).Select(l => l.Control!.Id), Is.EqualTo(new[] { "btn" }));
         });
     }
 

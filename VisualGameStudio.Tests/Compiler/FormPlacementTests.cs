@@ -223,6 +223,30 @@ public class FormPlacementTests
         Assert.That(result.Control!.TabIndex, Is.EqualTo(1));
     }
 
+    /// <summary>
+    /// Task 24c, Task 15 Step 1 Part 2 — the same guard as
+    /// <c>FormDocument.RenumberTabIndexes</c>, in <c>FormPlacement</c>'s own private
+    /// <c>NextTabIndex</c>: <c>Definition?.Place is null or FormPlace.Positioned</c>, never
+    /// <c>== FormPlace.Positioned</c>. An existing control whose Kind the catalog does not know has
+    /// a null <see cref="FormControl.Definition"/> and IS positioned; the equality mutant would
+    /// exclude it from the Max and hand this drop a TabIndex that collides with it.
+    /// </summary>
+    [Test]
+    public void ADroppedControl_TakesTheNextTabIndex_EvenWhenAnExistingControlHasNoCatalogRow()
+    {
+        var document = WinFormsDocument();
+        var mystery = Existing("UnknownWidgetKind", "mystery1", 0, 0, 10, 10);
+        mystery.TabIndex = 5;
+        document.Controls.Add(mystery);
+
+        Assert.That(mystery.Definition, Is.Null, "fixture premise: an unknown Kind has no catalog row");
+
+        var result = FormPlacement.Place(document, "Button", 10, 10);
+
+        Assert.That(result.Control!.TabIndex, Is.EqualTo(6),
+            "mystery1 (no catalog row, TabIndex 5) must still count toward the next tab index");
+    }
+
     [Test]
     public void ADroppedControl_CarriesItsIdAsItsCaption()
     {
@@ -509,6 +533,145 @@ public class FormPlacementTests
         {
             Assert.That(document.Controls, Has.Count.EqualTo(1));
             Assert.That(document.Controls[0].Id, Is.EqualTo("Button1"));
+        });
+    }
+
+    // ==================================================================
+    // Task 18 (commit 24c) — a Docked strip, an Item's refusal, and PlaceItem
+    // ==================================================================
+
+    /// <summary>
+    /// A strip (spec §1: `Place == Docked`) never gets a geometry, never nests inside whatever
+    /// container the point happens to be over, and takes the row's own default `Dock` — the point is
+    /// pure noise to it, exactly as it is for a component.
+    /// </summary>
+    [Test]
+    public void Place_ADockedKind_LandsTopLevel_GeometryLess_WithTheRowsDock_IgnoringThePoint()
+    {
+        var document = WinFormsDocument();
+        var panel = Existing("Panel", "Panel1", 0, 0, 300, 200);
+        document.Controls.Add(panel);
+
+        // A point deep inside the Panel would nest a Positioned control; a Docked kind must not —
+        // "the point is irrelevant" has to hold for containment, not only for X/Y.
+        var result = FormPlacement.Place(document, "StatusStrip", 150, 100);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Refusal, Is.Null);
+            Assert.That(document.Controls, Does.Contain(result.Control),
+                "a strip is top-level, never nested inside a container it was dropped over");
+            Assert.That(panel.Children, Is.Empty);
+            Assert.That(result.Control!.Geometry, Is.Null, "no X/Y/Width/Height for a docked strip");
+            Assert.That(result.Control.TabIndex, Is.Zero, "no tab order");
+            Assert.That(result.Control.Properties["Dock"], Is.EqualTo("Bottom"),
+                "the row's own default (StatusStrip docks Bottom), not anything derived from the point");
+        });
+    }
+
+    /// <summary>
+    /// An item (spec §1: `Place == Item`) has no place of its own on the canvas — it is created from
+    /// its host's "Type Here" slot (§6), never dropped — so a canvas drop of one must refuse, by name,
+    /// rather than silently position it like an ordinary control.
+    /// </summary>
+    [Test]
+    public void Place_AnItemKind_IsRefused_NamingTypeHere()
+    {
+        var document = WinFormsDocument();
+
+        var result = FormPlacement.Place(document, "ToolStripMenuItem", 10, 10);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Control, Is.Null);
+            Assert.That(result.Refusal, Does.Contain("Type Here"));
+            Assert.That(document.Controls, Is.Empty);
+        });
+    }
+
+    /// <summary>
+    /// <see cref="FormPlacement.PlaceItem"/> — the "Type Here" entry point (§6): appends an item to a
+    /// host's <c>Children</c>, minting VS's own id (the caption, camel-cased and sanitised, plus the
+    /// kind), or refuses when the host's <see cref="FormItemRule"/> does not accept the kind.
+    ///
+    /// <para>⚠ The fallback (an unusable caption, or <c>ToolStripSeparator</c>, which never reads its
+    /// caption) is SEEDED with the "1" — <c>FormDocument.MakeUniqueId</c> returns its argument
+    /// UNCHANGED when free — while the caption stem is NOT seeded: <c>openToolStripMenuItem</c>, then
+    /// <c>openToolStripMenuItem1</c> only once the plain stem collides. Get this backwards and a
+    /// SINGLE separator would read <c>toolStripSeparator</c> rather than VS's own
+    /// <c>toolStripSeparator1</c>.</para>
+    /// </summary>
+    [Test]
+    public void PlaceItem_AppendsToTheHost_WithTheCaptionAsId()
+    {
+        var document = WinFormsDocument();
+        var menuStrip = new FormControl { Kind = "MenuStrip", Id = "menuStrip1" };
+        document.Controls.Add(menuStrip);
+
+        var open = FormPlacement.PlaceItem(document, menuStrip, "ToolStripMenuItem", "&Open...");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(open.Refusal, Is.Null);
+            Assert.That(open.Control!.Id, Is.EqualTo("openToolStripMenuItem"));
+            Assert.That(open.Control.Properties["Text"], Is.EqualTo("&Open..."));
+            Assert.That(menuStrip.Children[^1], Is.SameAs(open.Control), "appended, last child of the host");
+        });
+
+        var secondOpen = FormPlacement.PlaceItem(document, menuStrip, "ToolStripMenuItem", "Open");
+        Assert.That(secondOpen.Control!.Id, Is.EqualTo("openToolStripMenuItem1"),
+            "a second Open collides on the plain caption stem, which was NOT seeded with a 1");
+
+        var separator = FormPlacement.PlaceItem(document, menuStrip, "ToolStripSeparator", "-");
+        Assert.Multiple(() =>
+        {
+            Assert.That(separator.Refusal, Is.Null);
+            Assert.That(separator.Control!.Kind, Is.EqualTo("ToolStripSeparator"));
+            Assert.That(separator.Control.Id, Is.EqualTo("toolStripSeparator1"),
+                "the fallback IS seeded with the 1 — MakeUniqueId returns it unchanged because it is free");
+        });
+
+        var numeric = FormPlacement.PlaceItem(document, menuStrip, "ToolStripMenuItem", "123");
+        Assert.That(numeric.Control!.Id, Is.EqualTo("toolStripMenuItem1"),
+            "a leading-digit caption is unusable as an identifier and falls back to the kind stem");
+
+        // `&&` is a literal ampersand in a WinForms caption (never the accelerator mark), and after it
+        // collapses the surviving `&` still has to drop out of the id rather than break it.
+        var ampersand = FormPlacement.PlaceItem(document, menuStrip, "ToolStripMenuItem", "Save && Close");
+        Assert.That(ampersand.Control!.Id, Is.EqualTo("saveCloseToolStripMenuItem"));
+
+        var before = menuStrip.Children.Count;
+        var refused = FormPlacement.PlaceItem(document, menuStrip, "Button", "nope");
+        Assert.Multiple(() =>
+        {
+            Assert.That(refused.Control, Is.Null);
+            Assert.That(refused.Refusal, Is.Not.Null.And.Not.Empty);
+            Assert.That(menuStrip.Children, Has.Count.EqualTo(before), "the refused item added nothing");
+        });
+    }
+
+    /// <summary>
+    /// Task 18 implementer's flagged edge case: a caption that is NOTHING but accelerator marks
+    /// leaves the accelerator-stripped, alnum-filtered caption empty, so <c>ItemId</c> must take its
+    /// fallback (the kind stem + "1") rather than mint an empty or otherwise unusable id.
+    /// </summary>
+    [Test]
+    public void PlaceItem_ACaptionThatIsEntirelyAcceleratorMarks_FallsBackRatherThanBreaking()
+    {
+        var document = WinFormsDocument();
+        var menuStrip = new FormControl { Kind = "MenuStrip", Id = "menuStrip1" };
+        document.Controls.Add(menuStrip);
+
+        var result = FormPlacement.PlaceItem(document, menuStrip, "ToolStripMenuItem", "&&&");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Refusal, Is.Null);
+            Assert.That(result.Control, Is.Not.Null);
+            Assert.That(result.Control!.Id, Is.EqualTo("toolStripMenuItem1"),
+                "an all-accelerator-marks caption leaves nothing usable — the fallback (kind stem + " +
+                "'1') must be used, never an empty or malformed id");
+            Assert.That(FormDocument.IsLegalControlId(result.Control.Id), Is.True);
         });
     }
 }

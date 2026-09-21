@@ -81,48 +81,38 @@ public sealed class FormCanvasTransform
     /// makes overlapping controls unselectable from the front, which reads as "the canvas ignores
     /// my clicks" rather than as an ordering bug.</para>
     ///
-    /// <para>⛔ A child's position is relative to ITS CONTAINER, not to the form. Hit-testing
-    /// against absolute coordinates puts every control inside a Panel at the wrong place the moment
-    /// the Panel is not at the origin — and the catalog ships Panel and GroupBox as containers, so
-    /// this is reachable from ordinary use rather than a corner case.</para>
+    /// <para>⛔ A child's stored X/Y is relative to ITS CONTAINER, not to the form. Taking those
+    /// numbers as absolute puts every control inside a Panel at the wrong place the moment the
+    /// Panel is not at the origin — and the catalog ships Panel and GroupBox as containers, so this
+    /// is reachable from ordinary use rather than a corner case. <see cref="Layout"/> is what adds
+    /// the container origins up, which is the reason this reads Layout rather than the model.</para>
     /// </summary>
-    public FormControl? HitTest(FormDocument document, Point canvasPoint)
+    /// <param name="selected">
+    /// The designer's selection, forwarded to <see cref="Layout"/>. Task 20 (commit 24d) makes it
+    /// decide which item cells and Type Here slot exist to be hit; today it changes nothing, and it
+    /// is threaded through now so the hit test cannot go on reading a DIFFERENT picture from the
+    /// one the render pass paints.
+    /// </param>
+    public FormControl? HitTest(FormDocument document, Point canvasPoint, FormControl? selected = null)
     {
         ArgumentNullException.ThrowIfNull(document);
 
         var formPoint = ToForm(canvasPoint);
 
-        // A web page has no pixel geometry to walk — its controls are in CELLS. Layout already
-        // knows how to find them, and reading it backwards gives the same topmost-wins rule.
-        if (document.Target == FormTarget.Web)
-        {
-            return Layout(document)
-                .Where(entry => entry.Bounds.Contains(formPoint))
-                .Select(entry => entry.Control)
-                .LastOrDefault();
-        }
-
-        return HitTest(document.Controls, formPoint, new Point(0, 0));
-    }
-
-    private static FormControl? HitTest(
-        IReadOnlyList<FormControl> controls, Point formPoint, Point containerOrigin)
-    {
-        for (var i = controls.Count - 1; i >= 0; i--)
-        {
-            var control = controls[i];
-            var bounds = BoundsOf(control, containerOrigin);
-            if (bounds == null || !bounds.Value.Contains(formPoint))
-            {
-                continue;
-            }
-
-            // A container's children sit on top of it, and are positioned relative to it.
-            var child = HitTest(control.Children, formPoint, bounds.Value.TopLeft);
-            return child ?? control;
-        }
-
-        return null;
+        // ⛔⛔ BOTH targets read Layout now — the recursive BoundsOf walk that used to serve WinForms
+        // is gone. It could not see a BAND: a strip carries no pixel geometry, so the walk skipped it
+        // and a click anywhere on a menu bar the canvas had just painted selected nothing at all.
+        // Rebuilding the band rule inside a second walk is the drift this class exists to prevent,
+        // so the WinForms branch was deleted rather than taught about strips.
+        //
+        // ⚠ ONE measured behaviour change, and it is the honest one: Layout yields child rects
+        // UNCLIPPED, while the recursive walk tested a container's own bounds before ever looking
+        // inside it. A child overflowing its Panel is now hittable where it is PAINTED, rather than
+        // being unreachable in the part of itself that hangs outside its parent.
+        return Layout(document, selected)
+            .Where(entry => entry.Control != null && entry.Bounds.Contains(formPoint))
+            .Select(entry => entry.Control)
+            .LastOrDefault();
     }
 
     /// <summary>
@@ -144,9 +134,15 @@ public sealed class FormCanvasTransform
     {
         ArgumentNullException.ThrowIfNull(document);
 
+        // ⛔ By PLACE, never by "Layout does not yield it yet". A marquee dragged across the form
+        // covers the menu bar's band and (from Task 20) its item cells, and VS band-selects
+        // positioned controls only — a bar or a menu item is not something a rubber band picks up,
+        // and a group move would have nowhere to move it to.
         var hit = Layout(document)
-            .Where(entry => entry.Bounds.Intersects(formRect))
-            .Select(entry => entry.Control)
+            .Where(entry => entry.Control != null &&
+                            entry.Control.Definition?.Place is not (FormPlace.Item or FormPlace.Docked) &&
+                            entry.Bounds.Intersects(formRect))
+            .Select(entry => entry.Control!)
             .ToList();
 
         if (hit.Count < 2)
@@ -275,6 +271,16 @@ public sealed class FormCanvasTransform
                 continue;
             }
 
+            // ⛔ A strip is never a drop target. It has no pixel geometry, so BoundsOf below would
+            // skip it today anyway — but that is an accident of the model, not the rule. Stated
+            // here, dropping on the menu bar lands on the FORM behind it, which is what the band
+            // being page chrome means; left implicit, the day a strip acquires bounds the canvas
+            // would start nesting Buttons inside a MenuStrip with nothing to explain it.
+            if (control.Definition?.Place == FormPlace.Docked)
+            {
+                continue;
+            }
+
             var bounds = BoundsOf(control, containerOrigin);
             if (bounds == null || !bounds.Value.Contains(formPoint))
             {
@@ -317,13 +323,60 @@ public sealed class FormCanvasTransform
     }
 
     /// <summary>Every control with its FORM-space rectangle, containers before their children.</summary>
-    public static IEnumerable<(FormControl Control, Rect Bounds)> Layout(FormDocument document)
+    /// <param name="selected">
+    /// The control the designer has selected. Unused while the canvas yields controls only; Task 20
+    /// (commit 24d) uses it to decide which strip's cells and Type Here slot are visible.
+    /// </param>
+    public static IEnumerable<FormLayoutEntry> Layout(FormDocument document, FormControl? selected = null)
     {
         ArgumentNullException.ThrowIfNull(document);
 
+        // ⚠ Bands LAST, so a band paints over — and out-hit-tests — anything that overlaps it.
+        // Document order is z-order everywhere in this class, and chrome is on top of the surface.
         return document.Target == FormTarget.Web
             ? WebLayout(document)
-            : Layout(document.Controls, new Point(0, 0));
+            : Layout(document.Controls, new Point(0, 0)).Concat(Bands(document));
+    }
+
+    /// <summary>
+    /// A Docked strip's BAND: the full width of the surface, the catalog row's height, stacked from
+    /// whichever edge it docks to.
+    ///
+    /// <para>⛔ A strip carries NO pixel geometry — its position is its Dock property — so it can
+    /// never come through <see cref="BoundsOf"/>. Reusing that would collapse every strip to a 0x0
+    /// rect at the origin: a phantom control in the corner with a resize grip nobody dropped, and
+    /// the menu bar itself invisible and unclickable, with nothing else on screen looking wrong.</para>
+    ///
+    /// <para>⛔ Top strips stack DOWNWARD in document order and Bottom strips stack UPWARD from the
+    /// edge, so the first-documented bottom bar is the one ON the edge — the same order
+    /// <c>FormAssetEmitter.Html</c> emits the page's bottom chrome in (reversed, for the same
+    /// reason). Which edge each one is on is <see cref="FormControl.IsDockedToBottom"/>, shared with
+    /// that emitter: two copies of that lookup would let this canvas draw the status band on one
+    /// edge while the page puts its <c>&lt;footer&gt;</c> on the other, from ONE document.</para>
+    /// </summary>
+    private static IEnumerable<FormLayoutEntry> Bands(FormDocument document)
+    {
+        var surface = SurfaceSize(document);
+        double top = 0, bottom = surface.Height;
+
+        foreach (var strip in document.Controls.Where(c => c.Definition?.Place == FormPlace.Docked))
+        {
+            var height = strip.Definition!.DefaultHeight;
+            Rect band;
+
+            if (strip.IsDockedToBottom)
+            {
+                bottom -= height;
+                band = new Rect(0, bottom, surface.Width, height);
+            }
+            else
+            {
+                band = new Rect(0, top, surface.Width, height);
+                top += height;
+            }
+
+            yield return new FormLayoutEntry(strip, band, FormLayoutRole.Band);
+        }
     }
 
     /// <summary>
@@ -337,36 +390,56 @@ public sealed class FormCanvasTransform
     /// unimplemented pixel escape hatch; for both, there is no cell a point could mean, and drawing
     /// a guess is exactly the preview this canvas must not pretend to be.</para>
     /// </summary>
-    private static IEnumerable<(FormControl Control, Rect Bounds)> WebLayout(FormDocument document)
+    private static IEnumerable<FormLayoutEntry> WebLayout(FormDocument document)
     {
-        if (document.Layout?.Kind != FormLayoutKind.Grid)
+        if (document.Layout?.Kind == FormLayoutKind.Grid)
         {
-            yield break;
+            var surface = SurfaceSize(document);
+            foreach (var control in document.Controls)
+            {
+                if (control.Geometry is GridGeometry grid)
+                {
+                    yield return new FormLayoutEntry(
+                        control,
+                        FormGridLayout.CellRect(
+                            document.Layout, surface, grid.Col, grid.Row, grid.ColSpan, grid.RowSpan),
+                        FormLayoutRole.Control);
+                }
+            }
         }
 
-        var surface = SurfaceSize(document);
-        foreach (var control in document.Controls)
+        // ⛔ ALWAYS, deliberately OUTSIDE the Grid branch. A band is page CHROME, not a cell: the
+        // emitter puts a strip's <nav>/<footer> outside <div class="vgs-form"> precisely because it
+        // occupies no track the user declared. Gating it on the layout kind would make a Flow page's
+        // menu bar — which the emitted page certainly has — invisible and unclickable in the
+        // designer, from a document the canvas otherwise lays out correctly.
+        foreach (var band in Bands(document))
         {
-            if (control.Geometry is GridGeometry grid)
-            {
-                yield return (control, FormGridLayout.CellRect(
-                    document.Layout, surface, grid.Col, grid.Row, grid.ColSpan, grid.RowSpan));
-            }
+            yield return band;
         }
     }
 
-    private static IEnumerable<(FormControl, Rect)> Layout(
+    private static IEnumerable<FormLayoutEntry> Layout(
         IReadOnlyList<FormControl> controls, Point containerOrigin)
     {
         foreach (var control in controls)
         {
+            // ⛔ A Docked strip is yielded by Bands() and by nothing else — never through BoundsOf,
+            // which knows only pixel geometry and would drop it silently (or, if one ever acquired
+            // geometry, yield it TWICE, once as a Control and once as a Band). Skipping the root
+            // also skips its items, which have no place on the canvas until Task 20 gives them one.
+            if (control.Definition?.Place == FormPlace.Docked)
+            {
+                continue;
+            }
+
             var bounds = BoundsOf(control, containerOrigin);
             if (bounds == null)
             {
                 continue;
             }
 
-            yield return (control, bounds.Value);
+            yield return new FormLayoutEntry(control, bounds.Value, FormLayoutRole.Control);
 
             foreach (var nested in Layout(control.Children, bounds.Value.TopLeft))
             {
@@ -375,3 +448,42 @@ public sealed class FormCanvasTransform
         }
     }
 }
+
+/// <summary>
+/// What a <see cref="FormLayoutEntry"/> IS, so a consumer that only wants real controls can say so
+/// rather than inferring it from a null <c>Control</c> or from a rectangle's shape.
+/// </summary>
+public enum FormLayoutRole
+{
+    /// <summary>An ordinary positioned control or a web page's cell-placed one.</summary>
+    Control,
+
+    /// <summary>A Docked strip's band across the surface (Task 17).</summary>
+    Band,
+
+    /// <summary>One item's cell inside a band or a dropdown (Task 20, commit 24d).</summary>
+    Cell,
+
+    /// <summary>The empty "Type Here" slot at the end of a host's items (Task 20, commit 24d).</summary>
+    TypeHere
+}
+
+/// <summary>
+/// One thing the canvas lays out: a control, a band, an item cell or a Type Here slot.
+///
+/// <para>⛔ Declared ONCE, with all FOUR fields, although <see cref="Host"/> is unused in commit 24c.
+/// A positional record struct's <c>Deconstruct</c> arity is part of its shape: adding the field in
+/// 24d would silently change every deconstruction written against a three-field version, and the
+/// tests that deconstruct it would break — or worse, bind their names to different fields. The field
+/// is here from the start and stays null until Task 20 fills it.</para>
+/// </summary>
+/// <param name="Control">The control this entry places, or null for a <see cref="FormLayoutRole.TypeHere"/> slot.</param>
+/// <param name="Bounds">Its rectangle in FORM space.</param>
+/// <param name="Role">What the entry is — see <see cref="FormLayoutRole"/>.</param>
+/// <param name="Host">
+/// The host a <see cref="FormLayoutRole.TypeHere"/> slot belongs to; null for everything else.
+/// Two slots can be visible at once (a strip's and an expanded item's), which is why the slot names
+/// its host rather than the caller inferring it from position.
+/// </param>
+public readonly record struct FormLayoutEntry(
+    FormControl? Control, Rect Bounds, FormLayoutRole Role, FormControl? Host = null);
