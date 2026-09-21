@@ -2563,6 +2563,52 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 + "a round-trip test to widen the set.");
         }
 
+        /// <summary>
+        /// The <c>System.String</c> members that arrive at <see cref="Visit(IRFieldAccess)"/> —
+        /// i.e. are written without parentheses — and the accessor each one really is.
+        ///
+        /// <para><b>One row, and that is not an oversight.</b> <c>System.String</c> has exactly one
+        /// public instance property, <c>Length</c>; everything else on it is a method and arrives
+        /// at <see cref="Visit(IRInstanceMethodCall)"/>, which already emits a real
+        /// <c>callvirt</c>. The table exists rather than a hard-coded <c>if</c> so that widening it
+        /// is the same one-row gesture as <see cref="CollectionMembers"/> and
+        /// <see cref="ExceptionMembers"/>, and so the return type travels with the accessor name
+        /// instead of being spelled at the emission site.</para>
+        /// </summary>
+        private static readonly Dictionary<string, CollectionMember> StringMembers =
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Length"] = new("get_Length", "int32", ""),
+            };
+
+        /// <summary>
+        /// Resolves a parenthesis-free member read on a <c>String</c> receiver to its property
+        /// accessor. Returns false for every other receiver, so nothing else is affected; throws
+        /// for a String member outside <see cref="StringMembers"/>.
+        ///
+        /// <para>⛔ The refusal is stronger here than for collections or exceptions. Those types
+        /// do have fields a future row might legitimately name; <c>System.String</c> has none, so
+        /// any member reaching this point and not found here would go out as an <c>ldfld</c> that
+        /// cannot exist. Refusing turns a run-time <c>MissingFieldException</c> from a build that
+        /// reported success into a compile-time diagnostic.</para>
+        /// </summary>
+        private bool TryStringMember(TypeInfo receiver, string member, out CollectionMember accessor)
+        {
+            accessor = null;
+            if (receiver == null || MapType(receiver) != "string") return false;
+            if (StringMembers.TryGetValue(member ?? "", out accessor)) return true;
+
+            throw new ForeignFeatureException(
+                $"MSIL: 'String.{member}' is outside the supported String surface. Length is the "
+                + "only member of System.String that is read without parentheses, and it is a "
+                + "PROPERTY — it has to be emitted as get_Length(). System.String has no public "
+                + "instance fields at all, so falling back to an ldfld here would emit a field "
+                + "reference that assembles and then fails with MissingFieldException at run time. "
+                + "Methods are unaffected: s.ToUpper() and s.Substring(i, n) go out as callvirt "
+                + "through the instance-method path. Add a row to MSILCodeGenerator.StringMembers "
+                + "plus a round-trip test to widen the set.");
+        }
+
         private void AllocateTemporaries(IRFunction function)
         {
             foreach (var block in function.Blocks)
@@ -3688,6 +3734,15 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 if (hasReturn && !string.IsNullOrEmpty(call.Name)
                     && !IsVoidStdLibArm(ResolveStdLibArm(funcName)))
                 {
+                    // The arm and the IR can disagree about what is on the stack — see
+                    // _stdLibResultSpec. Box across the gap before the store, exactly as the
+                    // .NET-static arm below does, so the slot holds what its declared type says.
+                    if (_stdLibResultSpec != null
+                        && NeedsBoxingInto(IlTypeSpec(call.Type), _stdLibResultSpec, out var stdBoxToken))
+                    {
+                        WriteLine($"    box {stdBoxToken}");
+                    }
+
                     if (_declaredIdentifiers.Contains(call.Name))
                     {
                         EmitStoreLocal(call.Name);
@@ -4134,9 +4189,104 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         private static bool IsVoidStdLibArm(string loweredName) =>
             loweredName is "print" or "printline" or "randomize";
 
+        /// <summary>
+        /// The IL spec an arm of <see cref="TryEmitStdLibCall"/> really left on the stack, for the
+        /// arms where the IR's type for the call does not say. Null means "the IR type is right",
+        /// which is every arm but one. Set by the arm, consumed immediately by its caller.
+        ///
+        /// <para>⛔ <c>Asc</c> and <c>Chr</c> are the two string intrinsics
+        /// <c>SemanticAnalyzer.RegisterStdLibFunctions</c> never registered, so the front end types
+        /// them <c>Object</c> and the destination slot is declared <c>object</c>. <c>Chr</c> is
+        /// unaffected — it yields a <c>string</c>, already a reference. <c>Asc</c> yields an
+        /// <c>int32</c>, and storing a raw integer into an object slot hands the runtime a number
+        /// as a reference: the same gap the .NET-static arm boxes across, and the same fix.</para>
+        ///
+        /// <para>⚠ Deliberately NOT fixed by registering the two names in the front end. That
+        /// table is read by all five backends, and re-typing a call that currently comes out
+        /// <c>Object</c> would change what C#, C++, JavaScript and LLVM emit for a shape that
+        /// works on three of them today. Bridging it in the one backend that spells IL types keeps
+        /// the blast radius here. Registering them is the better fix and belongs with whoever owns
+        /// the cross-backend stdlib table.</para>
+        /// </summary>
+        private string _stdLibResultSpec;
+
+        /// <summary>
+        /// The IL specs <c>conv.u2</c> can narrow to a <c>char</c>: the numeric ones. <c>bool</c>
+        /// is absent deliberately — <c>conv.u2</c> would happily turn True into U+0001, and the C#
+        /// backend refuses the same program (<c>((char)True)</c> is CS0030). <c>string</c> and
+        /// <c>object</c> are absent because they are references, and narrowing a reference is the
+        /// silent-wrong-answer case <see cref="RequireChrArgument"/> exists to stop.
+        /// </summary>
+        private static readonly HashSet<string> ChrArgumentSpecs = new(StringComparer.Ordinal)
+        {
+            "int8", "uint8", "int16", "uint16", "int32", "uint32", "int64", "uint64",
+            "float32", "float64", "char",
+        };
+
+        /// <summary>
+        /// ⛔ <c>Chr</c> and <c>Asc</c> are the two string intrinsics
+        /// <c>SemanticAnalyzer.RegisterStdLibFunctions</c> never registered, so — unlike Mid, Left,
+        /// Right, UCase, LCase, Trim, Replace, InStr and Len — <b>the front end type-checks nothing
+        /// about their arguments</b>. Every other arm can trust that arg 0 is a String because
+        /// semantic analysis already said so; these two cannot.
+        ///
+        /// <para>Measured on the CLI, compiled, assembled and run, with the guards removed:</para>
+        /// <list type="bullet">
+        /// <item><c>Chr("x")</c> emitted <c>ldstr "x"; conv.u2; call Char::ToString(char)</c>,
+        /// ran clean, and printed <b>Ԙ</b> — narrowing a string REFERENCE to a character. The C#
+        /// backend refuses the same program.</item>
+        /// <item><c>Chr(Asc("A"))</c> printed <b>鍀</b>: Asc's result is typed Object, so it
+        /// arrives boxed and <c>conv.u2</c> narrows the box pointer.</item>
+        /// <item><c>Asc(5)</c> emitted <c>ldc.i4.5; ldc.i4.0; callvirt String::get_Chars</c> and
+        /// died with NullReferenceException — an integer used as a string reference.</item>
+        /// </list>
+        ///
+        /// <para>⛔ <b>A clean run with a wrong answer is worse than the gap these arms close</b>,
+        /// so a mistyped argument is refused here. Before these arms existed the same programs
+        /// failed loudly with MissingMethodException; turning that into garbage output would be a
+        /// regression dressed as a feature.</para>
+        /// </summary>
+        private void RequireChrArgument(IRValue argument)
+        {
+            var spec = IlTypeSpec(argument?.Type);
+            if (ChrArgumentSpecs.Contains(spec)) return;
+
+            throw new ForeignFeatureException(
+                $"MSIL: 'Chr' needs a numeric argument; this one is '{spec}'. Chr is not registered "
+                + "in SemanticAnalyzer.RegisterStdLibFunctions, so the front end does not check its "
+                + "argument and nothing upstream rejects Chr(\"x\"). Emitting it anyway means "
+                + "conv.u2 narrowing a REFERENCE to a character: measured, Chr(\"x\") ran clean and "
+                + "printed a Cyrillic glyph, and Chr(Asc(\"A\")) — whose argument is boxed because "
+                + "Asc is typed Object — printed a CJK one. The C# backend refuses the same program "
+                + "(CS0030). Register Chr in the front end to fix this properly for all five "
+                + "backends.");
+        }
+
+        /// <summary>
+        /// The companion guard for <c>Asc</c>. <c>string</c> is the intended argument; <c>object</c>
+        /// is allowed because it is how the IR types any unregistered intrinsic's result and the
+        /// <c>callvirt</c> dispatches correctly when the object really is a string — measured,
+        /// <c>Asc(Chr(66))</c> answers 66. A VALUE-typed argument can never be a string, so it is
+        /// refused rather than emitted as the NullReferenceException it would become.
+        /// </summary>
+        private void RequireAscArgument(IRValue argument)
+        {
+            var spec = IlTypeSpec(argument?.Type);
+            if (spec == "string" || spec == "object") return;
+
+            throw new ForeignFeatureException(
+                $"MSIL: 'Asc' needs a String argument; this one is '{spec}'. Asc is not registered "
+                + "in SemanticAnalyzer.RegisterStdLibFunctions, so the front end does not check its "
+                + "argument and nothing upstream rejects Asc(5). Emitting it anyway calls "
+                + "String::get_Chars on a value type: measured, Asc(5) assembled and died with "
+                + "NullReferenceException. Register Asc in the front end to fix this properly for "
+                + "all five backends.");
+        }
+
         private bool TryEmitStdLibCall(string funcName, List<IRValue> args, bool hasReturn)
         {
             var lower = ResolveStdLibArm(funcName);
+            _stdLibResultSpec = null;
 
             switch (lower)
             {
@@ -4268,6 +4418,137 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 case "len":
                     EmitLoadValue(args[0]);
                     WriteLine("    callvirt instance int32 [mscorlib]System.String::get_Length()");
+                    return true;
+
+                // ============================================================================
+                // The VB string intrinsics. ⛔ EVERY ONE OF THESE EMITS THE IL THAT THE C#
+                // BACKEND'S OUTPUT COMPILES TO, INSTRUCTION FOR INSTRUCTION — see
+                // CSharpStdLibProvider.EmitMid/EmitLeft/… — AND THAT IS THE WHOLE CONTRACT.
+                //
+                // ⚠ It is NOT the same thing as "VB semantics", and the difference is not
+                // theoretical. Measured on this front end, all four backends, compiled and run:
+                //
+                //   Mid("abcdef", 5, 10)  C#: ArgumentOutOfRangeException   JS: "ef"
+                //   Mid("abc", 0, 2)      C#: ArgumentOutOfRangeException   JS: "c"
+                //   Left("abcdef", 10)    C#: ArgumentOutOfRangeException   JS: "abcdef"
+                //   Right("abcdef", 10)   C#: ArgumentOutOfRangeException   JS: "abcdef"
+                //   Asc("")               C#: IndexOutOfRangeException      JS: NaN
+                //
+                // Real VB clamps and returns the short string; BasicLang's C# backend does not,
+                // and `BasicLang.Runtime.BasicLangRuntime.Mid` — which DOES clamp — is dead code
+                // that no backend calls. So there is no single existing answer to copy. MSIL is
+                // the OTHER .NET backend, and the precedent this file already set for a .NET/.NET
+                // split is the `cint` arm below: when the two disagreed, MSIL was changed to match
+                // C#. Matching it here keeps the two .NET targets byte-identical on every input,
+                // including the throwing ones, and leaves the clamping question — which belongs to
+                // all five backends at once — to be settled in one place rather than invented here.
+                //
+                // ⛔ Do NOT "fix" one of these into clamping on its own. A clamp on MSIL alone
+                // turns an exception both .NET backends agree on into a silent different answer
+                // on one of them, which is strictly worse than the gap.
+
+                // C#: str.Substring(start - 1, length). `Mid` is 1-BASED and the `- 1` is the
+                // whole reason this cannot be a bare Substring; dropping it is an off-by-one that
+                // assembles, runs, and returns the wrong characters.
+                // ⚠ Only the 3-argument form exists: SemanticAnalyzer registers Mid with exactly
+                // three parameters, so `Mid(s, 3)` is rejected by the front end on every backend
+                // ("Function 'Mid' expects 3 argument(s), got 2") and never reaches any emitter.
+                case "mid":
+                    EmitLoadValue(args[0]);
+                    EmitLoadValue(args[1]);
+                    WriteLine("    ldc.i4.1");
+                    WriteLine("    sub");
+                    EmitLoadValue(args[2]);
+                    WriteLine("    callvirt instance string [mscorlib]System.String::Substring(int32, int32)");
+                    _currentStack -= 2;
+                    return true;
+
+                // C#: str.Substring(0, length).
+                case "left":
+                    EmitLoadValue(args[0]);
+                    WriteLine("    ldc.i4.0");
+                    EmitLoadValue(args[1]);
+                    WriteLine("    callvirt instance string [mscorlib]System.String::Substring(int32, int32)");
+                    _currentStack -= 2;
+                    return true;
+
+                // C#: str.Substring(str.Length - length) — which needs the receiver TWICE.
+                //
+                // ⛔ `dup`, not a second EmitLoadValue, and this is a deliberate divergence from
+                // the C# backend rather than an oversight. `EmitRight` interpolates `{str}` twice,
+                // so the receiver EXPRESSION is evaluated twice: measured on
+                // `Right(Tag(), 2)` where Tag prints, C# printed "tag" TWICE while JavaScript and
+                // C++ printed it once. Two of the three agree, a side effect happening twice is a
+                // defect by any reading, and `dup` is also the only spelling here that cannot
+                // duplicate work. The C# backend's double evaluation is recorded as its own bug.
+                case "right":
+                    EmitLoadValue(args[0]);
+                    WriteLine("    dup");
+                    WriteLine("    callvirt instance int32 [mscorlib]System.String::get_Length()");
+                    EmitLoadValue(args[1]);
+                    WriteLine("    sub");
+                    WriteLine("    callvirt instance string [mscorlib]System.String::Substring(int32)");
+                    _currentStack--;
+                    return true;
+
+                case "ucase":
+                    EmitLoadValue(args[0]);
+                    WriteLine("    callvirt instance string [mscorlib]System.String::ToUpper()");
+                    return true;
+
+                case "lcase":
+                    EmitLoadValue(args[0]);
+                    WriteLine("    callvirt instance string [mscorlib]System.String::ToLower()");
+                    return true;
+
+                case "trim":
+                    EmitLoadValue(args[0]);
+                    WriteLine("    callvirt instance string [mscorlib]System.String::Trim()");
+                    return true;
+
+                // C#: str.Replace(find, replaceWith) — which replaces EVERY occurrence, the
+                // answer JavaScript and C++ also give ("banana"/"a"/"o" → "bonono" on all three).
+                case "replace":
+                    EmitLoadValue(args[0]);
+                    EmitLoadValue(args[1]);
+                    EmitLoadValue(args[2]);
+                    WriteLine("    callvirt instance string [mscorlib]System.String::Replace(string, string)");
+                    _currentStack -= 2;
+                    return true;
+
+                // C#: (str.IndexOf(search) + 1). ⛔ The `+ 1` is what makes InStr 1-BASED and what
+                // makes NOT FOUND come out as 0 rather than .NET's -1 — one addition carrying two
+                // separate parts of the contract. Measured 3 / 1 / 0 on found-middle / found-first
+                // / absent, identically on C# and JavaScript.
+                case "instr":
+                    EmitLoadValue(args[0]);
+                    EmitLoadValue(args[1]);
+                    WriteLine("    callvirt instance int32 [mscorlib]System.String::IndexOf(string)");
+                    WriteLine("    ldc.i4.1");
+                    WriteLine("    add");
+                    _currentStack--;
+                    return true;
+
+                // C#: ((char)code).ToString(). `Char::ToString(char)` is the static one-argument
+                // overload, so no box/callvirt pair is needed. `conv.u2` performs the (char) cast:
+                // without it the int32 on the stack does not match the char parameter.
+                case "chr":
+                    RequireChrArgument(args[0]);
+                    EmitLoadValue(args[0]);
+                    WriteLine("    conv.u2");
+                    WriteLine("    call string [mscorlib]System.Char::ToString(char)");
+                    return true;
+
+                // C#: (int)str[0], i.e. the Chars indexer at 0. A char on the evaluation stack IS
+                // an int32, so the cast needs no opcode — but the IR types this call Object (Asc
+                // and Chr are the two intrinsics SemanticAnalyzer never registered), so the value
+                // has to be bridged into a reference slot. See _stdLibResultSpec.
+                case "asc":
+                    RequireAscArgument(args[0]);
+                    EmitLoadValue(args[0]);
+                    WriteLine("    ldc.i4.0");
+                    WriteLine("    callvirt instance char [mscorlib]System.String::get_Chars(int32)");
+                    _stdLibResultSpec = "int32";
                     return true;
 
                 // ⛔ ROUNDS HALF-TO-EVEN, and `conv.i4` alone does NOT — it truncates, which is
@@ -5331,6 +5612,32 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             {
                 WriteLine("    ldlen");
                 WriteLine("    conv.i4");   // ldlen yields a native uint; BasicLang's Length is Integer
+                EmitFieldAccessResult(fieldAccess);
+                return;
+            }
+
+            // ⛔ THE SAME SHAPE ONCE MORE, on the type it matters most for. `s.Length` emitted
+            // `ldfld int32 [mscorlib]System.String::'Length'`, which ASSEMBLES — ilasm does not
+            // resolve member references — and dies at run time with
+            // `MissingFieldException: Field not found: 'System.String.Length'`. Length is a
+            // PROPERTY, so it has to become its accessor call.
+            //
+            // ⚠ This is the PROPERTY half only, and that is what made it hard to see: the METHOD
+            // half beside it already worked. `s.ToUpper()` and `s.Substring(1, 3)` both run today,
+            // because Visit(IRInstanceMethodCall) renders the receiver through IlReceiverToken and
+            // emits a real `callvirt`. Only a member reaching Visit(IRFieldAccess) was broken, and
+            // String's only property is the one everybody uses.
+            //
+            // ⛔ An unrecorded String member is REFUSED, not passed to the ldfld below, and unlike
+            // the collection and exception tables that is not merely a convention here:
+            // System.String has NO public instance fields at all, so a field load on a string
+            // receiver cannot be right whatever it names. Falling through would re-create exactly
+            // the run-time failure this arm exists to remove.
+            if (TryStringMember(fieldAccess.Object?.Type, fieldAccess.FieldName, out var strAccessor))
+            {
+                WriteLine($"    callvirt instance {strAccessor.Ret} [mscorlib]System.String::{strAccessor.Il}()");
+                _currentStack--;
+                _currentStack++;
                 EmitFieldAccessResult(fieldAccess);
                 return;
             }

@@ -135,6 +135,19 @@ These are measured, not cautionary. Each one shipped a green build that did the 
   (it corrupts the BOM-less UTF-8 files here). Write commit messages to a file and use
   `git commit -F`. PowerShell 5.1 reports a native command's stderr as failure, so **verify a
   push by comparing SHAs, never by exit code**.
+- ⛔ **`MsilHarness.Run` is a `GenerateFailed` oracle for CODEGEN refusals ONLY** — a
+  `ForeignFeatureException` out of `MSILCodeGenerator`. It is **not** one for a parse or
+  semantic error. `MsilHarness.CompileToIl` asserts `Assert.That(analyzer.Analyze(ast),
+  Is.True)` internally, and NUnit 4 records that assertion failure against the CURRENT test
+  even when the calling code catches the exception — so a fixture that expects a front-end
+  rejection fails while appearing to assert the opposite. Assert front-end rejections against
+  `Parser.Errors` / `SemanticAnalyzer.Errors` directly. (Found by test-writer, 2026-09-21,
+  writing the String-property refusal cases.)
+- ⚠ **A mutation sweep restores the SOURCE but does not rebuild.** `sweep.sh` ends with
+  `mut.py restore`, which rewrites the `.cs` file; the last binary on disk is still the LAST
+  MUTANT'S. A `dotnet run --no-build` straight afterwards runs that mutant — measured
+  2026-09-21, it produced a phantom `InvalidProgramException` from a clean tree and cost real
+  time. **Always `dotnet build` after a sweep, before any `--no-build` run.**
 
 ---
 
@@ -2177,6 +2190,182 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
   exactly the two new fixtures (18 + 19) and nothing else. 195 reported = 195 anchored
   `^  Failed ` lines; 170 normalized failing names, `diff` against the baseline list clean —
   nothing new, nothing newly passing.
+
+  ⚠ **THE VB STRING INTRINSICS RUN ON MSIL as of 2026-09-21** — `MsilStringIntrinsicTests`
+  (54 cases), `MSILBackend.cs`: `TryEmitStdLibCall` arms at `4456-4553`, `_stdLibResultSpec`
+  (`4192-4211`, consumed `3735-3742`), `RequireChrArgument`/`RequireAscArgument`
+  (`4213-4281`). Before: `Mid`, `Left`, `Right`, `UCase`, `LCase`, `Trim`, `Replace`, `InStr`,
+  `Chr` and `Asc` each died at RUN time with e.g.
+  `MissingMethodException: Method not found: 'System.String MsilProbe.Mid(System.String, Int32, Int32)'`
+  — **naming the MODULE class**. They fell out of `TryEmitStdLibCall`'s switch, and
+  `Visit(IRCall)` then reached the emit-a-call-on-the-current-class default
+  (`MSILBackend.cs:3799`, `call {ret} {_moduleName ?? "Program"}::{name}(...)`): the phantom
+  self-call already recorded for `Console.WriteLine`. **ilasm accepts a MemberRef with no
+  definition**, so every one of them assembled cleanly and failed only when run.
+  ⭐ **`Len` WORKED, and that was the discriminator** — it has a `case "len"` arm emitting
+  `callvirt instance int32 [mscorlib]System.String::get_Length()`. The mechanism existed and
+  the table was incomplete, so the ten new arms copy it exactly rather than inventing a second
+  path. `BasicLang/StdLib/MSILStdLib.cs` is NOT that path (see below).
+  ⛔ **THE SEMANTIC FINDING, worth more than the arms. THERE IS NO SINGLE "BasicLang
+  semantics" FOR THESE FUNCTIONS.** Measured on all four backends, compiled and run, before
+  writing one line of emitter:
+  - The **C# backend's emissions are raw BCL with NO clamping** — `EmitMid` is
+    `str.Substring(start - 1, length)`, `EmitLeft` is `str.Substring(0, length)`
+    (`BasicLang/StdLib/CSharpStdLib.cs:352-364`) — so C# **THROWS** where real VB clamps:
+    `Mid("abcdef",5,10)`, `Mid("abc",5,2)`, `Mid("",1,1)`, `Mid("abc",0,2)`,
+    `Left("abcdef",10)`, `Left("",1)`, `Left("abc",-1)`, `Right("abcdef",10)`, `Right("",1)`
+    are all `ArgumentOutOfRangeException`; `Replace("banana","","o")` is `ArgumentException`;
+    `Asc("")` is `IndexOutOfRangeException`.
+  - **JavaScript CLAMPS** every one of them (`[ef]`, `[]`, `[]`, `[c]`, `[abcdef]`, `[]`, `[]`,
+    `[abcdef]`, `[]`, `[boaonoaonoa]`, `NaN`).
+  - ⚠ **`BasicLang.Runtime.BasicLangRuntime.Mid`/`Left`/`Right` DO clamp — and are DEAD CODE
+    that no backend calls.** `BasicLangRuntime.cs:19-65`. Do not read it as the specification;
+    grep for a caller before believing any of it.
+  So the choice was never "VB or not"; it was "match the other .NET backend, or invent a third
+  answer for MSIL alone". **MSIL now emits the IL the C# backend's output compiles to,
+  instruction for instruction, including the throwing inputs — same exception type, same
+  parameter name** — on the precedent the `cint` arm already set in this file (C# and MSIL
+  diverged on `CInt(7.5)`; MSIL was changed to match C#).
+  ⛔ **THE CLAMPING QUESTION IS A FIVE-BACKEND SEMANTIC AND IS DELIBERATELY LEFT UNDECIDED.**
+  Nothing here settles it. Changing to clamping later touches five backends and every pinned
+  shape; that is an architect's call, not an emitter's. ⛔ Do **not** "fix" one intrinsic into
+  clamping on its own — a clamp on MSIL alone turns an exception the two .NET backends agree
+  on into a silent different answer on one of them, which is strictly worse than the gap.
+  ⭐ **`Chr` AND `Asc` ARE ABSENT FROM `SemanticAnalyzer.RegisterStdLibFunctions`**
+  (`SemanticAnalyzer.cs:1130-1210` has rows for the other nine and none for these two). Two
+  consequences, both load-bearing:
+  - Their results are typed **Object**, so `Asc`'s `int32` lands in an `object` slot. Bridged
+    with `_stdLibResultSpec` + the existing `NeedsBoxingInto`, exactly as the .NET-static arm
+    does. The spec is RESET at the top of every `TryEmitStdLibCall` — without the reset it
+    leaks into the next call and boxes a `string` as an `Int32`.
+  - ⛔ **Their ARGUMENTS are type-checked by nothing.** Measured on the CLI with the arms in
+    and the guards out: **`Chr("x")` ran clean and printed `Ԙ`**; **`Chr(Asc("A"))` printed
+    `鍀`** (the argument arrives boxed, and `conv.u2` narrows the box pointer); **`Asc(5)`**
+    emitted `ldc.i4.5; ldc.i4.0; callvirt String::get_Chars` and died with
+    NullReferenceException. **Shipping the arms unguarded would have converted a LOUD FAILURE
+    (MissingMethodException) into a SILENT WRONG ANSWER** — a regression dressed as a feature,
+    and the worst failure mode this backend has. `RequireChrArgument`/`RequireAscArgument`
+    refuse them with a named diagnostic. ⚠ `Asc` still accepts an **Object**-typed argument and
+    must: `Asc(Chr(66))` answers `66`, because the `callvirt` dispatches on the real string.
+  ⚠ **`Right` uses `dup`, and that is a DELIBERATE DIVERGENCE from the C# backend.**
+  `CSharpStdLib.EmitRight` interpolates `{str}` twice, so the receiver EXPRESSION is evaluated
+  twice: measured on `Right(Tag(), 2)` where `Tag` prints, **C# printed `tag` TWICE** while
+  JavaScript, C++ and now MSIL print it once. Two of three agree and `dup` cannot duplicate
+  work. The C# backend's double evaluation is on the open list below.
+  ⚠ **`BasicLang/StdLib/MSILStdLib.cs` IS DEAD CODE.** `MSILStdLibProvider` is registered in
+  `StdLibRegistry.cs:36` and **referenced by nothing** — `MSILBackend.cs` has zero hits for it.
+  It is also wrong where it is most tempting to reuse: its `EmitMid` emits
+  `"ldc.i4.1\nsub\n…Substring(int32,int32)"`, which with `(str, start, length)` on the stack
+  subtracts 1 from the **LENGTH**, not the start; `EmitRight` is a comment saying it "needs
+  stack manipulation". Two tables claiming to be the MSIL stdlib is exactly the drift hazard
+  `CollectionMembers`/`ExceptionMembers` are narrow to avoid. Delete it or wire it — do not
+  quietly copy from it. On the open list.
+  ⚠ **C++ IS NOT A USABLE ORACLE for this family outside `Replace`.** `CppCodeGenerator.cs:3180-3186`
+  calls `.substr`/`.find` directly on `{args[0]}`, so a **string-literal receiver** is a bare
+  `const char*` with no such member and the program does not compile at all. `Replace` goes
+  through a lambda taking `string` and does compile.
+  ⚠ **`Mid` has no two-argument form** — registered with exactly three parameters, so
+  `Mid(s, 3)` is `Function 'Mid' expects 3 argument(s), got 2` on every backend and never
+  reaches an emitter. Pinned as the refusal.
+  ⚠ **`Right(s, n)` with n = half the string length is a DEGENERATE shape** — with a
+  6-character string, a correct `Right(s, 3)` and a `Substring(3)` that forgot the length
+  subtraction both answer `def`. Use `n = 2`. Cost a mutant that should have died.
+  **27 of 27 mutants killed against the committed fixture, 0 survivors, 0 build breaks.**
+  ⭐ **`g1-chr-no-conv` SURVIVED the first sweep and is UNTESTED, not equivalent.** Dropping
+  the `conv.u2` in front of `call string Char::ToString(char)` changes nothing for any INTEGER
+  argument — on the CLR stack `char` IS `int32`, so the call verifies and the ABI truncates
+  either way; `Chr(65)`, `Chr(65601)`, `Chr(0)`, `Chr(931)` and `Chr(-191)` are all identical
+  with and without it. It is what makes the call legal IL for a **non-integer** argument, which
+  nothing upstream rejects: `ChrOfADouble_NeedsTheNarrowingConversion` (`Dim d As Double = 65.0`
+  then `Chr(d)`) answers `[A]` and gives **InvalidProgramException** under the mutant. That one
+  test is the only thing in 54 that kills it — **do not remove it**, and note the rule it
+  illustrates again: *a mutant no shape can kill is UNTESTED, not redundant; the question is
+  whether a shape EXISTS.* `Len(Chr(-1))` is not that shape — the FRONT END rejects it
+  (`cannot convert from 'Object' to 'String'`), because `Chr` is typed Object and `Len` takes
+  String.
+
+  ⚠ **`s.Length` RUNS ON MSIL as of 2026-09-21** — `MsilStringPropertyTests` (21 cases),
+  `MSILBackend.cs`: `StringMembers` (`2566-2582`), `TryStringMember` (`2584-2610`), and the arm
+  in `Visit(IRFieldAccess)` (`5619-5643`). Before: `s.Length` on a String emitted
+  `ldfld int32 [mscorlib]System.String::'Length'` — a .NET **PROPERTY** read lowered to a field
+  load — which assembled (ilasm does not resolve member references) and died with
+  `MissingFieldException: Field not found: 'System.String.Length'`. Now
+  `callvirt instance int32 [mscorlib]System.String::get_Length()`.
+  ⭐ **THE METHOD PATH BESIDE IT WAS NEVER BROKEN, and that is what made this hard to see.**
+  `s.ToUpper()` and `s.Substring(1, 3)` both ran before and after — `Visit(IRInstanceMethodCall)`
+  renders the receiver through `IlReceiverToken` and emits a real `callvirt`. Only a member
+  reaching `Visit(IRFieldAccess)` was broken, and `Length` is String's only property, so the
+  break was total for the one member everybody uses and invisible everywhere else.
+  ⭐ **`List.Count` and `Dictionary.Count` SHARE THE SITE; `Array.Length` IS A DIFFERENT PATH
+  ENTIRELY.** Measured, all correct before and after: Count reaches `TryCollectionMember` two
+  arms above the `ldfld` and emits `callvirt … List`1<int32>::get_Count()`; **`a.Length` is the
+  dedicated `ldlen` + `conv.i4` opcode pair**, not an accessor call at all. They are CONTROLS in
+  the fixture, not siblings — and they are what kills `s5-receiver-test-removed`, the mutant
+  where the String arm claims every receiver. `HashSet.Count` is unobservable: `h.Add(1)` is
+  refused first by `TryCollectionMember`.
+  ⛔ **An unrecorded String member is REFUSED, not emitted as an `ldfld`, and that is stronger
+  than the `CollectionMembers`/`ExceptionMembers` convention on purpose:** `System.String` has
+  **no public instance fields at all**, so a field load on a string receiver cannot be right
+  whatever it names. Verified this breaks nothing that worked — on the parent tree `s.Foo`,
+  `s.Chars`, `s.Empty`, `s.ToUpper` (no parentheses) and `s.Trim` (no parentheses) all gave
+  `MissingFieldException` at RUN time; they now give a named `GenerateFailed`. ⚠ A
+  parenthesis-free String METHOD name reaches this arm too, so the refusal fires for it.
+  ⛔ **THE INTERFACE-PROPERTY READ IS STILL BROKEN and was deliberately NOT widened to.**
+  `h.Slot` on an `IHolder` still gives `MissingFieldException: Field not found: 'IHolder.Slot'`:
+  `TryResolveProperty` (`MSILBackend.cs:3104`) resolves only through `TryFindClass`, so an
+  interface receiver misses every arm. **It needs an interface-property resolver alongside the
+  existing `DeclaredInterfaceMethod` — a different lookup, not a table row**, which is why the
+  String fix does not reach it. ⚠ **C# cannot be its oracle either**: it emits an accessor-less
+  interface property and does not compile (**CS0548** + CS0200). JavaScript answers `5`. On the
+  open list.
+  **9 of 10 mutants killed against the committed fixture; 1 survivor, declared EQUIVALENT.**
+  `s7-unknown-member-falls-through` survived the scratch sweep and dies against the committed
+  fixture on all five refusal shapes — it was UNTESTED, not dead. ⚠ **`s8-call-not-callvirt`
+  SURVIVES and the `callvirt` is KEPT.** Unlike `g1` above the candidate space here is CLOSED,
+  not merely unexplored: `System.String` is sealed and `get_Length` is not virtual (nothing for
+  `callvirt` to find), ilasm accepts both, and the only receiver value where the two opcodes'
+  definitions differ — null — was measured under both and gives **byte-identical**
+  `NullReferenceException`. Kept because every other accessor emission in this file spells it
+  `callvirt` (`EmitPropertyGet`, the collection-member arm, the exception-member arm) and
+  `callvirt`'s null check is guaranteed by the CLI spec where `call`'s fault is a JIT
+  implementation detail. **Do not "simplify" it to `call`.**
+  ⚠ **Not fixed, out of these two families, each measured compiled-and-run — added to the open
+  list:**
+  - ⛔ **C# backend: `Right` EVALUATES ITS RECEIVER TWICE.** `EmitRight` interpolates `{str}`
+    twice; `Right(Tag(), 2)` where `Tag` prints printed `tag` twice on C# and once on
+    JavaScript, C++ and MSIL. That leg asserts against JavaScript.
+  - ⛔ **C# backend: an interface property emits an accessor-less property** —
+    `CS0548: 'IHolder.Slot': property or indexer must have at least one accessor`, plus CS0200.
+    The program does not compile, so C# is not a valid oracle for any interface-property shape.
+  - **C# backend: `Dim s As String` with no initializer then `s.Length` prints `0`** — the local
+    is initialised to `""`. MSIL gives `NullReferenceException`; every other backend agrees with
+    MSIL that the local is null.
+  - **C++ backend: `Mid`/`Left`/`Right`/`InStr` with a STRING-LITERAL receiver do not compile** —
+    `.substr`/`.find` called on a bare `const char*` (`CppCodeGenerator.cs:3180-3186`).
+    `Replace` is fine; it goes through a lambda taking `string`.
+  - ⛔ **C++ backend: `Replace(s, "", "o")` HANGS** — measured **exit 137, killed**. The replace
+    lambda's `pos += to.length()` never escapes an empty needle. C# throws `ArgumentException`
+    and JavaScript returns a string; C++ loops forever.
+  - **JavaScript backend: `s.ToUpper()` — a .NET method on a String — is
+    `TypeError: s.ToUpper is not a function`.** The `.NET`-method-on-a-primitive path is not
+    lowered; the `UCase(s)` intrinsic spelling works.
+  - ⛔ **Front end: `Chr` and `Asc` are not registered in
+    `SemanticAnalyzer.RegisterStdLibFunctions`** — results typed `Object` and arguments
+    unchecked, **on all five backends**. Registering them is the proper fix for both the boxing
+    bridge and the argument guards added here; it changes what C#, C++, JavaScript and LLVM
+    emit, so it was not done from a backend.
+  - ⚠ **`BasicLang/StdLib/MSILStdLib.cs` is dead code** registered in `StdLibRegistry.cs:36`
+    and referenced by nothing, with a wrong `EmitMid`. Delete or wire.
+  - **MSIL: an INTERFACE property read is still `MissingFieldException`**, needing an
+    interface-property resolver rather than a table row (above).
+  **Full suite in place for BOTH families: 195 / 6374 / 203 / 6772 against the `2608272`
+  baseline 195 / 6299 / 203 / 6697** — +75 passed, +75 total, +0 failed, +0 skipped, which is
+  exactly the two new fixtures (54 + 21) and nothing else. 195 reported = 195 anchored
+  `^  Failed ` lines; 170 normalized failing names, `diff` against the baseline list clean.
+  Filtered `FullyQualifiedName~Msil` reference: `Failed: 0, Passed: 322`; the two new fixtures
+  alone `Failed: 0, Passed: 75`. **Both entry points exercised** — `MsilHarness` (optimizer on)
+  and the CLI (`--target=msil` → ilasm → `dotnet`), which funnel through
+  `MSILCodeGenerator.Generate(irModule)` at `Program.cs:1317` and `Program.cs:4017`.
 
   ⚠ **Narrowing shapes are refused by the SEMANTIC ANALYZER, before any of this** —
   `Public N As Single = 1.5 + 1.0` is "Cannot assign value of type 'Double' to variable of type
