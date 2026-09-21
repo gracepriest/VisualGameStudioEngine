@@ -70,20 +70,52 @@ was not the pinned one.
   miscompilation; a whitelist that defaults to false is at worst
   over-conservative.
 
-## Premise status (unverified)
+## Premise status: MEASURED AND CONFIRMED (2026-09-21, HEAD 13411bf)
 
-This decision is motivated by the risk that `CommonSubexpressionEliminationPass`
-(`IROptimizer.cs:1162`, registered into the default pipeline at `:1542`)
-produces multi-use values out of side-effecting calls, which the current
-inline-always policy would then evaluate more than once. **As of this
-ruling, nobody has measured whether CSE actually fires on a side-effecting
-call in a program that can be written today.** The hazard is structurally
-real — the code has no use-count > 1 branch today, and CSE runs by default —
-but it is not yet demonstrated end to end. A measurement is queued but has
-not landed; an earlier claim that a characterization agent was already
-measuring this was inaccurate — no such measurement had actually been
-dispatched. Until a measurement lands, treat this premise as open, and see
-Revisit if below.
+This decision was ruled on while its motivating premise was still unverified.
+It has since been measured, and **the premise holds — but not through CSE.**
+Both halves are recorded here because the ADR was written the other way round.
+
+**CSE does NOT merge side-effecting calls.** Its only candidate arm is
+`if (inst is IRBinaryOp binaryOp)` (`IROptimizer.cs:1191`), so an `IRCall` is
+never a CSE candidate; and its key
+`$"{binaryOp.Operation}_{binaryOp.Left.Name}_{binaryOp.Right.Name}"` (`:1193`)
+cannot collide when an operand *is* a call, because every anonymous call result
+gets a unique SSA temp name. Every multi-use value CSE does produce has
+`IRVariable`/`IRConstant` operands — i.e. is replicable. **The shared-
+`IsReplicable` obligation on CSE below is therefore defence in depth, not the
+primary fix.**
+
+**The hazard is real and was measured elsewhere.** `AlgebraicSimplificationPass`'s
+`2 * x -> x + x` arm (`IROptimizer.cs:2456-2466`) writes the *same operand
+object* into both slots with **no gate on what the operand is**. On
+`Dim r As Integer = 2 * Tag()` it produces `Add(t0, t0)` where `t0` is the
+`IRCall` — a use count of 2 on a side-effecting call. C#'s inline-always then
+emits `r = Tag() + Tag();` and the program prints twice. **C# is the only one
+of the four backends that is wrong**; C++, JS and MSIL all materialise
+`t0 = Tag();` and print once. Reproduced on BOTH entry points (the single-file
+CLI with `--optimize`, and a Release `.blproj` through `CompileProjectFiles`);
+note `ProjectFile.cs:44` defaults `OptimizationsEnabled` to **true**.
+
+So E1 is violated by the oracle, in a one-line program, today. This decision
+is the primary fix for that instance.
+
+⚠ Worth recording, because it argues the opposite way: that arm carries a
+comment reasoning that the rewrite is "sound on both fronts" — IEEE 754
+rounding and integer-overflow wrapping. Both fronts are about the **value**.
+Nothing in it considers how many times `x` is *evaluated*. A value-preserving
+rewrite is not automatically an effect-preserving one, and that is the whole
+content of E1.
+
+⚠ **A trap in the other direction**, measured at the same time. CSE has no
+SSA/version check and will merge across a redefinition of an operand
+(`p + q`, then `p = …`, then `p + q` again). There, C# is the backend that is
+**right** — and it is right precisely *because* inline-always re-emits the
+expression text rather than honouring the IR's bad merge, while C++, JS and
+MSIL all print the wrong answer. Under this ADR that binop's use count is 1, so
+it is not materialised and C# stays correct; but an implementer who "fixes"
+materialisation more aggressively than E1 requires would make the oracle wrong
+too. Do not widen past the contract.
 
 ## Contract
 
@@ -109,12 +141,19 @@ Revisit if below.
 
 ## Obligations
 
+- ⭐ **`AlgebraicSimplificationPass`'s `2 * x -> x + x` arm
+  (`IROptimizer.cs:2456-2466`) must not fire unless the operand is
+  replicable.** This is the MEASURED instance (see Premise status) and the
+  fix is one line: the same predicate, a third consumer. Duplicating an
+  operand object is duplicating an evaluation.
 - `IsReplicable` is shared with `CommonSubexpressionEliminationPass`
   (`IROptimizer.cs:1162`, registered `:1542`): CSE may only merge
   instructions it would call replicable. Merging two effecting calls
-  *deletes* an effect, which no backend fix can repair. One predicate, two
-  consumers — the same rule as `ModuleResolver`/`ModuleTypeWalker` in
-  `CLAUDE.md`.
+  *deletes* an effect, which no backend fix can repair. ⚠ Measured
+  redundant today — the `:1191` candidate gate means CSE never sees a call —
+  so this bullet is defence in depth against that gate being widened, not a
+  live defect. One predicate, now three consumers — the same rule as
+  `ModuleResolver`/`ModuleTypeWalker` in `CLAUDE.md`.
 - **Fixture churn: yes, this churns emitted C#, and it is worth it.** Bounded
   to fixtures whose program contains a multi-use non-replicable value. Where
   `CSharpLoopExitTests.cs` strings change, update them — do not delete them;
@@ -143,6 +182,17 @@ Revisit if below.
 
 ## Revisit if
 
-A measured program shows CSE merging a side-effecting call — then CSE's gate
-is the primary fix and this decision becomes defence in depth rather than
-the primary mitigation.
+~~A measured program shows CSE merging a side-effecting call — then CSE's gate
+is the primary fix and this decision becomes defence in depth rather than the
+primary mitigation.~~ **SATISFIED 2026-09-21, and resolved the other way:** CSE
+does not merge calls (gate quoted in Premise status), but
+`AlgebraicSimplificationPass:2456-2466` duplicates an operand object without a
+gate, which is the same hazard by a different route. This decision stands as
+the primary fix; the pass-side gate is now an Obligation above rather than an
+alternative to it.
+
+Revisit if a value-duplicating or code-motion rewrite is added to any pass
+without an effect gate. The lesson from the measured instance is that the arm
+was reviewed for *value* preservation and shipped; evaluation count was never
+considered. Any new arm that writes one operand object into two slots needs
+`IsReplicable`, not a soundness argument about arithmetic.

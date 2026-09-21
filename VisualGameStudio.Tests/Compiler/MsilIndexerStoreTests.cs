@@ -41,14 +41,27 @@ namespace VisualGameStudio.Tests.Compiler;
 /// separate, pre-existing C#-backend defect, not this family's. Those cases assert MSIL against
 /// JavaScript instead (<c>MsilMatchesJs</c>), each naming the C# divergence in its own docstring.</para>
 ///
-/// <para>⛔ <b>The predicate is READ-MODIFY-WRITE, not "inside a loop".</b> An earlier version of
-/// this note claimed ANY indexer write inside a <c>For Each</c> body failed on C#; that was an
-/// over-generalization from the read-modify-write cases and it is wrong. Measured at f20435d and
-/// again after the C#-backend <c>Exit For</c> batch: a plain <c>l(0) = n</c> inside a
-/// <c>For Each</c> compiles and prints the right answer on C# (see
-/// <see cref="Write_InsideAForEach_OverADifferentCollection"/>), while <c>l(0) = l(1)</c> with NO
-/// loop anywhere is <c>CS0103</c>. The loop is incidental; reading the collection back inside the
-/// same statement is what breaks.</para>
+/// <para>⛔ <b>The predicate is an OPERAND THAT IS A TEMP — not "inside a loop", and not
+/// "read-modify-write" either.</b> This note has been wrong twice, each time by generalizing from
+/// whichever cases happened to be in the fixture, so the measured boundary is spelled out here in
+/// full. The loop was the first wrong answer (a plain <c>l(0) = n</c> inside a <c>For Each</c>
+/// compiles and is correct on C# — see
+/// <see cref="Write_InsideAForEach_OverADifferentCollection"/>). Read-modify-write was the second:
+/// it is sufficient but NOT necessary.</para>
+///
+/// <para>Measured at a36262c on all four backends: <c>Visit(IRIndexerStore)</c> spells the
+/// <b>Collection</b>, each <b>Index</b> and the <b>Value</b> by raw temp name, and <b>any one of
+/// the three being a temp fails on its own</b>, with no read-back anywhere:
+/// <c>l(0) = Five()</c> is <c>CS0103 't1'</c> (value only), <c>l(Zero()) = 5</c> is
+/// <c>CS0103 't1'</c> (index only), and <c>Get1()(0) = 5</c> is <c>CS0103 't0'</c> (receiver only).
+/// A constant, a declared local and a parameter are all fine, which is why <c>l(0) = 5</c> and
+/// <c>l(i) = 9</c> pass. ⚠ <c>l(0) = x + 1</c> is a FALSE control — the optimizer constant-folds it
+/// to <c>l[0] = 5;</c>; route the operand through a parameter to keep it unfoldable.</para>
+///
+/// <para>The governing rule is now recorded as ADR-0001 (<c>docs/superpowers/decisions/</c>): a
+/// value that is not replicable must appear in the emitted C# exactly once, and
+/// <c>GetValueName</c> may only be called for a value already materialised as a declared local.
+/// These three cases are that invariant's, not a defect family of their own.</para>
 ///
 /// <para>⚠ NOT COVERED HERE: a qualified field-of-object indexer (<c>g.Items(0)</c>, reading or
 /// writing a collection FIELD reached through another object) is broken on ALL FOUR backends —

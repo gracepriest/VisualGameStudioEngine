@@ -46,6 +46,17 @@ namespace VisualGameStudio.Tests.Compiler;
 /// against the value C++ and JavaScript compute, and each names the measured C# divergence in its
 /// own docstring rather than silently normalizing it away.</para>
 ///
+/// <para>⚠ Two of those three descriptions are narrower than what was measured at a36262c, so do
+/// not treat them as the predicate. <b>"Over a call's result" is not the boundary</b> — ANY
+/// non-local collection operand fails the same way, including a plain field read
+/// (<c>For Each n In b.Items</c>) and an indexer access; a local, a parameter and an array local
+/// are all fine, and a call is not required. <b>"Shadows an outer local" is the right shape but
+/// "collides" is not</b> — the name must collide with a local or parameter in the SAME emitted
+/// method body (or an enclosing <c>For Each</c>'s variable); two sibling <c>For Each n</c> loops, a
+/// module global, a class field and a counted <c>For i</c> all pass. And the property case is not
+/// about loops at all — see <see cref="ForEachInAPropertyAccessorBody"/>. The governing rule for
+/// the first of these is ADR-0001 in <c>docs/superpowers/decisions/</c>.</para>
+///
 /// <para>⭐ <b>The <c>Exit For</c> shapes used to be in that list and no longer are.</b> The C#
 /// backend's own <c>Exit For</c> no-op was a separate, pre-existing C#-backend defect; it has since
 /// been fixed, and those four cases now hold MSIL to C# like the rest. The C#-side contract for the

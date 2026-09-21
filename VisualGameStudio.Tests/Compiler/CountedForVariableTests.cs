@@ -229,13 +229,17 @@ public class CountedForVariableTests
             "10");
 
     /// <summary>
-    /// ⛔ C# CANNOT COMPILE THIS SHAPE, independent of a counted <c>For</c>'s own fix: a property
-    /// <c>Get</c> accessor's body hoists its locals through a path that misses anything declared
-    /// inside ANY loop (measured with a bare classic <c>For</c> too, not only a counted one) —
-    /// <c>CS0103</c> on the loop variable and every local the loop's body touches. A separate,
-    /// pre-existing, general C#-backend gap; MSIL and JavaScript are the oracles here instead.
-    /// MSIL alone was independently confirmed correct for this exact program before this fixture
-    /// existed.
+    /// ⛔ C# CANNOT COMPILE THIS SHAPE, independent of a counted <c>For</c>'s own fix. ⚠ The
+    /// reason recorded here was WRONG and is corrected: this is nothing to do with loops.
+    /// <c>GenerateProperty</c> emits <b>no local-declaration block at all</b> — a <c>Get</c> whose
+    /// entire body is <c>Dim sum As Integer = 5</c> / <c>Return sum + 1</c>, with no loop anywhere,
+    /// is the same <c>CS0103</c>, and so is a bare <c>Dim</c> with no initializer. Measured at
+    /// a36262c: of the seven emitters that write that block, the property <c>Get</c> and <c>Set</c>
+    /// are the only two that skip it — <c>GenerateFunction</c>, <c>GenerateMethod</c>,
+    /// <c>GenerateConstructor</c>, <c>GenerateOperator</c> and the interface-default path all have
+    /// it. A separate, pre-existing C#-backend gap; MSIL and JavaScript are the oracles here
+    /// instead. ⚠ C++ is NOT available as an oracle for any property with an explicit
+    /// <c>Get</c>/<c>Set</c> — it cannot compile one at all, with or without locals.
     /// </summary>
     [Test]
     public void CountedFor_InsideAPropertyGetter()

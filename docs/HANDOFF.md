@@ -196,6 +196,45 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
 
 ## Open work
 
+### ⭐ 2026-09-21 — defects measured on all four backends during the C# `CS0103` characterization
+
+Measured at `a36262c` via an out-of-process four-backend emit/compile/run loop (60 shapes, one per
+compile). **Not fixed. Each is a real shape with a real number, not a guess.**
+
+- ⛔ **NEW, JavaScript, SILENT WRONG ANSWER.** A `For Each` variable whose name collides with a
+  **class field** of the same name: JS emits `for (const n of l) { s = s + this.n; }` — the body
+  reads the FIELD, not the loop variable. **JS prints 0 where C#, C++ and MSIL all print 7.** C# is
+  correct here. Nobody had listed this; it was found by characterizing outward from a C# defect.
+- ⛔ **NEW, C#: an iterator's return type is emitted doubled** — `IEnumerable<IEnumerable<int>>` →
+  `CS0029`/`CS0266`. Distinct from the temp family, and it will block a clean promotion of the
+  `Yield` shape below.
+- **C#, a third `GetValueName`-on-a-use site nobody had listed:** `IRYield.Value`
+  (`CSharpBackend.cs:3889`) emits `yield return t0;` → `CS0103`. Same mechanism as
+  `IRForEach.Collection` (`:4097`) and `IRIndexerStore` (`:3859/:3861/:3862`). Governed by ADR-0001.
+- **Broken on ALL FOUR backends (front-end level, do NOT sweep into a backend family):**
+  `b.Items(0) = 5` — an indexer store through a field receiver is parsed as a method call. C#
+  `CS0103` + `CS1955`; C++ `does not provide a call operator`; JS `TypeError: b.Items is not a
+  function`; MSIL `MissingMethodException`.
+- **NOT C#-only, contrary to a note we shipped:** a computed `MyBase.New` argument
+  (`MyBase.New(New Tag())`, `MyBase.New(x + 1)`) fails on C# **and C++** identically
+  (`use of undeclared identifier 't0'`); JS and MSIL refuse it by design. `MsilClassTypeTests.cs:218`
+  blamed this on the C# backend alone — corrected in place.
+- **C++ cannot compile ANY property with an explicit `Get`/`Set` accessor** (`no member named …`),
+  including one with no locals at all. Auto-properties work. This caps the property-accessor
+  fixtures at THREE backends, not four.
+
+### Traps this characterization cost us, recorded so nobody pays twice
+
+- ⛔ **Constant folding silently destroys control shapes.** `l(0) = x + 1` folds to `l[0] = 5;` and
+  looks like a PASSING control proving the defect is narrow. It proves nothing. Route any operand
+  you need preserved through a parameter or a call. The honest twin `l(0) = p + 1` fails.
+- ⛔ **A predicate stated from whichever cases are in the fixture will be wrong.** The indexer-store
+  claim has now been wrong TWICE — first "any write inside a `For Each`", then "read-modify-write".
+  Measured: any ONE of Collection / Index / Value being a temp fails on its own, with no read-back
+  anywhere (`l(Zero()) = 5` is `CS0103`). Strip the shape until it stops failing, then report THAT.
+- Line numbers in a prior report drifted 10–30 lines. Re-locate by symbol, never trust a cited line.
+
+
 - ~~**P2a-2 (.NET classes in native projects)**~~ — **DONE and merged (`77e415b`).** Kept here
   only as a pointer: plan `docs/superpowers/plans/2026-08-02-p2a2-dotnet-native-flip.md`, spec
   `docs/superpowers/specs/2026-07-29-p2a-dotnet-access-aot-shim-design.md` (§12.4 drift
