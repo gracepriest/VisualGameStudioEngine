@@ -441,30 +441,56 @@ the game template" will land on a coercion commit that is probably correct in it
 the wrong thing.** The defect is the table, not the coercion.
 
 ⚠ **It is a MIRRORED PAIR — the table is declared TWICE and a fix must change both or they drift:**
-`BasicLang/SemanticAnalyzer.cs:1554-1574` and `BasicLang/StdLib/FrameworkStdLib.cs:35-44`. Fixing one
-leaves the semantic checker and the stdlib disagreeing about the same contract. This belongs on
-`CLAUDE.md`'s "change it once, not per-consumer" list.
+`BasicLang/SemanticAnalyzer.cs` and `BasicLang/StdLib/FrameworkStdLib.cs`. Fixing one leaves the
+semantic checker and the stdlib disagreeing about the same contract. This belongs on `CLAUDE.md`'s
+"change it once, not per-consumer" list.
 
-⚠ **Five functions are affected, not one** — the template only happens to call `DrawText`:
+⛔ **QUOTE THESE LINE NUMBERS WITH THEIR BASE — the two files do NOT agree across branches.**
+`FrameworkStdLib.cs` is the same on both (`:35-44`, `DrawText` at `:38`). **`SemanticAnalyzer.cs` is
+NOT:** on `origin/master` `DrawText` is at **`:1592-1594`** and `DrawTexture` at **`:1601-1603`**; on
+`feat/form-designer` — 120 commits ahead, with PRs #56–#60 touching that file — the same block is at
+**`:1554-1574`** (`DrawText` `:1563-1565`, `DrawTexture` `:1572-1574`). **This defect lives on MASTER,
+so master's numbers are the ones to use when fixing it**; a fresh session reading a branch number
+against master lands in a different function entirely. ⚠ This is the same failure as quoting a test
+total without its base (see the 5109-vs-5978 note above) — it cost a round-trip here too, in the
+opposite direction.
+
+⚠ **Exactly five functions are affected, not one** — the template only happens to call `DrawText`:
 `DrawText`, `DrawRectangle`, `DrawLine`, `DrawCircle` (x/y wrong, radius correctly `Single`) and
-`DrawTexture` (`FrameworkStdLib.cs:43` / `SemanticAnalyzer.cs:1572-1574` vs `framework.h:400`
-`int posX, int posY`). `DrawTextureEx` (`FrameworkStdLib.cs:44`, four `Single`s) is UNCHECKED — treat
-as suspect, not clean. C++ is unaffected: `CppCodeGenerator` passes args through raw and C++ narrows
-implicitly. **This is a C#-backend break.**
+`DrawTexture` (`FrameworkStdLib.cs:43` vs `framework.h:400` `int posX, int posY`). C++ is unaffected:
+`CppCodeGenerator` passes args through raw and C++ narrows implicitly. **This is a C#-backend break.**
 
-⭐ **The repo already contains the correct answer beside the wrong one, which settles the "would a fix
-take float positions away?" question:** `DrawRectangleLines` (`:99`) declares all four `Integer` while
-`DrawRectangle` (`:35`) declares all four `Single` — the same geometry, two rows apart, declared
-differently. `DrawCircleLines` (`:100`) declares `Integer, Integer, Single`, matching `framework.h:367`
-exactly, while `DrawCircle` (`:36`) declares three `Single`s. The `*Lines` variants are the correctly
-transcribed twins. **There is no float-facing API to preserve — there is a transcription error that
-four or five rows have and their siblings escaped.**
+⭐ **The repo contains the correct answer beside the wrong one THREE separate ways, which settles the
+"would a fix take float positions away?" question — there was never a float-facing design:**
 
-Three defensible fixes, and the choice is a product decision, not a mechanical one: **(a)** correct the
-table to `Integer`, matching engine and wrapper — minimal, truthful, self-consistent; **(b)** keep a
-`Single`-facing surface and have the C# emitter insert explicit `(int)` casts — note this is a
-forward-looking API *change*, not a preservation, per the `*Lines` evidence above; **(c)** widen engine
-and wrapper to float — largest, touches the native side.
+| Row | Compiler table | `framework.h` | |
+|---|---|---|---|
+| `DrawRectangle` (`:35`) | 4 × `Single` | 4 × `int` (`:300`) | ✗ wrong |
+| `DrawRectangleLines` (`:99`) | 4 × `Integer` | 4 × `int` (`:368`) | ✓ **correct twin, same geometry** |
+| `DrawCircle` (`:36`) | 3 × `Single` | `int, int, float` (`:366`) | ✗ x/y wrong |
+| `DrawCircleLines` (`:100`) | `Integer, Integer, Single` | `int, int, float` (`:367`) | ✓ **exact match, two rows away** |
+| `DrawTextureEx` (`:44`) | 4 × `Single` | `Vector2 position, float rotation, float scale` (`:402`) | ✓ **correct — and genuinely float** |
+
+`DrawTextureEx` is the decisive control: the table **does** distinguish float parameters from int ones
+elsewhere, and gets them right when it does. So the five `Single`s are transcription errors, not a
+design. (It was carried as UNCHECKED here until 2026-09-21 and is now resolved — **clean**.)
+
+✅ **RESOLVED — option (a) chosen and implemented** (on a peer's master-based branch, gated as codegen
+work; not on this branch): all five rows set to `Integer` in **both** mirrored copies in one commit,
+`DrawCircle`'s radius left `Single`, `DrawTextureEx` untouched, and each copy now carries a comment
+naming the other as its mirror. Measured before → `Framework_DrawText(player.Name, 10f, 10f, 20, …)`,
+CS1503, build failed; after → `…(player.Name, 10, 10, 20, …)`, build succeeded. The two rejected
+options are recorded only so the choice is not re-opened blind: **(b)** cast in the C# emitter — note
+the table above makes this a forward-looking API *change*, not a preservation; **(c)** widen engine and
+wrapper to float — largest, touches the native side.
+
+⭐⭐ **`VisualGameStudio.Tests/Services/TemplateBuildSweepTests.cs` ALREADY EXISTS to catch exactly this,
+and its own docstring says why** — *"the CLI roster shipped a never-compiling 'game' template precisely
+because only the IDE side was swept"*. It is `[Category("Integration")]`, which is why every fast-subset
+gate sailed past a broken game template for days. **This is the fast-subset lesson again, not a new one**
+(see *"The fast subset is not a gate for codegen work"* below). Strong candidate for being some or all of
+the **4 inherited failures** in this branch's gate — if so, that list shrinks the moment the fix reaches
+master and Task 28's baseline stops being blocked.
 
 ⛔ **Task 28 cannot honestly claim a clean baseline until this is fixed** — the alternative is
 quietly re-baselining around someone else's regression, which is how a known-bad build becomes the
