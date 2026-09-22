@@ -525,13 +525,18 @@ Public Speed As Single = 5.0   →    float Speed = 5f;     ⛔ the .0 is normal
 ```
 
 `400f` is valid C# and invalid C++ — an integer literal cannot carry an `f` suffix; C++ requires `400.0f`
-or `400.f`. **Source: `CppCodeGenerator.cs:5168`, `return $"{f}f";`**
+or `400.f`. **Source: `return $"{f}f";` at `CppCodeGenerator.cs:5168` on THIS branch / `:5346-5347` on
+`origin/master`** (the `decimal` arm is `:5176-5188` here / `:5355-5368` there; the `ToString()` fallback
+`:5191` / `:5370`). ⚠ **Fourth base mismatch in one day** — quote line numbers with their tree, always.
 
-⚠ **The precise rule is narrower than "any `Single` field", and the difference decides the blast radius:**
-`$"{f}"` is `float.ToString()`, which yields `"400"` for `400.0f` but `"2.5"` for `2.5f`. So the break is
-**any float constant whose VALUE is integral**, however it was written — which is exactly why `= 5.0` breaks
-(it normalises to `5`) while `= 2.5` would emit a valid `2.5f`. Not every `Single` field is affected; every
-integral-valued one is.
+⚠ **The precise rule is narrower than "any `Single` field" — MEASURED, not reasoned:** `$"{f}"` is
+`float.ToString()`, which yields `"400"` for `400.0f` but `"2.5"` for `2.5f`. So the break is **any float
+constant whose VALUE is integral**, however it was written — which is why `= 5.0` breaks (it normalises to
+`5`) while `= 2.5` does not. Confirmed 2026-09-21 by rebuilding the same C++ target with non-integral values
+only (`X = 400.5`, `Y = 300.5`, `Speed = 2.5`) → `float X = 400.5f;` etc., **build exit 0, no `C3688`**.
+⚠⚠ **Narrower than "every `Single` field" is NOT the same as narrow. `= 0` is one of the commonest field
+initialisers there is**, and every `= 0`, `= 1`, `= 100` breaks. Do not let the narrowing read as a
+downgrade in severity — it is a correction in *shape*, not in *reach*.
 
 ⛔ **A SECOND defect sits on the same line and is currently invisible: it is CULTURE-SENSITIVE.**
 `CppCodeGenerator.cs` contains **no `CultureInfo` or `InvariantCulture` anywhere**, so `$"{f}f"` — and the
