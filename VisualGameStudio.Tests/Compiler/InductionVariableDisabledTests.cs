@@ -57,13 +57,21 @@ namespace VisualGameStudio.Tests.Compiler;
 /// away, and C# still gave CS0103 on <c>t2</c> while JavaScript still threw. It also CONVERTED the
 /// two-multiplies-onto-one-local shape from a loud build failure into a SILENT wrong answer:
 /// 0,0,8,8,16,16,24,24 where 0,0,3,5,6,10,9,15 is correct, on C# and JavaScript. A loud failure
-/// traded for a quiet one is a regression. And defect 3 cannot be fixed inside the pass at all: it
-/// needs a loop preheader, and <c>ControlFlowGraph.IdentifyLoops</c> reports FOUR "natural loops"
-/// for a five-block function holding ONE loop, every one of them containing <c>entry</c>. Adding
-/// the initialisation to the entry block instead — which looks like the obvious fix — makes the
-/// OPTIMIZER itself run out of memory on every shape measured, because the seed multiply it
-/// inserts lands inside one of those bogus loops and the pass re-fires on its own output without
-/// bound.</para>
+/// traded for a quiet one is a regression. And defect 3 could not be fixed inside the pass at all:
+/// it needs a loop preheader, and at <c>67782af</c> <c>ControlFlowGraph.IdentifyLoops</c> reported
+/// FOUR "natural loops" for a five-block function holding ONE loop, every one of them containing
+/// <c>entry</c>. Adding the initialisation to the entry block instead — which looks like the
+/// obvious fix — made the OPTIMIZER itself run out of memory on every shape measured, because the
+/// seed multiply it inserts landed inside one of those bogus loops and the pass re-fired on its
+/// own output without bound.</para>
+///
+/// <para>⚠ <b>THAT SUBSTRATE IS REPAIRED AND THIS PASS IS STILL DISABLED.</b> ADR-0003 fixed the
+/// inverted back-edge predicate, so <c>IdentifyLoops</c> now reports one correct loop for that
+/// function — see <c>CfgNaturalLoopTests</c>. It does NOT re-open the question here: defect 3 was
+/// only ONE of six, the preheader it needs is still not synthesised anywhere (ADR-0003 explicitly
+/// declines to build one), and defects 1, 2, 4, 5 and 6 are untouched by it. ADR-0003's own
+/// Obligations section says so in as many words: "<c>InductionVariablePass</c> stays disabled;
+/// this change does not re-enable it."</para>
 ///
 /// <para>⚠ <b>THE CLASS IS KEPT, not deleted</b>, exactly as <c>FunctionInliningPass</c> is, so
 /// <see cref="RunDirectly_ThePassStillMiscompiles_WhichIsWhyItIsDisabled"/> can construct it and
@@ -235,22 +243,21 @@ public class InductionVariableDisabledTests
     /// unoptimized one" is the property, and a test that checked only one could not see a
     /// pipeline-specific miscompile at all.
     ///
-    /// <para>⛔ <b>C++ AND MSIL ARE EXCLUDED, and the reason is measured and unrelated.</b> Under
-    /// <c>AddAggressivePasses()</c> <c>LoopInvariantCodeMotionPass</c> sinks the loop condition's
-    /// definition out of the condition block and into the loop's own LATCH, because
-    /// <c>ControlFlowGraph.IdentifyLoops</c> hands it a "preheader" that IS the latch. C++ and MSIL
-    /// emit the CFG as labels and branches, so they read the condition flag before anything writes
-    /// it and run the loop ZERO TIMES; C# and JavaScript rebuild the condition from the CFG in
-    /// their structured-loop emitters and are unaffected. MEASURED on
-    /// <c>For i = 0 To n : Show(i) : Next</c> — the counter passed through untouched, so no
-    /// arithmetic pass has anything to act on — where the emitted C++ is literally
+    /// <para>⭐ <b>ALL FOUR BACKENDS SINCE ADR-0003; C++ AND MSIL USED TO BE EXCLUDED HERE.</b>
+    /// The exclusion was measured and unrelated to this pass: under <c>AddAggressivePasses()</c>
+    /// <c>LoopInvariantCodeMotionPass</c> sank the loop condition's definition out of the
+    /// condition block and into the loop's own LATCH, because <c>ControlFlowGraph.IdentifyLoops</c>
+    /// handed it a "preheader" that WAS the latch. C++ and MSIL emit the CFG as labels and
+    /// branches, so they read the condition flag before anything wrote it and ran the loop ZERO
+    /// TIMES; C# and JavaScript rebuild the condition from the CFG in their structured-loop
+    /// emitters and were unaffected. The emitted C++ was literally
     /// <c>bool t1 = {}; … for0_cond: if (t1) …</c> with <c>t1 = i &lt;= n</c> moved down into
-    /// <c>for0_inc</c>, and both backends print only the line AFTER the loop. That is issue #114.
-    /// A four-backend aggressive loop assertion CANNOT go green until it lands, and writing one
-    /// that expects the right answer would just be a red test about a different defect.
-    /// <see cref="TheSharedAggressiveFourBackendRunner_AgreesOnAShapeWithNoLoop"/> exercises all
-    /// four legs of the shared runner on a shape #114 does not touch, so the runner itself is not
-    /// unverified.</para>
+    /// <c>for0_inc</c>. That was issue #114, and ADR-0003 closed it by unregistering all three
+    /// loop passes — the inverted back-edge predicate underneath them is repaired, and the loop
+    /// sets it produced were what made the "preheader" resolve to the latch. RE-MEASURED across
+    /// the 13-shape CFG corpus, all four backends agree on every loop shape under both pipelines
+    /// (104/104 cells); <see cref="CfgLoopShapesAggressiveTests"/> is that measurement,
+    /// committed. So <see cref="BothPipelinesAgree"/> now runs all four.</para>
     ///
     /// <para>⚠ ONE SHAPE PER TEST. Both harnesses use <c>Assert.Multiple</c>, and the C# leg is
     /// in-process Roslyn with NO timeout, so several programs in one case would report the first
@@ -282,8 +289,9 @@ public class InductionVariableDisabledTests
     /// a fixture built only on <c>For i = 0 To n</c> cannot supply: it is the ONLY thing that
     /// distinguishes "the pass is fixed" from "the derived variable is declared but never
     /// initialised", and it does so SILENTLY — the measured repair emits perfectly valid code that
-    /// prints 0,3,6 instead of 3,6,9. Hence asserted BY VALUE, and hence on C# and JavaScript,
-    /// the only two backends that can show a wrong VALUE at all while #114 is open.
+    /// prints 0,3,6 instead of 3,6,9. Hence asserted BY VALUE — on all four backends since
+    /// ADR-0003; while #114 was open only C# and JavaScript could show a wrong VALUE at all,
+    /// because C++ and MSIL were not running the loop.
     /// </summary>
     [Test]
     [Category("Integration")]
@@ -446,33 +454,36 @@ public class InductionVariableDisabledTests
     }
 
     /// <summary>
-    /// ⛔ A MULTIPLY ON THE INNER COUNTER OF A NESTED LOOP, <b>C# ONLY</b>, asserted by value.
+    /// ⛔ A MULTIPLY ON THE INNER COUNTER OF A NESTED LOOP, asserted by value.
     /// Correct is 0,3,6,0,3,6: the inner counter restarts on every outer iteration, so a derived
     /// variable seeded once — in the function's ENTRY block, say, which is a correct preheader for
     /// a top-level loop and the obvious place to put it — is stale from the second outer iteration
     /// on. This is the shape that shows why the missing initialisation cannot be fixed without a
     /// real preheader.
     ///
-    /// <para>⛔ <b>JAVASCRIPT IS EXCLUDED, measured, and it is NOT this defect.</b> Under
-    /// <c>--optimize</c> a nested <c>For</c> gives
-    /// <c>ReferenceError: t4 is not defined</c> on the JavaScript backend: LICM sinks the OUTER
-    /// loop's increment <c>t4 = i + 1</c> into the INNER loop's latch, where the emitter declares
-    /// it <c>const</c> inside the inner block, so the outer loop's <c>i = t4</c> reads a name that
-    /// is out of scope. Same root cause as the C++/MSIL exclusion above — issue #114 — and newly
-    /// VISIBLE now that the <c>_div_</c> failure no longer masks it. C++ and MSIL are excluded for
-    /// the zero-iteration reason already documented. So C# is the only backend that can carry this
-    /// shape today, and it is this suite's reference oracle.</para>
+    /// <para>⭐ <b>ALL FOUR BACKENDS SINCE ADR-0003; THIS CASE USED TO BE C# ONLY.</b> JavaScript
+    /// was excluded by measurement and for a reason that was not this defect: under
+    /// <c>--optimize</c> a nested <c>For</c> gave <c>ReferenceError: t4 is not defined</c>,
+    /// because LICM sank the OUTER loop's increment <c>t4 = i + 1</c> into the INNER loop's latch,
+    /// where the emitter declared it <c>const</c> inside the inner block and the outer loop's
+    /// <c>i = t4</c> then read a name that was out of scope. C++ and MSIL were excluded for the
+    /// zero-iteration reason above. All three were issue #114, and ADR-0003 closed it — the
+    /// <c>t4</c> failure is gone, RE-MEASURED on this very shape.</para>
     /// </summary>
-    // ⚠ NOT [Category("Integration")], deliberately: both legs are the in-process Roslyn C#
-    // harness, which compiles and runs without a toolchain or a child process. Repo precedent is
-    // CSharpRightReceiverTests.Right_WithANegativeLength_Throws, which uses the same harness and is
-    // in the fast subset. Keeping it there matters — this is the shape that distinguishes a correct
-    // repair from one whose derived variable is seeded outside the inner loop, and it should be
-    // visible in the 2-minute run.
+    // ⚠ NOW [Category("Integration")], and that is a real trade being made deliberately. This
+    // case used to sit in the 2-minute subset because both its legs were the in-process Roslyn C#
+    // harness; adding C++, MSIL and Node moves it out. The fast-subset visibility it provided is
+    // replaced, not lost: LoopPassesDisabledTests' AggressivePlusLicm_ANestedCountedFor_Control
+    // runs a nested counted For through the aggressive pass list on in-process C# with no
+    // toolchain, and CfgNaturalLoopTests pins the nested loop's CFG structure — both fast. Four
+    // backends on the shape that distinguishes a correct repair from one whose derived variable is
+    // seeded outside the inner loop is worth more than two backends two minutes sooner.
     [Test]
-    public void AMultiplyOnTheInnerCounterOfANestedLoop_RunsTheSameOnBothPipelines_CSharpOnly()
+    [Category("Integration")]
+    public void AMultiplyOnTheInnerCounterOfANestedLoop_RunsTheSameOnBothPipelines()
     {
-        const string program = """
+        BothPipelinesAgree(
+            """
             Sub Show(v As Integer)
              PrintLine("S=" & CStr(v))
             End Sub
@@ -484,17 +495,8 @@ public class InductionVariableDisabledTests
              Next
              PrintLine("DONE")
             End Sub
-            """;
-        const string expected = "S=0\nS=3\nS=6\nS=0\nS=3\nS=6\nDONE";
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(program)), Is.EqualTo(expected),
-                "C#, default pipeline");
-            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpAggressive(program)), Is.EqualTo(expected),
-                "C#, AGGRESSIVE pipeline — a derived induction variable seeded outside the inner "
-                + "loop goes stale here, and the wrong answer is 0,3,6,9,12,15");
-        });
+            """,
+            "S=0\nS=3\nS=6\nS=0\nS=3\nS=6\nDONE");
     }
 
     // ====================================================================================
@@ -503,18 +505,23 @@ public class InductionVariableDisabledTests
 
     /// <summary>
     /// ⭐ <c>FourBackends.RunsOnEveryBackendAggressive</c> exercised on ALL FOUR legs, so the
-    /// shared runner this change adds is not unverified code that only ever runs two of its four
-    /// backends.
+    /// shared runner is not unverified code that only ever runs two of its four backends.
     ///
-    /// <para>The shape deliberately has NO LOOP — <c>Return (2 * p) + 1</c>, which
-    /// <c>AlgebraicSimplificationPass</c> (aggressive-only) does rewrite, so the aggressive
-    /// pipeline is genuinely doing something — because issue #114 makes any counted loop print the
-    /// wrong thing on C++ and MSIL under this pipeline. MEASURED: all four backends print 13,
-    /// under both pipelines.</para>
+    /// <para>⭐ <b>THE SHAPE NOW CONTAINS A LOOP, AND IT USED TO BE FORBIDDEN TO.</b> The original
+    /// case was deliberately loop-free — just <c>Return (2 * p) + 1</c> — because issue #114 made
+    /// ANY counted loop print the wrong thing on C++ and MSIL under this pipeline, so the only way
+    /// to exercise all four legs was to avoid the construct. ADR-0003 removes that constraint, and
+    /// the shape is extended with a counted <c>For</c> that accumulates <c>F(i)</c> so the runner
+    /// is verified on the construct it was previously unable to carry.</para>
+    ///
+    /// <para>⚠ <c>(2 * p) + 1</c> is kept, and it is the NON-VACUITY: <c>AlgebraicSimplificationPass</c>
+    /// is aggressive-only and does rewrite it, so this case proves the aggressive pipeline is
+    /// genuinely doing something rather than silently degenerating to the standard one.
+    /// <c>F(0)+F(1)+F(2) = 1+3+5 = 9.</c></para>
     /// </summary>
     [Test]
     [Category("Integration")]
-    public void TheSharedAggressiveFourBackendRunner_AgreesOnAShapeWithNoLoop()
+    public void TheSharedAggressiveFourBackendRunner_AgreesOnAShapeWithALoop()
     {
         const string program = """
             Module M
@@ -522,12 +529,16 @@ public class InductionVariableDisabledTests
               Return (2 * p) + 1
              End Function
              Sub Main()
-              PrintLine(CStr(F(6)))
+              Dim acc As Integer = 0
+              For i As Integer = 0 To 2
+               acc = acc + F(i)
+              Next
+              PrintLine(CStr(acc))
              End Sub
             End Module
             """;
 
-        FourBackends.RunsOnEveryBackendAggressive(program, "13");
+        FourBackends.RunsOnEveryBackendAggressive(program, "9");
     }
 
     // ====================================================================================
@@ -631,12 +642,23 @@ public class InductionVariableDisabledTests
         """;
 
     /// <summary>
-    /// The oracle for contract item 5: C# and JavaScript, each under the DEFAULT pipeline and
-    /// under the AGGRESSIVE one, all four equal to the arithmetically correct value.
+    /// The oracle for contract item 5: ALL FOUR backends, each under the DEFAULT pipeline and
+    /// under the AGGRESSIVE one, all eight equal to the arithmetically correct value.
     ///
-    /// <para>C++ and MSIL are absent by measurement, not oversight — see
-    /// <see cref="ACountedForWithAMultiply_RunsTheSameOnBothPipelines"/> for the #114 evidence.
-    /// Asserting "both pipelines agree" alone would not be enough either: two pipelines can agree
+    /// <para>⭐ <b>C++ AND MSIL WERE EXCLUDED HERE AND ARE NOT ANY MORE.</b> They were absent by
+    /// measurement, not oversight: issue #114 — <c>LoopInvariantCodeMotionPass</c> sinking a
+    /// counted loop's condition into its own latch — made both backends run every one of these
+    /// loops ZERO times under the aggressive pipeline, so a four-backend assertion could not have
+    /// gone green and writing one would have been a red test about a different defect. ADR-0003
+    /// unregisters all three loop passes, and RE-MEASURED on the 13-shape CFG corpus all four
+    /// backends now agree on every loop shape under both pipelines (104/104 cells).</para>
+    ///
+    /// <para>⚠ Note what this promotion IS: the previous fixture EXCLUDED the two damaged
+    /// backends rather than pinning their damaged output, so nothing here is being re-baselined —
+    /// there is no expectation to change, only two legs to add. Each case's expected value is
+    /// unchanged.</para>
+    ///
+    /// <para>Asserting "both pipelines agree" alone would not be enough: two pipelines can agree
     /// on a wrong answer, so the expected value is the arithmetic truth.</para>
     /// </summary>
     private static void BothPipelinesAgree(string program, string expected)
@@ -651,6 +673,14 @@ public class InductionVariableDisabledTests
                 "JavaScript, default pipeline");
             Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(program)), Is.EqualTo(expected),
                 "JavaScript, AGGRESSIVE pipeline — this was a ReferenceError while the pass ran");
+            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(program))), Is.EqualTo(expected),
+                "C++, default pipeline");
+            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(program))), Is.EqualTo(expected),
+                "C++, AGGRESSIVE pipeline — this ran the loop ZERO times until ADR-0003");
+            Assert.That(FourBackends.Norm(Msil.MsilHarness.RunExpectingSuccess(program)), Is.EqualTo(expected),
+                "MSIL, default pipeline");
+            Assert.That(FourBackends.Norm(Msil.MsilHarness.RunAggressiveExpectingSuccess(program)), Is.EqualTo(expected),
+                "MSIL, AGGRESSIVE pipeline — this ran the loop ZERO times until ADR-0003");
         });
     }
 

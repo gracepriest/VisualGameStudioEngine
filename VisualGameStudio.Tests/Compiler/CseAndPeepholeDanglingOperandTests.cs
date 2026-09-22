@@ -1139,12 +1139,19 @@ public class OptimizerDanglingOperandInvariantTests
     /// <c>OptimizerIr.Removed</c> counts <b>1</b> for each of the first twelve shapes under BOTH
     /// pipelines, and <b>0</b> for all five <c>AggrInvariant_</c> loop shapes under BOTH pipelines.
     /// NOTHING is removed from a counted <c>For</c> with a multiply in it by any pass, standard or
-    /// aggressive — the only aggressive-only pass that acts on those shapes is
-    /// <c>LoopInvariantCodeMotionPass</c>, and it MOVES instructions between blocks rather than
-    /// removing any. A "something was removed" assertion would therefore fail on exactly the five
+    /// aggressive. A "something was removed" assertion would therefore fail on exactly the five
     /// cases this test exists for, and for a reason with nothing to do with the property. The
     /// battery above keeps its check because all twelve of ITS shapes satisfy it. Do not copy it
     /// down here.</para>
+    ///
+    /// <para>⚠ <b>THE CONCLUSION IS UNCHANGED; ITS STATED REASON WAS AND IS NO LONGER TRUE.</b>
+    /// This note used to explain the zero as "the only aggressive-only pass that acts on those
+    /// shapes is <c>LoopInvariantCodeMotionPass</c>, and it MOVES instructions rather than
+    /// removing any". Since ADR-0003 that is not why: <c>LoopInvariantCodeMotionPass</c>,
+    /// <c>LoopUnrollingPass</c> and <c>LoopFusionPass</c> are all three UNREGISTERED, so NO
+    /// aggressive-only pass touches these loop shapes at all — the count is zero because nothing
+    /// runs on them, not because the thing that runs on them only moves. The zero itself is
+    /// re-measured and unchanged.</para>
     ///
     /// <para>⚠ These are the same twelve source bodies as the battery above rather than a shared
     /// constant, because NUnit needs them as attribute arguments. If one is edited, edit both — a
@@ -1230,25 +1237,33 @@ public class OptimizerDanglingOperandInvariantTests
     ///
     /// <para><b>What resolved it.</b> The pass is out of <c>AddAggressivePasses</c>. It could not
     /// be repaired in place: it also never initialises the derived induction variable, and placing
-    /// that initialisation needs a loop preheader that
-    /// <c>ControlFlowGraph.IdentifyLoops</c> cannot supply (measured: FOUR "natural loops" for a
-    /// five-block function holding one loop, every one of them containing <c>entry</c>). Repairing
+    /// that initialisation needs a loop preheader that nothing synthesises. (At <c>67782af</c>
+    /// <c>ControlFlowGraph.IdentifyLoops</c> could not even supply a correct loop SET to place it
+    /// against — measured: FOUR "natural loops" for a five-block function holding one loop, every
+    /// one of them containing <c>entry</c>. ADR-0003 repaired that; it did NOT add a preheader,
+    /// and it does not re-open this pass.) Repairing
     /// only the two defects this test was written about — the dangling uses and the missing
     /// <c>LocalVariables</c> entry — was measured to leave C# and JavaScript still broken here AND
     /// to turn two multiplies onto one local from a loud build failure into a SILENT wrong answer.
     /// The reasoning is recorded at the disabled <c>AddPass</c> line in <c>IROptimizer.cs</c>.</para>
     ///
     /// <para>⚠ This assertion is deliberately NOT paired with the battery's non-vacuity check.
-    /// On the aggressive pipeline the only pass that touches this shape is
-    /// <c>LoopInvariantCodeMotionPass</c>, which MOVES instructions between blocks rather than
-    /// removing any, so "something was removed" is false here and would fail for a reason that has
-    /// nothing to do with the property. Do not add it back.</para>
+    /// Nothing is removed from this shape by any aggressive pass, so "something was removed" is
+    /// false here and would fail for a reason that has nothing to do with the property. Do not
+    /// add it back. ⚠ The REASON has changed since this was written and the conclusion has not:
+    /// it used to be that the only pass touching this shape,
+    /// <c>LoopInvariantCodeMotionPass</c>, MOVED instructions rather than removing any; since
+    /// ADR-0003 that pass — and <c>LoopUnrollingPass</c> and <c>LoopFusionPass</c> with it — is
+    /// UNREGISTERED, so no aggressive-only pass touches this shape at all.</para>
     ///
-    /// <para>⚠ Still open, and NOT this test's business: under the aggressive pipeline C++ and MSIL
-    /// run this loop ZERO times, because LICM moves the loop condition's definition into the
-    /// loop's own latch. C# and JavaScript print the right four lines because their structured-loop
-    /// emitters rebuild the condition from the CFG. That is a separate defect in a separate pass;
-    /// it produces no dangling operand, so this invariant is blind to it by design.</para>
+    /// <para>⭐ <b>CORRECTED, AND IT WAS FACTUALLY FALSE.</b> This paragraph used to read "Still
+    /// open… under the aggressive pipeline C++ and MSIL run this loop ZERO times, because LICM
+    /// moves the loop condition's definition into the loop's own latch." That was issue #114 and
+    /// it is CLOSED: ADR-0003 unregisters LICM, and RE-MEASURED on the 13-shape CFG corpus all
+    /// four backends run every loop shape the right number of times under both pipelines
+    /// (<c>CfgLoopShapesAggressiveTests</c>, 104/104 cells). It remains true that such a defect
+    /// would produce no dangling operand, so this invariant would be blind to it — that is the
+    /// part worth keeping, and it is why the four-backend VALUE fixture exists separately.</para>
     /// </summary>
     [Test]
     public void TheAggressivePipelineLeavesNoDanglingOperand_WasAPinnedPreExistingDefect()

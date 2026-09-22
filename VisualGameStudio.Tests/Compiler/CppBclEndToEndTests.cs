@@ -66,11 +66,15 @@ internal static class BclE2E
     /// <c>FourBackends.RunsOnEveryBackendAggressive</c>. <see cref="CompileToCppOptimized"/> runs
     /// <c>AddStandardPasses</c> only, so it is blind to every aggressive-only pass.
     ///
-    /// <para>⛔ On a counted <c>For</c> loop this currently emits a program that runs the loop
-    /// ZERO times — issue #114, <c>LoopInvariantCodeMotionPass</c> sinking the loop condition into
-    /// the latch, which the label-and-<c>goto</c> C++ emitter cannot recover from. Measured on
-    /// <c>For i = 0 To n : Show(i) : Next</c>. Do not write a C++ aggressive loop assertion
-    /// expecting the right answer until #114 lands.</para>
+    /// <para>⭐ <b>SAFE FOR LOOPS SINCE ADR-0003 — this used to say it was not.</b> It emitted a
+    /// program that ran a counted <c>For</c> ZERO times: issue #114,
+    /// <c>LoopInvariantCodeMotionPass</c> sinking the loop condition into the latch, which the
+    /// label-and-<c>goto</c> C++ emitter cannot recover from. ADR-0003 unregisters all three loop
+    /// passes and nothing aggressive touches a loop any more. RE-MEASURED on the 13-shape CFG
+    /// corpus: every counted <c>For</c>, <c>While</c>, <c>Do While</c>, <c>Exit For</c> and
+    /// nested-loop shape now runs the right number of iterations through this helper and prints
+    /// the same thing as <see cref="CompileToCppOptimized"/> —
+    /// see <c>CfgLoopShapesAggressiveTests</c>.</para>
     /// </summary>
     internal static string CompileToCppAggressive(string source)
     {

@@ -84,20 +84,20 @@ internal static class FourBackends
     /// backends compiled AND RUN through <see cref="AggressivePipeline"/>. The shared runner the
     /// suite did not have; see <see cref="AggressivePipeline"/> for what its absence cost.
     ///
-    /// <para>⛔ <b>NOT usable for a counted <c>For</c> loop today, on C++ or MSIL.</b> Under
-    /// <c>AddAggressivePasses()</c> <c>LoopInvariantCodeMotionPass</c> sinks the loop condition's
-    /// definition out of the condition block and into the loop's own LATCH, because
-    /// <c>ControlFlowGraph.IdentifyLoops</c> hands it a "preheader" that is the latch. C++ and
-    /// MSIL emit the CFG as labels and <c>goto</c>s, so they read the condition flag before
-    /// anything writes it and run the loop ZERO times; C# and JavaScript rebuild the condition
-    /// from the CFG in their structured-loop emitters and are unaffected. MEASURED on
-    /// <c>For i = 0 To n : Show(i) : Next</c> — the counter is passed through untouched, so no
-    /// arithmetic pass has anything to act on: C++ and MSIL print only the line AFTER the loop,
-    /// and the emitted C++ is
-    /// literally <c>bool t1 = {}; for0_cond: if (t1) …</c> with <c>t1 = i &lt;= n</c> moved down
-    /// into <c>for0_inc</c>. That is issue #114, a separate defect in a separate pass. A loop
-    /// fixture must use the C# and JavaScript legs directly and say so — see
-    /// <c>InductionVariableDisabledTests</c>.</para>
+    /// <para>⭐ <b>USABLE FOR LOOPS SINCE ADR-0003 — this used to say it was not.</b> The
+    /// exclusion it carried was real: under <c>AddAggressivePasses()</c>
+    /// <c>LoopInvariantCodeMotionPass</c> sank a counted loop's condition out of the condition
+    /// block and into the loop's own LATCH, because <c>ControlFlowGraph.IdentifyLoops</c> handed
+    /// it a "preheader" that was the latch; C++ and MSIL emit the CFG as labels and <c>goto</c>s,
+    /// read the condition flag before anything wrote it, and ran the loop ZERO times. That was
+    /// issue #114. ADR-0003 unregisters all three loop passes, so no aggressive pass now touches
+    /// a loop at all.</para>
+    ///
+    /// <para>RE-MEASURED across the 13-shape CFG corpus (<see cref="CfgLoopShapes"/>) on all four
+    /// backends under both pipelines: <b>104 of 104 cells correct</b>, including every counted
+    /// <c>For</c>, <c>While</c>, <c>Do While</c>, <c>Exit For</c> and nested-loop shape on C++
+    /// and MSIL. <see cref="CfgLoopShapesAggressiveTests"/> is that measurement, committed. Write
+    /// a four-backend aggressive loop assertion here and expect the right answer.</para>
     ///
     /// <para>⚠ <c>Assert.Multiple</c> and an in-process Roslyn C# leg with no timeout, exactly as
     /// <see cref="RunsOnEveryBackend"/>: ONE shape per test.</para>

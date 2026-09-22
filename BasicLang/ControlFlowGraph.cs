@@ -14,17 +14,29 @@ namespace BasicLang.Compiler.IR
         public BasicBlock EntryBlock => Function.EntryBlock;
         
         // Analysis results
-        public Dictionary<BasicBlock, HashSet<BasicBlock>> DominatorTree { get; private set; }
-        public Dictionary<BasicBlock, HashSet<BasicBlock>> PostDominatorTree { get; private set; }
-        public Dictionary<BasicBlock, int> BlockDepths { get; private set; }
+        /// <summary>
+        /// Natural loops found by <see cref="IdentifyLoops"/>, one entry per back edge.
+        ///
+        /// ⛔ This covers ONLY loops expressed as branches in the CFG. BasicLang has a SECOND,
+        /// structurally different loop representation: `For Each` lowers to a structured
+        /// <c>IRForEach</c> node and `Try` to <c>IRTryCatch</c>, whose body/continuation blocks
+        /// <see cref="Build"/> wires as FORWARD edges only. Those constructs contribute no cycle,
+        /// hence no back edge, hence NO ENTRY IN THIS LIST. Reporting zero loops for a function
+        /// whose only loop is a `For Each` is the CORRECT answer here, not a gap to be patched by
+        /// widening this analysis.
+        ///
+        /// Any future loop pass must therefore be correct under the premise that UNSEEN LOOPS
+        /// EXIST IN THE FUNCTION, and may NOT treat "this block is in no loop" as "this block
+        /// executes once." A block that is in no natural loop may still sit inside a `For Each`
+        /// body and run many times; hoisting into it, or computing a trip count for it, is
+        /// unsound. Membership in this list is evidence that a loop exists — absence from it is
+        /// not evidence that one does not.
+        /// </summary>
         public List<List<BasicBlock>> NaturalLoops { get; private set; }
-        
+
         public ControlFlowGraph(IRFunction function)
         {
             Function = function;
-            DominatorTree = new Dictionary<BasicBlock, HashSet<BasicBlock>>();
-            PostDominatorTree = new Dictionary<BasicBlock, HashSet<BasicBlock>>();
-            BlockDepths = new Dictionary<BasicBlock, int>();
             NaturalLoops = new List<List<BasicBlock>>();
         }
         
@@ -167,7 +179,6 @@ namespace BasicLang.Compiler.IR
             }
             
             ComputeImmediateDominators();
-            BuildDominatorTree();
         }
         
         /// <summary>
@@ -215,60 +226,6 @@ namespace BasicLang.Compiler.IR
         }
         
         /// <summary>
-        /// Build dominator tree from immediate dominators
-        /// </summary>
-        private void BuildDominatorTree()
-        {
-            DominatorTree.Clear();
-            
-            foreach (var block in Blocks)
-            {
-                DominatorTree[block] = new HashSet<BasicBlock>();
-            }
-            
-            foreach (var block in Blocks)
-            {
-                if (block.ImmediateDominator != null)
-                {
-                    DominatorTree[block.ImmediateDominator].Add(block);
-                }
-            }
-        }
-        
-        /// <summary>
-        /// Compute dominance frontier for all blocks
-        /// DF(X) is the set of blocks where X's dominance stops
-        /// </summary>
-        public void ComputeDominanceFrontier()
-        {
-            foreach (var block in Blocks)
-            {
-                block.DominanceFrontier.Clear();
-            }
-            
-            foreach (var block in Blocks)
-            {
-                if (block.Predecessors.Count >= 2)
-                {
-                    foreach (var pred in block.Predecessors)
-                    {
-                        var runner = pred;
-                        
-                        while (runner != block.ImmediateDominator)
-                        {
-                            runner.DominanceFrontier.Add(block);
-                            
-                            if (runner.ImmediateDominator == null)
-                                break;
-                            
-                            runner = runner.ImmediateDominator;
-                        }
-                    }
-                }
-            }
-        }
-        
-        /// <summary>
         /// Find back edges in CFG (edges from a node to its dominator)
         /// </summary>
         public List<(BasicBlock From, BasicBlock To)> FindBackEdges()
@@ -279,8 +236,13 @@ namespace BasicLang.Compiler.IR
             {
                 foreach (var successor in block.Successors)
                 {
-                    // Back edge: successor dominates block
-                    if (successor.Dominators.Contains(block))
+                    // Back edge tail->head: the HEAD dominates the TAIL, i.e. the head is in
+                    // the tail's own dominator set. `b.Dominators` holds the blocks that
+                    // dominate b, so the test is block.Dominators.Contains(successor).
+                    // Testing successor.Dominators.Contains(block) instead asks "does the tail
+                    // dominate the head", which is the defining property of a FORWARD edge --
+                    // it selects every edge that is not a back edge and never the real one.
+                    if (block.Dominators.Contains(successor))
                     {
                         backEdges.Add((block, successor));
                     }
@@ -320,39 +282,6 @@ namespace BasicLang.Compiler.IR
                 }
                 
                 NaturalLoops.Add(loop.ToList());
-            }
-        }
-        
-        /// <summary>
-        /// Compute depth of each block (distance from entry)
-        /// </summary>
-        public void ComputeBlockDepths()
-        {
-            BlockDepths.Clear();
-            
-            foreach (var block in Blocks)
-            {
-                BlockDepths[block] = int.MaxValue;
-            }
-            
-            BlockDepths[EntryBlock] = 0;
-            
-            var queue = new Queue<BasicBlock>();
-            queue.Enqueue(EntryBlock);
-            
-            while (queue.Count > 0)
-            {
-                var block = queue.Dequeue();
-                int depth = BlockDepths[block];
-                
-                foreach (var successor in block.Successors)
-                {
-                    if (BlockDepths[successor] > depth + 1)
-                    {
-                        BlockDepths[successor] = depth + 1;
-                        queue.Enqueue(successor);
-                    }
-                }
             }
         }
         
@@ -435,26 +364,6 @@ namespace BasicLang.Compiler.IR
             DFS(EntryBlock);
             postOrder.Reverse();
             return postOrder;
-        }
-        
-        /// <summary>
-        /// Check if the CFG is reducible (structured control flow)
-        /// </summary>
-        public bool IsReducible()
-        {
-            // A CFG is reducible if all back edges are to loop headers
-            var backEdges = FindBackEdges();
-            
-            foreach (var (tail, head) in backEdges)
-            {
-                // Check if head dominates tail (making it a proper loop header)
-                if (!head.Dominators.Contains(tail))
-                {
-                    return false;
-                }
-            }
-            
-            return true;
         }
         
         /// <summary>

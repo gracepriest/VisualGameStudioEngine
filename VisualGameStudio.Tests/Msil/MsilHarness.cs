@@ -166,12 +166,14 @@ internal static class MsilHarness
     /// aggressive (<c>AggressivePipeline.Apply</c>). Ignored when <paramref name="optimize"/> is
     /// false.
     ///
-    /// <para>⛔ On a counted <c>For</c> loop this currently assembles a program that runs the loop
-    /// ZERO times — issue #114, the same <c>LoopInvariantCodeMotionPass</c> condition-sinking that
-    /// breaks the C++ leg, for the same reason: MSIL emits the CFG as labels and branches and
-    /// cannot recover a condition that moved into the latch. Measured on
-    /// <c>For i = 0 To n : Show(i) : Next</c>. Do not write an MSIL aggressive loop assertion
-    /// expecting the right answer until #114 lands.</para>
+    /// <para>⭐ <b>SAFE FOR LOOPS SINCE ADR-0003 — this used to say it was not.</b> It assembled a
+    /// program that ran a counted <c>For</c> ZERO times: issue #114, the same
+    /// <c>LoopInvariantCodeMotionPass</c> condition-sinking that broke the C++ leg, for the same
+    /// reason — MSIL emits the CFG as labels and branches and cannot recover a condition that
+    /// moved into the latch. ADR-0003 unregisters all three loop passes. RE-MEASURED on the
+    /// 13-shape CFG corpus: every loop shape now assembles, runs the right number of iterations
+    /// and prints what the non-aggressive path prints — see
+    /// <c>VisualGameStudio.Tests.Compiler.CfgLoopShapesAggressiveTests</c>.</para>
     /// </param>
     internal static string CompileToIl(string source, string moduleName = "MsilProbe",
         bool optimize = true, bool aggressive = false)
@@ -288,7 +290,7 @@ internal static class MsilHarness
     /// <summary>
     /// The round trip through the AGGRESSIVE pipeline, asserting it ran. The MSIL leg of
     /// <c>FourBackends.RunsOnEveryBackendAggressive</c>. See <see cref="CompileToIl"/>'s
-    /// <c>aggressive</c> parameter for the #114 loop caveat.
+    /// <c>aggressive</c> parameter — the #114 loop caveat it used to carry is closed by ADR-0003.
     /// </summary>
     internal static string RunAggressiveExpectingSuccess(
         string source, string moduleName = "MsilProbe", string stdin = null)

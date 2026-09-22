@@ -1444,18 +1444,46 @@ namespace BasicLang.Compiler.IR.Optimization
                 // Parameter variables are invariant
                 if (variable.IsParameter)
                     return true;
-                
+
                 // Global variables could change
                 if (variable.IsGlobal)
                     return false;
+
+                // ⛔ A LOCAL is NOT invariant. It must return false HERE, before the
+                // ParentBlock arm below, and this early return is the whole fix.
+                //
+                // IRValue derives from IRInstruction (IRNodes.cs), so an IRVariable falls into
+                // `value is IRInstruction` below. But a bare IRVariable used as an OPERAND is not
+                // itself placed in any block: MEASURED, every such operand carries
+                // IsParameter=False, IsGlobal=False, ParentBlock=<null>. `loop.Contains(null)` is
+                // false, so `!loop.Contains(inst.ParentBlock)` was TRUE and EVERY local read as
+                // loop-invariant — including the loop's own induction variable.
+                //
+                // This is a hoist-anything licence, not a conservative approximation. It was
+                // masked while ControlFlowGraph.FindBackEdges was inverted: the only usable bogus
+                // loop set was [for0.cond, entry], which holds no body, so LICM could only reach
+                // the condition. With the back-edge predicate corrected the body becomes visible
+                // and the unfixed test hoists the induction variable straight out of its own
+                // loop — MEASURED, it turned `For i = 0 To 7 : acc = acc + i` into
+                // `while (0 <= 7) { i = 1; }`, breaking 8/8 loop programs on 4/4 backends.
+                //
+                // Deciding a local is invariant needs a reaching-definition check (no definition
+                // of it inside the loop); nothing here computes one, and "not invariant" is the
+                // safe answer in its absence — it costs a missed hoist, never a wrong program.
+                //
+                // LoopInvariantCodeMotionPass is UNREGISTERED (see AddAggressivePasses), so this
+                // code is inert today. It is fixed now for exactly that reason: leaving a
+                // known-wrong invariance test parked behind a disabled pass, to be re-enabled by
+                // someone who trusts it, is the trap that produced this defect.
+                return false;
             }
-            
+
             // Check if the defining instruction is a known invariant
             if (value is IRInstruction inst)
             {
                 return !loop.Contains(inst.ParentBlock) || knownInvariants.Contains(inst);
             }
-            
+
             return false;
         }
     }
@@ -1602,7 +1630,36 @@ namespace BasicLang.Compiler.IR.Optimization
         public void AddAggressivePasses()
         {
             AddStandardPasses();
-            AddPass(new LoopInvariantCodeMotionPass());
+
+            // LoopInvariantCodeMotionPass DISABLED — see the shared note above
+            // LoopFusionPass/LoopUnrollingPass below. All three loop passes are unregistered
+            // together, because they share one substrate (ControlFlowGraph.IdentifyLoops) and
+            // there is no per-consumer opt-out of it.
+            //
+            // MEASURED at ef69a2c, all 13 CFG shapes compiled AND RUN out of process on all four
+            // backends, CLI `--optimize` against CLI default. LICM is the ONLY one of the three
+            // that fires today, and it is the whole of the aggressive pipeline's loop damage:
+            //   * C++ and MSIL run every counted loop ZERO times (8 of 13 shapes: single/nested/
+            //     sibling For, While, Do While, Exit For, For+If, For+Try).
+            //   * JavaScript throws ReferenceError on For+Try (`t2`), Exit For (`t3`) and nested
+            //     For (`t5`) — the hoisted temp is referenced where it was never declared.
+            //   * ⛔ SILENT WRONG ANSWER on C# — the reference oracle — and on JavaScript: two
+            //     sibling loops accumulating 0..7 each print 65 where 29 is correct. The bogus
+            //     loop sets span BOTH loops, so loop 0's body `a = a + i` is moved into loop 1's
+            //     latch, where it runs 8 more times with `i` frozen at 8: 1 + 8*8 = 65.
+            // Default (non-optimize) output is correct on all 13 shapes on all four backends, so
+            // every one of these is damage this pass adds.
+            //
+            // Repairing the substrate does NOT make this pass shippable. With the back-edge
+            // predicate corrected (ControlFlowGraph.FindBackEdges), loop sets are right on 13/13
+            // and LICM gets STRICTLY WORSE — 8/8 loop programs break on all four backends —
+            // because correct sets expose a SECOND LICM defect that the bogus sets were masking:
+            // IsValueInvariant read every local as invariant, so it hoisted the induction
+            // variable itself out of its own loop. That defect is fixed in this same change (see
+            // IsValueInvariant below); it is fixed rather than left behind precisely because a
+            // known-wrong invariance test sitting behind a disabled pass is what produced this
+            // incident in the first place.
+            // AddPass(new LoopInvariantCodeMotionPass());
 
             // FunctionInliningPass DISABLED — it has never produced correct output for any
             // function it actually inlines, and it MISCOMPILES SILENTLY. Same call as the
@@ -1635,8 +1692,38 @@ namespace BasicLang.Compiler.IR.Optimization
 
             AddPass(new TailCallOptimizationPass());
             AddPass(new AlgebraicSimplificationPass());
-            AddPass(new LoopFusionPass());  // Fuse adjacent loops before unrolling
-            AddPass(new LoopUnrollingPass(4));  // 4x unrolling
+
+            // LoopFusionPass and LoopUnrollingPass DISABLED — they ship with LICM above and go
+            // with it, on the same terms as ConstantPropagationPass, FunctionInliningPass and
+            // InductionVariablePass below: the class stays in the file so a test can add it
+            // explicitly, but nothing registers it.
+            //
+            // ⛔ NEITHER HAS EVER EXECUTED. MEASURED at ef69a2c across all 13 CFG shapes,
+            // including shapes built to satisfy every gate each pass names: both report zero
+            // modifications on every program. They refuse early, on the broken loop sets —
+            // LoopUnrolling at CanUnroll's trip-count gate (FindInitialValue needs a predecessor
+            // outside the loop, and `entry` is inside every bogus set), LoopFusion at
+            // GetLoopBounds returning null. So "disabling" them removes nothing that any program
+            // has ever received.
+            //
+            // They are unregistered rather than left alone because fixing the substrate would
+            // TURN THEM ON for the first time, and both are broken when they fire. MEASURED with
+            // the corrected back-edge predicate plus the IsValueInvariant fix, i.e. the exact
+            // state of this file otherwise:
+            //   * LoopUnrolling, counted call-free loop: emits doubly-prefixed undeclared names
+            //     (`_u0__u0_i`, `_u0__u1_acc`) because the pass re-runs over its own output and
+            //     CloneVariable mints names the optimizer has no facility to declare. CS0103 /
+            //     C++ undeclared identifier / JS ReferenceError / MSIL InvalidProgramException —
+            //     all four backends.
+            //   * LoopFusion, two same-bound sibling loops: FuseLoops removes loop 2's blocks
+            //     from function.Blocks while branches still target them. C++ "undeclared label
+            //     'for0_inc'"; MSIL "Unable to find forward reference label 'for0inc'";
+            //     JavaScript REFUSES the function outright; and C# is SILENTLY WRONG — 29,37
+            //     where 29,29 is correct.
+            // Turning on two never-run passes is not a side effect a substrate repair gets to
+            // have, so the repair ships with them unregistered.
+            // AddPass(new LoopFusionPass());  // Fuse adjacent loops before unrolling
+            // AddPass(new LoopUnrollingPass(4));  // 4x unrolling
 
             // InductionVariablePass DISABLED — third entry in the list this method already keeps
             // (ConstantPropagationPass above, FunctionInliningPass above that), for the same

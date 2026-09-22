@@ -61,7 +61,15 @@ four; if a count ever fails to reconcile, start there.
 
 ## Where things stand
 
-Most recent work — a **JavaScript project type in the IDE**. The compiler could already emit a
+⭐ **Newest (2026-09-22, branch `claude/jolly-pasteur-l4mpzs`, NOT yet on master): ADR-0003 —
+the CFG loop representation.** `ControlFlowGraph.FindBackEdges` had its dominance test inverted;
+the repair ships with all three loop passes unregistered from `AddAggressivePasses()`. **#114 is
+closed** (C++ and MSIL no longer run counted loops zero times under `--optimize`). ⛔ The fix is
+invisible to every backend value assertion — read the section **"2026-09-22 — ADR-0003"** under
+*Open work* before touching `ControlFlowGraph.cs` or the pass registration; the decision itself is
+`docs/superpowers/decisions/0003-cfg-loop-representation.md`.
+
+Before that — a **JavaScript project type in the IDE**. The compiler could already emit a
 web site, the build service could build one, and F5 could preview one, but the New Project
 wizard had no way to *create* one. Shipped:
 
@@ -104,7 +112,14 @@ These are measured, not cautionary. Each one shipped a green build that did the 
   (`JsTestSupport.CompileAggressive`, `BclE2E.CompileToCppAggressive`,
   `MsilHarness.RunAggressiveExpectingSuccess`, `ReturnCoercionTests.EmitCSharpAggressiveForTest`),
   all of which go through the one shared definition, `AggressivePipeline.Apply`. The aggressive
-  pipeline **ships**: a Release `.blproj` build and `--optimize` both take it.
+  pipeline **ships**: a Release `.blproj` build and `--optimize` both take it. ✅ Since ADR-0003
+  those legs are safe for LOOPS on all four backends (they were not — see #114 below).
+- ⛔⛔ **A PROPERTY WITH NO CONSUMER CANNOT BE TESTED FROM A BACKEND.** `ControlFlowGraph.NaturalLoops`
+  is read by nothing in the shipping compiler since ADR-0003 unregistered all three loop passes, so
+  reverting the back-edge fix changes ZERO of 104 end-to-end cells. The same shape recurs whenever a
+  decision disables every consumer of the thing it repairs: **assert directly on the analysis, and
+  assert the PASS LIST, not the emitted output.** `CfgNaturalLoopTests` and
+  `LoopPassesDisabledTests` are the worked examples.
 - ⛔ **`IDE/` is a hand-committed xcopy drop and goes stale.** A stale drop has been mistaken
   for a code bug more than once. Deploy with `robocopy <Shell bin> IDE /E` — **never `/MIR`**,
   since the engine DLL and import lib live only there. **`IDE/lib/js/dom-core.bli` is
@@ -201,6 +216,33 @@ ran; the two rows the claim rests on were measured, not inferred. The run's 2 sk
 `[Category("Integration")]`. Four fixes once gated green on it, then the first full run found
 17 failures and two real regressions already pushed.
 
+⭐ **ADR-0003 full-suite gate (2026-09-22, Linux container, branch `claude/jolly-pasteur-l4mpzs`,
+fixtures in place).**
+
+| Run | Result |
+|---|---|
+| Full suite, ADR-0003 implementation only | **195 failed / 6569 passed / 203 skipped of 6967**, no abort marker |
+| Full suite, + this change's fixtures | **195 failed / 6639 passed / 203 skipped of 7037**, no abort marker, 13m59s |
+
+The delta is **+70 total, +70 passed, +0 failed** — exactly the 70 new tests. Failing names
+compared **BY NAME**: 170 distinct methods, **IDENTICAL SET** to the pre-change baseline; zero
+newly failing, zero silently fixed. Anchored `^  Failed ` line count (195) equals the
+summary-reported total (195), so the log is not truncated. ⚠ 13m59s on this container; the
+Windows figure in the table above is much larger — do not use this number to gate a Windows run.
+
+Run these three fixtures whenever `ControlFlowGraph.cs` or `IROptimizer.cs`'s pass registration
+changes — they are the only thing in the suite that can see either:
+
+```
+dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release --no-build \
+  --filter "FullyQualifiedName~CfgNaturalLoopTests|FullyQualifiedName~LoopPassesDisabledTests|FullyQualifiedName~CfgLoopShapesAggressiveTests"
+```
+
+**70 tests, ~34 s** (the 13 four-backend `CfgLoopShapesAggressiveTests` rows are the whole of the
+time and are `[Category("Integration")]`; the other 57 are in the fast subset). Add the two
+promoted fixtures — `InductionVariableDisabledTests` and `CseAndPeepholeDanglingOperandTests`,
+another 38 tests, ~53 s — before claiming the loop work is gated.
+
 ---
 
 ## Open work
@@ -277,20 +319,26 @@ execution harness. One definition of "aggressive", `AggressivePipeline.Apply`, b
   `FunctionInliningPass` and `InductionVariablePass` — the two aggressive-only members of the three
   passes `OptimizationPipeline` now keeps but does not ship — both shipped broken behind that hole.
   (The third, `ConstantPropagationPass`, was a STANDARD pass.)
-- ⛔⛔ **#114: C++ AND MSIL RUN *ANY* COUNTED `For` LOOP ZERO TIMES UNDER `--optimize`.**
-  `LoopInvariantCodeMotionPass` sinks the loop condition's definition out of the condition block
-  into the loop's own LATCH, because `ControlFlowGraph.IdentifyLoops` hands it a "preheader" that IS
-  the latch. Both goto-emitting backends then read the flag before anything writes it. Measured on
+- ✅ **#114 — CLOSED 2026-09-22 by ADR-0003. Read the next section before acting on the two
+  bullets below; they describe the state BEFORE that change and are kept only because the
+  mechanism is worth knowing.** A four-backend aggressive loop assertion now goes green: measured
+  104/104 cells across 13 shapes × 4 backends × both pipelines.
+- ~~⛔⛔ **#114: C++ AND MSIL RUN *ANY* COUNTED `For` LOOP ZERO TIMES UNDER `--optimize`.**~~
+  `LoopInvariantCodeMotionPass` sank the loop condition's definition out of the condition block
+  into the loop's own LATCH, because `ControlFlowGraph.IdentifyLoops` handed it a "preheader" that
+  WAS the latch. Both goto-emitting backends then read the flag before anything wrote it. Measured on
   `For i = 0 To n : Show(i) : Next` — the counter passed through untouched, so no arithmetic pass
-  has anything to act on — where the emitted C++ is literally
-  `bool t1 = {}; … for0_cond: if (t1) …` with `t1 = i <= n` moved down into `for0_inc`; both print
-  only the line after the loop. C# and JavaScript rebuild the condition from the CFG and are fine.
-  **A four-backend aggressive loop assertion cannot go green until #114 lands.** An aggressive loop
-  fixture is C#+JS only, and must say which backend it excludes and why.
-- ⛔ **#114 breaks JAVASCRIPT too, on a NESTED `For`**: `ReferenceError: t4 is not defined`. LICM
-  sinks the OUTER increment `t4 = i + 1` into the INNER loop's latch, where the emitter declares it
-  `const` inside the inner block, so the outer `i = t4` reads an out-of-scope name. So a nested
-  aggressive loop fixture is **C# only**. Newly visible now that the `_div_` failure stopped masking it.
+  has anything to act on — where the emitted C++ was literally
+  `bool t1 = {}; … for0_cond: if (t1) …` with `t1 = i <= n` moved down into `for0_inc`; both printed
+  only the line after the loop. C# and JavaScript rebuild the condition from the CFG and were fine.
+- ~~⛔ **#114 breaks JAVASCRIPT too, on a NESTED `For`**~~: `ReferenceError: t4 is not defined`. LICM
+  sank the OUTER increment `t4 = i + 1` into the INNER loop's latch, where the emitter declares it
+  `const` inside the inner block, so the outer `i = t4` read an out-of-scope name. Newly visible
+  once the `_div_` failure stopped masking it; gone with LICM.
+- ⭐ **Two shapes beyond what the #114 brief had measured were ALSO zero-iteration on C++ and MSIL
+  at baseline: `While` (`A04_while`) and `Do While` (`A05_do`).** The original characterization
+  listed the counted-`For` family; a full 13-shape sweep found the two pre-test loop forms failing
+  the same way, for the same reason. Both are correct now and both are in the committed corpus.
 - ⚠ The archived `out/opt/S5` verdict from the implementer's characterization disagrees with a
   fresh run (it shows C++/MSIL printing four lines). A fresh isolated run of both pipelines shows
   the def output there; treat that one file as clobbered, not as evidence.
@@ -319,31 +367,151 @@ the third pass that method keeps but does not ship. `InductionVariableDisabledTe
   unless some block is named `.inc`, which only a counted `For` produces.
 - ⛔ **`OptimizerIr.Removed` is ZERO for a counted `For` with a multiply in it, in BOTH
   pipelines.** Measured: 1 for each of the twelve standard-pass battery shapes under standard AND
-  aggressive; 0 for all five induction-variable loop shapes under standard AND aggressive. No pass
-  removes an instruction from those loops at all — the only aggressive pass that acts on them is
-  LICM, which MOVES instructions between blocks. So a "something was removed" non-vacuity
-  assertion fails on exactly the cases an aggressive battery exists for; do not carry it over.
+  aggressive; 0 for all five induction-variable loop shapes under standard AND aggressive. So a
+  "something was removed" non-vacuity assertion fails on exactly the cases an aggressive battery
+  exists for; do not carry it over. ⚠ The ZERO still holds; its stated REASON no longer does. It
+  used to be "the only aggressive pass that acts on them is LICM, which MOVES instructions rather
+  than removing any". Since ADR-0003 all three loop passes are unregistered, so **no**
+  aggressive-only pass acts on those shapes at all.
 - ⛔ **Adding the missing initialisation to the ENTRY block makes the OPTIMIZER run out of
   memory** — on every shape measured, `--optimize` and the in-process helpers alike. The seed
   multiply lands inside one of `IdentifyLoops`' four bogus "natural loops" (every one contains
   `entry`), and the pass re-fires on its own output without bound. A CFG defect, surfacing as a
   compiler crash.
-- ⚠ **`LoopUnrollingPass` CANNOT FIRE AT ALL** (task #117). Removing it from
-  `AddAggressivePasses` changes nothing — measured as a surviving mutant, and independently:
-  `ModificationCount` is 0 on every shape probed, **including a loop with no call in it and a
-  constant trip count of 10**, which passes every gate `CanUnroll` names. The real blocker is one
-  level down and is the SAME CFG defect as #114: `FindInitialValue` looks for a block in the loop
-  whose predecessor is OUTSIDE the loop — a real preheader — and since every "natural loop"
-  `IdentifyLoops` reports contains `entry`, that never resolves to a block that assigns the counter
-  a constant. `GetConstantTripCount` therefore always returns null. The `IRCall` refusal is a
-  second, shallower gate, not the reason. **So this is DEAD code, not untested code: no shape can
-  exercise it until `IdentifyLoops` is fixed, and a test written for it today would assert
-  nothing.**
+- ⚠ **`LoopUnrollingPass` COULD NOT FIRE AT ALL** (task #117) — and ADR-0003 is exactly the change
+  that would have turned it on. Before it: `ModificationCount` was 0 on every shape probed,
+  **including a loop with no call in it and a constant trip count of 10**, which passes every gate
+  `CanUnroll` names. The blocker was one level down and was the SAME CFG defect as #114:
+  `FindInitialValue` looks for a block in the loop whose predecessor is OUTSIDE the loop — a real
+  preheader — and since every "natural loop" `IdentifyLoops` reported contained `entry`, that never
+  resolved to a block assigning the counter a constant, so `GetConstantTripCount` always returned
+  null. The `IRCall` refusal is a second, shallower gate, not the reason. ⛔ **With the back-edge
+  predicate repaired it FIRES, and it is broken when it fires** — which is why ADR-0003 unregisters
+  it rather than leaving it alone. Measured on a counted call-free loop over literal bounds, one
+  direct `Run`: 8 undeclared minted names (`_u0_acc`, `_u0_i`, …) and a dangling operand; under a
+  pipeline that re-runs it over its own output the prefixes compound to `_u0__u0_i` and all four
+  backends reject the result. Pinned in `LoopPassesDisabledTests`.
 - ⛔⛔ **A CRASHED TEST HOST STILL PRINTS `Passed!`.** `dotnet test` emits
   `Passed!  - Failed: 0, Passed: 24, Total: 24` for the subset that ran *before* the crash, then
   `Test Run Aborted.` A mutation classifier that only greps for a `^(Failed|Passed)!` summary
   calls that a SURVIVING mutant. Grep for `Test Run Aborted` / `Test host process crashed`
   **first**; "a summary is present" is not "the run completed".
+
+### ⭐ 2026-09-22 — ADR-0003: the CFG loop representation, and all three loop passes unregistered
+
+**Read `docs/superpowers/decisions/0003-cfg-loop-representation.md` first.** One-line summary:
+`ControlFlowGraph.FindBackEdges` had its dominance test the wrong way round — it asked whether the
+TAIL dominates the HEAD, which is the defining property of a FORWARD edge — and the repair ships
+together with unregistering `LoopInvariantCodeMotionPass`, `LoopUnrollingPass` and `LoopFusionPass`
+from `AddAggressivePasses()` and with an `IsValueInvariant` fix. `IsReducible`, the dead CFG
+surface (`DominatorTree`, `PostDominatorTree`, `ComputeDominanceFrontier`, `ComputeBlockDepths`)
+and `IRPipelineDemo.cs` are deleted. **#114 is closed by it.**
+
+**Gate added.** Three new fixtures, all built on ONE shared 13-shape corpus, `CfgLoopShapes`
+(in `VisualGameStudio.Tests/Compiler/CfgNaturalLoopTests.cs`) — each shape carries its source, its
+expected `Main` block names, its expected natural-loop sets AND its expected stdout, so the
+structural and the value fixture cannot drift about what a shape is.
+
+| Fixture | Asserts | Category |
+|---|---|---|
+| `CfgNaturalLoopTests` | INV-1 (loop sets, the back-edge biconditional against an INDEPENDENT dominator recompute, no `entry` in a loop, no loop holding its own head's `.end`) and INV-4 | fast subset |
+| `LoopPassesDisabledTests` | INV-2 (the pass LIST), the `IsValueInvariant` repair with LICM added explicitly, "still broken" pins for unrolling and fusion, and both shipping entry points by value | fast subset |
+| `CfgLoopShapesAggressiveTests` | INV-3 — 13 shapes × 4 backends × both pipelines, by VALUE | `Integration` (~34 s) |
+
+- ⛔⛔ **THE CORE FIX IS INVISIBLE TO EVERY VALUE ORACLE IN THE SUITE, AND THAT IS THE MOST
+  IMPORTANT THING ON THIS PAGE.** Measured by reverting the one-token predicate fix and re-running
+  everything: **0 of 52 aggressive shape-cells and 0 of 44 probe-cells differ; all 104 end-to-end
+  cells stay byte-identical and stay CORRECT.** Re-measured independently against the committed
+  fixtures: the revert takes **41 of 108** rows red — and **every one of them is a structural
+  `CfgNaturalLoopTests` row**; not one of the 13 four-backend value rows notices. Because all
+  three loop passes are unregistered, **nothing in the shipping compiler reads
+  `ControlFlowGraph.NaturalLoops`** — so the fix could be silently reverted forever behind a green
+  suite. The guard is a DIRECT `ControlFlowGraph` assertion on the reported loop sets, and nothing
+  else can do it. **If you touch `ControlFlowGraph`, that fixture is your only oracle.**
+- ⛔⛔ **RE-REGISTERING LICM IS ALSO INVISIBLE BY VALUE.** Measured: 0/52 and 0/44 cells differ,
+  because the `IsValueInvariant` repair makes LICM **inert** — with locals reading non-invariant it
+  can hoist nothing. (Non-vacuity confirmed: the same harness does report a modification when
+  another pass genuinely fires.) Re-measured against the committed fixtures: re-registering LICM
+  takes **exactly ONE** row red, the **pass-list** assertion
+  (`LoopPassesDisabledTests.TheThreeLoopPassesAreAbsentFromBothPipelines_…`) — the precedent being
+  `InductionVariableDisabledTests`. `LoopFusionPass` and `LoopUnrollingPass` re-registered DO change
+  output, so those two also go red by value (5 and 9 rows), `LoopFusionPass` **silently on C#** with
+  `29,37` where `29,29` is correct — caught by the two entry-point rows, not by a build failure.
+- ⛔ **`IsValueInvariant` reverted is PROVABLY INERT against every shipping route**: the method is
+  private to LICM and no pipeline registers LICM. It is only observable by a test that ADDS LICM
+  explicitly — `LoopPassesDisabledTests.LicmAddedExplicitly_…`, which asserts a single `pass.Run`
+  reports no modification AND that the program still prints the right value. ⚠ **A single-mutant
+  sweep reports the revert and the re-registration as TWO independent survivors; together they
+  reproduce #114 exactly.** `TheAggressivePipelineWithLicmAddedBack_StillPrintsTheCorrectValue` is
+  the test for the pair.
+- ⚠⚠ **`pass.ModificationCount` after `OptimizationPipeline.Run` is ALWAYS ZERO and asserting it
+  there is VACUOUS — this one nearly shipped as a real guard.** `Run` iterates to a fixed point
+  (max 10 by default), so the last iteration of any converging pass reports 0 no matter what it
+  did. Use a single `pass.Run(module)` — its bool return and `ModificationCount` are both
+  meaningful there — or `OptimizationResult.TotalModifications`. The same constructor argument is
+  also the lever that keeps a non-converging pass from hanging a test: see the termination bullet
+  below.
+- ⛔ **The `.end` check must be anchored to the LOOP HEAD.** The obvious spelling — "no loop
+  contains any block named `*.end`" — **fails four CORRECT shapes**: a nested loop's inner
+  `for1.end` legitimately sits inside the outer loop's body, and so do `if0.end` and `try0.end`.
+  The property that holds is that the loop headed at `for0.cond` must not contain `for0.end`.
+- ⛔ **`OK` from a backend is not `correct`.** The baseline verdict census counted 49 "OK" cells
+  that included the silently-wrong `65` (where 29 is correct, on C#, the reference oracle) and
+  every zero-iteration run that exited 0. **Assert VALUES.**
+- **Shape notes, measured.** `A13` (two sibling loops, SAME LITERAL bound) is the one that shows a
+  silent wrong value — and `LoopFusionPass` only fires on literal bounds: on the same two loops
+  over a CALL-valued bound `GetLoopBounds` returns null and it does not fire at all. `A12` (counted,
+  call-free, literal bounds) is the one that shows unrolling damage. `A01` is NOT a usable
+  discriminator for the `IsValueInvariant` revert through LICM ALONE — LICM modifies it and it
+  still prints the right answer; it IS a good one through the full aggressive pipeline plus LICM.
+- ⛔⛔ **A MUTANT THAT DOES NOT TERMINATE TURNS FOUR RED ROWS INTO AN ABORTED RUN. Build the test
+  so the defect FAILS rather than HANGS.** Measured, `IsValueInvariant` reverted: **the aggressive
+  pipeline plus LICM does not converge** — LICM re-hoists its own output round after round, so
+  `OptimizationPipeline`'s fixed-point loop just keeps going. One shape took 31 s; another never
+  terminated (killed at 200 s); inside a full fixture run the test host reached **5.9 GB and
+  crashed**, and the summary read `Failed: 4 … Total: 106` of 108 plus `Test Run Aborted`.
+  Changing which SHAPE was used did not fix it — the hazard is the fixed point, not the program.
+  **The remedy is `new OptimizationPipeline(maxIterations: 1)`**: one round is already enough to
+  expose the defect (one hoist out of a loop is already the wrong answer) and is bounded by
+  construction. With it, the same cases go red in ~250 ms. ⚠ Separately, `A04_while`/`A05_do` run
+  the host out of memory through LICM **alone** with the repair reverted, so they are excluded from
+  the LICM-alone case too. ⚠ The crash is not a substitute for a failing assertion: the run that
+  aborts is the run whose result you cannot read.
+- ⭐ **SIX PROMOTIONS, re-measured, and they are promotions rather than re-baselining** — the #116
+  fixtures EXCLUDED the damaged backends instead of pinning damaged output, so there was no
+  expectation to change, only legs to add. `FourBackends.RunsOnEveryBackendAggressive`,
+  `BclE2E.CompileToCppAggressive` and `MsilHarness.CompileToIl(aggressive:)` no longer carry the
+  "runs the loop ZERO times" caveat; `InductionVariableDisabledTests.BothPipelinesAgree` went from
+  C#+JS to all four backends (feeding 9 cases); the nested-loop case lost its `_CSharpOnly`
+  restriction (the JavaScript `t4` failure is gone); and the shared-runner smoke case no longer has
+  to avoid loops.
+- ⚠ **Two follow-on dead-code facts, DELIBERATELY NOT ACTED ON — recorded, not fixed.** They are a
+  separate decision and ADR-0003 does not cover them.
+  - `IRPrettyPrinter.CFGPrinter` (`:307`) and `IRPrettyPrinter.DotGraphPrinter` (`:360`) had
+    `IRPipelineDemo.cs` as their ONLY consumer. That file is deleted, so both are now dead.
+  - `BasicBlock.DominanceFrontier` (`IRNodes.cs:1276`) is never populated now that
+    `ComputeDominanceFrontier` is gone, so `IRPrettyPrinter.cs:333–335` prints a permanently
+    empty set.
+- ⚠ **`InductionVariablePass` stays disabled and this change does NOT re-enable it.** The CFG
+  substrate it blamed is repaired, but that was one of its six defects; the preheader it needs is
+  still not synthesised anywhere (ADR-0003 declines to build one) and defects 1, 2, 4, 5 and 6 are
+  untouched. ADR-0003's Obligations section says so explicitly.
+- ⚠ **Release builds lose all loop optimization, permanently, until ADR-0003 D2's revisit condition
+  is met.** No measured performance regression — only LICM ever fired and it fired wrongly — but
+  the loss is real. D2's terms for re-registering: one pass at a time, each behind its own commit,
+  and only once (a) the `IsValueInvariant` class of defect is closed for it and (b) a differential
+  harness runs the 13 shapes across four backends comparing VALUES.
+
+### ⛔ Two measurement traps from this work, recorded so nobody pays twice
+
+- ⛔⛔ **`cp -p` preserves mtime, so `dotnet build` keeps the PREVIOUS DLL** and a run you believe
+  is a baseline is silently the last mutant's. Restore a mutated source with a plain `cp` (or
+  `shutil.copyfile`), **`touch` it, and build `--no-incremental`.** This is the same family as the
+  existing "a mutation sweep restores the SOURCE but does not rebuild" trap above, and it bites
+  even when you *did* remember to rebuild.
+- ⛔⛔ **The harness's background-completion notification fires when the LAUNCHER shell exits, not
+  when the `nohup`'d child finishes.** Gate every sweep read on an explicit sentinel line written
+  into the log by the script itself; never on the notification.
 
 ### Traps this characterization cost us, recorded so nobody pays twice
 
